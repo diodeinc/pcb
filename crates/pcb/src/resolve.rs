@@ -1,8 +1,9 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use anyhow::{Result, bail};
 use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::resolution::ResolutionResult;
+use pcb_zen_core::resolution::{FrozenResolutionSet, ResolutionResult};
+use pcb_zen_core::workspace::WorkspaceInfo;
 use tracing::instrument;
 
 use pcb_zen::{get_workspace_info, resolve_dependencies};
@@ -40,6 +41,18 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         );
     }
 
+    let package_urls = crate::pcb_mod::target_package_urls_for_path(&workspace_info, path)
+        .inspect_err(|err| {
+            log::debug!(
+                "Skipping MVS v2 target discovery for {}: {err:#}",
+                path.display()
+            );
+        })
+        .unwrap_or_default();
+    if all_packages_have_indirect(&workspace_info, &package_urls) {
+        return resolve_mvs_v2(workspace_info, package_urls, offline);
+    }
+
     let mut res = resolve_dependencies(&mut workspace_info, offline, locked)?;
 
     // Sync vendor dir: add missing, prune stale (only prune when not offline and not locked)
@@ -56,4 +69,82 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
     }
 
     Ok(res)
+}
+
+fn resolve_mvs_v2(
+    workspace_info: WorkspaceInfo,
+    package_urls: Vec<String>,
+    offline: bool,
+) -> Result<ResolutionResult> {
+    if workspace_info.stdlib_patch_path().is_none() {
+        pcb_zen::cache_index::ensure_stdlib_materialized(&workspace_info.root)?;
+    }
+
+    let mut resolution_set = FrozenResolutionSet::default();
+    let mut symbol_parts = HashMap::new();
+
+    for package_url in package_urls {
+        let resolution =
+            crate::pcb_mod::build_frozen_resolution_map(&workspace_info, &package_url, offline)?;
+        symbol_parts.extend(pcb_zen::resolve::build_frozen_symbol_parts(
+            &workspace_info,
+            &resolution,
+        )?);
+        resolution_set.root_packages.insert(package_url, resolution);
+    }
+
+    Ok(ResolutionResult {
+        workspace_info,
+        package_resolutions: HashMap::new(),
+        closure: HashMap::new(),
+        mvs_v2_resolution: Some(resolution_set),
+        lockfile_changed: false,
+        symbol_parts,
+    })
+}
+
+pub(crate) fn attach_mvs_v2_resolution_for_packages(
+    res: &mut ResolutionResult,
+    package_urls: impl IntoIterator<Item = String>,
+    offline: bool,
+) {
+    let mut resolution_set = FrozenResolutionSet::default();
+
+    for package_url in package_urls {
+        if !package_has_indirect(&res.workspace_info, &package_url) {
+            continue;
+        }
+        match crate::pcb_mod::build_frozen_resolution_map(
+            &res.workspace_info,
+            &package_url,
+            offline,
+        ) {
+            Ok(resolution) => {
+                resolution_set
+                    .root_packages
+                    .insert(package_url.to_string(), resolution);
+            }
+            Err(err) => {
+                log::debug!("Skipping shadow MVS v2 resolution for {package_url}: {err:#}");
+            }
+        }
+    }
+
+    if !resolution_set.root_packages.is_empty() {
+        res.mvs_v2_resolution = Some(resolution_set);
+    }
+}
+
+fn all_packages_have_indirect(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
+    !package_urls.is_empty()
+        && package_urls
+            .iter()
+            .all(|package_url| package_has_indirect(workspace_info, package_url))
+}
+
+fn package_has_indirect(workspace_info: &WorkspaceInfo, package_url: &str) -> bool {
+    workspace_info
+        .packages
+        .get(package_url)
+        .is_some_and(|package| !package.config.dependencies.indirect.is_empty())
 }

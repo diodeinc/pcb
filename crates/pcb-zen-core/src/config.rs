@@ -33,8 +33,8 @@ pub struct PcbToml {
     pub packages: HashMap<String, String>,
 
     /// Dependencies (V2 only - code packages with pcb.toml)
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub dependencies: BTreeMap<String, DependencySpec>,
+    #[serde(default, skip_serializing_if = "DependencyTable::is_empty")]
+    pub dependencies: DependencyTable,
 
     /// Legacy assets section (V2).
     ///
@@ -57,6 +57,32 @@ pub struct PcbToml {
     /// Access control configuration section
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access: Option<AccessConfig>,
+}
+
+/// Dependency tables stored under `[dependencies]` and `[dependencies.indirect]`.
+///
+/// Existing runtime behavior only consumes the direct dependency map. The nested
+/// indirect table is additive plumbing for MVS v2 and is ignored by current build
+/// resolution. Direct keys stay bare module paths; indirect keys may be
+/// lane-qualified as `<module>@<lane>`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependencyTable {
+    /// Direct dependencies under `[dependencies]`.
+    #[serde(flatten)]
+    pub direct: BTreeMap<String, DependencySpec>,
+
+    /// Tool-managed transitive dependency closure under `[dependencies.indirect]`.
+    ///
+    /// MVS v2 should write exact version entries here, but we reuse `DependencySpec`
+    /// so both dependency tables share the same manifest encoding.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub indirect: BTreeMap<String, DependencySpec>,
+}
+
+impl DependencyTable {
+    pub fn is_empty(&self) -> bool {
+        self.direct.is_empty() && self.indirect.is_empty()
+    }
 }
 
 fn asset_targets_repo(asset_key: &str, repo: &str) -> bool {
@@ -119,15 +145,12 @@ impl PcbToml {
     }
 
     fn validate_pcb_version(&self) -> Result<()> {
-        let Some(version) = self
+        if let Some(version) = self
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.pcb_version.as_deref())
-        else {
-            return Ok(());
-        };
-
-        if parse_pcb_version(version).is_none() {
+            && parse_pcb_version(version).is_none()
+        {
             anyhow::bail!(
                 "invalid `pcb-version`: expected \"major.minor\" like \"0.3\", got \"{}\"",
                 version
@@ -178,6 +201,7 @@ impl PcbToml {
 
         for (repo, version) in selected {
             self.dependencies
+                .direct
                 .entry(repo)
                 .or_insert_with(|| DependencySpec::Version(version.to_string()));
         }
@@ -306,7 +330,7 @@ impl PcbToml {
         let mut seen_names: HashMap<String, usize> = HashMap::new();
 
         // Collect all URLs from dependencies
-        let all_urls: Vec<String> = self.dependencies.keys().cloned().collect();
+        let all_urls: Vec<String> = self.dependencies.direct.keys().cloned().collect();
 
         // First pass: count occurrences of each last segment
         for url in &all_urls {
@@ -1064,11 +1088,12 @@ path = "test.zen"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert_eq!(config.dependencies.len(), 4);
+        assert_eq!(config.dependencies.direct.len(), 4);
 
         // Test simple version string
         match config
             .dependencies
+            .direct
             .get("github.com/diodeinc/stdlib")
             .unwrap()
         {
@@ -1079,6 +1104,7 @@ path = "test.zen"
         // Test detailed spec with version
         match config
             .dependencies
+            .direct
             .get("github.com/diodeinc/registry/reference/ti/tps54331")
             .unwrap()
         {
@@ -1089,12 +1115,63 @@ path = "test.zen"
         }
 
         // Test branch spec
-        match config.dependencies.get("github.com/user/custom").unwrap() {
+        match config
+            .dependencies
+            .direct
+            .get("github.com/user/custom")
+            .unwrap()
+        {
             DependencySpec::Detailed(d) => {
                 assert_eq!(d.branch, Some("main".to_string()));
             }
             _ => panic!("Expected Detailed variant"),
         }
+    }
+
+    #[test]
+    fn test_parse_indirect_dependencies() {
+        let content = r#"
+[dependencies]
+"github.com/example/direct" = "1.2.3"
+
+[dependencies.indirect]
+"github.com/example/indirect@0.8" = "4.5.6"
+"github.com/example/other@1" = "7.8.9"
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        assert_eq!(config.dependencies.direct.len(), 1);
+        assert_eq!(config.dependencies.indirect.len(), 2);
+        match config
+            .dependencies
+            .indirect
+            .get("github.com/example/indirect@0.8")
+        {
+            Some(DependencySpec::Version(v)) => assert_eq!(v, "4.5.6"),
+            other => panic!("expected Version variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_serialize_indirect_dependencies_as_nested_table() {
+        let config = PcbToml {
+            dependencies: DependencyTable {
+                direct: BTreeMap::from([(
+                    "github.com/example/direct".to_string(),
+                    DependencySpec::Version("1.2.3".to_string()),
+                )]),
+                indirect: BTreeMap::from([(
+                    "github.com/example/indirect@0.8".to_string(),
+                    DependencySpec::Version("4.5.6".to_string()),
+                )]),
+            },
+            ..PcbToml::default()
+        };
+
+        let toml = toml::to_string_pretty(&config).unwrap();
+        assert!(toml.contains("[dependencies]"));
+        assert!(toml.contains("[dependencies.indirect]"));
+        assert!(toml.contains("\"github.com/example/indirect@0.8\" = \"4.5.6\""));
     }
 
     #[test]

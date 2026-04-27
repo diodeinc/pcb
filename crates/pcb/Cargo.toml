@@ -69,6 +69,7 @@ ignore = { workspace = true }
 globset = { workspace = true }
 semver = { workspace = true }
 rayon = { workspace = true }
+jiff = { workspace = true }
 crossterm = { workspace = true }
 ctrlc = { workspace = true }
 termimad = { workspace = true }

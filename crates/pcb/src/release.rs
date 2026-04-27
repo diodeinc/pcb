@@ -10,8 +10,7 @@ use pcb_ui::{Colorize, Spinner, Style, StyledText};
 use crate::bom::generate_bom_with_fallback;
 use crate::bundle::{self, MetadataInput, RemoteVendoring, SourceBundlePlan};
 use pcb_zen::WorkspaceInfo;
-use pcb_zen::workspace::{WorkspaceInfoExt, get_workspace_info};
-use pcb_zen_core::DefaultFileProvider;
+use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen_core::EvalOutput;
 use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
 
@@ -121,6 +120,7 @@ struct ReleaseInfo {
     output_name: String,
     suppress: Vec<String>,
     resolution: ResolutionResult,
+    root_package_url: Option<String>,
     closure: Option<PackageClosure>,
     allow_errors: bool,
 }
@@ -287,7 +287,7 @@ fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Insta
 /// Takes pre-resolved workspace info to avoid duplicate resolution.
 /// Returns the path to the created release zip file.
 pub fn build_board_release(
-    mut workspace: WorkspaceInfo,
+    workspace: WorkspaceInfo,
     zen_path: PathBuf,
     board_name: String,
     suppress: Vec<String>,
@@ -300,9 +300,15 @@ pub fn build_board_release(
     let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
 
-        // Require a lockfile for release - running in locked mode without one
-        // would fail to resolve @stdlib and other implicit dependencies
-        if workspace.lockfile.is_none() {
+        let package_url = workspace.package_url_for_zen(&zen_path);
+        let is_mvs_v2_board = package_url
+            .as_deref()
+            .and_then(|url| workspace.packages.get(url))
+            .is_some_and(|pkg| !pkg.config.dependencies.indirect.is_empty());
+
+        // Legacy release still requires pcb.sum for reproducible old-style
+        // resolution. Hydrated MVS v2 boards are complete from pcb.toml.
+        if !is_mvs_v2_board && workspace.lockfile.is_none() {
             anyhow::bail!(
                 "No lockfile found. Run 'pcb build' or 'pcb layout' first to generate one.\n\
                  Release requires a lockfile to ensure reproducible builds."
@@ -310,13 +316,10 @@ pub fn build_board_release(
         }
 
         info_spinner.set_message("Resolving dependencies");
-        let resolution = pcb_zen::resolve_dependencies(&mut workspace, false, true)?;
-
-        // Find the package URL for this board
-        let closure = resolution
-            .workspace_info
-            .package_url_for_zen(&zen_path)
-            .map(|url| resolution.package_closure(&url));
+        let resolution = crate::resolve::resolve(Some(&zen_path), false, true)?;
+        let closure = package_url
+            .as_deref()
+            .map(|url| resolution.package_closure(url));
 
         info_spinner.set_message("Evaluating zen file");
 
@@ -417,6 +420,7 @@ pub fn build_board_release(
             output_name,
             suppress,
             resolution,
+            root_package_url: package_url,
             closure,
             allow_errors,
         };
@@ -571,6 +575,7 @@ pub(crate) fn discover_layout_from_output(output: &EvalOutput) -> Result<Option<
 fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     bundle::stage_source_bundle(&SourceBundlePlan {
         resolution: &info.resolution,
+        root_package_url: info.root_package_url.as_deref(),
         closure: info.closure.as_ref(),
         remote_vendoring: RemoteVendoring::AllResolved,
         staged_src: &info.staging_dir.join("src"),
@@ -719,8 +724,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     // Re-resolve in offline+locked mode. All dependencies (including KiCad
     // library files) are vendored from eval1 by copy_sources.
-    let mut staged_workspace = get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path)?;
-    let staged_resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true, true)?;
+    let staged_resolution = crate::resolve::resolve(Some(&staged_zen_path), true, true)?;
 
     // Use build function with offline mode but allow warnings
     // Suspend spinner during build to allow diagnostics to render properly

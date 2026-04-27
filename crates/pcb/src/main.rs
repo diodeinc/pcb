@@ -27,9 +27,12 @@ mod kq;
 mod layout;
 mod lsp;
 mod migrate;
+mod mod_cmd;
 mod new;
 mod open;
 mod package;
+#[path = "mod/mod.rs"]
+mod pcb_mod;
 #[cfg(feature = "api")]
 mod preview;
 mod publish;
@@ -81,6 +84,15 @@ enum Commands {
     /// Migrate PCB projects
     #[command(alias = "m")]
     Migrate(migrate::MigrateArgs),
+
+    /// Manage package dependency manifests
+    Mod(mod_cmd::ModArgs),
+
+    /// Add or update a direct dependency
+    Add(pcb_mod::ModAddArgs),
+
+    /// Reconcile source imports and hydrate package dependency manifests
+    Sync(pcb_mod::SyncArgs),
 
     /// Create a new workspace, board, package, or component
     New(new::NewArgs),
@@ -207,6 +219,9 @@ fn run() -> anyhow::Result<()> {
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
+        Commands::Mod(args) => mod_cmd::execute(args),
+        Commands::Add(args) => pcb_mod::execute_mod_add(args),
+        Commands::Sync(args) => pcb_mod::execute_sync(args),
         Commands::New(args) => new::execute(args),
         Commands::Update(args) => update::execute(args),
         Commands::SelfUpdate(args) => self_update::execute(args),
@@ -280,7 +295,14 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn is_update_command(command: &Commands) -> bool {
-    matches!(command, Commands::Update(_) | Commands::SelfUpdate(_))
+    matches!(
+        command,
+        Commands::Mod(_)
+            | Commands::Add(_)
+            | Commands::Sync(_)
+            | Commands::Update(_)
+            | Commands::SelfUpdate(_)
+    )
 }
 
 fn ensure_docs_installed() {

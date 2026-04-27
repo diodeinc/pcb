@@ -11,14 +11,15 @@ use pcb_zen_core::kicad_library::{
     kicad_parts_url_for_symbol_repo, match_kicad_managed_repo, render_repo_url_template,
 };
 use pcb_zen_core::resolution::{
-    ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult, build_package_roots,
-    build_resolution_map, pseudo_matches_rev, select_version_for_detail, semver_family,
+    FrozenResolutionMap, ModuleLine, NativePathResolver, PackagePathResolver, ResolutionResult,
+    build_package_roots, build_resolution_map, pseudo_matches_rev, select_version_for_detail,
+    semver_family,
 };
 use pcb_zen_core::{DefaultFileProvider, initial_package_version, is_stdlib_module_path};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 use semver::Version;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info_span, instrument};
@@ -317,7 +318,7 @@ fn normalize_or_validate_branch_deps(
         let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut normalized = 0usize;
 
-        for (dep_url, spec) in &mut config.dependencies {
+        for (dep_url, spec) in &mut config.dependencies.direct {
             let DependencySpec::Detailed(detail) = spec else {
                 continue;
             };
@@ -375,7 +376,7 @@ fn refresh_branch_pins(
         let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut changed = false;
 
-        for (dep_url, spec) in &mut config.dependencies {
+        for (dep_url, spec) in &mut config.dependencies.direct {
             if !package_filter.is_empty() && !package_filter.iter().any(|p| dep_url.contains(p)) {
                 continue;
             }
@@ -723,7 +724,7 @@ pub fn resolve_dependencies(
 
             manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
-            for (dep_path, dep_spec) in &manifest.dependencies {
+            for (dep_path, dep_spec) in &manifest.dependencies.direct {
                 ensure_workspace_member_dependency(workspace_info, dep_path).with_context(
                     || format!("Dependency '{}' in {}@v{}", dep_path, line.path, version),
                 )?;
@@ -881,6 +882,7 @@ pub fn resolve_dependencies(
         workspace_info: workspace_info.clone(),
         package_resolutions,
         closure,
+        mvs_v2_resolution: None,
         lockfile_changed,
         symbol_parts,
     })
@@ -907,7 +909,28 @@ pub fn vendor_deps(
     target_vendor_dir: Option<&Path>,
     prune: bool,
 ) -> Result<VendorResult> {
-    let workspace_info = &resolution.workspace_info;
+    let package_roots: BTreeSet<_> = resolution
+        .closure
+        .iter()
+        .map(|(line, version)| (line.path.clone(), version.to_string()))
+        .collect();
+    vendor_package_roots(
+        &resolution.workspace_info,
+        &package_roots,
+        additional_patterns,
+        target_vendor_dir,
+        prune,
+    )
+}
+
+#[instrument(name = "vendor_package_roots", skip_all)]
+pub fn vendor_package_roots(
+    workspace_info: &WorkspaceInfo,
+    package_roots: &BTreeSet<(String, String)>,
+    additional_patterns: &[String],
+    target_vendor_dir: Option<&Path>,
+    prune: bool,
+) -> Result<VendorResult> {
     let vendor_dir = target_vendor_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_info.root.join("vendor"));
@@ -949,25 +972,18 @@ pub fn vendor_deps(
 
     // Copy matching packages from workspace vendor or cache (vendor takes precedence)
     let mut package_count = 0;
-    for (line, version) in &resolution.closure {
-        if !glob_set.is_match(&line.path) {
+    for (path, version) in package_roots {
+        if !glob_set.is_match(path) {
             continue;
         }
-        let version_str = version.to_string();
 
         // Track this package root for pruning
-        let rel_root = PathBuf::from(&line.path).join(&version_str);
+        let rel_root = PathBuf::from(path).join(version);
         desired_roots.insert(rel_root);
 
-        let dst = vendor_dir.join(&line.path).join(&version_str);
+        let dst = vendor_dir.join(path).join(version);
         if matches!(
-            copy_remote_package_to_vendor(
-                &workspace_vendor,
-                cache,
-                &line.path,
-                &version_str,
-                &dst
-            )?,
+            copy_remote_package_to_vendor(&workspace_vendor, cache, path, version, &dst)?,
             RemotePackageVendorStatus::Copied
         ) {
             package_count += 1;
@@ -1214,8 +1230,13 @@ fn collect_package_dependencies(
     let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = HashMap::new();
 
-    collect_deps_recursive(&config.dependencies, package_dir, &mut deps, workspace_info)
-        .with_context(|| format!("in {}", pcb_toml_path.display()))?;
+    collect_deps_recursive(
+        &config.dependencies.direct,
+        package_dir,
+        &mut deps,
+        workspace_info,
+    )
+    .with_context(|| format!("in {}", pcb_toml_path.display()))?;
 
     Ok(deps.into_values().collect())
 }
@@ -1306,7 +1327,7 @@ fn collect_deps_recursive(
         let file_provider = DefaultFileProvider::new();
         let dep_config = PcbToml::from_file(&file_provider, &dep_pcb_toml)?;
         collect_deps_recursive(
-            &dep_config.dependencies,
+            &dep_config.dependencies.direct,
             &resolved_path,
             deps,
             workspace_info,
@@ -1344,7 +1365,7 @@ fn parse_version_string(s: &str) -> Result<Version> {
 }
 
 /// Materialize asset dependencies selected by dependency resolution.
-fn materialize_asset_deps(
+pub fn materialize_asset_deps(
     workspace_info: &WorkspaceInfo,
     selected_kicad_assets: &HashMap<ModuleLine, Version>,
     offline: bool,
@@ -1575,32 +1596,44 @@ pub(crate) fn fetch_package(
     }
 
     // 5. Check cache directory: ~/.pcb/cache/{module_path}/{version}/
-    let cache = cache_base();
-    let checkout_dir = cache.join(module_path).join(version.to_string());
-    let version_str = version.to_string();
+    fetch_package_from_cache(module_path, version, index)
+}
 
+/// Returns a dependency manifest using the shared cache-backed materialization path.
+///
+/// This intentionally skips workspace-member, patch, vendor, and lockfile handling.
+/// Callers that need full build-time resolution semantics should use `fetch_package`.
+pub fn ensure_package_manifest_in_cache(
+    module_path: &str,
+    version: &Version,
+    index: &CacheIndex,
+) -> Result<PathBuf> {
+    let checkout_dir = cache_base().join(module_path).join(version.to_string());
+    let version_str = version.to_string();
     let pcb_toml_path = checkout_dir.join("pcb.toml");
 
-    // Fast path: index entry exists AND pcb.toml exists = valid cache
     if index.get_package(module_path, &version_str).is_some() && pcb_toml_path.exists() {
-        return PcbToml::from_path(&pcb_toml_path);
+        return Ok(pcb_toml_path);
     }
 
-    // Slow path: fetch via sparse checkout (network)
     ensure_sparse_checkout(&checkout_dir, module_path, &version_str, true, None)?;
 
-    // Compute hashes
     let content_hash = compute_content_hash_from_dir(&checkout_dir)?;
     let manifest_content = std::fs::read_to_string(&pcb_toml_path)?;
     let manifest_hash = compute_manifest_hash(&manifest_content);
 
-    // Verify against expected hashes from git tag
     verify_tag_hashes(module_path, version, &content_hash, &manifest_hash)?;
-
-    // Store hashes in index
     index.set_package(module_path, &version_str, &content_hash, &manifest_hash)?;
 
-    // Read the manifest
+    Ok(pcb_toml_path)
+}
+
+pub fn fetch_package_from_cache(
+    module_path: &str,
+    version: &Version,
+    index: &CacheIndex,
+) -> Result<PcbToml> {
+    let pcb_toml_path = ensure_package_manifest_in_cache(module_path, version, index)?;
     PcbToml::from_path(&pcb_toml_path)
 }
 
@@ -1715,7 +1748,7 @@ impl SymbolNameResolution {
 /// Iterates workspace members plus any resolved dependency roots that have a
 /// parts-bearing manifest, resolving each `ManifestPart.symbol` into a
 /// `package://` URI.
-fn build_symbol_parts(
+pub fn build_symbol_parts(
     workspace_info: &pcb_zen_core::workspace::WorkspaceInfo,
     closure: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PcbToml>,
@@ -1775,7 +1808,41 @@ fn build_symbol_parts(
             .with_context(|| format!("Failed to build symbol parts from {}", pkg_root.display()))?;
     }
 
-    for (package_coord, pkg_root) in &package_roots {
+    add_kicad_parts_indexes(&mut result, &package_roots, &kicad_entries, &mut seen_roots)?;
+
+    Ok(result)
+}
+
+pub fn build_frozen_symbol_parts(
+    workspace_info: &pcb_zen_core::workspace::WorkspaceInfo,
+    resolution: &FrozenResolutionMap,
+) -> Result<HashMap<String, Vec<ManifestPart>>> {
+    let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
+    let package_roots = resolution.package_roots();
+    let kicad_entries = workspace_info.kicad_library_entries();
+    let mut seen_roots = HashSet::new();
+
+    for (pkg_root, package) in &resolution.packages {
+        seen_roots.insert(pkg_root.clone());
+        if !package.parts.is_empty() {
+            add_parts_to_symbol_map(&mut result, &package_roots, &package.parts, pkg_root)
+                .with_context(|| {
+                    format!("Failed to build symbol parts from {}", pkg_root.display())
+                })?;
+        }
+    }
+
+    add_kicad_parts_indexes(&mut result, &package_roots, &kicad_entries, &mut seen_roots)?;
+    Ok(result)
+}
+
+fn add_kicad_parts_indexes(
+    result: &mut HashMap<String, Vec<ManifestPart>>,
+    package_roots: &BTreeMap<String, PathBuf>,
+    kicad_entries: &[pcb_zen_core::config::KicadLibraryConfig],
+    seen_roots: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    for (package_coord, pkg_root) in package_roots {
         if !seen_roots.insert(pkg_root.clone()) {
             continue;
         }
@@ -1786,7 +1853,7 @@ fn build_symbol_parts(
         let Ok(version) = Version::parse(version) else {
             continue;
         };
-        if kicad_parts_url_for_symbol_repo(&kicad_entries, repo, &version)?.is_none() {
+        if kicad_parts_url_for_symbol_repo(kicad_entries, repo, &version)?.is_none() {
             continue;
         }
 
@@ -1808,7 +1875,7 @@ fn build_symbol_parts(
         }
     }
 
-    Ok(result)
+    Ok(())
 }
 
 /// Build the final dependency closure using selected versions
@@ -1832,7 +1899,7 @@ fn build_closure(
     // Use get_line_for_dep to find the specific ModuleLine matching each dependency's family
     // Skip workspace members (resolved locally, not part of closure)
     for pkg in packages.values() {
-        for (url, spec) in &pkg.config.dependencies {
+        for (url, spec) in &pkg.config.dependencies.direct {
             if is_non_version_dep(spec) || packages.contains_key(url) {
                 continue;
             }
@@ -1868,7 +1935,7 @@ fn build_closure(
 
         // Follow transitive dependencies via selected versions
         if let Some(manifest) = manifest_cache.get(&(line.clone(), version)) {
-            for (dep_path, dep_spec) in &manifest.dependencies {
+            for (dep_path, dep_spec) in &manifest.dependencies.direct {
                 if is_non_version_dep(dep_spec) || packages.contains_key(dep_path) {
                     continue;
                 }
@@ -2773,7 +2840,7 @@ mod tests {
         std::fs::create_dir_all(&cache_root).unwrap();
 
         let mut config = PcbToml::default();
-        config.dependencies.insert(
+        config.dependencies.direct.insert(
             "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
             DependencySpec::Version("9.0.3".to_string()),
         );
