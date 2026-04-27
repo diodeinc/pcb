@@ -172,6 +172,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         #[starlark(require = named, default = UnpackList::default())] qualifications: UnpackList<
             String,
         >,
+        #[starlark(require = named, default = NoneOr::None)] datasheet: NoneOr<String>,
     ) -> starlark::Result<PartValue> {
         if mpn.trim().is_empty() {
             return Err(Error::new_other(anyhow::anyhow!(
@@ -183,7 +184,23 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
                 "`manufacturer` must be a non-empty string"
             )));
         }
-        Ok(PartValue::new(mpn, manufacturer, qualifications.items))
+        let datasheet = match datasheet {
+            NoneOr::None => None,
+            NoneOr::Other(datasheet) => {
+                if datasheet.trim().is_empty() {
+                    return Err(Error::new_other(anyhow::anyhow!(
+                        "`datasheet` must be a non-empty string when provided"
+                    )));
+                }
+                Some(datasheet)
+            }
+        };
+        Ok(PartValue::new(
+            mpn,
+            manufacturer,
+            qualifications.items,
+            datasheet,
+        ))
     }
 
     fn add_electrical_check<'v>(

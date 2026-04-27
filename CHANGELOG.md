@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Generated component `.zen` files now declare pins as flat top-level `io(Net)` assignments instead of a `Pins = struct(...)` block.
+- Component datasheets now prefer `Part` metadata before component-level datasheets, with KiCad symbol datasheets as the final fallback.
 
 ## [0.3.72] - 2026-04-27
 

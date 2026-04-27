@@ -49,7 +49,11 @@ def set_from_matches(c, matches):
     def _to_part(m):
         if type(m) == "tuple":
             return builtin.Part(mpn=m[0], manufacturer=m[1])
-        return builtin.Part(mpn=m["mpn"], manufacturer=m["manufacturer"])
+        return builtin.Part(
+            mpn=m["mpn"],
+            manufacturer=m["manufacturer"],
+            datasheet=m.get("datasheet"),
+        )
 
     c.part = _to_part(matches[0])
     if len(matches) > 1:
@@ -158,7 +162,9 @@ def iec60062_3digit(value):
     return sig_digits + str(mult)
 
 
-def resistor_series(manufacturer, series, resistance_range, max_v, power, tolerance, e_series, encode, suffix):
+def resistor_series(
+    manufacturer, series, resistance_range, max_v, power, tolerance, e_series, encode, suffix, datasheet=None
+):
     """Helper to create resistor series entry.
 
     Args:
@@ -185,10 +191,11 @@ def resistor_series(manufacturer, series, resistance_range, max_v, power, tolera
         "e_series": e_series,
         "encode": encode,
         "suffix": suffix,
+        "datasheet": datasheet,
     }
 
 
-def panasonic_erj(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode):
+def panasonic_erj(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode, datasheet_path=None):
     """Shorthand for Panasonic ERJ resistor series.
 
     Args:
@@ -204,6 +211,7 @@ def panasonic_erj(series, resistance_range, voltage, power, tolerance, e_series,
     Returns:
         Resistor series dictionary
     """
+    datasheet = panasonic_datasheet(datasheet_path) if datasheet_path else None
     return resistor_series(
         "Panasonic Electronic Components",
         series,
@@ -214,10 +222,11 @@ def panasonic_erj(series, resistance_range, voltage, power, tolerance, e_series,
         e_series,
         encode,
         suffix,
+        datasheet,
     )
 
 
-def uniroyal(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode):
+def uniroyal(series, resistance_range, voltage, power, tolerance, e_series, suffix, encode, datasheet=None):
     """Shorthand for Uniroyal chip resistor series.
 
     Args:
@@ -243,10 +252,115 @@ def uniroyal(series, resistance_range, voltage, power, tolerance, e_series, suff
         e_series,
         encode,
         suffix,
+        datasheet,
     )
 
 
-def discrete_resistor_series(manufacturer, series, max_v, power, tolerance, values_with_mpns):
+def yageo_datasheet(mpn):
+    """Return a YAGEO-hosted PDF datasheet URL for a verified MPN."""
+    return "https://www.yageogroup.com/component-documentation/download/specsheet/" + mpn
+
+
+def yageo_asset_datasheet(filename):
+    """Return a YAGEO-hosted PDF datasheet URL for a verified asset filename."""
+    return "https://yageogroup.com/content/datasheet/asset/file/" + filename
+
+
+def panasonic_datasheet(path):
+    """Return a Panasonic-hosted PDF datasheet URL for a verified path."""
+    if path.startswith("fileversion/"):
+        return "https://api.pim.na.industrial.panasonic.com/file_stream/main/" + path
+    if path.startswith("pdf-b4/"):
+        return "https://www.panasonic-ic.com/" + path
+    return "https://industrial.panasonic.com/cdbs/www-data/pdf/" + path
+
+
+def abracon_datasheet(path):
+    """Return an Abracon-hosted PDF datasheet URL for a verified path."""
+    return "https://abracon.com/" + path
+
+
+def abracon_crystal(frequency, load_capacitance, mpn, datasheet_path):
+    """Helper to create an Abracon crystal entry with a verified PDF datasheet path."""
+    return crystal(frequency, load_capacitance, mpn, "Abracon LLC", abracon_datasheet(datasheet_path))
+
+
+def onsemi_datasheet(filename):
+    """Return an onsemi-hosted PDF datasheet URL for a verified filename."""
+    return "https://www.onsemi.com/pdf/datasheet/" + filename
+
+
+def onsemi_rectifier(technology, reverse_voltage, forward_current, forward_voltage, mpn, datasheet_filename):
+    """Helper to create an onsemi rectifier entry with a verified PDF datasheet filename."""
+    return rectifier(
+        technology,
+        reverse_voltage,
+        forward_current,
+        forward_voltage,
+        mpn,
+        "onsemi",
+        onsemi_datasheet(datasheet_filename),
+    )
+
+
+def onsemi_zener(zener_voltage, power, mpn, datasheet_filename):
+    """Helper to create an onsemi zener entry with a verified PDF datasheet filename."""
+    return zener(zener_voltage, power, mpn, "onsemi", onsemi_datasheet(datasheet_filename))
+
+
+def vishay_datasheet(path):
+    """Return a Vishay-hosted PDF datasheet URL for a verified docs path."""
+    return "https://www.vishay.com/docs/" + path
+
+
+def vishay_tvs(standoff_voltage, clamping_voltage, peak_pulse_power, mpn, datasheet_path):
+    """Helper to create a Vishay TVS entry with a verified PDF datasheet path."""
+    return tvs(
+        standoff_voltage,
+        clamping_voltage,
+        peak_pulse_power,
+        mpn,
+        "Vishay General Semiconductor - Diodes Division",
+        vishay_datasheet(datasheet_path),
+    )
+
+
+def vishay_rectifier(technology, reverse_voltage, forward_current, forward_voltage, mpn, datasheet_path):
+    """Helper to create a Vishay rectifier entry with a verified PDF datasheet path."""
+    return rectifier(
+        technology,
+        reverse_voltage,
+        forward_current,
+        forward_voltage,
+        mpn,
+        "Vishay General Semiconductor - Diodes Division",
+        vishay_datasheet(datasheet_path),
+    )
+
+
+def vishay_zener(zener_voltage, power, mpn, datasheet_path):
+    """Helper to create a Vishay zener entry with a verified PDF datasheet path."""
+    return zener(
+        zener_voltage, power, mpn, "Vishay General Semiconductor - Diodes Division", vishay_datasheet(datasheet_path)
+    )
+
+
+def vishay_led(color, voltage_range, mpn, datasheet_path):
+    """Helper to create a Vishay LED entry with a verified PDF datasheet path."""
+    return led(color, voltage_range, mpn, "Vishay Semiconductor Opto Division", vishay_datasheet(datasheet_path))
+
+
+def ecs_datasheet(filename):
+    """Return an ECS-hosted PDF datasheet URL for a verified filename."""
+    return "https://ecsxtal.com/store/pdf/" + filename
+
+
+def ecs_crystal(frequency, load_capacitance, mpn, datasheet_filename):
+    """Helper to create an ECS crystal entry with a verified PDF datasheet filename."""
+    return crystal(frequency, load_capacitance, mpn, "ECS Inc.", ecs_datasheet(datasheet_filename))
+
+
+def discrete_resistor_series(manufacturer, series, max_v, power, tolerance, values_with_mpns, datasheet=None):
     """Helper to create discrete resistor series (non-E-series, exact values only).
 
     Args:
@@ -269,6 +383,7 @@ def discrete_resistor_series(manufacturer, series, max_v, power, tolerance, valu
         "max_v": Voltage(max_v),
         "power": Power(power),
         "tolerance": tolerance,
+        "datasheet": datasheet,
     }
 
 
@@ -304,7 +419,12 @@ def murata_mlcc_spice_model(base_mpn):
     }
 
 
-def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, manufacturer="Murata Electronics"):
+def murata_mlcc_datasheet(filename):
+    """Return a Murata-hosted MLCC PDF datasheet URL for a verified filename."""
+    return "https://search.murata.co.jp/Ceramy/image/img/A01X/G101/ENG/" + filename
+
+
+def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, datasheet_filename, manufacturer="Murata Electronics"):
     """Helper to create Murata capacitor entry with auto-generated packaging variants.
 
     Args:
@@ -313,21 +433,36 @@ def murata_cap(dielectric, voltage, cap, base_mpn, suffixes, manufacturer="Murat
         cap: Capacitance with tolerance (e.g., "100nF 10%")
         base_mpn: Base MPN without suffix (string)
         suffixes: List of suffixes to append (e.g., ["D", "J"] or ["K", "L"])
+        datasheet_filename: Verified Murata-hosted PDF datasheet filename
         manufacturer: Manufacturer name
 
     Returns:
         Capacitor dictionary
     """
+    datasheet = murata_mlcc_datasheet(datasheet_filename)
     return {
         "dielectric": dielectric,
         "voltage": Voltage(voltage),
         "cap": Capacitance(cap),
-        "parts": [(base_mpn + suffix, manufacturer) for suffix in suffixes],
+        "parts": [
+            {"mpn": base_mpn + suffix, "manufacturer": manufacturer, "datasheet": datasheet} for suffix in suffixes
+        ],
         "spice_model": murata_mlcc_spice_model(base_mpn),
     }
 
 
-def led(color: str, voltage_range: str, mpn: str, manufacturer: str) -> dict:
+def murata_caps_by_pkg(caps_by_pkg):
+    """Expand compact Murata MLCC catalog rows grouped by package."""
+    return {
+        pkg: [
+            murata_cap(dielectric, voltage, cap, base_mpn, suffixes, datasheet_filename)
+            for dielectric, voltage, cap, base_mpn, suffixes, datasheet_filename in entries
+        ]
+        for pkg, entries in caps_by_pkg.items()
+    }
+
+
+def led(color: str, voltage_range: str, mpn: str, manufacturer: str, datasheet=None) -> dict:
     """Helper to create LED catalog entry.
 
     Args:
@@ -344,10 +479,13 @@ def led(color: str, voltage_range: str, mpn: str, manufacturer: str) -> dict:
         "forward_voltage": Voltage(voltage_range),
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
-def ferrite_bead(impedance: str, frequency: str, current: str, dcr: str, mpn: str, manufacturer: str) -> dict:
+def ferrite_bead(
+    impedance: str, frequency: str, current: str, dcr: str, mpn: str, manufacturer: str, datasheet=None
+) -> dict:
     """Helper to create ferrite bead catalog entry.
 
     Args:
@@ -368,10 +506,18 @@ def ferrite_bead(impedance: str, frequency: str, current: str, dcr: str, mpn: st
         "dcr": Resistance(dcr),
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
-def tvs(standoff_voltage: str, clamping_voltage: str, peak_pulse_power: str, mpn: str, manufacturer: str) -> dict:
+def diodes_inc_datasheet(filename):
+    """Return a Diodes Inc. PDF datasheet URL for a verified filename."""
+    return "https://www.diodes.com/datasheet/download/" + filename
+
+
+def tvs(
+    standoff_voltage: str, clamping_voltage: str, peak_pulse_power: str, mpn: str, manufacturer: str, datasheet=None
+) -> dict:
     """Helper to create TVS diode catalog entry.
 
     Args:
@@ -399,11 +545,18 @@ def tvs(standoff_voltage: str, clamping_voltage: str, peak_pulse_power: str, mpn
         "peak_pulse_power": power_val,
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
 def rectifier(
-    technology: str, reverse_voltage: str, forward_current: str, forward_voltage: str, mpn: str, manufacturer: str
+    technology: str,
+    reverse_voltage: str,
+    forward_current: str,
+    forward_voltage: str,
+    mpn: str,
+    manufacturer: str,
+    datasheet=None,
 ) -> dict:
     """Helper to create rectifier diode catalog entry."""
     return {
@@ -413,10 +566,11 @@ def rectifier(
         "forward_voltage": Voltage(forward_voltage),
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
-def zener(zener_voltage: str, power: str, mpn: str, manufacturer: str) -> dict:
+def zener(zener_voltage: str, power: str, mpn: str, manufacturer: str, datasheet=None) -> dict:
     """Helper to create zener diode catalog entry."""
     zener_val = Voltage(zener_voltage) if "to" in zener_voltage else Voltage(zener_voltage + " to " + zener_voltage)
     return {
@@ -424,10 +578,11 @@ def zener(zener_voltage: str, power: str, mpn: str, manufacturer: str) -> dict:
         "power": Power(power),
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 
-def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer: str) -> dict:
+def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer: str, datasheet=None) -> dict:
     """Helper to create crystal catalog entry.
 
     Args:
@@ -444,6 +599,7 @@ def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer
         "load_capacitance": Capacitance(load_capacitance) if load_capacitance else None,
         "mpn": mpn,
         "manufacturer": manufacturer,
+        "datasheet": datasheet,
     }
 
 

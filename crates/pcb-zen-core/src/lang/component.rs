@@ -86,6 +86,9 @@ pub struct ComponentData<'v> {
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
+    pub(crate) datasheet: Option<String>,
+    pub(crate) component_datasheet: Option<String>,
+    pub(crate) symbol_datasheet: Option<String>,
     pub(crate) properties: SmallMap<String, Value<'v>>,
 }
 
@@ -97,6 +100,9 @@ pub struct FrozenComponentData {
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
+    pub(crate) datasheet: Option<String>,
+    pub(crate) component_datasheet: Option<String>,
+    pub(crate) symbol_datasheet: Option<String>,
     pub(crate) properties: SmallMap<String, FrozenValue>,
 }
 
@@ -114,7 +120,6 @@ pub struct ComponentGen<V, T> {
     data: T,
     source_path: String,
     symbol: V,
-    datasheet: Option<String>,
     description: Option<String>,
 }
 
@@ -149,6 +154,9 @@ impl<'v> Freeze for ComponentValue<'v> {
                 dnp: data.dnp,
                 skip_bom: data.skip_bom,
                 skip_pos: data.skip_pos,
+                datasheet: data.datasheet,
+                component_datasheet: data.component_datasheet,
+                symbol_datasheet: data.symbol_datasheet,
                 properties: {
                     let mut frozen_props = SmallMap::new();
                     for (k, v) in data.properties.into_iter() {
@@ -159,7 +167,6 @@ impl<'v> Freeze for ComponentValue<'v> {
             },
             source_path: self.source_path,
             symbol: self.symbol.freeze(freezer)?,
-            datasheet: self.datasheet,
             description: self.description,
         })
     }
@@ -389,7 +396,7 @@ fn resolve_component_sourcing<'v>(
     }
 
     // Only create a Part if both mpn and manufacturer are present
-    let part = mpn.and_then(|m| manufacturer.map(|mfr| PartValue::new(m, mfr, vec![])));
+    let part = mpn.and_then(|m| manufacturer.map(|mfr| PartValue::new(m, mfr, vec![], None)));
 
     (part, vec![])
 }
@@ -443,6 +450,17 @@ fn resolve_symbol_datasheet(
             .format_package_uri(&resolved)
             .unwrap_or_else(|| resolved.to_string_lossy().into_owned()),
     ))
+}
+
+fn resolve_component_datasheet(
+    part: Option<&PartValue>,
+    component_datasheet: Option<&str>,
+    symbol_datasheet: Option<&str>,
+) -> Option<String> {
+    part.and_then(PartValue::datasheet)
+        .or(component_datasheet)
+        .or(symbol_datasheet)
+        .map(ToOwned::to_owned)
 }
 
 fn parse_sim_pins(pins: &str) -> starlark::Result<Vec<(String, String)>> {
@@ -1092,6 +1110,12 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     .map(|p| heap.alloc(p.clone()).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
+            "datasheet" => Some(
+                data.datasheet
+                    .as_ref()
+                    .map(|datasheet| heap.alloc_str(datasheet).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
             "spice_model" => Some(data.spice_model.unwrap_or_else(Value::new_none)),
             "dnp" => Some(heap.alloc(data.dnp).to_value()),
             "skip_bom" => Some(heap.alloc(data.skip_bom).to_value()),
@@ -1175,6 +1199,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     mpn.to_owned(),
                     existing.manufacturer().to_owned(),
                     existing.qualifications().to_vec(),
+                    existing.datasheet().map(ToOwned::to_owned),
                 ));
                 Ok(())
             }
@@ -1191,12 +1216,18 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     existing.mpn().to_owned(),
                     manufacturer.to_owned(),
                     existing.qualifications().to_vec(),
+                    existing.datasheet().map(ToOwned::to_owned),
                 ));
                 Ok(())
             }
             "part" => {
                 if value.is_none() {
                     data.part = None;
+                    data.datasheet = resolve_component_datasheet(
+                        None,
+                        data.component_datasheet.as_deref(),
+                        data.symbol_datasheet.as_deref(),
+                    );
                     return Ok(());
                 }
                 let part = value.downcast_ref::<PartValue>().ok_or_else(|| {
@@ -1206,6 +1237,32 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                     ))
                 })?;
                 data.part = Some(part.clone());
+                data.datasheet = resolve_component_datasheet(
+                    data.part.as_ref(),
+                    data.component_datasheet.as_deref(),
+                    data.symbol_datasheet.as_deref(),
+                );
+                Ok(())
+            }
+            "datasheet" => {
+                if value.is_none() {
+                    data.component_datasheet = None;
+                    data.datasheet = resolve_component_datasheet(
+                        data.part.as_ref(),
+                        None,
+                        data.symbol_datasheet.as_deref(),
+                    );
+                    return Ok(());
+                }
+                let datasheet = value.unpack_str().ok_or_else(|| {
+                    starlark::Error::new_other(anyhow!("`datasheet` must be a string"))
+                })?;
+                data.component_datasheet = Some(datasheet.to_owned());
+                data.datasheet = resolve_component_datasheet(
+                    data.part.as_ref(),
+                    data.component_datasheet.as_deref(),
+                    data.symbol_datasheet.as_deref(),
+                );
                 Ok(())
             }
             "spice_model" => {
@@ -1245,6 +1302,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                 | "mpn"
                 | "manufacturer"
                 | "part"
+                | "datasheet"
                 | "spice_model"
                 | "dnp"
                 | "skip_bom"
@@ -1266,6 +1324,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "mpn".to_string(),
             "manufacturer".to_string(),
             "part".to_string(),
+            "datasheet".to_string(),
             "spice_model".to_string(),
             "dnp".to_string(),
             "skip_bom".to_string(),
@@ -1312,6 +1371,13 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                     .part
                     .as_ref()
                     .map(|p| heap.alloc(p.clone()).to_value())
+                    .unwrap_or_else(Value::new_none),
+            ),
+            "datasheet" => Some(
+                self.data
+                    .datasheet
+                    .as_ref()
+                    .map(|datasheet| heap.alloc_str(datasheet).to_value())
                     .unwrap_or_else(Value::new_none),
             ),
             "spice_model" => Some(
@@ -1394,6 +1460,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                 | "mpn"
                 | "manufacturer"
                 | "part"
+                | "datasheet"
                 | "spice_model"
                 | "dnp"
                 | "skip_bom"
@@ -1415,6 +1482,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
             "mpn".to_string(),
             "manufacturer".to_string(),
             "part".to_string(),
+            "datasheet".to_string(),
             "spice_model".to_string(),
             "dnp".to_string(),
             "skip_bom".to_string(),
@@ -1517,8 +1585,8 @@ impl<'v> ComponentValue<'v> {
         self.data.borrow().skip_pos
     }
 
-    pub fn datasheet(&self) -> Option<&str> {
-        self.datasheet.as_deref()
+    pub fn datasheet(&self) -> Option<String> {
+        self.data.borrow().datasheet.clone()
     }
 
     pub fn description(&self) -> Option<&str> {
@@ -1592,7 +1660,7 @@ impl FrozenComponentValue {
     }
 
     pub fn datasheet(&self) -> Option<&str> {
-        self.datasheet.as_deref()
+        self.data.datasheet.as_deref()
     }
 
     pub fn description(&self) -> Option<&str> {
@@ -1922,9 +1990,9 @@ where
             );
             append_alternatives_property(&mut properties_map, alternatives, eval_ctx.heap())?;
 
-            // If datasheet is not explicitly provided, try to get it from properties, then symbol properties
+            // Datasheets resolve as Part > component field/property > KiCad symbol fallback.
             // Skip empty strings and "~" (KiCad's placeholder for no datasheet) - prefer None over empty
-            let explicit_datasheet = datasheet_val
+            let component_datasheet = datasheet_val
                 .and_then(|v| v.unpack_str())
                 .and_then(pcb_eda::usable_kicad_field_value)
                 .map(ToOwned::to_owned)
@@ -1935,11 +2003,14 @@ where
                         .and_then(pcb_eda::usable_kicad_field_value)
                         .map(ToOwned::to_owned)
                 });
-            let final_datasheet = if let Some(datasheet) = explicit_datasheet {
-                Some(normalize_path_to_package_uri(&datasheet, Some(ctx)))
-            } else {
-                resolve_symbol_datasheet(&final_symbol, ctx)?
-            };
+            let component_datasheet = component_datasheet
+                .map(|datasheet| normalize_path_to_package_uri(&datasheet, Some(ctx)));
+            let symbol_datasheet = resolve_symbol_datasheet(&final_symbol, ctx)?;
+            let final_datasheet = resolve_component_datasheet(
+                final_part.as_ref(),
+                component_datasheet.as_deref(),
+                symbol_datasheet.as_deref(),
+            );
 
             // If description is not explicitly provided, try to get it from properties, then symbol properties
             // Skip empty strings - prefer None over empty
@@ -2043,11 +2114,13 @@ where
                     dnp: final_dnp.unwrap_or(false),
                     skip_bom: final_skip_bom,
                     skip_pos: final_skip_pos.unwrap_or(false),
+                    datasheet: final_datasheet,
+                    component_datasheet,
+                    symbol_datasheet,
                     properties: properties_map,
                 }),
                 source_path: eval_ctx.source_path().unwrap_or_default(),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
-                datasheet: final_datasheet,
                 description: final_description,
             });
 
@@ -2170,6 +2243,7 @@ mod tests {
             "PART-MPN".to_string(),
             "PART-MFR".to_string(),
             vec!["Q1".to_string()],
+            None,
         );
 
         let resolved = resolve_component_sourcing(
@@ -2198,6 +2272,7 @@ mod tests {
             "PART-MPN".to_string(),
             "PART-MFR".to_string(),
             vec!["Q1".to_string()],
+            None,
         );
         let manifest_parts = vec![
             ManifestPart {
@@ -2206,6 +2281,7 @@ mod tests {
                 symbol_name: None,
                 manufacturer: "ManifestCorp".to_string(),
                 qualifications: vec!["Q2".to_string()],
+                datasheet: None,
             },
             ManifestPart {
                 mpn: "MANIFEST-ALT".to_string(),
@@ -2213,6 +2289,7 @@ mod tests {
                 symbol_name: None,
                 manufacturer: "AltCorp".to_string(),
                 qualifications: vec!["Q3".to_string()],
+                datasheet: None,
             },
         ];
 
@@ -2237,11 +2314,13 @@ mod tests {
                     "MANIFEST-PRIMARY".to_string(),
                     "ManifestCorp".to_string(),
                     vec!["Q2".to_string()],
+                    None,
                 ),
                 PartValue::new(
                     "MANIFEST-ALT".to_string(),
                     "AltCorp".to_string(),
                     vec!["Q3".to_string()],
+                    None,
                 ),
             ]
         );
@@ -2307,6 +2386,7 @@ mod tests {
                 symbol_name: None,
                 manufacturer: "ManifestCorp".to_string(),
                 qualifications: vec!["Q1".to_string()],
+                datasheet: None,
             },
             ManifestPart {
                 mpn: "MANIFEST-ALT".to_string(),
@@ -2314,6 +2394,7 @@ mod tests {
                 symbol_name: None,
                 manufacturer: "AltCorp".to_string(),
                 qualifications: vec!["Q2".to_string()],
+                datasheet: None,
             },
         ];
 
@@ -2337,6 +2418,7 @@ mod tests {
                 "MANIFEST-ALT".to_string(),
                 "AltCorp".to_string(),
                 vec!["Q2".to_string()],
+                None,
             )]
         );
     }

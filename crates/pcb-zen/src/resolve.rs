@@ -2650,6 +2650,7 @@ mod tests {
                     symbol_name: Some("1N4004".to_string()),
                     manufacturer: "Vishay".to_string(),
                     qualifications: vec![],
+                    datasheet: None,
                 }],
             )]))
             .unwrap(),
@@ -2715,6 +2716,7 @@ mod tests {
                 symbol_name: None,
                 manufacturer: "Acme".to_string(),
                 qualifications: vec![],
+                datasheet: None,
             }],
         )
         .expect_err("expected ambiguous multi-symbol manifest part to fail");

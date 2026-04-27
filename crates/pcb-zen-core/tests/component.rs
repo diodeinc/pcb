@@ -31,6 +31,97 @@ fn eval_single_root_component(source: &str) -> FrozenComponentValue {
         .expect("expected one component")
 }
 
+#[test]
+fn component_prefers_part_datasheet_over_component_datasheet() {
+    let component = eval_single_root_component(
+        r#"
+P1 = Net()
+P2 = Net()
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    datasheet = "component.pdf",
+    part = builtin.Part(
+        mpn = "PART-1",
+        manufacturer = "MFR",
+        datasheet = "https://example.com/part-1.pdf",
+    ),
+)
+"#,
+    );
+
+    assert_eq!(
+        component.datasheet(),
+        Some("https://example.com/part-1.pdf")
+    );
+}
+
+#[test]
+fn component_modifier_can_set_part_datasheet() {
+    let component = eval_single_root_component(
+        r#"
+P1 = Net()
+P2 = Net()
+
+def match_part(component):
+    component.part = builtin.Part(
+        mpn = "HOUSE-1",
+        manufacturer = "MFR",
+        datasheet = "https://example.com/house-1.pdf",
+    )
+
+builtin.add_component_modifier(match_part)
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+)
+"#,
+    );
+
+    assert_eq!(
+        component.datasheet(),
+        Some("https://example.com/house-1.pdf")
+    );
+}
+
+#[test]
+fn component_modifier_part_without_datasheet_clears_stale_part_datasheet() {
+    let component = eval_single_root_component(
+        r#"
+P1 = Net()
+P2 = Net()
+
+def match_part(component):
+    component.part = builtin.Part(
+        mpn = "HOUSE-1",
+        manufacturer = "MFR",
+    )
+
+builtin.add_component_modifier(match_part)
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    part = builtin.Part(
+        mpn = "PART-1",
+        manufacturer = "MFR",
+        datasheet = "https://example.com/part-1.pdf",
+    ),
+)
+"#,
+    );
+
+    assert_eq!(component.datasheet(), None);
+}
+
 snapshot_eval!(component_properties, {
     "C146731.kicad_sym" => include_str!("resources/C146731.kicad_sym"),
     "test_props.zen" => r#"
