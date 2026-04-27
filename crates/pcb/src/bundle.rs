@@ -392,12 +392,8 @@ pcb-version = "0.3"
             .write("pcb.toml", ROOT_PCB_TOML)
             .write("pcb.sum", "test/package 0.1.0 h1:test\n");
 
-        let mut workspace = get_workspace_info(
-            &DefaultFileProvider::new(),
-            &sb.root_path().join("src"),
-            true,
-        )
-        .unwrap();
+        let mut workspace =
+            get_workspace_info(&DefaultFileProvider::new(), &sb.root_path().join("src")).unwrap();
         let resolution = resolve_dependencies(&mut workspace, false, false).unwrap();
         let staged_src = sb.root_path().join("staged/src");
 

@@ -1,12 +1,13 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize as ColoredExt;
+use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
+use pcb_zen::workspace::{MemberPackage, SymbolFileInfo, WorkspaceInfo, get_workspace_info};
 use pcb_zen_core::DefaultFileProvider;
 use serde::Serialize;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]
 #[command(about = "Display workspace and board information")]
@@ -14,10 +15,6 @@ pub struct InfoArgs {
     /// Output format
     #[arg(short = 'f', long, value_enum, default_value = "human")]
     pub format: OutputFormat,
-
-    /// Show dependency tree
-    #[arg(long)]
-    pub tree: bool,
 
     /// Optional path to start discovery from (defaults to current directory)
     pub path: Option<String>,
@@ -38,24 +35,72 @@ pub fn execute(args: InfoArgs) -> Result<()> {
     };
 
     let file_provider = DefaultFileProvider::new();
-    let mut workspace_info = get_workspace_info(&file_provider, &start_path, true)?;
-
-    // Populate dirty status for all packages (used by both human and JSON output)
-    workspace_info.populate_dirty();
+    let mut workspace_info = get_workspace_info(&file_provider, &start_path)?;
 
     match args.format {
         OutputFormat::Human => {
             print_human_readable(&workspace_info);
         }
-        OutputFormat::Json => print_json(&workspace_info)?,
+        OutputFormat::Json => {
+            populate_package_file_discovery(&mut workspace_info)?;
+            print_json(&workspace_info)?;
+        }
     }
 
-    // Print dependency tree if requested
-    if args.tree {
-        println!();
-        println!("{}", "Dependencies".with_style(Style::Blue).bold());
-        let result = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
-        pcb_zen::print_dep_tree(&result);
+    Ok(())
+}
+
+fn populate_package_file_discovery(ws: &mut WorkspaceInfo) -> Result<()> {
+    for pkg in ws.packages.values_mut() {
+        let package_dir = pkg.dir(&ws.root);
+        let mut entries = std::fs::read_dir(&package_dir)
+            .with_context(|| format!("Failed to read package directory {}", package_dir.display()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| {
+                format!("Failed to list package directory {}", package_dir.display())
+            })?;
+        entries.sort_by_key(|entry| entry.file_name());
+
+        let mut entrypoints = Vec::new();
+        let mut symbol_files = Vec::new();
+
+        for entry in entries {
+            let path = entry.path();
+            let extension = path.extension().and_then(|ext| ext.to_str());
+            if !matches!(extension, Some("zen" | "kicad_sym")) {
+                continue;
+            }
+
+            let file_type = entry
+                .file_type()
+                .with_context(|| format!("Failed to inspect package entry {}", path.display()))?;
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let rel_path = PathBuf::from(entry.file_name());
+            match extension {
+                Some("zen") => entrypoints.push(rel_path),
+                Some("kicad_sym") => {
+                    let library = KicadSymbolLibrary::from_file(&path).with_context(|| {
+                        format!("Failed to discover symbols in {}", path.display())
+                    })?;
+                    let symbols = library
+                        .symbol_names()
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect();
+                    symbol_files.push(SymbolFileInfo {
+                        path: rel_path,
+                        symbols,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        pkg.entrypoints = entrypoints;
+        pkg.symbol_files = symbol_files;
     }
 
     Ok(())

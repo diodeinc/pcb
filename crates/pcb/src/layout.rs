@@ -5,6 +5,7 @@ use pcb_ui::prelude::*;
 use std::path::PathBuf;
 
 use crate::build::{build, create_diagnostics_passes};
+use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
 use crate::drc;
 
 #[derive(Args, Debug, Default, Clone)]
@@ -13,6 +14,9 @@ pub struct LayoutArgs {
     /// Path to .zen file
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     pub file: PathBuf,
+
+    #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
+    pub config: Vec<String>,
 
     /// Skip opening the layout file after generation
     #[arg(long)]
@@ -44,6 +48,7 @@ pub struct LayoutArgs {
 
 pub fn execute(mut args: LayoutArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
+    let config_inputs = parse_config_overrides(&args.config)?;
 
     // --check implies --no-open
     if args.check {
@@ -62,7 +67,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
 
     let Some(schematic) = build(
         zen_path,
-        Default::default(),
+        config_inputs,
         create_diagnostics_passes(&args.suppress, &[]),
         false,
         &mut false.clone(),

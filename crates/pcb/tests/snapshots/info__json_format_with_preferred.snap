@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/info.rs
-assertion_line: 108
 expression: output
 ---
 Command: pcb info -f json
@@ -31,7 +30,10 @@ Exit Code: 0
         }
       },
       "preferred": false,
-      "dirty": true
+      "dirty": true,
+      "entrypoints": [
+        "main_board.zen"
+      ]
     },
     "boards/test-board": {
       "rel_path": "boards/test-board",
@@ -43,7 +45,10 @@ Exit Code: 0
         }
       },
       "preferred": true,
-      "dirty": true
+      "dirty": true,
+      "entrypoints": [
+        "test_board.zen"
+      ]
     }
   }
 }

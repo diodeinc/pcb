@@ -187,9 +187,10 @@ const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
     ArtifactType::Ipc2581,
     ArtifactType::Step,
     ArtifactType::Vrml,
-    ArtifactType::Glb,
     ArtifactType::Svg,
 ];
+
+const ODB_EXPORT_PRECISION: &str = "4";
 
 const FINALIZATION_TASKS: &[(&str, TaskFn)] = &[
     ("Writing release metadata", write_metadata),
@@ -718,8 +719,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     // Re-resolve in offline+locked mode. All dependencies (including KiCad
     // library files) are vendored from eval1 by copy_sources.
-    let mut staged_workspace =
-        get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path, true)?;
+    let mut staged_workspace = get_workspace_info(&DefaultFileProvider::new(), &staged_zen_path)?;
     let staged_resolution = pcb_zen::resolve_dependencies(&mut staged_workspace, true, true)?;
 
     // Use build function with offline mode but allow warnings
@@ -1099,7 +1099,7 @@ fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg("--units")
         .arg("mm")
         .arg("--precision")
-        .arg("2")
+        .arg(ODB_EXPORT_PRECISION)
         .arg("--compression")
         .arg("zip")
         .arg(kicad_pcb_path.to_string_lossy())

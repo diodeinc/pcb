@@ -189,6 +189,8 @@ pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::Re
             published_at: None,
             preferred: false,
             dirty: false,
+            entrypoints: Vec::new(),
+            symbol_files: Vec::new(),
         },
     );
     let default_deps = default_test_kicad_resolution_map();

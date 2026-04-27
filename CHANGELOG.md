@@ -10,12 +10,18 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `pcb layout`, `pcb simulate`, and `pcb test` now support repeatable `--config KEY=VALUE` overrides.
 - `pcb-version` now requires `major.minor`; auto-deps bumps older workspace minors forward and newer-required minors error out.
 - `Part` now accepts optional datasheet metadata, including for BOM-matched house parts.
+- `pcb info -f json` now includes package entrypoints and top-level KiCad symbol names.
 
 ### Changed
 
+- Removed `pcb info --tree`; it was not reliable and will be added back later when the dependency-tree semantics are more robust.
 - Removed the hidden `pcb mcp` command and deleted the `pcb-mcp` / `rquickjs` integration from the workspace.
+- Board releases no longer generate GLB model files.
+- ODB++ release exports now use precision 4.
+- `pcb info` now computes package dirty status from git metadata more efficiently.
 
 ### Fixed
 

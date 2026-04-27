@@ -134,7 +134,7 @@ fn matches_filter(url: &str, filter: &[String]) -> bool {
 
 pub fn execute(args: UpdateArgs) -> Result<()> {
     let start_path = args.path.canonicalize().unwrap_or(args.path.clone());
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &start_path, true)?;
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), &start_path)?;
 
     println!("{}", "Checking for updates...".cyan());
 
@@ -439,6 +439,8 @@ mod tests {
                 published_at: None,
                 preferred: false,
                 dirty: false,
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
             },
         );
 
@@ -504,6 +506,8 @@ mod tests {
                 published_at: None,
                 preferred: false,
                 dirty: false,
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
             },
         );
         packages.insert(
@@ -515,6 +519,8 @@ mod tests {
                 published_at: None,
                 preferred: false,
                 dirty: false,
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
             },
         );
 

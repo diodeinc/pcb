@@ -338,7 +338,7 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
 fn resolve_local_workspace_package_url(pkg: &str) -> Option<(PathBuf, String, Option<String>)> {
     let cwd = std::env::current_dir().ok()?;
     let file_provider = pcb_zen_core::DefaultFileProvider::new();
-    let workspace_info = pcb_zen::get_workspace_info(&file_provider, &cwd, true).ok()?;
+    let workspace_info = pcb_zen::get_workspace_info(&file_provider, &cwd).ok()?;
 
     workspace_info
         .packages
@@ -535,7 +535,7 @@ fn run_docgen_for_remote_package(
 fn get_local_package_url(dir: &std::path::Path) -> Option<String> {
     let canonical = dir.canonicalize().ok()?;
     let file_provider = pcb_zen_core::DefaultFileProvider::new();
-    let workspace_info = pcb_zen::get_workspace_info(&file_provider, &canonical, true).ok()?;
+    let workspace_info = pcb_zen::get_workspace_info(&file_provider, &canonical).ok()?;
     let repo = workspace_info.repository()?;
 
     let relative = canonical.strip_prefix(&workspace_info.root).ok()?;

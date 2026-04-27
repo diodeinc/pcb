@@ -179,82 +179,6 @@ fn build_fetch_pool() -> Result<rayon::ThreadPool> {
         .map_err(|e| anyhow::anyhow!("Failed to build fetch thread pool: {e}"))
 }
 
-/// Print the dependency tree to stdout.
-pub fn print_dep_tree(resolution: &ResolutionResult) {
-    let workspace_info = &resolution.workspace_info;
-    let workspace_name = workspace_info
-        .root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace");
-
-    // Index closure by path for fast lookup
-    let by_path: HashMap<&str, &Version> = resolution
-        .closure
-        .iter()
-        .map(|(line, version)| (line.path.as_str(), version))
-        .collect();
-
-    // Collect root deps (direct deps from workspace packages)
-    let mut root_deps: Vec<String> = Vec::new();
-    for pkg in workspace_info.packages.values() {
-        for url in pkg.config.dependencies.keys() {
-            if by_path.contains_key(url.as_str()) && !root_deps.contains(url) {
-                root_deps.push(url.clone());
-            }
-        }
-    }
-    root_deps.sort();
-
-    if root_deps.is_empty() {
-        return;
-    }
-
-    // Build dep graph: url -> Vec<dep_urls> by reading pcb.toml from resolved paths
-    let mut dep_graph: HashMap<String, Vec<String>> = HashMap::new();
-    for line in resolution.closure.keys() {
-        if dep_graph.contains_key(&line.path) {
-            continue;
-        }
-        for deps in resolution.package_resolutions.values() {
-            if let Some(resolved) = deps.get(&line.path) {
-                let pcb_toml = resolved.join("pcb.toml");
-                if let Ok(content) = std::fs::read_to_string(&pcb_toml)
-                    && let Ok(config) = PcbToml::parse(&content)
-                {
-                    let mut transitive: Vec<String> = config
-                        .dependencies
-                        .keys()
-                        .filter(|dep_url| by_path.contains_key(dep_url.as_str()))
-                        .cloned()
-                        .collect();
-                    transitive.sort();
-                    dep_graph.insert(line.path.clone(), transitive);
-                }
-                break;
-            }
-        }
-    }
-
-    let mut printed = HashSet::new();
-    let _ = crate::tree::print_tree(workspace_name.to_string(), root_deps, |url| {
-        let version = by_path
-            .get(url.as_str())
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "?".into());
-        let name = url.split('/').skip(1).collect::<Vec<_>>().join("/");
-        let already = !printed.insert(url.clone());
-
-        let label = format!("{} v{}{}", name, version, if already { " (*)" } else { "" });
-        let children = if already {
-            vec![]
-        } else {
-            dep_graph.get(url).cloned().unwrap_or_default()
-        };
-        (label, children)
-    });
-}
-
 /// Result of vendoring operation
 pub struct VendorResult {
     /// Number of packages vendored
@@ -2662,6 +2586,8 @@ mod tests {
                 published_at: None,
                 preferred: false,
                 dirty: false,
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
             },
         );
 
