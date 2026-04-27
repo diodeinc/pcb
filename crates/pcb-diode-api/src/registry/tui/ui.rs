@@ -1,7 +1,7 @@
 //! UI rendering
 
 use crate::kicad_symbols::KicadSymbol;
-use crate::{PackageDependency, RegistryPart, SearchHit};
+use crate::{RegistryModule, RegistryModuleDependency, RegistrySymbol, SearchHit};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -14,7 +14,7 @@ use ratatui_image::StatefulImage;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use super::app::{App, DownloadState};
+use super::app::{App, DownloadState, registry_symbol_has_image};
 use super::image::{decode_image, image_dimensions};
 
 /// Render the entire UI
@@ -119,42 +119,43 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .split(cols[1]);
 
-            render_result_list(
-                frame,
-                "Semantic",
-                &app.results.semantic,
-                left_rows[0],
-                Color::Cyan,
-                None,
-                true,
-            );
-            render_result_list(
-                frame,
-                "Trigram",
-                &app.results.trigram,
-                left_rows[1],
-                Color::Yellow,
-                None,
-                true,
-            );
-            render_result_list(
-                frame,
-                "Word",
-                &app.results.word,
-                right_rows[0],
-                Color::Green,
-                None,
-                true,
-            );
-            render_result_list(
-                frame,
-                "Docs",
-                &app.results.docs_full_text,
-                right_rows[1],
-                Color::LightMagenta,
-                None,
-                true,
-            );
+            let panel_areas = [left_rows[0], left_rows[1], right_rows[0], right_rows[1]];
+            match &app.results {
+                super::search::SearchResults::RegistryModules(results) => render_panel_set(
+                    frame,
+                    panel_areas,
+                    [
+                        &results.semantic,
+                        &results.trigram,
+                        &results.word,
+                        &results.docs_full_text,
+                    ],
+                    module_row_spans,
+                ),
+                super::search::SearchResults::RegistrySymbols(results) => render_panel_set(
+                    frame,
+                    panel_areas,
+                    [
+                        &results.semantic,
+                        &results.trigram,
+                        &results.word,
+                        &results.docs_full_text,
+                    ],
+                    symbol_row_spans,
+                ),
+                super::search::SearchResults::KicadSymbols(results) => render_panel_set(
+                    frame,
+                    panel_areas,
+                    [
+                        &results.semantic,
+                        &results.trigram,
+                        &results.word,
+                        &results.docs_full_text,
+                    ],
+                    kicad_row_spans,
+                ),
+                super::search::SearchResults::Empty => {}
+            }
 
             render_local_merged_list(frame, app, rows[1]);
         } else {
@@ -169,18 +170,18 @@ fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
 /// Render results count + query time line (subtle)
 fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
     let line = if app.mode.requires_local_index() {
-        let count = app.results.merged.len();
-        let query_time = format_duration(app.results.duration);
+        let count = app.results.len();
+        let query_time = format_duration(app.results.duration());
 
         if count == 0 {
             Line::from(vec![Span::styled(
-                format!("  0/{}", app.packages_count),
+                format!("  0/{}", app.index_count),
                 Style::default().fg(Color::DarkGray),
             )])
         } else {
             Line::from(vec![
                 Span::styled(
-                    format!("  {}/{} ", count, app.packages_count),
+                    format!("  {}/{} ", count, app.index_count),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(
@@ -232,53 +233,110 @@ fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// Render a simple results list panel (for Trigram/Word/Semantic - no selection, dimmed)
-fn render_result_list(
+/// Render the four debug panels (Semantic / Trigram / Word / Docs) for any hit type.
+fn render_panel_set<T>(
     frame: &mut Frame,
-    title: &str,
-    hits: &[SearchHit],
-    area: Rect,
-    color: Color,
-    _selected: Option<usize>,
-    dimmed: bool,
+    areas: [Rect; 4],
+    hits: [&[T]; 4],
+    mut row_spans: impl FnMut(&T) -> Vec<Span<'static>>,
 ) {
-    let score_style = Style::default().fg(Color::DarkGray);
+    const PANELS: [(&str, Color); 4] = [
+        ("Semantic", Color::Cyan),
+        ("Trigram", Color::Yellow),
+        ("Word", Color::Green),
+        ("Docs", Color::LightMagenta),
+    ];
+    for (i, (title, color)) in PANELS.iter().enumerate() {
+        let items: Vec<ListItem> = hits[i]
+            .iter()
+            .map(|hit| ListItem::new(Line::from(row_spans(hit))))
+            .collect();
+        let list = List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_set(border::ROUNDED)
+                .border_style(Style::default().fg(*color).add_modifier(Modifier::DIM))
+                .title(format!(" {} ", title)),
+        );
+        frame.render_widget(list, areas[i]);
+    }
+}
 
-    let items: Vec<ListItem> = hits
-        .iter()
-        .map(|hit| {
-            let display_name = hit.mpn.as_deref().unwrap_or(&hit.name);
-            let name_span = Span::styled(display_name, Style::default().fg(Color::White));
-            let prefix_span = if let Some(rank) = hit.rank {
-                Span::styled(format!("{:>7.2} ", rank), score_style)
+fn rank_prefix_span(rank: Option<f64>) -> Span<'static> {
+    let style = Style::default().fg(Color::DarkGray);
+    match rank {
+        Some(r) => Span::styled(format!("{:>7.2} ", r), style),
+        None => Span::styled("        ".to_string(), style),
+    }
+}
+
+fn module_row_spans(hit: &crate::RegistryModuleHit) -> Vec<Span<'static>> {
+    vec![
+        rank_prefix_span(hit.rank),
+        Span::styled(hit.name.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            format!(" ({})", hit.version),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]
+}
+
+fn symbol_row_spans(hit: &crate::RegistrySymbolHit) -> Vec<Span<'static>> {
+    vec![
+        rank_prefix_span(hit.rank),
+        Span::styled(hit.mpn.clone(), Style::default().fg(Color::White)),
+        Span::styled(
+            format!(" ({})", hit.manufacturer),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]
+}
+
+fn kicad_row_spans(hit: &SearchHit) -> Vec<Span<'static>> {
+    let display_name = hit.mpn.as_deref().unwrap_or(&hit.name).to_string();
+    let mut spans = vec![
+        rank_prefix_span(hit.rank),
+        Span::styled(display_name, Style::default().fg(Color::White)),
+    ];
+    if let Some(mfr) = hit.manufacturer.as_deref().filter(|m| !m.is_empty()) {
+        spans.push(Span::styled(
+            format!(" ({})", mfr),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+    spans
+}
+
+/// Build the merged-list items with selection highlighting; the closure renders the row lines.
+fn build_merged_items<T, F>(
+    hits: &[T],
+    selected_index: Option<usize>,
+    mut to_lines: F,
+) -> Vec<ListItem<'static>>
+where
+    F: FnMut(&T, bool, Style, Style) -> Vec<Line<'static>>,
+{
+    let selection_bg = Color::Rgb(38, 38, 38);
+    hits.iter()
+        .enumerate()
+        .map(|(i, hit)| {
+            let is_selected = selected_index == Some(i);
+            let (base, prefix) = if is_selected {
+                (
+                    Style::default().bg(selection_bg),
+                    Style::default().fg(Color::LightRed).bg(selection_bg),
+                )
             } else {
-                Span::styled("        ", score_style)
+                (Style::default(), Style::default())
             };
-            let mfr = hit.manufacturer.as_deref().unwrap_or("");
-            let mfr_span = if !mfr.is_empty() {
-                Span::styled(format!(" ({})", mfr), Style::default().fg(Color::DarkGray))
+            let item = ListItem::new(to_lines(hit, is_selected, base, prefix));
+            if is_selected {
+                item.style(Style::default().bg(selection_bg))
             } else {
-                Span::styled("", Style::default())
-            };
-            ListItem::new(Line::from(vec![prefix_span, name_span, mfr_span]))
+                item
+            }
         })
-        .collect();
-
-    let border_style = if dimmed {
-        Style::default().fg(color).add_modifier(Modifier::DIM)
-    } else {
-        Style::default().fg(color)
-    };
-
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(border::ROUNDED)
-            .border_style(border_style)
-            .title(format!(" {} ", title)),
-    );
-
-    frame.render_widget(list, area);
+        .collect()
 }
 
 /// Render the merged local-index results list with selection and auto-scrolling
@@ -288,52 +346,23 @@ fn render_local_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    use super::display::RegistryResultDisplay;
+    use super::display::{RegistryModuleDisplay, RegistrySymbolDisplay};
 
-    let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.list_state.selected();
-    let is_modules_mode = app.mode == super::app::SearchMode::RegistryModules;
 
-    let items: Vec<ListItem> = app
-        .results
-        .merged
-        .iter()
-        .enumerate()
-        .map(|(i, hit)| {
-            let is_selected = selected_index == Some(i);
-
-            let base_style = if is_selected {
-                Style::default().bg(selection_bg)
-            } else {
-                Style::default()
-            };
-
-            let prefix_style = if is_selected {
-                Style::default().fg(Color::LightRed).bg(selection_bg)
-            } else {
-                Style::default()
-            };
-
-            let display = RegistryResultDisplay::from_registry(
-                &hit.url,
-                hit.version.as_deref(),
-                hit.package_category.as_deref(),
-                hit.mpn.as_deref(),
-                hit.manufacturer.as_deref(),
-                hit.short_description.as_deref(),
-                is_modules_mode,
-            );
-
-            let lines = display.to_tui_lines(is_selected, base_style, prefix_style);
-
-            let item = ListItem::new(lines);
-            if is_selected {
-                item.style(Style::default().bg(selection_bg))
-            } else {
-                item
-            }
-        })
-        .collect();
+    let items: Vec<ListItem> = match &app.results {
+        super::search::SearchResults::RegistryModules(results) => {
+            build_merged_items(&results.merged, selected_index, |hit, sel, base, prefix| {
+                RegistryModuleDisplay::from_hit(hit).to_tui_lines(sel, base, prefix)
+            })
+        }
+        super::search::SearchResults::RegistrySymbols(results) => {
+            build_merged_items(&results.merged, selected_index, |hit, sel, base, prefix| {
+                RegistrySymbolDisplay::from_hit(hit).to_tui_lines(sel, base, prefix)
+            })
+        }
+        _ => Vec::new(),
+    };
 
     let list = List::new(items).direction(ListDirection::BottomToTop);
 
@@ -358,7 +387,7 @@ fn render_local_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
     render_scrollbar(
         frame,
         scrollbar_area,
-        app.results.merged.len(),
+        app.results.len(),
         app.list_state.offset(),
         item_height,
     );
@@ -367,37 +396,16 @@ fn render_local_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_kicad_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
     use super::display::KicadSymbolDisplay;
 
-    let selection_bg = Color::Rgb(38, 38, 38);
     let selected_index = app.list_state.selected();
 
-    let items: Vec<ListItem> = app
-        .results
-        .merged
-        .iter()
-        .enumerate()
-        .map(|(i, hit)| {
-            let is_selected = selected_index == Some(i);
-            let base_style = if is_selected {
-                Style::default().bg(selection_bg)
-            } else {
-                Style::default()
-            };
-            let prefix_style = if is_selected {
-                Style::default().fg(Color::LightRed).bg(selection_bg)
-            } else {
-                Style::default()
-            };
-
-            let display = KicadSymbolDisplay::from_hit(hit);
-            let lines = display.to_tui_lines(is_selected, base_style, prefix_style);
-            let item = ListItem::new(lines);
-            if is_selected {
-                item.style(Style::default().bg(selection_bg))
-            } else {
-                item
-            }
-        })
-        .collect();
+    let hits = match &app.results {
+        super::search::SearchResults::KicadSymbols(results) => &results.merged,
+        _ => return,
+    };
+    let items: Vec<ListItem> =
+        build_merged_items(hits, selected_index, |hit, sel, base, prefix| {
+            KicadSymbolDisplay::from_hit(hit).to_tui_lines(sel, base, prefix)
+        });
 
     let list = List::new(items).direction(ListDirection::BottomToTop);
     let list_area = Rect {
@@ -414,7 +422,7 @@ fn render_kicad_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
     render_scrollbar(
         frame,
         scrollbar_area,
-        app.results.merged.len(),
+        hits.len(),
         app.list_state.offset(),
         3,
     );
@@ -490,8 +498,10 @@ fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Render the preview panel showing selected package details
 fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
-    let title = if app.mode.requires_registry() {
-        " Package Details "
+    let title = if app.mode == super::app::SearchMode::RegistryModules {
+        " Module Details "
+    } else if app.mode == super::app::SearchMode::RegistryComponents {
+        " Component Details "
     } else if app.mode == super::app::SearchMode::KicadSymbols {
         " Symbol Details "
     } else {
@@ -508,31 +518,39 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
 
     if app.mode.requires_registry() {
-        // Use the cached selected_part (fetched on-demand)
-        // We keep showing old details while new ones load to avoid flicker.
-        // Only show "Loading..." if we've been waiting > 100ms (via is_loading_details).
-        if let Some(part) = app.selected_part.clone() {
-            // Add 2 char left padding
-            let padded = Rect {
-                x: inner.x + 2,
-                y: inner.y,
-                width: inner.width.saturating_sub(2),
-                height: inner.height,
-            };
-            render_part_details(frame, app, &part, padded);
-        } else if app.results.merged.is_empty() {
-            let empty = Paragraph::new("No part selected")
+        let padded = Rect {
+            x: inner.x + 2,
+            y: inner.y,
+            width: inner.width.saturating_sub(2),
+            height: inner.height,
+        };
+        if app.mode == super::app::SearchMode::RegistryModules {
+            if let Some(module) = app.selected_module.clone() {
+                render_registry_module_details(frame, app, &module, padded);
+            } else if app.results.is_empty() {
+                let empty = Paragraph::new("No module selected")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Center);
+                frame.render_widget(empty, inner);
+            } else if app.is_loading_details() {
+                let loading = Paragraph::new("Loading...")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Center);
+                frame.render_widget(loading, inner);
+            }
+        } else if let Some(symbol) = app.selected_symbol.clone() {
+            render_registry_symbol_details(frame, app, &symbol, padded);
+        } else if app.results.is_empty() {
+            let empty = Paragraph::new("No component selected")
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(Alignment::Center);
             frame.render_widget(empty, inner);
         } else if app.is_loading_details() {
-            // Only show loading after a delay to avoid flicker
             let loading = Paragraph::new("Loading...")
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(Alignment::Center);
             frame.render_widget(loading, inner);
         }
-        // else: waiting for details but delay not elapsed - show nothing
     } else if app.mode == super::app::SearchMode::KicadSymbols {
         if let Some(symbol) = app.selected_kicad_symbol.clone() {
             let padded = Rect {
@@ -542,7 +560,7 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                 height: inner.height,
             };
             render_kicad_symbol_details(frame, app, &symbol, padded);
-        } else if app.results.merged.is_empty() {
+        } else if app.results.is_empty() {
             let empty = Paragraph::new("No symbol selected")
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(Alignment::Center);
@@ -897,15 +915,6 @@ fn fitted_image_rect(image_width: u32, image_height: u32, area: Rect) -> Rect {
     }
 }
 
-/// Render part image in the preview panel (decodes from embedded image_data)
-fn render_part_image(frame: &mut Frame, app: &App, part: &RegistryPart, area: Rect) {
-    let image_data = match &part.image_data {
-        Some(data) if !data.is_empty() => data,
-        _ => return,
-    };
-    render_image_bytes(frame, app, image_data, area);
-}
-
 fn render_kicad_symbol_details(frame: &mut Frame, app: &mut App, symbol: &KicadSymbol, area: Rect) {
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
@@ -1120,252 +1129,308 @@ fn kicad_symbol_keywords(symbol: &KicadSymbol) -> Vec<String> {
     keywords
 }
 
-/// Render detailed package information with adaptive layout
-fn render_part_details(frame: &mut Frame, app: &mut App, part: &RegistryPart, area: Rect) {
+fn render_registry_module_details(
+    frame: &mut Frame,
+    app: &mut App,
+    module: &RegistryModule,
+    area: Rect,
+) {
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
     let dim_style = Style::default()
         .fg(Color::DarkGray)
         .add_modifier(Modifier::ITALIC);
-
     let mut lines: Vec<Line> = Vec::new();
 
-    // ═══════════════════════════════════════════
-    // PACKAGE INFO (always shown)
-    // ═══════════════════════════════════════════
     lines.push(Line::from(vec![
         Span::styled("URL           ", label_style),
         Span::styled(
-            &part.url,
+            module.url.clone(),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
-
-    if let Some(ref version) = part.version {
+    lines.push(Line::from(vec![
+        Span::styled("Version       ", label_style),
+        Span::styled(module.version.clone(), value_style),
+    ]));
+    if let Some(published_at) = module.published_at.as_deref() {
         lines.push(Line::from(vec![
-            Span::styled("Version       ", label_style),
-            Span::styled(version, value_style),
+            Span::styled("Published     ", label_style),
+            Span::styled(published_at.to_string(), value_style),
         ]));
     }
 
-    // Keywords (after URL/version, wrap with indentation)
-    if !part.keywords.is_empty() {
-        let label = "Keywords      ";
-        let indent = " ".repeat(label.len());
-        let max_width = area.width.saturating_sub(label.len() as u16 + 4) as usize;
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "─── Description ───",
+        Style::default().fg(Color::DarkGray),
+    )));
+    for chunk in wrap_text(&module.description, area.width.saturating_sub(4) as usize) {
+        lines.push(Line::from(Span::styled(chunk, value_style)));
+    }
 
-        let keywords_str = part.keywords.join(", ");
-        let wrapped = wrap_text(&keywords_str, max_width);
-
-        for (i, line_text) in wrapped.into_iter().enumerate() {
-            if i == 0 {
-                lines.push(Line::from(vec![
-                    Span::styled(label, label_style),
-                    Span::styled(line_text, Style::default().fg(Color::DarkGray)),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::styled(indent.clone(), label_style),
-                    Span::styled(line_text, Style::default().fg(Color::DarkGray)),
-                ]));
-            }
+    if !module.entrypoints.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "─── Entrypoints ───",
+            Style::default().fg(Color::DarkGray),
+        )));
+        for entrypoint in &module.entrypoints {
+            lines.push(Line::from(vec![Span::styled(
+                module_relative_url(&entrypoint.url, &module.url),
+                Style::default().fg(Color::Blue),
+            )]));
         }
+    }
+
+    if !module.symbols.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "─── Symbols ───",
+            Style::default().fg(Color::DarkGray),
+        )));
+        for symbol in &module.symbols {
+            lines.push(Line::from(vec![Span::styled(
+                module_relative_url(&symbol.url, &module.url),
+                Style::default().fg(Color::Green),
+            )]));
+        }
+    }
+
+    if !app.module_relations.dependencies.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "─── Dependencies ───",
+            Style::default().fg(Color::DarkGray),
+        )));
+        render_dependency_tree(&mut lines, &app.module_relations.dependencies);
+    }
+
+    if !app.module_relations.dependents.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "─── Used By ───",
+            Style::default().fg(Color::DarkGray),
+        )));
+        render_dependency_tree(&mut lines, &app.module_relations.dependents);
     }
 
     lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "─── Search Scoring ───",
+        Style::default().fg(Color::DarkGray),
+    )));
+    append_search_scoring_for_url(&mut lines, app, &module.url, dim_style);
 
-    // ═══════════════════════════════════════════
-    // COMPONENT DETAILS (only if has MPN or manufacturer)
-    // ═══════════════════════════════════════════
-    let has_component_details = part.mpn.is_some() || part.manufacturer.is_some();
-    if has_component_details {
-        lines.push(Line::from(vec![Span::styled(
-            "─── Component Details ───",
-            Style::default().fg(Color::DarkGray),
-        )]));
+    frame.render_widget(Paragraph::new(lines), area);
+}
 
-        if let Some(ref mpn) = part.mpn {
-            lines.push(Line::from(vec![
-                Span::styled("MPN           ", label_style),
-                Span::styled(mpn, value_style),
-            ]));
-        }
+fn module_relative_url(url: &str, module_url: &str) -> String {
+    url.strip_prefix(module_url)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .unwrap_or(url)
+        .to_string()
+}
 
-        if let Some(ref mfr) = part.manufacturer {
-            lines.push(Line::from(vec![
-                Span::styled("Manufacturer  ", label_style),
-                Span::styled(mfr, value_style),
-            ]));
-        }
-
-        if let Some(ref pt) = part.part_type {
-            lines.push(Line::from(vec![
-                Span::styled("Type          ", label_style),
-                Span::styled(pt, Style::default().fg(Color::Green)),
-            ]));
-        }
-
-        lines.push(Line::from(""));
+fn render_registry_symbol_details(
+    frame: &mut Frame,
+    app: &mut App,
+    symbol: &RegistrySymbol,
+    area: Rect,
+) {
+    let label_style = Style::default().fg(Color::DarkGray);
+    let value_style = Style::default().fg(Color::White);
+    let dim_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC);
+    let mut header_lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("URL           ", label_style),
+            Span::styled(
+                symbol.url.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Version       ", label_style),
+            Span::styled(symbol.module_version.clone(), value_style),
+        ]),
+        Line::from(vec![
+            Span::styled("MPN           ", label_style),
+            Span::styled(symbol.mpn.clone(), value_style),
+        ]),
+        Line::from(vec![
+            Span::styled("Manufacturer  ", label_style),
+            Span::styled(symbol.manufacturer.clone(), value_style),
+        ]),
+        Line::from(vec![
+            Span::styled("Footprint     ", label_style),
+            Span::styled(symbol.footprint.clone(), Style::default().fg(Color::Yellow)),
+        ]),
+    ];
+    if let Some(published_at) = symbol.module_published_at.as_deref() {
+        header_lines.insert(
+            2,
+            Line::from(vec![
+                Span::styled("Published     ", label_style),
+                Span::styled(published_at.to_string(), value_style),
+            ]),
+        );
+    }
+    if !symbol.datasheet.is_empty() {
+        header_lines.push(Line::from(vec![
+            Span::styled("Datasheet     ", label_style),
+            Span::styled(
+                module_relative_url(&symbol.datasheet, &symbol.module_url),
+                value_style,
+            ),
+        ]));
     }
 
-    // ═══════════════════════════════════════════
-    // IMAGE (in component details, before description)
-    // ═══════════════════════════════════════════
-    let has_image = app.image_protocol.is_supported()
+    if let Some(keywords) = symbol
+        .kicad_keywords
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        header_lines.push(Line::from(vec![
+            Span::styled("Keywords      ", label_style),
+            Span::styled(keywords.to_string(), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    let (image, is_loading_image) = app.registry_symbol_image(symbol);
+    let should_reserve_image_panel = app.image_protocol.is_supported()
         && app.picker.is_some()
-        && part.image_data.as_ref().is_some_and(|d| !d.is_empty());
-
-    if has_image {
-        // Render text so far, then image, then continue with description
-        let header_height = lines.len() as u16;
-        let image_height: u16 = 8;
-
+        && registry_symbol_has_image(symbol);
+    if should_reserve_image_panel {
+        let header_height = header_lines.len() as u16;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(header_height),
-                Constraint::Length(image_height),
-                Constraint::Length(1), // Spacer
-                Constraint::Min(0),    // Rest of text
+                Constraint::Length(1),
+                Constraint::Length(8),
+                Constraint::Min(0),
             ])
             .split(area);
 
-        let header_para = Paragraph::new(lines);
-        frame.render_widget(header_para, chunks[0]);
-        render_part_image(frame, app, part, chunks[1]);
-        let mut lines = Vec::new();
-        append_detail_body(
-            &mut lines,
+        frame.render_widget(Paragraph::new(header_lines), chunks[0]);
+        if let Some(image) = image {
+            render_image_bytes(frame, app, image.as_slice(), chunks[2]);
+        } else if is_loading_image {
+            frame.render_widget(
+                Paragraph::new("Loading image...")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(Alignment::Center),
+                chunks[2],
+            );
+        }
+
+        let body_lines = render_registry_symbol_body_lines(
             app,
-            part,
+            symbol,
             chunks[3].width,
             label_style,
             value_style,
             dim_style,
         );
-        frame.render_widget(Paragraph::new(lines), chunks[3]);
+        frame.render_widget(Paragraph::new(body_lines), chunks[3]);
         return;
     }
 
-    append_detail_body(
-        &mut lines,
+    let body_lines = render_registry_symbol_body_lines(
         app,
-        part,
+        symbol,
         area.width,
         label_style,
         value_style,
         dim_style,
     );
-
-    let para = Paragraph::new(lines);
-    frame.render_widget(para, area);
+    header_lines.extend(body_lines);
+    frame.render_widget(Paragraph::new(header_lines), area);
 }
-/// Append description, dependencies, parameters, and scoring to lines
-fn append_detail_body(
-    lines: &mut Vec<Line>,
+
+fn render_registry_symbol_body_lines(
     app: &mut App,
-    part: &RegistryPart,
+    symbol: &RegistrySymbol,
     width: u16,
     label_style: Style,
     value_style: Style,
     dim_style: Style,
-) {
-    // Description
-    let description = part
-        .detailed_description
-        .as_ref()
-        .or(part.short_description.as_ref());
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
 
-    if let Some(desc) = description {
+    if let Some(kicad_description) = symbol
+        .kicad_description
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Description",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
+            "─── Description ───",
+            Style::default().fg(Color::DarkGray),
         )));
-        for chunk in wrap_text(desc, width.saturating_sub(4) as usize) {
+        for chunk in wrap_text(kicad_description, width.saturating_sub(4) as usize) {
             lines.push(Line::from(Span::styled(chunk, value_style)));
         }
-        lines.push(Line::from(""));
     }
 
-    // Dependencies
-    if !app.package_relations.dependencies.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "─── Dependencies ───",
-            Style::default().fg(Color::DarkGray),
-        )));
-        render_dependency_tree(lines, &app.package_relations.dependencies);
-        lines.push(Line::from(""));
-    }
-
-    // Dependents
-    if !app.package_relations.dependents.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "─── Used By ───",
-            Style::default().fg(Color::DarkGray),
-        )));
-        render_dependency_tree(lines, &app.package_relations.dependents);
-        lines.push(Line::from(""));
-    }
-
-    // Parameters (Digikey)
-    if let Some(ref dk) = part.digikey
+    if let Some(ref dk) = symbol.digikey
         && !dk.parameters.is_empty()
     {
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "─── Parameters ───",
             Style::default().fg(Color::DarkGray),
         )));
-        append_parameters(lines, &dk.parameters, label_style, value_style);
+        append_parameters(&mut lines, &dk.parameters, label_style, value_style);
         lines.push(Line::from(""));
     }
 
-    // Availability (for components with MPN)
-    if part.mpn.is_some() {
-        let (availability, is_loading) =
-            app.availability_for_lookup(part.mpn.as_deref(), part.manufacturer.as_deref());
+    let (availability, is_loading) =
+        app.availability_for_lookup(Some(&symbol.mpn), Some(&symbol.manufacturer));
 
-        lines.push(Line::from(Span::styled(
-            "─── Availability ───",
-            Style::default().fg(Color::DarkGray),
-        )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "─── Availability ───",
+        Style::default().fg(Color::DarkGray),
+    )));
 
-        // Always show both lines to prevent layout shift
-        lines.push(format_avail_line(
-            "US",
-            availability.and_then(|p| p.us.as_ref()),
-            is_loading,
-        ));
-        lines.push(format_avail_line(
-            "Global",
-            availability.and_then(|p| p.global.as_ref()),
-            is_loading,
-        ));
+    lines.push(format_avail_line(
+        "US",
+        availability.and_then(|p| p.us.as_ref()),
+        is_loading,
+    ));
+    lines.push(format_avail_line(
+        "Global",
+        availability.and_then(|p| p.global.as_ref()),
+        is_loading,
+    ));
 
-        // Offers section
-        if let Some(p) = availability {
-            let in_stock: Vec<_> = p.offers.iter().filter(|o| o.stock > 0).take(6).collect();
-            if !in_stock.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "─── Offers ───",
-                    Style::default().fg(Color::DarkGray),
-                )));
-                lines.extend(format_offer_lines(&in_stock));
-            }
+    if let Some(p) = availability {
+        let in_stock: Vec<_> = p.offers.iter().filter(|o| o.stock > 0).take(6).collect();
+        if !in_stock.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "─── Offers ───",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.extend(format_offer_lines(&in_stock));
         }
-        lines.push(Line::from(""));
     }
 
-    // Search Scoring
+    lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "─── Search Scoring ───",
         Style::default().fg(Color::DarkGray),
     )));
-    append_search_scoring_for_url(lines, app, &part.url, dim_style);
+    append_search_scoring_for_url(&mut lines, app, &symbol.url, dim_style);
+
+    lines
 }
 
 /// Append DigiKey parameters with priority ordering
@@ -1434,7 +1499,31 @@ fn append_parameters(
 
 /// Append search scoring section
 fn append_search_scoring_for_url(lines: &mut Vec<Line>, app: &App, url: &str, dim_style: Style) {
-    let scoring = app.results.scoring.get(url);
+    let scoring = app.results.scoring().get(url);
+    let (trigram_len, word_len, docs_len, semantic_len, merged_len) = match &app.results {
+        super::search::SearchResults::RegistryModules(results) => (
+            results.trigram.len(),
+            results.word.len(),
+            results.docs_full_text.len(),
+            results.semantic.len(),
+            results.merged.len(),
+        ),
+        super::search::SearchResults::RegistrySymbols(results) => (
+            results.trigram.len(),
+            results.word.len(),
+            results.docs_full_text.len(),
+            results.semantic.len(),
+            results.merged.len(),
+        ),
+        super::search::SearchResults::KicadSymbols(results) => (
+            results.trigram.len(),
+            results.word.len(),
+            results.docs_full_text.len(),
+            results.semantic.len(),
+            results.merged.len(),
+        ),
+        super::search::SearchResults::Empty => (0, 0, 0, 0, 0),
+    };
 
     let format_result = |pos: Option<usize>, rank: Option<f64>, total: usize| -> Vec<Span> {
         match pos {
@@ -1469,26 +1558,22 @@ fn append_search_scoring_for_url(lines: &mut Vec<Line>, app: &App, url: &str, di
         "Trigram  ",
         Style::default().fg(Color::Yellow),
     )];
-    tri_line.extend(format_result(tri_pos, tri_rank, app.results.trigram.len()));
+    tri_line.extend(format_result(tri_pos, tri_rank, trigram_len));
     lines.push(Line::from(tri_line));
 
     let mut word_line = vec![Span::styled("Word     ", Style::default().fg(Color::Green))];
-    word_line.extend(format_result(word_pos, word_rank, app.results.word.len()));
+    word_line.extend(format_result(word_pos, word_rank, word_len));
     lines.push(Line::from(word_line));
 
     let mut docs_line = vec![Span::styled(
         "Docs     ",
         Style::default().fg(Color::LightMagenta),
     )];
-    docs_line.extend(format_result(
-        docs_pos,
-        docs_rank,
-        app.results.docs_full_text.len(),
-    ));
+    docs_line.extend(format_result(docs_pos, docs_rank, docs_len));
     lines.push(Line::from(docs_line));
 
     let mut sem_line = vec![Span::styled("Semantic ", Style::default().fg(Color::Cyan))];
-    sem_line.extend(format_result(sem_pos, sem_rank, app.results.semantic.len()));
+    sem_line.extend(format_result(sem_pos, sem_rank, semantic_len));
     lines.push(Line::from(sem_line));
 
     // RRF score calculation
@@ -1517,7 +1602,7 @@ fn append_search_scoring_for_url(lines: &mut Vec<Line>, app: &App, url: &str, di
             format!("#{}", app.selected_index() + 1),
             Style::default().fg(Color::White),
         ),
-        Span::styled(format!("/{}", app.results.merged.len()), dim_style),
+        Span::styled(format!("/{}", merged_len), dim_style),
     ];
     if !rrf_parts.is_empty() {
         merged_line.push(Span::styled(
@@ -1529,7 +1614,7 @@ fn append_search_scoring_for_url(lines: &mut Vec<Line>, app: &App, url: &str, di
 }
 
 /// Render dependency list with full URLs and colored paths
-fn render_dependency_tree(lines: &mut Vec<Line>, deps: &[PackageDependency]) {
+fn render_dependency_tree(lines: &mut Vec<Line>, deps: &[RegistryModuleDependency]) {
     let max_shown = 10;
     let count = deps.len();
 
@@ -1547,22 +1632,15 @@ fn render_dependency_tree(lines: &mut Vec<Line>, deps: &[PackageDependency]) {
             String::new()
         };
 
-        // Color the full path after registry based on category
-        let path_color = match dep.package_category.as_deref() {
-            Some("component") => Color::Green,
-            Some("module") => Color::Blue,
-            Some("reference") => Color::Magenta,
-            _ => Color::White,
-        };
-
-        let version_suffix = match dep.version.as_deref() {
-            Some(v) if !v.is_empty() => format!("@{v}"),
-            _ => String::new(),
+        let version_suffix = if dep.version.is_empty() {
+            String::new()
+        } else {
+            format!("@{}", dep.version)
         };
 
         lines.push(Line::from(vec![
             Span::styled(registry_prefix, Style::default().fg(Color::Gray)),
-            Span::styled(rest_path, Style::default().fg(path_color)),
+            Span::styled(rest_path, Style::default().fg(Color::Blue)),
             Span::styled(version_suffix, Style::default().fg(Color::DarkGray)),
         ]));
     }
@@ -1800,7 +1878,7 @@ fn render_command_palette(frame: &mut Frame, app: &App) {
         .enumerate()
         .map(|(i, cmd)| {
             let is_selected = i == app.command_palette_index;
-            let is_enabled = cmd.is_enabled(app.selected_part.as_ref(), &app.available_modes);
+            let is_enabled = cmd.is_enabled(app.selected_symbol.as_ref(), &app.available_modes);
 
             if is_selected {
                 let base_bg = Style::default().bg(selection_bg);

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::bom::ComponentKey;
@@ -11,13 +11,13 @@ pub mod download;
 pub mod embeddings;
 pub mod tui;
 
-pub use tui::search::SearchFilter;
-
 pub(crate) const RRF_K: f64 = 10.0;
+const REGISTRY_SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
 
-/// Digikey distribution data parsed from JSON
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DigikeyData {
+    pub mpn: Option<String>,
+    pub manufacturer: Option<String>,
     pub description: Option<String>,
     pub category: Option<String>,
     #[serde(rename = "productUrl")]
@@ -34,30 +34,149 @@ pub struct DigikeyData {
     #[serde(rename = "leadWeeks")]
     pub lead_weeks: Option<String>,
     #[serde(default)]
-    pub parameters: std::collections::BTreeMap<String, String>,
+    pub parameters: BTreeMap<String, String>,
+    #[serde(default)]
+    pub pricing: Vec<DigikeyPriceBreak>,
+    pub classifications: Option<DigikeyClassifications>,
 }
 
-/// eDatasheet structured component data parsed from JSON
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DigikeyPriceBreak {
+    pub qty: i64,
+    pub price: f64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EDatasheetData {
-    #[serde(rename = "componentID")]
-    pub component_id: Option<EDatasheetComponentId>,
-    #[serde(rename = "coreProperties")]
-    pub core_properties: Option<serde_json::Value>,
-    pub package: Option<serde_json::Value>,
+pub struct DigikeyClassifications {
+    pub rohs: Option<String>,
+    pub reach: Option<String>,
+    pub msl: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EDatasheetComponentId {
-    #[serde(rename = "partType")]
-    pub part_type: Option<String>,
-    pub manufacturer: Option<String>,
-    #[serde(rename = "componentName")]
-    pub component_name: Option<String>,
-    pub status: Option<String>,
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistryModuleEntrypoint {
+    pub id: i64,
+    pub url: String,
 }
 
-/// Lightweight search hit - just enough for ranking
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistryModuleSymbol {
+    pub id: i64,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistryModule {
+    pub id: i64,
+    pub url: String,
+    pub name: String,
+    pub version: String,
+    pub published_at: Option<String>,
+    pub description: String,
+    pub entrypoints: Vec<RegistryModuleEntrypoint>,
+    pub symbols: Vec<RegistryModuleSymbol>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistrySymbol {
+    pub id: i64,
+    pub url: String,
+    pub name: String,
+    pub module_id: i64,
+    pub module_url: String,
+    pub module_version: String,
+    pub module_published_at: Option<String>,
+    pub footprint: String,
+    pub datasheet: String,
+    pub manufacturer: String,
+    pub mpn: String,
+    pub mpn_normalized: String,
+    pub kicad_description: Option<String>,
+    pub kicad_keywords: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digikey: Option<DigikeyData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<f64>,
+}
+
+impl RegistrySymbol {
+    pub fn availability_lookup_key(&self) -> Option<ComponentKey> {
+        component_lookup_key(Some(&self.mpn), Some(&self.manufacturer))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistryModuleDependency {
+    pub id: i64,
+    pub url: String,
+    pub name: String,
+    pub version: String,
+    pub published_at: Option<String>,
+    pub description: String,
+}
+
+impl RegistryModuleDependency {
+    pub fn url_with_version(&self) -> String {
+        if self.version.is_empty() {
+            self.url.clone()
+        } else {
+            format!("{}@{}", self.url, self.version)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModuleRelations {
+    pub dependencies: Vec<RegistryModuleDependency>,
+    pub dependents: Vec<RegistryModuleDependency>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegistryModuleHit {
+    pub id: i64,
+    pub url: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub rank: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegistrySymbolHit {
+    pub id: i64,
+    pub url: String,
+    pub name: String,
+    pub module_url: String,
+    pub mpn: String,
+    pub manufacturer: String,
+    pub kicad_description: Option<String>,
+    pub rank: Option<f64>,
+    pub availability_lookups: Vec<ComponentKey>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ModuleRrfSearchOutput {
+    pub trigram: Vec<RegistryModuleHit>,
+    pub word: Vec<RegistryModuleHit>,
+    pub docs_full_text: Vec<RegistryModuleHit>,
+    pub semantic: Vec<RegistryModuleHit>,
+    pub merged: Vec<RegistryModuleHit>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SymbolRrfSearchOutput {
+    pub trigram: Vec<RegistrySymbolHit>,
+    pub word: Vec<RegistrySymbolHit>,
+    pub docs_full_text: Vec<RegistrySymbolHit>,
+    pub semantic: Vec<RegistrySymbolHit>,
+    pub merged: Vec<RegistrySymbolHit>,
+}
+
+/// Lightweight search hit retained for KiCad symbols search.
 #[derive(Debug, Clone)]
 pub struct SearchHit {
     pub id: i64,
@@ -72,15 +191,47 @@ pub struct SearchHit {
     pub availability_lookups: Vec<ComponentKey>,
 }
 
-pub(crate) fn collect_deduped_hits_by_url<I>(rows: I, limit: usize) -> Result<Vec<SearchHit>>
+#[derive(Debug, Clone, Default)]
+pub struct RrfSearchOutput {
+    pub trigram: Vec<SearchHit>,
+    pub word: Vec<SearchHit>,
+    pub docs_full_text: Vec<SearchHit>,
+    pub semantic: Vec<SearchHit>,
+    pub merged: Vec<SearchHit>,
+}
+
+trait UrlKeyedHit: Clone {
+    fn url(&self) -> &str;
+}
+
+impl UrlKeyedHit for SearchHit {
+    fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+impl UrlKeyedHit for RegistryModuleHit {
+    fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+impl UrlKeyedHit for RegistrySymbolHit {
+    fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+fn collect_deduped_by_url<I, T>(rows: I, limit: usize) -> Result<Vec<T>>
 where
-    I: IntoIterator<Item = rusqlite::Result<SearchHit>>,
+    I: IntoIterator<Item = rusqlite::Result<T>>,
+    T: UrlKeyedHit,
 {
     let mut seen_urls = HashSet::new();
     let mut deduped = Vec::with_capacity(limit);
     for row in rows {
         let hit = row?;
-        if seen_urls.insert(hit.url.clone()) {
+        if seen_urls.insert(hit.url().to_owned()) {
             deduped.push(hit);
             if deduped.len() >= limit {
                 break;
@@ -91,19 +242,30 @@ where
     Ok(deduped)
 }
 
-pub(crate) fn merge_rrf_hit_lists(lists: &[&[SearchHit]], limit: usize) -> Vec<SearchHit> {
+pub(crate) fn collect_deduped_hits_by_url<I>(rows: I, limit: usize) -> Result<Vec<SearchHit>>
+where
+    I: IntoIterator<Item = rusqlite::Result<SearchHit>>,
+{
+    collect_deduped_by_url(rows, limit)
+}
+
+fn merge_rrf_by_url<T>(lists: &[&[T]], limit: usize) -> Vec<T>
+where
+    T: UrlKeyedHit,
+{
     let mut rrf_scores: HashMap<String, f64> = HashMap::new();
     for hits in lists {
         for (idx, hit) in hits.iter().enumerate() {
-            *rrf_scores.entry(hit.url.clone()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
+            *rrf_scores.entry(hit.url().to_owned()).or_default() +=
+                1.0 / (RRF_K + (idx + 1) as f64);
         }
     }
 
-    let mut all_hits: HashMap<String, SearchHit> = HashMap::new();
+    let mut all_hits: HashMap<String, T> = HashMap::new();
     for hits in lists {
         for hit in hits.iter() {
             all_hits
-                .entry(hit.url.clone())
+                .entry(hit.url().to_owned())
                 .or_insert_with(|| hit.clone());
         }
     }
@@ -117,237 +279,67 @@ pub(crate) fn merge_rrf_hit_lists(lists: &[&[SearchHit]], limit: usize) -> Vec<S
     scored.into_iter().take(limit).map(|(_, hit)| hit).collect()
 }
 
-/// Extract package name from URL (last path segment)
-fn extract_package_name(url: &str) -> String {
+pub(crate) fn merge_rrf_hit_lists(lists: &[&[SearchHit]], limit: usize) -> Vec<SearchHit> {
+    merge_rrf_by_url(lists, limit)
+}
+
+pub(crate) fn package_name_from_url(url: &str) -> String {
     url.split('/').next_back().unwrap_or(url).to_string()
 }
 
-fn search_hit_availability_lookups(
-    mpn: Option<String>,
-    manufacturer: Option<String>,
-) -> Vec<ComponentKey> {
-    let Some(mpn) = mpn
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    else {
-        return Vec::new();
-    };
+fn symbol_name_from_url(url: &str) -> String {
+    url.rsplit_once(':')
+        .map(|(_, name)| name)
+        .or_else(|| url.split('/').next_back())
+        .unwrap_or(url)
+        .to_string()
+}
 
+pub(crate) fn component_lookup_key(
+    mpn: Option<&str>,
+    manufacturer: Option<&str>,
+) -> Option<ComponentKey> {
+    let mpn = mpn?.trim();
+    if mpn.is_empty() {
+        return None;
+    }
     let manufacturer = manufacturer
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-
-    vec![ComponentKey { mpn, manufacturer }]
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RegistryPackage {
-    pub id: i64,
-    pub url: String,
-    pub name: String,
-    pub version: Option<String>,
-    pub package_category: Option<String>,
-    // Component-specific fields (nullable for non-components)
-    pub mpn: Option<String>,
-    pub manufacturer: Option<String>,
-    pub part_type: Option<String>,
-    pub short_description: Option<String>,
-    pub detailed_description: Option<String>,
-    /// FTS5 rank score (lower is better match, typically negative)
-    #[serde(default)]
-    pub rank: Option<f64>,
-    /// Digikey distribution data (parsed from JSONB blob)
-    #[serde(default)]
-    pub digikey: Option<DigikeyData>,
-    /// eDatasheet structured component data (parsed from JSONB blob)
-    #[serde(default)]
-    pub edatasheet: Option<EDatasheetData>,
-    /// AVIF-encoded image data
-    #[serde(default, skip)]
-    pub image_data: Option<Vec<u8>>,
-    /// Keywords from FTS index (semicolon-separated in DB, parsed to Vec)
-    #[serde(default, skip)]
-    pub keywords: Vec<String>,
-}
-
-impl RegistryPackage {
-    /// Get display name (MPN for components, package name otherwise)
-    pub fn display_name(&self) -> &str {
-        self.mpn.as_deref().unwrap_or(&self.name)
-    }
-}
-
-/// Type alias for backward compatibility
-pub type RegistryPart = RegistryPackage;
-
-/// Public JSON result for registry search.
-#[derive(Debug, Clone, Serialize)]
-pub struct RegistrySearchResult {
-    pub url: String,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub category: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub part_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mpn: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manufacturer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub availability: Option<pcb_sch::bom::Availability>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub digikey: Option<DigikeyData>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub edatasheet: Option<EDatasheetData>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub dependencies: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub dependents: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_path: Option<String>,
-}
-
-impl RegistrySearchResult {
-    pub fn from_part(part: &RegistryPart, include_category: bool) -> Self {
-        Self {
-            url: part.url.clone(),
-            name: part.name.clone(),
-            category: if include_category {
-                non_empty_string(part.package_category.as_deref())
-            } else {
-                None
-            },
-            part_type: non_empty_string(part.part_type.as_deref()),
-            mpn: non_empty_string(part.mpn.as_deref()),
-            manufacturer: non_empty_string(part.manufacturer.as_deref()),
-            description: preferred_description(part),
-            version: non_empty_string(part.version.as_deref()),
-            availability: None,
-            digikey: part.digikey.clone(),
-            edatasheet: part.edatasheet.clone(),
-            dependencies: Vec::new(),
-            dependents: Vec::new(),
-            cache_path: None,
-        }
-    }
-}
-
-/// Package dependency information
-#[derive(Debug, Clone)]
-pub struct PackageDependency {
-    pub id: i64,
-    pub url: String,
-    pub name: String,
-    pub version: Option<String>,
-    pub package_category: Option<String>,
-}
-
-impl PackageDependency {
-    /// Format as `url@version` when version is available.
-    pub fn url_with_version(&self) -> String {
-        match self.version.as_deref() {
-            Some(v) if !v.is_empty() => format!("{}@{v}", self.url),
-            _ => self.url.clone(),
-        }
-    }
-}
-
-/// Dependencies and dependents for a package
-#[derive(Debug, Clone, Default)]
-pub struct PackageRelations {
-    pub dependencies: Vec<PackageDependency>,
-    pub dependents: Vec<PackageDependency>,
-}
-
-fn non_empty_string(value: Option<&str>) -> Option<String> {
-    value.and_then(|s| {
-        let trimmed = s.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Some(ComponentKey {
+        mpn: mpn.to_owned(),
+        manufacturer,
     })
 }
 
-fn preferred_description(part: &RegistryPart) -> Option<String> {
-    non_empty_string(part.detailed_description.as_deref())
-        .or_else(|| non_empty_string(part.short_description.as_deref()))
-}
-
-pub fn build_registry_search_results(
-    client: &RegistryClient,
-    results: &[RegistryPart],
-    availability_map: &HashMap<usize, pcb_sch::bom::Availability>,
-    include_category: bool,
-    cache_paths: Option<&[Option<PathBuf>]>,
-) -> Vec<RegistrySearchResult> {
-    results
-        .iter()
-        .enumerate()
-        .map(|(idx, part)| {
-            let relations = client.get_package_relations(part.id).unwrap_or_default();
-            let mut result = RegistrySearchResult::from_part(part, include_category);
-            result.availability = availability_map.get(&idx).cloned();
-            result.dependencies = relations
-                .dependencies
-                .into_iter()
-                .map(|d| d.url_with_version())
-                .collect();
-            result.dependents = relations
-                .dependents
-                .into_iter()
-                .map(|d| d.url_with_version())
-                .collect();
-            result.cache_path = cache_paths
-                .and_then(|paths| paths.get(idx))
-                .and_then(|path| path.as_ref())
-                .map(|path| path.display().to_string());
-            result
-        })
-        .collect()
-}
-
-/// Preprocessed query ready for identifier-aware search.
 #[derive(Debug)]
 pub struct ParsedQuery {
-    /// Original query string
     pub original: String,
-    /// Canonicalized form for trigram MPN search (alphanumeric only, uppercase)
+    pub identifier_canon: String,
     pub mpn_canon: String,
-    /// Whether the query looks like an MPN (vs natural language description)
-    pub looks_like_mpn: bool,
 }
 
 impl ParsedQuery {
     pub fn parse(query: &str) -> Self {
         let original = query.trim().to_string();
-        let mpn_canon = canonicalize_mpn(&original);
-        let looks_like_mpn = detect_mpn_query(&original, &mpn_canon);
+        let identifier_canon = canonicalize_identifier(&original);
 
         Self {
             original,
-            mpn_canon,
-            looks_like_mpn,
+            mpn_canon: identifier_canon.clone(),
+            identifier_canon,
         }
     }
 }
 
-/// Canonicalize an MPN query: uppercase, remove all non-alphanumeric chars
-/// This matches how mpn_canon is stored in the FTS index
-fn canonicalize_mpn(s: &str) -> String {
+fn canonicalize_identifier(s: &str) -> String {
     s.chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .collect::<String>()
         .to_uppercase()
 }
 
-/// Tokenize for word-based FTS search
-/// Splits on whitespace, lowercases, removes very short tokens
 fn tokenize_for_words(s: &str) -> Vec<String> {
     s.split(|c: char| c.is_whitespace() || c == ',' || c == ';')
         .map(|w| w.trim().to_lowercase())
@@ -403,65 +395,14 @@ pub(crate) fn normalize_semantic_query(query: &str) -> Option<String> {
 }
 
 pub(crate) fn build_query_embedding(query: &str) -> Option<[f32; 1024]> {
-    normalize_semantic_query(query).and_then(|q| embeddings::get_query_embedding(&q).ok())
+    normalize_semantic_query(query).and_then(|q| embeddings::get_kicad_query_embedding(&q).ok())
 }
 
-/// Detect if query looks like an MPN vs natural language
-/// MPNs typically: have digits, are single "word", have specific patterns
-fn detect_mpn_query(original: &str, canon: &str) -> bool {
-    let word_count = original.split_whitespace().count();
-    let has_digits = canon.chars().any(|c| c.is_ascii_digit());
-    let alpha_count = canon.chars().filter(|c| c.is_ascii_alphabetic()).count();
-    let digit_count = canon.chars().filter(|c| c.is_ascii_digit()).count();
-
-    // Single "word" with digits is likely an MPN
-    if word_count == 1 && has_digits {
-        return true;
-    }
-
-    // Two words where one looks like MPN prefix (e.g., "STM32 microcontroller")
-    if word_count == 2 {
-        let first = original.split_whitespace().next().unwrap_or("");
-        let first_canon = canonicalize_mpn(first);
-        if first_canon.len() >= 4
-            && first_canon.chars().any(|c| c.is_ascii_digit())
-            && first_canon.chars().any(|c| c.is_ascii_alphabetic())
-        {
-            return true;
-        }
-    }
-
-    // High ratio of digits suggests MPN
-    if canon.len() >= 4 && digit_count as f32 / canon.len() as f32 > 0.3 {
-        return true;
-    }
-
-    // Known MPN prefixes
-    let prefixes = [
-        "STM32", "STM8", "ESP32", "ESP8266", "ATM", "ATMEGA", "ATTINY", "PIC", "LM", "TPS", "TLV",
-        "MAX", "LTC", "AD", "ADP", "TCA", "INA", "OPA", "LDO", "REG", "MCP", "24LC", "93LC", "W25",
-        "SST", "IRFZ", "IRF", "BSS", "SI", "FDS", "AO", "DMG", "CSD",
-    ];
-    let upper = original.to_uppercase();
-    for prefix in prefixes {
-        if upper.starts_with(prefix) {
-            return true;
-        }
-    }
-
-    // More than 2 words is likely a description
-    if word_count > 2 {
-        return false;
-    }
-
-    // Default: if short and has mixed alpha+digit, assume MPN
-    alpha_count > 0 && digit_count > 0 && canon.len() <= 20
+pub(crate) fn build_registry_query_embedding(query: &str) -> Option<[f32; 512]> {
+    normalize_semantic_query(query).and_then(|q| embeddings::get_registry_query_embedding(&q).ok())
 }
 
-/// Escape special FTS5 characters in a token
-fn escape_fts5(s: &str) -> String {
-    // FTS5 special chars that need quoting: " * ( ) : ^ - . + < > ~ @
-    // We wrap in quotes to make it literal
+pub(crate) fn escape_fts5(s: &str) -> String {
     if s.chars().any(|c| {
         matches!(
             c,
@@ -479,14 +420,11 @@ pub struct RegistryClient {
 }
 
 impl RegistryClient {
-    /// Get the default registry database path (~/.pcb/registry/packages.db)
     pub fn default_db_path() -> Result<PathBuf> {
         let home = dirs::home_dir().context("Could not determine home directory")?;
         Ok(home.join(".pcb").join("registry").join("packages.db"))
     }
 
-    /// Open the registry database from the default location.
-    /// Downloads the index from the API server if not present locally.
     pub fn open() -> Result<Self> {
         let path = Self::default_db_path()?;
         if !path.exists() {
@@ -495,8 +433,7 @@ impl RegistryClient {
         Self::open_path(&path)
     }
 
-    /// Open the registry database from a specific path
-    pub fn open_path(path: &PathBuf) -> Result<Self> {
+    pub fn open_path(path: &std::path::Path) -> Result<Self> {
         if !path.exists() {
             anyhow::bail!(
                 "Registry database not found at {}. Run `pcb registry update` to download it.",
@@ -512,10 +449,9 @@ impl RegistryClient {
         )
         .context("Failed to open registry database")?;
 
-        // Optimize for read-only access
         conn.execute_batch(
-            "PRAGMA mmap_size = 268435456;  -- 256MB memory-mapped I/O
-             PRAGMA cache_size = -65536;    -- 64MB page cache
+            "PRAGMA mmap_size = 268435456;
+             PRAGMA cache_size = -65536;
              PRAGMA query_only = ON;",
         )
         .context("Failed to set read-only pragmas")?;
@@ -523,560 +459,56 @@ impl RegistryClient {
         Ok(Self { conn })
     }
 
-    /// Lightweight trigram search with optional URL prefix filtering
-    pub fn search_trigram_hits_filtered(
-        &self,
-        parsed: &ParsedQuery,
-        limit: usize,
-        filter: Option<SearchFilter>,
-    ) -> Result<Vec<SearchHit>> {
-        if parsed.mpn_canon.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let fts_query = escape_fts5(&parsed.mpn_canon);
-        let (filter_clause, url_pattern) = filter
-            .map(|f| f.sql_clause(3))
-            .unwrap_or(("", String::new()));
-
-        let sql = format!(
-            r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category, fts.rank
-            FROM package_fts_ids fts
-            JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
-            WHERE package_fts_ids MATCH ?1 {}
-            ORDER BY rank
-            LIMIT ?2
-            "#,
-            filter_clause
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = if filter.is_some() {
-            stmt.query_map(
-                rusqlite::params![&fts_query, limit as i64, &url_pattern],
-                Self::map_search_hit,
-            )?
-        } else {
-            stmt.query_map(
-                rusqlite::params![&fts_query, limit as i64],
-                Self::map_search_hit,
-            )?
-        };
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    pub fn count_modules(&self) -> Result<i64> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM modules", [], |row| row.get(0))
+            .map_err(Into::into)
     }
 
-    /// Lightweight word search with optional URL prefix filtering
-    pub fn search_words_hits_filtered(
-        &self,
-        parsed: &ParsedQuery,
-        limit: usize,
-        filter: Option<SearchFilter>,
-    ) -> Result<Vec<SearchHit>> {
-        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
-            return Ok(Vec::new());
-        };
-        let (filter_clause, url_pattern) = filter
-            .map(|f| f.sql_clause(3))
-            .unwrap_or(("", String::new()));
-
-        let sql = format!(
-            r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category, fts.rank
-            FROM package_fts_words fts
-            JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
-            WHERE package_fts_words MATCH ?1 {}
-            ORDER BY rank
-            LIMIT ?2
-            "#,
-            filter_clause
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = if filter.is_some() {
-            stmt.query_map(
-                rusqlite::params![&fts_query, limit as i64, &url_pattern],
-                Self::map_search_hit,
-            )?
-        } else {
-            stmt.query_map(
-                rusqlite::params![&fts_query, limit as i64],
-                Self::map_search_hit,
-            )?
-        };
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    pub fn count_symbols(&self) -> Result<i64> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+            .map_err(Into::into)
     }
 
-    /// Lightweight full-text search over package docs, deduped to one hit per package.
-    pub fn search_docs_full_text_hits_filtered(
-        &self,
-        parsed: &ParsedQuery,
-        limit: usize,
-        filter: Option<SearchFilter>,
-    ) -> Result<Vec<SearchHit>> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-
-        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
-            return Ok(Vec::new());
-        };
-        let (filter_clause, url_pattern) = filter
-            .map(|f| f.sql_clause(3))
-            .unwrap_or(("", String::new()));
-        let fetch_limit = limit.saturating_mul(4);
-
-        let sql = format!(
-            r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category,
-                   bm25(package_ocr_docs_fts) AS score
-            FROM package_ocr_docs_fts
-            JOIN package_ocr_docs d ON d.id = package_ocr_docs_fts.rowid
-            JOIN packages p ON p.id = d.package_id
-            WHERE package_ocr_docs_fts MATCH ?1 {}
-            ORDER BY score
-            LIMIT ?2
-            "#,
-            filter_clause
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = if filter.is_some() {
-            stmt.query_map(
-                rusqlite::params![&fts_query, fetch_limit as i64, &url_pattern],
-                Self::map_search_hit,
-            )?
-        } else {
-            stmt.query_map(
-                rusqlite::params![&fts_query, fetch_limit as i64],
-                Self::map_search_hit,
-            )?
-        };
-
-        collect_deduped_hits_by_url(rows, limit)
-    }
-
-    /// Row mapper for SearchHit (shared by FTS search methods)
-    fn map_search_hit(row: &rusqlite::Row) -> rusqlite::Result<SearchHit> {
-        let url: String = row.get(1)?;
-        let mpn: Option<String> = row.get(2)?;
-        let manufacturer: Option<String> = row.get(3)?;
-        Ok(SearchHit {
-            id: row.get(0)?,
-            name: extract_package_name(&url),
-            url,
-            availability_lookups: search_hit_availability_lookups(
-                mpn.clone(),
-                manufacturer.clone(),
-            ),
-            mpn,
-            manufacturer,
-            short_description: row.get(4)?,
-            version: row.get(5)?,
-            package_category: row.get(6)?,
-            rank: row.get(7)?,
-        })
-    }
-
-    /// Lightweight semantic search - returns only IDs, names, and distances
-    pub fn search_semantic_hits(
-        &self,
-        embedding: &[f32; 1024],
-        limit: usize,
-    ) -> Result<Vec<SearchHit>> {
-        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.short_description, p.version, p.package_category, v.distance
-            FROM package_vec v
-            JOIN packages p ON p.id = v.rowid
-            WHERE v.embedding MATCH ?1 AND v.k = ?2
-            ORDER BY v.distance
-            "#,
-        )?;
-
-        let rows = stmt.query_map(
-            rusqlite::params![embedding_bytes, limit as i64],
-            Self::map_search_hit,
-        )?;
-
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    /// Fetch full details for a single package by ID
-    pub fn get_part_by_id(&self, id: i64) -> Result<Option<RegistryPackage>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, url, mpn, manufacturer, part_type, package_category,
-                   short_description, detailed_description, version,
-                   json(edatasheet), json(digikey), image
-            FROM packages
-            WHERE id = ?1
-            "#,
-        )?;
-
-        let result = stmt
-            .query_row([id], |row| {
-                let url: String = row.get(1)?;
-                let edatasheet_json: Option<String> = row.get(9)?;
-                let digikey_json: Option<String> = row.get(10)?;
-                Ok(RegistryPackage {
-                    id: row.get(0)?,
-                    name: extract_package_name(&url),
-                    url,
-                    mpn: row.get(2)?,
-                    manufacturer: row.get(3)?,
-                    part_type: row.get(4)?,
-                    package_category: row.get(5)?,
-                    short_description: row.get(6)?,
-                    detailed_description: row.get(7)?,
-                    version: row.get(8)?,
-                    rank: None,
-                    edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
-                    digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
-                    image_data: row.get(11)?,
-                    keywords: Vec::new(),
-                })
-            })
-            .ok();
-
-        // Fetch keywords from FTS table if we got a result
-        if let Some(mut pkg) = result {
-            pkg.keywords = self.get_keywords(id).unwrap_or_default();
-            return Ok(Some(pkg));
-        }
-
-        Ok(None)
-    }
-
-    /// Get keywords for a package from the FTS index
-    pub fn get_keywords(&self, package_id: i64) -> Result<Vec<String>> {
-        let keywords_str: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT keywords FROM package_fts_words WHERE CAST(package_id AS INTEGER) = ?1",
-                [package_id],
-                |row| row.get(0),
-            )
-            .ok();
-
-        Ok(keywords_str
-            .map(|s| {
-                s.split(';')
-                    .map(|k| k.trim().to_string())
-                    .filter(|k| !k.is_empty() && k != "-")
-                    .collect()
-            })
-            .unwrap_or_default())
-    }
-
-    /// Search using trigram matching (for MPN/part number matching)
-    /// Takes a pre-parsed query - useful for TUI where we control parsing
-    pub fn search_trigram_raw(
-        &self,
-        parsed: &ParsedQuery,
-        limit: usize,
-    ) -> Result<Vec<RegistryPackage>> {
-        self.search_trigram_internal(parsed, limit)
-    }
-
-    /// Search using word tokenization (for description/keyword matching)
-    /// Takes a pre-parsed query - useful for TUI where we control parsing
-    pub fn search_words_raw(
-        &self,
-        parsed: &ParsedQuery,
-        limit: usize,
-    ) -> Result<Vec<RegistryPackage>> {
-        self.search_words_internal(parsed, limit)
-    }
-
-    /// Search using semantic vector similarity
-    /// Takes a pre-computed embedding vector
-    pub fn search_semantic(
-        &self,
-        embedding: &[f32; 1024],
-        limit: usize,
-    ) -> Result<Vec<RegistryPackage>> {
-        // Convert embedding to bytes for sqlite-vec
-        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
-
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.part_type, p.package_category,
-                   p.short_description, p.detailed_description, p.version,
-                   v.distance,
-                   json(p.edatasheet), json(p.digikey), p.image
-            FROM package_vec v
-            JOIN packages p ON p.id = v.rowid
-            WHERE v.embedding MATCH ?1 AND v.k = ?2
-            ORDER BY v.distance
-            "#,
-        )?;
-
-        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
-            let url: String = row.get(1)?;
-            let edatasheet_json: Option<String> = row.get(10)?;
-            let digikey_json: Option<String> = row.get(11)?;
-            Ok(RegistryPackage {
-                id: row.get(0)?,
-                name: extract_package_name(&url),
-                url,
-                mpn: row.get(2)?,
-                manufacturer: row.get(3)?,
-                part_type: row.get(4)?,
-                package_category: row.get(5)?,
-                short_description: row.get(6)?,
-                detailed_description: row.get(7)?,
-                version: row.get(8)?,
-                rank: row.get(9)?,
-                edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
-                digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
-                image_data: row.get(12)?,
-                keywords: Vec::new(),
-            })
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-
-        Ok(results)
-    }
-
-    fn search_trigram_internal(
-        &self,
-        parsed: &ParsedQuery,
-        limit: usize,
-    ) -> Result<Vec<RegistryPackage>> {
-        if parsed.mpn_canon.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // For trigram search, we search the canonicalized MPN directly
-        // The trigram tokenizer will match substrings
-        let fts_query = escape_fts5(&parsed.mpn_canon);
-
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.part_type, p.package_category,
-                   p.short_description, p.detailed_description, p.version, fts.rank,
-                   json(p.edatasheet), json(p.digikey), p.image
-            FROM package_fts_ids fts
-            JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
-            WHERE package_fts_ids MATCH ?1
-            ORDER BY rank
-            LIMIT ?2
-            "#,
-        )?;
-
-        let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
-            let url: String = row.get(1)?;
-            let edatasheet_json: Option<String> = row.get(10)?;
-            let digikey_json: Option<String> = row.get(11)?;
-            Ok(RegistryPackage {
-                id: row.get(0)?,
-                name: extract_package_name(&url),
-                url,
-                mpn: row.get(2)?,
-                manufacturer: row.get(3)?,
-                part_type: row.get(4)?,
-                package_category: row.get(5)?,
-                short_description: row.get(6)?,
-                detailed_description: row.get(7)?,
-                version: row.get(8)?,
-                rank: row.get(9)?,
-                edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
-                digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
-                image_data: row.get(12)?,
-                keywords: Vec::new(),
-            })
-        })?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-
-        Ok(results)
-    }
-
-    /// Search using word tokenization (for description/keyword matching)
-    fn search_words_internal(
-        &self,
-        parsed: &ParsedQuery,
-        limit: usize,
-    ) -> Result<Vec<RegistryPackage>> {
-        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
-            return Ok(Vec::new());
-        };
-
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT p.id, p.url, p.mpn, p.manufacturer, p.part_type, p.package_category,
-                   p.short_description, p.detailed_description, p.version, fts.rank,
-                   json(p.edatasheet), json(p.digikey), p.image
-            FROM package_fts_words fts
-            JOIN packages p ON p.id = CAST(fts.package_id AS INTEGER)
-            WHERE package_fts_words MATCH ?1
-            ORDER BY rank
-            LIMIT ?2
-            "#,
-        )?;
-
-        let rows = stmt.query_map([&fts_query, &limit.to_string()], |row| {
-            let url: String = row.get(1)?;
-            let edatasheet_json: Option<String> = row.get(10)?;
-            let digikey_json: Option<String> = row.get(11)?;
-            Ok(RegistryPackage {
-                id: row.get(0)?,
-                name: extract_package_name(&url),
-                url,
-                mpn: row.get(2)?,
-                manufacturer: row.get(3)?,
-                part_type: row.get(4)?,
-                package_category: row.get(5)?,
-                short_description: row.get(6)?,
-                detailed_description: row.get(7)?,
-                version: row.get(8)?,
-                rank: row.get(9)?,
-                edatasheet: edatasheet_json.and_then(|s| serde_json::from_str(&s).ok()),
-                digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
-                image_data: row.get(12)?,
-                keywords: Vec::new(),
-            })
-        })?;
-
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    /// Get count of packages matching a filter (None = all packages)
-    pub fn count_filtered(&self, filter: Option<SearchFilter>) -> Result<i64> {
-        let (where_clause, url_pattern) = match filter {
-            Some(f) => {
-                let (clause, pattern) = f.sql_clause(1);
-                // sql_clause returns "AND ..." but we need "WHERE ..."
-                let where_clause = clause.replacen("AND", "WHERE", 1);
-                (where_clause, Some(pattern))
-            }
-            None => (String::new(), None),
-        };
-
-        let sql = format!("SELECT COUNT(*) FROM packages p {}", where_clause);
-        let count: i64 = if let Some(ref pattern) = url_pattern {
-            self.conn.query_row(&sql, [pattern], |row| row.get(0))?
-        } else {
-            self.conn.query_row(&sql, [], |row| row.get(0))?
-        };
-        Ok(count)
-    }
-
-    /// Get dependencies for a package
-    pub fn get_dependencies(&self, package_id: i64) -> Result<Vec<PackageDependency>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT p.id, p.url, p.version, p.package_category
-            FROM package_deps d
-            JOIN packages p ON p.id = d.dependency_id
-            WHERE d.package_id = ?1
-            ORDER BY p.url
-            "#,
-        )?;
-
-        let rows = stmt.query_map([package_id], |row| {
-            let url: String = row.get(1)?;
-            Ok(PackageDependency {
-                id: row.get(0)?,
-                name: extract_package_name(&url),
-                url,
-                version: row.get(2)?,
-                package_category: row.get(3)?,
-            })
-        })?;
-
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    /// Get dependents (reverse dependencies) for a package
-    pub fn get_dependents(&self, package_id: i64) -> Result<Vec<PackageDependency>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT p.id, p.url, p.version, p.package_category
-            FROM package_deps d
-            JOIN packages p ON p.id = d.package_id
-            WHERE d.dependency_id = ?1
-            ORDER BY p.url
-            "#,
-        )?;
-
-        let rows = stmt.query_map([package_id], |row| {
-            let url: String = row.get(1)?;
-            Ok(PackageDependency {
-                id: row.get(0)?,
-                name: extract_package_name(&url),
-                url,
-                version: row.get(2)?,
-                package_category: row.get(3)?,
-            })
-        })?;
-
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    /// Get both dependencies and dependents for a package.
-    pub fn get_package_relations(&self, package_id: i64) -> Result<PackageRelations> {
-        Ok(PackageRelations {
-            dependencies: self.get_dependencies(package_id)?,
-            dependents: self.get_dependents(package_id)?,
-        })
-    }
-
-    /// Search using RRF (Reciprocal Rank Fusion) combining trigram, word, and semantic search.
-    /// Returns detailed results including per-index hits for debugging.
-    pub fn search_rrf(&self, query: &str, filter: Option<SearchFilter>) -> RrfSearchOutput {
+    pub fn search_modules_rrf(&self, query: &str) -> ModuleRrfSearchOutput {
         const PER_INDEX_LIMIT: usize = 50;
         const MERGED_LIMIT: usize = 100;
         const SEMANTIC_FETCH_LIMIT: usize = 100;
-        const SEMANTIC_DISTANCE_THRESHOLD: f64 = 1.3;
 
         let query_text = query.trim();
         if query_text.is_empty() {
-            return RrfSearchOutput::default();
+            return ModuleRrfSearchOutput::default();
         }
 
         let parsed = ParsedQuery::parse(query_text);
-
-        // Run all four searches
         let trigram = self
-            .search_trigram_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
+            .search_module_trigram_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
         let word = self
-            .search_words_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
+            .search_module_word_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
         let docs_full_text = self
-            .search_docs_full_text_hits_filtered(&parsed, PER_INDEX_LIMIT, filter)
+            .search_module_docs_full_text_hits(&parsed, PER_INDEX_LIMIT)
             .unwrap_or_default();
-        let semantic = build_query_embedding(query_text)
+        let semantic = build_registry_query_embedding(query_text)
             .and_then(|embedding| {
-                self.search_semantic_hits(&embedding, SEMANTIC_FETCH_LIMIT)
+                self.search_module_semantic_hits(&embedding, SEMANTIC_FETCH_LIMIT)
                     .ok()
             })
             .unwrap_or_default()
             .into_iter()
             .filter(|hit| {
                 hit.rank
-                    .map(|d| d < SEMANTIC_DISTANCE_THRESHOLD)
+                    .map(|d| d < REGISTRY_SEMANTIC_DISTANCE_THRESHOLD)
                     .unwrap_or(false)
             })
-            .filter(|hit| filter.map(|f| f.matches(&hit.url)).unwrap_or(true))
             .take(PER_INDEX_LIMIT)
             .collect::<Vec<_>>();
 
-        let merged =
-            merge_rrf_hit_lists(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
+        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
 
-        RrfSearchOutput {
+        ModuleRrfSearchOutput {
             trigram,
             word,
             docs_full_text,
@@ -1085,151 +517,454 @@ impl RegistryClient {
         }
     }
 
-    /// Search the registry using RRF and return full RegistryPart data.
-    /// Simpler interface for callers that don't need per-index debug data.
-    pub fn search_filtered(
-        &self,
-        query: &str,
-        limit: usize,
-        filter: Option<SearchFilter>,
-    ) -> Result<Vec<RegistryPart>> {
-        let output = self.search_rrf(query, filter);
-        let mut results = Vec::with_capacity(limit.min(output.merged.len()));
-        for hit in output.merged.into_iter().take(limit) {
-            if let Ok(Some(part)) = self.get_part_by_id(hit.id) {
-                results.push(part);
-            }
+    pub fn search_symbols_rrf(&self, query: &str) -> SymbolRrfSearchOutput {
+        const PER_INDEX_LIMIT: usize = 50;
+        const MERGED_LIMIT: usize = 100;
+        const SEMANTIC_FETCH_LIMIT: usize = 100;
+
+        let query_text = query.trim();
+        if query_text.is_empty() {
+            return SymbolRrfSearchOutput::default();
         }
-        Ok(results)
+
+        let parsed = ParsedQuery::parse(query_text);
+        let trigram = self
+            .search_symbol_trigram_hits(&parsed, PER_INDEX_LIMIT)
+            .unwrap_or_default();
+        let word = self
+            .search_symbol_word_hits(&parsed, PER_INDEX_LIMIT)
+            .unwrap_or_default();
+        let docs_full_text = self
+            .search_symbol_docs_full_text_hits(&parsed, PER_INDEX_LIMIT)
+            .unwrap_or_default();
+        let semantic = build_registry_query_embedding(query_text)
+            .and_then(|embedding| {
+                self.search_symbol_semantic_hits(&embedding, SEMANTIC_FETCH_LIMIT)
+                    .ok()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|hit| {
+                hit.rank
+                    .map(|d| d < REGISTRY_SEMANTIC_DISTANCE_THRESHOLD)
+                    .unwrap_or(false)
+            })
+            .take(PER_INDEX_LIMIT)
+            .collect::<Vec<_>>();
+
+        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
+
+        SymbolRrfSearchOutput {
+            trigram,
+            word,
+            docs_full_text,
+            semantic,
+            merged,
+        }
+    }
+
+    fn search_module_trigram_hits(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<RegistryModuleHit>> {
+        if parsed.identifier_canon.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let fts_query = escape_fts5(&parsed.identifier_canon);
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT m.id, m.url, m.version, m.description, fts.rank
+            FROM module_fts_ids fts
+            JOIN modules m ON m.id = CAST(fts.module_id AS INTEGER)
+            WHERE module_fts_ids MATCH ?1
+            ORDER BY fts.rank
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], map_module_hit)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn search_module_word_hits(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<RegistryModuleHit>> {
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
+            return Ok(Vec::new());
+        };
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT m.id, m.url, m.version, m.description, fts.rank
+            FROM module_fts_words fts
+            JOIN modules m ON m.id = CAST(fts.module_id AS INTEGER)
+            WHERE module_fts_words MATCH ?1
+            ORDER BY fts.rank
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], map_module_hit)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn search_module_docs_full_text_hits(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<RegistryModuleHit>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
+            return Ok(Vec::new());
+        };
+        let fetch_limit = limit.saturating_mul(4);
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT m.id, m.url, m.version, m.description, bm25(documents_fts) AS score
+            FROM documents_fts
+            JOIN documents d ON d.id = documents_fts.rowid
+            JOIN document_owners o ON o.document_id = d.id
+            JOIN modules m ON m.url = o.owner_url
+            WHERE documents_fts MATCH ?1
+              AND o.owner_kind = 'module'
+            ORDER BY score
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![fts_query, fetch_limit as i64],
+            map_module_hit,
+        )?;
+        collect_deduped_by_url(rows, limit)
+    }
+
+    fn search_module_semantic_hits(
+        &self,
+        embedding: &[f32; 512],
+        limit: usize,
+    ) -> Result<Vec<RegistryModuleHit>> {
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT m.id, m.url, m.version, m.description, v.distance
+            FROM module_vec v
+            JOIN modules m ON m.id = v.rowid
+            WHERE v.embedding MATCH ?1 AND v.k = ?2
+            ORDER BY v.distance
+            "#,
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![embedding_bytes, limit as i64],
+            map_module_hit,
+        )?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn search_symbol_trigram_hits(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<RegistrySymbolHit>> {
+        if parsed.identifier_canon.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let fts_query = escape_fts5(&parsed.identifier_canon);
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
+                   m.url AS module_url, fts.rank
+            FROM symbol_fts_ids fts
+            JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
+            JOIN modules m ON m.id = s.module_id
+            WHERE symbol_fts_ids MATCH ?1
+            ORDER BY fts.rank
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], map_symbol_hit)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn search_symbol_word_hits(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<RegistrySymbolHit>> {
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
+            return Ok(Vec::new());
+        };
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
+                   m.url AS module_url, fts.rank
+            FROM symbol_fts_words fts
+            JOIN symbols s ON s.id = CAST(fts.symbol_id AS INTEGER)
+            JOIN modules m ON m.id = s.module_id
+            WHERE symbol_fts_words MATCH ?1
+            ORDER BY fts.rank
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], map_symbol_hit)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    fn search_symbol_docs_full_text_hits(
+        &self,
+        parsed: &ParsedQuery,
+        limit: usize,
+    ) -> Result<Vec<RegistrySymbolHit>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let Some(fts_query) = build_prefix_fts_query(&parsed.original) else {
+            return Ok(Vec::new());
+        };
+        let fetch_limit = limit.saturating_mul(4);
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
+                   m.url AS module_url, bm25(documents_fts) AS score
+            FROM documents_fts
+            JOIN documents d ON d.id = documents_fts.rowid
+            JOIN document_owners o ON o.document_id = d.id
+            JOIN symbols s ON s.url = o.owner_url
+            JOIN modules m ON m.id = s.module_id
+            WHERE documents_fts MATCH ?1
+              AND o.owner_kind = 'symbol'
+            ORDER BY score
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![fts_query, fetch_limit as i64],
+            map_symbol_hit,
+        )?;
+        collect_deduped_by_url(rows, limit)
+    }
+
+    fn search_symbol_semantic_hits(
+        &self,
+        embedding: &[f32; 512],
+        limit: usize,
+    ) -> Result<Vec<RegistrySymbolHit>> {
+        let embedding_bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id, s.url, s.mpn, s.manufacturer, s.kicad_description,
+                   m.url AS module_url, v.distance
+            FROM symbol_vec v
+            JOIN symbols s ON s.id = v.rowid
+            JOIN modules m ON m.id = s.module_id
+            WHERE v.embedding MATCH ?1 AND v.k = ?2
+            ORDER BY v.distance
+            "#,
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![embedding_bytes, limit as i64],
+            map_symbol_hit,
+        )?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_module_by_id(&self, id: i64) -> Result<Option<RegistryModule>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, url, version, published_at, description
+            FROM modules
+            WHERE id = ?1
+            "#,
+        )?;
+        let module = stmt
+            .query_row([id], |row| {
+                let url: String = row.get(1)?;
+                Ok(RegistryModule {
+                    id: row.get(0)?,
+                    name: package_name_from_url(&url),
+                    url,
+                    version: row.get(2)?,
+                    published_at: row.get(3)?,
+                    description: row.get(4)?,
+                    entrypoints: Vec::new(),
+                    symbols: Vec::new(),
+                    rank: None,
+                })
+            })
+            .optional()?;
+
+        let Some(mut module) = module else {
+            return Ok(None);
+        };
+        module.entrypoints = self.get_module_entrypoints(id)?;
+        module.symbols = self.get_module_symbols(id)?;
+        Ok(Some(module))
+    }
+
+    pub fn get_symbol_by_id(&self, id: i64) -> Result<Option<RegistrySymbol>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT s.id, s.url, s.module_id, m.url AS module_url, m.version AS module_version,
+                   m.published_at AS module_published_at, s.footprint, s.datasheet,
+                   s.manufacturer, s.mpn, s.mpn_normalized, s.kicad_description,
+                   s.kicad_keywords, json(s.digikey), s.image_sha256
+            FROM symbols s
+            JOIN modules m ON m.id = s.module_id
+            WHERE s.id = ?1
+            "#,
+        )?;
+
+        stmt.query_row([id], |row| {
+            let url: String = row.get(1)?;
+            let digikey_json: Option<String> = row.get(13)?;
+            Ok(RegistrySymbol {
+                id: row.get(0)?,
+                name: symbol_name_from_url(&url),
+                url,
+                module_id: row.get(2)?,
+                module_url: row.get(3)?,
+                module_version: row.get(4)?,
+                module_published_at: row.get(5)?,
+                footprint: row.get(6)?,
+                datasheet: row.get(7)?,
+                manufacturer: row.get(8)?,
+                mpn: row.get(9)?,
+                mpn_normalized: row.get(10)?,
+                kicad_description: row.get(11)?,
+                kicad_keywords: row.get(12)?,
+                digikey: digikey_json.and_then(|s| serde_json::from_str(&s).ok()),
+                image_sha256: row.get(14)?,
+                rank: None,
+            })
+        })
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn get_module_entrypoints(&self, module_id: i64) -> Result<Vec<RegistryModuleEntrypoint>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, url
+            FROM module_zen_entrypoints
+            WHERE module_id = ?1
+            ORDER BY url
+            "#,
+        )?;
+        let rows = stmt.query_map([module_id], |row| {
+            Ok(RegistryModuleEntrypoint {
+                id: row.get(0)?,
+                url: row.get(1)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_module_symbols(&self, module_id: i64) -> Result<Vec<RegistryModuleSymbol>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, url
+            FROM symbols
+            WHERE module_id = ?1
+            ORDER BY url
+            "#,
+        )?;
+        let rows = stmt.query_map([module_id], |row| {
+            Ok(RegistryModuleSymbol {
+                id: row.get(0)?,
+                url: row.get(1)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_module_dependencies(&self, module_id: i64) -> Result<Vec<RegistryModuleDependency>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT dep.id, dep.url, dep.version, dep.published_at, dep.description
+            FROM module_deps d
+            JOIN modules dep ON dep.id = d.dependency_module_id
+            WHERE d.module_id = ?1
+            ORDER BY dep.url
+            "#,
+        )?;
+        let rows = stmt.query_map([module_id], map_module_dependency)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_module_dependents(&self, module_id: i64) -> Result<Vec<RegistryModuleDependency>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT parent.id, parent.url, parent.version, parent.published_at, parent.description
+            FROM module_deps d
+            JOIN modules parent ON parent.id = d.module_id
+            WHERE d.dependency_module_id = ?1
+            ORDER BY parent.url
+            "#,
+        )?;
+        let rows = stmt.query_map([module_id], map_module_dependency)?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn get_module_relations(&self, module_id: i64) -> Result<ModuleRelations> {
+        Ok(ModuleRelations {
+            dependencies: self.get_module_dependencies(module_id)?,
+            dependents: self.get_module_dependents(module_id)?,
+        })
     }
 }
 
-/// Output from RRF search with per-index results for debugging
-#[derive(Debug, Clone, Default)]
-pub struct RrfSearchOutput {
-    pub trigram: Vec<SearchHit>,
-    pub word: Vec<SearchHit>,
-    pub docs_full_text: Vec<SearchHit>,
-    pub semantic: Vec<SearchHit>,
-    pub merged: Vec<SearchHit>,
+fn map_module_hit(row: &rusqlite::Row) -> rusqlite::Result<RegistryModuleHit> {
+    let url: String = row.get(1)?;
+    Ok(RegistryModuleHit {
+        id: row.get(0)?,
+        name: package_name_from_url(&url),
+        url,
+        version: row.get(2)?,
+        description: row.get(3)?,
+        rank: row.get(4)?,
+    })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn map_symbol_hit(row: &rusqlite::Row) -> rusqlite::Result<RegistrySymbolHit> {
+    let url: String = row.get(1)?;
+    let mpn: String = row.get(2)?;
+    let manufacturer: String = row.get(3)?;
+    Ok(RegistrySymbolHit {
+        id: row.get(0)?,
+        name: symbol_name_from_url(&url),
+        url,
+        mpn: mpn.clone(),
+        manufacturer: manufacturer.clone(),
+        kicad_description: row.get(4)?,
+        module_url: row.get(5)?,
+        rank: row.get(6)?,
+        availability_lookups: component_lookup_key(Some(&mpn), Some(&manufacturer))
+            .into_iter()
+            .collect(),
+    })
+}
 
-    #[test]
-    fn test_canonicalize_mpn() {
-        assert_eq!(canonicalize_mpn("STM32G431"), "STM32G431");
-        assert_eq!(canonicalize_mpn("stm32g431"), "STM32G431");
-        assert_eq!(canonicalize_mpn("STM32-G431"), "STM32G431");
-        assert_eq!(canonicalize_mpn("1-406541-1"), "14065411");
-        assert_eq!(canonicalize_mpn("LM358 "), "LM358");
-        assert_eq!(canonicalize_mpn("TPS82140SILR"), "TPS82140SILR");
-    }
-
-    #[test]
-    fn test_detect_mpn_query() {
-        // Clear MPNs
-        assert!(detect_mpn_query("STM32G431", "STM32G431"));
-        assert!(detect_mpn_query("TPS82140", "TPS82140"));
-        assert!(detect_mpn_query("1-406541-1", "14065411"));
-        assert!(detect_mpn_query("2N7002", "2N7002"));
-        assert!(detect_mpn_query("LM358", "LM358"));
-
-        // Clear descriptions
-        assert!(!detect_mpn_query(
-            "n-channel mosfet 60v",
-            "NCHANNELMOSFET60V"
-        ));
-        assert!(!detect_mpn_query(
-            "voltage regulator 3.3v",
-            "VOLTAGEREGULATOR33V"
-        ));
-        assert!(!detect_mpn_query(
-            "usb type c connector",
-            "USBTYPECCONNECTOR"
-        ));
-
-        // Edge cases
-        assert!(detect_mpn_query(
-            "STM32 microcontroller",
-            "STM32MICROCONTROLLER"
-        ));
-        assert!(!detect_mpn_query("mosfet", "MOSFET"));
-        assert!(!detect_mpn_query("capacitor", "CAPACITOR"));
-    }
-
-    #[test]
-    fn test_tokenize_for_words() {
-        assert_eq!(
-            tokenize_for_words("n-channel mosfet"),
-            vec!["n-channel", "mosfet"]
-        );
-        assert_eq!(
-            tokenize_for_words("voltage regulator 3.3V"),
-            vec!["voltage", "regulator", "3.3v"]
-        );
-        assert_eq!(tokenize_for_words("a b cd"), vec!["cd"]); // filters short tokens
-    }
-
-    #[test]
-    fn test_build_prefix_fts_query_unquoted_tokens() {
-        assert_eq!(
-            build_prefix_fts_query("hall effect current sensor"),
-            Some("hall* AND effect* AND current* AND sensor*".to_string())
-        );
-    }
-
-    #[test]
-    fn test_build_prefix_fts_query_honors_phrases() {
-        assert_eq!(
-            build_prefix_fts_query("\"absolute maximum ratings\" sensor"),
-            Some("\"absolute maximum ratings\" AND sensor*".to_string())
-        );
-    }
-
-    #[test]
-    fn test_build_prefix_fts_query_phrase_only() {
-        assert_eq!(
-            build_prefix_fts_query("\"absolute maximum ratings\""),
-            Some("\"absolute maximum ratings\"".to_string())
-        );
-    }
-
-    #[test]
-    fn test_build_prefix_fts_query_mixes_tokens_and_phrases() {
-        assert_eq!(
-            build_prefix_fts_query("hall \"absolute maximum ratings\" current"),
-            Some("hall* AND \"absolute maximum ratings\" AND current*".to_string())
-        );
-    }
-
-    #[test]
-    fn test_normalize_semantic_query_strips_quotes() {
-        assert_eq!(
-            normalize_semantic_query("hall \"absolute maximum ratings\" current"),
-            Some("hall absolute maximum ratings current".to_string())
-        );
-    }
-
-    #[test]
-    fn test_escape_fts5() {
-        assert_eq!(escape_fts5("simple"), "simple");
-        assert_eq!(escape_fts5("has-dash"), "\"has-dash\"");
-        assert_eq!(escape_fts5("has*star"), "\"has*star\"");
-        assert_eq!(escape_fts5("3.3v"), "\"3.3v\"");
-        assert_eq!(escape_fts5("test@email"), "\"test@email\"");
-    }
-
-    #[test]
-    fn test_parsed_query() {
-        let q = ParsedQuery::parse("STM32G431");
-        assert_eq!(q.mpn_canon, "STM32G431");
-        assert!(q.looks_like_mpn);
-
-        let q = ParsedQuery::parse("n-channel mosfet 60v");
-        assert!(!q.looks_like_mpn);
-        assert_eq!(q.original, "n-channel mosfet 60v");
-    }
+fn map_module_dependency(row: &rusqlite::Row) -> rusqlite::Result<RegistryModuleDependency> {
+    let url: String = row.get(1)?;
+    Ok(RegistryModuleDependency {
+        id: row.get(0)?,
+        name: package_name_from_url(&url),
+        url,
+        version: row.get(2)?,
+        published_at: row.get(3)?,
+        description: row.get(4)?,
+    })
 }
