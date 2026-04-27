@@ -90,7 +90,7 @@ Component(
 }
 
 #[test]
-fn component_modifier_does_not_override_explicit_datasheet() {
+fn component_modifier_part_without_datasheet_clears_stale_part_datasheet() {
     let component = eval_single_root_component(
         r#"
 P1 = Net()
@@ -100,7 +100,6 @@ def match_part(component):
     component.part = builtin.Part(
         mpn = "HOUSE-1",
         manufacturer = "MFR",
-        datasheet = "https://example.com/house-1.pdf",
     )
 
 builtin.add_component_modifier(match_part)
@@ -110,12 +109,16 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    datasheet = "explicit.pdf",
+    part = builtin.Part(
+        mpn = "PART-1",
+        manufacturer = "MFR",
+        datasheet = "https://example.com/part-1.pdf",
+    ),
 )
 "#,
     );
 
-    assert_eq!(component.datasheet(), Some("explicit.pdf"));
+    assert_eq!(component.datasheet(), None);
 }
 
 snapshot_eval!(component_properties, {

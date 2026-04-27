@@ -1209,6 +1209,9 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "part" => {
                 if value.is_none() {
                     data.part = None;
+                    if !data.datasheet_is_explicit {
+                        data.datasheet = None;
+                    }
                     return Ok(());
                 }
                 let part = value.downcast_ref::<PartValue>().ok_or_else(|| {
@@ -1217,10 +1220,8 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                         value.get_type()
                     ))
                 })?;
-                if !data.datasheet_is_explicit
-                    && let Some(datasheet) = part.datasheet()
-                {
-                    data.datasheet = Some(datasheet.to_owned());
+                if !data.datasheet_is_explicit {
+                    data.datasheet = part.datasheet().map(ToOwned::to_owned);
                 }
                 data.part = Some(part.clone());
                 Ok(())
