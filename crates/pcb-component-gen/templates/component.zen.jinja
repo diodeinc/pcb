@@ -11,12 +11,9 @@ skip_bom = config(bool, default = {{ "True" if skip_bom_default else "False" }})
 skip_pos = config(bool, default = {{ "True" if skip_pos_default else "False" }})
 {% endif %}
 
-Pins = struct(
-{%- for pin in pin_groups %}
-    {{ pin.sanitized_name }} = io("{{ pin.sanitized_name }}", Net){{ "," if not loop.last }}
-{%- endfor %}
-)
-
+{% for pin in pin_groups -%}
+{{ pin.sanitized_name }} = io(Net)
+{% endfor %}
 Component(
     name = "{{ component_name }}",
 {%- if include_skip_bom %}
@@ -28,7 +25,7 @@ Component(
     symbol = Symbol(library = "{{ sym_path }}"),
     pins = {
 {%- for pin in pin_mappings %}
-        "{{ pin.original_name }}": Pins.{{ pin.sanitized_name }}{{ "," if not loop.last }}
+        "{{ pin.original_name }}": {{ pin.sanitized_name }}{{ "," if not loop.last }}
 {%- endfor %}
     },
 )

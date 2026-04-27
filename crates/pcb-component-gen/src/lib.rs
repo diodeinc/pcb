@@ -245,11 +245,12 @@ mod tests {
         .unwrap();
 
         assert!(zen.contains("Auto-generated using `pcb import`."));
-        assert!(zen.contains("Pins = struct("));
-        assert!(zen.contains("N_INT"));
-        assert!(zen.contains("\"~{INT}\": Pins.N_INT"));
+        assert!(zen.contains("N_INT = io(Net)"));
+        assert!(zen.contains("\"~{INT}\": N_INT"));
         assert!(zen.contains("VCC"));
         assert!(!zen.contains("pin_defs"));
+        assert!(!zen.contains("Pins = struct("));
+        assert!(!zen.contains("Pins."));
     }
 
     #[test]
@@ -355,8 +356,8 @@ mod tests {
         .unwrap();
 
         assert!(zen.contains("name = \"TP_0_75mm_SMD\""));
-        assert!(zen.contains("\"1\": Pins.P1"));
-        assert!(zen.contains("\"2\": Pins.P2"));
+        assert!(zen.contains("\"1\": P1"));
+        assert!(zen.contains("\"2\": P2"));
         assert!(!zen.contains("\"~\":"));
     }
 
@@ -392,8 +393,8 @@ mod tests {
         .unwrap();
 
         // Single io() for the shared signal name
-        assert!(zen.contains("NC = io(\"NC\", Net)"));
-        assert!(zen.contains("\"NC\": Pins.NC"));
+        assert!(zen.contains("NC = io(Net)"));
+        assert!(zen.contains("\"NC\": NC"));
         // No pin_defs needed
         assert!(!zen.contains("pin_defs"));
     }
@@ -437,9 +438,9 @@ mod tests {
         })
         .unwrap();
 
-        assert!(zen.contains("VCC = io(\"VCC\", Net)"));
-        assert!(zen.contains("\"VCC\": Pins.VCC"));
-        assert!(!zen.contains("NC = io(\"NC\", Net)"));
-        assert!(!zen.contains("\"NC\": Pins.NC"));
+        assert!(zen.contains("VCC = io(Net)"));
+        assert!(zen.contains("\"VCC\": VCC"));
+        assert!(!zen.contains("NC = io(Net)"));
+        assert!(!zen.contains("\"NC\": NC"));
     }
 }
