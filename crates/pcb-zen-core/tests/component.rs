@@ -32,7 +32,7 @@ fn eval_single_root_component(source: &str) -> FrozenComponentValue {
 }
 
 #[test]
-fn component_uses_part_datasheet_when_no_explicit_datasheet() {
+fn component_prefers_part_datasheet_over_component_datasheet() {
     let component = eval_single_root_component(
         r#"
 P1 = Net()
@@ -43,6 +43,7 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
+    datasheet = "component.pdf",
     part = builtin.Part(
         mpn = "PART-1",
         manufacturer = "MFR",

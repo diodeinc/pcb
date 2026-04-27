@@ -304,7 +304,7 @@ Component(
 | `spice_model` | no | Explicit `SpiceModel`; default: inferred from symbol `Sim.*` properties when present |
 | `dnp` | no | Do Not Populate flag |
 | `skip_bom` | no | Exclude from BOM (default: inverse of symbol `in_bom` flag) |
-| `datasheet` | no | Datasheet URL or path (default: `part.datasheet`, then symbol `Datasheet` property; local explicit paths resolved relative to the `.zen` file, symbol-local paths resolved relative to the `.kicad_sym` file) |
+| `datasheet` | no | Datasheet URL or path (default: `part.datasheet`, then this component value, then symbol `Datasheet` property; local component paths resolved relative to the `.zen` file, symbol-local paths resolved relative to the `.kicad_sym` file) |
 
 When KiCad symbol pin metadata is available:
 

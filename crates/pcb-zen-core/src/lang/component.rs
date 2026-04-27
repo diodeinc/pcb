@@ -87,7 +87,8 @@ pub struct ComponentData<'v> {
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
     pub(crate) datasheet: Option<String>,
-    pub(crate) datasheet_is_explicit: bool,
+    pub(crate) component_datasheet: Option<String>,
+    pub(crate) symbol_datasheet: Option<String>,
     pub(crate) properties: SmallMap<String, Value<'v>>,
 }
 
@@ -100,7 +101,8 @@ pub struct FrozenComponentData {
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
     pub(crate) datasheet: Option<String>,
-    pub(crate) datasheet_is_explicit: bool,
+    pub(crate) component_datasheet: Option<String>,
+    pub(crate) symbol_datasheet: Option<String>,
     pub(crate) properties: SmallMap<String, FrozenValue>,
 }
 
@@ -153,7 +155,8 @@ impl<'v> Freeze for ComponentValue<'v> {
                 skip_bom: data.skip_bom,
                 skip_pos: data.skip_pos,
                 datasheet: data.datasheet,
-                datasheet_is_explicit: data.datasheet_is_explicit,
+                component_datasheet: data.component_datasheet,
+                symbol_datasheet: data.symbol_datasheet,
                 properties: {
                     let mut frozen_props = SmallMap::new();
                     for (k, v) in data.properties.into_iter() {
@@ -447,6 +450,17 @@ fn resolve_symbol_datasheet(
             .format_package_uri(&resolved)
             .unwrap_or_else(|| resolved.to_string_lossy().into_owned()),
     ))
+}
+
+fn resolve_component_datasheet(
+    part: Option<&PartValue>,
+    component_datasheet: Option<&str>,
+    symbol_datasheet: Option<&str>,
+) -> Option<String> {
+    part.and_then(PartValue::datasheet)
+        .or(component_datasheet)
+        .or(symbol_datasheet)
+        .map(ToOwned::to_owned)
 }
 
 fn parse_sim_pins(pins: &str) -> starlark::Result<Vec<(String, String)>> {
@@ -1209,9 +1223,11 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             "part" => {
                 if value.is_none() {
                     data.part = None;
-                    if !data.datasheet_is_explicit {
-                        data.datasheet = None;
-                    }
+                    data.datasheet = resolve_component_datasheet(
+                        None,
+                        data.component_datasheet.as_deref(),
+                        data.symbol_datasheet.as_deref(),
+                    );
                     return Ok(());
                 }
                 let part = value.downcast_ref::<PartValue>().ok_or_else(|| {
@@ -1220,23 +1236,33 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
                         value.get_type()
                     ))
                 })?;
-                if !data.datasheet_is_explicit {
-                    data.datasheet = part.datasheet().map(ToOwned::to_owned);
-                }
                 data.part = Some(part.clone());
+                data.datasheet = resolve_component_datasheet(
+                    data.part.as_ref(),
+                    data.component_datasheet.as_deref(),
+                    data.symbol_datasheet.as_deref(),
+                );
                 Ok(())
             }
             "datasheet" => {
                 if value.is_none() {
-                    data.datasheet = None;
-                    data.datasheet_is_explicit = true;
+                    data.component_datasheet = None;
+                    data.datasheet = resolve_component_datasheet(
+                        data.part.as_ref(),
+                        None,
+                        data.symbol_datasheet.as_deref(),
+                    );
                     return Ok(());
                 }
                 let datasheet = value.unpack_str().ok_or_else(|| {
                     starlark::Error::new_other(anyhow!("`datasheet` must be a string"))
                 })?;
-                data.datasheet = Some(datasheet.to_owned());
-                data.datasheet_is_explicit = true;
+                data.component_datasheet = Some(datasheet.to_owned());
+                data.datasheet = resolve_component_datasheet(
+                    data.part.as_ref(),
+                    data.component_datasheet.as_deref(),
+                    data.symbol_datasheet.as_deref(),
+                );
                 Ok(())
             }
             "spice_model" => {
@@ -1964,9 +1990,9 @@ where
             );
             append_alternatives_property(&mut properties_map, alternatives, eval_ctx.heap())?;
 
-            // If datasheet is not explicitly provided, try to get it from properties, then symbol properties
+            // Datasheets resolve as Part > component field/property > KiCad symbol fallback.
             // Skip empty strings and "~" (KiCad's placeholder for no datasheet) - prefer None over empty
-            let explicit_datasheet = datasheet_val
+            let component_datasheet = datasheet_val
                 .and_then(|v| v.unpack_str())
                 .and_then(pcb_eda::usable_kicad_field_value)
                 .map(ToOwned::to_owned)
@@ -1977,14 +2003,14 @@ where
                         .and_then(pcb_eda::usable_kicad_field_value)
                         .map(ToOwned::to_owned)
                 });
-            let datasheet_is_explicit = explicit_datasheet.is_some();
-            let final_datasheet = if let Some(datasheet) = explicit_datasheet {
-                Some(normalize_path_to_package_uri(&datasheet, Some(ctx)))
-            } else if let Some(datasheet) = final_part.as_ref().and_then(|part| part.datasheet()) {
-                Some(datasheet.to_owned())
-            } else {
-                resolve_symbol_datasheet(&final_symbol, ctx)?
-            };
+            let component_datasheet = component_datasheet
+                .map(|datasheet| normalize_path_to_package_uri(&datasheet, Some(ctx)));
+            let symbol_datasheet = resolve_symbol_datasheet(&final_symbol, ctx)?;
+            let final_datasheet = resolve_component_datasheet(
+                final_part.as_ref(),
+                component_datasheet.as_deref(),
+                symbol_datasheet.as_deref(),
+            );
 
             // If description is not explicitly provided, try to get it from properties, then symbol properties
             // Skip empty strings - prefer None over empty
@@ -2089,7 +2115,8 @@ where
                     skip_bom: final_skip_bom,
                     skip_pos: final_skip_pos.unwrap_or(false),
                     datasheet: final_datasheet,
-                    datasheet_is_explicit,
+                    component_datasheet,
+                    symbol_datasheet,
                     properties: properties_map,
                 }),
                 source_path: eval_ctx.source_path().unwrap_or_default(),
