@@ -63,7 +63,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::add::dep_id::ResolvedDepId;
+    use crate::pcb_mod::dep_id::ResolvedDepId;
 
     #[test]
     fn writeback_rebuilds_direct_and_indirect_dependency_tables() {

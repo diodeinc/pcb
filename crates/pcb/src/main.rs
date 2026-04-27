@@ -8,7 +8,6 @@ use env_logger::Env;
 use std::ffi::OsString;
 use std::process::Command;
 
-mod add;
 #[cfg(feature = "api")]
 mod api;
 mod bom;
@@ -32,6 +31,8 @@ mod mod_cmd;
 mod new;
 mod open;
 mod package;
+#[path = "mod/mod.rs"]
+mod pcb_mod;
 #[cfg(feature = "api")]
 mod preview;
 mod publish;
@@ -88,10 +89,10 @@ enum Commands {
     Mod(mod_cmd::ModArgs),
 
     /// Add or update a direct dependency
-    Add(add::ModAddArgs),
+    Add(pcb_mod::ModAddArgs),
 
     /// Reconcile source imports and hydrate package dependency manifests
-    Sync(add::SyncArgs),
+    Sync(pcb_mod::SyncArgs),
 
     /// Create a new workspace, board, package, or component
     New(new::NewArgs),
@@ -219,8 +220,8 @@ fn run() -> anyhow::Result<()> {
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
         Commands::Mod(args) => mod_cmd::execute(args),
-        Commands::Add(args) => add::execute_mod_add(args),
-        Commands::Sync(args) => add::execute_sync(args),
+        Commands::Add(args) => pcb_mod::execute_mod_add(args),
+        Commands::Sync(args) => pcb_mod::execute_sync(args),
         Commands::New(args) => new::execute(args),
         Commands::Update(args) => update::execute(args),
         Commands::SelfUpdate(args) => self_update::execute(args),

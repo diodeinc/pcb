@@ -41,7 +41,7 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         );
     }
 
-    let package_urls = crate::add::target_package_urls_for_path(&workspace_info, path)
+    let package_urls = crate::pcb_mod::target_package_urls_for_path(&workspace_info, path)
         .inspect_err(|err| {
             log::debug!(
                 "Skipping MVS v2 target discovery for {}: {err:#}",
@@ -85,7 +85,7 @@ fn resolve_mvs_v2(
 
     for package_url in package_urls {
         let resolution =
-            crate::add::build_frozen_resolution_map(&workspace_info, &package_url, offline)?;
+            crate::pcb_mod::build_frozen_resolution_map(&workspace_info, &package_url, offline)?;
         symbol_parts.extend(pcb_zen::resolve::build_frozen_symbol_parts(
             &workspace_info,
             &resolution,
@@ -114,7 +114,11 @@ pub(crate) fn attach_mvs_v2_resolution_for_packages(
         if !package_has_indirect(&res.workspace_info, &package_url) {
             continue;
         }
-        match crate::add::build_frozen_resolution_map(&res.workspace_info, &package_url, offline) {
+        match crate::pcb_mod::build_frozen_resolution_map(
+            &res.workspace_info,
+            &package_url,
+            offline,
+        ) {
             Ok(resolution) => {
                 resolution_set
                     .root_packages
