@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap};
-use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -83,38 +82,6 @@ pub struct DependencyTable {
 impl DependencyTable {
     pub fn is_empty(&self) -> bool {
         self.direct.is_empty() && self.indirect.is_empty()
-    }
-}
-
-impl Deref for DependencyTable {
-    type Target = BTreeMap<String, DependencySpec>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.direct
-    }
-}
-
-impl DerefMut for DependencyTable {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.direct
-    }
-}
-
-impl<'a> IntoIterator for &'a DependencyTable {
-    type Item = (&'a String, &'a DependencySpec);
-    type IntoIter = std::collections::btree_map::Iter<'a, String, DependencySpec>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.direct.iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut DependencyTable {
-    type Item = (&'a String, &'a mut DependencySpec);
-    type IntoIter = std::collections::btree_map::IterMut<'a, String, DependencySpec>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.direct.iter_mut()
     }
 }
 
@@ -234,6 +201,7 @@ impl PcbToml {
 
         for (repo, version) in selected {
             self.dependencies
+                .direct
                 .entry(repo)
                 .or_insert_with(|| DependencySpec::Version(version.to_string()));
         }
@@ -362,7 +330,7 @@ impl PcbToml {
         let mut seen_names: HashMap<String, usize> = HashMap::new();
 
         // Collect all URLs from dependencies
-        let all_urls: Vec<String> = self.dependencies.keys().cloned().collect();
+        let all_urls: Vec<String> = self.dependencies.direct.keys().cloned().collect();
 
         // First pass: count occurrences of each last segment
         for url in &all_urls {
@@ -1120,11 +1088,12 @@ path = "test.zen"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert_eq!(config.dependencies.len(), 4);
+        assert_eq!(config.dependencies.direct.len(), 4);
 
         // Test simple version string
         match config
             .dependencies
+            .direct
             .get("github.com/diodeinc/stdlib")
             .unwrap()
         {
@@ -1135,6 +1104,7 @@ path = "test.zen"
         // Test detailed spec with version
         match config
             .dependencies
+            .direct
             .get("github.com/diodeinc/registry/reference/ti/tps54331")
             .unwrap()
         {
@@ -1145,7 +1115,12 @@ path = "test.zen"
         }
 
         // Test branch spec
-        match config.dependencies.get("github.com/user/custom").unwrap() {
+        match config
+            .dependencies
+            .direct
+            .get("github.com/user/custom")
+            .unwrap()
+        {
             DependencySpec::Detailed(d) => {
                 assert_eq!(d.branch, Some("main".to_string()));
             }
@@ -1165,7 +1140,7 @@ path = "test.zen"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert_eq!(config.dependencies.len(), 1);
+        assert_eq!(config.dependencies.direct.len(), 1);
         assert_eq!(config.dependencies.indirect.len(), 2);
         match config
             .dependencies

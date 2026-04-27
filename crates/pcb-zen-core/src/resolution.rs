@@ -198,7 +198,7 @@ fn resolve_package_deps<R: PackagePathResolver>(
 ) -> BTreeMap<String, PathBuf> {
     let mut map = BTreeMap::new();
 
-    for (url, spec) in &config.dependencies {
+    for (url, spec) in &config.dependencies.direct {
         if let Some(path) = resolve_dep(resolver, workspace, base_dir, url, spec) {
             map.insert(url.clone(), path);
         }
@@ -744,7 +744,7 @@ impl ResolutionResult {
 
             if let Some(pkg) = workspace_info.packages.get(&url) {
                 closure.local_packages.insert(url.clone());
-                for dep_url in pkg.config.dependencies.keys() {
+                for dep_url in pkg.config.dependencies.direct.keys() {
                     stack.push(dep_url.clone());
                 }
             } else if let Some((_, version)) = self.closure.iter().find(|(l, _)| l.path == url) {

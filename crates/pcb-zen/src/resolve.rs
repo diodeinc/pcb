@@ -318,7 +318,7 @@ fn normalize_or_validate_branch_deps(
         let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut normalized = 0usize;
 
-        for (dep_url, spec) in &mut config.dependencies {
+        for (dep_url, spec) in &mut config.dependencies.direct {
             let DependencySpec::Detailed(detail) = spec else {
                 continue;
             };
@@ -376,7 +376,7 @@ fn refresh_branch_pins(
         let mut config = PcbToml::from_file(&file_provider, &pcb_toml_path)?;
         let mut changed = false;
 
-        for (dep_url, spec) in &mut config.dependencies {
+        for (dep_url, spec) in &mut config.dependencies.direct {
             if !package_filter.is_empty() && !package_filter.iter().any(|p| dep_url.contains(p)) {
                 continue;
             }
@@ -724,7 +724,7 @@ pub fn resolve_dependencies(
 
             manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
-            for (dep_path, dep_spec) in &manifest.dependencies {
+            for (dep_path, dep_spec) in &manifest.dependencies.direct {
                 ensure_workspace_member_dependency(workspace_info, dep_path).with_context(
                     || format!("Dependency '{}' in {}@v{}", dep_path, line.path, version),
                 )?;
@@ -1230,8 +1230,13 @@ fn collect_package_dependencies(
     let package_dir = pcb_toml_path.parent().unwrap();
     let mut deps = HashMap::new();
 
-    collect_deps_recursive(&config.dependencies, package_dir, &mut deps, workspace_info)
-        .with_context(|| format!("in {}", pcb_toml_path.display()))?;
+    collect_deps_recursive(
+        &config.dependencies.direct,
+        package_dir,
+        &mut deps,
+        workspace_info,
+    )
+    .with_context(|| format!("in {}", pcb_toml_path.display()))?;
 
     Ok(deps.into_values().collect())
 }
@@ -1322,7 +1327,7 @@ fn collect_deps_recursive(
         let file_provider = DefaultFileProvider::new();
         let dep_config = PcbToml::from_file(&file_provider, &dep_pcb_toml)?;
         collect_deps_recursive(
-            &dep_config.dependencies,
+            &dep_config.dependencies.direct,
             &resolved_path,
             deps,
             workspace_info,
@@ -1894,7 +1899,7 @@ fn build_closure(
     // Use get_line_for_dep to find the specific ModuleLine matching each dependency's family
     // Skip workspace members (resolved locally, not part of closure)
     for pkg in packages.values() {
-        for (url, spec) in &pkg.config.dependencies {
+        for (url, spec) in &pkg.config.dependencies.direct {
             if is_non_version_dep(spec) || packages.contains_key(url) {
                 continue;
             }
@@ -1930,7 +1935,7 @@ fn build_closure(
 
         // Follow transitive dependencies via selected versions
         if let Some(manifest) = manifest_cache.get(&(line.clone(), version)) {
-            for (dep_path, dep_spec) in &manifest.dependencies {
+            for (dep_path, dep_spec) in &manifest.dependencies.direct {
                 if is_non_version_dep(dep_spec) || packages.contains_key(dep_path) {
                     continue;
                 }
@@ -2835,7 +2840,7 @@ mod tests {
         std::fs::create_dir_all(&cache_root).unwrap();
 
         let mut config = PcbToml::default();
-        config.dependencies.insert(
+        config.dependencies.direct.insert(
             "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
             DependencySpec::Version("9.0.3".to_string()),
         );
