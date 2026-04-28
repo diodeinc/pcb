@@ -1,6 +1,6 @@
 ---
 name: spice-sim
-description: Add a simulation test bench to a zener file.
+description: Adds an ngspice-backed simulation testbench to a Zener `.zen` design. Use when the user asks to simulate a circuit, validate behavior in SPICE, or wire a `spice_model=SpiceModel(...)` into a leaf component. Covers `pcb sim`, `Simulation` property, and ngspice `.control` blocks with `tran`/`PULSE`/`PWL` sources and SVG `hardcopy` output.
 ---
 
 # Spice Simulation
@@ -9,7 +9,7 @@ Add a small ngspice-backed testbench to a `.zen` design.
 
 ## Workflow
 
-1. Confirm the target is simulation-capable by runnnig a dummy sim. `pcb sim <path/to/file.zen> --setup "* empty setup check"`
+1. Confirm the target is simulation-capable by running a dummy sim. `pcb sim <path/to/file.zen> --setup "* empty setup check"`
 
 2. If the SPICE model is missing, add it.
 Find a vendor model, download it, or create a simple behavioral model if needed. Wire it through the leaf component with `spice_model=SpiceModel(...)` before writing the testbench.
