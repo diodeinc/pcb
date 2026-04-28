@@ -144,6 +144,8 @@ struct CachedModule {
     warnings: Vec<Diagnostic>,
 }
 
+type LoadCacheKey = (Option<String>, PathBuf);
+
 /// Output of `parse_and_analyze_file`, preserving both parsed AST and full eval output.
 #[derive(Clone)]
 pub struct ParseAndAnalyzeOutput {
@@ -274,7 +276,11 @@ pub struct EvalSession {
     /// Dedicated file contents cache - frequently accessed during preload scanning.
     file_contents_cache: Arc<RwLock<HashMap<PathBuf, String>>>,
     /// Dedicated load cache - frequently accessed during parallel module evaluation.
-    load_cache: Arc<RwLock<HashMap<PathBuf, CachedModule>>>,
+    ///
+    /// MVS v2 resolution is root-package scoped, so cached modules are keyed by
+    /// root package when a frozen root is active. V1 keeps the historical
+    /// path-only behavior via a `None` root key.
+    load_cache: Arc<RwLock<HashMap<LoadCacheKey, CachedModule>>>,
     /// Per-file mapping of `symbol → target path` for "go-to definition".
     symbol_index: Arc<RwLock<HashMap<PathBuf, HashMap<String, PathBuf>>>>,
     /// Per-file mapping of `symbol → parameter list` for signature help.
@@ -1078,12 +1084,14 @@ impl EvalSession {
 
     // --- Load cache ---
 
-    fn get_cached_module(&self, path: &Path) -> Option<CachedModule> {
-        self.load_cache.read().unwrap().get(path).cloned()
+    fn get_cached_module(&self, root_package: Option<&str>, path: &Path) -> Option<CachedModule> {
+        let key = (root_package.map(str::to_string), path.to_path_buf());
+        self.load_cache.read().unwrap().get(&key).cloned()
     }
 
-    fn cache_module(&self, path: PathBuf, module: CachedModule) {
-        self.load_cache.write().unwrap().insert(path, module);
+    fn cache_module(&self, root_package: Option<&str>, path: PathBuf, module: CachedModule) {
+        let key = (root_package.map(str::to_string), path);
+        self.load_cache.write().unwrap().insert(key, module);
     }
 
     pub fn clear_load_cache(&self) {
@@ -1407,11 +1415,13 @@ impl EvalContext {
     }
 
     fn get_cached_module(&self, path: &Path) -> Option<CachedModule> {
-        self.session.get_cached_module(path)
+        self.session
+            .get_cached_module(self.config.mvs_v2_root_package.as_deref(), path)
     }
 
     fn cache_module(&self, path: PathBuf, module: CachedModule) {
-        self.session.cache_module(path, module);
+        self.session
+            .cache_module(self.config.mvs_v2_root_package.as_deref(), path, module);
     }
 
     /// Check if there is a module dependency between two files
