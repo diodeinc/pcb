@@ -516,16 +516,23 @@ def diodes_inc_datasheet(filename):
 
 
 def tvs(
-    standoff_voltage: str, clamping_voltage: str, peak_pulse_power: str, mpn: str, manufacturer: str, datasheet=None
+    standoff_voltage: str,
+    clamping_voltage: str,
+    peak_pulse_power: str | None,
+    mpn: str,
+    manufacturer: str,
+    datasheet=None,
+    capacitance: str | None = None,
 ) -> dict:
     """Helper to create TVS diode catalog entry.
 
     Args:
         standoff_voltage: Reverse standoff voltage (e.g., "5V" or "5V to 6V")
         clamping_voltage: Clamping voltage @ Ipp (e.g., "9.2V" or "9V to 12V")
-        peak_pulse_power: Peak pulse power (e.g., "200W" or "200W to 400W")
+        peak_pulse_power: Peak pulse power (e.g., "200W" or "200W to 400W") or None
         mpn: Manufacturer part number
         manufacturer: Manufacturer name
+        capacitance: Diode capacitance (e.g., "0.5pF") or None
 
     Returns:
         TVS diode dictionary
@@ -537,12 +544,13 @@ def tvs(
     clamping_val = (
         Voltage(clamping_voltage) if "to" in clamping_voltage else Voltage(clamping_voltage + " to " + clamping_voltage)
     )
-    power_val = Power(peak_pulse_power)
+    power_val = Power(peak_pulse_power) if peak_pulse_power else None
 
     return {
         "standoff_voltage": standoff_val,
         "clamping_voltage": clamping_val,
         "peak_pulse_power": power_val,
+        "capacitance": Capacitance(capacitance) if capacitance else None,
         "mpn": mpn,
         "manufacturer": manufacturer,
         "datasheet": datasheet,

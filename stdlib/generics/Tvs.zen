@@ -1,6 +1,6 @@
 load("../io.zen", "io")
-load("../units.zen", "Voltage", Watts="Power")
-load("../interfaces.zen", "Ground", "Net", "Power")
+load("../units.zen", "Capacitance", "Voltage", Watts="Power")
+load("../interfaces.zen", "Ground", "Net")
 load("../utils.zen", "format_value")
 
 # Package      JEDEC         LxWxH
@@ -8,7 +8,8 @@ load("../utils.zen", "format_value")
 # SMA          DO-214AC      4.6×2.6×2.1
 # SMB          DO-214AA      5.3×3.7×2.5
 # SMC          DO-214AB      7.8×6.8×2.5
-Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB")
+# SOD-882      -             1.0×0.6x0.5
+Package = enum("DO-219AB", "DO-214AC", "DO-214AA", "DO-214AB", "SOD-882")
 Direction = enum("Unidirectional", "Bidirectional")
 
 USB_5V_STANDOFF_VOLTAGE = Voltage("5 to 6V")
@@ -19,12 +20,13 @@ direction = config(Direction, default=Direction("Unidirectional"), help="Unidire
 reverse_standoff_voltage = config(Voltage, default=USB_5V_STANDOFF_VOLTAGE, help="Maximum steady-state reverse voltage")
 reverse_clamping_voltage = config(Voltage, optional=True, help="Clamping voltage at peak pulse current")
 peak_pulse_power = config(Watts, optional=True, help="Peak pulse power rating (8/20μs)")
+capacitance = config(Capacitance, optional=True, help="Diode capacitance C_d at V_R=0V, f=1 MHz")
 mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
 
 if direction == Direction("Unidirectional"):
     A = io(Ground)
-    K = io(Power)
+    K = io(Net)
 else:
     A = io(Net)
     K = io(Net)
@@ -56,6 +58,7 @@ def _footprint(package: Package) -> str:
         Package("DO-214AC"): "@kicad-footprints/Diode_SMD.pretty/D_SMA.kicad_mod",
         Package("DO-214AA"): "@kicad-footprints/Diode_SMD.pretty/D_SMB.kicad_mod",
         Package("DO-214AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMC.kicad_mod",
+        Package("SOD-882"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-882.kicad_mod",
     }
     return kicad_footprints[package]
 
@@ -83,6 +86,8 @@ if peak_pulse_power:
     properties["peak_pulse_power"] = peak_pulse_power
 if reverse_clamping_voltage:
     properties["reverse_clamping_voltage"] = reverse_clamping_voltage
+if capacitance:
+    properties["capacitance"] = capacitance
 
 
 def _spice_subcircuit_name(direction: Direction):
