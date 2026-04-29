@@ -295,14 +295,7 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn is_update_command(command: &Commands) -> bool {
-    matches!(
-        command,
-        Commands::Mod(_)
-            | Commands::Add(_)
-            | Commands::Sync(_)
-            | Commands::Update(_)
-            | Commands::SelfUpdate(_)
-    )
+    matches!(command, Commands::Update(_) | Commands::SelfUpdate(_))
 }
 
 fn ensure_docs_installed() {
