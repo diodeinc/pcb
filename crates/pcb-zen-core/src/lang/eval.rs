@@ -42,7 +42,7 @@ use crate::lang::{
     module::{FrozenModuleValue, ModulePath},
 };
 use crate::load_spec::LoadSpec;
-use crate::resolution::{FrozenResolutionMap, ResolutionResult};
+use crate::resolution::{FrozenResolutionMap, FrozenUrlResolution, ResolutionResult};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 use crate::{FileProvider, ResolveContext};
 use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
@@ -739,25 +739,19 @@ impl EvalContextConfig {
         };
 
         let (_, package) = Self::current_mvs_v2_package(resolution, &context.current_file)?;
-        if package
-            .identity
-            .package_url()
-            .is_some_and(|package_url| crate::workspace::package_url_covers(package_url, &full_url))
-        {
-            anyhow::bail!(
+        let (matched_dep, root_path) = match resolution.resolve_package_url(package, &full_url) {
+            Some(FrozenUrlResolution::OwnPackage) => anyhow::bail!(
                 "{} uses package URL '{}' that points into its own package '{}'; use a relative path instead",
                 context.current_file.display(),
                 full_url,
                 package.identity.display()
-            );
-        }
-
-        let Some((matched_dep, root_path)) = resolution.dep_for_url(package, &full_url) else {
-            anyhow::bail!(
+            ),
+            Some(FrozenUrlResolution::Dependency { dep_url, root }) => (dep_url, root),
+            None => anyhow::bail!(
                 "No declared dependency matches '{}'\n  \
                 Add a dependency to [dependencies] in pcb.toml that covers this path",
                 full_url
-            );
+            ),
         };
 
         let relative_path = full_url
@@ -765,11 +759,7 @@ impl EvalContextConfig {
             .and_then(|s| s.strip_prefix('/'))
             .unwrap_or("");
 
-        let full_path = if relative_path.is_empty() {
-            root_path.clone()
-        } else {
-            root_path.join(relative_path)
-        };
+        let full_path = root_path.join(relative_path);
 
         if !self.file_provider.exists(&full_path) {
             anyhow::bail!(

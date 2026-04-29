@@ -476,17 +476,35 @@ impl FrozenResolutionMap {
             .max_by_key(|(root, _)| root.as_os_str().len())
     }
 
-    pub fn dep_for_url<'a>(
+    pub fn resolve_package_url<'a>(
         &'a self,
         package: &'a FrozenPackage,
         full_url: &str,
-    ) -> Option<(&'a str, &'a PathBuf)> {
-        package
+    ) -> Option<FrozenUrlResolution<'a>> {
+        let own_url = package
+            .identity
+            .package_url()
+            .filter(|url| package_url_covers(url, full_url));
+        let dep = package
             .deps
             .iter()
             .filter(|(dep_url, _)| package_url_covers(dep_url, full_url))
-            .max_by_key(|(dep_url, _)| dep_url.len())
-            .map(|(dep_url, root)| (dep_url.as_str(), root))
+            .max_by_key(|(dep_url, _)| dep_url.len());
+
+        match (own_url, dep) {
+            (Some(own_url), Some((dep_url, root))) if dep_url.len() > own_url.len() => {
+                Some(FrozenUrlResolution::Dependency {
+                    dep_url: dep_url.as_str(),
+                    root: root.as_path(),
+                })
+            }
+            (Some(_), _) => Some(FrozenUrlResolution::OwnPackage),
+            (None, Some((dep_url, root))) => Some(FrozenUrlResolution::Dependency {
+                dep_url: dep_url.as_str(),
+                root: root.as_path(),
+            }),
+            (None, None) => None,
+        }
     }
 
     fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
@@ -518,6 +536,11 @@ impl FrozenResolutionMap {
             })
             .collect();
     }
+}
+
+pub enum FrozenUrlResolution<'a> {
+    OwnPackage,
+    Dependency { dep_url: &'a str, root: &'a Path },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -780,6 +803,41 @@ mod tests {
     use super::*;
     use crate::InMemoryFileProvider;
     use crate::config::DependencyDetail;
+
+    #[test]
+    fn resolves_nested_package_url() {
+        let nested_root = PathBuf::from("/workspace/boards/demo/modules/usb");
+        let package = FrozenPackage {
+            identity: FrozenPackageIdentity::Workspace("github.com/acme/repo/boards/demo".into()),
+            deps: BTreeMap::from([(
+                "github.com/acme/repo/boards/demo/modules/usb".into(),
+                nested_root.clone(),
+            )]),
+            parts: Vec::new(),
+        };
+        let resolution = FrozenResolutionMap {
+            selected_remote: BTreeMap::new(),
+            packages: BTreeMap::new(),
+        };
+
+        let resolved = resolution.resolve_package_url(
+            &package,
+            "github.com/acme/repo/boards/demo/modules/usb/Usb.zen",
+        );
+
+        match resolved {
+            Some(FrozenUrlResolution::Dependency { dep_url, root }) => {
+                assert_eq!(dep_url, "github.com/acme/repo/boards/demo/modules/usb");
+                assert_eq!(root, nested_root.as_path());
+            }
+            _ => panic!("expected nested dependency resolution"),
+        }
+
+        let resolved = resolution
+            .resolve_package_url(&package, "github.com/acme/repo/boards/demo/src/Main.zen");
+
+        assert!(matches!(resolved, Some(FrozenUrlResolution::OwnPackage)));
+    }
 
     #[test]
     fn test_vendored_path_resolver_basic() {
