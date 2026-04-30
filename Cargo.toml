@@ -50,6 +50,10 @@ anyhow = "1.0"
 atomicwrites = "0.4"
 arboard = { version = "3.4", default-features = false }
 ariadne = { version = "0.6", features = ["auto-color"] }
+aws-config = "1.8.16"
+aws-credential-types = "1.2.14"
+aws-sigv4 = "1.4.3"
+aws-smithy-runtime-api = "1.12.0"
 axoupdater = { version = "0.10", features = ["blocking"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
@@ -76,6 +80,7 @@ serde_json = "1.0"
 tempfile = "3.10.1"
 thiserror = "2"
 toml = "1"
+tokio = { version = "1", features = ["rt-multi-thread"] }
 uuid = { version = "1.4", features = ["v4", "v5", "js"] }
 walkdir = "2.3"
 deunicode = "1.6"

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::auto_extension::{RawAutoExtension, register_auto_extension};
 
 pub mod auth;
+mod aws_auth;
 pub mod bom;
 pub mod component;
 pub mod datasheet;
