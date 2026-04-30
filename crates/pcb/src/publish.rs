@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
-use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, get_workspace_info};
+use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
 use pcb_zen::{git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml, find_workspace_root};
 use pcb_zen_core::{DefaultFileProvider, initial_package_version};
@@ -16,7 +16,7 @@ use petgraph::Direction;
 use petgraph::graph::{DiGraph, NodeIndex};
 use rayon::prelude::*;
 use semver::Version;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fmt;
 use std::path::Path;
@@ -650,6 +650,7 @@ fn collect_unpublishable_manifest_entries(manifest_path: &Path, manifest: &PcbTo
 
     let mut git_dependencies = manifest
         .dependencies
+        .direct
         .iter()
         .filter_map(|(url, spec)| match spec {
             DependencySpec::Detailed(detail) if detail.branch.is_some() || detail.rev.is_some() => {
@@ -946,8 +947,13 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     }
 
     let mut ws = workspace.clone();
-    let resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
+    let mut resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
     pcb_zen::vendor_deps(&resolution, &[], None, true)?;
+    let package_urls = zen_files
+        .iter()
+        .filter_map(|zen_path| workspace.package_url_for_zen(zen_path))
+        .collect::<BTreeSet<_>>();
+    crate::resolve::attach_mvs_v2_resolution_for_packages(&mut resolution, package_urls, false);
 
     let mut has_errors = false;
     let mut has_warnings = false;
@@ -1173,10 +1179,10 @@ fn bump_dependency_versions(
     let mut changed = false;
 
     for (dep_url, c) in candidates {
-        if let Some(existing) = config.dependencies.get(dep_url) {
+        if let Some(existing) = config.dependencies.direct.get(dep_url) {
             let new_spec = DependencySpec::Version(c.next_version.to_string());
             if *existing != new_spec {
-                config.dependencies.insert(dep_url.clone(), new_spec);
+                config.dependencies.direct.insert(dep_url.clone(), new_spec);
                 changed = true;
             }
         }

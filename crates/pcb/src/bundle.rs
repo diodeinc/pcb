@@ -2,8 +2,12 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use pcb_zen::resolve::{RemotePackageVendorStatus, copy_remote_package_to_vendor};
 use pcb_zen::{copy_dir_all, git, vendor_deps};
-use pcb_zen_core::kicad_library::KICAD_PARTS_INDEX_FILE;
-use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
+use pcb_zen_core::kicad_library::{
+    KICAD_PARTS_INDEX_FILE, KicadRepoMatch, match_kicad_managed_repo,
+};
+use pcb_zen_core::resolution::{
+    FrozenPackageIdentity, FrozenResolutionMap, PackageClosure, ResolutionResult,
+};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::BufWriter;
@@ -26,6 +30,7 @@ pub(crate) struct MetadataInput<'a> {
 
 pub(crate) struct SourceBundlePlan<'a> {
     pub resolution: &'a ResolutionResult,
+    pub root_package_url: Option<&'a str>,
     pub closure: Option<&'a PackageClosure>,
     pub remote_vendoring: RemoteVendoring,
     pub staged_src: &'a Path,
@@ -48,6 +53,16 @@ pub(crate) fn write_metadata_json(input: &MetadataInput<'_>) -> Result<()> {
 
 #[instrument(name = "stage_source_bundle", skip_all)]
 pub(crate) fn stage_source_bundle(plan: &SourceBundlePlan<'_>) -> Result<()> {
+    if let Some(root_package_url) = plan.root_package_url
+        && let Some(frozen) = plan.resolution.mvs_v2_root(root_package_url)
+    {
+        return stage_mvs_v2_source_bundle(plan, frozen);
+    }
+
+    stage_legacy_source_bundle(plan)
+}
+
+fn stage_legacy_source_bundle(plan: &SourceBundlePlan<'_>) -> Result<()> {
     let workspace_root = &plan.resolution.workspace_info.root;
     fs::create_dir_all(plan.staged_src)?;
 
@@ -116,6 +131,51 @@ pub(crate) fn stage_source_bundle(plan: &SourceBundlePlan<'_>) -> Result<()> {
     Ok(())
 }
 
+fn stage_mvs_v2_source_bundle(
+    plan: &SourceBundlePlan<'_>,
+    frozen: &FrozenResolutionMap,
+) -> Result<()> {
+    let workspace_info = &plan.resolution.workspace_info;
+    fs::create_dir_all(plan.staged_src)?;
+
+    let root_pcb_toml = workspace_info.root.join("pcb.toml");
+    if root_pcb_toml.exists() {
+        fs::copy(&root_pcb_toml, plan.staged_src.join("pcb.toml"))?;
+    }
+
+    let excluded_roots = source_bundle_excluded_roots(workspace_info);
+    let mut kicad_roots = BTreeMap::new();
+
+    for (root, package) in &frozen.packages {
+        match &package.identity {
+            FrozenPackageIdentity::Workspace(url) => {
+                let rel_path = workspace_package_rel_path(workspace_info, url)?;
+                copy_dir_all(root, &plan.staged_src.join(rel_path), &excluded_roots)?;
+            }
+            FrozenPackageIdentity::Remote { dep_id, version } => {
+                let dst = plan
+                    .staged_src
+                    .join("vendor")
+                    .join(&dep_id.path)
+                    .join(version.to_string());
+                if is_managed_kicad_repo(workspace_info, &dep_id.path, version) {
+                    fs::create_dir_all(&dst)?;
+                    kicad_roots.insert(root.clone(), (dep_id.path.clone(), version.to_string()));
+                } else {
+                    copy_dir_all(root, &dst, &HashSet::new())?;
+                }
+            }
+            FrozenPackageIdentity::Stdlib => {}
+        }
+    }
+
+    for resolved_path in plan.resolved_paths {
+        stage_kicad_resolved_file(plan.staged_src, &kicad_roots, resolved_path)?;
+    }
+
+    Ok(())
+}
+
 #[instrument(name = "write_canonical_bundle", skip_all)]
 pub(crate) fn write_canonical_bundle(staging_dir: &Path, output_path: &Path) -> Result<()> {
     if let Some(parent) = output_path.parent() {
@@ -170,6 +230,99 @@ pub(crate) fn remove_dir_all_with_permissions(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn source_bundle_excluded_roots(workspace_info: &pcb_zen::WorkspaceInfo) -> HashSet<PathBuf> {
+    let mut excluded: HashSet<_> = workspace_info
+        .packages
+        .values()
+        .map(|pkg| canonicalize(&pkg.dir(&workspace_info.root)))
+        .collect();
+    excluded.insert(canonicalize(&workspace_info.root.join("vendor")));
+    excluded
+}
+
+fn canonicalize(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn workspace_package_rel_path(
+    workspace_info: &pcb_zen::WorkspaceInfo,
+    package_url: &str,
+) -> Result<PathBuf> {
+    if let Some(pkg) = workspace_info.packages.get(package_url) {
+        return Ok(pkg.rel_path.clone());
+    }
+    if workspace_info.workspace_base_url().as_deref() == Some(package_url) {
+        return Ok(PathBuf::new());
+    }
+    bail!("Unknown workspace package {}", package_url)
+}
+
+fn is_managed_kicad_repo(
+    workspace_info: &pcb_zen::WorkspaceInfo,
+    module_path: &str,
+    version: &semver::Version,
+) -> bool {
+    matches!(
+        match_kicad_managed_repo(
+            &workspace_info.kicad_library_entries(),
+            module_path,
+            version
+        ),
+        KicadRepoMatch::SelectorMatched
+    )
+}
+
+fn stage_kicad_resolved_file(
+    staged_src: &Path,
+    kicad_roots: &BTreeMap<PathBuf, (String, String)>,
+    resolved_path: &Path,
+) -> Result<()> {
+    let Some((dep_root, (repo, version))) = kicad_roots
+        .iter()
+        .filter(|(root, _)| resolved_path.starts_with(root))
+        .max_by_key(|(root, _)| root.as_os_str().len())
+    else {
+        return Ok(());
+    };
+
+    let Ok(rel_path) = resolved_path.strip_prefix(dep_root) else {
+        return Ok(());
+    };
+    if rel_path.as_os_str().is_empty() {
+        return Ok(());
+    }
+    if !resolved_path.exists() {
+        log::warn!(
+            "Skipping missing referenced library path during source bundle staging: {}",
+            resolved_path.display()
+        );
+        return Ok(());
+    }
+
+    copy_bundle_path(
+        resolved_path,
+        &staged_src
+            .join("vendor")
+            .join(repo)
+            .join(version)
+            .join(rel_path),
+    )?;
+
+    let parts_index = dep_root.join(KICAD_PARTS_INDEX_FILE);
+    if parts_index.exists() {
+        copy_bundle_path(
+            &parts_index,
+            &staged_src
+                .join("vendor")
+                .join(repo)
+                .join(version)
+                .join(KICAD_PARTS_INDEX_FILE),
+        )?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn stage_resolved_file_for_source_bundle(
     staged_src: &Path,
     package_roots: &BTreeMap<String, PathBuf>,
@@ -204,28 +357,7 @@ pub(crate) fn stage_resolved_file_for_source_bundle(
         .join(&repo)
         .join(&version)
         .join(rel_path);
-    if resolved_path == dst || dst.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let copy_result: Result<()> = if resolved_path.is_dir() {
-        copy_dir_all(resolved_path, &dst, &HashSet::new())
-    } else {
-        fs::copy(resolved_path, &dst)
-            .map(|_| ())
-            .map_err(Into::into)
-    };
-
-    copy_result.with_context(|| {
-        format!(
-            "Failed to copy {} to {}",
-            resolved_path.display(),
-            dst.display()
-        )
-    })?;
+    copy_bundle_path(resolved_path, &dst)?;
 
     let parts_index = dep_root.join(KICAD_PARTS_INDEX_FILE);
     if parts_index.exists() {
@@ -249,6 +381,23 @@ pub(crate) fn stage_resolved_file_for_source_bundle(
     }
 
     Ok(())
+}
+
+fn copy_bundle_path(src: &Path, dst: &Path) -> Result<()> {
+    if src == dst || dst.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let copy_result: Result<()> = if src.is_dir() {
+        copy_dir_all(src, dst, &HashSet::new())
+    } else {
+        fs::copy(src, dst).map(|_| ()).map_err(Into::into)
+    };
+
+    copy_result.with_context(|| format!("Failed to copy {} to {}", src.display(), dst.display()))
 }
 
 fn create_metadata_json(input: &MetadataInput<'_>) -> serde_json::Value {
@@ -399,6 +548,7 @@ pcb-version = "0.3"
 
         stage_source_bundle(&SourceBundlePlan {
             resolution: &resolution,
+            root_package_url: None,
             closure: None,
             remote_vendoring: RemoteVendoring::AllResolved,
             staged_src: &staged_src,

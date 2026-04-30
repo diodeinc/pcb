@@ -257,7 +257,7 @@ fn apply_version_updates(pending: &[PendingUpdate]) -> Result<usize> {
     for u in &to_apply {
         let _manifest_lock = pcb_zen::git::lock_manifest(&u.pcb_toml_path)?;
         let mut config = PcbToml::from_file(&DefaultFileProvider::new(), &u.pcb_toml_path)?;
-        if let Some(spec) = config.dependencies.get_mut(&u.url) {
+        if let Some(spec) = config.dependencies.direct.get_mut(&u.url) {
             *spec = DependencySpec::Version(u.new_version.to_string());
             std::fs::write(&u.pcb_toml_path, toml::to_string_pretty(&config)?)?;
         }
@@ -310,7 +310,7 @@ fn find_version_updates(
     for pcb_toml_path in pcb_toml_paths {
         let config = PcbToml::from_file(&DefaultFileProvider::new(), &pcb_toml_path)?;
 
-        for (url, spec) in &config.dependencies {
+        for (url, spec) in &config.dependencies.direct {
             // Skip workspace members, filtered packages, and KiCad asset libraries.
             // TODO: Re-enable updates for KiCad asset libraries once we handle
             // their non-semver versioning properly (they publish breaking changes

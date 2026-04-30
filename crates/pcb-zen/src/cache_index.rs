@@ -9,8 +9,9 @@ use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{OptionalExtension, params};
 use semver::Version;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 
 use crate::git;
 use crate::tags;
@@ -18,6 +19,22 @@ use crate::tags;
 /// Bump this when changing table schemas. Encoded in the filename so a new
 /// version just creates a fresh file — no migration logic needed.
 const SCHEMA_VERSION: i32 = 4;
+static FETCHED_BARE_REPOS: LazyLock<Mutex<BTreeSet<String>>> =
+    LazyLock::new(|| Mutex::new(BTreeSet::new()));
+
+fn bare_repo_fetched_in_process(repo_url: &str) -> bool {
+    FETCHED_BARE_REPOS
+        .lock()
+        .expect("bare repo cache mutex poisoned")
+        .contains(repo_url)
+}
+
+fn mark_bare_repo_fetched(repo_url: &str) {
+    FETCHED_BARE_REPOS
+        .lock()
+        .expect("bare repo cache mutex poisoned")
+        .insert(repo_url.to_string());
+}
 
 pub struct CacheIndex {
     pool: Pool<SqliteConnectionManager>,
@@ -348,9 +365,18 @@ pub fn ensure_workspace_cache_symlink(workspace_root: &std::path::Path) -> Resul
 pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
     let bare_dir = bare_repo_dir(repo_url)?;
 
+    if bare_dir.join("HEAD").exists() && bare_repo_fetched_in_process(repo_url) {
+        return Ok(bare_dir);
+    }
+
     let _lock = git::lock_dir(&bare_dir)?;
+    let repo_exists = bare_dir.join("HEAD").exists();
+    if repo_exists && bare_repo_fetched_in_process(repo_url) {
+        return Ok(bare_dir);
+    }
+
     let spinner = Spinner::builder(format!("Fetching {repo_url}")).start();
-    let result = if bare_dir.join("HEAD").exists() {
+    let result = if repo_exists {
         git::fetch_in_bare_repo(&bare_dir)
     } else {
         git::clone_bare_with_fallback(repo_url, &bare_dir)
@@ -360,6 +386,7 @@ pub fn ensure_bare_repo(repo_url: &str) -> Result<PathBuf> {
         return Err(err);
     }
     spinner.finish();
+    mark_bare_repo_fetched(repo_url);
 
     Ok(bare_dir)
 }

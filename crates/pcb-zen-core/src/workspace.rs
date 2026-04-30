@@ -98,7 +98,7 @@ impl MemberPackage {
 
     /// Get dependency URLs from config
     pub fn dependencies(&self) -> impl Iterator<Item = &String> {
-        self.config.dependencies.keys()
+        self.config.dependencies.direct.keys()
     }
 }
 

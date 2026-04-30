@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added experimental MVS v2 dependency resolution via `pcb sync` / `pcb add`.
+
 ## [0.3.73] - 2026-04-27
 
 ### Changed

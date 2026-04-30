@@ -134,6 +134,7 @@ fn collect_manifest_paths(
 fn is_url_covered_by_manifest(url: &str, config: &PcbToml) -> bool {
     config
         .dependencies
+        .direct
         .keys()
         .any(|dep| package_url_covers(dep, url))
 }
@@ -402,7 +403,7 @@ fn mutate_manifest_dependencies(
             continue;
         }
 
-        config.dependencies.insert(
+        config.dependencies.direct.insert(
             dep.module_path.clone(),
             DependencySpec::Version(dep.version.clone()),
         );
@@ -416,11 +417,12 @@ fn mutate_manifest_dependencies(
             .version
             .clone()
             .unwrap_or_else(|| INITIAL_PACKAGE_VERSION.to_string());
-        if let Some(spec) = config.dependencies.get(url)
+        if let Some(spec) = config.dependencies.direct.get(url)
             && plain_version(spec).is_some_and(|v| is_upgrade_version(v, &version))
         {
             config
                 .dependencies
+                .direct
                 .insert(url.clone(), DependencySpec::Version(version));
             corrected += 1;
             changed = true;

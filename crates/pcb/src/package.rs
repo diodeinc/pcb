@@ -166,10 +166,15 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
 
     let mut workspace = target.workspace;
     let locked = workspace.lockfile.is_some();
-    let resolution = {
+    let mut resolution = {
         let _span = info_span!("resolve_package_bundle_dependencies").entered();
         resolve_dependencies(&mut workspace, false, locked)?
     };
+    crate::resolve::attach_mvs_v2_resolution_for_packages(
+        &mut resolution,
+        [target.package_url.clone()],
+        false,
+    );
     let layout_path = target
         .primary_zen
         .as_ref()
@@ -181,6 +186,7 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
 
     bundle::stage_source_bundle(&SourceBundlePlan {
         resolution: &resolution,
+        root_package_url: Some(&target.package_url),
         closure: Some(&closure),
         remote_vendoring: bundle::RemoteVendoring::ClosureOnly,
         staged_src: &staging_dir.join("src"),

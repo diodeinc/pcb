@@ -610,6 +610,7 @@ fn resolve_packages<F: FileProvider + Clone>(
         workspace_info: workspace,
         package_resolutions,
         closure: HashMap::new(),
+        mvs_v2_resolution: None,
         lockfile_changed: false,
         symbol_parts: HashMap::new(),
     })
