@@ -70,11 +70,7 @@ pub fn execute(args: ExportKicadArgs) -> Result<()> {
             args.output.display()
         )
     })?;
-
-    // process_layout(use_temp_dir=true) leaks its working directory via TempDir::keep().
-    // We just copied everything we need out, so remove the source to avoid piling up
-    // orphaned directories under $TMPDIR across CLI invocations and test runs.
-    let _ = std::fs::remove_dir_all(&layout_result.layout_dir);
+    drop(layout_result);
 
     crate::drc::render_diagnostics(&mut diagnostics, &[]);
     if diagnostics.error_count() > 0 {

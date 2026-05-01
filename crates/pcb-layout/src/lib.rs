@@ -45,6 +45,9 @@ pub struct LayoutResult {
     pub diagnostics_file: PathBuf,
     pub created: bool, // true if new, false if updated
     pub shadow: Option<ShadowLayoutContext>,
+    // When `use_temp_dir=true`, owns the TempDir backing `layout_dir` so it is cleaned up
+    // when this result is dropped.
+    _temp_dir: Option<TempDir>,
 }
 
 #[derive(Debug)]
@@ -467,17 +470,18 @@ pub fn process_layout(
     check_mode: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> Result<Option<LayoutResult>, LayoutError> {
-    // Resolve layout directory
-    let resolved_layout_dir = if use_temp_dir {
-        // Create a temporary directory and keep it (prevent cleanup on drop)
-        tempfile::Builder::new()
+    // Resolve layout directory. When `use_temp_dir` is set, we hold onto the TempDir so it
+    // is removed when the returned `LayoutResult` drops (rather than leaking to $TMPDIR).
+    let (resolved_layout_dir, owned_temp_dir) = if use_temp_dir {
+        let temp = tempfile::Builder::new()
             .prefix("pcb-layout-")
             .tempdir()
-            .expect("Failed to create temporary directory")
-            .keep()
+            .expect("Failed to create temporary directory");
+        let path = temp.path().to_path_buf();
+        (path, Some(temp))
     } else {
         match utils::resolve_layout_dir(schematic)? {
-            Some(path) => path,
+            Some(path) => (path, None),
             None => return Ok(None),
         }
     };
@@ -636,6 +640,7 @@ pub fn process_layout(
         diagnostics_file: paths.diagnostics,
         created: !pcb_exists,
         shadow,
+        _temp_dir: owned_temp_dir,
     }))
 }
 

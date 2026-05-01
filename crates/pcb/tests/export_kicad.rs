@@ -60,3 +60,30 @@ fn test_export_kicad_writes_project_directory() {
         exported.display()
     );
 }
+
+// Verifies `--offline` and `--locked` are wired through to dependency resolution.
+// The Sandbox blocks network egress and pre-seeds kicad-symbols/footprints, so a
+// hermetic export run with both flags should still succeed.
+#[test]
+fn test_export_kicad_offline_locked_writes_project_directory() {
+    let mut sandbox = Sandbox::new();
+    let output = sandbox
+        .write("pcb.toml", PCB_TOML_MIN)
+        .write("boards/SimpleBoard.zen", SIMPLE_BOARD_ZEN)
+        .snapshot_run(
+            "pcb",
+            [
+                "export-kicad",
+                "boards/SimpleBoard.zen",
+                "-o",
+                "exported",
+                "--offline",
+                "--locked",
+            ],
+        );
+    assert_snapshot!("export_kicad_offline_locked", output);
+
+    let exported = sandbox.default_cwd().join("exported");
+    assert!(exported.join("layout.kicad_pro").exists());
+    assert!(exported.join("layout.kicad_pcb").exists());
+}
