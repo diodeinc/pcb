@@ -65,6 +65,68 @@ impl LayoutResult {
             .map(|s| s.original_pcb_file.as_path())
             .unwrap_or(self.pcb_file.as_path())
     }
+
+    /// Disable automatic cleanup of the backing temp directory (if any).
+    ///
+    /// Use this when an external process (e.g., KiCad's pcbnew) is launched asynchronously
+    /// and needs to keep reading from `layout_dir` after this `LayoutResult` is dropped.
+    /// No-op when `use_temp_dir=false` was passed to `process_layout`.
+    pub fn persist_temp_dir(&mut self) {
+        if let Some(temp) = self._temp_dir.take() {
+            let _ = temp.keep();
+        }
+    }
+}
+
+#[cfg(test)]
+mod layout_result_temp_dir_tests {
+    use super::LayoutResult;
+    use std::path::PathBuf;
+
+    fn dummy_result(temp: tempfile::TempDir) -> LayoutResult {
+        let path = temp.path().to_path_buf();
+        LayoutResult {
+            source_file: PathBuf::new(),
+            layout_dir: path.clone(),
+            pcb_file: path.join("layout.kicad_pcb"),
+            netlist_file: path.join("layout.net"),
+            snapshot_file: path.join("layout.snapshot.json"),
+            log_file: path.join("layout.log"),
+            diagnostics_file: path.join("diagnostics.json"),
+            created: true,
+            shadow: None,
+            _temp_dir: Some(temp),
+        }
+    }
+
+    #[test]
+    fn drop_without_persist_removes_temp_dir() {
+        let temp = tempfile::Builder::new()
+            .prefix("pcb-layout-")
+            .tempdir()
+            .unwrap();
+        let path = temp.path().to_path_buf();
+        let result = dummy_result(temp);
+        drop(result);
+        assert!(!path.exists(), "temp dir should be cleaned up on drop");
+    }
+
+    #[test]
+    fn persist_temp_dir_keeps_dir_after_drop() {
+        let temp = tempfile::Builder::new()
+            .prefix("pcb-layout-")
+            .tempdir()
+            .unwrap();
+        let path = temp.path().to_path_buf();
+        let mut result = dummy_result(temp);
+        result.persist_temp_dir();
+        drop(result);
+        assert!(
+            path.exists(),
+            "persist_temp_dir() should disable cleanup-on-drop"
+        );
+        std::fs::remove_dir_all(&path).expect("manual cleanup of persisted dir");
+    }
 }
 
 /// Error types for layout operations
