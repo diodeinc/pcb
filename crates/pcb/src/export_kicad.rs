@@ -54,7 +54,7 @@ pub fn execute(args: ExportKicadArgs) -> Result<()> {
     let result = process_layout(
         &schematic,
         &model_dirs,
-        true,  // use_temp_dir: always export to a fresh temp dir, ignoring any layout_path on the design
+        true, // use_temp_dir: always export to a fresh temp dir, ignoring any layout_path on the design
         false, // check_mode
         &mut diagnostics,
     )?;
@@ -87,8 +87,7 @@ pub fn execute(args: ExportKicadArgs) -> Result<()> {
 }
 
 fn copy_dir_contents(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)
-        .with_context(|| format!("Failed to create {}", dst.display()))?;
+    std::fs::create_dir_all(dst).with_context(|| format!("Failed to create {}", dst.display()))?;
     for entry in WalkDir::new(src) {
         let entry = entry?;
         let rel = entry
