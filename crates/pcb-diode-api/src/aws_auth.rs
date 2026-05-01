@@ -21,6 +21,8 @@ use std::time::SystemTime;
 use crate::WorkspaceContext;
 
 const SERVICE_TOKEN_EXPIRY_SKEW_SECONDS: i64 = 120;
+const AWS_AUTH_AUDIENCE_HEADER: &str = "x-diode-audience";
+const AWS_AUTH_AUDIENCE: &str = "diode-api/aws-auth/v1";
 
 #[derive(Debug, Clone)]
 pub(crate) struct AwsDiodeToken {
@@ -267,10 +269,16 @@ fn build_identity_proof() -> Result<AwsIdentityProofWithCacheKey> {
             .into();
 
         let mut url = sts_get_caller_identity_url(region);
+        let proof_headers = [(
+            AWS_AUTH_AUDIENCE_HEADER.to_string(),
+            AWS_AUTH_AUDIENCE.to_string(),
+        )];
         let signable_request = SignableRequest::new(
             "GET",
             url.as_str(),
-            std::iter::empty(),
+            proof_headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
             SignableBody::empty(),
         )
         .context("Failed to build signable STS request")?;
@@ -286,7 +294,7 @@ fn build_identity_proof() -> Result<AwsIdentityProofWithCacheKey> {
             proof: AwsIdentityProof {
                 method: "GET".to_string(),
                 url: url.to_string(),
-                headers: HashMap::new(),
+                headers: proof_headers.into_iter().collect(),
                 body: String::new(),
             },
             cache_discriminator,
