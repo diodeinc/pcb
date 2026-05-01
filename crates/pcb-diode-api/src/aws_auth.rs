@@ -146,7 +146,7 @@ pub(crate) fn clear_service_token(ctx: &WorkspaceContext) -> Result<()> {
         cache.retain(|key, _| !key.starts_with(&cache_prefix));
     }
 
-    let service_auth_dir = service_auth_dir()?;
+    let service_auth_dir = service_auth_dir_path()?;
     if !service_auth_dir.exists() {
         return Ok(());
     }
@@ -180,14 +180,18 @@ fn cache_token(cache_key: String, token: AwsDiodeToken) {
     }
 }
 
-fn service_auth_dir() -> Result<PathBuf> {
+fn service_auth_dir_path() -> Result<PathBuf> {
     let pcb_dir = if let Ok(config_dir) = std::env::var("PCB_CONFIG_DIR") {
         PathBuf::from(config_dir)
     } else {
         let home_dir = dirs::home_dir().context("Failed to get home directory")?;
         home_dir.join(".pcb")
     };
-    let service_auth_dir = pcb_dir.join("service-auth");
+    Ok(pcb_dir.join("service-auth"))
+}
+
+fn service_auth_dir() -> Result<PathBuf> {
+    let service_auth_dir = service_auth_dir_path()?;
     fs::create_dir_all(&service_auth_dir)?;
     Ok(service_auth_dir)
 }
