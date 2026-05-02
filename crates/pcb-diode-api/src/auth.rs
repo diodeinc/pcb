@@ -33,21 +33,25 @@ impl AuthTokens {
     }
 
     pub fn time_until_expiry(&self) -> String {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        let remaining = self.expires_at - now;
+        time_until_expiry(self.expires_at)
+    }
+}
 
-        if remaining <= 0 {
-            "expired".to_string()
-        } else if remaining < 3600 {
-            format!("{} minutes", remaining / 60)
-        } else if remaining < 86400 {
-            format!("{} hours", remaining / 3600)
-        } else {
-            format!("{} days", remaining / 86400)
-        }
+fn time_until_expiry(expires_at: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let remaining = expires_at - now;
+
+    if remaining <= 0 {
+        "expired".to_string()
+    } else if remaining < 3600 {
+        format!("{} minutes", remaining / 60)
+    } else if remaining < 86400 {
+        format!("{} hours", remaining / 3600)
+    } else {
+        format!("{} days", remaining / 86400)
     }
 }
 
@@ -299,9 +303,9 @@ pub fn logout() -> Result<()> {
 }
 
 pub fn status_with_context(ctx: &WorkspaceContext) -> Result<()> {
+    println!("Authentication Status:");
     match load_tokens_with_context(ctx)? {
         Some(tokens) => {
-            println!("Authentication Status:");
             println!("  Status: Logged in");
             if let Some(email) = &tokens.email {
                 println!("  Email: {}", email);
@@ -313,11 +317,23 @@ pub fn status_with_context(ctx: &WorkspaceContext) -> Result<()> {
                 println!("  Token expires in: {}", tokens.time_until_expiry());
             }
         }
-        None => {
-            println!("Authentication Status:");
-            println!("  Status: Not logged in");
-            println!("\nRun `pcb auth login` to authenticate.");
-        }
+        None => match aws_auth::get_service_token(ctx) {
+            Ok(token) => {
+                println!("  Status: Logged in");
+                println!("  Method: AWS credentials");
+                if let Some(aws_principal_arn) = &token.aws_principal_arn {
+                    println!("  AWS principal: {}", aws_principal_arn);
+                }
+                println!(
+                    "  Token expires in: {}",
+                    time_until_expiry(token.expires_at)
+                );
+            }
+            Err(_) => {
+                println!("  Status: Not logged in");
+                println!("\nRun `pcb auth login` to authenticate.");
+            }
+        },
     }
     Ok(())
 }
