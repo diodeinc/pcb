@@ -641,6 +641,274 @@ HOUSE_TVS_BY_PKG = {
         vishay_tvs("48V", "77.4V", "6000W", "SMCJ48CA-E3", "88394/smcj.pdf"),
         vishay_tvs("60V", "96.8V", "6000W", "SMCJ60CA-E3", "88394/smcj.pdf"),
     ],
+    ("Unidirectional", "SOD-882"): [
+        tvs(
+            "5V",
+            "7.5V",
+            None,
+            "SP3031-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/tvs-diode-arrays-sp3031-datasheet?assetguid=2f63a461-bb1a-458d-97ab-119532f3b1f4",
+            capacitance="0.8pF",
+        ),
+        tvs(
+            "5V",
+            "12V",
+            None,
+            "SP1003-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1003_datasheet.pdf?assetguid=12e91f0b-9a70-47f1-8c30-51aa42e84dd5",
+            capacitance="30pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            None,
+            "SP3030-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp3030_datasheet.pdf?assetguid=477be72d-f135-4b27-a334-de0f49e61bac",
+            capacitance="0.5pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            None,
+            "SP1250-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1250_datasheet.pdf?assetguid=e52bbf49-0dd7-4706-9776-b2e12ebb5a3a",
+            capacitance="120pF",
+        ),
+        tvs(
+            "7V",
+            "11.8V",
+            None,
+            "SP3530-01ETG",
+            "Littelfuse Inc.",
+            "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2345/SP3530_Series.pdf",
+        ),
+        tvs(
+            "3.3V",
+            "10V",
+            "95W",
+            "VESD03A1C-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81797/vesd03a1.pdf",
+            capacitance="78pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            "80W",
+            "VESD05A1C-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81798/vesd05a1.pdf",
+            capacitance="63pF",
+        ),
+        tvs(
+            "5V",
+            "12V",
+            "192W",
+            "VESD05A1A-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81800/vesd05a1.pdf",
+            capacitance="130pF",
+        ),
+        tvs(
+            "3.3V",
+            "9V",
+            "31W",
+            "VESD03A1B-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81851/vesd03a1.pdf",
+            capacitance="25pF",
+        ),
+        tvs(
+            "5V",
+            "11V",
+            "33W",
+            "VESD05A1B-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81796/vesd05a1.pdf",
+            capacitance="19pF",
+        ),
+        tvs(
+            "5.5V",
+            "14V",
+            "28W",
+            "VBUS051CD-HD1-G-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81195/vbus051cd.pdf",
+            capacitance="0.6pF",
+        ),
+    ],
+    ("Bidirectional", "SOD-882"): [
+        tvs(
+            "1V",
+            "8.5V",
+            None,
+            "SP0115-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sp0115-01etg-datasheet?assetguid=e612b8e6-e7be-4b03-b9cb-e0e912cf59c1",
+            capacitance="0.85pF",
+        ),
+        tvs(
+            "3.3V",
+            "9V",
+            None,
+            "SC1333-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sc1333-01etg-datasheet?assetguid=3f42833b-e7fb-4dbd-925d-18e1fde6e51d",
+            capacitance="8pF",
+        ),
+        tvs(
+            "3.3V",
+            "8.5V",
+            "180W",
+            "SP1233-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1233_datasheet.pdf?assetguid=0e864491-f5c5-4123-a4af-5b5f312ccc58",
+            capacitance="35pF",
+        ),
+        tvs(
+            "5V",
+            "14.7V",
+            None,
+            "SP3021-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp3021_datasheet.pdf?assetguid=02714df5-d4f5-4e09-baec-2bc99a517824",
+        ),
+        tvs(
+            "5V",
+            "11V",
+            None,
+            "SC1210-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sc1210-01etg-datasheet?assetguid=69d2080a-f0b0-48bb-a865-7cbf0c1070b5",
+            capacitance="26pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            None,
+            "AQ1205-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_aq1205-01etg_datasheet.pdf?assetguid=72e10767-3f7e-4400-818c-12e470836581",
+            capacitance="7pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            None,
+            "SC1205-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sc1205-01etg_datasheet.pdf?assetguid=1c78a8be-7e76-4626-a182-63ddf7641a57",
+            capacitance="7pF",
+        ),
+        tvs(
+            "5.3V",
+            "12V",
+            "20W",
+            "SP3022-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sp3022-datasheet?assetguid=a27ecccd-9fa4-4223-9a25-f0bb33be4303",
+        ),
+        tvs(
+            "5.3V",
+            "13V",
+            None,
+            "SP3022-01ETG-NM",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sp3022-01etg-nm-datasheet?assetguid=60969493-fae9-418a-91ac-bc92d273bb80",
+            capacitance="0.35pF",
+        ),
+        tvs(
+            "6V",
+            "15.6V",
+            None,
+            "SP1005-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1005_datasheet.pdf?assetguid=52a245c3-fc07-42d4-9891-4cdd6cceab3f",
+        ),
+        tvs(
+            "6V",
+            "9.2V",
+            None,
+            "SP1007-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1007_datasheet.pdf?assetguid=fcbdfc8e-b10b-4d90-ad90-b7da1dfffcb8",
+        ),
+        tvs(
+            "7V",
+            "14.5V",
+            None,
+            "SP3522-01ETG",
+            "Littelfuse Inc.",
+            "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2292/SP3522_Series.pdf",
+        ),
+        tvs(
+            "18V",
+            "38V",
+            None,
+            "SP3118-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp3118_datasheet.pdf?assetguid=049f1614-7668-459d-a6c4-a91a1217584b",
+            capacitance="0.3pF",
+        ),
+        tvs(
+            "28V",
+            "48V",
+            None,
+            "SP3130-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-arrays-sp3130-datasheet?assetguid=be94cc20-a863-42b7-82be-41ce11851e36",
+            capacitance="0.3pF",
+        ),
+        tvs(
+            "5.5V",
+            "16V",
+            "56W",
+            "VCUT0505B-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81852/vcut0505.pdf",
+            capacitance="18pF",
+        ),
+        tvs(
+            "5.5V",
+            "12.5V",
+            "38W",
+            "VCUT05B1-DD1-G-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81149/vcut05b1dd1.pdf",
+            capacitance="10pF",
+        ),
+        tvs(
+            "5.5V",
+            "17V",
+            "34W",
+            "VBUS05L1-DD1-G-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81188/vbus05l1.pdf",
+            capacitance="0.33pF",
+        ),
+        tvs(
+            "7V",
+            "15V",
+            "60W",
+            "VCUT07B1-HD1-G4-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/84137/vcut07b1hd1.pdf",
+            capacitance="14pF",
+        ),
+        tvs(
+            "3.5V",
+            "11.5V",
+            "40W",
+            "VCUT03B1-DD1-G-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81148/vcut03b1.pdf",
+            capacitance="12.5pF",
+        ),
+    ],
 }
 
 # House standoff catalog (Würth WA-SMSI series with Sinhoo SMTSO alternatives)
@@ -1186,7 +1454,9 @@ def assign_house_tvs(c, house_tvs_by_pkg):
     req_standoff = prop(c, ["reverse_standoff_voltage", "Reverse_standoff_voltage"])
     req_clamping = prop(c, ["reverse_clamping_voltage", "Reverse_clamping_voltage"])
     req_power = prop(c, ["peak_pulse_power", "Peak_pulse_power"])
+    req_capacitance = prop(c, ["capacitance", "Capacitance"])
     required_power = Power(req_power) if req_power else None
+    required_capacitance = Capacitance(req_capacitance) if req_capacitance else None
 
     parts = house_tvs_by_pkg.get((direction, pkg), [])
     matches = []
@@ -1201,8 +1471,14 @@ def assign_house_tvs(c, house_tvs_by_pkg):
             continue
 
         # Power is a minimum acceptable rating; allow higher-power TVS parts.
-        if required_power and p["peak_pulse_power"] < required_power:
+        if required_power and (not p["peak_pulse_power"] or p["peak_pulse_power"] < required_power):
             continue
+
+        if required_capacitance:
+            if not p["capacitance"]:
+                continue
+            if not p["capacitance"].within(required_capacitance):
+                continue
 
         matches.append(p)
 

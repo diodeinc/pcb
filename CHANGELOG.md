@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added SOD-882 TVS diodes with capacitance-based BOM matching.
+
 ## [0.3.75] - 2026-05-02
 
 ### Added
