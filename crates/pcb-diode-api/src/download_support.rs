@@ -129,6 +129,15 @@ pub(crate) fn save_local_version(db_path: &Path, version: &str, label: &str) -> 
     Ok(())
 }
 
+pub(crate) fn sha256_version_token(sha256: &str, label: &str) -> Result<String> {
+    let sha256 = sha256.trim();
+    if !sha256.is_empty() {
+        return Ok(sha256.to_string());
+    }
+
+    anyhow::bail!("{label} metadata missing sha256")
+}
+
 pub(crate) fn ensure_parent_dir(dest_path: &Path, label: &str) -> Result<()> {
     if let Some(parent) = dest_path.parent() {
         fs::create_dir_all(parent)

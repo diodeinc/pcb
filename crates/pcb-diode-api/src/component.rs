@@ -1348,12 +1348,33 @@ fn execute_search(
         None => SearchMode::WebComponents,
     };
 
+    refresh_search_index_if_stale(effective_mode, registry_index);
+
     match effective_mode {
         SearchMode::RegistryModules | SearchMode::RegistryComponents => {
             execute_registry_search_filtered(query, json, effective_mode, registry_index)
         }
         SearchMode::KicadSymbols => execute_kicad_symbols_search(query, json),
         SearchMode::WebComponents => execute_web_search(query, json),
+    }
+}
+
+fn refresh_search_index_if_stale(
+    mode: crate::registry::tui::SearchMode,
+    registry_index: Option<&Path>,
+) {
+    use crate::registry::tui::SearchMode;
+
+    match mode {
+        SearchMode::RegistryModules | SearchMode::RegistryComponents => {
+            if registry_index.is_none() {
+                let _ = crate::RegistryClient::refresh_if_stale();
+            }
+        }
+        SearchMode::KicadSymbols => {
+            let _ = crate::KicadSymbolsClient::refresh_if_stale();
+        }
+        SearchMode::WebComponents => {}
     }
 }
 
