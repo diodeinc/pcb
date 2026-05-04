@@ -26,12 +26,7 @@ pub struct KicadSymbolsIndexMetadata {
 impl KicadSymbolsIndexMetadata {
     /// Stable token for local freshness checks.
     pub fn version_token(&self) -> Result<String> {
-        let sha256 = self.sha256.trim();
-        if !sha256.is_empty() {
-            return Ok(sha256.to_string());
-        }
-
-        anyhow::bail!("KiCad symbols index metadata missing sha256")
+        crate::download_support::sha256_version_token(&self.sha256, "KiCad symbols index")
     }
 }
 

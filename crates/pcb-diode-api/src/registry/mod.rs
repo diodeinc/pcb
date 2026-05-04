@@ -425,6 +425,12 @@ impl RegistryClient {
         Ok(home.join(".pcb").join("registry").join("packages.db"))
     }
 
+    /// Refresh the default registry index when the server-side version changes.
+    pub fn refresh_if_stale() -> Result<download::RefreshResult> {
+        let path = Self::default_db_path()?;
+        download::refresh_registry_index_if_stale(&path)
+    }
+
     pub fn open() -> Result<Self> {
         let path = Self::default_db_path()?;
         if !path.exists() {
