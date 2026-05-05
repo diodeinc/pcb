@@ -2,9 +2,16 @@
 
 load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
+load("../../units.zen", "Voltage")
+load("../../utils.zen", "capacitor_voltage_rating")
 load("../../bom/match_generics.zen", "HOUSE_CAPS_BY_PKG", "assign_house_parts")
 
 Capacitor = Module("../Capacitor.zen")
+
+check(capacitor_voltage_rating(Voltage("4.95V")) == Voltage("6.3V"), "3.3V rail cap should round to 6.3V")
+check(capacitor_voltage_rating(Voltage("7.5V")) == Voltage("10V"), "5V rail cap should round to 10V")
+check(capacitor_voltage_rating(Voltage("36V")) == Voltage("50V"), "24V rail cap should round to 50V")
+check(capacitor_voltage_rating(Voltage("52.5V")) == Voltage("100V"), "35V is not a capacitor rating tier")
 
 # Capacitors
 for package in Capacitor.Package.values():

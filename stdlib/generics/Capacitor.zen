@@ -1,7 +1,7 @@
 load("../io.zen", "io")
 load("../interfaces.zen", "Net")
 load("../units.zen", "Capacitance", "Inductance", "Resistance", "Temperature", "Voltage")
-load("../utils.zen", "format_value")
+load("../utils.zen", "capacitor_voltage_rating", "format_value")
 
 Package = enum("01005", "0201", "0402", "0603", "0805", "1206", "1210", "1812", "1825", "2220", "2225", "3640")
 Mount = enum("SMD")
@@ -30,7 +30,11 @@ if exclude_from_bom:
 P1 = io(Net)
 P2 = io(Net)
 
-effective_voltage = Voltage(P1.voltage.diff(P2.voltage) * 1.5) if not voltage and P1.voltage and P2.voltage else voltage
+effective_voltage = (
+    capacitor_voltage_rating(Voltage(P1.voltage.diff(P2.voltage) * 1.5))
+    if not voltage and P1.voltage and P2.voltage
+    else voltage
+)
 
 # Properties
 properties = {
