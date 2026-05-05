@@ -1,19 +1,22 @@
 ---
 name: zener-language
-description: Canonical Zener HDL semantics reference — language constructs, package rules, manifests, and stdlib APIs. Use when writing or editing non-trivial `.zen` code and you need exact semantics for `Module()`, `io()`, `config()`, imports, `pcb.toml`, `pcb.sum`, stdlib interfaces, units, properties, or generics. Pair with `idiomatic-zener` for style; this skill is the semantics companion.
+description: Canonical Zener HDL guidance — language semantics, package rules, manifests, stdlib APIs, and authoring idioms. Use when writing, editing, refactoring, or reviewing non-trivial `.zen` code, especially work involving `Module()`, `io()`, `config()`, imports, `pcb.toml`, stdlib interfaces, units, generics, DNP patterns, or validation.
 ---
 
 # Zener Language
 
+Canonical Zener HDL semantics and authoring guidance. Start from nearby code and confirm unfamiliar APIs with `pcb doc` or source.
+
 ## Workflow
 
 1. Start from nearby workspace code. Prefer the local package's patterns before generic examples.
-2. Check exact semantics here before editing when the code touches unfamiliar syntax, manifests, imports, stdlib APIs, or package interfaces.
+2. Check exact semantics here before editing unfamiliar syntax, manifests, imports, stdlib APIs, package interfaces, or authoring patterns.
 3. Use `pcb doc` to discover package APIs whenever you need interface field names, generic parameters, or any unfamiliar surface. Output includes the resolved source path so you can read the package source directly.
    - `pcb doc --package @stdlib` (or `@stdlib/generics`) for stdlib.
    - `pcb doc --package <package>` for any installed or registry package. Pin URL packages with `@<version>`, e.g. `pcb doc --package github.com/org/repo/path@v0.2.5`.
 4. When in doubt about exact behavior or semantics, read the actual source `.zen` files — stdlib modules and package sources alike. `pcb doc` is type-level only; the source is the truth.
-5. Never invent syntax, stdlib modules, interfaces, fields, or package APIs.
+5. Never invent syntax, stdlib modules, interfaces, fields, package APIs, footprints, or part names.
+6. Preserve trailing `# pcb:sch ...` comments. Only update names inside an existing comment when you rename the matching component or net.
 
 ## Language
 
@@ -52,6 +55,7 @@ Components and sourcing:
 - `typ` can be primitive types, enums, records, or physical value constructors like `Voltage` or `Resistance`.
 - `allowed=` constrains accepted values to a discrete set.
 - Strings auto-convert when possible: `"10k"` can become `Resistance("10k")`; `"0603"` can become an enum value.
+- Use physical types from `@stdlib/units.zen` for physical-value configs. Use `enum()` only for discrete design choices.
 
 Utilities:
 
@@ -59,9 +63,84 @@ Utilities:
 - `Layout(name, path)` associates reusable layout metadata to a module.
 - `check(condition, message)`, `warn(message)`, and `error(message)` are the validation and diagnostic primitives.
 
-Tool-managed metadata:
+## Authoring Idioms
 
-- Trailing `# pcb:sch ...` comments are tool-managed schematic placement metadata. Leave them alone, never delete them, and never add new ones. The only allowed edit is updating names inside an existing comment when you rename the matching component or net.
+### Power, Interfaces, And Checks
+
+- Keep power domains explicit with `Power(voltage=...)`, `Ground`, typed bus interfaces, and `@stdlib/checks.zen` helpers such as `voltage_within(...)`.
+- Every `Power` `io()` declares its voltage range in the template unless the existing local API intentionally keeps it generic.
+- Connect `Power` and `Ground` ios directly to pins and passives.
+- Use `help=` when it adds integrator-visible meaning that is not already obvious from the name, type, or default. Omit help text that merely restates those fields.
+
+```zen
+VDD = io(Power(voltage="3.0V to 5.5V"))
+GND = io(Ground)
+EN = io(Net, help="High to enable the regulator")
+```
+
+### Configs And Computation
+
+- Expose meaningful design choices, not incidental implementation details. Good configs include output voltage, gain, cutoff frequency, address, mode, or optional feature enablement. Avoid configs for fixed decoupling values, passive package sizes, and test-point style unless local code already makes them public API.
+- Prefer one meaningful physical config over raw R/C/L strings. For example, expose a cutoff `Frequency` and compute snapped passives internally.
+- Put non-trivial calculations in named functions with datasheet section or equation references when available. Snap results to E-series values with `e96()`, `e24()`, or the appropriate stdlib utility.
+
+```zen
+def load_r(v_out, v_sense):
+    """Datasheet §8.1.1 / Eq 4: V_OUT = V_SENSE × gm × R_L"""
+    GM = Current("200uA") / Voltage("1V")
+    return e96(v_out / (v_sense * GM))
+```
+
+### DNP And Optional Circuitry
+
+- Configs may change component values and `dnp=` state, but they should not change which instances or nets exist in the schematic.
+- Never use conditional instantiation to add, remove, or reconnect circuitry. Always instantiate the relevant components and use `dnp=` for population state.
+- When a config selects a value on the same two nets, prefer one component with a computed value.
+- When a config selects between mutually exclusive net straps, instantiate each strap option and DNP the inactive ones so topology stays stable.
+- Leverage an IC's internal pull-up or pull-down when the default mode uses it; use external bias components with `dnp=` only for populated alternatives.
+
+```zen
+load("@stdlib/units.zen", "Voltage", "Resistance")
+load("@stdlib/utils.zen", "e96")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+Mode = enum("PFM", "PWM")
+mode = config(Mode, default="PFM")
+voltage_out = config(Voltage, default="5V", allowed=["3.3V", "5V"])
+
+VOUT = io(Power(voltage=voltage_out))
+GND = io(Ground())
+
+_VFB = Voltage("0.8V")
+_R_FB_TOP_VAL = Resistance("100kohm")
+
+def _fb_bottom(vout):
+    """Datasheet Table 1: R2 = R1 × VFB / (VOUT − VFB)"""
+    return e96(_R_FB_TOP_VAL * _VFB / (vout - _VFB))
+
+VCC = Power()
+FB = Net()
+MSYNC = Net()
+
+# Same feedback divider instances and nets for every output voltage; only value changes.
+Resistor(name="R_FB_TOP", value=_R_FB_TOP_VAL.with_tolerance("1%"), package="0402", P1=VOUT, P2=FB)
+Resistor(name="R_FB_BOT", value=_fb_bottom(voltage_out).with_tolerance("1%"), package="0402", P1=FB, P2=GND)
+
+# Same strap options and nets for every mode; only population changes.
+Resistor(name="R_MSYNC_GND", value="0ohm", package="0402", P1=MSYNC, P2=GND, dnp=mode != Mode("PFM"))
+Resistor(name="R_MSYNC_VCC", value="0ohm", package="0402", P1=MSYNC, P2=VCC, dnp=mode != Mode("PWM"))
+```
+
+### Naming
+
+| Element | Convention | Example |
+|---|---|---|
+| `io()` names | UPPERCASE | `VDD`, `GND`, `I2C` |
+| `config()` names | lowercase | `input_filter`, `output_voltage` |
+| Internal nets | `_` prefix | `_VREF`, `_XI`, `_RBIAS` |
+| Components | Uppercase functional prefix | `R_LOAD`, `C_VDD`, `U_LDO` |
+| Differential pairs | `_P` / `_N` suffixes | `IN_P`, `IN_N` |
 
 ## Packages And Manifests
 
