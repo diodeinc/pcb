@@ -1,6 +1,6 @@
 """Comprehensive test for all generic components."""
 
-load("../../interfaces.zen", "Net")
+load("../../interfaces.zen", "Ground", "Net", "Power")
 load("../../properties.zen", "Layout")
 load("../../units.zen", "Voltage")
 load("../../utils.zen", "capacitor_voltage_rating")
@@ -12,6 +12,11 @@ check(capacitor_voltage_rating(Voltage("4.95V")) == Voltage("6.3V"), "3.3V rail 
 check(capacitor_voltage_rating(Voltage("7.5V")) == Voltage("10V"), "5V rail cap should round to 10V")
 check(capacitor_voltage_rating(Voltage("36V")) == Voltage("50V"), "24V rail cap should round to 50V")
 check(capacitor_voltage_rating(Voltage("52.5V")) == Voltage("100V"), "35V is not a capacitor rating tier")
+
+v3v3 = Power("V3V3", voltage=Voltage("3.3V"))
+gnd = Ground("GND")
+Capacitor(name="C_EXPLICIT_EQUAL_AUTO_VOLTAGE", value="100nF", voltage="6.3V", P1=v3v3, P2=gnd)
+Capacitor(name="C_EXPLICIT_HIGHER_THAN_AUTO_VOLTAGE", value="100nF", voltage="10V", P1=v3v3, P2=gnd)
 
 # Capacitors
 for package in Capacitor.Package.values():

@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added SOD-882 TVS diodes with capacitance-based BOM matching.
 
+### Changed
+
+- Capacitors now warn when explicit voltage ratings are below the inferred 1.5x rounded net-voltage requirement.
+
 ### Fixed
 
 - KiCad CLI discovery now checks `PATH` before platform fallbacks.
