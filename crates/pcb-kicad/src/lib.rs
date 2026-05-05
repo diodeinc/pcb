@@ -27,6 +27,23 @@ fn env_or_path(env_var: &str, default: &str) -> String {
     expand_home(&std::env::var(env_var).unwrap_or_else(|_| default.to_string()))
 }
 
+fn command_exists_on_path(command: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|path| path.join(command).exists()))
+}
+
+fn env_or_command_or_path(env_var: &str, command: &str, default: &str) -> String {
+    if let Ok(path) = std::env::var(env_var) {
+        return expand_home(&path);
+    }
+
+    if command_exists_on_path(command) {
+        command.to_string()
+    } else {
+        expand_home(default)
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn first_existing_path(candidates: &[&str]) -> String {
     candidates
@@ -41,6 +58,23 @@ fn env_or_first_existing_path(env_var: &str, candidates: &[&str]) -> String {
     std::env::var(env_var)
         .map(|path| expand_home(&path))
         .unwrap_or_else(|_| first_existing_path(candidates))
+}
+
+#[cfg(target_os = "windows")]
+fn env_or_command_or_first_existing_path(
+    env_var: &str,
+    command: &str,
+    candidates: &[&str],
+) -> String {
+    if let Ok(path) = std::env::var(env_var) {
+        return expand_home(&path);
+    }
+
+    if command_exists_on_path(command) {
+        command.to_string()
+    } else {
+        first_existing_path(candidates)
+    }
 }
 
 fn require_tool_path(
@@ -109,8 +143,9 @@ mod paths {
     }
 
     pub(crate) fn kicad_cli() -> String {
-        super::env_or_path(
+        super::env_or_command_or_path(
             "KICAD_CLI",
+            "kicad-cli",
             "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
         )
     }
@@ -157,8 +192,9 @@ mod paths {
     }
 
     pub(crate) fn kicad_cli() -> String {
-        super::env_or_first_existing_path(
+        super::env_or_command_or_first_existing_path(
             "KICAD_CLI",
+            "kicad-cli.exe",
             &[
                 r"C:\Program Files\KiCad\10.0\bin\kicad-cli.exe",
                 r"C:\Program Files\KiCad\9.0\bin\kicad-cli.exe",
@@ -203,7 +239,7 @@ mod paths {
     }
 
     pub(crate) fn kicad_cli() -> String {
-        super::env_or_path("KICAD_CLI", "/usr/bin/kicad-cli")
+        super::env_or_command_or_path("KICAD_CLI", "kicad-cli", "/usr/bin/kicad-cli")
     }
 
     pub(crate) fn pcbnew() -> String {
@@ -212,17 +248,12 @@ mod paths {
 }
 
 /// Check if KiCad is installed and return a helpful error if not
-fn check_kicad_installed() -> Result<()> {
-    let kicad_path = require_tool_path(
-        paths::kicad_cli(),
-        "KiCad CLI",
-        "KICAD_CLI",
-        "Please ensure KiCad is installed. You can download it from https://www.kicad.org/",
-    )?;
+fn check_kicad_installed() -> Result<String> {
+    let kicad_path = paths::kicad_cli();
 
     // Try to run kicad-cli --version to verify it's executable
     match Command::new(&kicad_path).arg("--version").output() {
-        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) if output.status.success() => Ok(kicad_path),
         Ok(_) => Err(anyhow!(
             "KiCad CLI found but failed to execute. Please check your KiCad installation."
         )),
@@ -449,12 +480,12 @@ impl KiCadCliBuilder {
     /// Execute the KiCad CLI command
     pub fn run(self) -> Result<()> {
         // Check if KiCad is installed before trying to run
-        check_kicad_installed()?;
+        let kicad_cli = check_kicad_installed()?;
 
         let args_refs: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
 
         // Build command with environment variables
-        let mut cmd = CommandRunner::new(paths::kicad_cli());
+        let mut cmd = CommandRunner::new(kicad_cli);
 
         // Add all arguments
         for arg in &args_refs {
@@ -491,12 +522,12 @@ impl KiCadCliBuilder {
     /// Execute the KiCad CLI command and return the output
     pub fn output(self) -> Result<std::process::Output> {
         // Check if KiCad is installed before trying to run
-        check_kicad_installed()?;
+        let kicad_cli = check_kicad_installed()?;
 
         let args_refs: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
 
         // Build command with environment variables
-        let mut cmd = std::process::Command::new(paths::kicad_cli());
+        let mut cmd = std::process::Command::new(kicad_cli);
 
         // Add all arguments
         for arg in &args_refs {
@@ -540,8 +571,6 @@ pub fn run_drc(
     working_dir: Option<&Path>,
     output_path: &Path,
 ) -> Result<drc::DrcReport> {
-    check_kicad_installed()?;
-
     let pcb_path = pcb_path.as_ref();
     if !pcb_path.exists() {
         anyhow::bail!("PCB file not found: {}", pcb_path.display());
@@ -586,8 +615,6 @@ pub fn run_erc_report(
     schematic_path: impl AsRef<Path>,
     working_dir: Option<&Path>,
 ) -> Result<erc::ErcReport> {
-    check_kicad_installed()?;
-
     let schematic_path = schematic_path.as_ref();
     if !schematic_path.exists() {
         anyhow::bail!("Schematic file not found: {}", schematic_path.display());
