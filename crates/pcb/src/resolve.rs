@@ -83,9 +83,9 @@ fn resolve_mvs_v2(
     let mut resolution_set = FrozenResolutionSet::default();
     let mut symbol_parts = HashMap::new();
 
-    for package_url in package_urls {
-        let resolution =
-            crate::pcb_mod::build_frozen_resolution_map(&workspace_info, &package_url, offline)?;
+    for (package_url, resolution) in
+        crate::pcb_mod::build_frozen_resolution_maps(&workspace_info, package_urls, offline)?
+    {
         symbol_parts.extend(pcb_zen::resolve::build_frozen_symbol_parts(
             &workspace_info,
             &resolution,
@@ -93,14 +93,11 @@ fn resolve_mvs_v2(
         resolution_set.root_packages.insert(package_url, resolution);
     }
 
-    Ok(ResolutionResult {
+    Ok(ResolutionResult::frozen(
         workspace_info,
-        package_resolutions: HashMap::new(),
-        closure: HashMap::new(),
-        mvs_v2_resolution: Some(resolution_set),
-        lockfile_changed: false,
+        resolution_set,
         symbol_parts,
-    })
+    ))
 }
 
 pub(crate) fn attach_mvs_v2_resolution_for_packages(

@@ -26,7 +26,9 @@ use std::path::{Path, PathBuf};
 use self::materialize::{materialize_selected, vendor_selected};
 use self::mvs::{DepGraph, DepGraphNode, PackageResolver};
 use self::request::resolve_direct_dependency_request;
-pub(crate) use self::resolve::{build_frozen_resolution_map, target_package_urls_for_path};
+pub(crate) use self::resolve::{
+    build_frozen_resolution_map, build_frozen_resolution_maps, target_package_urls_for_path,
+};
 use self::target::{AddTarget, discover_add_targets};
 use self::writeback::write_package_manifest;
 

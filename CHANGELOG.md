@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Capacitors now warn when explicit voltage ratings are below the inferred 1.5x rounded net-voltage requirement.
+- Hydrated MVS v2 builds now reuse cached loads across packages with identical package-local dependency maps.
 
 ### Fixed
 
