@@ -56,6 +56,12 @@ logger = logging.getLogger("pcb.lens.kicad")
 PACKAGE_URI_PREFIX = "package://"
 FRAGMENT_ZONE_PRIORITY_BIAS = 1
 
+# KiCad 10 length-tuning patterns are serialized as PCB_GENERATOR board items.
+# pcbnew's Python wrapper cannot Cast() them, and the lens does not model the
+# generator controller itself; the generated tracks/vias remain separate board
+# items and are handled through the normal routing paths.
+_UNCASTABLE_GROUP_ITEM_CLASSES = {"PCB_GENERATOR"}
+
 
 def resolve_package_uri(uri: str, package_roots: Dict[str, str]) -> Path:
     """Resolve a package:// URI to an absolute filesystem path.
@@ -89,6 +95,27 @@ def get_footprint_field(fp: Any, name: str) -> Optional[Any]:
     if hasattr(fp, "HasField") and fp.HasField(name):
         return fp.GetField(name)
     return None
+
+
+def get_group_items(group: Any) -> List[Any]:
+    """Return group items, skipping KiCad item classes the Python wrapper cannot cast."""
+    if not hasattr(group, "GetItemsDeque"):
+        return list(group.GetItems())
+
+    items: List[Any] = []
+    for item in group.GetItemsDeque():
+        item_class = str(item.GetClass()).upper() if hasattr(item, "GetClass") else ""
+        if item_class in _UNCASTABLE_GROUP_ITEM_CLASSES:
+            continue
+        items.append(item.Cast() if hasattr(item, "Cast") else item)
+    return items
+
+
+def get_group_items_for_detach(group: Any) -> List[Any]:
+    """Return every raw group item that can be passed to PCB_GROUP.RemoveItem."""
+    if not hasattr(group, "GetItemsDeque"):
+        return list(group.GetItems())
+    return list(group.GetItemsDeque())
 
 
 def _discover_kicad_pcb_file(layout_dir: Path) -> Path:
@@ -240,7 +267,7 @@ def _move_group_to(
 
     Returns (dx, dy) applied to all items, or None if move failed.
     """
-    items = list(group.GetItems())
+    items = get_group_items(group)
     bbox = _compute_items_bbox(items, pcbnew)
     if not bbox:
         return None
@@ -527,7 +554,7 @@ def _get_group_bbox_size(group: Any, pcbnew: Any) -> Tuple[int, int]:
     """Get the bounding box size of a KiCad group."""
     if not group:
         return (0, 0)
-    bbox = _compute_items_bbox(list(group.GetItems()), pcbnew)
+    bbox = _compute_items_bbox(get_group_items(group), pcbnew)
     return (bbox[2], bbox[3]) if bbox else (0, 0)
 
 
@@ -763,7 +790,7 @@ def apply_changeset(
         # Detach all members first. Deleting a group directly can leave stale
         # parent-group pointers on BOARD_ITEMs, which later crashes KiCad in
         # BOARD_ITEM::IsLocked() during SaveBoard.
-        for item in list(group.GetItems()):
+        for item in get_group_items_for_detach(group):
             group.RemoveItem(item)
 
         kicad_board.Delete(group)
@@ -874,7 +901,7 @@ def apply_changeset(
 
         # Clear only lens-owned membership (footprints and child groups)
         # Routing items (tracks, vias, zones, graphics) are board-authored and preserved
-        for item in list(group.GetItems()):
+        for item in get_group_items(group):
             is_footprint = hasattr(pcbnew, "FOOTPRINT") and isinstance(
                 item, pcbnew.FOOTPRINT
             )
