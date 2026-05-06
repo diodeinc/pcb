@@ -5,5 +5,5 @@ Component(
     footprint=File("./footprints/QR.kicad_mod"),
     pins={},
     skip_bom=True,
-    skip_pos=True,
+    skip_pos=False,
 )
