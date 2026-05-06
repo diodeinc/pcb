@@ -94,7 +94,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     )?;
     spinner.finish();
 
-    let Some(layout_result) = result else {
+    let Some(mut layout_result) = result else {
         drc::render_diagnostics(&mut diagnostics, &args.suppress);
         if diagnostics.error_count() > 0 {
             anyhow::bail!("Layout sync failed with errors");
@@ -134,6 +134,12 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
 
     // Open the layout if not disabled (or if using temp)
     if !args.no_open || args.temp {
+        // open_pcbnew() spawns KiCad asynchronously and returns immediately. When `--temp`
+        // is set, layout_result owns a TempDir that would otherwise be deleted on drop —
+        // pulling the directory out from under KiCad while it's still loading. Persist it.
+        if args.temp {
+            layout_result.persist_temp_dir();
+        }
         pcb_kicad::open_pcbnew(&pcb_file)?;
     }
 
