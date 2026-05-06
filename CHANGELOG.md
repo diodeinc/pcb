@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.76] - 2026-05-06
+
 ### Added
 
 - Added SOD-882 TVS diodes with capacitance-based BOM matching.
@@ -970,7 +972,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.75...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.76...HEAD
+[0.3.76]: https://github.com/diodeinc/pcb/compare/v0.3.75...v0.3.76
 [0.3.75]: https://github.com/diodeinc/pcb/compare/v0.3.74...v0.3.75
 [0.3.74]: https://github.com/diodeinc/pcb/compare/v0.3.73...v0.3.74
 [0.3.73]: https://github.com/diodeinc/pcb/compare/v0.3.72...v0.3.73
