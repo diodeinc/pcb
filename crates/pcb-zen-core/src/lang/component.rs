@@ -975,7 +975,7 @@ fn infer_kicad_footprint_fallback(
         return Ok(None);
     };
     let Some((symbol_repo, symbol_version, _)) =
-        package_coord_for_path(symbol_source, &eval_ctx.resolution().package_roots())
+        package_coord_for_path(symbol_source, eval_ctx.resolution().package_roots_ref())
     else {
         return Ok(None);
     };

@@ -11,7 +11,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::Arc;
 
 use semver::Version;
 
@@ -314,6 +314,18 @@ pub fn build_package_roots(
         }
     }
 
+    roots
+}
+
+fn resolution_package_roots(
+    workspace_info: &WorkspaceInfo,
+    package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
+    mvs_v2_resolution: Option<&FrozenResolutionSet>,
+) -> BTreeMap<String, PathBuf> {
+    let mut roots = build_package_roots(workspace_info, package_resolutions);
+    if let Some(resolution) = mvs_v2_resolution {
+        roots.extend(resolution.package_roots());
+    }
     roots
 }
 
@@ -732,7 +744,7 @@ pub struct ResolutionResult {
     ///
     /// Native CLI resolution populates this for hydrated package scopes, and eval
     /// uses it as the authoritative package lookup table for those invocations.
-    pub mvs_v2_resolution: Option<FrozenResolutionSet>,
+    mvs_v2_resolution: Option<FrozenResolutionSet>,
     /// Whether the lockfile (pcb.sum) was updated during resolution
     pub lockfile_changed: bool,
     /// Symbol-to-parts mapping built from `[parts]` sections across all manifests.
@@ -740,7 +752,7 @@ pub struct ResolutionResult {
     /// Keys are `package://` URIs for `.kicad_sym` files. Values are ordered lists
     /// of parts declared for that symbol (preserving manifest order).
     pub symbol_parts: HashMap<String, Vec<ManifestPart>>,
-    package_roots_cache: OnceLock<BTreeMap<String, PathBuf>>,
+    package_roots: Arc<BTreeMap<String, PathBuf>>,
 }
 
 impl ResolutionResult {
@@ -752,6 +764,11 @@ impl ResolutionResult {
         lockfile_changed: bool,
         symbol_parts: HashMap<String, Vec<ManifestPart>>,
     ) -> Self {
+        let package_roots = Arc::new(resolution_package_roots(
+            &workspace_info,
+            &package_resolutions,
+            mvs_v2_resolution.as_ref(),
+        ));
         Self {
             workspace_info,
             package_resolutions,
@@ -759,7 +776,7 @@ impl ResolutionResult {
             mvs_v2_resolution,
             lockfile_changed,
             symbol_parts,
-            package_roots_cache: OnceLock::new(),
+            package_roots,
         }
     }
 
@@ -975,7 +992,20 @@ impl ResolutionResult {
         if let Some(resolution) = &mut self.mvs_v2_resolution {
             resolution.canonicalize_keys(file_provider);
         }
-        self.package_roots_cache = OnceLock::new();
+        self.refresh_package_roots();
+    }
+
+    fn refresh_package_roots(&mut self) {
+        self.package_roots = Arc::new(resolution_package_roots(
+            &self.workspace_info,
+            &self.package_resolutions,
+            self.mvs_v2_resolution.as_ref(),
+        ));
+    }
+
+    pub fn set_mvs_v2_resolution(&mut self, resolution: FrozenResolutionSet) {
+        self.mvs_v2_resolution = Some(resolution);
+        self.refresh_package_roots();
     }
 
     /// Build the package coordinate → absolute root directory mapping.
@@ -984,17 +1014,11 @@ impl ResolutionResult {
     /// are discovered from `package_resolutions` values (already resolved by the
     /// resolver through patches → vendor → cache).
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
-        self.package_roots_cached().clone()
+        self.package_roots.as_ref().clone()
     }
 
-    fn package_roots_cached(&self) -> &BTreeMap<String, PathBuf> {
-        self.package_roots_cache.get_or_init(|| {
-            let mut roots = build_package_roots(&self.workspace_info, &self.package_resolutions);
-            if let Some(resolution) = &self.mvs_v2_resolution {
-                roots.extend(resolution.package_roots());
-            }
-            roots
-        })
+    pub(crate) fn package_roots_ref(&self) -> &BTreeMap<String, PathBuf> {
+        self.package_roots.as_ref()
     }
 
     pub fn mvs_v2_root(&self, package_url: &str) -> Option<&FrozenResolutionMap> {
@@ -1049,7 +1073,7 @@ impl ResolutionResult {
 
     /// Resolve a package URI (`package://…`) to an absolute filesystem path.
     pub fn resolve_package_uri(&self, uri: &str) -> anyhow::Result<PathBuf> {
-        pcb_sch::resolve_package_uri(uri, self.package_roots_cached())
+        pcb_sch::resolve_package_uri(uri, self.package_roots.as_ref())
     }
 
     fn workspace_cache_path(&self, path: &Path) -> PathBuf {
@@ -1067,7 +1091,7 @@ impl ResolutionResult {
     pub fn format_package_uri(&self, abs: &Path) -> Option<String> {
         let effective_abs = self.workspace_cache_path(abs);
         let package_roots = self
-            .package_roots_cached()
+            .package_roots
             .iter()
             .map(|(coord, root)| (coord.clone(), self.workspace_cache_path(root)))
             .collect();
@@ -1152,6 +1176,53 @@ mod tests {
         let resolved = scope.resolve_package_url("github.com/acme/repo/boards/demo/src/Main.zen");
 
         assert!(matches!(resolved, Some(PackageUrlResolution::OwnPackage)));
+    }
+
+    #[test]
+    fn package_roots_reflect_attached_mvs_v2_resolution() {
+        let mut result = ResolutionResult::native(
+            WorkspaceInfo {
+                root: PathBuf::from("/workspace"),
+                cache_dir: PathBuf::new(),
+                config: None,
+                packages: BTreeMap::new(),
+                lockfile: None,
+                errors: vec![],
+            },
+            HashMap::new(),
+            HashMap::new(),
+            false,
+            HashMap::new(),
+        );
+        let dep_root = PathBuf::from("/cache/github.com/acme/dep/1.2.3");
+        let dep_coord = "github.com/acme/dep@1.2.3";
+
+        assert!(!result.package_roots().contains_key(dep_coord));
+
+        result.set_mvs_v2_resolution(FrozenResolutionSet {
+            root_packages: BTreeMap::from([(
+                "github.com/acme/root".into(),
+                FrozenResolutionMap {
+                    selected_remote: BTreeMap::new(),
+                    packages: BTreeMap::from([(
+                        dep_root.clone(),
+                        FrozenPackage {
+                            identity: FrozenPackageIdentity::Remote {
+                                dep_id: FrozenDepId {
+                                    path: "github.com/acme/dep".into(),
+                                    lane: "v1".into(),
+                                },
+                                version: Version::parse("1.2.3").unwrap(),
+                            },
+                            deps: BTreeMap::new(),
+                            parts: Vec::new(),
+                        },
+                    )]),
+                },
+            )]),
+        });
+
+        assert_eq!(result.package_roots().get(dep_coord), Some(&dep_root));
     }
 
     #[test]

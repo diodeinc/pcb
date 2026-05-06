@@ -128,7 +128,7 @@ pub(crate) fn attach_mvs_v2_resolution_for_packages(
     }
 
     if !resolution_set.root_packages.is_empty() {
-        res.mvs_v2_resolution = Some(resolution_set);
+        res.set_mvs_v2_resolution(resolution_set);
     }
 }
 
