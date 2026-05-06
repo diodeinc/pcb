@@ -12,11 +12,16 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added SOD-882 TVS diodes with capacitance-based BOM matching.
 
+### Changed
+
+- Capacitors now warn when explicit voltage ratings are below the inferred 1.5x rounded net-voltage requirement.
+
 ### Fixed
 
 - KiCad CLI discovery now checks `PATH` before platform fallbacks.
 - `pcb search` now refreshes stale local registry and KiCad indexes before non-interactive searches.
 - `pcb layout` no longer fails when KiCad groups contain generated tuning-pattern items.
+- Capacitor auto voltage ratings now round the 1.5x net-voltage requirement up to common capacitor voltage tiers.
 
 ## [0.3.75] - 2026-05-02
 
