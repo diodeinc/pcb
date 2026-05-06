@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- KiCad CLI discovery now checks `PATH` before platform fallbacks.
 - `pcb search` now refreshes stale local registry and KiCad indexes before non-interactive searches.
 
 ## [0.3.75] - 2026-05-02
