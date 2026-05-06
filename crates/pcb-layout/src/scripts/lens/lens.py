@@ -47,7 +47,11 @@ from .types import (
     default_footprint_complement,
     default_group_complement,
 )
-from .kicad_adapter import extract_zone_outline_positions, get_footprint_field
+from .kicad_adapter import (
+    extract_zone_outline_positions,
+    get_footprint_field,
+    get_group_items,
+)
 
 logger = logging.getLogger("pcb.lens")
 
@@ -454,7 +458,7 @@ def extract(
         vias: List[ViaComplement] = []
         zones: List[ZoneComplement] = []
 
-        for item in group.GetItems():
+        for item in get_group_items(group):
             item_class = item.GetClass().upper()
             item_uuid = str(item.m_Uuid.AsString())
 
