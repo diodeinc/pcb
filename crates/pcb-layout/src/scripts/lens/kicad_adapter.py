@@ -111,6 +111,13 @@ def get_group_items(group: Any) -> List[Any]:
     return items
 
 
+def get_group_items_for_detach(group: Any) -> List[Any]:
+    """Return every raw group item that can be passed to PCB_GROUP.RemoveItem."""
+    if not hasattr(group, "GetItemsDeque"):
+        return list(group.GetItems())
+    return list(group.GetItemsDeque())
+
+
 def _discover_kicad_pcb_file(layout_dir: Path) -> Path:
     """Discover the KiCad PCB file inside a layout directory.
 
@@ -783,7 +790,7 @@ def apply_changeset(
         # Detach all members first. Deleting a group directly can leave stale
         # parent-group pointers on BOARD_ITEMs, which later crashes KiCad in
         # BOARD_ITEM::IsLocked() during SaveBoard.
-        for item in get_group_items(group):
+        for item in get_group_items_for_detach(group):
             group.RemoveItem(item)
 
         kicad_board.Delete(group)
