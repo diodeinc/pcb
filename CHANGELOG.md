@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb layout` now embeds footprint-relative 3D models.
+
 ## [0.3.77] - 2026-05-07
 
 ### Changed

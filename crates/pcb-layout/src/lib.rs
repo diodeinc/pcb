@@ -536,7 +536,8 @@ pub fn process_layout(
         .with_context(|| format!("Failed to write netlist: {}", paths.netlist.display()))?;
 
     // Write footprint library table
-    utils::write_footprint_library_table(&layout_dir, schematic)?;
+    let footprint_lib_dirs = utils::footprint_library_dirs(schematic)?;
+    utils::write_footprint_library_dirs(&layout_dir, &footprint_lib_dirs)?;
 
     // Write JSON netlist for Python script
     let json_content =
@@ -595,7 +596,12 @@ pub fn process_layout(
             &netclass_assignments,
         )?;
     }
-    patch_pcb_file(&paths.pcb, board_config.as_ref(), kicad_model_dirs)?;
+    patch_pcb_file(
+        &paths.pcb,
+        board_config.as_ref(),
+        kicad_model_dirs,
+        &footprint_lib_dirs,
+    )?;
 
     // Add sync diagnostics from JSON file
     if paths.diagnostics.exists() {
@@ -810,10 +816,9 @@ pub mod utils {
     }
 
     /// Write footprint library table for a layout
-    pub fn write_footprint_library_table(
-        layout_dir: &Path,
+    pub fn footprint_library_dirs(
         schematic: &Schematic,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<HashMap<String, PathBuf>> {
         let mut fp_libs: HashMap<String, PathBuf> = HashMap::new();
 
         for inst in schematic.instances.values() {
@@ -830,17 +835,32 @@ pub mod utils {
             }
         }
 
+        Ok(fp_libs)
+    }
+
+    pub(crate) fn write_footprint_library_dirs(
+        layout_dir: &Path,
+        fp_libs: &HashMap<String, PathBuf>,
+    ) -> anyhow::Result<()> {
         // Canonicalize the layout directory to avoid symlink issues on macOS
         let canonical_layout_dir = layout_dir
             .canonicalize()
             .unwrap_or_else(|_| layout_dir.to_path_buf());
 
         // Write or update the fp-lib-table for this layout directory
-        write_fp_lib_table(&canonical_layout_dir, &fp_libs).with_context(|| {
+        write_fp_lib_table(&canonical_layout_dir, fp_libs).with_context(|| {
             format!("Failed to write fp-lib-table for {}", layout_dir.display())
         })?;
 
         Ok(())
+    }
+
+    pub fn write_footprint_library_table(
+        layout_dir: &Path,
+        schematic: &Schematic,
+    ) -> anyhow::Result<()> {
+        let fp_libs = footprint_library_dirs(schematic)?;
+        write_footprint_library_dirs(layout_dir, &fp_libs)
     }
 }
 
@@ -1001,6 +1021,7 @@ fn patch_pcb_file(
     pcb_path: &Path,
     board_config: Option<&BoardConfig>,
     kicad_model_dirs: &BTreeMap<String, PathBuf>,
+    footprint_lib_dirs: &HashMap<String, PathBuf>,
 ) -> Result<(), LayoutError> {
     let pcb_content = fs::read_to_string(pcb_path).map_err(|e| {
         LayoutError::StackupPatchingError(format!("Failed to read PCB file: {}", e))
@@ -1019,15 +1040,19 @@ fn patch_pcb_file(
         ))
     })?;
     let pcb_dir = pcb_path.parent().unwrap_or_else(|| Path::new("."));
-    let (embedded, discovery, applied) =
-        model_embed_discovery::embed_models_in_pcb_source(&patched, pcb_dir, kicad_model_dirs)
-            .map_err(|e| {
-                LayoutError::StackupPatchingError(format!(
-                    "Failed to prepare embedded 3D models for {}: {}",
-                    pcb_path.display(),
-                    e
-                ))
-            })?;
+    let (embedded, discovery, applied) = model_embed_discovery::embed_models_in_pcb_source(
+        &patched,
+        pcb_dir,
+        kicad_model_dirs,
+        footprint_lib_dirs,
+    )
+    .map_err(|e| {
+        LayoutError::StackupPatchingError(format!(
+            "Failed to prepare embedded 3D models for {}: {}",
+            pcb_path.display(),
+            e
+        ))
+    })?;
     if discovery.unresolved_refs > 0 {
         log::warn!(
             "Unresolved managed 3D model references in {}: {}",
