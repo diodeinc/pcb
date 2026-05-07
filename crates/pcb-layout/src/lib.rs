@@ -18,10 +18,14 @@ use include_dir::{Dir, include_dir};
 use pcb_kicad::{PythonScriptBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_sch::kicad_netlist::{try_format_footprint_with_package_roots, write_fp_lib_table};
 
+mod effective_netlist;
 mod kicad_project_patch;
 mod model_embed_discovery;
 mod moved;
 mod repair_nets;
+use effective_netlist::{
+    DiffSeverity, diff_effective_netlists, layout_effective_netlist, source_effective_netlist,
+};
 pub use moved::compute_moved_paths_patches;
 pub use moved::compute_net_renames_patches;
 
@@ -44,23 +48,12 @@ pub struct LayoutResult {
     pub log_file: PathBuf,
     pub diagnostics_file: PathBuf,
     pub created: bool, // true if new, false if updated
-    pub shadow: Option<ShadowLayoutContext>,
-}
-
-#[derive(Debug)]
-pub struct ShadowLayoutContext {
-    _dir: TempDir,
-    original_pcb_file: PathBuf,
 }
 
 impl LayoutResult {
-    /// Path to show in diagnostics/output. In `--check` mode this is the original PCB path,
-    /// not the shadow-copy PCB.
+    /// Path to show in diagnostics/output.
     pub fn display_pcb_file(&self) -> &Path {
-        self.shadow
-            .as_ref()
-            .map(|s| s.original_pcb_file.as_path())
-            .unwrap_or(self.pcb_file.as_path())
+        self.pcb_file.as_path()
     }
 }
 
@@ -238,14 +231,6 @@ fn render_patches(source: &str, patches: &pcb_sexpr::PatchSet) -> anyhow::Result
     String::from_utf8(out).context("Patched PCB is not valid UTF-8")
 }
 
-fn files_differ(original_path: &Path, generated_path: &Path, what: &str) -> anyhow::Result<bool> {
-    let original_bytes = fs::read(original_path)
-        .with_context(|| format!("Failed to read {what} file: {}", original_path.display()))?;
-    let generated_bytes = fs::read(generated_path)
-        .with_context(|| format!("Failed to read {what} file: {}", generated_path.display()))?;
-    Ok(original_bytes.trim_ascii_end() != generated_bytes.trim_ascii_end())
-}
-
 /// Apply moved() path renames to a PCB file
 fn apply_moved_paths(
     pcb_path: &Path,
@@ -400,50 +385,63 @@ fn run_sync_script(paths: &LayoutPaths, lens_python_path: &Path) -> anyhow::Resu
     builder.log_file(log_file).run()
 }
 
-fn create_shadow_layout_dir(layout_dir: &Path) -> anyhow::Result<TempDir> {
-    let parent = layout_dir.parent().ok_or_else(|| {
-        anyhow::anyhow!("Layout directory has no parent: {}", layout_dir.display())
-    })?;
-    let base_name = layout_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| anyhow::anyhow!("Layout directory has invalid UTF-8 name"))?;
-    let temp_dir = tempfile::Builder::new()
-        .prefix(&format!(".{base_name}.pcb-check."))
-        .tempdir_in(parent)
-        .with_context(|| {
-            format!(
-                "Failed to create shadow layout directory near {}",
-                layout_dir.display()
-            )
-        })?;
-    copy_dir_recursive(layout_dir, temp_dir.path())?;
-    Ok(temp_dir)
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    for entry in fs::read_dir(src).with_context(|| format!("Failed to read {}", src.display()))? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        let file_type = entry.file_type()?;
-
-        if file_type.is_dir() {
-            fs::create_dir(&dst_path)
-                .with_context(|| format!("Failed to create {}", dst_path.display()))?;
-            copy_dir_recursive(&src_path, &dst_path)?;
-            continue;
-        }
-
-        fs::copy(&src_path, &dst_path).with_context(|| {
-            format!(
-                "Failed to copy {} to {}",
-                src_path.display(),
-                dst_path.display()
-            )
-        })?;
+/// Check the checked-in KiCad layout against the schematic using a semantic effective-netlist
+/// comparison. This is intentionally read-only: it does not run the Python sync pipeline and
+/// ignores byte-level KiCad serialization churn.
+pub fn check_layout_sync(
+    schematic: &Schematic,
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+) -> Result<Option<LayoutResult>, LayoutError> {
+    let Some(layout_dir) = utils::resolve_layout_dir(schematic)? else {
+        return Ok(None);
+    };
+    let Some(kicad_files) = utils::discover_kicad_files(&layout_dir)? else {
+        return Ok(None);
+    };
+    let pcb_file = kicad_files.kicad_pcb();
+    if !pcb_file.exists() {
+        return Ok(None);
     }
-    Ok(())
+
+    let source_path = schematic
+        .root_ref
+        .as_ref()
+        .map(|r| r.module.source_path.clone())
+        .unwrap_or_default();
+    let paths = utils::get_layout_paths_for_pcb(&layout_dir, pcb_file.clone());
+    let diagnostics_pcb_path = pcb_file.to_string_lossy().to_string();
+
+    let board_content = fs::read_to_string(&pcb_file)
+        .with_context(|| format!("Failed to read PCB file: {}", pcb_file.display()))?;
+    let board = pcb_sexpr::parse(&board_content)
+        .with_context(|| format!("Failed to parse PCB file: {}", pcb_file.display()))?;
+    let expected = source_effective_netlist(schematic)?;
+    let (actual, extraction_diagnostics) = layout_effective_netlist(&board, &expected)?;
+    let mut semantic_diffs = extraction_diagnostics;
+    semantic_diffs.extend(diff_effective_netlists(&expected, &actual));
+
+    for diff in semantic_diffs {
+        diagnostics.diagnostics.push(Diagnostic::categorized(
+            &diagnostics_pcb_path,
+            &diff.message,
+            diff.kind,
+            match diff.severity {
+                DiffSeverity::Warning => EvalSeverity::Warning,
+                DiffSeverity::Error => EvalSeverity::Error,
+            },
+        ));
+    }
+
+    Ok(Some(LayoutResult {
+        source_file: source_path,
+        layout_dir,
+        pcb_file: pcb_file.clone(),
+        netlist_file: paths.netlist,
+        snapshot_file: paths.snapshot,
+        log_file: paths.log,
+        diagnostics_file: paths.diagnostics,
+        created: false,
+    }))
 }
 
 /// Process a schematic and generate/update its layout files
@@ -456,10 +454,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
 /// 5. Create or update the KiCad PCB file
 ///
 /// When `check_mode` is true:
-/// - Requires the real layout to already exist
-/// - Creates a hidden shadow sibling layout directory
-/// - Runs the exact same mutating sync pipeline against the shadow copy
-/// - Returns paths pointing to the shadow copy for downstream DRC
+/// - Runs the pure semantic layout sync check without mutating layout files
 pub fn process_layout(
     schematic: &Schematic,
     kicad_model_dirs: &BTreeMap<String, PathBuf>,
@@ -467,6 +462,10 @@ pub fn process_layout(
     check_mode: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> Result<Option<LayoutResult>, LayoutError> {
+    if check_mode {
+        return check_layout_sync(schematic, diagnostics);
+    }
+
     // Resolve layout directory
     let resolved_layout_dir = if use_temp_dir {
         // Create a temporary directory and keep it (prevent cleanup on drop)
@@ -488,34 +487,11 @@ pub fn process_layout(
         .map(|r| r.module.source_path.clone())
         .unwrap_or_default();
 
-    let shadow = if check_mode {
-        let Some(existing_files) = utils::discover_kicad_files(&resolved_layout_dir)? else {
-            return Ok(None);
-        };
-        let original_pcb_file = existing_files.kicad_pcb();
-        if !original_pcb_file.exists() {
-            return Ok(None);
-        }
-        let shadow_dir = create_shadow_layout_dir(&resolved_layout_dir)?;
-        Some(ShadowLayoutContext {
-            _dir: shadow_dir,
-            original_pcb_file,
-        })
-    } else {
-        None
-    };
-
-    let layout_dir = shadow
-        .as_ref()
-        .map(|s| s._dir.path().to_path_buf())
-        .unwrap_or_else(|| resolved_layout_dir.clone());
+    let layout_dir = resolved_layout_dir.clone();
 
     let kicad_files = utils::resolve_kicad_files(&layout_dir)?;
     let paths = utils::get_layout_paths_for_pcb(&layout_dir, kicad_files.kicad_pcb());
-    let diagnostics_pcb_path = shadow
-        .as_ref()
-        .map(|s| s.original_pcb_file.to_string_lossy().to_string())
-        .unwrap_or_else(|| paths.pcb.to_string_lossy().to_string());
+    let diagnostics_pcb_path = paths.pcb.to_string_lossy().to_string();
 
     debug!(
         "Generating layout for {} in {}",
@@ -613,25 +589,6 @@ pub fn process_layout(
         }
     }
 
-    // In check mode, fail if the layout would be modified by a sync.
-    //
-    // Since check mode runs the full sync pipeline against a shadow copy, we can compare
-    // the shadow PCB file after sync with the original PCB file in the real layout dir.
-    if check_mode && let Some(ref shadow) = shadow {
-        let pcb_drift = files_differ(&shadow.original_pcb_file, &paths.pcb, "PCB")?;
-        let shadow_pro_file = paths.pcb.with_extension("kicad_pro");
-        let original_pro_file = shadow.original_pcb_file.with_extension("kicad_pro");
-        let project_drift = files_differ(&original_pro_file, &shadow_pro_file, "project")?;
-        if pcb_drift || project_drift {
-            diagnostics.diagnostics.push(Diagnostic::categorized(
-                &diagnostics_pcb_path,
-                "Layout is out of sync (run without --check to apply changes)",
-                "layout.sync",
-                EvalSeverity::Error,
-            ));
-        }
-    }
-
     Ok(Some(LayoutResult {
         source_file: source_path,
         layout_dir,
@@ -641,7 +598,6 @@ pub fn process_layout(
         log_file: paths.log,
         diagnostics_file: paths.diagnostics,
         created: !pcb_exists,
-        shadow,
     }))
 }
 
@@ -870,45 +826,6 @@ mod diff_tests {
     use pcb_sch::{Instance, InstanceRef, ModuleRef, Schematic};
     use serde_json::Value;
     use std::path::PathBuf;
-
-    #[test]
-    fn files_differ_ignores_trailing_whitespace() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let original = temp.path().join("original.kicad_pcb");
-        let generated = temp.path().join("generated.kicad_pcb");
-
-        fs::write(&original, "(kicad_pcb (version 20240101))\n")?;
-        fs::write(&generated, "(kicad_pcb (version 20240101))\r\n\t")?;
-
-        assert!(!files_differ(&original, &generated, "PCB")?);
-        Ok(())
-    }
-
-    #[test]
-    fn files_differ_detects_leading_whitespace_changes() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let original = temp.path().join("original.kicad_pcb");
-        let generated = temp.path().join("generated.kicad_pcb");
-
-        fs::write(&original, "(kicad_pcb (version 20240101))\n")?;
-        fs::write(&generated, " (kicad_pcb (version 20240101))\n")?;
-
-        assert!(files_differ(&original, &generated, "PCB")?);
-        Ok(())
-    }
-
-    #[test]
-    fn files_differ_detects_internal_whitespace_changes() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let original = temp.path().join("original.kicad_pro");
-        let generated = temp.path().join("generated.kicad_pro");
-
-        fs::write(&original, r#"{"a":1,"b":2}"#)?;
-        fs::write(&generated, r#"{"a":1, "b":2}"#)?;
-
-        assert!(files_differ(&original, &generated, "project")?);
-        Ok(())
-    }
 
     #[test]
     fn layout_json_netlist_adds_derived_footprint_fpid() -> anyhow::Result<()> {

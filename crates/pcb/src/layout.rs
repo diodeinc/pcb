@@ -89,7 +89,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         &schematic,
         &model_dirs,
         args.temp,
-        args.check, // check-mode (shadow copy)
+        args.check,
         &mut diagnostics,
     )?;
     spinner.finish();

@@ -35,8 +35,5 @@ build/
 # Local pcb cache
 .pcb/
 
-# Temporary layout shadow copies created by `pcb layout --check`
-.*.pcb-check.*
-
 # KiCad layout history directories
 **/.history/
