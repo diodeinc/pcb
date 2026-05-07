@@ -60,7 +60,9 @@ pub(crate) fn build_frozen_resolution_maps(
     let mut builder = FrozenResolutionBuilder::new(workspace.clone(), offline)?;
     let mut resolutions = BTreeMap::new();
     for package_url in package_urls {
-        let resolution = builder.build(&package_url)?;
+        let resolution = builder
+            .build(&package_url)
+            .with_context(|| format!("while resolving dependencies for {package_url}"))?;
         resolutions.insert(package_url, resolution);
     }
     Ok(resolutions)
@@ -375,7 +377,7 @@ impl FrozenResolutionBuilder {
         let (_, config) = self.workspace_manifest(package_url)?;
         if config.dependencies.indirect.is_empty() {
             bail!(
-                "{} does not contain a hydrated MVS v2 dependency closure; run `pcb mod sync` first",
+                "{} is missing resolved dependency entries; run `pcb sync` first",
                 package_url
             );
         }
@@ -454,7 +456,7 @@ fn exact_spec_version(dep_url: &str, spec: &DependencySpec) -> Result<Version> {
         }
         DependencySpec::Detailed(_) => {
             bail!(
-                "Dependency {} must have an exact version for frozen MVS v2 resolution",
+                "Dependency {} must specify an exact version; run `pcb sync` to update dependency versions",
                 dep_url
             );
         }
