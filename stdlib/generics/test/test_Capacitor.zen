@@ -15,6 +15,7 @@ check(capacitor_voltage_rating(Voltage("52.5V")) == Voltage("100V"), "35V is not
 
 v3v3 = Power("V3V3", voltage=Voltage("3.3V"))
 gnd = Ground("GND")
+Capacitor(name="C_EXPLICIT_ABOVE_NET_BELOW_AUTO_VOLTAGE", value="100nF", voltage="5V", P1=v3v3, P2=gnd)
 Capacitor(name="C_EXPLICIT_EQUAL_AUTO_VOLTAGE", value="100nF", voltage="6.3V", P1=v3v3, P2=gnd)
 Capacitor(name="C_EXPLICIT_HIGHER_THAN_AUTO_VOLTAGE", value="100nF", voltage="10V", P1=v3v3, P2=gnd)
 
