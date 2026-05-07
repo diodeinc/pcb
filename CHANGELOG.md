@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.78] - 2026-05-07
+
 ### Fixed
 
 - `pcb layout` now embeds footprint-relative 3D models.
@@ -985,7 +987,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.77...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.78...HEAD
+[0.3.78]: https://github.com/diodeinc/pcb/compare/v0.3.77...v0.3.78
 [0.3.77]: https://github.com/diodeinc/pcb/compare/v0.3.76...v0.3.77
 [0.3.76]: https://github.com/diodeinc/pcb/compare/v0.3.75...v0.3.76
 [0.3.75]: https://github.com/diodeinc/pcb/compare/v0.3.74...v0.3.75
