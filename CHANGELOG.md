@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Capacitor voltage-rating warnings now compare explicit ratings against the connected net voltage difference instead of the inferred 1.5x rounded requirement.
+
 ## [0.3.76] - 2026-05-06
 
 ### Added

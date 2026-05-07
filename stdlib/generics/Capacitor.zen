@@ -30,12 +30,11 @@ if exclude_from_bom:
 P1 = io(Net)
 P2 = io(Net)
 
-default_voltage = (
-    capacitor_voltage_rating(Voltage(P1.voltage.diff(P2.voltage) * 1.5)) if P1.voltage and P2.voltage else None
-)
-if voltage and default_voltage and voltage < default_voltage:
+net_voltage_diff = P1.voltage.diff(P2.voltage) if P1.voltage and P2.voltage else None
+default_voltage = capacitor_voltage_rating(Voltage(net_voltage_diff * 1.5)) if net_voltage_diff != None else None
+if voltage and net_voltage_diff != None and voltage < net_voltage_diff:
     warn(
-        "Capacitor voltage rating (%s) should be >= inferred voltage rating (%s)" % (voltage, default_voltage),
+        f"Capacitor voltage rating ({voltage}) should be >= net voltage difference ({net_voltage_diff})",
         kind="capacitor.voltage_rating",
     )
 
