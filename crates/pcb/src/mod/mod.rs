@@ -26,9 +26,7 @@ use std::path::{Path, PathBuf};
 use self::materialize::{materialize_selected, vendor_selected};
 use self::mvs::{DepGraph, DepGraphNode, PackageResolver};
 use self::request::resolve_direct_dependency_request;
-pub(crate) use self::resolve::{
-    build_frozen_resolution_map, build_frozen_resolution_maps, target_package_urls_for_path,
-};
+pub(crate) use self::resolve::{build_frozen_resolution_maps, target_package_urls_for_path};
 use self::target::{AddTarget, discover_add_targets};
 use self::writeback::write_package_manifest;
 
@@ -137,10 +135,10 @@ pub fn execute_mod_download(args: ModDownloadArgs) -> Result<()> {
         return Ok(());
     }
 
-    let targets = discover_add_targets(&workspace, &cwd)?;
-    for target in targets {
-        build_frozen_resolution_map(&workspace, &target.package_url, false)?;
-    }
+    let package_urls = discover_add_targets(&workspace, &cwd)?
+        .into_iter()
+        .map(|target| target.package_url);
+    build_frozen_resolution_maps(&workspace, package_urls, false)?;
     Ok(())
 }
 
@@ -179,12 +177,15 @@ pub fn execute_mod_resolve(args: ModResolveArgs) -> Result<()> {
     validate_workspace(&workspace)?;
 
     let package_urls = target_package_urls_for_path(&workspace, path)?;
+    let resolutions = build_frozen_resolution_maps(&workspace, package_urls.clone(), false)?;
     for (idx, package_url) in package_urls.iter().enumerate() {
         if idx > 0 {
             println!();
         }
-        let resolution = build_frozen_resolution_map(&workspace, package_url, false)?;
-        print_frozen_resolution(&workspace, package_url, &resolution);
+        let resolution = resolutions
+            .get(package_url)
+            .expect("frozen resolution was built for requested package");
+        print_frozen_resolution(&workspace, package_url, resolution);
     }
 
     Ok(())

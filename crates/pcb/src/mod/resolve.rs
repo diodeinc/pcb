@@ -52,14 +52,6 @@ pub(crate) fn target_package_urls_for_path(
     Ok(package_urls.into_iter().collect())
 }
 
-pub(crate) fn build_frozen_resolution_map(
-    workspace: &WorkspaceInfo,
-    package_url: &str,
-    offline: bool,
-) -> Result<FrozenResolutionMap> {
-    FrozenResolutionBuilder::new(workspace.clone(), offline)?.build(package_url)
-}
-
 pub(crate) fn build_frozen_resolution_maps(
     workspace: &WorkspaceInfo,
     package_urls: impl IntoIterator<Item = String>,

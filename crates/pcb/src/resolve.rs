@@ -90,7 +90,7 @@ fn resolve_mvs_v2(
             &workspace_info,
             &resolution,
         )?);
-        resolution_set.root_packages.insert(package_url, resolution);
+        resolution_set.insert(package_url, resolution);
     }
 
     Ok(ResolutionResult::frozen(
@@ -105,30 +105,17 @@ pub(crate) fn attach_mvs_v2_resolution_for_packages(
     package_urls: impl IntoIterator<Item = String>,
     offline: bool,
 ) {
-    let mut resolution_set = FrozenResolutionSet::default();
-
-    for package_url in package_urls {
-        if !package_has_indirect(&res.workspace_info, &package_url) {
-            continue;
-        }
-        match crate::pcb_mod::build_frozen_resolution_map(
-            &res.workspace_info,
-            &package_url,
-            offline,
-        ) {
-            Ok(resolution) => {
-                resolution_set
-                    .root_packages
-                    .insert(package_url.to_string(), resolution);
-            }
-            Err(err) => {
-                log::debug!("Skipping shadow MVS v2 resolution for {package_url}: {err:#}");
-            }
-        }
+    let package_urls: Vec<_> = package_urls
+        .into_iter()
+        .filter(|package_url| package_has_indirect(&res.workspace_info, package_url))
+        .collect();
+    if package_urls.is_empty() {
+        return;
     }
 
-    if !resolution_set.root_packages.is_empty() {
-        res.set_mvs_v2_resolution(resolution_set);
+    match crate::pcb_mod::build_frozen_resolution_maps(&res.workspace_info, package_urls, offline) {
+        Ok(resolution) => res.set_mvs_v2_resolution(resolution),
+        Err(err) => log::debug!("Skipping shadow MVS v2 resolution: {err:#}"),
     }
 }
 
