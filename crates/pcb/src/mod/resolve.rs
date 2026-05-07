@@ -52,12 +52,20 @@ pub(crate) fn target_package_urls_for_path(
     Ok(package_urls.into_iter().collect())
 }
 
-pub(crate) fn build_frozen_resolution_map(
+pub(crate) fn build_frozen_resolution_maps(
     workspace: &WorkspaceInfo,
-    package_url: &str,
+    package_urls: impl IntoIterator<Item = String>,
     offline: bool,
-) -> Result<FrozenResolutionMap> {
-    FrozenResolutionBuilder::new(workspace.clone(), offline)?.build(package_url)
+) -> Result<BTreeMap<String, FrozenResolutionMap>> {
+    let mut builder = FrozenResolutionBuilder::new(workspace.clone(), offline)?;
+    let mut resolutions = BTreeMap::new();
+    for package_url in package_urls {
+        let resolution = builder
+            .build(&package_url)
+            .with_context(|| format!("while resolving dependencies for {package_url}"))?;
+        resolutions.insert(package_url, resolution);
+    }
+    Ok(resolutions)
 }
 
 struct FrozenResolutionBuilder {
@@ -66,6 +74,8 @@ struct FrozenResolutionBuilder {
     cache_index: CacheIndex,
     manifest_loader: ManifestLoader,
     selected_remote: BTreeMap<ResolvedDepId, Version>,
+    materialized_remote: BTreeSet<(ResolvedDepId, Version)>,
+    remote_roots: BTreeMap<(String, Version), PathBuf>,
     packages: BTreeMap<PathBuf, FrozenPackage>,
 }
 
@@ -78,16 +88,19 @@ impl FrozenResolutionBuilder {
             workspace,
             offline,
             selected_remote: BTreeMap::new(),
+            materialized_remote: BTreeSet::new(),
+            remote_roots: BTreeMap::new(),
             packages: BTreeMap::new(),
         })
     }
 
-    fn build(mut self, package_url: &str) -> Result<FrozenResolutionMap> {
+    fn build(&mut self, package_url: &str) -> Result<FrozenResolutionMap> {
         self.selected_remote = self
             .selected_remote_from_root_manifest(package_url)
             .with_context(|| format!("while reading resolved closure for {}", package_url))?;
 
-        materialize_selected(&self.workspace, &self.selected_remote, self.offline)?;
+        self.materialize_selected_remote()?;
+        self.packages.clear();
 
         let mut queue = VecDeque::from([PackageNode::Workspace(package_url.to_string())]);
         let mut seen = BTreeSet::new();
@@ -102,11 +115,33 @@ impl FrozenResolutionBuilder {
         Ok(FrozenResolutionMap {
             selected_remote: self
                 .selected_remote
+                .clone()
                 .into_iter()
                 .map(|(dep_id, version)| (frozen_dep_id(dep_id), version))
                 .collect(),
-            packages: self.packages,
+            packages: std::mem::take(&mut self.packages),
         })
+    }
+
+    fn materialize_selected_remote(&mut self) -> Result<()> {
+        let pending: BTreeMap<_, _> = self
+            .selected_remote
+            .iter()
+            .filter(|(dep_id, version)| {
+                !self
+                    .materialized_remote
+                    .contains(&((*dep_id).clone(), (*version).clone()))
+            })
+            .map(|(dep_id, version)| (dep_id.clone(), version.clone()))
+            .collect();
+
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        materialize_selected(&self.workspace, &pending, self.offline)?;
+        self.materialized_remote.extend(pending);
+        Ok(())
     }
 
     fn resolve_package_node(
@@ -285,6 +320,11 @@ impl FrozenResolutionBuilder {
     }
 
     fn remote_package_root(&mut self, module_path: &str, version: &Version) -> Result<PathBuf> {
+        let key = (module_path.to_string(), version.clone());
+        if let Some(root) = self.remote_roots.get(&key) {
+            return Ok(root.clone());
+        }
+
         let version_str = version.to_string();
         let vendor_root = self
             .workspace
@@ -293,6 +333,7 @@ impl FrozenResolutionBuilder {
             .join(module_path)
             .join(&version_str);
         if vendor_root.exists() {
+            self.remote_roots.insert(key, vendor_root.clone());
             return Ok(vendor_root);
         }
 
@@ -303,6 +344,7 @@ impl FrozenResolutionBuilder {
             .join(&version_str);
         let managed_kicad = self.is_managed_kicad_dep(module_path, version);
         if cache_root.join("pcb.toml").exists() || managed_kicad && cache_root.exists() {
+            self.remote_roots.insert(key, cache_root.clone());
             return Ok(cache_root);
         }
 
@@ -317,6 +359,7 @@ impl FrozenResolutionBuilder {
         if !managed_kicad {
             ensure_package_manifest_in_cache(module_path, version, &self.cache_index)?;
         }
+        self.remote_roots.insert(key, cache_root.clone());
         Ok(cache_root)
     }
 
@@ -334,7 +377,7 @@ impl FrozenResolutionBuilder {
         let (_, config) = self.workspace_manifest(package_url)?;
         if config.dependencies.indirect.is_empty() {
             bail!(
-                "{} does not contain a hydrated MVS v2 dependency closure; run `pcb mod sync` first",
+                "{} is missing resolved dependency entries; run `pcb sync` first",
                 package_url
             );
         }
@@ -413,7 +456,7 @@ fn exact_spec_version(dep_url: &str, spec: &DependencySpec) -> Result<Version> {
         }
         DependencySpec::Detailed(_) => {
             bail!(
-                "Dependency {} must have an exact version for frozen MVS v2 resolution",
+                "Dependency {} must specify an exact version; run `pcb sync` to update dependency versions",
                 dep_url
             );
         }

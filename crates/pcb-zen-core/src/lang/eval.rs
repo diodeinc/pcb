@@ -42,7 +42,7 @@ use crate::lang::{
     module::{FrozenModuleValue, ModulePath},
 };
 use crate::load_spec::LoadSpec;
-use crate::resolution::{FrozenResolutionMap, FrozenUrlResolution, ResolutionResult};
+use crate::resolution::{PackageScopeKey, PackageUrlResolution, ResolutionResult};
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 use crate::{FileProvider, ResolveContext};
 use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
@@ -144,7 +144,7 @@ struct CachedModule {
     warnings: Vec<Diagnostic>,
 }
 
-type LoadCacheKey = (Option<String>, PathBuf);
+type LoadCacheKey = (Option<PackageScopeKey>, PathBuf);
 
 /// Output of `parse_and_analyze_file`, preserving both parsed AST and full eval output.
 #[derive(Clone)]
@@ -277,9 +277,10 @@ pub struct EvalSession {
     file_contents_cache: Arc<RwLock<HashMap<PathBuf, String>>>,
     /// Dedicated load cache - frequently accessed during parallel module evaluation.
     ///
-    /// MVS v2 resolution is root-package scoped, so cached modules are keyed by
-    /// root package when a frozen root is active. V1 keeps the historical
-    /// path-only behavior via a `None` root key.
+    /// MVS v2 resolution is package-local, so cached modules are keyed by the
+    /// loaded file's package identity and resolved dependency map when a frozen
+    /// root is active. V1 keeps the historical path-only behavior via a `None`
+    /// scope.
     load_cache: Arc<RwLock<HashMap<LoadCacheKey, CachedModule>>>,
     /// Per-file mapping of `symbol → target path` for "go-to definition".
     symbol_index: Arc<RwLock<HashMap<PathBuf, HashMap<String, PathBuf>>>>,
@@ -509,10 +510,15 @@ impl EvalContextConfig {
         paths
     }
 
-    fn active_mvs_v2_resolution(&self) -> Option<&FrozenResolutionMap> {
-        self.mvs_v2_root_package
-            .as_deref()
-            .and_then(|package_url| self.resolution.mvs_v2_root(package_url))
+    fn package_scope_for_file(
+        &self,
+        path: &Path,
+    ) -> Option<crate::resolution::ResolvedPackageScope<'_>> {
+        self.resolution.package_scope_for_file(
+            path,
+            self.mvs_v2_root_package.as_deref(),
+            self.file_provider(),
+        )
     }
 
     /// Manually track a file. Useful for entrypoints.
@@ -557,86 +563,23 @@ impl EvalContextConfig {
         self.resolve(&mut context)
     }
 
-    /// Find the package root for a given file by walking up directories.
-    /// Expects a canonical (absolute, normalized) path.
-    fn find_package_root_for_file(&self, file: &Path) -> anyhow::Result<PathBuf> {
-        let mut current = file.parent();
-        while let Some(dir) = current {
-            if self.resolution.package_resolutions.contains_key(dir) {
-                return Ok(dir.to_path_buf());
-            }
-            let pcb_toml = dir.join("pcb.toml");
-            if self.file_provider.exists(&pcb_toml) {
-                return Ok(dir.to_path_buf());
-            }
-            current = dir.parent();
-        }
-        anyhow::bail!(
-            "Internal error: current file not in any package: {}",
-            file.display()
-        )
-    }
-
-    fn find_alias_in_map(resolved_map: &BTreeMap<String, PathBuf>, alias: &str) -> Option<String> {
-        for url in resolved_map.keys() {
-            if let Some(last_segment) = url.rsplit('/').next()
-                && last_segment == alias
-            {
-                return Some(url.clone());
-            }
-        }
-        None
-    }
-
-    fn current_mvs_v2_package<'a>(
-        resolution: &'a FrozenResolutionMap,
+    fn current_package_scope(
+        &self,
         file: &Path,
-    ) -> anyhow::Result<(&'a PathBuf, &'a crate::resolution::FrozenPackage)> {
-        resolution.package_for_file(file).ok_or_else(|| {
+    ) -> anyhow::Result<crate::resolution::ResolvedPackageScope<'_>> {
+        self.package_scope_for_file(file).ok_or_else(|| {
             anyhow::anyhow!(
-                "Internal error: current file not in MVS v2 resolution map: {}",
+                "Internal error: current file not in any package: {}",
                 file.display()
             )
         })
     }
 
-    fn expand_alias_v2(
-        &self,
-        context: &ResolveContext,
-        alias: &str,
-        resolution: &FrozenResolutionMap,
-    ) -> Result<String, anyhow::Error> {
-        let (_, package) = Self::current_mvs_v2_package(resolution, &context.current_file)?;
-        if let Some(url) = Self::find_alias_in_map(&package.deps, alias) {
-            return Ok(url);
-        }
-
-        anyhow::bail!("Unknown alias '@{}'", alias)
-    }
-
-    fn find_best_dep_match<'a>(
-        resolved_map: &'a BTreeMap<String, PathBuf>,
-        full_url: &str,
-    ) -> Option<(&'a String, &'a PathBuf)> {
-        resolved_map
-            .iter()
-            .rev()
-            .find(|(dep_url, _)| Self::url_matches_prefix(dep_url, full_url))
-    }
-
-    fn url_matches_prefix(prefix: &str, full_url: &str) -> bool {
-        full_url.starts_with(prefix)
-            && (full_url.len() == prefix.len()
-                || full_url.as_bytes().get(prefix.len()) == Some(&b'/'))
-    }
-
     /// Expand alias using the resolution map.
     fn expand_alias(&self, context: &ResolveContext, alias: &str) -> Result<String, anyhow::Error> {
-        let package_root = self.find_package_root_for_file(&context.current_file)?;
-        if let Some(resolved_map) = self.resolution.package_resolutions.get(&package_root)
-            && let Some(url) = Self::find_alias_in_map(resolved_map, alias)
-        {
-            return Ok(url);
+        let scope = self.current_package_scope(&context.current_file)?;
+        if let Some(url) = scope.expand_alias(alias) {
+            return Ok(url.to_string());
         }
 
         anyhow::bail!("Unknown alias '@{}'", alias)
@@ -646,7 +589,7 @@ impl EvalContextConfig {
     fn try_resolve_workspace(
         &self,
         context: &ResolveContext,
-        package_root: &Path,
+        scope: &crate::resolution::ResolvedPackageScope<'_>,
     ) -> Result<PathBuf, anyhow::Error> {
         let full_url = if let LoadSpec::Stdlib { path } = context.latest_spec() {
             let stdlib_root = self.resolution.workspace_info.workspace_stdlib_dir();
@@ -662,47 +605,28 @@ impl EvalContextConfig {
                 .expect("try_resolve_workspace called with non-URL spec")
         };
 
-        let canonical_root = self.file_provider.canonicalize(package_root)?;
-        if let Some(package_url) = self.find_url_for_package_root(&canonical_root)
-            && {
-                let package_roots = self.resolution.package_roots();
-                Self::find_best_dep_match(&package_roots, &full_url)
-                    .is_some_and(|(matched_url, _)| matched_url == &package_url)
-            }
-        {
-            anyhow::bail!(
+        let (matched_dep, root_path) = match scope.resolve_package_url(&full_url) {
+            Some(PackageUrlResolution::OwnPackage) => anyhow::bail!(
                 "{} uses package URL '{}' that points into its own package '{}'; use a relative path instead",
                 context.current_file.display(),
                 full_url,
-                package_url
-            );
-        }
-
-        let resolved_map = self.resolution.package_resolutions.get(package_root);
-        let best_match = resolved_map.and_then(|map| Self::find_best_dep_match(map, &full_url));
-
-        let Some((matched_dep, root_path)) = best_match else {
-            if resolved_map.is_none() {
-                anyhow::bail!(
-                    "Dependency map not loaded for package '{}'",
-                    package_root.display()
-                );
-            }
-
-            anyhow::bail!(
+                scope.display()
+            ),
+            Some(PackageUrlResolution::Dependency { dep_url, root }) => (dep_url, root),
+            None => anyhow::bail!(
                 "No declared dependency matches '{}'\n  \
                 Add a dependency to [dependencies] in pcb.toml that covers this path",
                 full_url
-            );
+            ),
         };
 
         let relative_path = full_url
-            .strip_prefix(matched_dep.as_str())
+            .strip_prefix(matched_dep)
             .and_then(|s| s.strip_prefix('/'))
             .unwrap_or("");
 
         let full_path = if relative_path.is_empty() {
-            root_path.clone()
+            root_path.to_path_buf()
         } else {
             root_path.join(relative_path)
         };
@@ -719,77 +643,10 @@ impl EvalContextConfig {
         Ok(full_path)
     }
 
-    fn try_resolve_workspace_v2(
-        &self,
-        context: &ResolveContext,
-        resolution: &FrozenResolutionMap,
-    ) -> Result<PathBuf, anyhow::Error> {
-        let full_url = if let LoadSpec::Stdlib { path } = context.latest_spec() {
-            let stdlib_root = self.resolution.workspace_info.workspace_stdlib_dir();
-            return Ok(if path.as_os_str().is_empty() {
-                stdlib_root
-            } else {
-                stdlib_root.join(path)
-            });
-        } else {
-            context
-                .latest_spec()
-                .to_full_url()
-                .expect("try_resolve_workspace_v2 called with non-URL spec")
-        };
-
-        let (_, package) = Self::current_mvs_v2_package(resolution, &context.current_file)?;
-        let (matched_dep, root_path) = match resolution.resolve_package_url(package, &full_url) {
-            Some(FrozenUrlResolution::OwnPackage) => anyhow::bail!(
-                "{} uses package URL '{}' that points into its own package '{}'; use a relative path instead",
-                context.current_file.display(),
-                full_url,
-                package.identity.display()
-            ),
-            Some(FrozenUrlResolution::Dependency { dep_url, root }) => (dep_url, root),
-            None => anyhow::bail!(
-                "No declared dependency matches '{}'\n  \
-                Add a dependency to [dependencies] in pcb.toml that covers this path",
-                full_url
-            ),
-        };
-
-        let relative_path = full_url
-            .strip_prefix(matched_dep)
-            .and_then(|s| s.strip_prefix('/'))
-            .unwrap_or("");
-
-        let full_path = root_path.join(relative_path);
-
-        if !self.file_provider.exists(&full_path) {
-            anyhow::bail!(
-                "File not found: {} (resolved to: {}, dep root: {})",
-                relative_path,
-                full_path.display(),
-                root_path.display()
-            );
-        }
-
-        Ok(full_path)
-    }
-
     /// URL resolution: translate canonical URL to cache path using resolution map.
     fn resolve_url(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
-        let package_root = self.find_package_root_for_file(&context.current_file)?;
-        self.try_resolve_workspace(context, &package_root)
-    }
-
-    /// Find the package URL for a given canonical package root path by scanning
-    /// known package roots.
-    // TODO: if this becomes a bottleneck, pre-build a reverse map (PathBuf -> URL) at init time.
-    fn find_url_for_package_root(&self, canonical_root: &Path) -> Option<String> {
-        for (url, root) in self.resolution.package_roots() {
-            let canonical = self.file_provider.canonicalize(&root).unwrap_or(root);
-            if canonical == canonical_root {
-                return Some(url);
-            }
-        }
-        None
+        let scope = self.current_package_scope(&context.current_file)?;
+        self.try_resolve_workspace(context, &scope)
     }
 
     /// Compute the canonical URL for a file being evaluated.
@@ -805,59 +662,15 @@ impl EvalContextConfig {
             return Ok(url);
         }
 
-        // Slow path: scan workspace members and resolution maps to find the URL
-        let pkg_root = self.find_package_root_for_file(file_path)?;
-        let canonical_root = self.file_provider.canonicalize(&pkg_root)?;
-
-        let pkg_url = self
-            .find_url_for_package_root(&canonical_root)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Cannot determine package URL for '{}' (package root: '{}')",
-                    file_path.display(),
-                    pkg_root.display()
-                )
-            })?;
-
-        let rel = file_path
-            .strip_prefix(&canonical_root)
-            .or_else(|_| file_path.strip_prefix(&pkg_root))
-            .unwrap_or(Path::new(""));
-
-        if rel.as_os_str().is_empty() {
-            Ok(pkg_url.clone())
-        } else {
-            Ok(format!("{}/{}", pkg_url, rel.display()))
-        }
-    }
-
-    fn file_url_v2(
-        &self,
-        file_path: &Path,
-        resolution: &FrozenResolutionMap,
-    ) -> anyhow::Result<String> {
-        if let Some(spec) = self.get_load_spec(file_path)
-            && let Some(url) = spec.to_full_url()
-        {
-            return Ok(url);
-        }
-
-        let (pkg_root, package) = Self::current_mvs_v2_package(resolution, file_path)?;
-        let pkg_url = package.identity.package_url().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Cannot determine package URL for '{}' (package root: '{}')",
-                file_path.display(),
-                pkg_root.display()
+        self.resolution
+            .package_url_for_file(
+                file_path,
+                self.mvs_v2_root_package.as_deref(),
+                self.file_provider(),
             )
-        })?;
-
-        let rel = file_path.strip_prefix(pkg_root).unwrap_or(Path::new(""));
-
-        if rel.as_os_str().is_empty() {
-            Ok(pkg_url.to_string())
-        } else {
-            Ok(format!("{}/{}", pkg_url, rel.display()))
-        }
+            .ok_or_else(|| {
+                anyhow::anyhow!("Cannot determine package URL for '{}'", file_path.display())
+            })
     }
 
     /// Relative path resolution: resolve relative to current file with boundary enforcement.
@@ -867,7 +680,9 @@ impl EvalContextConfig {
         };
         let path = path.clone();
 
-        let package_root = self.find_package_root_for_file(&context.current_file)?;
+        let scope = self.current_package_scope(&context.current_file)?;
+        let package_root = scope.root().to_path_buf();
+        let enforce_nested_package_boundary = scope.enforces_nested_package_boundaries();
 
         let current_dir = context
             .current_file
@@ -879,7 +694,19 @@ impl EvalContextConfig {
         let canonical_resolved = context.file_provider.canonicalize(&resolved_path)?;
         let canonical_root = context.file_provider.canonicalize(&package_root)?;
 
-        if !canonical_resolved.starts_with(&canonical_root) {
+        let mut crosses_package_boundary = !canonical_resolved.starts_with(&canonical_root);
+        if !crosses_package_boundary
+            && enforce_nested_package_boundary
+            && let Some(target_scope) = self.package_scope_for_file(&canonical_resolved)
+        {
+            let target_root = context
+                .file_provider
+                .canonicalize(target_scope.root())
+                .unwrap_or_else(|_| target_scope.root().to_path_buf());
+            crosses_package_boundary = target_root != canonical_root;
+        }
+
+        if crosses_package_boundary {
             // Escaped package boundary — resolve via URL arithmetic
             let current_url = self.file_url(&context.current_file)?;
             let current_dir_url = current_url
@@ -903,77 +730,6 @@ impl EvalContextConfig {
         crate::validate_path_case_with_canonical(&path, &canonical_resolved)?;
 
         Ok(canonical_resolved)
-    }
-
-    fn resolve_relative_v2(
-        &self,
-        context: &mut ResolveContext,
-        resolution: &FrozenResolutionMap,
-    ) -> Result<PathBuf, anyhow::Error> {
-        let LoadSpec::Path { path, .. } = context.latest_spec() else {
-            unreachable!("resolve_relative_v2 called on non-Path spec");
-        };
-        let path = path.clone();
-
-        let (package_root, _) = Self::current_mvs_v2_package(resolution, &context.current_file)?;
-        let current_dir = context
-            .current_file
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Current file has no parent directory"))?;
-        let resolved_path = current_dir.join(&path);
-        let canonical_resolved = context.file_provider.canonicalize(&resolved_path)?;
-        let canonical_root = context.file_provider.canonicalize(package_root)?;
-        let target_package_root = resolution
-            .package_for_file(&canonical_resolved)
-            .map(|(root, _)| root);
-
-        if !canonical_resolved.starts_with(&canonical_root)
-            || target_package_root.is_some_and(|root| root != package_root)
-        {
-            let current_url = self.file_url_v2(&context.current_file, resolution)?;
-            let current_dir_url = current_url
-                .rsplit_once('/')
-                .map(|(dir, _)| dir)
-                .unwrap_or(&current_url);
-            let target_url = crate::normalize_url_path(&format!(
-                "{}/{}",
-                current_dir_url,
-                path.to_string_lossy().replace('\\', "/")
-            ))?;
-
-            let new_spec = LoadSpec::Package {
-                package: target_url,
-                path: PathBuf::new(),
-            };
-            context.push_spec(new_spec)?;
-            return self.try_resolve_workspace_v2(context, resolution);
-        }
-
-        crate::validate_path_case_with_canonical(&path, &canonical_resolved)?;
-
-        Ok(canonical_resolved)
-    }
-
-    fn resolve_v2(
-        &self,
-        context: &mut ResolveContext,
-        resolution: &FrozenResolutionMap,
-    ) -> Result<PathBuf, anyhow::Error> {
-        if let LoadSpec::Package { package, path, .. } = context.latest_spec() {
-            let expanded_url = self.expand_alias_v2(context, package, resolution)?;
-            let expanded_spec = LoadSpec::Package {
-                package: expanded_url,
-                path: path.clone(),
-            };
-            if &expanded_spec != context.latest_spec() {
-                context.push_spec(expanded_spec)?;
-            }
-        }
-
-        match context.latest_spec() {
-            LoadSpec::Path { .. } => self.resolve_relative_v2(context, resolution),
-            _ => self.try_resolve_workspace_v2(context, resolution),
-        }
     }
 
     fn finish_resolve(
@@ -1000,11 +756,6 @@ impl EvalContextConfig {
 
     /// Resolve a load path. Supports aliases, URLs, and relative paths.
     pub(crate) fn resolve(&self, context: &mut ResolveContext) -> Result<PathBuf, anyhow::Error> {
-        if let Some(resolution) = self.active_mvs_v2_resolution() {
-            let resolved_path = self.resolve_v2(context, resolution)?;
-            return self.finish_resolve(context, resolved_path);
-        }
-
         // Expand aliases
         if let LoadSpec::Package { package, path, .. } = context.latest_spec() {
             let expanded_url = self.expand_alias(context, package)?;
@@ -1074,13 +825,17 @@ impl EvalSession {
 
     // --- Load cache ---
 
-    fn get_cached_module(&self, root_package: Option<&str>, path: &Path) -> Option<CachedModule> {
-        let key = (root_package.map(str::to_string), path.to_path_buf());
+    fn get_cached_module(
+        &self,
+        scope: Option<PackageScopeKey>,
+        path: &Path,
+    ) -> Option<CachedModule> {
+        let key = (scope, path.to_path_buf());
         self.load_cache.read().unwrap().get(&key).cloned()
     }
 
-    fn cache_module(&self, root_package: Option<&str>, path: PathBuf, module: CachedModule) {
-        let key = (root_package.map(str::to_string), path);
+    fn cache_module(&self, scope: Option<PackageScopeKey>, path: PathBuf, module: CachedModule) {
+        let key = (scope, path);
         self.load_cache.write().unwrap().insert(key, module);
     }
 
@@ -1404,14 +1159,22 @@ impl EvalContext {
         self.session.record_module_dependency(from, to);
     }
 
+    fn load_cache_scope(&self, path: &Path) -> Option<PackageScopeKey> {
+        self.config.resolution.load_cache_scope_key_for_file(
+            path,
+            self.config.mvs_v2_root_package.as_deref(),
+            self.file_provider(),
+        )
+    }
+
     fn get_cached_module(&self, path: &Path) -> Option<CachedModule> {
         self.session
-            .get_cached_module(self.config.mvs_v2_root_package.as_deref(), path)
+            .get_cached_module(self.load_cache_scope(path), path)
     }
 
     fn cache_module(&self, path: PathBuf, module: CachedModule) {
-        self.session
-            .cache_module(self.config.mvs_v2_root_package.as_deref(), path, module);
+        let scope = self.load_cache_scope(&path);
+        self.session.cache_module(scope, path, module);
     }
 
     /// Check if there is a module dependency between two files

@@ -130,14 +130,13 @@ check(LedValue == "hello from Led", "should load from Led")
     // Workspace root resolution map
     package_resolutions.insert(workspace_root, common::default_test_kicad_resolution_map());
 
-    let resolution = ResolutionResult {
+    let resolution = ResolutionResult::native(
         workspace_info,
         package_resolutions,
-        closure: HashMap::new(),
-        mvs_v2_resolution: None,
-        lockfile_changed: false,
-        symbol_parts: HashMap::new(),
-    };
+        HashMap::new(),
+        false,
+        HashMap::new(),
+    );
 
     let main_path = PathBuf::from("/workspace/boards/Main/Main.zen");
     (file_provider, resolution, main_path)
