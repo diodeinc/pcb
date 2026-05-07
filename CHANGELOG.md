@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb layout` now embeds footprint-relative 3D models.
 - `pcb layout --check` and board publish now use a semantic managed-footprint/connectivity check instead of byte-comparing shadow-synced KiCad files.
+- Schematic position parsing for hierarchical labels representing interface nets now works correctly.
 
 ## [0.3.77] - 2026-05-07
 
