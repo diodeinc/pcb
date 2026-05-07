@@ -39,7 +39,8 @@ Nets and interfaces:
 Components and sourcing:
 
 - `Component(...)` is the primitive physical-part constructor. Required fields are effectively `name`, `symbol`, and `pins`.
-- Prefer `part=Part(mpn=..., manufacturer=...)` over legacy scalar `mpn` and `manufacturer`.
+- The symbol is the source of truth for footprint and part metadata. Make the symbol properties correct; do not repeat `footprint=` or `part=` in `Component()` when they are already provided by the symbol.
+- Prefer `part=Part(mpn=..., manufacturer=...)` over legacy scalar `mpn` and `manufacturer` when part metadata is not already in the symbol.
 - `Symbol(library, name=None)` points at a `.kicad_sym`; `name` is required for multi-symbol libraries.
 - Omit `no_connect` pins from `pins`; `Component()` wires `NotConnected()` automatically.
 
@@ -70,7 +71,7 @@ Utilities:
 - Keep power domains explicit with `Power(voltage=...)`, `Ground`, typed bus interfaces, and `@stdlib/checks.zen` helpers such as `voltage_within(...)`.
 - Every `Power` `io()` declares its voltage range in the template unless the existing local API intentionally keeps it generic.
 - Connect `Power` and `Ground` ios directly to pins and passives.
-- Use `help=` when it adds integrator-visible meaning that is not already obvious from the name, type, or default. Omit help text that merely restates those fields.
+- Use `help=` when it adds integrator-visible meaning that is not already obvious from the name, type, or default. Keep it concise; prefer one-line `io()` / `config()` declarations when readable. Omit help text that merely restates those fields.
 
 ```zen
 VDD = io(Power(voltage="3.0V to 5.5V"))
