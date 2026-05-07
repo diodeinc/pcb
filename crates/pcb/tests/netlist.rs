@@ -204,6 +204,50 @@ fn test_netlist_hierarchical_board_with_positions() {
     assert_snapshot!("netlist_hierarchical_board_with_positions", output);
 }
 
+const I2C_MODULE_ZEN: &str = r#"
+load("@stdlib/interfaces.zen", "I2c")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+VDD = io(Power)
+GND = io(Ground)
+I2C = io(I2c)
+
+Resistor(name="R_SCL", value="10kohm", package="0402", P1=VDD, P2=I2C.SCL)
+Resistor(name="R_SDA", value="10kohm", package="0402", P1=VDD, P2=I2C.SDA)
+
+# Hierarchical labels on multi-field interface bus (I2c) - SCL and SDA fields.
+# pcb:sch I2C_SCL.0 x=10.0000 y=20.0000 rot=0
+# pcb:sch I2C_SDA.0 x=10.0000 y=30.0000 rot=0
+"#;
+
+const I2C_HIERARCHICAL_BOARD_ZEN: &str = r#"
+load("@stdlib/interfaces.zen", "I2c")
+
+I2cPullups = Module("../modules/I2cPullups.zen")
+
+vdd = Power("VDD_3V3")
+gnd = Ground("GND")
+bus = I2c("I2C_BUS")
+
+I2cPullups(name="PU1", VDD=vdd, GND=gnd, I2C=bus)
+"#;
+
+#[test]
+fn test_netlist_interface_field_positions() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
+        .write("modules/I2cPullups.zen", I2C_MODULE_ZEN)
+        .write("boards/I2cBoard.zen", I2C_HIERARCHICAL_BOARD_ZEN);
+    let output = snapshot_netlist_positions(
+        &mut sandbox,
+        "pcb",
+        &["build", "boards/I2cBoard.zen", "--netlist"],
+    );
+    assert_snapshot!("netlist_interface_field_positions", output);
+}
+
 #[test]
 fn test_netlist_no_positions() {
     let board_zen = r#"

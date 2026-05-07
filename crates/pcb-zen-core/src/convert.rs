@@ -180,6 +180,34 @@ fn wrap(tag: &str, inner: JsonValue) -> JsonValue {
     JsonValue::Object(JsonMap::from_iter([(tag.to_string(), inner)]))
 }
 
+/// Walk a signature parameter's default value (Net or Interface, possibly nested) and return the
+/// path of field names leading to a net whose name equals `target_net_name`. Returns `Some(vec![])`
+/// when the value itself is a matching net.
+fn find_net_field_path(value: FrozenValue, target_net_name: &str) -> Option<Vec<String>> {
+    if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+        return (net.name() == target_net_name).then(Vec::new);
+    }
+    let interface = value.downcast_ref::<FrozenInterfaceValue>()?;
+    for (field_name, field_value) in interface.fields().iter() {
+        if let Some(mut path) = find_net_field_path(*field_value, target_net_name) {
+            path.insert(0, field_name.clone());
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Resolve a field path (as produced by [`find_net_field_path`]) against a value, returning the
+/// net id at the end of the path. The terminal value must be a [`FrozenNetValue`].
+fn resolve_net_id_along_path(value: FrozenValue, path: &[String]) -> Option<NetId> {
+    let Some((head, tail)) = path.split_first() else {
+        return value.downcast_ref::<FrozenNetValue>().map(|n| n.id());
+    };
+    let interface = value.downcast_ref::<FrozenInterfaceValue>()?;
+    let next_value = *interface.fields().get(head)?;
+    resolve_net_id_along_path(next_value, tail)
+}
+
 impl ModuleConverter {
     pub(crate) fn new() -> Self {
         Self {
@@ -928,44 +956,29 @@ impl ModuleConverter {
             return Some(symbol_key);
         }
 
-        // First try: public io() nets from signature - these need net ID lookup to get actual name
+        // First try: public io() nets from signature - these need net ID lookup to get actual name.
+        // Walks the parameter's default value (Net or Interface, possibly nested) looking for a
+        // net whose name matches `net_part`, then resolves the same field path on the actual
+        // value to get the bound net's id.
         for param in module.signature().iter().filter(|p| !p.is_config) {
-            if let Some(default_net_name) = param.default_value.and_then(|v| {
-                v.downcast_ref::<FrozenNetValue>()
-                    .map(|n| n.name().to_string())
-                    .or_else(|| {
-                        v.downcast_ref::<FrozenInterfaceValue>()?
-                            .fields()
-                            .get("NET")?
-                            .downcast_ref::<FrozenNetValue>()
-                            .map(|n| n.name().to_string())
-                    })
-            }) && default_net_name == net_part
+            let Some(default_value) = param.default_value else {
+                continue;
+            };
+            let Some(field_path) = find_net_field_path(default_value, net_part) else {
+                continue;
+            };
+            let Some(actual_value) = param.actual_value else {
+                continue;
+            };
+            let Some(net_id) = resolve_net_id_along_path(actual_value, &field_path) else {
+                continue;
+            };
+            if let Some(actual_net_name) = self
+                .net_to_info
+                .get(&net_id)
+                .and_then(|info| info.name.clone())
             {
-                // Get the actual net name from the net ID
-                let net_id =
-                    if let Some(net_value) = param.actual_value?.downcast_ref::<FrozenNetValue>() {
-                        net_value.id()
-                    } else if let Some(net_value) = param
-                        .actual_value?
-                        .downcast_ref::<FrozenInterfaceValue>()?
-                        .fields()
-                        .get("NET")?
-                        .downcast_ref::<FrozenNetValue>()
-                    {
-                        net_value.id()
-                    } else {
-                        continue;
-                    };
-
-                // Look up actual net name and construct symbol key
-                if let Some(actual_net_name) = self
-                    .net_to_info
-                    .get(&net_id)
-                    .and_then(|info| info.name.clone())
-                {
-                    return Some(format!("sym:{}#{}", actual_net_name, suffix));
-                }
+                return Some(format!("sym:{}#{}", actual_net_name, suffix));
             }
         }
 
