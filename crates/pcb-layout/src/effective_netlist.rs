@@ -378,11 +378,17 @@ pub fn diff_effective_netlists(
         }
     }
 
+    let expected_ports_by_net = ports_by_net(&expected.port_to_net);
+    let actual_ports_by_net = ports_by_net(&actual.port_to_net);
+
     for (net_name, expected_ports) in &expected.nets {
         if consumed_expected.contains(net_name) {
             continue;
         }
-        let actual_ports = actual.nets.get(net_name).cloned().unwrap_or_default();
+        let actual_ports = actual_ports_by_net
+            .get(net_name)
+            .cloned()
+            .unwrap_or_default();
         let missing: BTreeSet<_> = expected_ports
             .difference(&actual_ports)
             .filter(|p| !explained_ports.contains(*p))
@@ -403,7 +409,10 @@ pub fn diff_effective_netlists(
         if consumed_actual.contains(net_name) {
             continue;
         }
-        let expected_ports = expected.nets.get(net_name).cloned().unwrap_or_default();
+        let expected_ports = expected_ports_by_net
+            .get(net_name)
+            .cloned()
+            .unwrap_or_default();
         let extra: BTreeSet<_> = actual_ports
             .difference(&expected_ports)
             .filter(|p| !explained_ports.contains(*p))
@@ -445,6 +454,17 @@ fn unique_signature_index(nets: &BTreeMap<String, BTreeSet<Port>>) -> BTreeMap<V
         .into_iter()
         .filter_map(|(sig, net)| net.map(|n| (sig, n)))
         .collect()
+}
+
+fn ports_by_net(port_to_net: &BTreeMap<Port, String>) -> BTreeMap<String, BTreeSet<Port>> {
+    let mut by_net = BTreeMap::new();
+    for (port, net_name) in port_to_net {
+        by_net
+            .entry(net_name.clone())
+            .or_insert_with(BTreeSet::new)
+            .insert(port.clone());
+    }
+    by_net
 }
 
 fn sample_ports(ports: &BTreeSet<Port>) -> String {
@@ -556,6 +576,21 @@ mod tests {
         let diffs = diff_effective_netlists(&expected, &actual);
 
         assert!(diffs.is_empty());
+    }
+
+    #[test]
+    fn missing_assignment_does_not_overreport_remaining_single_port_net() {
+        let expected = netlist(&[("R1", "1", "A"), ("R2", "1", "A")]);
+        let actual = netlist(&[("R1", "1", "A"), ("R2", "1", "B")]);
+
+        let diffs = diff_effective_netlists(&expected, &actual);
+
+        let missing = diffs
+            .iter()
+            .find(|d| d.message.starts_with("Net `A` is missing"))
+            .unwrap();
+        assert!(missing.message.contains("R2:1"));
+        assert!(!missing.message.contains("R1:1"));
     }
 
     #[test]
