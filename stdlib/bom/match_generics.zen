@@ -110,7 +110,7 @@ SERIES_BY_PKG = {
         ),
         panasonic_erj(
             "ERJ-H2CF",
-            "1Ohm – 10Ohm",
+            "1Ohm – 9.76Ohm",
             "50V",
             "0.1W",
             "1%",
@@ -160,7 +160,7 @@ SERIES_BY_PKG = {
         ),
         panasonic_erj(
             "ERJ-H3QF",
-            "1Ohm – 10Ohm",
+            "1Ohm – 9.76Ohm",
             "75V",
             "0.333W",
             "1%",
