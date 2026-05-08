@@ -922,6 +922,10 @@ pub struct SearchArgs {
     /// Registry SQLite index to use instead of the cached/downloaded index
     #[arg(long, value_name = "PATH")]
     pub registry_index: Option<PathBuf>,
+
+    /// Registry URL/id to search. Can be repeated. Overrides the default registry scope.
+    #[arg(long = "registry", value_name = "REGISTRY")]
+    pub registries: Vec<String>,
 }
 
 /// Files discovered in a local directory for component generation
@@ -1241,6 +1245,15 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let workspace_root = find_workspace_root(&pcb_zen_core::DefaultFileProvider::new(), &cwd)?;
 
+    if args.registry_index.is_some() && !args.registries.is_empty() {
+        anyhow::bail!("--registry cannot be used with --registry-index");
+    }
+    if !args.registries.is_empty() && args.mode.is_some_and(|mode| !mode.requires_registry()) {
+        anyhow::bail!("--registry can only be used with registry search modes");
+    }
+
+    let registry_selectors = args.registries;
+
     // Search mode (local registry database with TUI or API)
     let query = args.query.as_deref().unwrap_or("");
     let json = matches!(args.format, SearchOutputFormat::Json);
@@ -1250,6 +1263,7 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         &workspace_root,
         args.mode,
         args.registry_index.as_deref(),
+        &registry_selectors,
     )
 }
 
@@ -1324,6 +1338,7 @@ fn execute_search(
     workspace_root: &Path,
     mode: Option<crate::registry::tui::SearchMode>,
     registry_index: Option<&Path>,
+    registry_selectors: &[String],
 ) -> Result<()> {
     use crate::registry::tui::SearchMode;
 
@@ -1332,6 +1347,8 @@ fn execute_search(
         let tui_result = crate::registry::tui::run_with_mode_and_registry_index(
             mode,
             registry_index.map(Path::to_path_buf),
+            registry_selectors.to_vec(),
+            Some(workspace_root.to_path_buf()),
         )?;
         if let Some(component) = tui_result.selected_component {
             handle_tui_component_selection(component, workspace_root)?;
@@ -1339,11 +1356,21 @@ fn execute_search(
         return Ok(());
     }
 
+    let registry_scope =
+        if registry_index.is_none() && mode.map(|mode| mode.requires_registry()).unwrap_or(true) {
+            crate::registry::download::resolve_registry_search_scope(
+                registry_selectors,
+                Some(workspace_root),
+            )?
+        } else {
+            None
+        };
+
     // Determine effective mode
     let effective_mode = match mode {
         Some(mode) => mode,
         None if registry_index.is_some() => SearchMode::RegistryModules,
-        None if crate::RegistryClient::open().is_ok() => SearchMode::RegistryModules,
+        None if registry_scope.is_some() => SearchMode::RegistryModules,
         None if crate::KicadSymbolsClient::open().is_ok() => SearchMode::KicadSymbols,
         None => SearchMode::WebComponents,
     };
@@ -1352,7 +1379,13 @@ fn execute_search(
 
     match effective_mode {
         SearchMode::RegistryModules | SearchMode::RegistryComponents => {
-            execute_registry_search_filtered(query, json, effective_mode, registry_index)
+            execute_registry_search_filtered(
+                query,
+                json,
+                effective_mode,
+                registry_index,
+                registry_scope,
+            )
         }
         SearchMode::KicadSymbols => execute_kicad_symbols_search(query, json),
         SearchMode::WebComponents => execute_web_search(query, json),
@@ -1361,16 +1394,12 @@ fn execute_search(
 
 fn refresh_search_index_if_stale(
     mode: crate::registry::tui::SearchMode,
-    registry_index: Option<&Path>,
+    _registry_index: Option<&Path>,
 ) {
     use crate::registry::tui::SearchMode;
 
     match mode {
-        SearchMode::RegistryModules | SearchMode::RegistryComponents => {
-            if registry_index.is_none() {
-                let _ = crate::RegistryClient::refresh_if_stale();
-            }
-        }
+        SearchMode::RegistryModules | SearchMode::RegistryComponents => {}
         SearchMode::KicadSymbols => {
             let _ = crate::KicadSymbolsClient::refresh_if_stale();
         }
@@ -1383,11 +1412,14 @@ fn execute_registry_search_filtered(
     json: bool,
     mode: crate::registry::tui::SearchMode,
     registry_index: Option<&Path>,
+    registry_scope: Option<crate::registry::download::RegistrySearchScope>,
 ) -> Result<()> {
     let client = if let Some(path) = registry_index {
-        crate::RegistryClient::open_path(path)?
+        crate::RegistrySearchClient::single(crate::RegistryClient::open_path(path)?)
+    } else if let Some(scope) = registry_scope {
+        crate::RegistrySearchClient::open_scope(scope, false)?
     } else {
-        crate::RegistryClient::open()?
+        anyhow::bail!("No registry index available");
     };
     match mode {
         crate::registry::tui::SearchMode::RegistryModules => {
@@ -1403,6 +1435,7 @@ fn execute_registry_search_filtered(
 #[derive(Debug, Clone, Serialize)]
 struct RegistryModuleCliResult {
     pub kind: &'static str,
+    pub registry: crate::registry::download::RegistryInfo,
     pub url: String,
     pub name: String,
     pub version: String,
@@ -1417,6 +1450,7 @@ struct RegistryModuleCliResult {
 #[derive(Debug, Clone, Serialize)]
 struct RegistrySymbolCliResult {
     pub kind: &'static str,
+    pub registry: crate::registry::download::RegistryInfo,
     pub url: String,
     pub name: String,
     #[serde(rename = "moduleUrl")]
@@ -1438,11 +1472,12 @@ struct RegistrySymbolCliResult {
 }
 
 fn execute_registry_module_search(
-    client: &crate::RegistryClient,
+    client: &crate::RegistrySearchClient,
     query: &str,
     json: bool,
 ) -> Result<()> {
     use crate::registry::tui::display::RegistryModuleDisplay;
+    use crate::registry::tui::search::registry_scoring_key;
 
     let rrf = client.search_modules_rrf(query);
     let scoring_by_url = crate::registry::tui::search::build_scoring(
@@ -1466,10 +1501,11 @@ fn execute_registry_module_search(
         let results: Vec<_> = hits
             .iter()
             .filter_map(|hit| {
-                let module = client.get_module_by_id(hit.id).ok().flatten()?;
-                let relations = client.get_module_relations(hit.id).unwrap_or_default();
+                let module = client.get_module_by_hit(hit).ok().flatten()?;
+                let relations = client.get_module_relations_by_hit(hit).unwrap_or_default();
                 Some(RegistryModuleCliResult {
                     kind: "module",
+                    registry: hit.registry.clone(),
                     url: module.url.clone(),
                     name: module.name,
                     version: module.version,
@@ -1485,7 +1521,9 @@ fn execute_registry_module_search(
                         .into_iter()
                         .map(|dep| dep.url_with_version())
                         .collect(),
-                    scoring: scoring_by_url.get(&module.url).cloned(),
+                    scoring: scoring_by_url
+                        .get(&registry_scoring_key(&module.registry.id, &module.url))
+                        .cloned(),
                 })
             })
             .collect();
@@ -1504,18 +1542,19 @@ fn execute_registry_module_search(
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
-        print_search_scoring(scoring_by_url.get(&hit.url));
+        print_search_scoring(scoring_by_url.get(&registry_scoring_key(&hit.registry.id, &hit.url)));
         println!();
     }
     Ok(())
 }
 
 fn execute_registry_symbol_search(
-    client: &crate::RegistryClient,
+    client: &crate::RegistrySearchClient,
     query: &str,
     json: bool,
 ) -> Result<()> {
     use crate::registry::tui::display::RegistrySymbolDisplay;
+    use crate::registry::tui::search::registry_scoring_key;
 
     let rrf = client.search_symbols_rrf(query);
     let scoring_by_url = crate::registry::tui::search::build_scoring(
@@ -1542,9 +1581,10 @@ fn execute_registry_symbol_search(
             .iter()
             .enumerate()
             .filter_map(|(idx, hit)| {
-                let symbol = client.get_symbol_by_id(hit.id).ok().flatten()?;
+                let symbol = client.get_symbol_by_hit(hit).ok().flatten()?;
                 Some(RegistrySymbolCliResult {
                     kind: "symbol",
+                    registry: hit.registry.clone(),
                     url: symbol.url.clone(),
                     name: symbol.name,
                     module_url: symbol.module_url,
@@ -1556,7 +1596,9 @@ fn execute_registry_symbol_search(
                     description: symbol.kicad_description,
                     digikey: symbol.digikey,
                     availability: availability_map.get(&idx).cloned(),
-                    scoring: scoring_by_url.get(&hit.url).cloned(),
+                    scoring: scoring_by_url
+                        .get(&registry_scoring_key(&hit.registry.id, &hit.url))
+                        .cloned(),
                 })
             })
             .collect();
@@ -1575,7 +1617,7 @@ fn execute_registry_symbol_search(
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
-        print_search_scoring(scoring_by_url.get(&hit.url));
+        print_search_scoring(scoring_by_url.get(&registry_scoring_key(&hit.registry.id, &hit.url)));
         if let Some(pricing) = availability_map.get(&idx) {
             print_availability_summary(pricing);
         }

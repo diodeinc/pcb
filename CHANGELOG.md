@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added scoped multi-registry search for registry-backed `pcb search`.
+
 ## [0.3.79] - 2026-05-08
 
 ### Added
