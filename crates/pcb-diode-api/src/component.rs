@@ -19,6 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use walkdir::WalkDir;
 
+use crate::RegistryInfo;
+
 pub use pcb_component_gen::sanitize_mpn_for_path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1375,7 +1377,7 @@ fn execute_search(
         None => SearchMode::WebComponents,
     };
 
-    refresh_search_index_if_stale(effective_mode, registry_index);
+    refresh_search_index_if_stale(effective_mode);
 
     match effective_mode {
         SearchMode::RegistryModules | SearchMode::RegistryComponents => {
@@ -1392,10 +1394,7 @@ fn execute_search(
     }
 }
 
-fn refresh_search_index_if_stale(
-    mode: crate::registry::tui::SearchMode,
-    _registry_index: Option<&Path>,
-) {
+fn refresh_search_index_if_stale(mode: crate::registry::tui::SearchMode) {
     use crate::registry::tui::SearchMode;
 
     match mode {
@@ -1435,7 +1434,7 @@ fn execute_registry_search_filtered(
 #[derive(Debug, Clone, Serialize)]
 struct RegistryModuleCliResult {
     pub kind: &'static str,
-    pub registry: crate::registry::download::RegistryInfo,
+    pub registry: RegistryInfo,
     pub url: String,
     pub name: String,
     pub version: String,
@@ -1450,7 +1449,7 @@ struct RegistryModuleCliResult {
 #[derive(Debug, Clone, Serialize)]
 struct RegistrySymbolCliResult {
     pub kind: &'static str,
-    pub registry: crate::registry::download::RegistryInfo,
+    pub registry: RegistryInfo,
     pub url: String,
     pub name: String,
     #[serde(rename = "moduleUrl")]
@@ -1477,7 +1476,7 @@ fn execute_registry_module_search(
     json: bool,
 ) -> Result<()> {
     use crate::registry::tui::display::RegistryModuleDisplay;
-    use crate::registry::tui::search::registry_scoring_key;
+    use crate::registry::tui::search::SearchScoringKey;
 
     let rrf = client.search_modules_rrf(query);
     let scoring_by_url = crate::registry::tui::search::build_scoring(
@@ -1522,7 +1521,10 @@ fn execute_registry_module_search(
                         .map(|dep| dep.url_with_version())
                         .collect(),
                     scoring: scoring_by_url
-                        .get(&registry_scoring_key(&module.registry.id, &module.url))
+                        .get(&SearchScoringKey::registry(
+                            &module.registry.id,
+                            &module.url,
+                        ))
                         .cloned(),
                 })
             })
@@ -1542,7 +1544,9 @@ fn execute_registry_module_search(
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
-        print_search_scoring(scoring_by_url.get(&registry_scoring_key(&hit.registry.id, &hit.url)));
+        print_search_scoring(
+            scoring_by_url.get(&SearchScoringKey::registry(&hit.registry.id, &hit.url)),
+        );
         println!();
     }
     Ok(())
@@ -1554,7 +1558,7 @@ fn execute_registry_symbol_search(
     json: bool,
 ) -> Result<()> {
     use crate::registry::tui::display::RegistrySymbolDisplay;
-    use crate::registry::tui::search::registry_scoring_key;
+    use crate::registry::tui::search::SearchScoringKey;
 
     let rrf = client.search_symbols_rrf(query);
     let scoring_by_url = crate::registry::tui::search::build_scoring(
@@ -1597,7 +1601,7 @@ fn execute_registry_symbol_search(
                     digikey: symbol.digikey,
                     availability: availability_map.get(&idx).cloned(),
                     scoring: scoring_by_url
-                        .get(&registry_scoring_key(&hit.registry.id, &hit.url))
+                        .get(&SearchScoringKey::registry(&hit.registry.id, &hit.url))
                         .cloned(),
                 })
             })
@@ -1617,7 +1621,9 @@ fn execute_registry_symbol_search(
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
-        print_search_scoring(scoring_by_url.get(&registry_scoring_key(&hit.registry.id, &hit.url)));
+        print_search_scoring(
+            scoring_by_url.get(&SearchScoringKey::registry(&hit.registry.id, &hit.url)),
+        );
         if let Some(pricing) = availability_map.get(&idx) {
             print_availability_summary(pricing);
         }
@@ -1648,6 +1654,7 @@ struct KicadSymbolCliResult {
 
 fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
     use crate::registry::tui::display::KicadSymbolDisplay;
+    use crate::registry::tui::search::SearchScoringKey;
 
     let client = crate::KicadSymbolsClient::open()?;
     let rrf = client.search_rrf(query);
@@ -1690,7 +1697,9 @@ fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
                 description: symbol.description().map(str::to_string),
                 datasheet_url: symbol.datasheet_url.clone(),
                 availability: availability_map.get(&idx).cloned(),
-                scoring: scoring_by_url.get(&symbol.clipboard_url()).cloned(),
+                scoring: scoring_by_url
+                    .get(&SearchScoringKey::url(symbol.clipboard_url()))
+                    .cloned(),
             })
             .collect();
         println!("{}", serde_json::to_string_pretty(&combined)?);
@@ -1721,7 +1730,7 @@ fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
         for line in display.to_cli_lines() {
             println!("{}", line);
         }
-        print_search_scoring(scoring_by_url.get(&symbol.clipboard_url()));
+        print_search_scoring(scoring_by_url.get(&SearchScoringKey::url(symbol.clipboard_url())));
         if let Some(pricing) = availability_map.get(&idx) {
             print_availability_summary(pricing);
         }

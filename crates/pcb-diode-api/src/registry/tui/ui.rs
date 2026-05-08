@@ -1225,7 +1225,7 @@ fn render_registry_module_details(
     append_search_scoring_for_key(
         &mut lines,
         app,
-        &super::search::registry_scoring_key(&module.registry.id, &module.url),
+        &super::search::SearchScoringKey::registry(&module.registry.id, &module.url),
         dim_style,
     );
 
@@ -1436,7 +1436,7 @@ fn render_registry_symbol_body_lines(
     append_search_scoring_for_key(
         &mut lines,
         app,
-        &super::search::registry_scoring_key(&symbol.registry.id, &symbol.url),
+        &super::search::SearchScoringKey::registry(&symbol.registry.id, &symbol.url),
         dim_style,
     );
 
@@ -1509,10 +1509,20 @@ fn append_parameters(
 
 /// Append search scoring section
 fn append_search_scoring_for_url(lines: &mut Vec<Line>, app: &App, url: &str, dim_style: Style) {
-    append_search_scoring_for_key(lines, app, url, dim_style);
+    append_search_scoring_for_key(
+        lines,
+        app,
+        &super::search::SearchScoringKey::url(url),
+        dim_style,
+    );
 }
 
-fn append_search_scoring_for_key(lines: &mut Vec<Line>, app: &App, key: &str, dim_style: Style) {
+fn append_search_scoring_for_key(
+    lines: &mut Vec<Line>,
+    app: &App,
+    key: &super::search::SearchScoringKey,
+    dim_style: Style,
+) {
     let scoring = app.results.scoring().get(key);
     let (trigram_len, word_len, docs_len, semantic_len, merged_len) = match &app.results {
         super::search::SearchResults::RegistryModules(results) => (

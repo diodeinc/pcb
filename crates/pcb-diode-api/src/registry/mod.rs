@@ -969,15 +969,9 @@ impl RegistrySearchClient {
     pub fn open_scope(scope: download::RegistrySearchScope, force: bool) -> Result<Self> {
         match scope {
             download::RegistrySearchScope::Registries(registries) => {
-                if !force {
-                    let scope = download::RegistrySearchScope::Registries(registries.clone());
-                    if scope.local_indexes_exist() {
-                        return Self::open_cached(&registries);
-                    }
-                }
                 Self::open_registries(registries, force)
             }
-            download::RegistrySearchScope::Index(file) => Self::open_index_files(vec![*file]),
+            download::RegistrySearchScope::IndexFiles(files) => Self::open_index_files(files),
         }
     }
 
@@ -1004,15 +998,9 @@ impl RegistrySearchClient {
     ) -> Result<Self> {
         match scope {
             download::RegistrySearchScope::Registries(registries) => {
-                if !force {
-                    let scope = download::RegistrySearchScope::Registries(registries.clone());
-                    if scope.local_indexes_exist() {
-                        return Self::open_cached(&registries);
-                    }
-                }
                 Self::open_registries_with_progress(registries, progress_tx, is_update, force)
             }
-            download::RegistrySearchScope::Index(file) => Self::open_index_files(vec![*file]),
+            download::RegistrySearchScope::IndexFiles(files) => Self::open_index_files(files),
         }
     }
 
@@ -1033,8 +1021,8 @@ impl RegistrySearchClient {
     pub fn open_cached_scope(scope: &download::RegistrySearchScope) -> Result<Self> {
         match scope {
             download::RegistrySearchScope::Registries(registries) => Self::open_cached(registries),
-            download::RegistrySearchScope::Index(file) => {
-                Self::open_index_files(vec![(**file).clone()])
+            download::RegistrySearchScope::IndexFiles(files) => {
+                Self::open_index_files(files.clone())
             }
         }
     }

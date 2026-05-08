@@ -1,6 +1,6 @@
 ---
 name: librarian
-description: Build or modify reusable registry content for board designers. Use when fulfilling a librarian request or when asked to add/fix a registry component, symbol, footprint, STEP model, datasheet, family selector, or datasheet-backed Zener reference circuit. Covers artifact import, symbol/footprint cleanup, package structure, sourceability, and validation.
+description: Use before creating or modifying reusable PCB registry content, including component packages, symbols, footprints, STEP models, datasheets, or reusable Zener modules. Also use when working inside a registry component package or changing KiCad/Zener files that define reusable parts. Covers search-before-authoring, datasheet-backed cleanup, package structure, sourcing checks, and validation.
 ---
 
 # Librarian

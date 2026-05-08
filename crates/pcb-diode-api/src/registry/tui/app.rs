@@ -1594,9 +1594,9 @@ fn compute_preflight(
 ) -> Result<Preflight> {
     if let Some(path) = registry_db_path_override {
         RegistryClient::open_path(&path)?;
-        let registry_scope = Some(RegistrySearchScope::Index(Box::new(local_registry_index(
+        let registry_scope = Some(RegistrySearchScope::IndexFiles(vec![local_registry_index(
             path.clone(),
-        ))));
+        )]));
 
         let mut available_modes = vec![SearchMode::RegistryModules, SearchMode::RegistryComponents];
         if KicadSymbolsClient::default_db_path()?.exists() {

@@ -68,6 +68,20 @@ impl RegistryInfo {
             updated_at: None,
         }
     }
+
+    fn cached(id: String, path: &Path) -> Self {
+        Self {
+            id: id.clone(),
+            workspace: "cached".to_string(),
+            name: id.clone(),
+            provider: "cached".to_string(),
+            owner: "cached".to_string(),
+            repo: id,
+            registry_url: path.display().to_string(),
+            default_branch: None,
+            updated_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,18 +99,20 @@ pub struct RegistryIndexFile {
 #[derive(Debug, Clone)]
 pub enum RegistrySearchScope {
     Registries(Vec<RegistryInfo>),
-    Index(Box<RegistryIndexFile>),
+    IndexFiles(Vec<RegistryIndexFile>),
 }
 
 impl RegistrySearchScope {
     pub fn updates_disabled(&self) -> bool {
-        matches!(self, Self::Index(_))
+        matches!(self, Self::IndexFiles(_))
     }
 
     pub fn index_paths(&self) -> Result<Vec<PathBuf>> {
         match self {
             Self::Registries(registries) => registries.iter().map(registry_db_path).collect(),
-            Self::Index(index) => Ok(vec![index.path.clone()]),
+            Self::IndexFiles(indexes) => {
+                Ok(indexes.iter().map(|index| index.path.clone()).collect())
+            }
         }
     }
 
@@ -253,13 +269,41 @@ pub fn resolve_registry_search_scope(
 
             Ok((!registries.is_empty()).then_some(RegistrySearchScope::Registries(registries)))
         }
-        Err(err) if selectors.is_empty() => {
+        Err(err) => {
             log::debug!("registry discovery unavailable: {err}");
-            cached_default_registry_index()
-                .map(|index| index.map(|index| RegistrySearchScope::Index(Box::new(index))))
+
+            let indexes = cached_registry_indexes()?;
+            let indexes = if selectors.is_empty() {
+                indexes
+            } else {
+                match resolve_cached_registry_indexes(indexes, selectors) {
+                    Ok(indexes) if !indexes.is_empty() => indexes,
+                    _ => return Err(err).context("Failed to fetch registries for registry scope"),
+                }
+            };
+
+            Ok((!indexes.is_empty()).then_some(RegistrySearchScope::IndexFiles(indexes)))
         }
-        Err(err) => Err(err).context("Failed to fetch registries for registry scope"),
     }
+}
+
+fn resolve_cached_registry_indexes(
+    indexes: Vec<RegistryIndexFile>,
+    selectors: &[String],
+) -> Result<Vec<RegistryIndexFile>> {
+    let registries = indexes
+        .iter()
+        .map(|index| index.registry.clone())
+        .collect::<Vec<_>>();
+    let selected_ids = resolve_registry_scope(registries, selectors)?
+        .into_iter()
+        .map(|registry| registry.id)
+        .collect::<HashSet<_>>();
+
+    Ok(indexes
+        .into_iter()
+        .filter(|index| selected_ids.contains(&index.registry.id))
+        .collect())
 }
 
 fn workspace_registry_prefix(workspace_root: &Path) -> Option<String> {
@@ -333,9 +377,11 @@ fn normalize_registry_selector(value: &str) -> String {
         value = strip_userinfo(value);
         value = strip_numeric_port_from_authority(value);
     } else if let Some(rest) = value.strip_prefix("https://") {
-        value = strip_numeric_port_from_authority(rest.to_string());
+        value = strip_userinfo(rest.to_string());
+        value = strip_numeric_port_from_authority(value);
     } else if let Some(rest) = value.strip_prefix("http://") {
-        value = strip_numeric_port_from_authority(rest.to_string());
+        value = strip_userinfo(rest.to_string());
+        value = strip_numeric_port_from_authority(value);
     } else if let Some(rest) = value.strip_prefix("git@") {
         value = rest.replacen(':', "/", 1);
     } else {
@@ -415,6 +461,44 @@ pub fn cached_default_registry_index() -> Result<Option<RegistryIndexFile>> {
     }))
 }
 
+fn cached_registry_indexes() -> Result<Vec<RegistryIndexFile>> {
+    let mut indexes = Vec::new();
+    if let Some(index) = cached_default_registry_index()? {
+        indexes.push(index);
+    }
+
+    let home = dirs::home_dir().context("Could not determine home directory")?;
+    let index_dir = home.join(".pcb").join("registry").join("indexes");
+    let Ok(entries) = std::fs::read_dir(index_dir) else {
+        return Ok(indexes);
+    };
+
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let path = entry.path().join("packages.db");
+        if !path.exists() {
+            continue;
+        }
+        let Some(id) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        indexes.push(RegistryIndexFile {
+            registry: RegistryInfo::cached(id, &path),
+            path,
+            downloaded: false,
+        });
+    }
+
+    indexes.sort_by_key(|index| index.registry.display_name());
+    Ok(indexes)
+}
+
 /// Fetch registry index metadata without downloading the file.
 pub fn fetch_registry_index_metadata(registry_id: &str) -> Result<RegistryIndexMetadata> {
     let token = crate::auth::get_valid_token().context("Auth failed")?;
@@ -460,12 +544,28 @@ pub fn registry_db_path(registry: &RegistryInfo) -> Result<PathBuf> {
 
 pub fn ensure_registry_index(registry: &RegistryInfo, force: bool) -> Result<RegistryIndexFile> {
     let path = registry_db_path(registry)?;
-    let metadata = fetch_registry_index_metadata(&registry.id).with_context(|| {
-        format!(
-            "Failed to fetch index metadata for {}",
-            registry.display_name()
-        )
-    })?;
+    let metadata = match fetch_registry_index_metadata(&registry.id) {
+        Ok(metadata) => metadata,
+        Err(err) if !force && path.exists() => {
+            log::debug!(
+                "using cached registry index for {} after metadata fetch failed: {err}",
+                registry.display_name()
+            );
+            return Ok(RegistryIndexFile {
+                registry: registry.clone(),
+                path,
+                downloaded: false,
+            });
+        }
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to fetch index metadata for {}",
+                    registry.display_name()
+                )
+            });
+        }
+    };
     let remote_version = metadata.version_token()?;
     let local_version = load_local_version(&path);
 
@@ -653,6 +753,34 @@ mod tests {
     }
 
     #[test]
+    fn cached_registry_scope_matches_selectors() {
+        let indexes = vec![
+            RegistryIndexFile {
+                registry: registry("public", "diode", "registry", DEFAULT_REGISTRY_URL),
+                path: "public.db".into(),
+                downloaded: false,
+            },
+            RegistryIndexFile {
+                registry: registry(
+                    "workspace",
+                    "revel",
+                    "registry",
+                    "code.diode.computer/revel/registry",
+                ),
+                path: "workspace.db".into(),
+                downloaded: false,
+            },
+        ];
+
+        let selected =
+            resolve_cached_registry_indexes(indexes, &["github.com/diodeinc/registry".into()])
+                .unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].registry.id, "public");
+    }
+
+    #[test]
     fn default_scope_selects_public_and_workspace_registries() {
         let registries = vec![
             registry(
@@ -698,6 +826,18 @@ mod tests {
         assert_eq!(
             registry_workspace_prefix_from_url("git@code.diode.computer:weave/WW0001.git").unwrap(),
             "code.diode.computer/weave"
+        );
+        assert_eq!(
+            registry_workspace_prefix_from_url("https://user@code.diode.computer/revel/WW0001.git")
+                .unwrap(),
+            "code.diode.computer/revel"
+        );
+        assert_eq!(
+            registry_workspace_prefix_from_url(
+                "https://token:x-oauth-basic@code.diode.computer:23231/revel/WW0001.git"
+            )
+            .unwrap(),
+            "code.diode.computer/revel"
         );
     }
 

@@ -87,10 +87,25 @@ def encode_R_notation(value):
     return str(i) + "R" + str(f)
 
 
+def encode_4digit_R_notation(value):
+    """Four-character R notation for 4-digit resistor codes (e.g., 3.32Ω → 3R32)."""
+    i = int(value)
+    if i == 0:
+        f = int(value * 1000 + 0.5)
+        return "R" + (("0" * (3 - len(str(f)))) + str(f))
+
+    if i < 10:
+        f = int((value - i) * 100 + 0.5)
+        return str(i) + "R" + (("0" if f < 10 else "") + str(f))
+
+    f = int((value - i) * 10 + 0.5)
+    return str(i) + "R" + str(f)
+
+
 def iec60062_4digit(value):
     """IEC 60062 4-digit code: 3 significant digits + multiplier (e.g., 10kΩ → 1002)."""
     if value < 100.0:
-        return encode_R_notation(value)
+        return encode_4digit_R_notation(value)
 
     mult = 0
     norm = value

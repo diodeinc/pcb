@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added scoped multi-registry search for registry-backed `pcb search`.
 
+### Fixed
+
+- Fixed 4-digit resistor R-notation for generic BOM matching of sub-10Ω E96 values.
+
 ## [0.3.79] - 2026-05-08
 
 ### Added
