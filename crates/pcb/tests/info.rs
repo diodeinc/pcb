@@ -129,56 +129,22 @@ fn test_pcb_info_json_includes_external_dependency_closure() {
         .tag("Leaf/v1.0.0", true)
         .push_mirror();
 
-    let output = sandbox
-        .write(
-            "pcb.toml",
-            r#"
+    sandbox.write(
+        "pcb.toml",
+        r#"
 [workspace]
 pcb-version = "0.3"
 
 [dependencies]
 "github.com/vendor/components/Thing" = "1.0.0"
 "#,
-        )
-        .run("pcb", ["info", "-f", "json"])
-        .stdout_capture()
-        .stderr_capture()
-        .run()
-        .expect("run pcb info");
-
-    assert!(output.status.success(), "pcb info failed: {output:?}");
-
-    let json: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("parse pcb info JSON");
-    let deps = json["external_dependencies"]
-        .as_object()
-        .expect("external_dependencies is an object");
-
-    let thing = &deps["github.com/vendor/components/Thing@1.0.0"];
-    assert_eq!(thing["module_path"], "github.com/vendor/components/Thing");
-    assert_eq!(thing["version"], "1.0.0");
-    assert_eq!(thing["source"], "cache");
-    assert_eq!(thing["entrypoints"], serde_json::json!(["Thing.zen"]));
-
-    let leaf = &deps["github.com/vendor/components/Leaf@1.0.0"];
-    assert_eq!(leaf["module_path"], "github.com/vendor/components/Leaf");
-    assert_eq!(leaf["version"], "1.0.0");
-    assert_eq!(leaf["source"], "cache");
-    assert_eq!(leaf["entrypoints"], serde_json::json!(["Leaf.zen"]));
-
-    let human = sandbox.snapshot_run("pcb", ["info"]);
-    assert!(
-        human.contains("External dependencies (2)"),
-        "human output should include external dependency count:\n{human}"
     );
-    assert!(
-        human.contains("github.com/vendor/components/Thing"),
-        "human output should include direct external dependency:\n{human}"
-    );
-    assert!(
-        human.contains("github.com/vendor/components/Leaf"),
-        "human output should include transitive external dependency:\n{human}"
-    );
+
+    let json_output = sandbox.snapshot_run("pcb", ["info", "-f", "json"]);
+    assert_snapshot!("json_with_external_dependencies", json_output);
+
+    let human_output = sandbox.snapshot_run("pcb", ["info"]);
+    assert_snapshot!("human_with_external_dependencies", human_output);
 }
 
 #[test]
