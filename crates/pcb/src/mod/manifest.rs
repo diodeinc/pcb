@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use pcb_zen::cache_index::CacheIndex;
@@ -65,12 +66,12 @@ pub(crate) fn load_manifest_for_module_version(
         return Ok(loaded);
     }
 
-    let pcb_toml_path = if offline {
-        workspace
-            .workspace_cache_dir()
-            .join(module_path)
-            .join(version.to_string())
-            .join("pcb.toml")
+    let vendor_toml_path =
+        package_version_root(workspace.root.join("vendor"), module_path, version).join("pcb.toml");
+    let pcb_toml_path = if vendor_toml_path.exists() {
+        vendor_toml_path
+    } else if offline {
+        package_version_root(workspace.workspace_cache_dir(), module_path, version).join("pcb.toml")
     } else {
         pcb_zen::resolve::ensure_package_manifest_in_cache(module_path, version, index)
             .with_context(|| format!("Failed to materialize {}@{}", module_path, version))?
@@ -167,4 +168,49 @@ fn synthetic_kicad_manifest(
         indirect: BTreeMap::new(),
         parts: Vec::new(),
     }))
+}
+
+pub(crate) fn package_version_root(
+    root: impl AsRef<Path>,
+    module_path: &str,
+    version: &Version,
+) -> PathBuf {
+    root.as_ref().join(module_path).join(version.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use pcb_zen::WorkspaceInfo;
+
+    use super::*;
+
+    #[test]
+    fn offline_manifest_load_prefers_vendor_over_workspace_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let module_path = "github.com/example/vendor-only-package";
+        let version = Version::new(0, 2, 1);
+        let vendor_toml_path =
+            package_version_root(temp.path().join("vendor"), module_path, &version)
+                .join("pcb.toml");
+        std::fs::create_dir_all(vendor_toml_path.parent().unwrap()).unwrap();
+        std::fs::write(&vendor_toml_path, "").unwrap();
+
+        let workspace = WorkspaceInfo {
+            root: temp.path().to_path_buf(),
+            cache_dir: temp.path().join(".pcb/cache"),
+            config: None,
+            packages: BTreeMap::new(),
+            lockfile: None,
+            errors: Vec::new(),
+        };
+
+        let index = CacheIndex::open().unwrap();
+        let loaded =
+            load_manifest_for_module_version(&workspace, &index, module_path, &version, true)
+                .expect("offline load should use vendored manifest");
+
+        assert!(loaded.direct.is_empty());
+    }
 }
