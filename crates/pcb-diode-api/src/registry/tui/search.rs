@@ -43,24 +43,7 @@ pub struct SearchScoring {
     pub semantic_rank: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SearchScoringKey {
-    Url(String),
-    Registry { registry_id: String, url: String },
-}
-
-impl SearchScoringKey {
-    pub fn url(url: impl Into<String>) -> Self {
-        Self::Url(url.into())
-    }
-
-    pub fn registry(registry_id: impl Into<String>, url: impl Into<String>) -> Self {
-        Self::Registry {
-            registry_id: registry_id.into(),
-            url: url.into(),
-        }
-    }
-}
+pub type SearchScoringKey = super::super::SearchResultKey;
 
 /// Results from the worker thread
 #[derive(Debug, Clone, Default)]

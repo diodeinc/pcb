@@ -1358,21 +1358,43 @@ fn execute_search(
         return Ok(());
     }
 
-    let registry_scope =
-        if registry_index.is_none() && mode.map(|mode| mode.requires_registry()).unwrap_or(true) {
-            crate::registry::download::resolve_registry_search_scope(
-                registry_selectors,
-                Some(workspace_root),
-            )?
+    let registry_requested = mode.map(|mode| mode.requires_registry()).unwrap_or(true);
+    let registry_scope = if registry_index.is_none() && registry_requested {
+        crate::registry::download::resolve_registry_search_scope(
+            registry_selectors,
+            Some(workspace_root),
+        )?
+    } else {
+        None
+    };
+    let allow_registry_fallback =
+        mode.is_none() && registry_index.is_none() && registry_selectors.is_empty();
+    let registry_client = if registry_requested {
+        if let Some(path) = registry_index {
+            Some(crate::RegistrySearchClient::single(
+                crate::RegistryClient::open_path(path)?,
+            ))
+        } else if let Some(scope) = registry_scope.clone() {
+            match crate::RegistrySearchClient::open_scope(scope, false) {
+                Ok(client) => Some(client),
+                Err(err) if allow_registry_fallback => {
+                    log::debug!("registry search unavailable, falling back: {err}");
+                    None
+                }
+                Err(err) => return Err(err),
+            }
         } else {
             None
-        };
+        }
+    } else {
+        None
+    };
 
     // Determine effective mode
     let effective_mode = match mode {
         Some(mode) => mode,
         None if registry_index.is_some() => SearchMode::RegistryModules,
-        None if registry_scope.is_some() => SearchMode::RegistryModules,
+        None if registry_client.is_some() => SearchMode::RegistryModules,
         None if crate::KicadSymbolsClient::open().is_ok() => SearchMode::KicadSymbols,
         None => SearchMode::WebComponents,
     };
@@ -1381,13 +1403,10 @@ fn execute_search(
 
     match effective_mode {
         SearchMode::RegistryModules | SearchMode::RegistryComponents => {
-            execute_registry_search_filtered(
-                query,
-                json,
-                effective_mode,
-                registry_index,
-                registry_scope,
-            )
+            let Some(client) = registry_client else {
+                anyhow::bail!("No registry index available");
+            };
+            execute_registry_search_filtered(query, json, effective_mode, &client)
         }
         SearchMode::KicadSymbols => execute_kicad_symbols_search(query, json),
         SearchMode::WebComponents => execute_web_search(query, json),
@@ -1410,22 +1429,14 @@ fn execute_registry_search_filtered(
     query: &str,
     json: bool,
     mode: crate::registry::tui::SearchMode,
-    registry_index: Option<&Path>,
-    registry_scope: Option<crate::registry::download::RegistrySearchScope>,
+    client: &crate::RegistrySearchClient,
 ) -> Result<()> {
-    let client = if let Some(path) = registry_index {
-        crate::RegistrySearchClient::single(crate::RegistryClient::open_path(path)?)
-    } else if let Some(scope) = registry_scope {
-        crate::RegistrySearchClient::open_scope(scope, false)?
-    } else {
-        anyhow::bail!("No registry index available");
-    };
     match mode {
         crate::registry::tui::SearchMode::RegistryModules => {
-            execute_registry_module_search(&client, query, json)
+            execute_registry_module_search(client, query, json)
         }
         crate::registry::tui::SearchMode::RegistryComponents => {
-            execute_registry_symbol_search(&client, query, json)
+            execute_registry_symbol_search(client, query, json)
         }
         _ => unreachable!(),
     }

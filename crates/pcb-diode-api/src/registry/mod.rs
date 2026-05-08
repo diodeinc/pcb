@@ -208,8 +208,30 @@ pub struct RrfSearchOutput {
 trait UrlKeyedHit: Clone {
     fn url(&self) -> &str;
 
-    fn result_key(&self) -> String {
-        self.url().to_string()
+    fn result_key(&self) -> SearchResultKey {
+        SearchResultKey::url(self.url())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SearchResultKey {
+    registry_id: Option<String>,
+    url: String,
+}
+
+impl SearchResultKey {
+    pub fn url(url: impl Into<String>) -> Self {
+        Self {
+            registry_id: None,
+            url: url.into(),
+        }
+    }
+
+    pub fn registry(registry_id: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            registry_id: Some(registry_id.into()),
+            url: url.into(),
+        }
     }
 }
 
@@ -224,8 +246,8 @@ impl UrlKeyedHit for RegistryModuleHit {
         &self.url
     }
 
-    fn result_key(&self) -> String {
-        format!("{}\0{}", self.registry.id, self.url)
+    fn result_key(&self) -> SearchResultKey {
+        SearchResultKey::registry(self.registry.id.as_str(), self.url.as_str())
     }
 }
 
@@ -234,8 +256,8 @@ impl UrlKeyedHit for RegistrySymbolHit {
         &self.url
     }
 
-    fn result_key(&self) -> String {
-        format!("{}\0{}", self.registry.id, self.url)
+    fn result_key(&self) -> SearchResultKey {
+        SearchResultKey::registry(self.registry.id.as_str(), self.url.as_str())
     }
 }
 
@@ -270,14 +292,14 @@ fn merge_rrf_by_url<T>(lists: &[&[T]], limit: usize) -> Vec<T>
 where
     T: UrlKeyedHit,
 {
-    let mut rrf_scores: HashMap<String, f64> = HashMap::new();
+    let mut rrf_scores: HashMap<SearchResultKey, f64> = HashMap::new();
     for hits in lists {
         for (idx, hit) in hits.iter().enumerate() {
             *rrf_scores.entry(hit.result_key()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
         }
     }
 
-    let mut all_hits: HashMap<String, T> = HashMap::new();
+    let mut all_hits: HashMap<SearchResultKey, T> = HashMap::new();
     for hits in lists {
         for hit in hits.iter() {
             all_hits
@@ -288,11 +310,29 @@ where
 
     let mut scored: Vec<_> = all_hits
         .into_iter()
-        .map(|(url, hit)| (rrf_scores.get(&url).copied().unwrap_or(0.0), hit))
+        .map(|(key, hit)| (rrf_scores.get(&key).copied().unwrap_or(0.0), hit))
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
     scored.into_iter().take(limit).map(|(_, hit)| hit).collect()
+}
+
+fn merge_rrf_by_ranked_lists<T>(channels: &[&[Vec<T>]], limit: usize) -> Vec<T>
+where
+    T: UrlKeyedHit,
+{
+    let lists = channels
+        .iter()
+        .flat_map(|channel| channel.iter().map(Vec::as_slice))
+        .collect::<Vec<_>>();
+    merge_rrf_by_url(&lists, limit)
+}
+
+fn merge_all_rrf_by_ranked_lists<T>(channels: &[&[Vec<T>]]) -> Vec<T>
+where
+    T: UrlKeyedHit,
+{
+    merge_rrf_by_ranked_lists(channels, usize::MAX)
 }
 
 pub(crate) fn merge_rrf_hit_lists(lists: &[&[SearchHit]], limit: usize) -> Vec<SearchHit> {
@@ -1066,16 +1106,35 @@ impl RegistrySearchClient {
             .map(|client| client.search_modules_rrf(query))
             .collect::<Vec<_>>();
 
-        let trigram = interleave_ranked(outputs.iter().map(|out| out.trigram.clone()).collect());
-        let word = interleave_ranked(outputs.iter().map(|out| out.word.clone()).collect());
-        let docs_full_text = interleave_ranked(
-            outputs
-                .iter()
-                .map(|out| out.docs_full_text.clone())
-                .collect(),
+        let trigram_lists = outputs
+            .iter()
+            .map(|out| out.trigram.clone())
+            .collect::<Vec<_>>();
+        let word_lists = outputs
+            .iter()
+            .map(|out| out.word.clone())
+            .collect::<Vec<_>>();
+        let docs_full_text_lists = outputs
+            .iter()
+            .map(|out| out.docs_full_text.clone())
+            .collect::<Vec<_>>();
+        let semantic_lists = outputs
+            .iter()
+            .map(|out| out.semantic.clone())
+            .collect::<Vec<_>>();
+        let merged = merge_rrf_by_ranked_lists(
+            &[
+                &trigram_lists,
+                &word_lists,
+                &docs_full_text_lists,
+                &semantic_lists,
+            ],
+            MERGED_LIMIT,
         );
-        let semantic = interleave_ranked(outputs.iter().map(|out| out.semantic.clone()).collect());
-        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
+        let trigram = merge_all_rrf_by_ranked_lists(&[&trigram_lists]);
+        let word = merge_all_rrf_by_ranked_lists(&[&word_lists]);
+        let docs_full_text = merge_all_rrf_by_ranked_lists(&[&docs_full_text_lists]);
+        let semantic = merge_all_rrf_by_ranked_lists(&[&semantic_lists]);
 
         ModuleRrfSearchOutput {
             trigram,
@@ -1094,16 +1153,35 @@ impl RegistrySearchClient {
             .map(|client| client.search_symbols_rrf(query))
             .collect::<Vec<_>>();
 
-        let trigram = interleave_ranked(outputs.iter().map(|out| out.trigram.clone()).collect());
-        let word = interleave_ranked(outputs.iter().map(|out| out.word.clone()).collect());
-        let docs_full_text = interleave_ranked(
-            outputs
-                .iter()
-                .map(|out| out.docs_full_text.clone())
-                .collect(),
+        let trigram_lists = outputs
+            .iter()
+            .map(|out| out.trigram.clone())
+            .collect::<Vec<_>>();
+        let word_lists = outputs
+            .iter()
+            .map(|out| out.word.clone())
+            .collect::<Vec<_>>();
+        let docs_full_text_lists = outputs
+            .iter()
+            .map(|out| out.docs_full_text.clone())
+            .collect::<Vec<_>>();
+        let semantic_lists = outputs
+            .iter()
+            .map(|out| out.semantic.clone())
+            .collect::<Vec<_>>();
+        let merged = merge_rrf_by_ranked_lists(
+            &[
+                &trigram_lists,
+                &word_lists,
+                &docs_full_text_lists,
+                &semantic_lists,
+            ],
+            MERGED_LIMIT,
         );
-        let semantic = interleave_ranked(outputs.iter().map(|out| out.semantic.clone()).collect());
-        let merged = merge_rrf_by_url(&[&trigram, &word, &docs_full_text, &semantic], MERGED_LIMIT);
+        let trigram = merge_all_rrf_by_ranked_lists(&[&trigram_lists]);
+        let word = merge_all_rrf_by_ranked_lists(&[&word_lists]);
+        let docs_full_text = merge_all_rrf_by_ranked_lists(&[&docs_full_text_lists]);
+        let semantic = merge_all_rrf_by_ranked_lists(&[&semantic_lists]);
 
         SymbolRrfSearchOutput {
             trigram,
@@ -1173,19 +1251,6 @@ impl RegistrySearchClient {
             .iter()
             .find(|client| client.registry().id == registry_id)
     }
-}
-
-fn interleave_ranked<T: Clone>(lists: Vec<Vec<T>>) -> Vec<T> {
-    let max_len = lists.iter().map(Vec::len).max().unwrap_or(0);
-    let mut merged = Vec::new();
-    for idx in 0..max_len {
-        for list in &lists {
-            if let Some(hit) = list.get(idx) {
-                merged.push(hit.clone());
-            }
-        }
-    }
-    merged
 }
 
 fn map_module_hit(

@@ -6,7 +6,9 @@ use crate::download_support::{
     save_local_version as save_shared_local_version, write_decoded_index,
 };
 use anyhow::{Context, Result};
+use pcb_zen_core::config::PcbToml;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -70,6 +72,8 @@ impl RegistryInfo {
     }
 
     fn cached(id: String, path: &Path) -> Self {
+        let registry_url =
+            infer_cached_registry_url(path).unwrap_or_else(|| path.display().to_string());
         Self {
             id: id.clone(),
             workspace: "cached".to_string(),
@@ -77,7 +81,7 @@ impl RegistryInfo {
             provider: "cached".to_string(),
             owner: "cached".to_string(),
             repo: id,
-            registry_url: path.display().to_string(),
+            registry_url,
             default_branch: None,
             updated_at: None,
         }
@@ -273,49 +277,38 @@ pub fn resolve_registry_search_scope(
             log::debug!("registry discovery unavailable: {err}");
 
             let indexes = cached_registry_indexes()?;
-            let indexes = if selectors.is_empty() {
-                indexes
+            let registries = indexes
+                .iter()
+                .map(|index| index.registry.clone())
+                .collect::<Vec<_>>();
+            let registries = if selectors.is_empty() {
+                default_registry_scope(registries, workspace_root)
             } else {
-                match resolve_cached_registry_indexes(indexes, selectors) {
-                    Ok(indexes) if !indexes.is_empty() => indexes,
+                match resolve_registry_scope(registries, selectors) {
+                    Ok(registries) if !registries.is_empty() => registries,
                     _ => return Err(err).context("Failed to fetch registries for registry scope"),
                 }
             };
+            let selected_ids = registries
+                .into_iter()
+                .map(|registry| registry.id)
+                .collect::<HashSet<_>>();
+            let indexes = indexes
+                .into_iter()
+                .filter(|index| selected_ids.contains(&index.registry.id))
+                .collect::<Vec<_>>();
 
             Ok((!indexes.is_empty()).then_some(RegistrySearchScope::IndexFiles(indexes)))
         }
     }
 }
 
-fn resolve_cached_registry_indexes(
-    indexes: Vec<RegistryIndexFile>,
-    selectors: &[String],
-) -> Result<Vec<RegistryIndexFile>> {
-    let registries = indexes
-        .iter()
-        .map(|index| index.registry.clone())
-        .collect::<Vec<_>>();
-    let selected_ids = resolve_registry_scope(registries, selectors)?
-        .into_iter()
-        .map(|registry| registry.id)
-        .collect::<HashSet<_>>();
-
-    Ok(indexes
-        .into_iter()
-        .filter(|index| selected_ids.contains(&index.registry.id))
-        .collect())
-}
-
 fn workspace_registry_prefix(workspace_root: &Path) -> Option<String> {
-    let repo_root = pcb_zen::git::get_repo_root(workspace_root).ok()?;
-    let repo_url = pcb_zen::git::detect_repository_url(&repo_root)
-        .ok()
-        .or_else(|| {
-            pcb_zen::git::get_remote_url(&repo_root)
-                .ok()
-                .map(|url| normalize_registry_selector(&url))
-        })?;
-    registry_workspace_prefix_from_url(&repo_url)
+    let repository = PcbToml::from_path(&workspace_root.join("pcb.toml"))
+        .ok()?
+        .workspace?
+        .repository?;
+    registry_workspace_prefix_from_url(&repository)
 }
 
 fn registry_workspace_prefix_from_url(url: &str) -> Option<String> {
@@ -496,7 +489,35 @@ fn cached_registry_indexes() -> Result<Vec<RegistryIndexFile>> {
     }
 
     indexes.sort_by_key(|index| index.registry.display_name());
+    let mut seen_urls = HashSet::new();
+    indexes.retain(|index| {
+        seen_urls.insert(normalize_registry_selector(&index.registry.registry_url))
+    });
     Ok(indexes)
+}
+
+fn infer_cached_registry_url(path: &Path) -> Option<String> {
+    let conn = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let url = conn
+        .query_row("SELECT url FROM modules ORDER BY id LIMIT 1", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .ok()?;
+    registry_url_from_package_url(&url)
+}
+
+fn registry_url_from_package_url(url: &str) -> Option<String> {
+    let normalized = normalize_registry_selector(url);
+    for marker in ["/components/", "/modules/"] {
+        if let Some((registry_url, _)) = normalized.split_once(marker) {
+            return Some(registry_url.to_string());
+        }
+    }
+    None
 }
 
 /// Fetch registry index metadata without downloading the file.
@@ -538,8 +559,21 @@ pub fn registry_db_path(registry: &RegistryInfo) -> Result<PathBuf> {
         .join(".pcb")
         .join("registry")
         .join("indexes")
-        .join(&registry.id)
+        .join(registry_cache_dir_name(&registry.id))
         .join("packages.db"))
+}
+
+fn registry_cache_dir_name(registry_id: &str) -> String {
+    if !registry_id.is_empty()
+        && registry_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return registry_id.to_string();
+    }
+
+    let hash = hex::encode(Sha256::digest(registry_id.as_bytes()));
+    format!("registry-{}", &hash[..16])
 }
 
 pub fn ensure_registry_index(registry: &RegistryInfo, force: bool) -> Result<RegistryIndexFile> {
@@ -579,12 +613,23 @@ pub fn ensure_registry_index(registry: &RegistryInfo, force: bool) -> Result<Reg
 
     let (progress_tx, progress_rx) = std::sync::mpsc::channel();
     let _ = progress_rx;
-    download_registry_index_with_progress(&path, &progress_tx, force, &metadata)?;
+    let downloaded =
+        match download_registry_index_with_progress(&path, &progress_tx, force, &metadata) {
+            Ok(()) => true,
+            Err(err) if !force && path.exists() => {
+                log::debug!(
+                    "using cached registry index for {} after download failed: {err}",
+                    registry.display_name()
+                );
+                false
+            }
+            Err(err) => return Err(err),
+        };
 
     Ok(RegistryIndexFile {
         registry: registry.clone(),
         path,
-        downloaded: true,
+        downloaded,
     })
 }
 
@@ -630,23 +675,27 @@ pub fn ensure_registry_indexes_with_progress(
     is_update: bool,
     force: bool,
 ) -> Result<Vec<RegistryIndexFile>> {
-    let _ = progress_tx.send(DownloadProgress {
-        source: DownloadSource::Registry,
-        pct: None,
-        done: false,
-        error: None,
-        is_update,
-    });
+    if !is_update || force {
+        let _ = progress_tx.send(DownloadProgress {
+            source: DownloadSource::Registry,
+            pct: None,
+            done: false,
+            error: None,
+            is_update,
+        });
+    }
 
     match ensure_registry_indexes(registries, force) {
         Ok(files) => {
-            let _ = progress_tx.send(DownloadProgress {
-                source: DownloadSource::Registry,
-                pct: Some(100),
-                done: true,
-                error: None,
-                is_update,
-            });
+            if !is_update || files.iter().any(|file| file.downloaded) {
+                let _ = progress_tx.send(DownloadProgress {
+                    source: DownloadSource::Registry,
+                    pct: Some(100),
+                    done: true,
+                    error: None,
+                    is_update,
+                });
+            }
             Ok(files)
         }
         Err(err) => {
@@ -753,31 +802,31 @@ mod tests {
     }
 
     #[test]
-    fn cached_registry_scope_matches_selectors() {
-        let indexes = vec![
-            RegistryIndexFile {
-                registry: registry("public", "diode", "registry", DEFAULT_REGISTRY_URL),
-                path: "public.db".into(),
-                downloaded: false,
-            },
-            RegistryIndexFile {
-                registry: registry(
-                    "workspace",
-                    "revel",
-                    "registry",
-                    "code.diode.computer/revel/registry",
-                ),
-                path: "workspace.db".into(),
-                downloaded: false,
-            },
-        ];
+    fn registry_url_is_inferred_from_cached_package_url() {
+        assert_eq!(
+            registry_url_from_package_url(
+                "code.diode.computer/revel/registry/components/Bosch/BMI270"
+            )
+            .as_deref(),
+            Some("code.diode.computer/revel/registry")
+        );
+        assert_eq!(
+            registry_url_from_package_url("github.com/diodeinc/registry/modules/foo").as_deref(),
+            Some("github.com/diodeinc/registry")
+        );
+    }
 
-        let selected =
-            resolve_cached_registry_indexes(indexes, &["github.com/diodeinc/registry".into()])
-                .unwrap();
+    #[test]
+    fn registry_cache_dir_preserves_safe_ids_and_hashes_unsafe_ids() {
+        assert_eq!(
+            registry_cache_dir_name("1f9c50cb-f370-4b98-a994-ee051919905d"),
+            "1f9c50cb-f370-4b98-a994-ee051919905d"
+        );
 
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].registry.id, "public");
+        let unsafe_name = registry_cache_dir_name("../outside");
+        assert!(unsafe_name.starts_with("registry-"));
+        assert!(!unsafe_name.contains('/'));
+        assert!(!unsafe_name.contains(".."));
     }
 
     #[test]
@@ -798,7 +847,7 @@ mod tests {
             registry("other", "other", "parts", "code.diode.computer/other/parts"),
         ];
         let workspace_prefix =
-            registry_workspace_prefix_from_url("git@code.diode.computer:weave/WW0001.git").unwrap();
+            registry_workspace_prefix_from_url("code.diode.computer/weave").unwrap();
         let selected = default_registry_scope_for_prefix(registries, Some(&workspace_prefix));
 
         let ids = selected
@@ -806,6 +855,24 @@ mod tests {
             .map(|registry| registry.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["public", "workspace"]);
+    }
+
+    #[test]
+    fn workspace_prefix_uses_workspace_repository() {
+        let tempdir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tempdir.path().join("pcb.toml"),
+            r#"
+[workspace]
+repository = "code.diode.computer/wildwestsystems"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            workspace_registry_prefix(tempdir.path()).as_deref(),
+            Some("code.diode.computer/wildwestsystems")
+        );
     }
 
     #[test]
