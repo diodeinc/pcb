@@ -968,7 +968,10 @@ impl ResolutionResult {
     /// are discovered from `package_resolutions` values (already resolved by the
     /// resolver through patches → vendor → cache).
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
-        self.package_roots.as_ref().clone()
+        self.package_roots
+            .iter()
+            .map(|(coord, root)| (coord.clone(), self.workspace_cache_path(root)))
+            .collect()
     }
 
     pub(crate) fn package_roots_ref(&self) -> &BTreeMap<String, PathBuf> {
