@@ -19,9 +19,7 @@ Exit Code: 0
   },
   "packages": {
     "boards/discovered": {
-      "module_path": "boards/discovered",
       "rel_path": "boards/discovered",
-      "source": "workspace",
       "config": {
         "board": {
           "name": "DiscoveredBoard",

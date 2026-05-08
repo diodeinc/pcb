@@ -44,10 +44,10 @@ struct InfoJson {
 
 #[derive(Debug, Serialize)]
 struct PackageMetadata {
-    module_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
     rel_path: PathBuf,
+    #[serde(skip)]
     source: PackageSource,
     #[serde(default, skip_serializing_if = "is_default")]
     config: PcbToml,
@@ -92,7 +92,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
 
     match args.format {
         OutputFormat::Human => {
-            let external_dependencies = external_dependencies(&workspace_info, &resolution)?;
+            let external_dependencies = external_dependencies(&workspace_info, &resolution, false)?;
             print_human_readable(&workspace_info, &external_dependencies);
         }
         OutputFormat::Json => {
@@ -108,26 +108,20 @@ fn info_json(ws: &WorkspaceInfo, resolution: &ResolutionResult) -> Result<InfoJs
     let packages = ws
         .packages
         .iter()
-        .map(|(module_path, pkg)| {
-            (
-                module_path.clone(),
-                metadata_for_workspace_package(module_path, pkg),
-            )
-        })
+        .map(|(module_path, pkg)| (module_path.clone(), metadata_for_workspace_package(pkg)))
         .collect();
 
     Ok(InfoJson {
         root: ws.root.clone(),
         config: ws.config.clone(),
         packages,
-        external_dependencies: external_dependencies(ws, resolution)?,
+        external_dependencies: external_dependencies(ws, resolution, true)?,
         errors: ws.errors.clone(),
     })
 }
 
-fn metadata_for_workspace_package(module_path: &str, pkg: &MemberPackage) -> PackageMetadata {
+fn metadata_for_workspace_package(pkg: &MemberPackage) -> PackageMetadata {
     PackageMetadata {
-        module_path: module_path.to_string(),
         version: pkg.version.clone(),
         rel_path: pkg.rel_path.clone(),
         source: PackageSource::Workspace,
@@ -145,6 +139,7 @@ fn metadata_for_workspace_package(module_path: &str, pkg: &MemberPackage) -> Pac
 fn external_dependencies(
     ws: &WorkspaceInfo,
     resolution: &ResolutionResult,
+    include_file_details: bool,
 ) -> Result<BTreeMap<String, PackageMetadata>> {
     let mut deps = BTreeMap::new();
     let package_roots = resolution.package_roots();
@@ -162,15 +157,19 @@ fn external_dependencies(
             .lockfile
             .as_ref()
             .and_then(|lockfile| lockfile.get(module_path, version));
-        let config = PcbToml::from_path(&manifest_path).unwrap_or_default();
-        let (entrypoints, symbol_files) = discover_package_files(&root)?;
+        let (config, entrypoints, symbol_files) = if include_file_details {
+            let config = PcbToml::from_path(&manifest_path).unwrap_or_default();
+            let (entrypoints, symbol_files) = discover_package_files(&root)?;
+            (config, entrypoints, symbol_files)
+        } else {
+            (PcbToml::default(), Vec::new(), Vec::new())
+        };
         let module_path = module_path.to_string();
         let version = version.to_string();
 
         deps.insert(
             coord,
             PackageMetadata {
-                module_path: module_path.clone(),
                 version: Some(version),
                 rel_path: root
                     .strip_prefix(&ws.root)
@@ -382,8 +381,8 @@ fn print_human_readable(
             external_dependencies.len()
         );
 
-        for dep in external_dependencies.values() {
-            print_external_dependency_line(dep);
+        for (coord, dep) in external_dependencies {
+            print_external_dependency_line(coord, dep);
         }
     }
 }
@@ -443,14 +442,15 @@ fn print_package_line(pkg: &MemberPackage) {
     );
 }
 
-fn print_external_dependency_line(dep: &PackageMetadata) {
+fn print_external_dependency_line(coord: &str, dep: &PackageMetadata) {
+    let module_path = coord.rsplit_once('@').map_or(coord, |(path, _)| path);
     let version = dep.version.as_deref().unwrap_or("unknown");
     let source = dep.source.as_str();
     let path = dep.rel_path.to_string_lossy();
 
     println!(
         "  {} {} {} {}",
-        dep.module_path.bold(),
+        module_path.bold(),
         format!("(v{version})").green(),
         format!("[{source}]").dimmed(),
         path.dimmed()

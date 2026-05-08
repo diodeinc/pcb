@@ -19,9 +19,7 @@ Exit Code: 0
   },
   "packages": {
     "boards/main-board": {
-      "module_path": "boards/main-board",
       "rel_path": "boards/main-board",
-      "source": "workspace",
       "config": {
         "board": {
           "name": "MainBoard",
@@ -35,9 +33,7 @@ Exit Code: 0
       ]
     },
     "boards/test-board": {
-      "module_path": "boards/test-board",
       "rel_path": "boards/test-board",
-      "source": "workspace",
       "config": {
         "board": {
           "name": "TestBoard",
