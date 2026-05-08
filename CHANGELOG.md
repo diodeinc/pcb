@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb embed-step` is now shown in CLI help.
+
 ### Fixed
 
 - Fixed 4-digit resistor R-notation for generic BOM matching of sub-10Ω E96 values.

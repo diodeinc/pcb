@@ -146,7 +146,6 @@ enum Commands {
     Fork,
 
     /// Embed a STEP model into a KiCad footprint
-    #[command(hide = true)]
     EmbedStep(embed_step::EmbedStepArgs),
 
     /// Scan datasheets from local PDFs or URLs
