@@ -202,7 +202,7 @@ fn external_package_coord<'a>(
         || version.is_empty()
         || ws.packages.contains_key(module_path)
         || pcb_zen_core::is_stdlib_module_path(module_path)
-        || !root.file_name().is_some_and(|name| name == version)
+        || root.file_name().is_none_or(|name| name != version)
     {
         return None;
     }
