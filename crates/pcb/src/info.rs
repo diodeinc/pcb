@@ -92,7 +92,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
 
     match args.format {
         OutputFormat::Human => {
-            let external_dependencies = external_dependencies(&workspace_info, &resolution, false)?;
+            let external_dependencies = external_dependencies(&workspace_info, &resolution)?;
             print_human_readable(&workspace_info, &external_dependencies);
         }
         OutputFormat::Json => {
@@ -115,7 +115,7 @@ fn info_json(ws: &WorkspaceInfo, resolution: &ResolutionResult) -> Result<InfoJs
         root: ws.root.clone(),
         config: ws.config.clone(),
         packages,
-        external_dependencies: external_dependencies(ws, resolution, true)?,
+        external_dependencies: external_dependencies(ws, resolution)?,
         errors: ws.errors.clone(),
     })
 }
@@ -139,7 +139,6 @@ fn metadata_for_workspace_package(pkg: &MemberPackage) -> PackageMetadata {
 fn external_dependencies(
     ws: &WorkspaceInfo,
     resolution: &ResolutionResult,
-    include_file_details: bool,
 ) -> Result<BTreeMap<String, PackageMetadata>> {
     let mut deps = BTreeMap::new();
     let package_roots = resolution.package_roots();
@@ -157,13 +156,8 @@ fn external_dependencies(
             .lockfile
             .as_ref()
             .and_then(|lockfile| lockfile.get(module_path, version));
-        let (config, entrypoints, symbol_files) = if include_file_details {
-            let config = PcbToml::from_path(&manifest_path).unwrap_or_default();
-            let (entrypoints, symbol_files) = discover_package_files(&root)?;
-            (config, entrypoints, symbol_files)
-        } else {
-            (PcbToml::default(), Vec::new(), Vec::new())
-        };
+        let config = PcbToml::from_path(&manifest_path).unwrap_or_default();
+        let (entrypoints, symbol_files) = discover_package_files(&root)?;
         let module_path = module_path.to_string();
         let version = version.to_string();
 
