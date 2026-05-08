@@ -64,8 +64,8 @@
 			)
 		)
 		(symbol "Version_1_1"
-			(text "${PCB_NAME}\nREV ${PCB_VERSION}\nHASH ${PCB_GIT_HASH}"
-				(at 0 3.048 0)
+			(text "${PCB_VERSION}"
+				(at 0 3.175 0)
 				(effects
 					(font
 						(size 1.27 1.27)

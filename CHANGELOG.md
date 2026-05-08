@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added simpler version footprint and separate QR to stdlib.
+
 ## [0.3.78] - 2026-05-07
 
 ### Fixed
