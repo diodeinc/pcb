@@ -109,6 +109,146 @@ fn test_pcb_info_json_includes_preferred() {
 }
 
 #[test]
+fn test_pcb_info_json_includes_external_dependency_closure() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .git_fixture("https://github.com/vendor/components.git")
+        .write(
+            "Thing/pcb.toml",
+            r#"
+[dependencies]
+"github.com/vendor/components/Leaf" = "1.0.0"
+"#,
+        )
+        .write("Thing/Thing.zen", "P1 = io(Net)\n")
+        .write("Leaf/pcb.toml", "")
+        .write("Leaf/Leaf.zen", "P1 = io(Net)\n")
+        .commit("Add component packages")
+        .tag("Thing/v1.0.0", true)
+        .tag("Leaf/v1.0.0", true)
+        .push_mirror();
+
+    let output = sandbox
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/vendor/components/Thing" = "1.0.0"
+"#,
+        )
+        .run("pcb", ["info", "-f", "json"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("run pcb info");
+
+    assert!(output.status.success(), "pcb info failed: {output:?}");
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse pcb info JSON");
+    let deps = json["external_dependencies"]
+        .as_object()
+        .expect("external_dependencies is an object");
+
+    let thing = &deps["github.com/vendor/components/Thing@1.0.0"];
+    assert_eq!(thing["module_path"], "github.com/vendor/components/Thing");
+    assert_eq!(thing["version"], "1.0.0");
+    assert_eq!(thing["source"], "cache");
+    assert_eq!(thing["entrypoints"], serde_json::json!(["Thing.zen"]));
+
+    let leaf = &deps["github.com/vendor/components/Leaf@1.0.0"];
+    assert_eq!(leaf["module_path"], "github.com/vendor/components/Leaf");
+    assert_eq!(leaf["version"], "1.0.0");
+    assert_eq!(leaf["source"], "cache");
+    assert_eq!(leaf["entrypoints"], serde_json::json!(["Leaf.zen"]));
+
+    let human = sandbox.snapshot_run("pcb", ["info"]);
+    assert!(
+        human.contains("External dependencies (2)"),
+        "human output should include external dependency count:\n{human}"
+    );
+    assert!(
+        human.contains("github.com/vendor/components/Thing"),
+        "human output should include direct external dependency:\n{human}"
+    );
+    assert!(
+        human.contains("github.com/vendor/components/Leaf"),
+        "human output should include transitive external dependency:\n{human}"
+    );
+}
+
+#[test]
+fn test_pcb_info_json_includes_sum_free_external_dependency_closure() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .git_fixture("https://github.com/vendor/components.git")
+        .write(
+            "Thing/pcb.toml",
+            r#"
+[dependencies]
+"github.com/vendor/components/Leaf" = "1.0.0"
+"#,
+        )
+        .write("Thing/Thing.zen", "P1 = io(Net)\n")
+        .write("Leaf/pcb.toml", "")
+        .write("Leaf/Leaf.zen", "P1 = io(Net)\n")
+        .commit("Add component packages")
+        .tag("Thing/v1.0.0", true)
+        .tag("Leaf/v1.0.0", true)
+        .push_mirror();
+
+    let output = sandbox
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*"]
+"#,
+        )
+        .write(
+            "boards/Board/pcb.toml",
+            r#"
+[board]
+name = "Board"
+path = "Board.zen"
+
+[dependencies]
+"github.com/vendor/components/Thing" = "1.0.0"
+
+[dependencies.indirect]
+"github.com/vendor/components/Leaf@1" = "1.0.0"
+"#,
+        )
+        .write("boards/Board/Board.zen", "p1 = Net(\"P1\")\n")
+        .run("pcb", ["info", "-f", "json", "boards/Board"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("run pcb info");
+
+    assert!(output.status.success(), "pcb info failed: {output:?}");
+    assert!(
+        !sandbox.root_path().join("pcb.sum").exists(),
+        "sum-free info should not create pcb.sum"
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse pcb info JSON");
+    let deps = json["external_dependencies"]
+        .as_object()
+        .expect("external_dependencies is an object");
+
+    assert!(deps.contains_key("github.com/vendor/components/Thing@1.0.0"));
+    assert!(deps.contains_key("github.com/vendor/components/Leaf@1.0.0"));
+}
+
+#[test]
 fn test_pcb_info_json_includes_published_at() {
     let mut sandbox = Sandbox::new();
     sandbox

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb info -f json` now includes the full transitive external dependency closure using package metadata aligned with workspace packages.
+
 ### Changed
 
 - `pcb embed-step` is now shown in CLI help.

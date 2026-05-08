@@ -3,9 +3,11 @@ use clap::Args;
 use colored::Colorize as ColoredExt;
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::workspace::{MemberPackage, SymbolFileInfo, WorkspaceInfo, get_workspace_info};
-use pcb_zen_core::DefaultFileProvider;
+use pcb_zen::workspace::{MemberPackage, SymbolFileInfo, WorkspaceInfo};
+use pcb_zen_core::config::PcbToml;
+use pcb_zen_core::resolution::ResolutionResult;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -28,77 +30,210 @@ pub enum OutputFormat {
     Json,
 }
 
+#[derive(Debug, Serialize)]
+struct InfoJson {
+    root: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config: Option<PcbToml>,
+    packages: BTreeMap<String, PackageMetadata>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    external_dependencies: BTreeMap<String, PackageMetadata>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    errors: Vec<pcb_zen::workspace::DiscoveryError>,
+}
+
+#[derive(Debug, Serialize)]
+struct PackageMetadata {
+    module_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    rel_path: PathBuf,
+    source: PackageSource,
+    #[serde(default, skip_serializing_if = "is_default")]
+    config: PcbToml,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_at: Option<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    preferred: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    dirty: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manifest_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    entrypoints: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    symbol_files: Vec<SymbolFileInfo>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PackageSource {
+    Workspace,
+    Vendor,
+    Cache,
+    Patch,
+    Other,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
 pub fn execute(args: InfoArgs) -> Result<()> {
     let start_path = match &args.path {
         Some(path) => Path::new(path).to_path_buf(),
         None => env::current_dir()?,
     };
 
-    let file_provider = DefaultFileProvider::new();
-    let mut workspace_info = get_workspace_info(&file_provider, &start_path)?;
+    let resolution = crate::resolve::resolve(Some(&start_path), false, true)?;
+    let mut workspace_info = resolution.workspace_info.clone();
 
     match args.format {
         OutputFormat::Human => {
-            print_human_readable(&workspace_info);
+            let external_dependencies = external_dependencies(&workspace_info, &resolution)?;
+            print_human_readable(&workspace_info, &external_dependencies);
         }
         OutputFormat::Json => {
             populate_package_file_discovery(&mut workspace_info)?;
-            print_json(&workspace_info)?;
+            print_json(&info_json(&workspace_info, &resolution)?)?;
         }
     }
 
     Ok(())
 }
 
+fn info_json(ws: &WorkspaceInfo, resolution: &ResolutionResult) -> Result<InfoJson> {
+    let packages = ws
+        .packages
+        .iter()
+        .map(|(module_path, pkg)| {
+            (
+                module_path.clone(),
+                metadata_for_workspace_package(module_path, pkg),
+            )
+        })
+        .collect();
+
+    Ok(InfoJson {
+        root: ws.root.clone(),
+        config: ws.config.clone(),
+        packages,
+        external_dependencies: external_dependencies(ws, resolution)?,
+        errors: ws.errors.clone(),
+    })
+}
+
+fn metadata_for_workspace_package(module_path: &str, pkg: &MemberPackage) -> PackageMetadata {
+    PackageMetadata {
+        module_path: module_path.to_string(),
+        version: pkg.version.clone(),
+        rel_path: pkg.rel_path.clone(),
+        source: PackageSource::Workspace,
+        config: pkg.config.clone(),
+        published_at: pkg.published_at.clone(),
+        preferred: pkg.preferred,
+        dirty: pkg.dirty,
+        content_hash: None,
+        manifest_hash: None,
+        entrypoints: pkg.entrypoints.clone(),
+        symbol_files: pkg.symbol_files.clone(),
+    }
+}
+
+fn external_dependencies(
+    ws: &WorkspaceInfo,
+    resolution: &ResolutionResult,
+) -> Result<BTreeMap<String, PackageMetadata>> {
+    let mut deps = BTreeMap::new();
+    let package_roots = resolution.package_roots();
+
+    for (coord, root) in package_roots {
+        let Some((module_path, version)) = external_package_coord(ws, &coord, &root) else {
+            continue;
+        };
+        let manifest_path = root.join("pcb.toml");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let lock_entry = ws
+            .lockfile
+            .as_ref()
+            .and_then(|lockfile| lockfile.get(module_path, version));
+        let config = PcbToml::from_path(&manifest_path).unwrap_or_default();
+        let (entrypoints, symbol_files) = discover_package_files(&root)?;
+        let module_path = module_path.to_string();
+        let version = version.to_string();
+
+        deps.insert(
+            coord,
+            PackageMetadata {
+                module_path: module_path.clone(),
+                version: Some(version),
+                rel_path: root
+                    .strip_prefix(&ws.root)
+                    .unwrap_or(root.as_path())
+                    .to_path_buf(),
+                source: package_source(ws, &module_path, &root),
+                config,
+                published_at: None,
+                preferred: false,
+                dirty: false,
+                content_hash: lock_entry.map(|entry| entry.content_hash.clone()),
+                manifest_hash: lock_entry.and_then(|entry| entry.manifest_hash.clone()),
+                entrypoints,
+                symbol_files,
+            },
+        );
+    }
+
+    Ok(deps)
+}
+
+fn external_package_coord<'a>(
+    ws: &WorkspaceInfo,
+    coord: &'a str,
+    root: &Path,
+) -> Option<(&'a str, &'a str)> {
+    let (module_path, version) = coord.rsplit_once('@')?;
+    if module_path.is_empty()
+        || version.is_empty()
+        || ws.packages.contains_key(module_path)
+        || pcb_zen_core::is_stdlib_module_path(module_path)
+        || !root.file_name().is_some_and(|name| name == version)
+    {
+        return None;
+    }
+    Some((module_path, version))
+}
+
+fn package_source(ws: &WorkspaceInfo, module_path: &str, root: &Path) -> PackageSource {
+    if is_path_patch(ws, module_path, root) {
+        return PackageSource::Patch;
+    }
+    if root.starts_with(ws.root.join("vendor")) {
+        return PackageSource::Vendor;
+    }
+    if root.starts_with(ws.workspace_cache_dir()) || root.starts_with(&ws.cache_dir) {
+        return PackageSource::Cache;
+    }
+    PackageSource::Other
+}
+
+fn is_path_patch(ws: &WorkspaceInfo, module_path: &str, root: &Path) -> bool {
+    ws.config
+        .as_ref()
+        .and_then(|config| config.patch.get(module_path))
+        .and_then(|patch| patch.path.as_ref())
+        .is_some_and(|path| ws.root.join(path) == root)
+}
+
 fn populate_package_file_discovery(ws: &mut WorkspaceInfo) -> Result<()> {
     for pkg in ws.packages.values_mut() {
         let package_dir = pkg.dir(&ws.root);
-        let mut entries = std::fs::read_dir(&package_dir)
-            .with_context(|| format!("Failed to read package directory {}", package_dir.display()))?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .with_context(|| {
-                format!("Failed to list package directory {}", package_dir.display())
-            })?;
-        entries.sort_by_key(|entry| entry.file_name());
-
-        let mut entrypoints = Vec::new();
-        let mut symbol_files = Vec::new();
-
-        for entry in entries {
-            let path = entry.path();
-            let extension = path.extension().and_then(|ext| ext.to_str());
-            if !matches!(extension, Some("zen" | "kicad_sym")) {
-                continue;
-            }
-
-            let file_type = entry
-                .file_type()
-                .with_context(|| format!("Failed to inspect package entry {}", path.display()))?;
-            if !file_type.is_file() {
-                continue;
-            }
-
-            let rel_path = PathBuf::from(entry.file_name());
-            match extension {
-                Some("zen") => entrypoints.push(rel_path),
-                Some("kicad_sym") => {
-                    let library = KicadSymbolLibrary::from_file(&path).with_context(|| {
-                        format!("Failed to discover symbols in {}", path.display())
-                    })?;
-                    let symbols = library
-                        .symbol_names()
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect();
-                    symbol_files.push(SymbolFileInfo {
-                        path: rel_path,
-                        symbols,
-                    });
-                }
-                _ => {}
-            }
-        }
-
+        let (entrypoints, symbol_files) = discover_package_files(&package_dir)?;
         pkg.entrypoints = entrypoints;
         pkg.symbol_files = symbol_files;
     }
@@ -106,7 +241,57 @@ fn populate_package_file_discovery(ws: &mut WorkspaceInfo) -> Result<()> {
     Ok(())
 }
 
-fn print_human_readable(ws: &WorkspaceInfo) {
+fn discover_package_files(package_dir: &Path) -> Result<(Vec<PathBuf>, Vec<SymbolFileInfo>)> {
+    let mut entries = std::fs::read_dir(package_dir)
+        .with_context(|| format!("Failed to read package directory {}", package_dir.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("Failed to list package directory {}", package_dir.display()))?;
+    entries.sort_by_key(|entry| entry.file_name());
+
+    let mut entrypoints = Vec::new();
+    let mut symbol_files = Vec::new();
+
+    for entry in entries {
+        let path = entry.path();
+        let extension = path.extension().and_then(|ext| ext.to_str());
+        if !matches!(extension, Some("zen" | "kicad_sym")) {
+            continue;
+        }
+
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect package entry {}", path.display()))?;
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let rel_path = PathBuf::from(entry.file_name());
+        match extension {
+            Some("zen") => entrypoints.push(rel_path),
+            Some("kicad_sym") => {
+                let library = KicadSymbolLibrary::from_file(&path)
+                    .with_context(|| format!("Failed to discover symbols in {}", path.display()))?;
+                let symbols = library
+                    .symbol_names()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect();
+                symbol_files.push(SymbolFileInfo {
+                    path: rel_path,
+                    symbols,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok((entrypoints, symbol_files))
+}
+
+fn print_human_readable(
+    ws: &WorkspaceInfo,
+    external_dependencies: &BTreeMap<String, PackageMetadata>,
+) {
     // Header
     println!("{}", "Workspace".with_style(Style::Blue).bold());
     println!("Root: {}", ws.root.display());
@@ -188,6 +373,19 @@ fn print_human_readable(ws: &WorkspaceInfo) {
             print_package_line(pkg);
         }
     }
+
+    if !external_dependencies.is_empty() {
+        println!();
+        println!(
+            "{} ({})",
+            "External dependencies".with_style(Style::Blue).bold(),
+            external_dependencies.len()
+        );
+
+        for dep in external_dependencies.values() {
+            print_external_dependency_line(dep);
+        }
+    }
 }
 
 fn print_package_line(pkg: &MemberPackage) {
@@ -243,6 +441,32 @@ fn print_package_line(pkg: &MemberPackage) {
         path_str,
         extras_str
     );
+}
+
+fn print_external_dependency_line(dep: &PackageMetadata) {
+    let version = dep.version.as_deref().unwrap_or("unknown");
+    let source = dep.source.as_str();
+    let path = dep.rel_path.to_string_lossy();
+
+    println!(
+        "  {} {} {} {}",
+        dep.module_path.bold(),
+        format!("(v{version})").green(),
+        format!("[{source}]").dimmed(),
+        path.dimmed()
+    );
+}
+
+impl PackageSource {
+    fn as_str(&self) -> &'static str {
+        match self {
+            PackageSource::Workspace => "workspace",
+            PackageSource::Vendor => "vendor",
+            PackageSource::Cache => "cache",
+            PackageSource::Patch => "patch",
+            PackageSource::Other => "other",
+        }
+    }
 }
 
 fn print_json<T: Serialize>(info: &T) -> Result<()> {

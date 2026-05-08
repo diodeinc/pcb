@@ -22,21 +22,24 @@ Exit Code: 0
   },
   "packages": {
     "boards/main-board": {
+      "module_path": "boards/main-board",
       "rel_path": "boards/main-board",
+      "source": "workspace",
       "config": {
         "board": {
           "name": "MainBoard",
           "path": "main_board.zen"
         }
       },
-      "preferred": false,
       "dirty": true,
       "entrypoints": [
         "main_board.zen"
       ]
     },
     "boards/test-board": {
+      "module_path": "boards/test-board",
       "rel_path": "boards/test-board",
+      "source": "workspace",
       "config": {
         "board": {
           "name": "TestBoard",

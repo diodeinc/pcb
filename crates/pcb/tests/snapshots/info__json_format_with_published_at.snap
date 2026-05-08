@@ -19,7 +19,10 @@ Exit Code: 0
   },
   "packages": {
     "boards/test-board": {
+      "module_path": "boards/test-board",
+      "version": "0.2.0",
       "rel_path": "boards/test-board",
+      "source": "workspace",
       "config": {
         "board": {
           "name": "TestBoard",
@@ -27,9 +30,7 @@ Exit Code: 0
           "description": "Main test board for validation"
         }
       },
-      "version": "0.2.0",
       "published_at": "<PUBLISHED_AT>",
-      "preferred": false,
       "entrypoints": [
         "test_board.zen"
       ]
