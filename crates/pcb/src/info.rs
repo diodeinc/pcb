@@ -53,7 +53,7 @@ struct PackageMetadata {
     config: PcbToml,
     #[serde(skip_serializing_if = "Option::is_none")]
     published_at: Option<String>,
-    #[serde(default, skip_serializing_if = "is_default")]
+    #[serde(default)]
     preferred: bool,
     #[serde(default, skip_serializing_if = "is_default")]
     dirty: bool,

@@ -28,6 +28,7 @@ Exit Code: 0
           "path": "main_board.zen"
         }
       },
+      "preferred": false,
       "dirty": true,
       "entrypoints": [
         "main_board.zen"
@@ -44,6 +45,7 @@ Exit Code: 0
           "description": "Main test board for validation"
         }
       },
+      "preferred": false,
       "dirty": true,
       "entrypoints": [
         "test_board.zen"

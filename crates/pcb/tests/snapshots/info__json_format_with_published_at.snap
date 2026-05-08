@@ -31,6 +31,7 @@ Exit Code: 0
         }
       },
       "published_at": "<PUBLISHED_AT>",
+      "preferred": false,
       "entrypoints": [
         "test_board.zen"
       ]

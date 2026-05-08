@@ -31,6 +31,7 @@ Exit Code: 0
           "path": "main_board.zen"
         }
       },
+      "preferred": false,
       "dirty": true,
       "entrypoints": [
         "main_board.zen"
