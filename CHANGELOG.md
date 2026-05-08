@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added simpler version footprint and separate QR to stdlib.
 
+### Fixed
+
+- MVS v2 offline builds now load dependency manifests from `vendor/` before falling back to the package cache.
+
 ## [0.3.78] - 2026-05-07
 
 ### Fixed

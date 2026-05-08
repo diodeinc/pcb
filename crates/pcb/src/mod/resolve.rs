@@ -20,7 +20,7 @@ use semver::Version;
 use crate::file_walker;
 
 use super::dep_id::{ResolvedDepId, compatibility_lane, parse_lane_qualified_key};
-use super::manifest::ManifestLoader;
+use super::manifest::{ManifestLoader, package_version_root};
 use super::materialize::materialize_selected;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -326,22 +326,15 @@ impl FrozenResolutionBuilder {
         }
 
         let version_str = version.to_string();
-        let vendor_root = self
-            .workspace
-            .root
-            .join("vendor")
-            .join(module_path)
-            .join(&version_str);
+        let vendor_root =
+            package_version_root(self.workspace.root.join("vendor"), module_path, version);
         if vendor_root.exists() {
             self.remote_roots.insert(key, vendor_root.clone());
             return Ok(vendor_root);
         }
 
-        let cache_root = self
-            .workspace
-            .workspace_cache_dir()
-            .join(module_path)
-            .join(&version_str);
+        let cache_root =
+            package_version_root(self.workspace.workspace_cache_dir(), module_path, version);
         let managed_kicad = self.is_managed_kicad_dep(module_path, version);
         if cache_root.join("pcb.toml").exists() || managed_kicad && cache_root.exists() {
             self.remote_roots.insert(key, cache_root.clone());
