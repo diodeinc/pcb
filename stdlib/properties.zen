@@ -68,6 +68,7 @@ def Layout(
 
     if path:
         add_property("layout_path", Path(path, allow_not_exist=True))
+    add_property("layout_name", name)
     if hints:
         add_property("layout_hints", hints)
 

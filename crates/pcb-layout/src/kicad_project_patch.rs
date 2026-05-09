@@ -88,14 +88,14 @@ pub(crate) fn patch_kicad_pro(
     pro_path: &Path,
     board_config: Option<&BoardConfig>,
     assignments: &HashMap<String, String>,
-    board_name: Option<&str>,
+    layout_name: Option<&str>,
 ) -> Result<()> {
     let source = fs::read_to_string(pro_path)
         .with_context(|| format!("Failed to read {}", pro_path.display()))?;
     let mut project: Value = serde_json::from_str(&source)
         .with_context(|| format!("Failed to parse {}", pro_path.display()))?;
 
-    patch_text_variables(&mut project, board_name);
+    patch_text_variables(&mut project, layout_name);
     if let Some(board_config) = board_config {
         patch_project_value(&mut project, board_config, assignments);
     }
@@ -135,17 +135,17 @@ fn patch_project_value(
     }
 }
 
-fn patch_text_variables(project: &mut Value, board_name: Option<&str>) {
+fn patch_text_variables(project: &mut Value, layout_name: Option<&str>) {
     let vars = ensure_object(
         ensure_object(project)
             .entry("text_variables".to_string())
             .or_insert_with(|| Value::Object(Map::new())),
     );
 
-    if let Some(board_name) = board_name {
+    if let Some(layout_name) = layout_name {
         vars.insert(
             "PCB_NAME".to_string(),
-            Value::String(board_name.to_string()),
+            Value::String(layout_name.to_string()),
         );
     }
     vars.insert(

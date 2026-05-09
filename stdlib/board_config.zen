@@ -469,8 +469,6 @@ def Board(
             config=config,
         )
 
-    add_property("layout_name", name)
-
     # Add layout to the module
     Layout(
         name=name,
