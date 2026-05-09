@@ -737,26 +737,13 @@ pub mod utils {
     }
 
     pub fn extract_board_name(schematic: &Schematic) -> Option<String> {
-        let root = schematic.instances.get(schematic.root_ref.as_ref()?)?;
-
-        if let Some(name) = root
+        schematic
+            .instances
+            .get(schematic.root_ref.as_ref()?)?
             .attributes
-            .get("default_board_config")
+            .get("layout_name")
             .and_then(|v| v.string())
-        {
-            return Some(name.to_string());
-        }
-
-        let mut names = root
-            .attributes
-            .keys()
-            .filter_map(|key| key.strip_prefix("board_config."))
-            .filter(|name| !name.is_empty());
-        let name = names.next()?;
-        if names.next().is_some() {
-            return None;
-        }
-        Some(name.to_string())
+            .map(str::to_string)
     }
 
     /// Serialize the schematic to JSON for Python layout sync, enriching component
