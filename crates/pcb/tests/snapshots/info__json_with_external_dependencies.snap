@@ -1,0 +1,58 @@
+---
+source: crates/pcb/tests/info.rs
+expression: json_output
+---
+Command: pcb info -f json
+Exit Code: 0
+
+--- STDOUT ---
+{
+  "root": "<TEMP_DIR>",
+  "config": {
+    "workspace": {
+      "pcb-version": "0.3"
+    },
+    "dependencies": {
+      "github.com/vendor/components/Thing": "1.0.0"
+    }
+  },
+  "packages": {
+    "workspace": {
+      "rel_path": "",
+      "config": {
+        "workspace": {
+          "pcb-version": "0.3"
+        },
+        "dependencies": {
+          "github.com/vendor/components/Thing": "1.0.0"
+        }
+      },
+      "preferred": false,
+      "dirty": true
+    }
+  },
+  "external_dependencies": {
+    "github.com/vendor/components/Leaf@1.0.0": {
+      "version": "1.0.0",
+      "rel_path": ".pcb/cache/github.com/vendor/components/Leaf/1.0.0",
+      "preferred": false,
+      "entrypoints": [
+        "Leaf.zen"
+      ]
+    },
+    "github.com/vendor/components/Thing@1.0.0": {
+      "version": "1.0.0",
+      "rel_path": ".pcb/cache/github.com/vendor/components/Thing/1.0.0",
+      "config": {
+        "dependencies": {
+          "github.com/vendor/components/Leaf": "1.0.0"
+        }
+      },
+      "preferred": false,
+      "entrypoints": [
+        "Thing.zen"
+      ]
+    }
+  }
+}
+--- STDERR ---
