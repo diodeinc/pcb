@@ -4523,7 +4523,6 @@ dependencies = [
  "atomicwrites",
  "base64",
  "dirs",
- "hex",
  "log",
  "pcb-command-runner",
  "pcb-sexpr",
@@ -4531,7 +4530,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "starlark",
  "tempfile",
  "zstd",
@@ -4545,7 +4543,6 @@ dependencies = [
  "assert_fs",
  "atomicwrites",
  "base64",
- "hex",
  "include_dir",
  "insta",
  "log",
@@ -4560,7 +4557,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
- "sha2 0.11.0",
  "starlark",
  "tempfile",
  "thiserror 2.0.18",
@@ -4601,8 +4597,12 @@ dependencies = [
 name = "pcb-sexpr"
 version = "0.3.79"
 dependencies = [
+ "base64",
+ "hex",
  "log",
  "serde",
+ "sha2 0.11.0",
+ "zstd",
 ]
 
 [[package]]

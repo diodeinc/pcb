@@ -3,9 +3,11 @@
 //! This module groups KiCad-related parsing utilities in submodules:
 //! - [`props`] - common "property-like" query helpers
 //! - [`netlist`] - KiCad netlist (`kicadsexpr`) helpers
+//! - [`footprint`] - KiCad footprint (`.kicad_mod`) helpers
 //! - [`schematic`] - KiCad schematic (`.kicad_sch`) helpers
 //! - [`symbol`] - KiCad symbol library (`.kicad_sym`) helpers
 
+pub mod footprint;
 pub mod netlist;
 pub mod props;
 pub mod schematic;

@@ -8,7 +8,6 @@ authors = { workspace = true }
 description = "PCB layout generation and management"
 
 [dependencies]
-hex = { workspace = true }
 anyhow = { workspace = true }
 atomicwrites = { workspace = true }
 thiserror = { workspace = true }
@@ -25,7 +24,6 @@ serde = { workspace = true }
 starlark = { workspace = true }
 include_dir = "0.7.4"
 base64 = { workspace = true }
-sha2 = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]

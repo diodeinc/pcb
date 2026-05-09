@@ -10,11 +10,13 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Builds now validate file-backed KiCad footprint S-expressions and embedded model checksums before layout generation.
 - `pcb info -f json` now includes the full transitive external dependency closure using package metadata aligned with workspace packages.
 
 ### Changed
 
 - `pcb layout` now initializes release text variables in KiCad project and board files, using `d10d3c0` as the placeholder git hash.
+- Embedded STEP writers now use KiCad's current MMH3 checksums instead of legacy SHA-256 checksums.
 - `pcb embed-step` is now shown in CLI help.
 
 ### Fixed

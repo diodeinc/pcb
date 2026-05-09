@@ -8,8 +8,12 @@ authors = { workspace = true }
 description = "S-expression parser for PCB file formats"
 
 [dependencies]
+base64 = { workspace = true }
+hex = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true, optional = true }
+sha2 = { workspace = true }
+zstd = { workspace = true }
 
 [features]
 default = []

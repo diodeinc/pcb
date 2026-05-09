@@ -2,7 +2,6 @@ use anyhow::Context;
 use base64::Engine;
 use pcb_sexpr::formatter::{FormatMode, format_tree};
 use pcb_sexpr::{Sexpr, SexprKind, WalkCtx, find_named_list_index, set_or_insert_named_list};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -76,7 +75,7 @@ pub(crate) fn embed_models_in_pcb_source(
 
         let bytes = std::fs::read(source_path)
             .with_context(|| format!("Failed to read 3D model {}", source_path.display()))?;
-        let checksum = sha256_hex(&bytes);
+        let checksum = pcb_sexpr::kicad::footprint::embedded_file_checksum(&bytes);
         model_checksums.insert(embed_name.clone(), checksum.clone());
         let data = compress_and_encode(&bytes)?;
         new_file_nodes.push(build_model_file_node(embed_name, &checksum, Some(&data)));
@@ -454,10 +453,6 @@ fn build_model_file_node(name: &str, checksum: &str, data: Option<&str>) -> Sexp
         Sexpr::string(checksum.to_string()),
     ]));
     Sexpr::list(items)
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
 }
 
 fn compress_and_encode(bytes: &[u8]) -> anyhow::Result<String> {
