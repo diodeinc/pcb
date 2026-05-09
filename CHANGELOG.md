@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `pcb layout` now initializes release text variables in KiCad project and board files, using `d10d3c0` as the placeholder git hash.
 - `pcb embed-step` is now shown in CLI help.
 
 ### Fixed

@@ -132,18 +132,6 @@ impl ReleaseInfo {
         &self.resolution.workspace_info.root
     }
 
-    fn board_display_name(&self) -> String {
-        self.workspace_info()
-            .board_name_for_zen(&self.zen_path)
-            .unwrap_or_else(|| {
-                self.zen_path
-                    .file_stem()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string()
-            })
-    }
-
     fn has_layout(&self) -> bool {
         self.layout.is_some()
     }
@@ -581,12 +569,10 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     })
 }
 
-/// Ensure text variables are defined in .kicad_pro file
-fn update_kicad_pro_text_variables(
+fn update_kicad_pro_release_variables(
     kicad_pro_path: &Path,
     version: &str,
     git_hash: &str,
-    board_name: &str,
 ) -> Result<()> {
     // Read the existing .kicad_pro file
     let content = fs::read_to_string(kicad_pro_path).with_context(|| {
@@ -604,26 +590,25 @@ fn update_kicad_pro_text_variables(
         )
     })?;
 
-    if !project
-        .get("text_variables")
-        .is_some_and(|vars| vars.is_object())
-    {
-        project["text_variables"] = serde_json::json!({});
-    }
+    let text_vars = project
+        .get_mut("text_variables")
+        .and_then(|v| v.as_object_mut())
+        .with_context(|| {
+            format!(
+                "Missing text_variables in {}. Run `pcb layout` before publishing.",
+                kicad_pro_path.display()
+            )
+        })?;
 
-    let text_vars = project["text_variables"].as_object_mut().unwrap();
-    text_vars.insert(
-        "PCB_VERSION".to_string(),
-        serde_json::Value::String(version.to_string()),
-    );
-    text_vars.insert(
-        "PCB_GIT_HASH".to_string(),
-        serde_json::Value::String(git_hash.to_string()),
-    );
-    text_vars.insert(
-        "PCB_NAME".to_string(),
-        serde_json::Value::String(board_name.to_string()),
-    );
+    for (key, value) in [("PCB_VERSION", version), ("PCB_GIT_HASH", git_hash)] {
+        let slot = text_vars.get_mut(key).with_context(|| {
+            format!(
+                "Missing {key} text variable in {}. Run `pcb layout` before publishing.",
+                kicad_pro_path.display()
+            )
+        })?;
+        *slot = serde_json::Value::String(value.to_string());
+    }
 
     // Write back to file with pretty formatting
     let mut updated_content = serde_json::to_string_pretty(&project)?;
@@ -640,21 +625,67 @@ fn update_kicad_pro_text_variables(
     Ok(())
 }
 
-/// Substitute version, git hash and name variables in KiCad project files
+fn update_kicad_pcb_release_variables(
+    kicad_pcb_path: &Path,
+    version: &str,
+    git_hash: &str,
+) -> Result<()> {
+    let content = fs::read_to_string(kicad_pcb_path).with_context(|| {
+        format!(
+            "Failed to read .kicad_pcb file: {}",
+            kicad_pcb_path.display()
+        )
+    })?;
+    let root = pcb_sexpr::parse(&content).map_err(|e| anyhow::anyhow!(e))?;
+    let root_items = root
+        .as_list()
+        .context("KiCad PCB file root must be an S-expression list")?;
+
+    let mut patches = pcb_sexpr::PatchSet::new();
+    for (key, value) in [("PCB_VERSION", version), ("PCB_GIT_HASH", git_hash)] {
+        let value_node = root_items
+            .iter()
+            .find_map(|item| {
+                let items = item.as_list()?;
+                (items.first().and_then(|item| item.as_sym()) == Some("property")
+                    && items.get(1).and_then(|item| item.as_str()) == Some(key))
+                .then_some(items.get(2))
+                .flatten()
+            })
+            .with_context(|| {
+                format!(
+                    "Missing {key} board property in {}. Run `pcb layout` before publishing.",
+                    kicad_pcb_path.display()
+                )
+            })?;
+        patches.replace_string(value_node.span, value);
+    }
+
+    let file = fs::File::create(kicad_pcb_path).with_context(|| {
+        format!(
+            "Failed to write updated .kicad_pcb file: {}",
+            kicad_pcb_path.display()
+        )
+    })?;
+    patches.write_to(&content, BufWriter::new(file))?;
+
+    debug!("Updated release variables in: {}", kicad_pcb_path.display());
+    Ok(())
+}
+
+/// Substitute release version and git hash placeholders in staged KiCad files.
 fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let Some(kicad_files) = info.staged_kicad_files() else {
         debug!("No layout directory, skipping variable substitution");
         return Ok(());
     };
 
-    // Determine display name of the board
-    let board_name = info.board_display_name();
-
     // Use short hash (7 chars) for variable substitution
     let short_hash = &info.git_hash[..7.min(info.git_hash.len())];
 
     let kicad_pro_path = kicad_files.kicad_pro.clone();
-    update_kicad_pro_text_variables(&kicad_pro_path, &info.version, short_hash, &board_name)?;
+    update_kicad_pro_release_variables(&kicad_pro_path, &info.version, short_hash)?;
+    update_kicad_pcb_release_variables(&kicad_files.kicad_pcb(), &info.version, short_hash)?;
     Ok(())
 }
 
@@ -1351,18 +1382,22 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn update_kicad_pro_text_variables_writes_trailing_newline() -> Result<()> {
+    fn update_kicad_pro_release_variables_writes_trailing_newline() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let kicad_pro_path = temp_dir.path().join("layout.kicad_pro");
 
         fs::write(
             &kicad_pro_path,
             r#"{
-  "text_variables": {}
+  "text_variables": {
+    "PCB_NAME": "Demo Board",
+    "PCB_VERSION": "v0.0.0",
+    "PCB_GIT_HASH": "d10d3c0"
+  }
 }"#,
         )?;
 
-        update_kicad_pro_text_variables(&kicad_pro_path, "1.2.3", "abcdef0", "Demo Board")?;
+        update_kicad_pro_release_variables(&kicad_pro_path, "1.2.3", "abcdef0")?;
 
         let content = fs::read_to_string(&kicad_pro_path)?;
         assert!(
