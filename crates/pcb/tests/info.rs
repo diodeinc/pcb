@@ -109,6 +109,112 @@ fn test_pcb_info_json_includes_preferred() {
 }
 
 #[test]
+fn test_pcb_info_json_includes_external_dependency_closure() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .git_fixture("https://github.com/vendor/components.git")
+        .write(
+            "Thing/pcb.toml",
+            r#"
+[dependencies]
+"github.com/vendor/components/Leaf" = "1.0.0"
+"#,
+        )
+        .write("Thing/Thing.zen", "P1 = io(Net)\n")
+        .write("Leaf/pcb.toml", "")
+        .write("Leaf/Leaf.zen", "P1 = io(Net)\n")
+        .commit("Add component packages")
+        .tag("Thing/v1.0.0", true)
+        .tag("Leaf/v1.0.0", true)
+        .push_mirror();
+
+    sandbox.write(
+        "pcb.toml",
+        r#"
+[workspace]
+pcb-version = "0.3"
+
+[dependencies]
+"github.com/vendor/components/Thing" = "1.0.0"
+"#,
+    );
+
+    let json_output = sandbox.snapshot_run("pcb", ["info", "-f", "json"]);
+    assert_snapshot!("json_with_external_dependencies", json_output);
+
+    let human_output = sandbox.snapshot_run("pcb", ["info"]);
+    assert_snapshot!("human_with_external_dependencies", human_output);
+}
+
+#[test]
+fn test_pcb_info_json_includes_sum_free_external_dependency_closure() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .git_fixture("https://github.com/vendor/components.git")
+        .write(
+            "Thing/pcb.toml",
+            r#"
+[dependencies]
+"github.com/vendor/components/Leaf" = "1.0.0"
+"#,
+        )
+        .write("Thing/Thing.zen", "P1 = io(Net)\n")
+        .write("Leaf/pcb.toml", "")
+        .write("Leaf/Leaf.zen", "P1 = io(Net)\n")
+        .commit("Add component packages")
+        .tag("Thing/v1.0.0", true)
+        .tag("Leaf/v1.0.0", true)
+        .push_mirror();
+
+    let output = sandbox
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.3"
+members = ["boards/*"]
+"#,
+        )
+        .write(
+            "boards/Board/pcb.toml",
+            r#"
+[board]
+name = "Board"
+path = "Board.zen"
+
+[dependencies]
+"github.com/vendor/components/Thing" = "1.0.0"
+
+[dependencies.indirect]
+"github.com/vendor/components/Leaf@1" = "1.0.0"
+"#,
+        )
+        .write("boards/Board/Board.zen", "p1 = Net(\"P1\")\n")
+        .run("pcb", ["info", "-f", "json", "boards/Board"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("run pcb info");
+
+    assert!(output.status.success(), "pcb info failed: {output:?}");
+    assert!(
+        !sandbox.root_path().join("pcb.sum").exists(),
+        "sum-free info should not create pcb.sum"
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse pcb info JSON");
+    let deps = json["external_dependencies"]
+        .as_object()
+        .expect("external_dependencies is an object");
+
+    assert!(deps.contains_key("github.com/vendor/components/Thing@1.0.0"));
+    assert!(deps.contains_key("github.com/vendor/components/Leaf@1.0.0"));
+}
+
+#[test]
 fn test_pcb_info_json_includes_published_at() {
     let mut sandbox = Sandbox::new();
     sandbox
