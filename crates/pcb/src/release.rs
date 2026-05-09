@@ -667,7 +667,14 @@ fn update_kicad_pcb_release_variables(
             kicad_pcb_path.display()
         )
     })?;
-    patches.write_to(&content, BufWriter::new(file))?;
+    let mut writer = BufWriter::new(file);
+    patches.write_to(&content, &mut writer)?;
+    writer.flush().with_context(|| {
+        format!(
+            "Failed to flush updated .kicad_pcb file: {}",
+            kicad_pcb_path.display()
+        )
+    })?;
 
     debug!("Updated release variables in: {}", kicad_pcb_path.display());
     Ok(())
