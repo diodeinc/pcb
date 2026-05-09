@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::{debug, warn};
-use pcb_kicad::{
-    KiCadCliBuilder, PythonScriptBuilder, ensure_board_compatible_with_installed_kicad,
-};
+use pcb_kicad::{KiCadCliBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
@@ -606,60 +604,43 @@ fn update_kicad_pro_text_variables(
         )
     })?;
 
-    // Check if text variables already exist
-    let text_vars = project.get("text_variables").and_then(|v| v.as_object());
-    let needs_pcb_version = text_vars.is_none_or(|vars| !vars.contains_key("PCB_VERSION"));
-    let needs_pcb_git_hash = text_vars.is_none_or(|vars| !vars.contains_key("PCB_GIT_HASH"));
-    let needs_pcb_name = text_vars.is_none_or(|vars| !vars.contains_key("PCB_NAME"));
-
-    // Only modify if we need to add missing variables
-    if needs_pcb_version || needs_pcb_git_hash || needs_pcb_name {
-        // Ensure text_variables object exists
-        if project.get("text_variables").is_none() || !project["text_variables"].is_object() {
-            project["text_variables"] = serde_json::json!({});
-        }
-
-        let text_vars = project["text_variables"].as_object_mut().unwrap();
-
-        // Add missing variables with correct values
-        text_vars.insert(
-            "PCB_VERSION".to_string(),
-            serde_json::Value::String(version.to_string()),
-        );
-        text_vars.insert(
-            "PCB_GIT_HASH".to_string(),
-            serde_json::Value::String(git_hash.to_string()),
-        );
-        text_vars.insert(
-            "PCB_NAME".to_string(),
-            serde_json::Value::String(board_name.to_string()),
-        );
-
-        // Write back to file with pretty formatting
-        let mut updated_content = serde_json::to_string_pretty(&project)?;
-        updated_content.push('\n');
-        fs::write(kicad_pro_path, updated_content).with_context(|| {
-            format!(
-                "Failed to write updated .kicad_pro file: {}",
-                kicad_pro_path.display()
-            )
-        })?;
-
-        debug!(
-            "Added missing text variables to: {}",
-            kicad_pro_path.display()
-        );
-    } else {
-        debug!(
-            "Text variables already exist in: {}",
-            kicad_pro_path.display()
-        );
+    if !project
+        .get("text_variables")
+        .is_some_and(|vars| vars.is_object())
+    {
+        project["text_variables"] = serde_json::json!({});
     }
+
+    let text_vars = project["text_variables"].as_object_mut().unwrap();
+    text_vars.insert(
+        "PCB_VERSION".to_string(),
+        serde_json::Value::String(version.to_string()),
+    );
+    text_vars.insert(
+        "PCB_GIT_HASH".to_string(),
+        serde_json::Value::String(git_hash.to_string()),
+    );
+    text_vars.insert(
+        "PCB_NAME".to_string(),
+        serde_json::Value::String(board_name.to_string()),
+    );
+
+    // Write back to file with pretty formatting
+    let mut updated_content = serde_json::to_string_pretty(&project)?;
+    updated_content.push('\n');
+    fs::write(kicad_pro_path, updated_content).with_context(|| {
+        format!(
+            "Failed to write updated .kicad_pro file: {}",
+            kicad_pro_path.display()
+        )
+    })?;
+
+    debug!("Updated text variables in: {}", kicad_pro_path.display());
 
     Ok(())
 }
 
-/// Substitute version, git hash and name variables in KiCad PCB files
+/// Substitute version, git hash and name variables in KiCad project files
 fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let Some(kicad_files) = info.staged_kicad_files() else {
         debug!("No layout directory, skipping variable substitution");
@@ -672,41 +653,8 @@ fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     // Use short hash (7 chars) for variable substitution
     let short_hash = &info.git_hash[..7.min(info.git_hash.len())];
 
-    // First, update the .kicad_pro file to ensure text variables are defined
     let kicad_pro_path = kicad_files.kicad_pro.clone();
     update_kicad_pro_text_variables(&kicad_pro_path, &info.version, short_hash, &board_name)?;
-
-    // Then update the .kicad_pcb file with the actual values
-    let kicad_pcb_path = kicad_files.kicad_pcb();
-    let script = format!(
-        r#"
-import sys
-import pcbnew
-
-# Load the board
-board = pcbnew.LoadBoard(sys.argv[1])
-
-# Get text variables
-text_vars = board.GetProperties()
-
-# Update variables
-text_vars['PCB_VERSION'] = '{version}'
-text_vars['PCB_GIT_HASH'] = '{git_hash}'
-text_vars['PCB_NAME'] = '{board_name}'
-
-# Save the board
-board.Save(sys.argv[1])
-print("Text variables updated successfully")
-"#,
-        version = info.version.replace('\'', "\\'"),
-        git_hash = short_hash.replace('\'', "\\'"),
-        board_name = board_name.replace('\'', "\\'")
-    );
-
-    PythonScriptBuilder::new(script)
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()?;
-    debug!("Updated variables in: {}", kicad_pcb_path.display());
     Ok(())
 }
 
