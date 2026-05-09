@@ -29,6 +29,9 @@ use effective_netlist::{
 pub use moved::compute_moved_paths_patches;
 pub use moved::compute_net_renames_patches;
 
+pub const PCB_VERSION_PLACEHOLDER: &str = "v0.0.0";
+pub const PCB_GIT_HASH_PLACEHOLDER: &str = "d10d3c0";
+
 /// Extract DesignRules from a KiCad project file.
 pub fn extract_design_rules_from_kicad_pro(pro_path: &Path) -> AnyhowResult<Option<DesignRules>> {
     kicad_project_patch::extract_design_rules_from_kicad_pro(pro_path)
@@ -564,17 +567,21 @@ pub fn process_layout(
     // Run the Python sync script
     run_sync_script(&paths, &lens_python_path)?;
 
-    if let Some(config) = board_config.as_ref() {
-        let netclass_assignments = build_netclass_assignments(schematic, config.netclasses());
-        patch_project_file(
-            &paths.pcb.with_extension("kicad_pro"),
-            config,
-            &netclass_assignments,
-        )?;
-    }
+    let layout_name = utils::extract_layout_name(schematic);
+    let netclass_assignments = board_config
+        .as_ref()
+        .map(|config| build_netclass_assignments(schematic, config.netclasses()))
+        .unwrap_or_default();
+    patch_project_file(
+        &paths.pcb.with_extension("kicad_pro"),
+        board_config.as_ref(),
+        &netclass_assignments,
+        layout_name.as_deref(),
+    )?;
     patch_pcb_file(
         &paths.pcb,
         board_config.as_ref(),
+        layout_name.as_deref(),
         kicad_model_dirs,
         &footprint_lib_dirs,
     )?;
@@ -727,6 +734,16 @@ pub mod utils {
             .and_then(|(_, v)| v.string())?;
 
         BoardConfig::from_json_str(config_json).ok()
+    }
+
+    pub fn extract_layout_name(schematic: &Schematic) -> Option<String> {
+        schematic
+            .instances
+            .get(schematic.root_ref.as_ref()?)?
+            .attributes
+            .get("layout_name")
+            .and_then(|v| v.string())
+            .map(str::to_string)
     }
 
     /// Serialize the schematic to JSON for Python layout sync, enriching component
@@ -927,16 +944,18 @@ fn build_netclass_assignments(
 
 fn patch_project_file(
     pro_path: &Path,
-    board_config: &BoardConfig,
+    board_config: Option<&BoardConfig>,
     assignments: &HashMap<String, String>,
+    layout_name: Option<&str>,
 ) -> AnyhowResult<()> {
     info!("Updating project settings in {}", pro_path.display());
-    kicad_project_patch::patch_kicad_pro(pro_path, board_config, assignments)
+    kicad_project_patch::patch_kicad_pro(pro_path, board_config, assignments, layout_name)
 }
 
 fn patch_pcb_file(
     pcb_path: &Path,
     board_config: Option<&BoardConfig>,
+    layout_name: Option<&str>,
     kicad_model_dirs: &BTreeMap<String, PathBuf>,
     footprint_lib_dirs: &HashMap<String, PathBuf>,
 ) -> Result<(), LayoutError> {
@@ -948,7 +967,7 @@ fn patch_pcb_file(
         LayoutError::StackupPatchingError(format!("Failed to parse PCB file: {}", e))
     })?;
 
-    let patches = build_pcb_patchset(&board, board_config)?;
+    let patches = build_pcb_patchset(&board, board_config, layout_name)?;
     let patched = render_patches(&pcb_content, &patches).map_err(|e| {
         LayoutError::StackupPatchingError(format!(
             "Failed to patch PCB file {}: {}",
@@ -1014,8 +1033,10 @@ fn patch_pcb_file(
 fn build_pcb_patchset(
     board: &pcb_sexpr::Sexpr,
     board_config: Option<&BoardConfig>,
+    layout_name: Option<&str>,
 ) -> Result<pcb_sexpr::PatchSet, LayoutError> {
     let mut patches = build_title_block_patchset(board)?;
+    patches.extend(build_board_properties_patchset(board, layout_name)?);
 
     if let Some(stackup) = board_config.and_then(|config| config.stackup.as_ref()) {
         let board_thickness_iu = stackup_thickness_iu(stackup);
@@ -1028,6 +1049,73 @@ fn build_pcb_patchset(
             &stackup,
             board_thickness_iu,
         )?);
+    }
+
+    Ok(patches)
+}
+
+fn build_board_properties_patchset(
+    board: &pcb_sexpr::Sexpr,
+    layout_name: Option<&str>,
+) -> Result<pcb_sexpr::PatchSet, LayoutError> {
+    let root_items = board.as_list().ok_or_else(|| {
+        LayoutError::StackupPatchingError("PCB root is not an S-expression list".to_string())
+    })?;
+    if root_items.first().and_then(pcb_sexpr::Sexpr::as_sym) != Some("kicad_pcb") {
+        return Err(LayoutError::StackupPatchingError(
+            "PCB root must start with (kicad_pcb ...)".to_string(),
+        ));
+    }
+
+    let mut patches = pcb_sexpr::PatchSet::new();
+    let mut inserted = Vec::new();
+    for (name, value) in [
+        layout_name.map(|value| ("PCB_NAME", value)),
+        Some(("PCB_VERSION", PCB_VERSION_PLACEHOLDER)),
+        Some(("PCB_GIT_HASH", PCB_GIT_HASH_PLACEHOLDER)),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let property = root_items.iter().find_map(|item| {
+            let items = item.as_list()?;
+            (items.first().and_then(|item| item.as_sym()) == Some("property")
+                && items.get(1).and_then(|item| item.as_str()) == Some(name))
+            .then_some(items)
+        });
+
+        if let Some(value_node) = property.and_then(|items| items.get(2)) {
+            patches.replace_string(value_node.span, value);
+        } else {
+            inserted.push((name, value));
+        }
+    }
+
+    if !inserted.is_empty() {
+        let insert_at = root_items
+            .iter()
+            .rev()
+            .find_map(|item| {
+                let items = item.as_list()?;
+                match items.first().and_then(|item| item.as_sym()) {
+                    Some("setup" | "layers" | "general") => Some(item.span.end),
+                    _ => None,
+                }
+            })
+            .unwrap_or_else(|| board.span.end.saturating_sub(1));
+        let text = inserted
+            .into_iter()
+            .map(|(name, value)| {
+                pcb_sexpr::Sexpr::list(vec![
+                    pcb_sexpr::Sexpr::symbol("property"),
+                    pcb_sexpr::Sexpr::string(name),
+                    pcb_sexpr::Sexpr::string(value),
+                ])
+                .to_string()
+            })
+            .map(|property| format!("\n{property}"))
+            .collect::<String>();
+        patches.replace_raw(pcb_sexpr::Span::new(insert_at, insert_at), text);
     }
 
     Ok(patches)
@@ -1239,7 +1327,10 @@ fn stackup_thickness_iu(stackup: &Stackup) -> Option<PcbIu> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PcbIu, build_stackup_patchset, build_title_block_patchset, stackup_thickness_iu};
+    use super::{
+        PCB_GIT_HASH_PLACEHOLDER, PCB_VERSION_PLACEHOLDER, PcbIu, build_board_properties_patchset,
+        build_stackup_patchset, build_title_block_patchset, stackup_thickness_iu,
+    };
     use pcb_zen_core::lang::stackup::{CopperRole, DielectricForm, Layer, Stackup};
 
     #[test]
@@ -1277,6 +1368,31 @@ mod tests {
         assert_eq!(PcbIu(1_600_000).to_kicad_mm_text(), "1.6");
         assert_eq!(PcbIu(2_000_000).to_kicad_mm_text(), "2");
         assert_eq!(PcbIu(-1_234_568).to_kicad_mm_text(), "-1.234568");
+    }
+
+    #[test]
+    fn build_board_properties_patchset_sets_release_placeholders() {
+        let input = r#"(kicad_pcb
+	(version 20240101)
+	(general (thickness 1.6))
+	(layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+	(setup)
+)"#;
+
+        let board = pcb_sexpr::parse(input).unwrap();
+        let patches = build_board_properties_patchset(&board, Some("DemoBoard")).unwrap();
+        let mut out = Vec::new();
+        patches.write_to(input, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        let out = pcb_sexpr::formatter::prettify(&out, pcb_sexpr::formatter::FormatMode::Normal);
+
+        assert!(out.contains(r#"(property "PCB_NAME" "DemoBoard")"#));
+        assert!(out.contains(&format!(
+            r#"(property "PCB_VERSION" "{PCB_VERSION_PLACEHOLDER}")"#
+        )));
+        assert!(out.contains(&format!(
+            r#"(property "PCB_GIT_HASH" "{PCB_GIT_HASH_PLACEHOLDER}")"#
+        )));
     }
 
     #[test]

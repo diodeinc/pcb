@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use crate::{PCB_GIT_HASH_PLACEHOLDER, PCB_VERSION_PLACEHOLDER};
+
 const DEFAULT_COLOR: &str = "rgba(0, 0, 0, 0.000)";
 const DEFAULT_WIRE_WIDTH_MIL: i64 = 6;
 const DEFAULT_BUS_WIDTH_MIL: i64 = 12;
@@ -84,15 +86,19 @@ const CONSTRAINT_MAPPINGS: &[(&[&str], &str)] = &[
 
 pub(crate) fn patch_kicad_pro(
     pro_path: &Path,
-    board_config: &BoardConfig,
+    board_config: Option<&BoardConfig>,
     assignments: &HashMap<String, String>,
+    layout_name: Option<&str>,
 ) -> Result<()> {
     let source = fs::read_to_string(pro_path)
         .with_context(|| format!("Failed to read {}", pro_path.display()))?;
     let mut project: Value = serde_json::from_str(&source)
         .with_context(|| format!("Failed to parse {}", pro_path.display()))?;
 
-    patch_project_value(&mut project, board_config, assignments);
+    patch_text_variables(&mut project, layout_name);
+    if let Some(board_config) = board_config {
+        patch_project_value(&mut project, board_config, assignments);
+    }
 
     let mut serialized = serde_json::to_string_pretty(&project)?;
     serialized.push('\n');
@@ -127,6 +133,29 @@ fn patch_project_value(
     if !assignments.is_empty() {
         patch_netclass_patterns(project, assignments);
     }
+}
+
+fn patch_text_variables(project: &mut Value, layout_name: Option<&str>) {
+    let vars = ensure_object(
+        ensure_object(project)
+            .entry("text_variables".to_string())
+            .or_insert_with(|| Value::Object(Map::new())),
+    );
+
+    if let Some(layout_name) = layout_name {
+        vars.insert(
+            "PCB_NAME".to_string(),
+            Value::String(layout_name.to_string()),
+        );
+    }
+    vars.insert(
+        "PCB_VERSION".to_string(),
+        Value::String(PCB_VERSION_PLACEHOLDER.to_string()),
+    );
+    vars.insert(
+        "PCB_GIT_HASH".to_string(),
+        Value::String(PCB_GIT_HASH_PLACEHOLDER.to_string()),
+    );
 }
 
 fn extract_design_rules_from_project_value(project: &Value) -> Option<DesignRules> {
