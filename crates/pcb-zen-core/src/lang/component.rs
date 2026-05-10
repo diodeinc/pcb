@@ -5,6 +5,7 @@ use pcb_sch::physical::PhysicalValue;
 use semver::Version;
 use starlark::{
     any::ProvidesStaticType,
+    codemap::ResolvedSpan,
     collections::SmallMap,
     environment::GlobalsBuilder,
     errors::EvalSeverity,
@@ -119,6 +120,8 @@ pub struct ComponentGen<V, T> {
     connections: SmallMap<String, V>,
     data: T,
     source_path: String,
+    #[allocative(skip)]
+    declaration_span: Option<ResolvedSpan>,
     symbol: V,
     description: Option<String>,
 }
@@ -166,6 +169,7 @@ impl<'v> Freeze for ComponentValue<'v> {
                 },
             },
             source_path: self.source_path,
+            declaration_span: self.declaration_span,
             symbol: self.symbol.freeze(freezer)?,
             description: self.description,
         })
@@ -1687,6 +1691,10 @@ impl FrozenComponentValue {
         &self.source_path
     }
 
+    pub fn declaration_span(&self) -> Option<ResolvedSpan> {
+        self.declaration_span
+    }
+
     pub fn symbol(&self) -> &FrozenValue {
         &self.symbol
     }
@@ -2120,6 +2128,9 @@ where
                     properties: properties_map,
                 }),
                 source_path: eval_ctx.source_path().unwrap_or_default(),
+                declaration_span: eval_ctx
+                    .call_stack_top_location()
+                    .map(|location| location.resolve_span()),
                 symbol: eval_ctx.heap().alloc_complex(final_symbol),
                 description: final_description,
             });

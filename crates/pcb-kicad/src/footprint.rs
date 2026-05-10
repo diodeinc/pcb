@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use base64::Engine;
 use pcb_sexpr::formatter::{FormatMode, prettify};
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -88,7 +87,7 @@ pub fn embed_step_in_footprint(
     encoder.write_all(&step_bytes)?;
     let compressed = encoder.finish()?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
-    let checksum = hex::encode(Sha256::digest(&step_bytes));
+    let checksum = pcb_sexpr::kicad::footprint::embedded_file_checksum(&step_bytes);
 
     let b64_formatted = b64
         .as_bytes()

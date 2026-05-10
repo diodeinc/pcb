@@ -91,6 +91,77 @@ Component(
 }
 
 #[test]
+fn file_backed_footprint_validation_reports_embedded_file_errors() {
+    let result = common::eval_zen(vec![
+        (
+            "bad.kicad_mod".to_string(),
+            r#"
+            (footprint "Bad"
+              (embedded_files
+                (file
+                  (name model.step)
+                  (type model)
+                  (data |not base64|)
+                  (checksum "00")
+                )
+              )
+            )
+            "#
+            .to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+            P1 = Net()
+            P2 = Net()
+            P3 = Net()
+            P4 = Net()
+
+            Component(
+                name = "R1",
+                footprint = "bad.kicad_mod",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": P1, "2": P2},
+            )
+
+            Component(
+                name = "R2",
+                footprint = "bad.kicad_mod",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": P3, "2": P4},
+            )
+            "#
+            .to_string(),
+        ),
+    ]);
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+
+    let schematic_result = result
+        .output
+        .expect("expected eval output")
+        .to_schematic_with_diagnostics();
+
+    assert!(schematic_result.diagnostics.has_errors());
+    let footprint_diags = schematic_result
+        .diagnostics
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.body.contains("uses invalid footprint"))
+        .collect::<Vec<_>>();
+    assert_eq!(footprint_diags.len(), 2);
+    let footprint_diag = footprint_diags[0];
+    assert!(footprint_diag.span.is_some());
+    let child = footprint_diag
+        .child
+        .as_ref()
+        .expect("expected inner footprint-file diagnostic");
+    assert!(child.body.contains("Invalid KiCad footprint"), "{child:?}");
+    assert!(child.body.contains("invalid base64 data"), "{child:?}");
+    assert!(child.path.ends_with("bad.kicad_mod"), "{child:?}");
+    assert!(child.span.is_some());
+}
+
+#[test]
 fn component_modifier_part_without_datasheet_clears_stale_part_datasheet() {
     let component = eval_single_root_component(
         r#"

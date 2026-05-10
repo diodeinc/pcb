@@ -14,7 +14,7 @@ expression: result
 			(name new.step)
 			(type model)
 			(data |KLUv/SANaQAATkVXIFNURVAgREFUQQ==|)
-			(checksum "77d27e421d129c030d5426bfd60022a9bbec7e7964cb05b2d459c19d06adf250")
+			(checksum "0FC02384A29118F69FFB8F37551022E3")
 		)
 	)
 	(model "kicad-embed://new.step"
