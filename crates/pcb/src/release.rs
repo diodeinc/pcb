@@ -590,24 +590,22 @@ fn update_kicad_pro_release_variables(
         )
     })?;
 
+    let project = project
+        .as_object_mut()
+        .context("KiCad project file root must be a JSON object")?;
     let text_vars = project
-        .get_mut("text_variables")
-        .and_then(|v| v.as_object_mut())
-        .with_context(|| {
-            format!(
-                "Missing text_variables in {}. Run `pcb layout` before publishing.",
-                kicad_pro_path.display()
-            )
-        })?;
+        .entry("text_variables")
+        .or_insert_with(|| serde_json::json!({}));
+    if !text_vars.is_object() {
+        *text_vars = serde_json::json!({});
+    }
+    let text_vars = text_vars.as_object_mut().unwrap();
 
     for (key, value) in [("PCB_VERSION", version), ("PCB_GIT_HASH", git_hash)] {
-        let slot = text_vars.get_mut(key).with_context(|| {
-            format!(
-                "Missing {key} text variable in {}. Run `pcb layout` before publishing.",
-                kicad_pro_path.display()
-            )
-        })?;
-        *slot = serde_json::Value::String(value.to_string());
+        text_vars.insert(
+            key.to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
     }
 
     // Write back to file with pretty formatting
@@ -642,23 +640,41 @@ fn update_kicad_pcb_release_variables(
         .context("KiCad PCB file root must be an S-expression list")?;
 
     let mut patches = pcb_sexpr::PatchSet::new();
+    let mut inserted = String::new();
     for (key, value) in [("PCB_VERSION", version), ("PCB_GIT_HASH", git_hash)] {
-        let value_node = root_items
+        let value_node = root_items.iter().find_map(|item| {
+            let items = item.as_list()?;
+            (items.first().and_then(|item| item.as_sym()) == Some("property")
+                && items.get(1).and_then(|item| item.as_str()) == Some(key))
+            .then_some(items.get(2))
+            .flatten()
+        });
+        if let Some(value_node) = value_node {
+            patches.replace_string(value_node.span, value);
+        } else {
+            let property = pcb_sexpr::Sexpr::list(vec![
+                pcb_sexpr::Sexpr::symbol("property"),
+                pcb_sexpr::Sexpr::string(key),
+                pcb_sexpr::Sexpr::string(value),
+            ]);
+            inserted.push('\n');
+            inserted.push_str(&property.to_string());
+        }
+    }
+
+    if !inserted.is_empty() {
+        let insert_at = root_items
             .iter()
+            .rev()
             .find_map(|item| {
                 let items = item.as_list()?;
-                (items.first().and_then(|item| item.as_sym()) == Some("property")
-                    && items.get(1).and_then(|item| item.as_str()) == Some(key))
-                .then_some(items.get(2))
-                .flatten()
+                match items.first().and_then(|item| item.as_sym()) {
+                    Some("setup" | "layers" | "general") => Some(item.span.end),
+                    _ => None,
+                }
             })
-            .with_context(|| {
-                format!(
-                    "Missing {key} board property in {}. Run `pcb layout` before publishing.",
-                    kicad_pcb_path.display()
-                )
-            })?;
-        patches.replace_string(value_node.span, value);
+            .unwrap_or_else(|| root.span.end.saturating_sub(1));
+        patches.replace_raw(pcb_sexpr::Span::new(insert_at, insert_at), inserted);
     }
 
     let file = fs::File::create(kicad_pcb_path).with_context(|| {
@@ -1389,7 +1405,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn update_kicad_pro_release_variables_writes_trailing_newline() -> Result<()> {
+    fn update_kicad_pro_release_variables_adds_missing_release_variables() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let kicad_pro_path = temp_dir.path().join("layout.kicad_pro");
 
@@ -1397,9 +1413,7 @@ mod tests {
             &kicad_pro_path,
             r#"{
   "text_variables": {
-    "PCB_NAME": "Demo Board",
-    "PCB_VERSION": "v0.0.0",
-    "PCB_GIT_HASH": "d10d3c0"
+    "PCB_NAME": "Demo Board"
   }
 }"#,
         )?;
@@ -1430,6 +1444,30 @@ mod tests {
             vars.get("PCB_NAME").and_then(|v| v.as_str()),
             Some("Demo Board")
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_kicad_pcb_release_variables_adds_missing_release_properties() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let kicad_pcb_path = temp_dir.path().join("layout.kicad_pcb");
+
+        fs::write(
+            &kicad_pcb_path,
+            r#"(kicad_pcb
+  (version 20240108)
+  (generator "pcb")
+  (general)
+)
+"#,
+        )?;
+
+        update_kicad_pcb_release_variables(&kicad_pcb_path, "1.2.3", "abcdef0")?;
+
+        let content = fs::read_to_string(&kicad_pcb_path)?;
+        assert!(content.contains(r#"(property "PCB_VERSION" "1.2.3")"#));
+        assert!(content.contains(r#"(property "PCB_GIT_HASH" "abcdef0")"#));
 
         Ok(())
     }
