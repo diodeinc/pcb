@@ -263,7 +263,10 @@ fn resolve_registry_image_url(
     token: &str,
     sha256: &str,
 ) -> Result<Option<String>> {
-    let endpoint = format!("{}/api/registry/images/{sha256}", crate::get_api_base_url());
+    let endpoint = format!(
+        "{}/api/registries/images/{sha256}",
+        crate::get_api_base_url()
+    );
     let response = client
         .get(endpoint)
         .bearer_auth(token)
