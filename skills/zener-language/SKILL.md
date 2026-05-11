@@ -1,22 +1,30 @@
 ---
 name: zener-language
-description: Canonical Zener HDL guidance — language semantics, package rules, manifests, stdlib APIs, and authoring idioms. Use when writing, editing, refactoring, or reviewing non-trivial `.zen` code, especially work involving `Module()`, `io()`, `config()`, imports, `pcb.toml`, stdlib interfaces, units, generics, DNP patterns, or validation.
+description: Canonical Zener HDL guidance. Use for any non-trivial `.zen` work or whenever syntax, `Module()`, `io()`, `config()`, imports, `pcb.toml`, stdlib APIs, package APIs, source lookup, generics, DNP patterns, or validation are uncertain.
 ---
 
 # Zener Language
 
-Canonical Zener HDL semantics and authoring guidance. Start from nearby code and confirm unfamiliar APIs with `pcb doc` or source.
+Canonical Zener HDL semantics and authoring guidance. Start from nearby code; use `pcb doc` for package APIs and source locations before searching elsewhere.
 
 ## Workflow
 
 1. Start from nearby workspace code. Prefer the local package's patterns before generic examples.
 2. Check exact semantics here before editing unfamiliar syntax, manifests, imports, stdlib APIs, package interfaces, or authoring patterns.
-3. Use `pcb doc` to discover package APIs whenever you need interface field names, generic parameters, or any unfamiliar surface. Output includes the resolved source path so you can read the package source directly.
-   - `pcb doc --package @stdlib` (or `@stdlib/generics`) for stdlib.
-   - `pcb doc --package <package>` for any installed or registry package. Pin URL packages with `@<version>`, e.g. `pcb doc --package github.com/org/repo/path@v0.2.5`.
-4. When in doubt about exact behavior or semantics, read the actual source `.zen` files — stdlib modules and package sources alike. `pcb doc` is type-level only; the source is the truth.
+3. Use `pcb doc` first for interface fields, generic parameters, stdlib/package APIs, file trees, and source roots.
+4. Read source from the path reported by `pcb doc` when behavior matters. Do not search broad filesystem roots or random cache directories to find stdlib/package source.
 5. Never invent syntax, stdlib modules, interfaces, fields, package APIs, footprints, or part names.
 6. Preserve trailing `# pcb:sch ...` comments. Only update names inside an existing comment when you rename the matching component or net.
+
+## Using `pcb doc`
+
+`pcb doc` is the entry point for Zener package discovery. It works for `@stdlib`, local paths, installed packages, and registry/Git URL packages.
+
+- `pcb doc --package @stdlib` or `pcb doc --package <package>` prints API docs and a `<!-- source: ... -->` root; read files under that root when docs are not enough. Pin URL packages with `@<version>`, e.g. `github.com/org/repo/path@v0.2.5`.
+- Add `--list` to print the `.zen` file tree, e.g. `pcb doc --package @stdlib --list`, before opening files like `interfaces.zen`, `units.zen`, `generics/Resistor.zen`, or `bom/match_generics.zen`.
+- Warnings do not necessarily make the command useless; partial output can still reveal the source root or file tree.
+
+Use docs for signatures and public surfaces, then read source for exact behavior. For stdlib/package source lookup, `pcb doc --package ...` replaces ad hoc `find /`, `find /Users`, or broad cache searches.
 
 ## Language
 

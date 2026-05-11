@@ -40,7 +40,7 @@ Then inspect the candidate API before instantiating it:
 pcb doc --package <module-url>@<version>
 ```
 
-If docs are incomplete or fail, read the package source from the dependency cache, registry checkout, or sandbox checkout instead of guessing the IO/config interface.
+If docs are incomplete or fail, use the source path or file tree from `pcb doc` to inspect the package source instead of guessing the IO/config interface.
 
 ## Choosing Results
 
@@ -64,7 +64,7 @@ PartModule = Module("github.com/diodeinc/registry/components/<Manufacturer>/<NAM
 
 Do not manually edit `pcb.toml` to add the dependency. On the next `pcb build`, the tool will detect the registry import and add the dependency to the package manifest automatically.
 
-Use `pcb doc --package` or source inspection for exact IO and configs. Do not infer pin names from search snippets.
+Use `pcb doc --package` and its reported source path for exact IO and configs. Do not infer pin names from search snippets.
 
 After adding the package to a board or module, verify the consuming design:
 
