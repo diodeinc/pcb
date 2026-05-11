@@ -30,14 +30,11 @@ pub fn execute(args: SelfUpdateArgs) -> anyhow::Result<()> {
 
             match updater.run_sync()? {
                 Some(result) => {
-                    // Update was performed - print changelog from the NEW binary.
+                    // Update was performed - print changelog for the version range.
                     println!();
                     let selector =
                         changelog_selector(result.old_version.as_ref(), &result.new_version);
-                    let _ = std::process::Command::new("pcb")
-                        .arg("changelog")
-                        .arg(selector)
-                        .status();
+                    let _ = crate::changelog::execute(crate::changelog::ChangelogArgs { selector });
 
                     // Print a random fortune
                     let fortunes: Vec<&str> = FORTUNES.lines().filter(|l| !l.is_empty()).collect();
