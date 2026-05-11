@@ -34,7 +34,6 @@ pcb-sch = { workspace = true, features = ["table"] }
 pcb-layout = { workspace = true }
 pcb-sim = { workspace = true }
 pcb-diode-api = { workspace = true, optional = true }
-pcb-docs = { workspace = true }
 pcb-docgen = { workspace = true }
 pcb-ipc2581-tools = { workspace = true, features = ["api"] }
 pcb-eda = { workspace = true }
@@ -72,6 +71,7 @@ rayon = { workspace = true }
 jiff = { workspace = true }
 crossterm = { workspace = true }
 ctrlc = { workspace = true }
+reqwest = { workspace = true }
 termimad = { workspace = true }
 syntect = { workspace = true }
 gltfpack-sys = { workspace = true }

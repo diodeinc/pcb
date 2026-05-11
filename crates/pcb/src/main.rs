@@ -13,6 +13,7 @@ mod api;
 mod bom;
 mod build;
 mod bundle;
+mod changelog;
 mod codegen;
 mod config_input;
 mod doc;
@@ -113,8 +114,12 @@ enum Commands {
     /// Import KiCad projects into a Zener workspace
     Import(import::ImportArgs),
 
-    /// View embedded Zener documentation
+    /// Generate package documentation
     Doc(doc::DocArgs),
+
+    /// Print the pcb changelog
+    #[command(hide = true)]
+    Changelog(changelog::ChangelogArgs),
 
     /// Layout PCB designs
     #[command(alias = "l")]
@@ -209,7 +214,6 @@ fn run() -> anyhow::Result<()> {
     // Skip auto-update check in CI environments or when running the update command
     if std::env::var("CI").is_err() && !is_update_command(&cli.command) {
         check_and_update();
-        ensure_docs_installed();
     }
 
     match cli.command {
@@ -228,6 +232,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Info(args) => info::execute(args),
         Commands::Import(args) => import::execute(args),
         Commands::Doc(args) => doc::execute(args),
+        Commands::Changelog(args) => changelog::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
@@ -295,24 +300,6 @@ fn run() -> anyhow::Result<()> {
 
 fn is_update_command(command: &Commands) -> bool {
     matches!(command, Commands::Update(_) | Commands::SelfUpdate(_))
-}
-
-fn ensure_docs_installed() {
-    if let Some(home) = dirs::home_dir() {
-        let docs_dir = home.join(".pcb/docs");
-        let is_empty = docs_dir
-            .read_dir()
-            .map(|mut d| d.next().is_none())
-            .unwrap_or(true);
-        if is_empty {
-            let _ = doc::execute(doc::DocArgs {
-                path: String::new(),
-                list: false,
-                package: None,
-                install: true,
-            });
-        }
-    }
 }
 
 fn check_and_update() {

@@ -1,6 +1,7 @@
 use clap::{Args, Subcommand};
 use colored::Colorize;
 use rand::seq::SliceRandom;
+use semver::Version;
 
 const FORTUNES: &str = include_str!("fortune.txt");
 
@@ -29,13 +30,13 @@ pub fn execute(args: SelfUpdateArgs) -> anyhow::Result<()> {
 
             match updater.run_sync()? {
                 Some(result) => {
-                    // Update was performed - install docs and print changelog from NEW binary
+                    // Update was performed - print changelog from the NEW binary.
                     println!();
+                    let selector =
+                        changelog_selector(result.old_version.as_ref(), &result.new_version);
                     let _ = std::process::Command::new("pcb")
-                        .args(["doc", "--install"])
-                        .status();
-                    let _ = std::process::Command::new("pcb")
-                        .args(["doc", "changelog@latest"])
+                        .arg("changelog")
+                        .arg(selector)
                         .status();
 
                     // Print a random fortune
@@ -61,5 +62,27 @@ pub fn execute(args: SelfUpdateArgs) -> anyhow::Result<()> {
 
             Ok(())
         }
+    }
+}
+
+fn changelog_selector(old: Option<&Version>, new: &Version) -> String {
+    old.map_or_else(|| "latest".to_string(), |old| format!("{old}..{new}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changelog_selector_uses_old_to_new_range() {
+        assert_eq!(
+            changelog_selector(Some(&Version::new(0, 3, 78)), &Version::new(0, 3, 80)),
+            "0.3.78..0.3.80"
+        );
+    }
+
+    #[test]
+    fn changelog_selector_falls_back_to_latest_without_old_version() {
+        assert_eq!(changelog_selector(None, &Version::new(0, 3, 80)), "latest");
     }
 }
