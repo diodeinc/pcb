@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb publish` now tolerates layouts missing release text variables from older `pcb layout` runs by adding them during staging.
+
 ## [0.3.80] - 2026-05-11
 
 ### Added
