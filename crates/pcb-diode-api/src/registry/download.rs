@@ -14,8 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::thread;
 
-const REGISTRY_INDEX_ROUTE: &str = "/api/registry/index";
-const REGISTRIES_ROUTE: &str = "/api/registry/registries";
+const REGISTRIES_ROUTE: &str = "/api/registries";
 pub const DEFAULT_REGISTRY_URL: &str = "github.com/diodeinc/registry";
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize, PartialEq, Eq)]
@@ -520,14 +519,17 @@ fn registry_url_from_package_url(url: &str) -> Option<String> {
     None
 }
 
+fn registry_index_route(registry: &RegistryInfo) -> String {
+    format!("/api/registries/{}/index", registry.id)
+}
+
 /// Fetch registry index metadata without downloading the file.
-pub fn fetch_registry_index_metadata(registry_id: &str) -> Result<RegistryIndexMetadata> {
+pub fn fetch_registry_index_metadata(registry: &RegistryInfo) -> Result<RegistryIndexMetadata> {
     let token = crate::auth::get_valid_token().context("Auth failed")?;
     let client = http_client()?;
     let api_url = crate::get_api_base_url();
-    let mut url = reqwest::Url::parse(&format!("{api_url}{REGISTRY_INDEX_ROUTE}"))
+    let url = reqwest::Url::parse(&format!("{api_url}{}", registry_index_route(registry)))
         .context("Invalid registry index URL")?;
-    url.query_pairs_mut().append_pair("registryId", registry_id);
 
     let resp = client
         .get(url.clone())
@@ -578,7 +580,7 @@ fn registry_cache_dir_name(registry_id: &str) -> String {
 
 pub fn ensure_registry_index(registry: &RegistryInfo, force: bool) -> Result<RegistryIndexFile> {
     let path = registry_db_path(registry)?;
-    let metadata = match fetch_registry_index_metadata(&registry.id) {
+    let metadata = match fetch_registry_index_metadata(registry) {
         Ok(metadata) => metadata,
         Err(err) if !force && path.exists() => {
             log::debug!(
