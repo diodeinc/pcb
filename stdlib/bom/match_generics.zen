@@ -98,6 +98,28 @@ SERIES_BY_PKG = {
             [("0Ohm", "RC0201FR-070RL")],
             yageo_asset_datasheet("PYU-RC_GROUP_51_ROHS_L"),
         ),
+        panasonic_erj(
+            "ERJ-1GJF",
+            "10Ohm – 1MOhm",
+            "25V",
+            "0.05W",
+            "1%",
+            ["e96", "e24"],
+            "C",
+            iec60062_4digit,
+            "RDA0000/AOA0000C304.pdf",
+        ),
+        panasonic_erj(
+            "ERJ-1GNF",
+            "10Ohm – 1MOhm",
+            "25V",
+            "0.05W",
+            "1%",
+            ["e96", "e24"],
+            "C",
+            iec60062_4digit,
+            "RDA0000/AOA0000C304.pdf",
+        ),
     ],
     "0402": [
         # 0 ohm jumpers (checked first for exact 0 ohm match)
