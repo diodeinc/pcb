@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Added an LPDDR4 channel interface to stdlib.
 - Added scoped multi-registry search for registry-backed `pcb search`.
 - Builds now validate file-backed KiCad footprint S-expressions and embedded model checksums before layout generation.
 - `pcb info -f json` now includes the full transitive external dependency closure using package metadata aligned with workspace packages.
