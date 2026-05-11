@@ -137,10 +137,6 @@ impl LoadSpec {
     ///   - `"@gitlab/foo/bar/src/lib.zen"` - Simple user/repo without revision (assumes HEAD)
     ///   - `"@gitlab/kicad/libraries/kicad-symbols:main/Device.kicad_sym"` - Nested groups with revision
     ///
-    /// • **Workspace-relative path** – `"//<path>"`.
-    ///   Paths starting with `//` are resolved relative to the workspace root.
-    ///   Example: `"//src/components/resistor.zen"`.
-    ///
     /// • **Package URI** – `"package://<url>/<path>"`.
     ///   A stable, machine-independent reference to a file within a resolved package.
     ///   Example: `"package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen"`.
