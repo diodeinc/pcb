@@ -24,7 +24,7 @@ Commands:
   bom         Generate Bill of Materials (BOM)
   info        Display workspace and board information
   import      Import KiCad projects into a Zener workspace
-  doc         View embedded Zener documentation
+  doc         View changelog and package documentation
   layout      Layout PCB designs
   fmt         Format .zen files
   open        Open PCB layout files

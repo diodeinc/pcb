@@ -113,7 +113,7 @@ enum Commands {
     /// Import KiCad projects into a Zener workspace
     Import(import::ImportArgs),
 
-    /// View embedded Zener documentation
+    /// View changelog and package documentation
     Doc(doc::DocArgs),
 
     /// Layout PCB designs
@@ -209,7 +209,6 @@ fn run() -> anyhow::Result<()> {
     // Skip auto-update check in CI environments or when running the update command
     if std::env::var("CI").is_err() && !is_update_command(&cli.command) {
         check_and_update();
-        ensure_docs_installed();
     }
 
     match cli.command {
@@ -295,24 +294,6 @@ fn run() -> anyhow::Result<()> {
 
 fn is_update_command(command: &Commands) -> bool {
     matches!(command, Commands::Update(_) | Commands::SelfUpdate(_))
-}
-
-fn ensure_docs_installed() {
-    if let Some(home) = dirs::home_dir() {
-        let docs_dir = home.join(".pcb/docs");
-        let is_empty = docs_dir
-            .read_dir()
-            .map(|mut d| d.next().is_none())
-            .unwrap_or(true);
-        if is_empty {
-            let _ = doc::execute(doc::DocArgs {
-                path: String::new(),
-                list: false,
-                package: None,
-                install: true,
-            });
-        }
-    }
 }
 
 fn check_and_update() {

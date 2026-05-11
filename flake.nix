@@ -34,7 +34,6 @@
               ./crates/pcb-ipc2581-tools/src/commands/html_template.html.jinja
               ./crates/pcb-ipc2581-tools/src/commands/style.css
               ./crates/pcb-layout/src/scripts
-              ./docs/pages
               ./stdlib
             ];
           };

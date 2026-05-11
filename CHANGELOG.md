@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb doc` now only serves changelog and package documentation; embedded `docs/pages` docs, `pcb doc spec`, and `pcb doc --install` were removed.
+
 ### Fixed
 
 - `pcb publish` now tolerates layouts missing release text variables from older `pcb layout` runs by adding them during staging.

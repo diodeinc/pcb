@@ -17,32 +17,23 @@ const UNRELEASED_CHANGELOG_SELECTOR: &str = "unreleased";
 
 #[derive(Debug, Args)]
 pub struct DocArgs {
-    /// Documentation path for embedded docs (e.g. "spec", "tutorial", "changelog@latest")
+    /// Documentation path (e.g. "changelog", "changelog@latest")
     #[arg(default_value = "")]
     pub path: String,
 
-    /// List available pages or sections instead of showing content
+    /// List available changelog versions or package files instead of showing content
     #[arg(long, short = 'l')]
     pub list: bool,
 
     /// Generate docs from a package (local path, @stdlib, or github.com/user/repo[@version])
     #[arg(long, value_name = "PACKAGE")]
     pub package: Option<String>,
-
-    /// Install documentation files to ~/.pcb/docs
-    #[arg(long)]
-    pub install: bool,
 }
 
 // Include the generated changelog constants
 include!(concat!(env!("OUT_DIR"), "/changelog.rs"));
 
 pub fn execute(args: DocArgs) -> Result<()> {
-    // --install flag: write embedded docs to ~/.pcb/docs
-    if args.install {
-        return install_docs();
-    }
-
     if let Some(selector) = parse_changelog_path(&args.path)? {
         return render_changelog(selector, args.list);
     }
@@ -52,13 +43,17 @@ pub fn execute(args: DocArgs) -> Result<()> {
         return run_docgen_for_package(pkg, args.list);
     }
 
+    if args.path.is_empty() && args.list {
+        println!("{}", changelog_paths(CHANGELOG_MD).join("\n"));
+        return Ok(());
+    }
+
     // Require a path or --list flag
-    if args.path.is_empty() && !args.list {
+    if args.path.is_empty() {
         anyhow::bail!(
-            "Usage: pcb doc <PAGE> or pcb doc --package <PACKAGE>\n\n\
+            "Usage: pcb doc changelog[@VERSION] or pcb doc --package <PACKAGE>\n\n\
              Examples:\n\
-             \x20 pcb doc spec                  # Language specification\n\
-             \x20 pcb doc --list                # List available pages\n\
+             \x20 pcb doc --list                # List available changelog versions\n\
              \x20 pcb doc changelog             # Show latest release notes\n\
              \x20 pcb doc changelog@unreleased  # Show unreleased notes\n\
              \x20 pcb doc --package @stdlib     # Generate stdlib docs\n\
@@ -66,36 +61,20 @@ pub fn execute(args: DocArgs) -> Result<()> {
         );
     }
 
-    // Show embedded static docs
-    render_embedded_docs(&args.path, args.list)
-}
-
-/// Install embedded documentation files to ~/.pcb/docs
-fn install_docs() -> Result<()> {
-    let docs_dir = dirs::home_dir()
-        .context("Cannot determine home directory")?
-        .join(".pcb/docs");
-
-    // Clear existing docs
-    if docs_dir.exists() {
-        std::fs::remove_dir_all(&docs_dir)
-            .with_context(|| format!("Failed to remove {}", docs_dir.display()))?;
-    }
-    std::fs::create_dir_all(&docs_dir)
-        .with_context(|| format!("Failed to create {}", docs_dir.display()))?;
-
-    // Write each embedded page as a .md file
-    for page in pcb_docs::list_pages() {
-        let file_path = docs_dir.join(format!("{}.md", page.slug));
-        std::fs::write(&file_path, page.markdown)
-            .with_context(|| format!("Failed to write {}", file_path.display()))?;
+    if looks_like_package_path(&args.path) {
+        anyhow::bail!(
+            "Unknown documentation path '{}'.\n\nDid you mean: pcb doc --package {}",
+            args.path,
+            args.path
+        );
     }
 
-    // Write changelog
-    std::fs::write(docs_dir.join("CHANGELOG.md"), CHANGELOG_MD)
-        .context("Failed to write CHANGELOG.md")?;
-
-    Ok(())
+    anyhow::bail!(
+        "Unknown documentation path '{}'.\n\n\
+         Supported paths: changelog, changelog@latest, changelog@unreleased, changelog@<version>.\n\
+         Use `pcb doc --package <PACKAGE>` for package documentation.",
+        args.path
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,7 +100,7 @@ fn render_changelog(selector: ChangelogSelector, list: bool) -> Result<()> {
                      Use `pcb doc changelog --list` to see available versions."
                 )
             })?;
-            print_embedded_markdown(&content);
+            print_markdown(&content);
         }
     }
 
@@ -221,46 +200,19 @@ fn normalize_changelog_version(version: &str) -> Option<String> {
 
 /// Render just the latest release notes (used by self-update)
 pub fn print_latest_release_notes() {
-    print_embedded_markdown(LATEST_RELEASE_NOTES);
+    print_markdown(LATEST_RELEASE_NOTES);
 }
 
 /// Render just the unreleased release notes.
 pub fn print_unreleased_release_notes() {
-    print_embedded_markdown(UNRELEASED_RELEASE_NOTES);
+    print_markdown(UNRELEASED_RELEASE_NOTES);
 }
 
-fn print_embedded_markdown(content: &str) {
+fn print_markdown(content: &str) {
     if io::stdout().is_terminal() {
         print_highlighted_markdown(content);
     } else {
         println!("{}", content);
-    }
-}
-
-fn render_embedded_docs(path: &str, list: bool) -> Result<()> {
-    let content = if list {
-        pcb_docs::lookup_list(path)
-    } else {
-        pcb_docs::lookup(path)
-    };
-
-    match content {
-        Ok(content) => {
-            if !list && io::stdout().is_terminal() {
-                print_highlighted_markdown(&content);
-            } else {
-                println!("{}", content);
-            }
-            Ok(())
-        }
-        Err(e) => {
-            // Add hint if it looks like a path or URL
-            if looks_like_package_path(path) {
-                anyhow::bail!("{}\n\nDid you mean: pcb doc --package {}", e, path)
-            } else {
-                anyhow::bail!("{}", e)
-            }
-        }
     }
 }
 
