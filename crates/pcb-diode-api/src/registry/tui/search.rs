@@ -1,9 +1,6 @@
 //! Background search and detail worker threads
 
-use super::super::download::{
-    DownloadProgress, DownloadSource, RegistryIndexMetadata, download_registry_index_with_progress,
-    fetch_registry_index_metadata, load_local_version, save_local_version,
-};
+use super::super::download::{DownloadProgress, DownloadSource, RegistrySearchScope};
 use crate::bom::ComponentKey;
 use crate::kicad_symbols::KicadSymbol;
 use crate::kicad_symbols::download::{
@@ -12,7 +9,7 @@ use crate::kicad_symbols::download::{
     save_local_version as save_local_kicad_symbols_version,
 };
 use crate::{
-    KicadSymbolsClient, ModuleRelations, RegistryClient, RegistryModule, RegistryModuleHit,
+    KicadSymbolsClient, ModuleRelations, RegistryModule, RegistryModuleHit, RegistrySearchClient,
     RegistrySymbol, RegistrySymbolHit, SearchHit,
 };
 use std::collections::HashMap;
@@ -46,6 +43,8 @@ pub struct SearchScoring {
     pub semantic_rank: Option<f64>,
 }
 
+pub type SearchScoringKey = super::super::SearchResultKey;
+
 /// Results from the worker thread
 #[derive(Debug, Clone, Default)]
 pub enum SearchResults {
@@ -64,7 +63,7 @@ pub struct RegistryModuleSearchResults {
     pub docs_full_text: Vec<RegistryModuleHit>,
     pub semantic: Vec<RegistryModuleHit>,
     pub merged: Vec<RegistryModuleHit>,
-    pub scoring: HashMap<String, SearchScoring>,
+    pub scoring: HashMap<SearchScoringKey, SearchScoring>,
     pub duration: Duration,
 }
 
@@ -76,7 +75,7 @@ pub struct RegistrySymbolSearchResults {
     pub docs_full_text: Vec<RegistrySymbolHit>,
     pub semantic: Vec<RegistrySymbolHit>,
     pub merged: Vec<RegistrySymbolHit>,
-    pub scoring: HashMap<String, SearchScoring>,
+    pub scoring: HashMap<SearchScoringKey, SearchScoring>,
     pub duration: Duration,
 }
 
@@ -88,7 +87,7 @@ pub struct KicadSearchResults {
     pub docs_full_text: Vec<SearchHit>,
     pub semantic: Vec<SearchHit>,
     pub merged: Vec<SearchHit>,
-    pub scoring: HashMap<String, SearchScoring>,
+    pub scoring: HashMap<SearchScoringKey, SearchScoring>,
     pub duration: Duration,
 }
 
@@ -124,8 +123,8 @@ impl SearchResults {
         }
     }
 
-    pub fn scoring(&self) -> &HashMap<String, SearchScoring> {
-        static EMPTY: OnceLock<HashMap<String, SearchScoring>> = OnceLock::new();
+    pub fn scoring(&self) -> &HashMap<SearchScoringKey, SearchScoring> {
+        static EMPTY: OnceLock<HashMap<SearchScoringKey, SearchScoring>> = OnceLock::new();
         match self {
             SearchResults::Empty => EMPTY.get_or_init(HashMap::new),
             SearchResults::RegistryModules(results) => &results.scoring,
@@ -154,6 +153,18 @@ impl SearchResults {
             SearchResults::RegistryModules(results) => results.merged.get(idx).map(|hit| hit.id),
             SearchResults::RegistrySymbols(results) => results.merged.get(idx).map(|hit| hit.id),
             SearchResults::KicadSymbols(results) => results.merged.get(idx).map(|hit| hit.id),
+        }
+    }
+
+    pub fn selected_registry_id(&self, idx: usize) -> Option<&str> {
+        match self {
+            SearchResults::RegistryModules(results) => {
+                results.merged.get(idx).map(|hit| hit.registry.id.as_str())
+            }
+            SearchResults::RegistrySymbols(results) => {
+                results.merged.get(idx).map(|hit| hit.registry.id.as_str())
+            }
+            SearchResults::Empty | SearchResults::KicadSymbols(_) => None,
         }
     }
 
@@ -218,15 +229,15 @@ impl Default for ComponentSearchResults {
 pub struct SearchWorkerOptions {
     pub registry_enabled: bool,
     pub kicad_enabled: bool,
-    pub prefetched_registry_metadata: Option<RegistryIndexMetadata>,
+    pub registry_scope: Option<RegistrySearchScope>,
     pub prefetched_kicad_metadata: Option<KicadSymbolsIndexMetadata>,
-    pub registry_db_path_override: Option<std::path::PathBuf>,
 }
 
 /// Request to fetch details for a specific local-index item.
 #[derive(Debug)]
 pub struct DetailRequest {
     pub item_id: i64,
+    pub registry_id: Option<String>,
     pub mode: SearchMode,
 }
 
@@ -234,6 +245,7 @@ pub struct DetailRequest {
 #[derive(Debug)]
 pub struct DetailResponse {
     pub item_id: i64,
+    pub registry_id: Option<String>,
     pub mode: SearchMode,
     pub module: Option<RegistryModule>,
     pub symbol: Option<RegistrySymbol>,
@@ -245,23 +257,16 @@ pub struct DetailResponse {
 pub fn spawn_detail_worker(
     req_rx: Receiver<DetailRequest>,
     resp_tx: Sender<DetailResponse>,
-    registry_db_path_override: Option<std::path::PathBuf>,
+    registry_scope: Option<RegistrySearchScope>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let registry_db_path = match registry_db_path_override {
-            Some(path) => path,
-            None => match RegistryClient::default_db_path() {
-                Ok(path) => path,
-                Err(_) => return,
-            },
-        };
         let kicad_db_path = match KicadSymbolsClient::default_db_path() {
             Ok(path) => path,
             Err(_) => return,
         };
 
-        let mut registry_client: Option<RegistryClient> = None;
-        let mut registry_mtime: Option<SystemTime> = None;
+        let mut registry_client: Option<RegistrySearchClient> = None;
+        let mut registry_mtimes: Vec<Option<SystemTime>> = Vec::new();
         let mut kicad_client: Option<KicadSymbolsClient> = None;
         let mut kicad_mtime: Option<SystemTime> = None;
 
@@ -272,17 +277,31 @@ pub fn spawn_detail_worker(
 
             match req.mode {
                 SearchMode::RegistryModules | SearchMode::RegistryComponents => {
-                    let current_mtime = get_file_mtime(&registry_db_path);
-                    if (registry_client.is_none() || current_mtime != registry_mtime)
-                        && let Ok(new_client) = RegistryClient::open_path(&registry_db_path)
-                    {
-                        registry_client = Some(new_client);
-                        registry_mtime = current_mtime;
+                    let current_mtimes = registry_index_mtimes(registry_scope.as_ref());
+                    if registry_client.is_none() || current_mtimes != registry_mtimes {
+                        registry_client = registry_scope
+                            .as_ref()
+                            .and_then(|scope| RegistrySearchClient::open_cached_scope(scope).ok());
+                        registry_mtimes = current_mtimes;
                     }
 
                     let Some(ref client) = registry_client else {
                         let _ = resp_tx.send(DetailResponse {
                             item_id: req.item_id,
+                            registry_id: req.registry_id.clone(),
+                            mode: req.mode,
+                            module: None,
+                            symbol: None,
+                            kicad_symbol: None,
+                            relations: ModuleRelations::default(),
+                        });
+                        continue;
+                    };
+
+                    let Some(registry_id) = req.registry_id.as_deref() else {
+                        let _ = resp_tx.send(DetailResponse {
+                            item_id: req.item_id,
+                            registry_id: req.registry_id.clone(),
                             mode: req.mode,
                             module: None,
                             symbol: None,
@@ -294,16 +313,24 @@ pub fn spawn_detail_worker(
 
                     let (module, symbol, relations) = match req.mode {
                         SearchMode::RegistryModules => {
-                            let module = client.get_module_by_id(req.item_id).ok().flatten();
+                            let module = client
+                                .get_module_by_key(registry_id, req.item_id)
+                                .ok()
+                                .flatten();
                             let relations = if module.is_some() {
-                                client.get_module_relations(req.item_id).unwrap_or_default()
+                                client
+                                    .get_module_relations_by_key(registry_id, req.item_id)
+                                    .unwrap_or_default()
                             } else {
                                 ModuleRelations::default()
                             };
                             (module, None, relations)
                         }
                         SearchMode::RegistryComponents => {
-                            let symbol = client.get_symbol_by_id(req.item_id).ok().flatten();
+                            let symbol = client
+                                .get_symbol_by_key(registry_id, req.item_id)
+                                .ok()
+                                .flatten();
                             (None, symbol, ModuleRelations::default())
                         }
                         _ => unreachable!(),
@@ -311,6 +338,7 @@ pub fn spawn_detail_worker(
 
                     let _ = resp_tx.send(DetailResponse {
                         item_id: req.item_id,
+                        registry_id: req.registry_id.clone(),
                         mode: req.mode,
                         module,
                         symbol,
@@ -333,6 +361,7 @@ pub fn spawn_detail_worker(
 
                     let _ = resp_tx.send(DetailResponse {
                         item_id: req.item_id,
+                        registry_id: None,
                         mode: req.mode,
                         module: None,
                         symbol: None,
@@ -349,6 +378,15 @@ pub fn spawn_detail_worker(
 /// Get file modification time, returns None on error
 fn get_file_mtime(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
+}
+
+fn registry_index_mtimes(scope: Option<&RegistrySearchScope>) -> Vec<Option<SystemTime>> {
+    scope
+        .and_then(|scope| scope.index_paths().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| get_file_mtime(&path))
+        .collect()
 }
 
 fn index_update_lock() -> &'static Mutex<()> {
@@ -388,36 +426,14 @@ fn ensure_local_index_present<Meta>(
 }
 
 fn spawn_registry_update_check(
-    db_path: std::path::PathBuf,
+    scope: RegistrySearchScope,
     download_tx: Sender<DownloadProgress>,
     force: bool,
 ) {
     thread::spawn(move || {
         let _lock = index_update_lock().lock().unwrap();
-        let meta = match fetch_registry_index_metadata() {
-            Ok(metadata) => metadata,
-            Err(err) => {
-                if force {
-                    let _ = download_tx.send(DownloadProgress {
-                        source: DownloadSource::Registry,
-                        pct: None,
-                        done: true,
-                        error: Some(err.to_string()),
-                        is_update: true,
-                    });
-                }
-                return;
-            }
-        };
-
-        let remote_version = &meta.sha256;
-        let local_version = load_local_version(&db_path);
-        if !force && local_version.as_deref() == Some(remote_version.as_str()) {
-            return;
-        }
-
         if let Err(err) =
-            download_registry_index_with_progress(&db_path, &download_tx, true, Some(&meta))
+            RegistrySearchClient::open_scope_with_progress(scope, &download_tx, true, force)
         {
             let _ = download_tx.send(DownloadProgress {
                 source: DownloadSource::Registry,
@@ -426,10 +442,7 @@ fn spawn_registry_update_check(
                 error: Some(format!("Update failed: {}", err)),
                 is_update: true,
             });
-            return;
         }
-
-        let _ = save_local_version(&db_path, remote_version);
     });
 }
 
@@ -473,6 +486,10 @@ fn spawn_kicad_update_check(db_path: std::path::PathBuf, download_tx: Sender<Dow
 pub(crate) trait ScoredHit {
     fn url(&self) -> &str;
     fn rank(&self) -> Option<f64>;
+
+    fn scoring_key(&self) -> SearchScoringKey {
+        SearchScoringKey::url(self.url())
+    }
 }
 
 impl ScoredHit for SearchHit {
@@ -493,6 +510,10 @@ impl ScoredHit for RegistryModuleHit {
     fn rank(&self) -> Option<f64> {
         self.rank
     }
+
+    fn scoring_key(&self) -> SearchScoringKey {
+        SearchScoringKey::registry(&self.registry.id, &self.url)
+    }
 }
 
 impl ScoredHit for RegistrySymbolHit {
@@ -503,6 +524,10 @@ impl ScoredHit for RegistrySymbolHit {
     fn rank(&self) -> Option<f64> {
         self.rank
     }
+
+    fn scoring_key(&self) -> SearchScoringKey {
+        SearchScoringKey::registry(&self.registry.id, &self.url)
+    }
 }
 
 pub(crate) fn build_scoring<T: ScoredHit>(
@@ -510,7 +535,7 @@ pub(crate) fn build_scoring<T: ScoredHit>(
     word: &[T],
     docs_full_text: &[T],
     semantic: &[T],
-) -> HashMap<String, SearchScoring> {
+) -> HashMap<SearchScoringKey, SearchScoring> {
     let mut scoring = HashMap::new();
     record_scores(&mut scoring, trigram, |entry, idx, rank| {
         entry.trigram_position = Some(idx);
@@ -532,20 +557,17 @@ pub(crate) fn build_scoring<T: ScoredHit>(
 }
 
 fn record_scores<T: ScoredHit>(
-    scoring: &mut HashMap<String, SearchScoring>,
+    scoring: &mut HashMap<SearchScoringKey, SearchScoring>,
     hits: &[T],
     mut update: impl FnMut(&mut SearchScoring, usize, Option<f64>),
 ) {
     for (idx, hit) in hits.iter().enumerate() {
-        let entry = scoring.entry(hit.url().to_string()).or_default();
+        let entry = scoring.entry(hit.scoring_key()).or_default();
         update(entry, idx, hit.rank());
     }
 }
 
 /// Spawn the search worker thread
-///
-/// If `prefetched_metadata` is provided, it will be used for the initial download
-/// to avoid a duplicate API request.
 pub fn spawn_worker(
     query_rx: Receiver<SearchQuery>,
     result_tx: Sender<SearchResults>,
@@ -556,27 +578,12 @@ pub fn spawn_worker(
         let SearchWorkerOptions {
             registry_enabled,
             kicad_enabled,
-            mut prefetched_registry_metadata,
+            registry_scope,
             mut prefetched_kicad_metadata,
-            registry_db_path_override,
         } = options;
-        let registry_index_override = registry_db_path_override.is_some();
-        let registry_db_path = match registry_db_path_override {
-            Some(path) => path,
-            None => match RegistryClient::default_db_path() {
-                Ok(p) => p,
-                Err(e) => {
-                    let _ = download_tx.send(DownloadProgress {
-                        source: DownloadSource::Registry,
-                        pct: None,
-                        done: true,
-                        error: Some(format!("Failed to get registry db path: {}", e)),
-                        is_update: false,
-                    });
-                    return;
-                }
-            },
-        };
+        let registry_updates_disabled = registry_scope
+            .as_ref()
+            .is_some_and(RegistrySearchScope::updates_disabled);
         let kicad_db_path = match KicadSymbolsClient::default_db_path() {
             Ok(p) => p,
             Err(e) => {
@@ -591,35 +598,42 @@ pub fn spawn_worker(
             }
         };
 
-        let mut registry_client: Option<RegistryClient> = None;
-        let mut registry_mtime = None;
+        let mut registry_client: Option<RegistrySearchClient> = None;
+        let mut registry_mtimes = Vec::new();
         let mut kicad_client: Option<KicadSymbolsClient> = None;
         let mut kicad_mtime = None;
-        let mut registry_ready = false;
         let mut kicad_ready = false;
-        let mut registry_update_pending = false;
         let mut kicad_update_started = false;
 
-        if registry_enabled {
-            let registry_present = if registry_index_override {
-                registry_db_path.exists()
+        if registry_enabled && let Some(scope) = registry_scope.as_ref() {
+            let client = if scope.local_indexes_exist() {
+                RegistrySearchClient::open_cached_scope(scope)
             } else {
-                ensure_local_index_present(
-                    &registry_db_path,
+                RegistrySearchClient::open_scope_with_progress(
+                    scope.clone(),
                     &download_tx,
-                    prefetched_registry_metadata.as_ref(),
-                    |path, tx, metadata| {
-                        download_registry_index_with_progress(path, tx, false, metadata)
-                    },
+                    false,
+                    false,
                 )
-                .is_ok()
             };
 
-            if registry_present && let Ok(client) = RegistryClient::open_path(&registry_db_path) {
-                registry_client = Some(client);
-                registry_mtime = get_file_mtime(&registry_db_path);
-                registry_ready = true;
-                prefetched_registry_metadata = None;
+            match client {
+                Ok(client) => {
+                    registry_mtimes = registry_index_mtimes(registry_scope.as_ref());
+                    registry_client = Some(client);
+                    if !registry_updates_disabled {
+                        spawn_registry_update_check(scope.clone(), download_tx.clone(), false);
+                    }
+                }
+                Err(err) => {
+                    let _ = download_tx.send(DownloadProgress {
+                        source: DownloadSource::Registry,
+                        pct: None,
+                        done: true,
+                        error: Some(format!("Failed to open registry: {}", err)),
+                        is_update: false,
+                    });
+                }
             }
         }
 
@@ -641,11 +655,6 @@ pub fn spawn_worker(
             prefetched_kicad_metadata = None;
         }
 
-        if registry_ready && !registry_index_override {
-            registry_update_pending = true;
-            spawn_registry_update_check(registry_db_path.clone(), download_tx.clone(), false);
-        }
-
         if kicad_ready {
             kicad_update_started = true;
             spawn_kicad_update_check(kicad_db_path.clone(), download_tx.clone());
@@ -658,25 +667,46 @@ pub fn spawn_worker(
 
             match query.mode {
                 SearchMode::RegistryModules | SearchMode::RegistryComponents => {
-                    if !registry_ready {
-                        let registry_present = if registry_index_override {
-                            registry_db_path.exists()
-                        } else {
-                            ensure_local_index_present(
-                                &registry_db_path,
-                                &download_tx,
-                                prefetched_registry_metadata.as_ref(),
-                                |path, tx, metadata| {
-                                    download_registry_index_with_progress(path, tx, false, metadata)
-                                },
-                            )
-                            .is_ok()
-                        };
-                        if !registry_present {
+                    let current_mtimes = registry_index_mtimes(registry_scope.as_ref());
+                    if current_mtimes != registry_mtimes
+                        && let Some(scope) = registry_scope.as_ref()
+                        && let Ok(client) = RegistrySearchClient::open_cached_scope(scope)
+                    {
+                        registry_client = Some(client);
+                        registry_mtimes = current_mtimes;
+                    }
+
+                    if query.force_update && registry_updates_disabled {
+                        let _ = download_tx.send(DownloadProgress {
+                            source: DownloadSource::Registry,
+                            pct: None,
+                            done: true,
+                            error: Some(
+                                "Registry updates are disabled when --registry-index is set"
+                                    .to_string(),
+                            ),
+                            is_update: true,
+                        });
+                    } else if query.force_update
+                        && let Some(scope) = registry_scope.as_ref()
+                    {
+                        spawn_registry_update_check(scope.clone(), download_tx.clone(), true);
+                    }
+
+                    if registry_client.is_none() {
+                        let Some(scope) = registry_scope.as_ref() else {
                             continue;
-                        }
-                        registry_client = match RegistryClient::open_path(&registry_db_path) {
-                            Ok(client) => Some(client),
+                        };
+                        registry_client = match RegistrySearchClient::open_scope_with_progress(
+                            scope.clone(),
+                            &download_tx,
+                            false,
+                            false,
+                        ) {
+                            Ok(client) => {
+                                registry_mtimes = registry_index_mtimes(registry_scope.as_ref());
+                                Some(client)
+                            }
                             Err(err) => {
                                 let _ = download_tx.send(DownloadProgress {
                                     source: DownloadSource::Registry,
@@ -688,47 +718,6 @@ pub fn spawn_worker(
                                 continue;
                             }
                         };
-                        registry_mtime = get_file_mtime(&registry_db_path);
-                        registry_ready = true;
-                        prefetched_registry_metadata = None;
-
-                        if !registry_index_override && !registry_update_pending {
-                            registry_update_pending = true;
-                            spawn_registry_update_check(
-                                registry_db_path.clone(),
-                                download_tx.clone(),
-                                false,
-                            );
-                        }
-                    }
-
-                    let current_mtime = get_file_mtime(&registry_db_path);
-                    if current_mtime != registry_mtime
-                        && let Ok(new_client) = RegistryClient::open_path(&registry_db_path)
-                    {
-                        registry_client = Some(new_client);
-                        registry_mtime = current_mtime;
-                        registry_update_pending = false;
-                    }
-
-                    if query.force_update && registry_index_override {
-                        let _ = download_tx.send(DownloadProgress {
-                            source: DownloadSource::Registry,
-                            pct: None,
-                            done: true,
-                            error: Some(
-                                "Registry updates are disabled when --registry-index is set"
-                                    .to_string(),
-                            ),
-                            is_update: true,
-                        });
-                    } else if query.force_update && !registry_update_pending {
-                        registry_update_pending = true;
-                        spawn_registry_update_check(
-                            registry_db_path.clone(),
-                            download_tx.clone(),
-                            true,
-                        );
                     }
 
                     let Some(client) = registry_client.as_ref() else {

@@ -1,8 +1,8 @@
 //! Main application state and event loop
 
 use super::super::download::{
-    DownloadProgress, DownloadSource, RegistryAccessResult, RegistryIndexMetadata,
-    check_registry_access,
+    DownloadProgress, DownloadSource, RegistrySearchScope, local_registry_index,
+    resolve_registry_search_scope,
 };
 use super::availability::{AvailabilityStore, selected_first_indices};
 use super::image::{
@@ -20,7 +20,10 @@ use crate::kicad_symbols::download::{
     KicadSymbolsAccessResult, KicadSymbolsIndexMetadata, check_kicad_symbols_access,
 };
 use crate::registry::component_lookup_key;
-use crate::{KicadSymbolsClient, ModuleRelations, RegistryClient, RegistryModule, RegistrySymbol};
+use crate::{
+    KicadSymbolsClient, ModuleRelations, RegistryClient, RegistryModule, RegistrySearchClient,
+    RegistrySymbol,
+};
 use anyhow::Result;
 use arboard::Clipboard;
 use crossterm::{
@@ -32,7 +35,7 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend, widgets::ListState};
 use ratatui_image::picker::Picker;
 use std::io::{self, Stdout};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
@@ -474,7 +477,7 @@ pub struct App {
     /// Channel to receive detail responses from worker
     detail_rx: Receiver<DetailResponse>,
     /// Part ID of pending detail request (None = not waiting)
-    pending_detail_for: Option<(SearchMode, i64)>,
+    pending_detail_for: Option<(SearchMode, Option<String>, i64)>,
     /// When we started waiting for current detail request (for delayed "Loading..." display)
     detail_request_started: Option<Instant>,
     /// Command palette visible
@@ -507,8 +510,8 @@ pub struct App {
     pub selected_component_for_download: Option<crate::component::ComponentSearchResult>,
     /// Available search modes (determines which modes can be cycled to)
     pub available_modes: Vec<SearchMode>,
-    /// Optional registry index override used instead of the cached/downloaded index.
-    registry_db_path_override: Option<PathBuf>,
+    /// Registry search scope, when registry modes are available.
+    registry_scope: Option<RegistrySearchScope>,
     /// Channel to send availability requests to worker
     availability_tx: Sender<PricingRequest>,
     /// Channel to receive availability responses from worker
@@ -531,10 +534,8 @@ pub struct Preflight {
     pub start_mode: SearchMode,
     /// Available search modes (empty = all modes available based on registry access)
     pub available_modes: Vec<SearchMode>,
-    /// Pre-fetched registry index metadata (avoids duplicate request during download)
-    pub registry_metadata: Option<RegistryIndexMetadata>,
-    /// Registry SQLite index override.
-    pub registry_db_path_override: Option<PathBuf>,
+    /// Registry search scope, when registry modes are available.
+    pub registry_scope: Option<RegistrySearchScope>,
     /// Pre-fetched KiCad symbols index metadata (avoids duplicate request during download)
     pub kicad_symbols_metadata: Option<KicadSymbolsIndexMetadata>,
     /// Non-fatal startup warning to surface in the TUI.
@@ -546,8 +547,7 @@ impl Preflight {
         Self {
             start_mode: SearchMode::WebComponents,
             available_modes: vec![SearchMode::WebComponents],
-            registry_metadata: None,
-            registry_db_path_override: None,
+            registry_scope: None,
             kicad_symbols_metadata: None,
             warning: None,
         }
@@ -559,8 +559,7 @@ impl App {
         let Preflight {
             start_mode,
             available_modes,
-            registry_metadata,
-            registry_db_path_override,
+            registry_scope,
             kicad_symbols_metadata,
             warning,
         } = preflight;
@@ -580,16 +579,11 @@ impl App {
                 SearchWorkerOptions {
                     registry_enabled: available_modes.iter().any(SearchMode::requires_registry),
                     kicad_enabled: available_modes.contains(&SearchMode::KicadSymbols),
-                    prefetched_registry_metadata: registry_metadata,
+                    registry_scope: registry_scope.clone(),
                     prefetched_kicad_metadata: kicad_symbols_metadata,
-                    registry_db_path_override: registry_db_path_override.clone(),
                 },
             );
-            spawn_detail_worker(
-                detail_req_rx,
-                detail_resp_tx,
-                registry_db_path_override.clone(),
-            );
+            spawn_detail_worker(detail_req_rx, detail_resp_tx, registry_scope.clone());
         }
 
         // Component search (online API) channels
@@ -659,7 +653,7 @@ impl App {
             component_list_state: ListState::default(),
             selected_component_for_download: None,
             available_modes,
-            registry_db_path_override,
+            registry_scope,
             availability_tx,
             availability_rx,
             availability_store: AvailabilityStore::new(),
@@ -905,11 +899,12 @@ impl App {
             self.module_relations = ModuleRelations::default();
             return;
         };
+        let registry_id = self.results.selected_registry_id(idx).map(str::to_string);
 
-        let pending_key = (self.mode, item_id);
+        let pending_key = (self.mode, registry_id.clone(), item_id);
 
         // Already requested this exact part and it's still pending
-        if self.pending_detail_for == Some(pending_key) {
+        if self.pending_detail_for.as_ref() == Some(&pending_key) {
             return;
         }
 
@@ -919,6 +914,7 @@ impl App {
 
         let _ = self.detail_tx.send(DetailRequest {
             item_id,
+            registry_id,
             mode: self.mode,
         });
     }
@@ -927,7 +923,8 @@ impl App {
     fn poll_detail_responses(&mut self) {
         while let Ok(resp) = self.detail_rx.try_recv() {
             // Ignore responses for parts we no longer care about
-            if self.pending_detail_for != Some((resp.mode, resp.item_id)) {
+            if self.pending_detail_for != Some((resp.mode, resp.registry_id.clone(), resp.item_id))
+            {
                 continue;
             }
 
@@ -1243,10 +1240,12 @@ impl App {
 
     fn refresh_local_count(&mut self) {
         if self.mode.requires_registry() {
-            if let Some(path) = self.registry_db_path()
-                && path.exists()
-                && let Ok(client) = RegistryClient::open_path(&path)
-            {
+            let client = self
+                .registry_scope
+                .as_ref()
+                .map(RegistrySearchClient::open_cached_scope);
+
+            if let Some(Ok(client)) = client {
                 self.index_count = match self.mode {
                     SearchMode::RegistryModules => client.count_modules().unwrap_or(0),
                     SearchMode::RegistryComponents => client.count_symbols().unwrap_or(0),
@@ -1262,17 +1261,11 @@ impl App {
         }
     }
 
-    fn registry_db_path(&self) -> Option<PathBuf> {
-        self.registry_db_path_override
-            .clone()
-            .or_else(|| RegistryClient::default_db_path().ok())
-    }
-
     fn local_index_exists(&self, mode: SearchMode) -> bool {
         if mode.requires_registry() {
-            self.registry_db_path()
-                .map(|path| path.exists())
-                .unwrap_or(false)
+            self.registry_scope
+                .as_ref()
+                .is_some_and(RegistrySearchScope::local_indexes_exist)
         } else if mode.requires_kicad_symbols() {
             KicadSymbolsClient::default_db_path()
                 .map(|path| path.exists())
@@ -1354,7 +1347,11 @@ impl App {
                 ));
             }
             Command::UpdateRegistryIndex => {
-                if self.registry_db_path_override.is_some() {
+                if self
+                    .registry_scope
+                    .as_ref()
+                    .is_some_and(RegistrySearchScope::updates_disabled)
+                {
                     self.toast = Some(Toast::error(
                         "Registry updates are disabled when --registry-index is set".to_string(),
                         Duration::from_secs(2),
@@ -1590,9 +1587,16 @@ pub struct TuiResult {
 }
 
 /// Determine the preflight configuration based on auth and local-index access
-fn compute_preflight(registry_db_path_override: Option<PathBuf>) -> Result<Preflight> {
+fn compute_preflight(
+    registry_db_path_override: Option<PathBuf>,
+    registry_selectors: &[String],
+    workspace_root: Option<&Path>,
+) -> Result<Preflight> {
     if let Some(path) = registry_db_path_override {
         RegistryClient::open_path(&path)?;
+        let registry_scope = Some(RegistrySearchScope::IndexFiles(vec![local_registry_index(
+            path.clone(),
+        )]));
 
         let mut available_modes = vec![SearchMode::RegistryModules, SearchMode::RegistryComponents];
         if KicadSymbolsClient::default_db_path()?.exists() {
@@ -1603,27 +1607,19 @@ fn compute_preflight(registry_db_path_override: Option<PathBuf>) -> Result<Prefl
         return Ok(Preflight {
             start_mode: SearchMode::RegistryModules,
             available_modes,
-            registry_metadata: None,
-            registry_db_path_override: Some(path),
+            registry_scope,
             kicad_symbols_metadata: None,
             warning: None,
         });
     }
 
-    if crate::auth::get_valid_token().is_err() {
-        return Ok(Preflight::web_only());
-    }
-
     let mut available_modes = Vec::new();
-    let mut registry_metadata = None;
     let mut kicad_symbols_metadata = None;
     let mut warning = None;
+    let registry_scope = resolve_registry_search_scope(registry_selectors, workspace_root)?;
 
-    if RegistryClient::default_db_path()?.exists() {
+    if registry_scope.is_some() {
         available_modes.extend([SearchMode::RegistryModules, SearchMode::RegistryComponents]);
-    } else if let Ok(RegistryAccessResult::Allowed(metadata)) = check_registry_access() {
-        available_modes.extend([SearchMode::RegistryModules, SearchMode::RegistryComponents]);
-        registry_metadata = Some(metadata);
     }
 
     if KicadSymbolsClient::default_db_path()?.exists() {
@@ -1655,16 +1651,22 @@ fn compute_preflight(registry_db_path_override: Option<PathBuf>) -> Result<Prefl
     Ok(Preflight {
         start_mode,
         available_modes,
-        registry_metadata,
-        registry_db_path_override: None,
+        registry_scope,
         kicad_symbols_metadata,
         warning,
     })
 }
 
+fn current_workspace_root() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let file_provider = pcb_zen_core::DefaultFileProvider::new();
+    pcb_zen_core::config::find_workspace_root(&file_provider, &cwd).ok()
+}
+
 /// Run the TUI application
 pub fn run() -> Result<TuiResult> {
-    let preflight = compute_preflight(None)?;
+    let workspace_root = current_workspace_root();
+    let preflight = compute_preflight(None, &[], workspace_root.as_deref())?;
     run_with_preflight(preflight)
 }
 
@@ -1672,14 +1674,20 @@ pub fn run() -> Result<TuiResult> {
 /// - If mode is Some, use that mode (but available modes still depend on registry access)
 /// - If mode is None, use default behavior (registry:modules if registry access available, web:components otherwise)
 pub fn run_with_mode(mode: Option<SearchMode>) -> Result<TuiResult> {
-    run_with_mode_and_registry_index(mode, None)
+    run_with_mode_and_registry_index(mode, None, Vec::new(), current_workspace_root())
 }
 
 pub fn run_with_mode_and_registry_index(
     mode: Option<SearchMode>,
     registry_db_path_override: Option<PathBuf>,
+    registry_selectors: Vec<String>,
+    workspace_root: Option<PathBuf>,
 ) -> Result<TuiResult> {
-    let mut preflight = compute_preflight(registry_db_path_override)?;
+    let mut preflight = compute_preflight(
+        registry_db_path_override,
+        &registry_selectors,
+        workspace_root.as_deref(),
+    )?;
     if let Some(m) = mode {
         // Override start mode, but validate it's available
         if preflight.available_modes.contains(&m) {

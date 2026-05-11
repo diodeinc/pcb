@@ -387,6 +387,13 @@ endpoint = "diode.computer"
 - This applies to workspace-aware commands such as `pcb auth`, `pcb bom`, `pcb publish`, `pcb preview`, and routing flows.
 - Authentication is scoped per resolved endpoint, so logging into one workspace endpoint does not overwrite tokens for another.
 
+## Registry Search Scope
+
+Registry-backed `pcb search` defaults to the public Diode registry and registries in the workspace configured by `[workspace].repository`.
+
+- `pcb search --registry github.com/diodeinc/registry ...` overrides the default scope for that invocation.
+- Repeat `--registry` to search more than one registry.
+
 ## Pseudo-Versions
 
 Sometimes you need to depend on unreleased code—a bug fix that hasn't been tagged,

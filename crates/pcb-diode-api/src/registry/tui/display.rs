@@ -4,6 +4,7 @@ use crate::SearchHit;
 
 pub struct RegistryModuleDisplay {
     pub path: String,
+    pub registry: String,
     pub version: String,
     pub description: String,
 }
@@ -11,7 +12,8 @@ pub struct RegistryModuleDisplay {
 impl RegistryModuleDisplay {
     pub fn from_hit(hit: &crate::RegistryModuleHit) -> Self {
         Self {
-            path: registry_relative_path(&hit.url),
+            path: registry_relative_path(&hit.url, &hit.registry.registry_url),
+            registry: hit.registry.display_name(),
             version: hit.version.clone(),
             description: hit.description.clone(),
         }
@@ -20,9 +22,10 @@ impl RegistryModuleDisplay {
     pub fn to_cli_lines(&self) -> Vec<String> {
         vec![
             format!(
-                "{} {}",
+                "{} {} {}",
                 self.path.blue(),
-                format!("({})", self.version).yellow().dimmed()
+                format!("({})", self.version).yellow().dimmed(),
+                format!("[{}]", self.registry).dimmed()
             ),
             format!("  {}", self.description.dimmed()),
         ]
@@ -52,6 +55,10 @@ impl RegistryModuleDisplay {
                     format!(" ({})", self.version),
                     base_style.fg(Color::Yellow).add_modifier(Modifier::DIM),
                 ),
+                Span::styled(
+                    format!(" [{}]", self.registry),
+                    base_style.fg(Color::DarkGray),
+                ),
             ]),
             Line::from(vec![
                 Span::styled(prefix.to_string(), prefix_style),
@@ -64,6 +71,7 @@ impl RegistryModuleDisplay {
 
 pub struct RegistrySymbolDisplay {
     pub path: String,
+    pub registry: String,
     pub mpn: String,
     pub manufacturer: String,
     pub description: Option<String>,
@@ -72,7 +80,8 @@ pub struct RegistrySymbolDisplay {
 impl RegistrySymbolDisplay {
     pub fn from_hit(hit: &crate::RegistrySymbolHit) -> Self {
         Self {
-            path: registry_relative_path(&hit.url),
+            path: registry_relative_path(&hit.url, &hit.registry.registry_url),
+            registry: hit.registry.display_name(),
             mpn: hit.mpn.clone(),
             manufacturer: hit.manufacturer.clone(),
             description: hit.kicad_description.clone(),
@@ -83,9 +92,10 @@ impl RegistrySymbolDisplay {
         let mut lines = vec![
             self.path.green().to_string(),
             format!(
-                "  {} {}",
+                "  {} {} {}",
                 self.mpn,
-                format!("· {}", self.manufacturer).dimmed()
+                format!("· {}", self.manufacturer).dimmed(),
+                format!("[{}]", self.registry).dimmed()
             ),
         ];
         if let Some(description) = self
@@ -125,6 +135,10 @@ impl RegistrySymbolDisplay {
                 Span::styled(self.mpn.clone(), base_style.fg(Color::Gray)),
                 Span::styled(" · ".to_string(), base_style.fg(Color::DarkGray)),
                 Span::styled(self.manufacturer.clone(), base_style.fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" [{}]", self.registry),
+                    base_style.fg(Color::DarkGray),
+                ),
             ]),
         ];
         let description = self
@@ -141,7 +155,12 @@ impl RegistrySymbolDisplay {
     }
 }
 
-pub fn registry_relative_path(url: &str) -> String {
+pub fn registry_relative_path(url: &str, registry_url: &str) -> String {
+    let registry_url = registry_url.trim_end_matches('/');
+    if let Some(rest) = url.strip_prefix(registry_url) {
+        return rest.trim_start_matches('/').to_string();
+    }
+
     url.split('/').skip(3).collect::<Vec<_>>().join("/")
 }
 

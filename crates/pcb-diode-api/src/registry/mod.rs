@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::bom::ComponentKey;
 use crate::ensure_sqlite_vec_registered;
+pub use crate::registry::download::RegistryInfo;
 
 pub mod download;
 pub mod embeddings;
@@ -67,6 +68,7 @@ pub struct RegistryModuleSymbol {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistryModule {
+    pub registry: RegistryInfo,
     pub id: i64,
     pub url: String,
     pub name: String,
@@ -81,6 +83,7 @@ pub struct RegistryModule {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistrySymbol {
+    pub registry: RegistryInfo,
     pub id: i64,
     pub url: String,
     pub name: String,
@@ -137,6 +140,7 @@ pub struct ModuleRelations {
 
 #[derive(Debug, Clone)]
 pub struct RegistryModuleHit {
+    pub registry: RegistryInfo,
     pub id: i64,
     pub url: String,
     pub name: String,
@@ -147,6 +151,7 @@ pub struct RegistryModuleHit {
 
 #[derive(Debug, Clone)]
 pub struct RegistrySymbolHit {
+    pub registry: RegistryInfo,
     pub id: i64,
     pub url: String,
     pub name: String,
@@ -202,6 +207,32 @@ pub struct RrfSearchOutput {
 
 trait UrlKeyedHit: Clone {
     fn url(&self) -> &str;
+
+    fn result_key(&self) -> SearchResultKey {
+        SearchResultKey::url(self.url())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SearchResultKey {
+    registry_id: Option<String>,
+    url: String,
+}
+
+impl SearchResultKey {
+    pub fn url(url: impl Into<String>) -> Self {
+        Self {
+            registry_id: None,
+            url: url.into(),
+        }
+    }
+
+    pub fn registry(registry_id: impl Into<String>, url: impl Into<String>) -> Self {
+        Self {
+            registry_id: Some(registry_id.into()),
+            url: url.into(),
+        }
+    }
 }
 
 impl UrlKeyedHit for SearchHit {
@@ -214,11 +245,19 @@ impl UrlKeyedHit for RegistryModuleHit {
     fn url(&self) -> &str {
         &self.url
     }
+
+    fn result_key(&self) -> SearchResultKey {
+        SearchResultKey::registry(self.registry.id.as_str(), self.url.as_str())
+    }
 }
 
 impl UrlKeyedHit for RegistrySymbolHit {
     fn url(&self) -> &str {
         &self.url
+    }
+
+    fn result_key(&self) -> SearchResultKey {
+        SearchResultKey::registry(self.registry.id.as_str(), self.url.as_str())
     }
 }
 
@@ -253,30 +292,47 @@ fn merge_rrf_by_url<T>(lists: &[&[T]], limit: usize) -> Vec<T>
 where
     T: UrlKeyedHit,
 {
-    let mut rrf_scores: HashMap<String, f64> = HashMap::new();
+    let mut rrf_scores: HashMap<SearchResultKey, f64> = HashMap::new();
     for hits in lists {
         for (idx, hit) in hits.iter().enumerate() {
-            *rrf_scores.entry(hit.url().to_owned()).or_default() +=
-                1.0 / (RRF_K + (idx + 1) as f64);
+            *rrf_scores.entry(hit.result_key()).or_default() += 1.0 / (RRF_K + (idx + 1) as f64);
         }
     }
 
-    let mut all_hits: HashMap<String, T> = HashMap::new();
+    let mut all_hits: HashMap<SearchResultKey, T> = HashMap::new();
     for hits in lists {
         for hit in hits.iter() {
             all_hits
-                .entry(hit.url().to_owned())
+                .entry(hit.result_key())
                 .or_insert_with(|| hit.clone());
         }
     }
 
     let mut scored: Vec<_> = all_hits
         .into_iter()
-        .map(|(url, hit)| (rrf_scores.get(&url).copied().unwrap_or(0.0), hit))
+        .map(|(key, hit)| (rrf_scores.get(&key).copied().unwrap_or(0.0), hit))
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
     scored.into_iter().take(limit).map(|(_, hit)| hit).collect()
+}
+
+fn merge_rrf_by_ranked_lists<T>(channels: &[&[Vec<T>]], limit: usize) -> Vec<T>
+where
+    T: UrlKeyedHit,
+{
+    let lists = channels
+        .iter()
+        .flat_map(|channel| channel.iter().map(Vec::as_slice))
+        .collect::<Vec<_>>();
+    merge_rrf_by_url(&lists, limit)
+}
+
+fn merge_all_rrf_by_ranked_lists<T>(channels: &[&[Vec<T>]]) -> Vec<T>
+where
+    T: UrlKeyedHit,
+{
+    merge_rrf_by_ranked_lists(channels, usize::MAX)
 }
 
 pub(crate) fn merge_rrf_hit_lists(lists: &[&[SearchHit]], limit: usize) -> Vec<SearchHit> {
@@ -417,29 +473,19 @@ pub(crate) fn escape_fts5(s: &str) -> String {
 
 pub struct RegistryClient {
     conn: Connection,
+    registry: RegistryInfo,
 }
 
 impl RegistryClient {
     pub fn default_db_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().context("Could not determine home directory")?;
-        Ok(home.join(".pcb").join("registry").join("packages.db"))
-    }
-
-    /// Refresh the default registry index when the server-side version changes.
-    pub fn refresh_if_stale() -> Result<download::RefreshResult> {
-        let path = Self::default_db_path()?;
-        download::refresh_registry_index_if_stale(&path)
-    }
-
-    pub fn open() -> Result<Self> {
-        let path = Self::default_db_path()?;
-        if !path.exists() {
-            download::download_registry_index(&path)?;
-        }
-        Self::open_path(&path)
+        download::default_registry_db_path()
     }
 
     pub fn open_path(path: &std::path::Path) -> Result<Self> {
+        Self::open_path_with_registry(path, RegistryInfo::local(path))
+    }
+
+    pub fn open_path_with_registry(path: &std::path::Path, registry: RegistryInfo) -> Result<Self> {
         if !path.exists() {
             anyhow::bail!(
                 "Registry database not found at {}. Run `pcb registry update` to download it.",
@@ -462,7 +508,11 @@ impl RegistryClient {
         )
         .context("Failed to set read-only pragmas")?;
 
-        Ok(Self { conn })
+        Ok(Self { conn, registry })
+    }
+
+    pub fn registry(&self) -> &RegistryInfo {
+        &self.registry
     }
 
     pub fn count_modules(&self) -> Result<i64> {
@@ -589,7 +639,10 @@ impl RegistryClient {
             LIMIT ?2
             "#,
         )?;
-        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], map_module_hit)?;
+        let registry = self.registry.clone();
+        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], |row| {
+            map_module_hit(row, &registry)
+        })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -612,7 +665,10 @@ impl RegistryClient {
             LIMIT ?2
             "#,
         )?;
-        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], map_module_hit)?;
+        let registry = self.registry.clone();
+        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], |row| {
+            map_module_hit(row, &registry)
+        })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -642,10 +698,10 @@ impl RegistryClient {
             LIMIT ?2
             "#,
         )?;
-        let rows = stmt.query_map(
-            rusqlite::params![fts_query, fetch_limit as i64],
-            map_module_hit,
-        )?;
+        let registry = self.registry.clone();
+        let rows = stmt.query_map(rusqlite::params![fts_query, fetch_limit as i64], |row| {
+            map_module_hit(row, &registry)
+        })?;
         collect_deduped_by_url(rows, limit)
     }
 
@@ -664,10 +720,10 @@ impl RegistryClient {
             ORDER BY v.distance
             "#,
         )?;
-        let rows = stmt.query_map(
-            rusqlite::params![embedding_bytes, limit as i64],
-            map_module_hit,
-        )?;
+        let registry = self.registry.clone();
+        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
+            map_module_hit(row, &registry)
+        })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -694,7 +750,10 @@ impl RegistryClient {
             LIMIT ?2
             "#,
         )?;
-        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], map_symbol_hit)?;
+        let registry = self.registry.clone();
+        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], |row| {
+            map_symbol_hit(row, &registry)
+        })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -719,7 +778,10 @@ impl RegistryClient {
             LIMIT ?2
             "#,
         )?;
-        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], map_symbol_hit)?;
+        let registry = self.registry.clone();
+        let rows = stmt.query_map(rusqlite::params![fts_query, limit as i64], |row| {
+            map_symbol_hit(row, &registry)
+        })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -751,10 +813,10 @@ impl RegistryClient {
             LIMIT ?2
             "#,
         )?;
-        let rows = stmt.query_map(
-            rusqlite::params![fts_query, fetch_limit as i64],
-            map_symbol_hit,
-        )?;
+        let registry = self.registry.clone();
+        let rows = stmt.query_map(rusqlite::params![fts_query, fetch_limit as i64], |row| {
+            map_symbol_hit(row, &registry)
+        })?;
         collect_deduped_by_url(rows, limit)
     }
 
@@ -775,10 +837,10 @@ impl RegistryClient {
             ORDER BY v.distance
             "#,
         )?;
-        let rows = stmt.query_map(
-            rusqlite::params![embedding_bytes, limit as i64],
-            map_symbol_hit,
-        )?;
+        let registry = self.registry.clone();
+        let rows = stmt.query_map(rusqlite::params![embedding_bytes, limit as i64], |row| {
+            map_symbol_hit(row, &registry)
+        })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -795,6 +857,7 @@ impl RegistryClient {
             .query_row([id], |row| {
                 let url: String = row.get(1)?;
                 Ok(RegistryModule {
+                    registry: self.registry.clone(),
                     id: row.get(0)?,
                     name: package_name_from_url(&url),
                     url,
@@ -833,6 +896,7 @@ impl RegistryClient {
             let url: String = row.get(1)?;
             let digikey_json: Option<String> = row.get(13)?;
             Ok(RegistrySymbol {
+                registry: self.registry.clone(),
                 id: row.get(0)?,
                 name: symbol_name_from_url(&url),
                 url,
@@ -932,9 +996,270 @@ impl RegistryClient {
     }
 }
 
-fn map_module_hit(row: &rusqlite::Row) -> rusqlite::Result<RegistryModuleHit> {
+pub struct RegistrySearchClient {
+    clients: Vec<RegistryClient>,
+}
+
+impl RegistrySearchClient {
+    pub fn open_registries(registries: Vec<RegistryInfo>, force: bool) -> Result<Self> {
+        let files = download::ensure_registry_indexes(registries, force)?;
+        Self::open_index_files(files)
+    }
+
+    pub fn open_scope(scope: download::RegistrySearchScope, force: bool) -> Result<Self> {
+        match scope {
+            download::RegistrySearchScope::Registries(registries) => {
+                Self::open_registries(registries, force)
+            }
+            download::RegistrySearchScope::IndexFiles(files) => Self::open_index_files(files),
+        }
+    }
+
+    pub fn open_registries_with_progress(
+        registries: Vec<RegistryInfo>,
+        progress_tx: &std::sync::mpsc::Sender<download::DownloadProgress>,
+        is_update: bool,
+        force: bool,
+    ) -> Result<Self> {
+        let files = download::ensure_registry_indexes_with_progress(
+            registries,
+            progress_tx,
+            is_update,
+            force,
+        )?;
+        Self::open_index_files(files)
+    }
+
+    pub fn open_scope_with_progress(
+        scope: download::RegistrySearchScope,
+        progress_tx: &std::sync::mpsc::Sender<download::DownloadProgress>,
+        is_update: bool,
+        force: bool,
+    ) -> Result<Self> {
+        match scope {
+            download::RegistrySearchScope::Registries(registries) => {
+                Self::open_registries_with_progress(registries, progress_tx, is_update, force)
+            }
+            download::RegistrySearchScope::IndexFiles(files) => Self::open_index_files(files),
+        }
+    }
+
+    pub fn open_cached(registries: &[RegistryInfo]) -> Result<Self> {
+        let files = registries
+            .iter()
+            .map(|registry| {
+                Ok(download::RegistryIndexFile {
+                    registry: registry.clone(),
+                    path: download::registry_db_path(registry)?,
+                    downloaded: false,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::open_index_files(files)
+    }
+
+    pub fn open_cached_scope(scope: &download::RegistrySearchScope) -> Result<Self> {
+        match scope {
+            download::RegistrySearchScope::Registries(registries) => Self::open_cached(registries),
+            download::RegistrySearchScope::IndexFiles(files) => {
+                Self::open_index_files(files.clone())
+            }
+        }
+    }
+
+    pub fn single(client: RegistryClient) -> Self {
+        Self {
+            clients: vec![client],
+        }
+    }
+
+    fn open_index_files(files: Vec<download::RegistryIndexFile>) -> Result<Self> {
+        let clients = files
+            .into_iter()
+            .map(|file| RegistryClient::open_path_with_registry(&file.path, file.registry))
+            .collect::<Result<Vec<_>>>()?;
+        if clients.is_empty() {
+            anyhow::bail!("No registry indexes available");
+        }
+        Ok(Self { clients })
+    }
+
+    pub fn count_modules(&self) -> Result<i64> {
+        self.clients
+            .iter()
+            .map(RegistryClient::count_modules)
+            .try_fold(0, |acc, count| count.map(|count| acc + count))
+    }
+
+    pub fn count_symbols(&self) -> Result<i64> {
+        self.clients
+            .iter()
+            .map(RegistryClient::count_symbols)
+            .try_fold(0, |acc, count| count.map(|count| acc + count))
+    }
+
+    pub fn search_modules_rrf(&self, query: &str) -> ModuleRrfSearchOutput {
+        const MERGED_LIMIT: usize = 100;
+        let outputs = self
+            .clients
+            .iter()
+            .map(|client| client.search_modules_rrf(query))
+            .collect::<Vec<_>>();
+
+        let trigram_lists = outputs
+            .iter()
+            .map(|out| out.trigram.clone())
+            .collect::<Vec<_>>();
+        let word_lists = outputs
+            .iter()
+            .map(|out| out.word.clone())
+            .collect::<Vec<_>>();
+        let docs_full_text_lists = outputs
+            .iter()
+            .map(|out| out.docs_full_text.clone())
+            .collect::<Vec<_>>();
+        let semantic_lists = outputs
+            .iter()
+            .map(|out| out.semantic.clone())
+            .collect::<Vec<_>>();
+        let merged = merge_rrf_by_ranked_lists(
+            &[
+                &trigram_lists,
+                &word_lists,
+                &docs_full_text_lists,
+                &semantic_lists,
+            ],
+            MERGED_LIMIT,
+        );
+        let trigram = merge_all_rrf_by_ranked_lists(&[&trigram_lists]);
+        let word = merge_all_rrf_by_ranked_lists(&[&word_lists]);
+        let docs_full_text = merge_all_rrf_by_ranked_lists(&[&docs_full_text_lists]);
+        let semantic = merge_all_rrf_by_ranked_lists(&[&semantic_lists]);
+
+        ModuleRrfSearchOutput {
+            trigram,
+            word,
+            docs_full_text,
+            semantic,
+            merged,
+        }
+    }
+
+    pub fn search_symbols_rrf(&self, query: &str) -> SymbolRrfSearchOutput {
+        const MERGED_LIMIT: usize = 100;
+        let outputs = self
+            .clients
+            .iter()
+            .map(|client| client.search_symbols_rrf(query))
+            .collect::<Vec<_>>();
+
+        let trigram_lists = outputs
+            .iter()
+            .map(|out| out.trigram.clone())
+            .collect::<Vec<_>>();
+        let word_lists = outputs
+            .iter()
+            .map(|out| out.word.clone())
+            .collect::<Vec<_>>();
+        let docs_full_text_lists = outputs
+            .iter()
+            .map(|out| out.docs_full_text.clone())
+            .collect::<Vec<_>>();
+        let semantic_lists = outputs
+            .iter()
+            .map(|out| out.semantic.clone())
+            .collect::<Vec<_>>();
+        let merged = merge_rrf_by_ranked_lists(
+            &[
+                &trigram_lists,
+                &word_lists,
+                &docs_full_text_lists,
+                &semantic_lists,
+            ],
+            MERGED_LIMIT,
+        );
+        let trigram = merge_all_rrf_by_ranked_lists(&[&trigram_lists]);
+        let word = merge_all_rrf_by_ranked_lists(&[&word_lists]);
+        let docs_full_text = merge_all_rrf_by_ranked_lists(&[&docs_full_text_lists]);
+        let semantic = merge_all_rrf_by_ranked_lists(&[&semantic_lists]);
+
+        SymbolRrfSearchOutput {
+            trigram,
+            word,
+            docs_full_text,
+            semantic,
+            merged,
+        }
+    }
+
+    pub fn get_module_by_hit(&self, hit: &RegistryModuleHit) -> Result<Option<RegistryModule>> {
+        let Some(client) = self.client_for_registry(&hit.registry.id) else {
+            return Ok(None);
+        };
+        client.get_module_by_id(hit.id)
+    }
+
+    pub fn get_symbol_by_hit(&self, hit: &RegistrySymbolHit) -> Result<Option<RegistrySymbol>> {
+        let Some(client) = self.client_for_registry(&hit.registry.id) else {
+            return Ok(None);
+        };
+        client.get_symbol_by_id(hit.id)
+    }
+
+    pub fn get_module_relations_by_hit(&self, hit: &RegistryModuleHit) -> Result<ModuleRelations> {
+        let Some(client) = self.client_for_registry(&hit.registry.id) else {
+            return Ok(ModuleRelations::default());
+        };
+        client.get_module_relations(hit.id)
+    }
+
+    pub fn get_module_by_key(
+        &self,
+        registry_id: &str,
+        module_id: i64,
+    ) -> Result<Option<RegistryModule>> {
+        let Some(client) = self.client_for_registry(registry_id) else {
+            return Ok(None);
+        };
+        client.get_module_by_id(module_id)
+    }
+
+    pub fn get_symbol_by_key(
+        &self,
+        registry_id: &str,
+        symbol_id: i64,
+    ) -> Result<Option<RegistrySymbol>> {
+        let Some(client) = self.client_for_registry(registry_id) else {
+            return Ok(None);
+        };
+        client.get_symbol_by_id(symbol_id)
+    }
+
+    pub fn get_module_relations_by_key(
+        &self,
+        registry_id: &str,
+        module_id: i64,
+    ) -> Result<ModuleRelations> {
+        let Some(client) = self.client_for_registry(registry_id) else {
+            return Ok(ModuleRelations::default());
+        };
+        client.get_module_relations(module_id)
+    }
+
+    fn client_for_registry(&self, registry_id: &str) -> Option<&RegistryClient> {
+        self.clients
+            .iter()
+            .find(|client| client.registry().id == registry_id)
+    }
+}
+
+fn map_module_hit(
+    row: &rusqlite::Row,
+    registry: &RegistryInfo,
+) -> rusqlite::Result<RegistryModuleHit> {
     let url: String = row.get(1)?;
     Ok(RegistryModuleHit {
+        registry: registry.clone(),
         id: row.get(0)?,
         name: package_name_from_url(&url),
         url,
@@ -944,11 +1269,15 @@ fn map_module_hit(row: &rusqlite::Row) -> rusqlite::Result<RegistryModuleHit> {
     })
 }
 
-fn map_symbol_hit(row: &rusqlite::Row) -> rusqlite::Result<RegistrySymbolHit> {
+fn map_symbol_hit(
+    row: &rusqlite::Row,
+    registry: &RegistryInfo,
+) -> rusqlite::Result<RegistrySymbolHit> {
     let url: String = row.get(1)?;
     let mpn: String = row.get(2)?;
     let manufacturer: String = row.get(3)?;
     Ok(RegistrySymbolHit {
+        registry: registry.clone(),
         id: row.get(0)?,
         name: symbol_name_from_url(&url),
         url,
