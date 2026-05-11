@@ -707,7 +707,7 @@ pub fn ensure_registry_indexes_with_progress(
                 error: Some(msg.clone()),
                 is_update,
             });
-            Err(anyhow::anyhow!(msg))
+            Err(err)
         }
     }
 }
