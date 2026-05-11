@@ -71,6 +71,7 @@ rayon = { workspace = true }
 jiff = { workspace = true }
 crossterm = { workspace = true }
 ctrlc = { workspace = true }
+reqwest = { workspace = true }
 termimad = { workspace = true }
 syntect = { workspace = true }
 gltfpack-sys = { workspace = true }

@@ -13,6 +13,7 @@ mod api;
 mod bom;
 mod build;
 mod bundle;
+mod changelog;
 mod codegen;
 mod config_input;
 mod doc;
@@ -113,8 +114,12 @@ enum Commands {
     /// Import KiCad projects into a Zener workspace
     Import(import::ImportArgs),
 
-    /// View changelog and package documentation
+    /// Generate package documentation
     Doc(doc::DocArgs),
+
+    /// Print the pcb changelog
+    #[command(hide = true)]
+    Changelog(changelog::ChangelogArgs),
 
     /// Layout PCB designs
     #[command(alias = "l")]
@@ -227,6 +232,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Info(args) => info::execute(args),
         Commands::Import(args) => import::execute(args),
         Commands::Doc(args) => doc::execute(args),
+        Commands::Changelog(args) => changelog::execute(args),
         Commands::Layout(args) => layout::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),

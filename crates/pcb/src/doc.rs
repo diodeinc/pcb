@@ -12,203 +12,45 @@ use syntect::util::{LinesWithEndings, as_24_bit_terminal_escaped};
 use termimad::MadSkin;
 
 const LATEST_PACKAGE_VERSION: &str = "latest";
-const CHANGELOG_PAGE: &str = "changelog";
-const UNRELEASED_CHANGELOG_SELECTOR: &str = "unreleased";
 
 #[derive(Debug, Args)]
 pub struct DocArgs {
-    /// Documentation path (e.g. "changelog", "changelog@latest")
+    /// Package path shorthand. Prefer --package for clarity.
     #[arg(default_value = "")]
     pub path: String,
-
-    /// List available changelog versions or package files instead of showing content
-    #[arg(long, short = 'l')]
-    pub list: bool,
 
     /// Generate docs from a package (local path, @stdlib, or github.com/user/repo[@version])
     #[arg(long, value_name = "PACKAGE")]
     pub package: Option<String>,
 }
 
-// Include the generated changelog constants
-include!(concat!(env!("OUT_DIR"), "/changelog.rs"));
-
 pub fn execute(args: DocArgs) -> Result<()> {
-    if let Some(selector) = parse_changelog_path(&args.path)? {
-        return render_changelog(selector, args.list);
-    }
-
     // --package flag: generate docs for a Zener package
     if let Some(pkg) = &args.package {
-        return run_docgen_for_package(pkg, args.list);
+        return run_docgen_for_package(pkg);
     }
 
-    if args.path.is_empty() && args.list {
-        println!("{}", changelog_paths(CHANGELOG_MD).join("\n"));
-        return Ok(());
-    }
-
-    // Require a path or --list flag
     if args.path.is_empty() {
         anyhow::bail!(
-            "Usage: pcb doc changelog[@VERSION] or pcb doc --package <PACKAGE>\n\n\
+            "Usage: pcb doc --package <PACKAGE>\n\n\
              Examples:\n\
-             \x20 pcb doc --list                # List available changelog versions\n\
-             \x20 pcb doc changelog             # Show latest release notes\n\
-             \x20 pcb doc changelog@unreleased  # Show unreleased notes\n\
              \x20 pcb doc --package @stdlib     # Generate stdlib docs\n\
              \x20 pcb doc --package github.com/acme/lib@latest"
         );
     }
 
     if looks_like_package_path(&args.path) {
-        anyhow::bail!(
-            "Unknown documentation path '{}'.\n\nDid you mean: pcb doc --package {}",
-            args.path,
-            args.path
-        );
+        return run_docgen_for_package(&args.path);
     }
 
     anyhow::bail!(
         "Unknown documentation path '{}'.\n\n\
-         Supported paths: changelog, changelog@latest, changelog@unreleased, changelog@<version>.\n\
          Use `pcb doc --package <PACKAGE>` for package documentation.",
         args.path
     )
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ChangelogSelector {
-    Latest,
-    Unreleased,
-    Version(String),
-}
-
-fn render_changelog(selector: ChangelogSelector, list: bool) -> Result<()> {
-    if list {
-        println!("{}", changelog_paths(CHANGELOG_MD).join("\n"));
-        return Ok(());
-    }
-
-    match selector {
-        ChangelogSelector::Latest => print_latest_release_notes(),
-        ChangelogSelector::Unreleased => print_unreleased_release_notes(),
-        ChangelogSelector::Version(version) => {
-            let content = extract_versioned_release(CHANGELOG_MD, &version).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Release notes for version {version} not found.\n\
-                     Use `pcb doc changelog --list` to see available versions."
-                )
-            })?;
-            print_markdown(&content);
-        }
-    }
-
-    Ok(())
-}
-
-fn parse_changelog_path(path: &str) -> Result<Option<ChangelogSelector>> {
-    if path == CHANGELOG_PAGE {
-        return Ok(Some(ChangelogSelector::Latest));
-    }
-
-    let Some((page, selector)) = path.split_once('@') else {
-        return Ok(None);
-    };
-    if page != CHANGELOG_PAGE {
-        return Ok(None);
-    }
-
-    if selector.is_empty() || selector.eq_ignore_ascii_case(LATEST_PACKAGE_VERSION) {
-        return Ok(Some(ChangelogSelector::Latest));
-    }
-    if selector.eq_ignore_ascii_case(UNRELEASED_CHANGELOG_SELECTOR) {
-        return Ok(Some(ChangelogSelector::Unreleased));
-    }
-
-    let version = pcb_zen::tags::parse_version(selector).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Invalid changelog selector '{path}'.\n\
-             Use `pcb doc changelog@latest`, `pcb doc changelog@unreleased`, or `pcb doc changelog@0.4.0`."
-        )
-    })?;
-
-    Ok(Some(ChangelogSelector::Version(version.to_string())))
-}
-
-fn changelog_paths(content: &str) -> Vec<String> {
-    let mut paths = vec![
-        format!("{CHANGELOG_PAGE}@{LATEST_PACKAGE_VERSION}"),
-        format!("{CHANGELOG_PAGE}@{UNRELEASED_CHANGELOG_SELECTOR}"),
-    ];
-    paths.extend(changelog_versions(content).map(|version| format!("{CHANGELOG_PAGE}@{version}")));
-    paths
-}
-
-fn changelog_versions(content: &str) -> impl Iterator<Item = String> + '_ {
-    content
-        .lines()
-        .filter_map(parse_release_heading)
-        .filter(|heading| !heading.eq_ignore_ascii_case(UNRELEASED_CHANGELOG_SELECTOR))
-        .filter_map(normalize_changelog_version)
-}
-
-fn extract_versioned_release(content: &str, version: &str) -> Option<String> {
-    let mut result = Vec::new();
-    let mut in_target_section = false;
-    let mut has_content = false;
-
-    for line in content.lines() {
-        if let Some(heading) = parse_release_heading(line) {
-            if in_target_section {
-                break;
-            }
-
-            in_target_section = normalize_changelog_version(heading).as_deref() == Some(version);
-            if in_target_section {
-                result.push(line);
-            }
-            continue;
-        }
-
-        if in_target_section {
-            if !line.trim().is_empty() {
-                has_content = true;
-            }
-            if !line.trim().is_empty() || !result.is_empty() {
-                result.push(line);
-            }
-        }
-    }
-
-    while result.last().is_some_and(|line| line.trim().is_empty()) {
-        result.pop();
-    }
-
-    has_content.then(|| result.join("\n"))
-}
-
-fn parse_release_heading(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("## [")?;
-    let end = rest.find(']')?;
-    Some(&rest[..end])
-}
-
-fn normalize_changelog_version(version: &str) -> Option<String> {
-    pcb_zen::tags::parse_version(version).map(|v| v.to_string())
-}
-
-/// Render just the latest release notes (used by self-update)
-pub fn print_latest_release_notes() {
-    print_markdown(LATEST_RELEASE_NOTES);
-}
-
-/// Render just the unreleased release notes.
-pub fn print_unreleased_release_notes() {
-    print_markdown(UNRELEASED_RELEASE_NOTES);
-}
-
-fn print_markdown(content: &str) {
+pub(crate) fn print_markdown(content: &str) {
     if io::stdout().is_terminal() {
         print_highlighted_markdown(content);
     } else {
@@ -227,7 +69,7 @@ fn looks_like_package_path(s: &str) -> bool {
 }
 
 /// Generate docs for a package specified as local path, @stdlib, or remote URL
-fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
+fn run_docgen_for_package(pkg: &str) -> Result<()> {
     // Handle @stdlib alias (with optional subpath filter)
     if pkg == "@stdlib" || pkg.starts_with("@stdlib/") {
         // Extract filter if subpath provided
@@ -243,9 +85,6 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
         // Docgen intentionally does not support stdlib patch overrides.
         // Always render docs from the toolchain-managed embedded stdlib.
         let stdlib_root = ensure_stdlib_materialized(&workspace_root)?;
-        if list {
-            return list_package_files("@stdlib", &stdlib_root, filter);
-        }
         return run_docgen(&stdlib_root, Some(pcb_zen_core::STDLIB_MODULE_PATH), filter);
     }
 
@@ -254,9 +93,6 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
     if !pkg.contains('@')
         && let Some((package_dir, package_url, filter)) = resolve_local_workspace_package_url(pkg)
     {
-        if list {
-            return list_package_files(&package_url, &package_dir, filter.as_deref());
-        }
         return run_docgen(&package_dir, Some(&package_url), filter.as_deref());
     }
 
@@ -265,25 +101,13 @@ fn run_docgen_for_package(pkg: &str, list: bool) -> Result<()> {
         let (display_name, requested_version) = parse_remote_package_spec(pkg)?;
         let (module_path, version, filter) =
             resolve_remote_package(display_name, requested_version.as_ref())?;
-        return run_docgen_for_remote_package(
-            display_name,
-            &module_path,
-            &version,
-            filter.as_deref(),
-            list,
-        );
+        return run_docgen_for_remote_package(&module_path, &version, filter.as_deref());
     }
 
     // Local path - find package root and filter
     let path = PathBuf::from(pkg);
     let (package_dir, filter) = find_package_root_and_filter(&path)?;
     let url = get_local_package_url(&package_dir);
-    let display_name = url
-        .as_deref()
-        .unwrap_or_else(|| package_dir.to_str().unwrap_or("."));
-    if list {
-        return list_package_files(display_name, &package_dir, filter.as_deref());
-    }
     run_docgen(&package_dir, url.as_deref(), filter.as_deref())
 }
 
@@ -461,11 +285,9 @@ fn remote_filter_from_requested_path(
 
 /// Fetch and generate docs for a remote package
 fn run_docgen_for_remote_package(
-    display_name: &str,
     module_path: &str,
     version: &str,
     filter: Option<&str>,
-    list: bool,
 ) -> Result<()> {
     let cache_dir = dirs::home_dir()
         .expect("Cannot determine home directory")
@@ -477,9 +299,6 @@ fn run_docgen_for_remote_package(
         pcb_zen::ensure_sparse_checkout(&cache_dir, module_path, version, true, None)
             .with_context(|| format!("Failed to fetch {module_path}@{version}"))?;
 
-    if list {
-        return list_package_files(display_name, &package_root, filter);
-    }
     run_docgen(&package_root, Some(module_path), filter)
 }
 
@@ -542,121 +361,6 @@ fn run_docgen(path: &Path, package_url: Option<&str>, filter: Option<&str>) -> R
     } else {
         println!("{}", result.markdown);
     }
-
-    Ok(())
-}
-
-/// List .zen files in a package as a tree structure.
-fn list_package_files(display_name: &str, path: &Path, filter: Option<&str>) -> Result<()> {
-    use std::collections::BTreeMap;
-    use walkdir::WalkDir;
-
-    let (dir, filter) = normalize_path_filter(path, filter)?;
-    let canonical = dir.canonicalize().unwrap_or(dir);
-
-    let mut files: Vec<String> = WalkDir::new(&canonical)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "zen"))
-        .filter(|e| {
-            let rel_path = e.path().strip_prefix(&canonical).unwrap_or(e.path());
-            !rel_path.components().any(|c| {
-                let s = c.as_os_str().to_string_lossy();
-                s == "test" || s == "layout" || s.starts_with('.')
-            })
-        })
-        .filter_map(|e| {
-            let rel_path = e.path().strip_prefix(&canonical).ok()?;
-            let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-            if let Some(ref f) = filter
-                && !rel_str.starts_with(f)
-                && rel_str != *f
-            {
-                return None;
-            }
-            Some(rel_str)
-        })
-        .collect();
-
-    files.sort();
-
-    if files.is_empty() {
-        let filter_msg = filter
-            .as_ref()
-            .map(|f| format!(" matching '{}'", f))
-            .unwrap_or_default();
-        anyhow::bail!(
-            "No .zen files found{} under '{}'.",
-            filter_msg,
-            canonical.display()
-        );
-    }
-
-    // Build a hierarchical directory tree from the file paths
-    #[derive(Default)]
-    struct DirTree {
-        subdirs: BTreeMap<String, DirTree>,
-        files: Vec<String>,
-    }
-
-    impl DirTree {
-        fn insert(&mut self, path: &str) {
-            let mut parts = path.split('/').peekable();
-            let mut current = self;
-
-            while let Some(part) = parts.next() {
-                if parts.peek().is_some() {
-                    current = current.subdirs.entry(part.to_string()).or_default();
-                } else {
-                    current.files.push(part.to_string());
-                }
-            }
-        }
-    }
-
-    #[derive(Clone)]
-    enum Node {
-        Dir { name: String, children: Vec<Node> },
-        File(String),
-    }
-
-    fn build_dir_node(name: String, tree: DirTree) -> Node {
-        let mut children = Vec::new();
-        for (subdir_name, subdir_tree) in tree.subdirs {
-            children.push(build_dir_node(subdir_name, subdir_tree));
-        }
-        let mut file_names = tree.files;
-        file_names.sort();
-        for file in file_names {
-            children.push(Node::File(file));
-        }
-        Node::Dir { name, children }
-    }
-
-    fn build_nodes(tree: DirTree) -> Vec<Node> {
-        let mut nodes = Vec::new();
-        for (dir_name, subdir_tree) in tree.subdirs {
-            nodes.push(build_dir_node(dir_name, subdir_tree));
-        }
-        let mut root_files = tree.files;
-        root_files.sort();
-        for file in root_files {
-            nodes.push(Node::File(file));
-        }
-        nodes
-    }
-
-    let mut tree = DirTree::default();
-    for file in &files {
-        tree.insert(file);
-    }
-
-    let roots = build_nodes(tree);
-
-    pcb_zen::tree::print_tree(display_name.to_string(), roots, |node| match node {
-        Node::Dir { name, children } => (format!("{}/", name), children.clone()),
-        Node::File(name) => (name.clone(), vec![]),
-    })?;
 
     Ok(())
 }
