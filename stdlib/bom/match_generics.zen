@@ -268,6 +268,7 @@ SERIES_BY_PKG = {
 HOUSE_CAPS_BY_PKG = murata_caps_by_pkg(
     {
         "0201": [
+            ("X7R", "10V", "2.2nF 10%", "GCM033R71A222KA03", ["D", "J"], "GCM033R71A222KA03-01A.pdf"),
             ("X7R", "10V", "10nF 10%", "GCM033R71A103KA03", ["D", "J"], "GCM033R71A103KA03-01A.pdf"),
             ("X7R", "10V", "100nF 10%", "GRM033Z71A104KE14", ["D", "J"], "GRM033Z71A104KE14-01A.pdf"),
             ("X5R", "10V", "1uF 20%", "GRM033R61A105ME44", ["D", "J"], "GRM033R61A105ME44-04A.pdf"),
