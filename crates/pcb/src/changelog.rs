@@ -9,7 +9,7 @@ const CHANGELOG_URL: &str =
 pub struct ChangelogArgs {
     /// Version selector: latest, unreleased, 0.3.80, or 0.3.78..0.3.80
     #[arg(default_value = "")]
-    selector: String,
+    pub(crate) selector: String,
 }
 
 pub fn execute(args: ChangelogArgs) -> Result<()> {
