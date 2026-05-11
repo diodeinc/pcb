@@ -556,14 +556,10 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     // Upload to API (must succeed before creating tag)
     #[cfg(feature = "api")]
     if remote.is_some() {
-        let ws_name = workspace
-            .root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .context("Invalid workspace root")?;
+        let ws_name = release_workspace_name(&workspace)?;
         let ctx = pcb_diode_api::WorkspaceContext::from_workspace_root(&workspace.root);
         eprintln!("Uploading release to Diode...");
-        let result = pcb_diode_api::upload_release(&_zip_path, ws_name, &ctx)?;
+        let result = pcb_diode_api::upload_release(&_zip_path, &ws_name, &ctx)?;
         if let Some(release_id) = result.release_id {
             eprintln!(
                 "{} Release uploaded: {}",
@@ -599,6 +595,31 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn release_workspace_name(workspace: &WorkspaceInfo) -> Result<String> {
+    if let Some(name) = workspace
+        .repository()
+        .and_then(workspace_name_from_code_diode_repository)
+    {
+        return Ok(name);
+    }
+
+    workspace
+        .root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
+        .context("Invalid workspace root")
+}
+
+fn workspace_name_from_code_diode_repository(repository: &str) -> Option<String> {
+    repository
+        .trim()
+        .strip_prefix("code.diode.computer/")
+        .and_then(|path| path.split('/').next())
+        .filter(|workspace| !workspace.is_empty())
+        .map(str::to_string)
 }
 
 fn ensure_board_publish_has_no_workspace_overrides(workspace: &WorkspaceInfo) -> Result<()> {
@@ -1413,6 +1434,8 @@ fn prompt_single_bump(name: &str, current: Option<&Version>) -> Result<ReleaseBu
 mod tests {
     use super::*;
     use pcb_test_utils::sandbox::Sandbox;
+    use pcb_zen_core::config::WorkspaceConfig;
+    use std::path::PathBuf;
 
     const TEST_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
@@ -1452,6 +1475,39 @@ P1 = io(Net)
 
     fn dirty_urls(urls: &[&str]) -> HashSet<String> {
         urls.iter().map(|url| (*url).to_string()).collect()
+    }
+
+    fn workspace_with_repository(root: &str, repository: Option<&str>) -> WorkspaceInfo {
+        WorkspaceInfo {
+            root: PathBuf::from(root),
+            cache_dir: PathBuf::new(),
+            config: Some(PcbToml {
+                workspace: Some(WorkspaceConfig {
+                    repository: repository.map(str::to_string),
+                    ..WorkspaceConfig::default()
+                }),
+                ..PcbToml::default()
+            }),
+            packages: BTreeMap::new(),
+            lockfile: None,
+            errors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn release_workspace_name_uses_code_diode_repository_owner_segment() {
+        let workspace =
+            workspace_with_repository("/tmp/IP0010", Some("code.diode.computer/diode/b/IP0010"));
+
+        assert_eq!(release_workspace_name(&workspace).unwrap(), "diode");
+    }
+
+    #[test]
+    fn release_workspace_name_falls_back_to_workspace_directory() {
+        let workspace =
+            workspace_with_repository("/tmp/IP0010", Some("github.com/diodeinc/IP0010"));
+
+        assert_eq!(release_workspace_name(&workspace).unwrap(), "IP0010");
     }
 
     /// Helper to create a dependency map from a list of (package, [dependencies])

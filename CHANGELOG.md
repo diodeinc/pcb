@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Improved `pcb publish` workspace resolution.
 - `pcb publish` no longer loads and rewrites boards with KiCad Python just to update release text variables, avoiding headless KiCad failures.
 - Fixed 4-digit resistor R-notation for generic BOM matching of sub-10Ω E96 values.
 - MVS v2 layout generation now keeps cache-backed footprint library paths workspace-relative.
