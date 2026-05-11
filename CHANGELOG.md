@@ -11,14 +11,19 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added scoped multi-registry search for registry-backed `pcb search`.
+- Builds now validate file-backed KiCad footprint S-expressions and embedded model checksums before layout generation.
 - `pcb info -f json` now includes the full transitive external dependency closure using package metadata aligned with workspace packages.
 
 ### Changed
 
+- `pcb layout` now initializes release text variables in KiCad project and board files, using `d10d3c0` as the placeholder git hash.
+- Embedded STEP writers now use KiCad's current MMH3 checksums instead of legacy SHA-256 checksums.
 - `pcb embed-step` is now shown in CLI help.
 
 ### Fixed
 
+- Improved `pcb publish` workspace resolution.
+- `pcb publish` no longer loads and rewrites boards with KiCad Python just to update release text variables, avoiding headless KiCad failures.
 - Fixed 4-digit resistor R-notation for generic BOM matching of sub-10Ω E96 values.
 - MVS v2 layout generation now keeps cache-backed footprint library paths workspace-relative.
 

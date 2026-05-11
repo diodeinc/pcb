@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::{debug, warn};
-use pcb_kicad::{
-    KiCadCliBuilder, PythonScriptBuilder, ensure_board_compatible_with_installed_kicad,
-};
+use pcb_kicad::{KiCadCliBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
@@ -132,18 +130,6 @@ impl ReleaseInfo {
 
     fn workspace_root(&self) -> &Path {
         &self.resolution.workspace_info.root
-    }
-
-    fn board_display_name(&self) -> String {
-        self.workspace_info()
-            .board_name_for_zen(&self.zen_path)
-            .unwrap_or_else(|| {
-                self.zen_path
-                    .file_stem()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string()
-            })
     }
 
     fn has_layout(&self) -> bool {
@@ -583,12 +569,10 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     })
 }
 
-/// Ensure text variables are defined in .kicad_pro file
-fn update_kicad_pro_text_variables(
+fn update_kicad_pro_release_variables(
     kicad_pro_path: &Path,
     version: &str,
     git_hash: &str,
-    board_name: &str,
 ) -> Result<()> {
     // Read the existing .kicad_pro file
     let content = fs::read_to_string(kicad_pro_path).with_context(|| {
@@ -606,107 +590,109 @@ fn update_kicad_pro_text_variables(
         )
     })?;
 
-    // Check if text variables already exist
-    let text_vars = project.get("text_variables").and_then(|v| v.as_object());
-    let needs_pcb_version = text_vars.is_none_or(|vars| !vars.contains_key("PCB_VERSION"));
-    let needs_pcb_git_hash = text_vars.is_none_or(|vars| !vars.contains_key("PCB_GIT_HASH"));
-    let needs_pcb_name = text_vars.is_none_or(|vars| !vars.contains_key("PCB_NAME"));
-
-    // Only modify if we need to add missing variables
-    if needs_pcb_version || needs_pcb_git_hash || needs_pcb_name {
-        // Ensure text_variables object exists
-        if project.get("text_variables").is_none() || !project["text_variables"].is_object() {
-            project["text_variables"] = serde_json::json!({});
-        }
-
-        let text_vars = project["text_variables"].as_object_mut().unwrap();
-
-        // Add missing variables with correct values
-        text_vars.insert(
-            "PCB_VERSION".to_string(),
-            serde_json::Value::String(version.to_string()),
-        );
-        text_vars.insert(
-            "PCB_GIT_HASH".to_string(),
-            serde_json::Value::String(git_hash.to_string()),
-        );
-        text_vars.insert(
-            "PCB_NAME".to_string(),
-            serde_json::Value::String(board_name.to_string()),
-        );
-
-        // Write back to file with pretty formatting
-        let mut updated_content = serde_json::to_string_pretty(&project)?;
-        updated_content.push('\n');
-        fs::write(kicad_pro_path, updated_content).with_context(|| {
+    let text_vars = project
+        .get_mut("text_variables")
+        .and_then(|v| v.as_object_mut())
+        .with_context(|| {
             format!(
-                "Failed to write updated .kicad_pro file: {}",
+                "Missing text_variables in {}. Run `pcb layout` before publishing.",
                 kicad_pro_path.display()
             )
         })?;
 
-        debug!(
-            "Added missing text variables to: {}",
-            kicad_pro_path.display()
-        );
-    } else {
-        debug!(
-            "Text variables already exist in: {}",
-            kicad_pro_path.display()
-        );
+    for (key, value) in [("PCB_VERSION", version), ("PCB_GIT_HASH", git_hash)] {
+        let slot = text_vars.get_mut(key).with_context(|| {
+            format!(
+                "Missing {key} text variable in {}. Run `pcb layout` before publishing.",
+                kicad_pro_path.display()
+            )
+        })?;
+        *slot = serde_json::Value::String(value.to_string());
     }
+
+    // Write back to file with pretty formatting
+    let mut updated_content = serde_json::to_string_pretty(&project)?;
+    updated_content.push('\n');
+    fs::write(kicad_pro_path, updated_content).with_context(|| {
+        format!(
+            "Failed to write updated .kicad_pro file: {}",
+            kicad_pro_path.display()
+        )
+    })?;
+
+    debug!("Updated text variables in: {}", kicad_pro_path.display());
 
     Ok(())
 }
 
-/// Substitute version, git hash and name variables in KiCad PCB files
+fn update_kicad_pcb_release_variables(
+    kicad_pcb_path: &Path,
+    version: &str,
+    git_hash: &str,
+) -> Result<()> {
+    let content = fs::read_to_string(kicad_pcb_path).with_context(|| {
+        format!(
+            "Failed to read .kicad_pcb file: {}",
+            kicad_pcb_path.display()
+        )
+    })?;
+    let root = pcb_sexpr::parse(&content).map_err(|e| anyhow::anyhow!(e))?;
+    let root_items = root
+        .as_list()
+        .context("KiCad PCB file root must be an S-expression list")?;
+
+    let mut patches = pcb_sexpr::PatchSet::new();
+    for (key, value) in [("PCB_VERSION", version), ("PCB_GIT_HASH", git_hash)] {
+        let value_node = root_items
+            .iter()
+            .find_map(|item| {
+                let items = item.as_list()?;
+                (items.first().and_then(|item| item.as_sym()) == Some("property")
+                    && items.get(1).and_then(|item| item.as_str()) == Some(key))
+                .then_some(items.get(2))
+                .flatten()
+            })
+            .with_context(|| {
+                format!(
+                    "Missing {key} board property in {}. Run `pcb layout` before publishing.",
+                    kicad_pcb_path.display()
+                )
+            })?;
+        patches.replace_string(value_node.span, value);
+    }
+
+    let file = fs::File::create(kicad_pcb_path).with_context(|| {
+        format!(
+            "Failed to write updated .kicad_pcb file: {}",
+            kicad_pcb_path.display()
+        )
+    })?;
+    let mut writer = BufWriter::new(file);
+    patches.write_to(&content, &mut writer)?;
+    writer.flush().with_context(|| {
+        format!(
+            "Failed to flush updated .kicad_pcb file: {}",
+            kicad_pcb_path.display()
+        )
+    })?;
+
+    debug!("Updated release variables in: {}", kicad_pcb_path.display());
+    Ok(())
+}
+
+/// Substitute release version and git hash placeholders in staged KiCad files.
 fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let Some(kicad_files) = info.staged_kicad_files() else {
         debug!("No layout directory, skipping variable substitution");
         return Ok(());
     };
 
-    // Determine display name of the board
-    let board_name = info.board_display_name();
-
     // Use short hash (7 chars) for variable substitution
     let short_hash = &info.git_hash[..7.min(info.git_hash.len())];
 
-    // First, update the .kicad_pro file to ensure text variables are defined
     let kicad_pro_path = kicad_files.kicad_pro.clone();
-    update_kicad_pro_text_variables(&kicad_pro_path, &info.version, short_hash, &board_name)?;
-
-    // Then update the .kicad_pcb file with the actual values
-    let kicad_pcb_path = kicad_files.kicad_pcb();
-    let script = format!(
-        r#"
-import sys
-import pcbnew
-
-# Load the board
-board = pcbnew.LoadBoard(sys.argv[1])
-
-# Get text variables
-text_vars = board.GetProperties()
-
-# Update variables
-text_vars['PCB_VERSION'] = '{version}'
-text_vars['PCB_GIT_HASH'] = '{git_hash}'
-text_vars['PCB_NAME'] = '{board_name}'
-
-# Save the board
-board.Save(sys.argv[1])
-print("Text variables updated successfully")
-"#,
-        version = info.version.replace('\'', "\\'"),
-        git_hash = short_hash.replace('\'', "\\'"),
-        board_name = board_name.replace('\'', "\\'")
-    );
-
-    PythonScriptBuilder::new(script)
-        .arg(kicad_pcb_path.to_string_lossy())
-        .run()?;
-    debug!("Updated variables in: {}", kicad_pcb_path.display());
+    update_kicad_pro_release_variables(&kicad_pro_path, &info.version, short_hash)?;
+    update_kicad_pcb_release_variables(&kicad_files.kicad_pcb(), &info.version, short_hash)?;
     Ok(())
 }
 
@@ -1403,18 +1389,22 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn update_kicad_pro_text_variables_writes_trailing_newline() -> Result<()> {
+    fn update_kicad_pro_release_variables_writes_trailing_newline() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let kicad_pro_path = temp_dir.path().join("layout.kicad_pro");
 
         fs::write(
             &kicad_pro_path,
             r#"{
-  "text_variables": {}
+  "text_variables": {
+    "PCB_NAME": "Demo Board",
+    "PCB_VERSION": "v0.0.0",
+    "PCB_GIT_HASH": "d10d3c0"
+  }
 }"#,
         )?;
 
-        update_kicad_pro_text_variables(&kicad_pro_path, "1.2.3", "abcdef0", "Demo Board")?;
+        update_kicad_pro_release_variables(&kicad_pro_path, "1.2.3", "abcdef0")?;
 
         let content = fs::read_to_string(&kicad_pro_path)?;
         assert!(

@@ -39,6 +39,7 @@ use crate::lang::{
     electrical_check::FrozenElectricalCheck,
     evaluator_ext::EvaluatorExt,
     file::file_globals,
+    footprint::{FootprintCacheKey, footprint_cache_key, validate_footprints},
     module::{FrozenModuleValue, ModulePath},
 };
 use crate::load_spec::LoadSpec;
@@ -172,7 +173,9 @@ impl EvalOutput {
     /// Convert to schematic with diagnostics
     pub fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<pcb_sch::Schematic> {
         let converter = ModuleConverter::new();
-        let mut result = converter.build(self.module_tree());
+        let module_tree = self.module_tree();
+        let footprint_diagnostics = validate_footprints(&module_tree, &self.config, &self.session);
+        let mut result = converter.build(module_tree);
         if let Some(ref mut schematic) = result.output {
             schematic.package_roots = self.config.resolution.package_roots();
             schematic.resolved_paths = self.config.tracked_resolved_paths();
@@ -204,6 +207,7 @@ impl EvalOutput {
                 }
             }
         }
+        result.diagnostics.extend(footprint_diagnostics);
         result
     }
 
@@ -282,6 +286,8 @@ pub struct EvalSession {
     /// root is active. V1 keeps the historical path-only behavior via a `None`
     /// scope.
     load_cache: Arc<RwLock<HashMap<LoadCacheKey, CachedModule>>>,
+    /// Cache of validated footprint files.
+    footprint_cache: Arc<RwLock<HashMap<FootprintCacheKey, Vec<Diagnostic>>>>,
     /// Per-file mapping of `symbol → target path` for "go-to definition".
     symbol_index: Arc<RwLock<HashMap<PathBuf, HashMap<String, PathBuf>>>>,
     /// Per-file mapping of `symbol → parameter list` for signature help.
@@ -782,6 +788,7 @@ impl Default for EvalSession {
         Self {
             file_contents_cache: Arc::new(RwLock::new(HashMap::new())),
             load_cache: Arc::new(RwLock::new(HashMap::new())),
+            footprint_cache: Arc::new(RwLock::new(HashMap::new())),
             symbol_index: Arc::new(RwLock::new(HashMap::new())),
             symbol_params: Arc::new(RwLock::new(HashMap::new())),
             symbol_meta: Arc::new(RwLock::new(HashMap::new())),
@@ -841,10 +848,25 @@ impl EvalSession {
 
     pub fn clear_load_cache(&self) {
         self.load_cache.write().unwrap().clear();
+        self.footprint_cache.write().unwrap().clear();
     }
 
-    fn clear_file_contents(&self, path: &Path) {
+    pub(crate) fn get_cached_footprint(&self, key: &FootprintCacheKey) -> Option<Vec<Diagnostic>> {
+        self.footprint_cache.read().unwrap().get(key).cloned()
+    }
+
+    pub(crate) fn cache_footprint(&self, key: FootprintCacheKey, diagnostics: Vec<Diagnostic>) {
+        self.footprint_cache
+            .write()
+            .unwrap()
+            .insert(key, diagnostics);
+    }
+
+    fn clear_file_contents(&self, path: &Path, footprint_key: Option<FootprintCacheKey>) {
         self.file_contents_cache.write().unwrap().remove(path);
+        if let Some(key) = footprint_key {
+            self.footprint_cache.write().unwrap().remove(&key);
+        }
     }
 
     fn clear_symbol_maps(&self, path: &Path) {
@@ -1628,7 +1650,9 @@ impl EvalContext {
 
     /// Remove file contents from the in-memory cache.
     pub fn clear_file_contents(&self, path: &Path) {
-        self.session.clear_file_contents(path);
+        let footprint_key = (path.extension().and_then(|ext| ext.to_str()) == Some("kicad_mod"))
+            .then(|| footprint_cache_key(path, &self.config));
+        self.session.clear_file_contents(path, footprint_key);
     }
 
     /// Get all symbols for a file
@@ -2197,5 +2221,32 @@ impl FileLoader for EvalContext {
     fn load(&self, path: &str) -> starlark::Result<FrozenModule> {
         let eval_output = self.resolve_and_eval_module(path, None)?;
         Ok(eval_output.star_module)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{path::Path, sync::Arc};
+
+    use crate::{InMemoryFileProvider, resolution::ResolutionResult};
+
+    use super::*;
+
+    #[test]
+    fn clear_file_contents_invalidates_canonicalized_footprint_cache_key() {
+        let context = EvalContext::new(
+            Arc::new(InMemoryFileProvider::empty()),
+            ResolutionResult::empty(),
+        );
+        let cached_path = Path::new("/dir/bad.kicad_mod");
+        let invalidation_path = Path::new("/dir/../dir/bad.kicad_mod");
+        let key = footprint_cache_key(cached_path, context.config());
+
+        context.session.cache_footprint(key.clone(), Vec::new());
+        assert!(context.session.get_cached_footprint(&key).is_some());
+
+        context.clear_file_contents(invalidation_path);
+
+        assert!(context.session.get_cached_footprint(&key).is_none());
     }
 }

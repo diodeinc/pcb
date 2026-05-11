@@ -6,6 +6,7 @@ pub mod electrical_check;
 pub mod r#enum;
 pub mod eval;
 pub(crate) mod evaluator_ext;
+pub(crate) mod footprint;
 pub(crate) mod interface;
 pub mod io_direction;
 pub mod module;

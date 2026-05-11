@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/tag.rs
-assertion_line: 86
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
@@ -36,7 +35,7 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <1522 bytes, sha256: 013f6ec>
+=== netlist.json <1556 bytes, sha256: 226cca3>
 === src/boards/Test/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
