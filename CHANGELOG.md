@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.80] - 2026-05-11
+
 ### Added
 
 - Added stdlib BOM matching for Murata 0201 2.2nF capacitors.
@@ -1020,7 +1022,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.79...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.80...HEAD
+[0.3.80]: https://github.com/diodeinc/pcb/compare/v0.3.79...v0.3.80
 [0.3.79]: https://github.com/diodeinc/pcb/compare/v0.3.78...v0.3.79
 [0.3.78]: https://github.com/diodeinc/pcb/compare/v0.3.77...v0.3.78
 [0.3.77]: https://github.com/diodeinc/pcb/compare/v0.3.76...v0.3.77
