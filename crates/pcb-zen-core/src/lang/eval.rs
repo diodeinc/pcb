@@ -20,6 +20,11 @@ use starlark::{
 };
 use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
 use starlark::{environment::FrozenModule, typing::Interface};
+use starlark_syntax::syntax::{
+    ast::{LoadArgP, StmtP},
+    module::AstModuleFields,
+    top_level_stmts::top_level_stmts,
+};
 
 #[cfg(feature = "native")]
 use rayon::prelude::*;
@@ -69,6 +74,121 @@ const PRELUDE: &[(&str, &[&str])] = &[
     ("@stdlib/properties.zen", &["Layout", "Part"]),
     ("@stdlib/board_config.zen", &["Board"]),
 ];
+
+fn canonicalize_for_compare(path: &Path, file_provider: &dyn FileProvider) -> PathBuf {
+    file_provider
+        .canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn path_starts_with_canonical(
+    path: &Path,
+    prefix: &Path,
+    file_provider: &dyn FileProvider,
+) -> bool {
+    canonicalize_for_compare(path, file_provider)
+        .starts_with(canonicalize_for_compare(prefix, file_provider))
+}
+
+fn is_stdlib_source_path(path: &Path, config: &EvalContextConfig) -> bool {
+    let file_provider = config.file_provider.as_ref();
+    path_starts_with_canonical(
+        path,
+        &config.resolution.workspace_info.workspace_stdlib_dir(),
+        file_provider,
+    ) || path_starts_with_canonical(
+        path,
+        &config.resolution.workspace_info.root.join("stdlib"),
+        file_provider,
+    )
+}
+
+fn explicit_prelude_load_diagnostics(
+    ast: &AstModule,
+    config: &EvalContextConfig,
+) -> Vec<Diagnostic> {
+    if !config.inject_prelude {
+        return Vec::new();
+    }
+
+    let Some(source_path) = config.source_path.as_deref() else {
+        return Vec::new();
+    };
+
+    if is_stdlib_source_path(source_path, config) {
+        return Vec::new();
+    }
+
+    let file_provider = config.file_provider.as_ref();
+    let prelude_modules: Vec<_> = PRELUDE
+        .iter()
+        .filter_map(|(module_path, symbols)| {
+            config
+                .resolve_path(module_path, source_path)
+                .ok()
+                .map(|path| (canonicalize_for_compare(&path, file_provider), *symbols))
+        })
+        .collect();
+
+    let mut diagnostics = Vec::new();
+    for stmt in top_level_stmts(ast.statement()) {
+        let StmtP::Load(load) = &stmt.node else {
+            continue;
+        };
+
+        let Ok(load_path) = config.resolve_path(&load.module.node, source_path) else {
+            continue;
+        };
+        let load_path = canonicalize_for_compare(&load_path, file_provider);
+
+        let Some((_, prelude_symbols)) = prelude_modules
+            .iter()
+            .find(|(prelude_path, _)| prelude_path == &load_path)
+        else {
+            continue;
+        };
+
+        let explicitly_loaded: Vec<&str> = load
+            .args
+            .iter()
+            .filter_map(|LoadArgP { their, .. }| {
+                prelude_symbols
+                    .contains(&their.node.as_str())
+                    .then_some(their.node.as_str())
+            })
+            .collect();
+
+        if explicitly_loaded.is_empty() {
+            continue;
+        }
+
+        let names = match explicitly_loaded.as_slice() {
+            [name] => format!("`{name}` is"),
+            names => format!(
+                "{} are",
+                names
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        let message = format!(
+            "{names} available from the @stdlib prelude; remove from this explicit `load()`"
+        );
+        diagnostics.push(
+            Diagnostic::categorized(
+                &source_path.to_string_lossy(),
+                &message,
+                "stdlib.prelude_load",
+                EvalSeverity::Warning,
+            )
+            .with_span(Some(ast.codemap().file_span(stmt.span).resolve_span())),
+        );
+    }
+
+    diagnostics
+}
 
 /// A PrintHandler that collects all print output into a vector
 struct CollectingPrintHandler {
@@ -1414,6 +1534,9 @@ impl EvalContext {
         };
 
         for diagnostic in binding::check_bindings(&ast, source_path, &contents_owned) {
+            self.add_load_diagnostic(diagnostic);
+        }
+        for diagnostic in explicit_prelude_load_diagnostics(&ast, &self.config) {
             self.add_load_diagnostic(diagnostic);
         }
 

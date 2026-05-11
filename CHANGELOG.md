@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Explicitly loading prelude-provided stdlib identifiers now emits a warning encouraging use of the @stdlib prelude.
 - `pcb self update` now prints release notes between the old and new versions.
 - `pcb doc` is now only for package documentation.
 - Removed embedded `docs/pages`, embedded changelog rendering, `pcb doc spec`, `pcb doc --install`, and `pcb doc --list`.
