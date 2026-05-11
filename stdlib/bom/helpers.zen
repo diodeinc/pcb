@@ -7,6 +7,7 @@ load(
     "Voltage",
     "Power",
     "Capacitance",
+    "Inductance",
     "Impedance",
     "Current",
     "Frequency",
@@ -517,6 +518,29 @@ def ferrite_bead(
     return {
         "impedance": Impedance(impedance),
         "frequency": Frequency(frequency),
+        "current": Current(current),
+        "dcr": Resistance(dcr),
+        "mpn": mpn,
+        "manufacturer": manufacturer,
+        "datasheet": datasheet,
+    }
+
+
+def power_inductor(inductance: str, current: str, dcr: str, mpn: str, manufacturer: str, datasheet=None) -> dict:
+    """Helper to create power inductor catalog entry.
+
+    Args:
+        inductance: Inductance with tolerance (e.g., "10uH 20%")
+        current: Rated current (e.g., "1.2A")
+        dcr: DC resistance max (e.g., "250mOhm")
+        mpn: Manufacturer part number
+        manufacturer: Manufacturer name
+
+    Returns:
+        Power inductor dictionary
+    """
+    return {
+        "inductance": Inductance(inductance),
         "current": Current(current),
         "dcr": Resistance(dcr),
         "mpn": mpn,

@@ -9,6 +9,7 @@ load(
     "Voltage",
     "Resistance",
     "Capacitance",
+    "Inductance",
     "Power",
     "Current",
     "Frequency",
@@ -41,6 +42,7 @@ load(
     "ecs_crystal",
     "led",
     "ferrite_bead",
+    "power_inductor",
     "tvs",
     "rectifier",
     "zener",
@@ -95,6 +97,28 @@ SERIES_BY_PKG = {
             "0%",
             [("0Ohm", "RC0201FR-070RL")],
             yageo_asset_datasheet("PYU-RC_GROUP_51_ROHS_L"),
+        ),
+        panasonic_erj(
+            "ERJ-1GJF",
+            "10Ohm – 1MOhm",
+            "25V",
+            "0.05W",
+            "1%",
+            ["e96", "e24"],
+            "C",
+            iec60062_4digit,
+            "RDA0000/AOA0000C304.pdf",
+        ),
+        panasonic_erj(
+            "ERJ-1GNF",
+            "10Ohm – 1MOhm",
+            "25V",
+            "0.05W",
+            "1%",
+            ["e96", "e24"],
+            "C",
+            iec60062_4digit,
+            "RDA0000/AOA0000C304.pdf",
         ),
     ],
     "0402": [
@@ -338,6 +362,113 @@ HOUSE_FB_BY_PKG = {
     "0805": [
         ferrite_bead("220Ohm 25%", "100MHz", "2A", "45mOhm", "BLM21PG221SN1D", "Murata Electronics"),
         ferrite_bead("220Ohm 25%", "100MHz", "3A", "40mOhm", "MPZ2012S221AT000", "TDK Corporation"),
+    ],
+}
+
+# House power inductor catalog by package.
+HOUSE_POWER_INDUCTORS_BY_PKG = {
+    "0603": [
+        # Würth Elektronik WE-PMCI, 0603 (1608 Metric), shielded molded power inductors.
+        power_inductor(
+            "470nH 20%",
+            "3.95A",
+            "75mOhm",
+            "74479262147",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479262147.pdf",
+        ),
+        power_inductor(
+            "1uH 20%",
+            "2.6A",
+            "115mOhm",
+            "74479262210",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479262210.pdf",
+        ),
+    ],
+    "0805": [
+        # Würth Elektronik WE-PMCI, 0805 (2012 Metric), shielded molded power inductors.
+        power_inductor(
+            "470nH 20%",
+            "4.3A",
+            "44mOhm",
+            "74479275147",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479275147.pdf",
+        ),
+        power_inductor(
+            "1uH 20%",
+            "3.3A",
+            "75mOhm",
+            "74479275210",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479275210.pdf",
+        ),
+        power_inductor(
+            "2.2uH 20%",
+            "2A",
+            "190mOhm",
+            "74479275222",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479275222.pdf",
+        ),
+        # Würth Elektronik WE-PMI, 0805 (2012 Metric), shielded multilayer power inductors.
+        power_inductor(
+            "470nH 20%",
+            "1.4A",
+            "100mOhm",
+            "74479775147A",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479775147A.pdf",
+        ),
+        power_inductor(
+            "1uH 20%",
+            "1.1A",
+            "190mOhm",
+            "74479774210",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479774210.pdf",
+        ),
+        power_inductor(
+            "2.2uH 20%",
+            "700mA",
+            "340mOhm",
+            "74479774222",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479774222.pdf",
+        ),
+        power_inductor(
+            "4.7uH 20%",
+            "850mA",
+            "312.5mOhm",
+            "74479775247",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479775247.pdf",
+        ),
+        power_inductor(
+            "6.8uH 20%",
+            "900mA",
+            "375mOhm",
+            "74479777268",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479777268.pdf",
+        ),
+        power_inductor(
+            "10uH 20%",
+            "900mA",
+            "375mOhm",
+            "74479777310A",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479777310A.pdf",
+        ),
+        power_inductor(
+            "10uH 20%",
+            "650mA",
+            "625mOhm",
+            "74479777310",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479777310.pdf",
+        ),
     ],
 }
 
@@ -1419,6 +1550,47 @@ def assign_house_ferrite_bead(c, house_fb_by_pkg):
     _no_match_warn("ferrite bead", c, pkg)
 
 
+def assign_house_inductor(c, house_inductors_by_pkg):
+    """Assign house power inductor MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    if pkg not in house_inductors_by_pkg:
+        return
+
+    inductance_req = Inductance(prop(c, ["inductance", "Inductance"]))
+    current_constraint = prop(c, ["current", "Current"])
+    dcr_constraint = prop(c, ["dcr", "Dcr"])
+
+    if inductance_req.tolerance == 0.0:
+        inductance_req = inductance_req.with_tolerance(0.20)
+
+    parts = house_inductors_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        if not p["inductance"].within(inductance_req):
+            continue
+
+        # Current: part's current must be >= required (higher is better)
+        if current_constraint and p["current"] < current_constraint:
+            continue
+
+        # DCR: part's DCR must be <= required (lower is better)
+        if dcr_constraint and p["dcr"] > dcr_constraint:
+            continue
+
+        err = p["inductance"].diff(inductance_req) / inductance_req
+        score = (err, p["current"] * -1, p["dcr"])
+        matches.append((score, p))
+
+    if matches:
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        set_from_matches(c, [p for score, p in sorted_matches])
+        c.matcher = "assign_house_inductor"
+        return
+
+    _no_match_warn("power inductor", c, pkg)
+
+
 def assign_house_pin_header(c, house_ph):
     """Assign house pin header MPNs."""
     pins_req = prop(c, ["pins", "Pins"])
@@ -1663,6 +1835,8 @@ def assign_house_parts(c):
         assign_house_led(c, HOUSE_LEDS_BY_PKG)
     elif c.type == "ferrite_bead":
         assign_house_ferrite_bead(c, HOUSE_FB_BY_PKG)
+    elif c.type == "inductor":
+        assign_house_inductor(c, HOUSE_POWER_INDUCTORS_BY_PKG)
     elif c.type == "rectifier":
         assign_house_rectifier(c, HOUSE_RECTIFIERS_BY_PKG)
     elif c.type == "zener":

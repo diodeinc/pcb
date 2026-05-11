@@ -2,6 +2,7 @@
 
 load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
+load("../../bom/match_generics.zen", "assign_house_parts")
 
 Resistor = Module("../Resistor.zen")
 
@@ -13,6 +14,8 @@ for package in Resistor.Package.values():
         value="10kOhm",
         voltage="50V",
         package=package,
+        mpn="TEST-" + name,
+        manufacturer="Test",
         P1=Net(name + "_P1"),
         P2=Net(name + "_P2"),
     )
@@ -24,6 +27,21 @@ Resistor(
     voltage="50V",
     package="0603",
     use_us_symbol=True,
+    mpn="TEST-" + name,
+    manufacturer="Test",
     P1=Net(name + "_P1"),
     P2=Net(name + "_P2"),
 )
+
+for value in ["10kOhm", "47kOhm", "100kOhm"]:
+    name = "R_0201_MATCH_" + value
+    Resistor(
+        name=name,
+        value=value,
+        voltage="25V",
+        package="0201",
+        P1=Net(name + "_P1"),
+        P2=Net(name + "_P2"),
+    )
+
+builtin.add_component_modifier(assign_house_parts)
