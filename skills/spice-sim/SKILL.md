@@ -61,7 +61,6 @@ The `setup` string is passed through as ngspice input. Put voltage sources, wave
 ```python
 """<Part> <scenario> simulation test."""
 
-load("@stdlib/interfaces.zen", "Ground", "Power")
 load("@stdlib/properties.zen", "Simulation")
 
 Target = Module("../Target.zen")

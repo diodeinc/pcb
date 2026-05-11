@@ -15,6 +15,7 @@ Canonical Zener HDL semantics and authoring guidance. Start from nearby code; us
 4. Read source from the path reported by `pcb doc` when behavior matters. Do not search broad filesystem roots or random cache directories to find stdlib/package source.
 5. Never invent syntax, stdlib modules, interfaces, fields, package APIs, footprints, or part names.
 6. Preserve trailing `# pcb:sch ...` comments. Only update names inside an existing comment when you rename the matching component or net.
+7. For recent Zener, stdlib, and `pcb` CLI changes, check the pcb changelog entries for the installed version and nearby previous releases: <https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md>
 
 ## Using `pcb doc`
 
