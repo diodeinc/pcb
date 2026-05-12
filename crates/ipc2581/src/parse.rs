@@ -1603,12 +1603,22 @@ impl Parser {
             .map(|s| self.parse_polarity(s))
             .transpose()?;
 
-        // Parse layer-specific Profile (for rigid-flex)
+        let mut span = None;
         let mut profile = None;
         for child in node.children().filter(|n| n.is_element()) {
-            if child.tag_name().name() == "Profile" {
-                profile = Some(self.parse_profile(&child)?);
-                break;
+            match child.tag_name().name() {
+                "Span" => {
+                    span = Some(ecad::LayerSpan {
+                        from_layer: child
+                            .attribute("fromLayer")
+                            .map(|s| self.interner.intern(s)),
+                        to_layer: child.attribute("toLayer").map(|s| self.interner.intern(s)),
+                    });
+                }
+                "Profile" => {
+                    profile = Some(self.parse_profile(&child)?);
+                }
+                _ => {}
             }
         }
 
@@ -1617,6 +1627,7 @@ impl Parser {
             layer_function,
             side,
             polarity,
+            span,
             profile,
         })
     }
@@ -1984,10 +1995,15 @@ impl Parser {
             SlotShape::Primitive(self.parse_standard_primitive(&primitive_node, units)?)
         };
 
+        let z_axis_dim = node.children().any(|child| {
+            child.is_element() && matches!(child.tag_name().name(), "MaterialCut" | "MaterialLeft")
+        });
+
         Ok(Slot {
             name,
             shape,
             plating_status,
+            z_axis_dim,
             x,
             y,
         })

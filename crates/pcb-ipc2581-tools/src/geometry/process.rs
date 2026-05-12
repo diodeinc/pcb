@@ -1,6 +1,8 @@
 use super::ir::*;
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
+use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::simplify::SimplifyShape;
+use i_overlay::float::single::SingleFloatOverlay;
 use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 
 type ContourPayload = (BBox, Vec<PathCmd>);
@@ -10,6 +12,7 @@ pub fn process_document(doc: &mut GeometryDocument) {
     normalize_bounds(doc);
     compose_feature_paths(doc);
     outline_stroked_paths(doc);
+    subtract_layer_cutouts(doc);
     union_feature_filled_paths(doc);
     normalize_bounds(doc);
 }
@@ -117,14 +120,10 @@ pub fn union_feature_filled_paths(doc: &mut GeometryDocument) {
         }
 
         let mut contours = Vec::new();
-        let mut supported = true;
         for path in paths {
-            if !path_to_polygon_contours(doc, path, &mut contours) {
-                supported = false;
-                break;
-            }
+            path_to_polygon_contours(doc, path, &mut contours);
         }
-        if !supported || contours.len() < 2 {
+        if contours.len() < 2 {
             continue;
         }
 
@@ -141,6 +140,63 @@ pub fn union_feature_filled_paths(doc: &mut GeometryDocument) {
         let feature = &mut doc.features[feature_index];
         feature.path_start = path_id;
         feature.path_count = 1;
+    }
+}
+
+pub fn subtract_layer_cutouts(doc: &mut GeometryDocument) {
+    for layer_index in 0..doc.layers.len() {
+        let layer = doc.layers[layer_index].clone();
+        let features = &doc.features
+            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
+        let mut cutouts = Vec::new();
+        for feature in features {
+            if feature.bucket == FeatureBucket::Cutout {
+                for path in &doc.paths[feature.path_start as usize
+                    ..(feature.path_start + feature.path_count) as usize]
+                {
+                    path_to_polygon_contours(doc, path, &mut cutouts);
+                }
+            }
+        }
+        if cutouts.is_empty() {
+            continue;
+        }
+
+        for feature_index in layer.feature_start..layer.feature_start + layer.feature_count {
+            let feature = doc.features[feature_index as usize].clone();
+            if feature.bucket == FeatureBucket::Cutout {
+                continue;
+            }
+
+            let paths = &doc.paths
+                [feature.path_start as usize..(feature.path_start + feature.path_count) as usize];
+            if paths.is_empty() || !paths.iter().all(|path| path.flags.filled) {
+                continue;
+            }
+
+            let mut subject = Vec::new();
+            for path in paths {
+                path_to_polygon_contours(doc, path, &mut subject);
+            }
+            if subject.is_empty() {
+                continue;
+            }
+
+            let result =
+                subject.overlay(&cutouts, OverlayRule::Difference, OverlayFillRule::NonZero);
+            let contours = polygon_shapes_to_contours(result);
+            if contours.is_empty() {
+                continue;
+            }
+
+            let path_id = doc.push_compound_path(
+                GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+                contours,
+            );
+            let feature = &mut doc.features[feature_index as usize];
+            feature.path_start = path_id;
+            feature.path_count = 1;
+        }
     }
 }
 
@@ -354,7 +410,7 @@ fn path_to_polygon_contours(
     doc: &GeometryDocument,
     path: &GeometryPath,
     out: &mut Vec<PolygonContour>,
-) -> bool {
+) {
     let bez_path = path_to_kurbo(doc, path);
     let mut current = Vec::new();
     kurbo::flatten(bez_path, 0.005, |element| match element {
@@ -367,7 +423,6 @@ fn path_to_polygon_contours(
         PathEl::QuadTo(..) | PathEl::CurveTo(..) => unreachable!("kurbo::flatten emits lines"),
     });
     push_polygon_contour(out, &mut current);
-    true
 }
 
 fn push_polygon_contour(out: &mut Vec<PolygonContour>, contour: &mut PolygonContour) {
@@ -570,6 +625,53 @@ mod tests {
         assert_eq!(path.contour_count, 1);
         assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
         assert_eq!(path.bbox.max, Point::new(3.0, 1.0));
+    }
+
+    #[test]
+    fn subtracts_cutouts_from_filled_layer_geometry() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 4.0, 4.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(1.0, 1.0, 3.0, 3.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_start: 1,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Slot,
+                FeatureBucket::Cutout,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 2,
+            bbox: BBox::empty(),
+        });
+
+        process_document(&mut doc);
+
+        let feature = &doc.features[0];
+        let path = &doc.paths[feature.path_start as usize];
+        assert_eq!(feature.path_count, 1);
+        assert!(path.contour_count > 1);
+        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(path.bbox.max, Point::new(4.0, 4.0));
     }
 
     fn rect_cmds(x0: f64, y0: f64, x1: f64, y1: f64) -> [PathCmd; 5] {

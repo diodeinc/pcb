@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Preserved IPC-2581 `PolyStepCurve` arc geometry when rendering layer SVGs.
+- Applied IPC-2581 slot/cavity cutouts only to affected layers and subtracted them from rendered layer geometry.
 
 ### Changed
 

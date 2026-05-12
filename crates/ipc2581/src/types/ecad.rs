@@ -199,7 +199,14 @@ pub struct Layer {
     pub layer_function: LayerFunction,
     pub side: Option<Side>,
     pub polarity: Option<Polarity>,
+    pub span: Option<LayerSpan>,
     pub profile: Option<Profile>, // Layer-specific outline (for rigid-flex)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LayerSpan {
+    pub from_layer: Option<Symbol>,
+    pub to_layer: Option<Symbol>,
 }
 
 /// LayerFeature contains features on a layer
@@ -272,6 +279,7 @@ pub struct Slot {
     pub name: Option<Symbol>,
     pub shape: SlotShape,
     pub plating_status: PlatingStatus,
+    pub z_axis_dim: bool,
     pub x: f64,
     pub y: f64,
 }

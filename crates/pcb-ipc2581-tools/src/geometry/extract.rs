@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use ipc2581::types::{
     FillProperty, LayerFunction, LineEnd, PadUse, PlatingStatus, Polarity, PolyStep, SlotShape,
-    StandardPrimitive, Styled,
+    StandardPrimitive, Styled, ecad::Layer,
 };
 use ipc2581::{Ipc2581, Symbol};
 
@@ -133,10 +133,16 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
     }
 
     for layer_feature in &step.layer_features {
-        let is_drill_layer = ecad.cad_data.layers.iter().any(|candidate| {
-            candidate.name == layer_feature.layer_ref
-                && candidate.layer_function == LayerFunction::Drill
-        });
+        let Some(source_layer) = ecad
+            .cad_data
+            .layers
+            .iter()
+            .find(|candidate| candidate.name == layer_feature.layer_ref)
+        else {
+            continue;
+        };
+        let is_drill_layer = source_layer.layer_function == LayerFunction::Drill;
+        let is_routing_layer = source_layer.layer_function == LayerFunction::Rout;
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             if is_drill_layer {
@@ -154,18 +160,22 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
                 }
             }
 
-            for (feature_index, slot) in set.slots.iter().enumerate() {
-                let feature = extract_slot(
-                    &context,
-                    SourceRef {
-                        set_index: set_index as u32,
-                        feature_index: feature_index as u32,
-                    },
-                    slot,
-                    &mut doc,
-                )?;
-                layer_bbox = layer_bbox.union(feature.bbox);
-                doc.features.push(feature);
+            if is_drill_layer || is_routing_layer {
+                for (feature_index, slot) in set.slots.iter().enumerate() {
+                    if slot_applies_to_layer(source_layer, layer, &ecad.cad_data.layers, slot) {
+                        let feature = extract_slot(
+                            &context,
+                            SourceRef {
+                                set_index: set_index as u32,
+                                feature_index: feature_index as u32,
+                            },
+                            slot,
+                            &mut doc,
+                        )?;
+                        layer_bbox = layer_bbox.union(feature.bbox);
+                        doc.features.push(feature);
+                    }
+                }
             }
         }
     }
@@ -180,6 +190,41 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
     });
 
     Ok(doc)
+}
+
+fn slot_applies_to_layer(
+    source_layer: &Layer,
+    target_layer: &Layer,
+    layers: &[Layer],
+    slot: &ipc2581::types::Slot,
+) -> bool {
+    if slot.z_axis_dim {
+        return source_layer.name == target_layer.name;
+    }
+
+    let Some(span) = source_layer.span else {
+        return true;
+    };
+
+    let Some(target_index) = layer_index(layers, target_layer.name) else {
+        return false;
+    };
+    let from_index = span
+        .from_layer
+        .and_then(|layer| layer_index(layers, layer))
+        .unwrap_or(0);
+    let to_index = span
+        .to_layer
+        .and_then(|layer| layer_index(layers, layer))
+        .unwrap_or(layers.len().saturating_sub(1));
+    let start = from_index.min(to_index);
+    let end = from_index.max(to_index);
+
+    (start..=end).contains(&target_index)
+}
+
+fn layer_index(layers: &[Layer], layer_ref: Symbol) -> Option<usize> {
+    layers.iter().position(|layer| layer.name == layer_ref)
 }
 
 fn extract_pad(
@@ -1104,5 +1149,71 @@ mod tests {
         assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, 2.0)));
         assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, -2.0)));
         assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-4.0, -3.0)));
+    }
+
+    #[test]
+    fn slot_cavity_span_controls_target_layers() {
+        let mut interner = ipc2581::Interner::new();
+        let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
+        let l2 = test_layer(&mut interner, "L2", LayerFunction::Signal, None);
+        let l3 = test_layer(&mut interner, "L3", LayerFunction::Signal, None);
+        let route = test_layer(
+            &mut interner,
+            "ROUT",
+            LayerFunction::Rout,
+            Some(ipc2581::types::ecad::LayerSpan {
+                from_layer: Some(l1.name),
+                to_layer: Some(l2.name),
+            }),
+        );
+        let layers = [l1.clone(), l2.clone(), l3.clone(), route.clone()];
+        let slot = test_slot(false);
+
+        assert!(slot_applies_to_layer(&route, &l1, &layers, &slot));
+        assert!(slot_applies_to_layer(&route, &l2, &layers, &slot));
+        assert!(!slot_applies_to_layer(&route, &l3, &layers, &slot));
+    }
+
+    #[test]
+    fn partial_depth_slot_cavity_does_not_default_to_through_board() {
+        let mut interner = ipc2581::Interner::new();
+        let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
+        let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
+        let layers = [l1.clone(), route.clone()];
+        let slot = test_slot(true);
+
+        assert!(!slot_applies_to_layer(&route, &l1, &layers, &slot));
+        assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
+    }
+
+    fn test_layer(
+        interner: &mut ipc2581::Interner,
+        name: &str,
+        layer_function: LayerFunction,
+        span: Option<ipc2581::types::ecad::LayerSpan>,
+    ) -> Layer {
+        Layer {
+            name: interner.intern(name),
+            layer_function,
+            side: None,
+            polarity: None,
+            span,
+            profile: None,
+        }
+    }
+
+    fn test_slot(z_axis_dim: bool) -> ipc2581::types::Slot {
+        ipc2581::types::Slot {
+            name: None,
+            shape: SlotShape::Primitive(StandardPrimitive::Circle(Styled {
+                shape: ipc2581::types::Circle { diameter: 1.0 },
+                fill_property: None,
+                line_desc_ref: None,
+            })),
+            plating_status: PlatingStatus::NonPlated,
+            z_axis_dim,
+            x: 0.0,
+            y: 0.0,
+        }
     }
 }
