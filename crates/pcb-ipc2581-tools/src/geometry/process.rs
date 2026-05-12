@@ -52,24 +52,14 @@ pub fn compose_feature_paths(doc: &mut GeometryDocument) {
             continue;
         }
 
-        let mut contours = Vec::new();
-        for path in paths {
-            for contour in &doc.contours
-                [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
-            {
-                let cmds = doc.path_cmds
-                    [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
-                    .to_vec();
-                contours.push((contour.bbox, cmds));
-            }
-        }
+        let contours = paths
+            .iter()
+            .flat_map(|path| path_contours(doc, path))
+            .collect::<Vec<_>>();
 
         let mut path = first.clone();
         path.bbox = BBox::empty();
-        let path_id = doc.push_compound_path(path, contours);
-        let feature = &mut doc.features[feature_index];
-        feature.path_start = path_id;
-        feature.path_count = 1;
+        replace_feature_with_compound_path(doc, feature_index, path, contours);
     }
 }
 
@@ -88,7 +78,7 @@ pub fn outline_stroked_paths(doc: &mut GeometryDocument) {
         }
 
         let paths = paths.to_vec();
-        let path_start = doc.paths.len() as u32;
+        let new_path_start = doc.paths.len() as u32;
         for path in paths {
             if path.flags.stroked {
                 if let Some((path, contours)) = stroked_path_outline(doc, &path) {
@@ -100,8 +90,8 @@ pub fn outline_stroked_paths(doc: &mut GeometryDocument) {
         }
 
         let feature = &mut doc.features[feature_index];
-        feature.path_start = path_start;
-        feature.path_count = doc.paths.len() as u32 - path_start;
+        feature.path_start = new_path_start;
+        feature.path_count = doc.paths.len() as u32 - new_path_start;
     }
 }
 
@@ -119,10 +109,7 @@ pub fn union_feature_filled_paths(doc: &mut GeometryDocument) {
             continue;
         }
 
-        let mut contours = Vec::new();
-        for path in paths {
-            path_to_polygon_contours(doc, path, &mut contours);
-        }
+        let contours = feature_polygon_contours(doc, &feature);
         if contours.len() < 2 {
             continue;
         }
@@ -133,31 +120,19 @@ pub fn union_feature_filled_paths(doc: &mut GeometryDocument) {
             continue;
         }
 
-        let path_id = doc.push_compound_path(
+        replace_feature_with_compound_path(
+            doc,
+            feature_index,
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
             contours,
         );
-        let feature = &mut doc.features[feature_index];
-        feature.path_start = path_id;
-        feature.path_count = 1;
     }
 }
 
 pub fn subtract_layer_cutouts(doc: &mut GeometryDocument) {
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
-        let features = &doc.features
-            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
-        let mut cutouts = Vec::new();
-        for feature in features {
-            if feature.bucket == FeatureBucket::Cutout {
-                for path in &doc.paths[feature.path_start as usize
-                    ..(feature.path_start + feature.path_count) as usize]
-                {
-                    path_to_polygon_contours(doc, path, &mut cutouts);
-                }
-            }
-        }
+        let cutouts = layer_cutout_contours(doc, &layer);
         if cutouts.is_empty() {
             continue;
         }
@@ -174,10 +149,7 @@ pub fn subtract_layer_cutouts(doc: &mut GeometryDocument) {
                 continue;
             }
 
-            let mut subject = Vec::new();
-            for path in paths {
-                path_to_polygon_contours(doc, path, &mut subject);
-            }
+            let subject = feature_polygon_contours(doc, &feature);
             if subject.is_empty() {
                 continue;
             }
@@ -186,19 +158,16 @@ pub fn subtract_layer_cutouts(doc: &mut GeometryDocument) {
                 subject.overlay(&cutouts, OverlayRule::Difference, OverlayFillRule::NonZero);
             let contours = polygon_shapes_to_contours(result);
             if contours.is_empty() {
-                let feature = &mut doc.features[feature_index as usize];
-                feature.path_start = doc.paths.len() as u32;
-                feature.path_count = 0;
+                clear_feature_paths(doc, feature_index as usize);
                 continue;
             }
 
-            let path_id = doc.push_compound_path(
+            replace_feature_with_compound_path(
+                doc,
+                feature_index as usize,
                 GeometryPath::filled(FillRule::NonZero, BBox::empty()),
                 contours,
             );
-            let feature = &mut doc.features[feature_index as usize];
-            feature.path_start = path_id;
-            feature.path_count = 1;
         }
     }
 }
@@ -211,8 +180,29 @@ fn compatible_paths(a: &GeometryPath, b: &GeometryPath) -> bool {
 }
 
 fn copy_path(doc: &mut GeometryDocument, path: &GeometryPath) -> u32 {
-    let contours = doc.contours
-        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+    doc.push_compound_path(path.clone(), path_contours(doc, path))
+}
+
+fn replace_feature_with_compound_path(
+    doc: &mut GeometryDocument,
+    feature_index: usize,
+    path: GeometryPath,
+    contours: Vec<ContourPayload>,
+) {
+    let path_id = doc.push_compound_path(path, contours);
+    let feature = &mut doc.features[feature_index];
+    feature.path_start = path_id;
+    feature.path_count = 1;
+}
+
+fn clear_feature_paths(doc: &mut GeometryDocument, feature_index: usize) {
+    let feature = &mut doc.features[feature_index];
+    feature.path_start = doc.paths.len() as u32;
+    feature.path_count = 0;
+}
+
+fn path_contours(doc: &GeometryDocument, path: &GeometryPath) -> Vec<ContourPayload> {
+    doc.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
         .iter()
         .map(|contour| {
             let cmds = doc.path_cmds
@@ -220,8 +210,25 @@ fn copy_path(doc: &mut GeometryDocument, path: &GeometryPath) -> u32 {
                 .to_vec();
             (contour.bbox, cmds)
         })
-        .collect::<Vec<_>>();
-    doc.push_compound_path(path.clone(), contours)
+        .collect()
+}
+
+fn layer_cutout_contours(doc: &GeometryDocument, layer: &GeometryLayer) -> Vec<PolygonContour> {
+    doc.features[layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
+        .iter()
+        .filter(|feature| feature.bucket == FeatureBucket::Cutout)
+        .flat_map(|feature| feature_polygon_contours(doc, feature))
+        .collect()
+}
+
+fn feature_polygon_contours(
+    doc: &GeometryDocument,
+    feature: &GeometryFeature,
+) -> Vec<PolygonContour> {
+    doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+        .iter()
+        .flat_map(|path| path_polygon_contours(doc, path))
+        .collect()
 }
 
 fn stroked_path_outline(
@@ -426,6 +433,12 @@ fn path_to_polygon_contours(
         PathEl::QuadTo(..) | PathEl::CurveTo(..) => unreachable!("kurbo::flatten emits lines"),
     });
     push_polygon_contour(out, &mut current);
+}
+
+fn path_polygon_contours(doc: &GeometryDocument, path: &GeometryPath) -> Vec<PolygonContour> {
+    let mut contours = Vec::new();
+    path_to_polygon_contours(doc, path, &mut contours);
+    contours
 }
 
 fn push_polygon_contour(out: &mut Vec<PolygonContour>, contour: &mut PolygonContour) {
