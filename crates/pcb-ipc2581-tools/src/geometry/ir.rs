@@ -6,6 +6,7 @@ pub struct GeometryDocument {
     pub layers: Vec<GeometryLayer>,
     pub features: Vec<GeometryFeature>,
     pub paths: Vec<GeometryPath>,
+    pub contours: Vec<GeometryContour>,
     pub path_cmds: Vec<PathCmd>,
     pub diagnostics: Vec<GeometryDiagnostic>,
 }
@@ -17,6 +18,7 @@ impl GeometryDocument {
             layers: Vec::new(),
             features: Vec::new(),
             paths: Vec::new(),
+            contours: Vec::new(),
             path_cmds: Vec::new(),
             diagnostics: Vec::new(),
         }
@@ -27,17 +29,53 @@ impl GeometryDocument {
         path: GeometryPath,
         cmds: impl IntoIterator<Item = PathCmd>,
     ) -> u32 {
-        let cmd_start = self.path_cmds.len() as u32;
-        self.path_cmds.extend(cmds);
-        let cmd_count = self.path_cmds.len() as u32 - cmd_start;
+        let contour_start = self.contours.len() as u32;
+        let bbox = path.bbox;
+        self.push_contour(bbox, cmds);
 
         let mut path = path;
-        path.cmd_start = cmd_start;
-        path.cmd_count = cmd_count;
+        path.contour_start = contour_start;
+        path.contour_count = 1;
 
         let path_id = self.paths.len() as u32;
         self.paths.push(path);
         path_id
+    }
+
+    pub fn push_compound_path(
+        &mut self,
+        mut path: GeometryPath,
+        contours: impl IntoIterator<Item = (BBox, Vec<PathCmd>)>,
+    ) -> u32 {
+        let contour_start = self.contours.len() as u32;
+        let mut path_bbox = BBox::empty();
+        for (bbox, cmds) in contours {
+            path_bbox = path_bbox.union(bbox);
+            self.push_contour(bbox, cmds);
+        }
+        let contour_count = self.contours.len() as u32 - contour_start;
+
+        path.contour_start = contour_start;
+        path.contour_count = contour_count;
+        path.bbox = path_bbox;
+
+        let path_id = self.paths.len() as u32;
+        self.paths.push(path);
+        path_id
+    }
+
+    fn push_contour(&mut self, bbox: BBox, cmds: impl IntoIterator<Item = PathCmd>) -> u32 {
+        let cmd_start = self.path_cmds.len() as u32;
+        self.path_cmds.extend(cmds);
+        let cmd_count = self.path_cmds.len() as u32 - cmd_start;
+
+        let contour_id = self.contours.len() as u32;
+        self.contours.push(GeometryContour {
+            cmd_start,
+            cmd_count,
+            bbox,
+        });
+        contour_id
     }
 
     pub fn warn(&mut self, message: impl Into<String>) {
@@ -118,8 +156,8 @@ impl GeometryFeature {
 
 #[derive(Debug, Clone)]
 pub struct GeometryPath {
-    pub cmd_start: u32,
-    pub cmd_count: u32,
+    pub contour_start: u32,
+    pub contour_count: u32,
     pub bbox: BBox,
     pub fill_rule: FillRule,
     pub stroke_width: f64,
@@ -130,8 +168,8 @@ pub struct GeometryPath {
 impl GeometryPath {
     pub fn filled(fill_rule: FillRule, bbox: BBox) -> Self {
         Self {
-            cmd_start: 0,
-            cmd_count: 0,
+            contour_start: 0,
+            contour_count: 0,
             bbox,
             fill_rule,
             stroke_width: 0.0,
@@ -145,8 +183,8 @@ impl GeometryPath {
 
     pub fn stroked(width: f64, line_cap: LineCap, bbox: BBox) -> Self {
         Self {
-            cmd_start: 0,
-            cmd_count: 0,
+            contour_start: 0,
+            contour_count: 0,
             bbox,
             fill_rule: FillRule::NonZero,
             stroke_width: width,
@@ -157,6 +195,13 @@ impl GeometryPath {
             },
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct GeometryContour {
+    pub cmd_start: u32,
+    pub cmd_count: u32,
+    pub bbox: BBox,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

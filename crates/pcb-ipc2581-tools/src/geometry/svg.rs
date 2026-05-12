@@ -125,50 +125,59 @@ fn write_path(
 
 fn path_data(doc: &GeometryDocument, path: &GeometryPath) -> String {
     let mut data = String::new();
-    let mut current = Point::default();
-    for cmd in &doc.path_cmds[path.cmd_start as usize..(path.cmd_start + path.cmd_count) as usize] {
-        match cmd.op {
-            PathOp::MoveTo => {
-                current = cmd.p0;
-                write!(data, "M{} {}", fmt_num(cmd.p0.x), fmt_num(cmd.p0.y)).unwrap()
-            }
-            PathOp::LineTo => {
-                current = cmd.p0;
-                write!(data, " L{} {}", fmt_num(cmd.p0.x), fmt_num(cmd.p0.y)).unwrap()
-            }
-            PathOp::ArcTo => {
-                let radius = current.distance_to(cmd.p1);
-                let large_arc = u8::from(
-                    arc_sweep_radians(current, cmd.p0, cmd.p1, cmd.clockwise)
-                        > std::f64::consts::PI,
-                );
-                let sweep = if cmd.clockwise { 0 } else { 1 };
-                current = cmd.p0;
-                write!(
+    for contour in &doc.contours
+        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+    {
+        let mut current = Point::default();
+        for cmd in &doc.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+        {
+            match cmd.op {
+                PathOp::MoveTo => {
+                    current = cmd.p0;
+                    if !data.is_empty() {
+                        data.push(' ');
+                    }
+                    write!(data, "M{} {}", fmt_num(cmd.p0.x), fmt_num(cmd.p0.y)).unwrap()
+                }
+                PathOp::LineTo => {
+                    current = cmd.p0;
+                    write!(data, " L{} {}", fmt_num(cmd.p0.x), fmt_num(cmd.p0.y)).unwrap()
+                }
+                PathOp::ArcTo => {
+                    let radius = current.distance_to(cmd.p1);
+                    let large_arc = u8::from(
+                        arc_sweep_radians(current, cmd.p0, cmd.p1, cmd.clockwise)
+                            > std::f64::consts::PI,
+                    );
+                    let sweep = if cmd.clockwise { 0 } else { 1 };
+                    current = cmd.p0;
+                    write!(
+                        data,
+                        " A{} {} 0 {} {} {} {}",
+                        fmt_num(radius),
+                        fmt_num(radius),
+                        large_arc,
+                        sweep,
+                        fmt_num(cmd.p0.x),
+                        fmt_num(cmd.p0.y)
+                    )
+                    .unwrap()
+                }
+                PathOp::CubicTo => write!(
                     data,
-                    " A{} {} 0 {} {} {} {}",
-                    fmt_num(radius),
-                    fmt_num(radius),
-                    large_arc,
-                    sweep,
+                    " C{} {},{} {},{} {}",
                     fmt_num(cmd.p0.x),
-                    fmt_num(cmd.p0.y)
+                    fmt_num(cmd.p0.y),
+                    fmt_num(cmd.p1.x),
+                    fmt_num(cmd.p1.y),
+                    fmt_num(cmd.p2.x),
+                    fmt_num(cmd.p2.y)
                 )
-                .unwrap()
+                .map(|_| current = cmd.p2)
+                .unwrap(),
+                PathOp::Close => data.push_str(" Z"),
             }
-            PathOp::CubicTo => write!(
-                data,
-                " C{} {},{} {},{} {}",
-                fmt_num(cmd.p0.x),
-                fmt_num(cmd.p0.y),
-                fmt_num(cmd.p1.x),
-                fmt_num(cmd.p1.y),
-                fmt_num(cmd.p2.x),
-                fmt_num(cmd.p2.y)
-            )
-            .map(|_| current = cmd.p2)
-            .unwrap(),
-            PathOp::Close => data.push_str(" Z"),
         }
     }
     data
@@ -275,5 +284,66 @@ mod tests {
         let svg = render_layer_svg(&doc, 0);
 
         assert!(svg.contains(" A1 1 0 0 0 -1 0"));
+    }
+
+    #[test]
+    fn renders_compound_path_contours_as_one_svg_path() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        let outer = BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(10.0, 10.0),
+        };
+        let inner = BBox {
+            min: Point::new(2.0, 2.0),
+            max: Point::new(4.0, 4.0),
+        };
+        doc.push_compound_path(
+            GeometryPath::filled(FillRule::EvenOdd, BBox::empty()),
+            [
+                (
+                    outer,
+                    vec![
+                        PathCmd::move_to(Point::new(0.0, 0.0)),
+                        PathCmd::line_to(Point::new(10.0, 0.0)),
+                        PathCmd::line_to(Point::new(10.0, 10.0)),
+                        PathCmd::line_to(Point::new(0.0, 10.0)),
+                        PathCmd::close(),
+                    ],
+                ),
+                (
+                    inner,
+                    vec![
+                        PathCmd::move_to(Point::new(2.0, 2.0)),
+                        PathCmd::line_to(Point::new(4.0, 2.0)),
+                        PathCmd::line_to(Point::new(4.0, 4.0)),
+                        PathCmd::line_to(Point::new(2.0, 4.0)),
+                        PathCmd::close(),
+                    ],
+                ),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            bbox: outer,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 1,
+            bbox: outer,
+        });
+
+        let svg = render_layer_svg(&doc, 0);
+
+        assert_eq!(svg.matches("<path d='").count(), 1);
+        assert!(svg.contains(" Z M2 2"));
+        assert!(svg.contains("fill-rule='evenodd'"));
     }
 }

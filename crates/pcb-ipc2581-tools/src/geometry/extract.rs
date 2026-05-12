@@ -582,10 +582,15 @@ fn lower_standard_primitive(
             );
         }
         StandardPrimitive::Contour(contour) => {
-            push_polygon_path(doc, &contour.polygon, transform, FillRule::EvenOdd);
+            let mut contours = Vec::with_capacity(1 + contour.cutouts.len());
+            contours.push(polygon_contour(&contour.polygon, transform));
             for cutout in &contour.cutouts {
-                push_polygon_path(doc, cutout, transform, FillRule::EvenOdd);
+                contours.push(polygon_contour(cutout, transform));
             }
+            doc.push_compound_path(
+                GeometryPath::filled(FillRule::EvenOdd, BBox::empty()),
+                contours,
+            );
         }
         StandardPrimitive::RectRound(rect) => {
             push_rounded_rect_path(
@@ -645,6 +650,11 @@ fn push_polygon_path(
     transform: Affine2,
     fill_rule: FillRule,
 ) {
+    let (bbox, cmds) = polygon_contour(polygon, transform);
+    doc.push_path(GeometryPath::filled(fill_rule, bbox), cmds);
+}
+
+fn polygon_contour(polygon: &ipc2581::types::Polygon, transform: Affine2) -> (BBox, Vec<PathCmd>) {
     let mut cmds = Vec::new();
     let mut current = Point::new(polygon.begin.x, polygon.begin.y);
     let start = transform.transform_point(current);
@@ -677,7 +687,7 @@ fn push_polygon_path(
         }
     }
     cmds.push(PathCmd::close());
-    doc.push_path(GeometryPath::filled(fill_rule, bbox), cmds);
+    (bbox, cmds)
 }
 
 fn push_closed_points_path(
@@ -819,6 +829,11 @@ fn push_regular_polygon_path(
 }
 
 fn push_ellipse_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, height: f64) {
+    let (bbox, cmds) = ellipse_contour(transform, width, height);
+    doc.push_path(GeometryPath::filled(FillRule::NonZero, bbox), cmds);
+}
+
+fn ellipse_contour(transform: Affine2, width: f64, height: f64) -> (BBox, Vec<PathCmd>) {
     let rx = width / 2.0;
     let ry = height / 2.0;
     let k = 0.552_284_749_830_793_6;
@@ -862,7 +877,7 @@ fn push_ellipse_path(doc: &mut GeometryDocument, transform: Affine2, width: f64,
         cmds.push(PathCmd::cubic_to(c1, c2, end));
     }
     cmds.push(PathCmd::close());
-    doc.push_path(GeometryPath::filled(FillRule::NonZero, bbox), cmds);
+    (bbox, cmds)
 }
 
 fn push_oval_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, height: f64) {
@@ -970,12 +985,13 @@ fn push_donut_path(
     outer_diameter: f64,
     inner_diameter: f64,
 ) {
-    let path_start = doc.paths.len();
-    push_ellipse_path(doc, transform, outer_diameter, outer_diameter);
-    push_ellipse_path(doc, transform, inner_diameter, inner_diameter);
-    for path in &mut doc.paths[path_start..] {
-        path.fill_rule = FillRule::EvenOdd;
-    }
+    doc.push_compound_path(
+        GeometryPath::filled(FillRule::EvenOdd, BBox::empty()),
+        [
+            ellipse_contour(transform, outer_diameter, outer_diameter),
+            ellipse_contour(transform, inner_diameter, inner_diameter),
+        ],
+    );
 }
 
 fn push_thermal_path(
