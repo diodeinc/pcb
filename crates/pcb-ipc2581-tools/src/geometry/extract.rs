@@ -740,15 +740,15 @@ fn push_rounded_rect_path(
     let mut cmds = Vec::new();
 
     cmds.push(PathCmd::move_to(Point::new(
-        -hw + if upper_left { r } else { 0.0 },
+        -hw + if lower_left { r } else { 0.0 },
         -hh,
     )));
 
     cmds.push(PathCmd::line_to(Point::new(
-        hw - if upper_right { r } else { 0.0 },
+        hw - if lower_right { r } else { 0.0 },
         -hh,
     )));
-    if upper_right {
+    if lower_right {
         cmds.push(PathCmd::cubic_to(
             Point::new(hw - r + k * r, -hh),
             Point::new(hw, -hh + r - k * r),
@@ -758,9 +758,9 @@ fn push_rounded_rect_path(
 
     cmds.push(PathCmd::line_to(Point::new(
         hw,
-        hh - if lower_right { r } else { 0.0 },
+        hh - if upper_right { r } else { 0.0 },
     )));
-    if lower_right {
+    if upper_right {
         cmds.push(PathCmd::cubic_to(
             Point::new(hw, hh - r + k * r),
             Point::new(hw - r + k * r, hh),
@@ -769,10 +769,10 @@ fn push_rounded_rect_path(
     }
 
     cmds.push(PathCmd::line_to(Point::new(
-        -hw + if lower_left { r } else { 0.0 },
+        -hw + if upper_left { r } else { 0.0 },
         hh,
     )));
-    if lower_left {
+    if upper_left {
         cmds.push(PathCmd::cubic_to(
             Point::new(-hw + r - k * r, hh),
             Point::new(-hw, hh - r + k * r),
@@ -782,9 +782,9 @@ fn push_rounded_rect_path(
 
     cmds.push(PathCmd::line_to(Point::new(
         -hw,
-        -hh + if upper_left { r } else { 0.0 },
+        -hh + if lower_left { r } else { 0.0 },
     )));
-    if upper_left {
+    if lower_left {
         cmds.push(PathCmd::cubic_to(
             Point::new(-hw, -hh + r - k * r),
             Point::new(-hw + r - k * r, -hh),
@@ -820,24 +820,24 @@ fn push_chamfered_rect_path(
     let [upper_right, lower_right, lower_left, upper_left] = corners;
     let mut points = Vec::with_capacity(8);
 
-    points.push(Point::new(-hw + if upper_left { c } else { 0.0 }, -hh));
+    points.push(Point::new(-hw + if lower_left { c } else { 0.0 }, -hh));
 
-    points.push(Point::new(hw - if upper_right { c } else { 0.0 }, -hh));
-    if upper_right {
+    points.push(Point::new(hw - if lower_right { c } else { 0.0 }, -hh));
+    if lower_right {
         points.push(Point::new(hw, -hh + c));
     }
 
-    points.push(Point::new(hw, hh - if lower_right { c } else { 0.0 }));
-    if lower_right {
+    points.push(Point::new(hw, hh - if upper_right { c } else { 0.0 }));
+    if upper_right {
         points.push(Point::new(hw - c, hh));
     }
 
-    points.push(Point::new(-hw + if lower_left { c } else { 0.0 }, hh));
-    if lower_left {
+    points.push(Point::new(-hw + if upper_left { c } else { 0.0 }, hh));
+    if upper_left {
         points.push(Point::new(-hw, hh - c));
     }
 
-    points.push(Point::new(-hw, -hh + if upper_left { c } else { 0.0 }));
+    points.push(Point::new(-hw, -hh + if lower_left { c } else { 0.0 }));
 
     push_closed_points_path(doc, transform, points, FillRule::NonZero);
 }
@@ -1096,10 +1096,10 @@ mod tests {
         let cmds = &doc.path_cmds
             [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
 
-        assert!(cmds.iter().any(|cmd| cmd.p0 == Point::new(4.0, -3.0)));
-        assert!(cmds.iter().any(|cmd| cmd.p0 == Point::new(5.0, -2.0)));
-        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(5.0, 2.0)));
-        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(4.0, 3.0)));
+        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(4.0, -3.0)));
+        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(5.0, -2.0)));
+        assert!(cmds.iter().any(|cmd| cmd.p0 == Point::new(5.0, 2.0)));
+        assert!(cmds.iter().any(|cmd| cmd.p0 == Point::new(4.0, 3.0)));
         assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-4.0, 3.0)));
         assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, 2.0)));
         assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, -2.0)));
