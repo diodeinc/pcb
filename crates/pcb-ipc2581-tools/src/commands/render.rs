@@ -20,7 +20,8 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
     let target = resolve_target(options)?;
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
-    let geometry = geometry::extract_layer(&ipc, &options.layer)?;
+    let mut geometry = geometry::extract_layer(&ipc, &options.layer)?;
+    geometry::process::process_document(&mut geometry);
 
     match target {
         RenderTarget::Svg => render_svg(&geometry, options)?,
