@@ -32,8 +32,7 @@ fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
     if path.exists() && !path.is_dir() {
         anyhow::bail!("Output directory is not a directory: {}", path.display());
     }
-    let created = !path.exists();
-    if created {
+    if !path.exists() {
         fs::create_dir_all(path)
             .with_context(|| format!("Failed to create output directory: {}", path.display()))?;
     }
@@ -47,6 +46,12 @@ fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
         if !config.is_workspace() {
             anyhow::bail!(
                 "Output directory contains a pcb.toml but it is not a workspace: {}",
+                pcb_toml.display()
+            );
+        }
+        if !config.is_board() {
+            anyhow::bail!(
+                "Output directory contains a pcb.toml but it is not a board repository: {}",
                 pcb_toml.display()
             );
         }

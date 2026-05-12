@@ -70,22 +70,22 @@ fn prepare_output(
     selection: &ImportSelection,
     args: &ImportArgs,
 ) -> Result<()> {
-    let board_dir = &paths.workspace_root;
-    let pcb_toml = board_dir.join("pcb.toml");
+    let board_repo = &paths.workspace_root;
+    let pcb_toml = board_repo.join("pcb.toml");
     if pcb_toml.exists() && !args.force {
         anyhow::bail!(
             "Board repository already exists: {}. Use --force to overwrite generated files.",
-            board_dir.display()
+            board_repo.display()
         );
     }
 
     if args.force {
-        remove_generated_output(board_dir, &selection.board_name)?;
+        remove_generated_output(board_repo, &selection.board_name)?;
     }
 
-    crate::new::init_board_workspace(board_dir, &selection.board_name, "")?;
+    crate::new::init_board_repo(board_repo, &selection.board_name, "")?;
     let portable_kicad_project_zip =
-        board_dir.join(format!("{}.kicad.archive.zip", selection.board_name));
+        board_repo.join(format!("{}.kicad.archive.zip", selection.board_name));
     portable::write_portable_zip(&selection.portable, &portable_kicad_project_zip)
         .context("Failed to write portable KiCad project archive")?;
     Ok(())

@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 use crate::codegen;
 
 const GITIGNORE_TEMPLATE: &str = include_str!("templates/gitignore");
-const BOARD_WORKSPACE_PCB_TOML: &str = include_str!("templates/board_workspace_pcb_toml.jinja");
+const BOARD_PCB_TOML: &str = include_str!("templates/board_pcb_toml.jinja");
 const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
 const BOARD_README: &str = include_str!("templates/board_readme.jinja");
 const PACKAGE_ZEN: &str = include_str!("templates/package_zen.jinja");
@@ -20,8 +20,7 @@ const PACKAGE_README: &str = include_str!("templates/package_readme.jinja");
 
 fn create_template_env() -> Environment<'static> {
     let mut env = Environment::new();
-    env.add_template("board_workspace_pcb_toml", BOARD_WORKSPACE_PCB_TOML)
-        .unwrap();
+    env.add_template("board_pcb_toml", BOARD_PCB_TOML).unwrap();
     env.add_template("board_zen", BOARD_ZEN).unwrap();
     env.add_template("board_readme", BOARD_README).unwrap();
     env.add_template("package_zen", PACKAGE_ZEN).unwrap();
@@ -287,7 +286,7 @@ fn execute_new_board(board: &str, repo: &str) -> Result<()> {
     std::fs::create_dir_all(board_path)
         .with_context(|| format!("Failed to create directory '{}'", board))?;
 
-    init_board_workspace(board_path, board, &repository)?;
+    init_board_repo(board_path, board, &repository)?;
 
     eprintln!(
         "{} board {} ({})",
@@ -299,7 +298,7 @@ fn execute_new_board(board: &str, repo: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn init_board_workspace(dir: &Path, board: &str, repository: &str) -> Result<()> {
+pub(crate) fn init_board_repo(dir: &Path, board: &str, repository: &str) -> Result<()> {
     init_git(dir)?;
 
     let env = create_template_env();
@@ -310,7 +309,7 @@ pub(crate) fn init_board_workspace(dir: &Path, board: &str, repository: &str) ->
     };
 
     let pcb_toml_content = env
-        .get_template("board_workspace_pcb_toml")
+        .get_template("board_pcb_toml")
         .unwrap()
         .render(&ctx)
         .context("Failed to render pcb.toml template")?;
