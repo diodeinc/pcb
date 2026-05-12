@@ -8,6 +8,7 @@ authors.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 colored = { workspace = true }
@@ -20,6 +21,8 @@ pcb-sch = { workspace = true, features = ["table"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 quick-xml = { workspace = true }
+resvg = { workspace = true }
+terminal_size = { workspace = true }
 zstd = { workspace = true }
 pcb-diode-api = { workspace = true, optional = true }
 pcb-ui = { workspace = true, optional = true }
