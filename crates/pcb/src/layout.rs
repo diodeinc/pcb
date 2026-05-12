@@ -1,12 +1,57 @@
 use anyhow::Result;
+use ariadne::{Label, Report, ReportKind, sources};
 use clap::Args;
 use pcb_layout::process_layout;
+use pcb_sch::{ATTR_LAYOUT_PATH, Schematic};
 use pcb_ui::prelude::*;
 use std::path::PathBuf;
 
 use crate::build::{build, create_diagnostics_passes};
 use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
 use crate::drc;
+
+fn suggested_board_macro(zen_path: &std::path::Path) -> String {
+    let board_name = zen_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("board");
+    format!(r#"Board(name="{board_name}", layers=4, layout_path="layout/{board_name}")"#)
+}
+
+fn render_missing_board_warning(zen_path: &std::path::Path) {
+    let file_name = zen_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("board.zen");
+    let suggestion = suggested_board_macro(zen_path);
+    let source = std::fs::read_to_string(zen_path).unwrap_or_default();
+    let source_id = zen_path.to_string_lossy().to_string();
+    let insertion = source.chars().count();
+
+    let report = Report::build(
+        ReportKind::Warning,
+        (source_id.clone(), insertion..insertion),
+    )
+    .with_message("layout generation needs a root `Board` macro with `layout_path`")
+    .with_label(
+        Label::new((source_id.clone(), insertion..insertion))
+            .with_message("insert the board declaration here"),
+    )
+    .with_help(format!("add this to {file_name}:\n    {suggestion}"));
+
+    let _ = report
+        .finish()
+        .write(sources([(source_id, source)]), &mut std::io::stderr());
+}
+
+fn schematic_has_string_layout_path(schematic: &Schematic) -> bool {
+    schematic
+        .root_ref
+        .as_ref()
+        .and_then(|root| schematic.instances.get(root))
+        .and_then(|root| root.attributes.get(ATTR_LAYOUT_PATH))
+        .is_some_and(|layout_path| layout_path.string().is_some())
+}
 
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Generate PCB layout files from a .zen file")]
@@ -100,6 +145,9 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
             anyhow::bail!("Layout sync failed with errors");
         }
 
+        if !schematic_has_string_layout_path(&schematic) {
+            render_missing_board_warning(zen_path);
+        }
         return Ok(());
     };
     let pcb_file = layout_result.pcb_file.clone();

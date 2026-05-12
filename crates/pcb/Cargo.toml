@@ -25,6 +25,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+ariadne = { workspace = true }
 clap = { workspace = true }
 glam = { workspace = true }
 pcb-zen-core = { workspace = true, features = ["table"] }

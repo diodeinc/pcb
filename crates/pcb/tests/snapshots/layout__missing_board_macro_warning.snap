@@ -1,0 +1,21 @@
+---
+source: crates/pcb/tests/layout.rs
+assertion_line: 16
+expression: output
+---
+Command: pcb layout --no-open boost_5v.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: layout generation needs a root `Board` macro with `layout_path`
+   ╭─[ boost_5v.zen:4:24 ]
+   │
+ 4 │ signal = Net("SIGNAL")
+   │                        │ 
+   │                        ╰─ insert the board declaration here
+   │ 
+   │ Help: add this to boost_5v.zen:
+   │           Board(name="boost_5v", layers=4, layout_path="layout/boost_5v")
+───╯
