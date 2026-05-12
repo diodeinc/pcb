@@ -4564,6 +4564,7 @@ dependencies = [
  "comfy-table",
  "ipc2581",
  "jiff",
+ "kurbo",
  "log",
  "minijinja",
  "pcb-diode-api",

@@ -15,6 +15,7 @@ colored = { workspace = true }
 comfy-table = { workspace = true }
 ipc2581 = { workspace = true }
 jiff = { workspace = true }
+kurbo = { workspace = true }
 log = { workspace = true }
 minijinja = { workspace = true }
 pcb-sch = { workspace = true, features = ["table"] }

@@ -1,8 +1,12 @@
 use super::ir::*;
+use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
+
+type ContourPayload = (BBox, Vec<PathCmd>);
 
 pub fn process_document(doc: &mut GeometryDocument) {
     normalize_bounds(doc);
     compose_feature_paths(doc);
+    outline_stroked_paths(doc);
     normalize_bounds(doc);
 }
 
@@ -62,11 +66,238 @@ pub fn compose_feature_paths(doc: &mut GeometryDocument) {
     }
 }
 
+pub fn outline_stroked_paths(doc: &mut GeometryDocument) {
+    let feature_count = doc.features.len();
+    for feature_index in 0..feature_count {
+        let feature = doc.features[feature_index].clone();
+        let paths = &doc.paths
+            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize];
+        if !paths.iter().any(|path| path.flags.stroked) {
+            continue;
+        }
+
+        let paths = paths.to_vec();
+        let path_start = doc.paths.len() as u32;
+        for path in paths {
+            if path.flags.stroked {
+                if let Some((path, contours)) = stroked_path_outline(doc, &path) {
+                    doc.push_compound_path(path, contours);
+                }
+            } else {
+                copy_path(doc, &path);
+            }
+        }
+
+        let feature = &mut doc.features[feature_index];
+        feature.path_start = path_start;
+        feature.path_count = doc.paths.len() as u32 - path_start;
+    }
+}
+
 fn compatible_paths(a: &GeometryPath, b: &GeometryPath) -> bool {
     a.flags.filled == b.flags.filled
         && a.flags.stroked == b.flags.stroked
         && (!a.flags.filled || a.fill_rule == b.fill_rule)
         && (!a.flags.stroked || (a.stroke_width == b.stroke_width && a.line_cap == b.line_cap))
+}
+
+fn copy_path(doc: &mut GeometryDocument, path: &GeometryPath) -> u32 {
+    let contours = doc.contours
+        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+        .iter()
+        .map(|contour| {
+            let cmds = doc.path_cmds
+                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+                .to_vec();
+            (contour.bbox, cmds)
+        })
+        .collect::<Vec<_>>();
+    doc.push_compound_path(path.clone(), contours)
+}
+
+fn stroked_path_outline(
+    doc: &GeometryDocument,
+    path: &GeometryPath,
+) -> Option<(GeometryPath, Vec<ContourPayload>)> {
+    let source = path_to_kurbo(doc, path);
+    if source.elements().is_empty() {
+        return None;
+    }
+
+    let stroke = Stroke::new(path.stroke_width)
+        .with_join(Join::Round)
+        .with_caps(kurbo_cap(path.line_cap));
+    let outline = kurbo::stroke(source, &stroke, &StrokeOpts::default(), 0.01);
+    let contours = kurbo_path_to_contours(&outline);
+    if contours.is_empty() {
+        return None;
+    }
+
+    Some((
+        GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+        contours,
+    ))
+}
+
+fn path_to_kurbo(doc: &GeometryDocument, path: &GeometryPath) -> BezPath {
+    let mut out = BezPath::new();
+    for contour in &doc.contours
+        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+    {
+        let mut current = Point::default();
+        for cmd in &doc.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+        {
+            match cmd.op {
+                PathOp::MoveTo => {
+                    current = cmd.p0;
+                    out.move_to(kurbo_point(cmd.p0));
+                }
+                PathOp::LineTo => {
+                    current = cmd.p0;
+                    out.line_to(kurbo_point(cmd.p0));
+                }
+                PathOp::ArcTo => {
+                    append_arc_to_kurbo(&mut out, current, cmd.p0, cmd.p1, cmd.clockwise);
+                    current = cmd.p0;
+                }
+                PathOp::CubicTo => {
+                    current = cmd.p2;
+                    out.curve_to(
+                        kurbo_point(cmd.p0),
+                        kurbo_point(cmd.p1),
+                        kurbo_point(cmd.p2),
+                    );
+                }
+                PathOp::Close => out.close_path(),
+            }
+        }
+    }
+    out
+}
+
+fn append_arc_to_kurbo(
+    out: &mut BezPath,
+    start: Point,
+    end: Point,
+    center: Point,
+    clockwise: bool,
+) {
+    let radius = start.distance_to(center);
+    if radius == 0.0 {
+        out.line_to(kurbo_point(end));
+        return;
+    }
+
+    let sweep = arc_sweep_radians(start, end, center, clockwise);
+    let signed_sweep = if clockwise { -sweep } else { sweep };
+    let segment_count = (signed_sweep.abs() / std::f64::consts::FRAC_PI_2).ceil() as usize;
+    let delta = signed_sweep / segment_count.max(1) as f64;
+    let mut angle = start.angle_from(center);
+
+    for _ in 0..segment_count.max(1) {
+        let next_angle = angle + delta;
+        let k = 4.0 / 3.0 * (delta / 4.0).tan();
+        let p0 = Point::new(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        );
+        let p3 = Point::new(
+            center.x + radius * next_angle.cos(),
+            center.y + radius * next_angle.sin(),
+        );
+        let c1 = Point::new(
+            p0.x - radius * angle.sin() * k,
+            p0.y + radius * angle.cos() * k,
+        );
+        let c2 = Point::new(
+            p3.x + radius * next_angle.sin() * k,
+            p3.y - radius * next_angle.cos() * k,
+        );
+        out.curve_to(kurbo_point(c1), kurbo_point(c2), kurbo_point(p3));
+        angle = next_angle;
+    }
+}
+
+fn kurbo_path_to_contours(path: &BezPath) -> Vec<(BBox, Vec<PathCmd>)> {
+    let mut contours = Vec::new();
+    let mut cmds = Vec::new();
+    let mut bbox = BBox::empty();
+    let mut current = Point::default();
+
+    for element in path.iter() {
+        match element {
+            PathEl::MoveTo(point) => {
+                push_kurbo_contour(&mut contours, &mut bbox, &mut cmds);
+                current = ir_point(point);
+                bbox.include_point(current);
+                cmds.push(PathCmd::move_to(current));
+            }
+            PathEl::LineTo(point) => {
+                current = ir_point(point);
+                bbox.include_point(current);
+                cmds.push(PathCmd::line_to(current));
+            }
+            PathEl::QuadTo(p1, p2) => {
+                let p1 = ir_point(p1);
+                let p2 = ir_point(p2);
+                let c1 = Point::new(
+                    current.x + (p1.x - current.x) * 2.0 / 3.0,
+                    current.y + (p1.y - current.y) * 2.0 / 3.0,
+                );
+                let c2 = Point::new(
+                    p2.x + (p1.x - p2.x) * 2.0 / 3.0,
+                    p2.y + (p1.y - p2.y) * 2.0 / 3.0,
+                );
+                bbox.include_point(c1);
+                bbox.include_point(c2);
+                bbox.include_point(p2);
+                cmds.push(PathCmd::cubic_to(c1, c2, p2));
+                current = p2;
+            }
+            PathEl::CurveTo(p1, p2, p3) => {
+                let p1 = ir_point(p1);
+                let p2 = ir_point(p2);
+                let p3 = ir_point(p3);
+                bbox.include_point(p1);
+                bbox.include_point(p2);
+                bbox.include_point(p3);
+                cmds.push(PathCmd::cubic_to(p1, p2, p3));
+                current = p3;
+            }
+            PathEl::ClosePath => cmds.push(PathCmd::close()),
+        }
+    }
+    push_kurbo_contour(&mut contours, &mut bbox, &mut cmds);
+    contours
+}
+
+fn push_kurbo_contour(
+    contours: &mut Vec<(BBox, Vec<PathCmd>)>,
+    bbox: &mut BBox,
+    cmds: &mut Vec<PathCmd>,
+) {
+    if cmds.is_empty() {
+        return;
+    }
+    contours.push((*bbox, std::mem::take(cmds)));
+    *bbox = BBox::empty();
+}
+
+fn kurbo_cap(line_cap: LineCap) -> Cap {
+    match line_cap {
+        LineCap::Round => Cap::Round,
+        LineCap::Square => Cap::Square,
+        LineCap::Butt => Cap::Butt,
+    }
+}
+
+fn kurbo_point(point: Point) -> kurbo::Point {
+    kurbo::Point::new(point.x, point.y)
+}
+
+fn ir_point(point: kurbo::Point) -> Point {
+    Point::new(point.x, point.y)
 }
 
 fn contour_bbox(doc: &GeometryDocument, contour_index: usize) -> BBox {
@@ -163,7 +394,8 @@ mod tests {
 
         assert_eq!(doc.features[0].path_count, 1);
         let path = &doc.paths[doc.features[0].path_start as usize];
-        assert_eq!(path.contour_count, 2);
+        assert!(path.flags.filled);
+        assert!(!path.flags.stroked);
         assert_eq!(path.bbox.min, Point::new(-1.0, -1.0));
         assert_eq!(path.bbox.max, Point::new(11.0, 1.0));
     }
