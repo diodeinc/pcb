@@ -323,8 +323,6 @@ fn extract_trace(
         .collect();
     Some(push_stroked_polyline(
         doc,
-        FeatureKind::Trace,
-        FeatureBucket::Trace,
         net,
         polarity,
         source,
@@ -343,8 +341,6 @@ fn extract_line(
 ) -> GeometryFeature {
     push_stroked_polyline(
         doc,
-        FeatureKind::Trace,
-        FeatureBucket::Trace,
         net,
         polarity,
         source,
@@ -380,8 +376,6 @@ fn extract_polygon(
 
 fn push_stroked_polyline(
     doc: &mut GeometryDocument,
-    kind: FeatureKind,
-    bucket: FeatureBucket,
     net: Option<Symbol>,
     polarity: GeometryPolarity,
     source: SourceRef,
@@ -404,7 +398,7 @@ fn push_stroked_polyline(
     let path_start = doc.paths.len() as u32;
     doc.push_path(GeometryPath::stroked(width, line_cap, bbox), cmds);
 
-    let mut feature = GeometryFeature::new(kind, bucket, polarity);
+    let mut feature = GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, polarity);
     feature.net = net;
     feature.source = source;
     feature.bbox = bbox;

@@ -37,8 +37,7 @@ fn terminal_max_dimension_px() -> u32 {
 
     u32::from(columns)
         .saturating_mul(12)
-        .max(1)
-        .min(MAX_TERMINAL_DIMENSION_PX)
+        .clamp(1, MAX_TERMINAL_DIMENSION_PX)
 }
 
 fn write_kitty_png<W: Write>(writer: &mut W, png: &[u8]) -> io::Result<()> {
