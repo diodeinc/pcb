@@ -186,6 +186,9 @@ pub fn subtract_layer_cutouts(doc: &mut GeometryDocument) {
                 subject.overlay(&cutouts, OverlayRule::Difference, OverlayFillRule::NonZero);
             let contours = polygon_shapes_to_contours(result);
             if contours.is_empty() {
+                let feature = &mut doc.features[feature_index as usize];
+                feature.path_start = doc.paths.len() as u32;
+                feature.path_count = 0;
                 continue;
             }
 
@@ -672,6 +675,99 @@ mod tests {
         assert!(path.contour_count > 1);
         assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
         assert_eq!(path.bbox.max, Point::new(4.0, 4.0));
+    }
+
+    #[test]
+    fn subtracts_cutouts_after_trace_union() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        doc.push_path(
+            GeometryPath::stroked(1.0, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(0.0, 2.0)),
+                PathCmd::line_to(Point::new(4.0, 2.0)),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Trace,
+                FeatureBucket::Trace,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(1.5, 1.0, 2.5, 3.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_start: 1,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Slot,
+                FeatureBucket::Cutout,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 2,
+            bbox: BBox::empty(),
+        });
+
+        process_document(&mut doc);
+
+        let trace = &doc.features[0];
+        let path = &doc.paths[trace.path_start as usize];
+        assert!(path.flags.filled);
+        assert!(path.contour_count >= 2);
+        assert_eq!(path.bbox.min.x, -0.5);
+        assert_eq!(path.bbox.max.x, 4.5);
+    }
+
+    #[test]
+    fn removes_features_fully_inside_cutouts() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(1.0, 1.0, 2.0, 2.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 3.0, 3.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_start: 1,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Slot,
+                FeatureBucket::Cutout,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 2,
+            bbox: BBox::empty(),
+        });
+
+        process_document(&mut doc);
+
+        assert_eq!(doc.features[0].path_count, 0);
+        assert!(doc.features[0].bbox.is_empty());
     }
 
     fn rect_cmds(x0: f64, y0: f64, x1: f64, y1: f64) -> [PathCmd; 5] {

@@ -56,15 +56,6 @@ fn render_layer_svg_with_size(
     writeln!(svg, "  <title>{}</title>", escape_xml(&doc.board_name)).unwrap();
     writeln!(
         svg,
-        "  <rect x='{}' y='{}' width='{}' height='{}' fill='black'/>",
-        fmt_num(geometry_bbox.min.x),
-        fmt_num(viewbox_y),
-        fmt_num(geometry_bbox.width()),
-        fmt_num(geometry_bbox.height())
-    )
-    .unwrap();
-    writeln!(
-        svg,
         "  <g data-layer='{}' transform='scale(1 -1)'>",
         escape_xml(&layer.name)
     )
@@ -73,20 +64,35 @@ fn render_layer_svg_with_size(
     for feature in &doc.features
         [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
     {
-        if feature.bucket == FeatureBucket::Cutout {
-            continue;
-        }
+        write_feature_paths(&mut svg, doc, feature, false);
+    }
 
-        for path in &doc.paths
-            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
-        {
-            write_path(&mut svg, doc, feature, path);
-        }
+    for feature in &doc.features
+        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
+    {
+        write_feature_paths(&mut svg, doc, feature, true);
     }
 
     writeln!(svg, "  </g>").unwrap();
     writeln!(svg, "</svg>").unwrap();
     svg
+}
+
+fn write_feature_paths(
+    svg: &mut String,
+    doc: &GeometryDocument,
+    feature: &GeometryFeature,
+    cutouts: bool,
+) {
+    if (feature.bucket == FeatureBucket::Cutout) != cutouts {
+        return;
+    }
+
+    for path in
+        &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+    {
+        write_path(svg, doc, feature, path);
+    }
 }
 
 fn write_path(
@@ -352,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn does_not_render_cutout_features_as_positive_geometry() {
+    fn renders_cutout_features_after_positive_geometry() {
         let mut interner = ipc2581::Interner::new();
         let mut doc = GeometryDocument::new("test".to_string());
         let bbox = BBox {
@@ -372,6 +378,25 @@ mod tests {
             path_count: 1,
             bbox,
             ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, bbox),
+            [
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+                PathCmd::close(),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_start: 1,
+            path_count: 1,
+            bbox,
+            ..GeometryFeature::new(
                 FeatureKind::Hole,
                 FeatureBucket::Cutout,
                 GeometryPolarity::Positive,
@@ -381,12 +406,13 @@ mod tests {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
             feature_start: 0,
-            feature_count: 1,
+            feature_count: 2,
             bbox,
         });
 
         let svg = render_layer_svg(&doc, 0);
 
-        assert_eq!(svg.matches("<path d='").count(), 0);
+        assert_eq!(svg.matches("<path d='").count(), 2);
+        assert!(svg.find("fill='#2f9e44'").unwrap() < svg.find("fill='#64748b'").unwrap());
     }
 }
