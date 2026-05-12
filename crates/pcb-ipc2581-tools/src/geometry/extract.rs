@@ -602,23 +602,18 @@ fn lower_standard_primitive(
             );
         }
         StandardPrimitive::RectCham(rect) => {
-            let hw = rect.shape.size.width / 2.0;
-            let hh = rect.shape.size.height / 2.0;
-            let c = rect.shape.chamfer.min(hw).min(hh);
-            push_closed_points_path(
+            push_chamfered_rect_path(
                 doc,
                 transform,
-                vec![
-                    Point::new(-hw + c, -hh),
-                    Point::new(hw - c, -hh),
-                    Point::new(hw, -hh + c),
-                    Point::new(hw, hh - c),
-                    Point::new(hw - c, hh),
-                    Point::new(-hw + c, hh),
-                    Point::new(-hw, hh - c),
-                    Point::new(-hw, -hh + c),
+                rect.shape.size.width,
+                rect.shape.size.height,
+                rect.shape.chamfer,
+                [
+                    rect.shape.upper_right,
+                    rect.shape.lower_right,
+                    rect.shape.lower_left,
+                    rect.shape.upper_left,
                 ],
-                FillRule::NonZero,
             );
         }
         StandardPrimitive::Butterfly(butterfly) => {
@@ -804,6 +799,47 @@ fn push_rounded_rect_path(
         .map(|cmd| transform_path_cmd(cmd, transform, &mut bbox))
         .collect::<Vec<_>>();
     doc.push_path(GeometryPath::filled(FillRule::NonZero, bbox), cmds);
+}
+
+fn push_chamfered_rect_path(
+    doc: &mut GeometryDocument,
+    transform: Affine2,
+    width: f64,
+    height: f64,
+    chamfer: f64,
+    corners: [bool; 4],
+) {
+    let hw = width / 2.0;
+    let hh = height / 2.0;
+    let c = chamfer.min(hw).min(hh).max(0.0);
+    if c == 0.0 || !corners.iter().any(|corner| *corner) {
+        push_rect_path(doc, transform, width, height);
+        return;
+    }
+
+    let [upper_right, lower_right, lower_left, upper_left] = corners;
+    let mut points = Vec::with_capacity(8);
+
+    points.push(Point::new(-hw + if upper_left { c } else { 0.0 }, -hh));
+
+    points.push(Point::new(hw - if upper_right { c } else { 0.0 }, -hh));
+    if upper_right {
+        points.push(Point::new(hw, -hh + c));
+    }
+
+    points.push(Point::new(hw, hh - if lower_right { c } else { 0.0 }));
+    if lower_right {
+        points.push(Point::new(hw - c, hh));
+    }
+
+    points.push(Point::new(-hw + if lower_left { c } else { 0.0 }, hh));
+    if lower_left {
+        points.push(Point::new(-hw, hh - c));
+    }
+
+    points.push(Point::new(-hw, -hh + if upper_left { c } else { 0.0 }));
+
+    push_closed_points_path(doc, transform, points, FillRule::NonZero);
 }
 
 fn push_regular_polygon_path(
@@ -1036,4 +1072,37 @@ fn _styled_is_filled<T>(styled: &Styled<T>) -> bool {
         styled.fill_property,
         Some(FillProperty::Hollow | FillProperty::Void)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chamfered_rect_respects_corner_flags() {
+        let mut doc = GeometryDocument::new("test".to_string());
+
+        push_chamfered_rect_path(
+            &mut doc,
+            Affine2::identity(),
+            10.0,
+            6.0,
+            1.0,
+            [true, false, false, false],
+        );
+
+        let path = &doc.paths[0];
+        let contour = &doc.contours[path.contour_start as usize];
+        let cmds = &doc.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
+
+        assert!(cmds.iter().any(|cmd| cmd.p0 == Point::new(4.0, -3.0)));
+        assert!(cmds.iter().any(|cmd| cmd.p0 == Point::new(5.0, -2.0)));
+        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(5.0, 2.0)));
+        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(4.0, 3.0)));
+        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-4.0, 3.0)));
+        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, 2.0)));
+        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, -2.0)));
+        assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-4.0, -3.0)));
+    }
 }
