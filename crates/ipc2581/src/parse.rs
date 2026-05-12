@@ -1995,9 +1995,7 @@ impl Parser {
             SlotShape::Primitive(self.parse_standard_primitive(&primitive_node, units)?)
         };
 
-        let z_axis_dim = node.children().any(|child| {
-            child.is_element() && matches!(child.tag_name().name(), "MaterialCut" | "MaterialLeft")
-        });
+        let z_axis_dim = has_z_axis_dim(node);
 
         Ok(Slot {
             name,
@@ -2583,6 +2581,46 @@ impl Parser {
             mirror,
             scale,
         }
+    }
+}
+
+fn has_z_axis_dim(node: &Node) -> bool {
+    node.children()
+        .filter(|child| child.is_element())
+        .any(|child| {
+            matches!(child.tag_name().name(), "MaterialCut" | "MaterialLeft")
+                || (matches!(child.tag_name().name(), "Z_AxisDim" | "ZAxisDim")
+                    && child
+                        .children()
+                        .filter(|grandchild| grandchild.is_element())
+                        .any(|grandchild| {
+                            matches!(grandchild.tag_name().name(), "MaterialCut" | "MaterialLeft")
+                        }))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_slot_cavity_z_axis_substitution_children() {
+        let doc = Document::parse(
+            r#"<SlotCavity><Location x="0" y="0"/><MaterialCut depth="0.1"/></SlotCavity>"#,
+        )
+        .unwrap();
+
+        assert!(has_z_axis_dim(&doc.root_element()));
+    }
+
+    #[test]
+    fn detects_wrapped_slot_cavity_z_axis_dimensions() {
+        let doc = Document::parse(
+            r#"<SlotCavity><Location x="0" y="0"/><ZAxisDim><MaterialLeft thickness="0.1"/></ZAxisDim></SlotCavity>"#,
+        )
+        .unwrap();
+
+        assert!(has_z_axis_dim(&doc.root_element()));
     }
 }
 
