@@ -1010,12 +1010,8 @@ fn push_thermal_path(
         let angle = index as f64 * std::f64::consts::TAU / spoke_count as f64;
         let center_radius = inner_radius + length / 2.0;
         let center = Point::new(center_radius * angle.cos(), center_radius * angle.sin());
-        let spoke_transform = Affine2::placement(
-            transform.transform_point(center),
-            angle.to_degrees(),
-            false,
-            1.0,
-        );
+        let spoke_transform =
+            transform.concat(Affine2::placement(center, angle.to_degrees(), false, 1.0));
         push_rect_path(doc, spoke_transform, length, spoke_width);
     }
 }

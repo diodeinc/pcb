@@ -522,6 +522,17 @@ impl Affine2 {
         )
     }
 
+    pub fn concat(&self, child: Self) -> Self {
+        Self {
+            m00: self.m00 * child.m00 + self.m01 * child.m10,
+            m01: self.m00 * child.m01 + self.m01 * child.m11,
+            m02: self.m00 * child.m02 + self.m01 * child.m12 + self.m02,
+            m10: self.m10 * child.m00 + self.m11 * child.m10,
+            m11: self.m10 * child.m01 + self.m11 * child.m11,
+            m12: self.m10 * child.m02 + self.m11 * child.m12 + self.m12,
+        }
+    }
+
     pub fn determinant(&self) -> f64 {
         self.m00 * self.m11 - self.m01 * self.m10
     }
