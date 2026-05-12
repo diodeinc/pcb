@@ -73,6 +73,10 @@ fn render_layer_svg_with_size(
     for feature in &doc.features
         [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
     {
+        if feature.bucket == FeatureBucket::Cutout {
+            continue;
+        }
+
         for path in &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         {
@@ -345,5 +349,44 @@ mod tests {
         assert_eq!(svg.matches("<path d='").count(), 1);
         assert!(svg.contains(" Z M2 2"));
         assert!(svg.contains("fill-rule='evenodd'"));
+    }
+
+    #[test]
+    fn does_not_render_cutout_features_as_positive_geometry() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        let bbox = BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(1.0, 1.0),
+        };
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, bbox),
+            [
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+                PathCmd::close(),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            bbox,
+            ..GeometryFeature::new(
+                FeatureKind::Hole,
+                FeatureBucket::Cutout,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 1,
+            bbox,
+        });
+
+        let svg = render_layer_svg(&doc, 0);
+
+        assert_eq!(svg.matches("<path d='").count(), 0);
     }
 }
