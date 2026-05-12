@@ -1,9 +1,0 @@
-[workspace]
-{% if repository %}repository = "{{ repository }}"
-{% endif %}pcb-version = "{{ pcb_version }}"
-members = [
-    "components/*",
-    "modules/*",
-    "boards/*",
-]
-vendor = ["github.com/diodeinc/registry/**"]

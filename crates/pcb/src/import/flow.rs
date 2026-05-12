@@ -70,32 +70,46 @@ fn prepare_output(
     selection: &ImportSelection,
     args: &ImportArgs,
 ) -> Result<()> {
-    let board_dir = paths
-        .workspace_root
-        .join("boards")
-        .join(&selection.board_name);
-    if board_dir.exists() {
-        if args.force {
-            std::fs::remove_dir_all(&board_dir).with_context(|| {
-                format!(
-                    "Failed to remove existing board dir {}",
-                    board_dir.display()
-                )
-            })?;
-        } else {
-            anyhow::bail!(
-                "Board directory already exists: {}. Use --force to overwrite.",
-                board_dir.display()
-            );
+    let board_dir = &paths.workspace_root;
+    let pcb_toml = board_dir.join("pcb.toml");
+    if pcb_toml.exists() && !args.force {
+        anyhow::bail!(
+            "Board repository already exists: {}. Use --force to overwrite generated files.",
+            board_dir.display()
+        );
+    }
+
+    if args.force {
+        remove_generated_output(board_dir, &selection.board_name)?;
+    }
+
+    crate::new::init_board_workspace(board_dir, &selection.board_name, "")?;
+    let portable_kicad_project_zip =
+        board_dir.join(format!("{}.kicad.archive.zip", selection.board_name));
+    portable::write_portable_zip(&selection.portable, &portable_kicad_project_zip)
+        .context("Failed to write portable KiCad project archive")?;
+    Ok(())
+}
+
+fn remove_generated_output(board_dir: &std::path::Path, board_name: &str) -> Result<()> {
+    for path in [
+        board_dir.join(format!("{board_name}.zen")),
+        board_dir.join("modules"),
+        board_dir.join("components"),
+        board_dir.join("layout"),
+        board_dir.join(".kicad.import.extraction.json"),
+        board_dir.join(".kicad.validation.diagnostics.json"),
+        board_dir.join(format!("{board_name}.kicad.archive.zip")),
+    ] {
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+                .with_context(|| format!("Failed to remove {}", path.display()))?;
+        } else if path.exists() {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("Failed to remove {}", path.display()))?;
         }
     }
 
-    let board_scaffold = crate::new::scaffold_board(&paths.workspace_root, &selection.board_name)?;
-    let portable_kicad_project_zip = board_scaffold
-        .board_dir
-        .join(format!("{}.kicad.archive.zip", selection.board_name));
-    portable::write_portable_zip(&selection.portable, &portable_kicad_project_zip)
-        .context("Failed to write portable KiCad project archive")?;
     Ok(())
 }
 

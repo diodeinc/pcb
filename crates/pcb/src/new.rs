@@ -12,10 +12,7 @@ use std::process::{Command, Stdio};
 use crate::codegen;
 
 const GITIGNORE_TEMPLATE: &str = include_str!("templates/gitignore");
-const WORKSPACE_PCB_TOML: &str = include_str!("templates/workspace_pcb_toml.jinja");
-const WORKSPACE_README: &str = include_str!("templates/workspace_readme.jinja");
 const BOARD_WORKSPACE_PCB_TOML: &str = include_str!("templates/board_workspace_pcb_toml.jinja");
-const BOARD_PACKAGE_PCB_TOML: &str = include_str!("templates/board_package_pcb_toml.jinja");
 const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
 const BOARD_README: &str = include_str!("templates/board_readme.jinja");
 const PACKAGE_ZEN: &str = include_str!("templates/package_zen.jinja");
@@ -23,13 +20,7 @@ const PACKAGE_README: &str = include_str!("templates/package_readme.jinja");
 
 fn create_template_env() -> Environment<'static> {
     let mut env = Environment::new();
-    env.add_template("workspace_pcb_toml", WORKSPACE_PCB_TOML)
-        .unwrap();
-    env.add_template("workspace_readme", WORKSPACE_README)
-        .unwrap();
     env.add_template("board_workspace_pcb_toml", BOARD_WORKSPACE_PCB_TOML)
-        .unwrap();
-    env.add_template("board_package_pcb_toml", BOARD_PACKAGE_PCB_TOML)
         .unwrap();
     env.add_template("board_zen", BOARD_ZEN).unwrap();
     env.add_template("board_readme", BOARD_README).unwrap();
@@ -261,38 +252,6 @@ fn prompt_new_package() -> Result<()> {
     execute_new_package(&path)
 }
 
-/// Initialize workspace scaffolding in an existing directory: pcb.toml, pcb.sum,
-/// README, .gitignore, git init. `repository` may be empty.
-pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
-    init_git(dir)?;
-
-    let env = create_template_env();
-    let ctx = context! {
-        repository => repository,
-        pcb_version => pcb_version_from_cargo(),
-    };
-
-    let pcb_toml_content = env
-        .get_template("workspace_pcb_toml")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render pcb.toml template")?;
-    std::fs::write(dir.join("pcb.toml"), pcb_toml_content).context("Failed to write pcb.toml")?;
-    std::fs::write(dir.join("pcb.sum"), "").context("Failed to write pcb.sum")?;
-
-    let readme_content = env
-        .get_template("workspace_readme")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render README.md template")?;
-    std::fs::write(dir.join("README.md"), readme_content).context("Failed to write README.md")?;
-
-    std::fs::write(dir.join(".gitignore"), GITIGNORE_TEMPLATE)
-        .context("Failed to write .gitignore")?;
-
-    Ok(())
-}
-
 fn init_git(dir: &Path) -> Result<()> {
     if !dir.join(".git").exists() {
         let status = Command::new("git")
@@ -340,11 +299,7 @@ fn execute_new_board(board: &str, repo: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) struct BoardScaffold {
-    pub board_dir: std::path::PathBuf,
-}
-
-fn init_board_workspace(dir: &Path, board: &str, repository: &str) -> Result<()> {
+pub(crate) fn init_board_workspace(dir: &Path, board: &str, repository: &str) -> Result<()> {
     init_git(dir)?;
 
     let env = create_template_env();
@@ -382,51 +337,6 @@ fn init_board_workspace(dir: &Path, board: &str, repository: &str) -> Result<()>
         .context("Failed to write .gitignore")?;
 
     Ok(())
-}
-
-pub(crate) fn scaffold_board(workspace_root: &Path, board: &str) -> Result<BoardScaffold> {
-    validate_name(board, "Board")?;
-
-    let board_dir = workspace_root.join("boards").join(board);
-    if board_dir.exists() {
-        bail!("Board directory '{}' already exists", board_dir.display());
-    }
-
-    std::fs::create_dir_all(&board_dir)
-        .with_context(|| format!("Failed to create directory '{}'", board_dir.display()))?;
-
-    let env = create_template_env();
-    let ctx = context! {
-        board => board,
-        pcb_version => pcb_version_from_cargo(),
-    };
-
-    let pcb_toml_content = env
-        .get_template("board_package_pcb_toml")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render pcb.toml template")?;
-    std::fs::write(board_dir.join("pcb.toml"), pcb_toml_content)
-        .context("Failed to write pcb.toml")?;
-
-    let zen_content = env
-        .get_template("board_zen")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render .zen template")?;
-    let board_zen = board_dir.join(format!("{}.zen", board));
-    codegen::zen::write_zen_formatted(&board_zen, &zen_content)
-        .context("Failed to write .zen file")?;
-
-    let readme_content = env
-        .get_template("board_readme")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render README.md template")?;
-    std::fs::write(board_dir.join("README.md"), readme_content)
-        .context("Failed to write README.md")?;
-
-    Ok(BoardScaffold { board_dir })
 }
 
 fn execute_new_package(package_path: &str) -> Result<()> {
