@@ -12,8 +12,8 @@ pub fn process_document(doc: &mut GeometryDocument) {
     normalize_bounds(doc);
     compose_feature_paths(doc);
     outline_stroked_paths(doc);
-    subtract_layer_cutouts(doc);
     union_feature_filled_paths(doc);
+    subtract_layer_cutouts(doc);
     normalize_bounds(doc);
 }
 
