@@ -1,12 +1,16 @@
 use super::ir::*;
+use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
+use i_overlay::float::simplify::SimplifyShape;
 use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 
 type ContourPayload = (BBox, Vec<PathCmd>);
+type PolygonContour = Vec<[f64; 2]>;
 
 pub fn process_document(doc: &mut GeometryDocument) {
     normalize_bounds(doc);
     compose_feature_paths(doc);
     outline_stroked_paths(doc);
+    union_feature_filled_paths(doc);
     normalize_bounds(doc);
 }
 
@@ -70,6 +74,10 @@ pub fn outline_stroked_paths(doc: &mut GeometryDocument) {
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
         let feature = doc.features[feature_index].clone();
+        if feature.bucket != FeatureBucket::Trace {
+            continue;
+        }
+
         let paths = &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize];
         if !paths.iter().any(|path| path.flags.stroked) {
@@ -91,6 +99,48 @@ pub fn outline_stroked_paths(doc: &mut GeometryDocument) {
         let feature = &mut doc.features[feature_index];
         feature.path_start = path_start;
         feature.path_count = doc.paths.len() as u32 - path_start;
+    }
+}
+
+pub fn union_feature_filled_paths(doc: &mut GeometryDocument) {
+    let feature_count = doc.features.len();
+    for feature_index in 0..feature_count {
+        let feature = doc.features[feature_index].clone();
+        if feature.bucket != FeatureBucket::Trace {
+            continue;
+        }
+
+        let paths = &doc.paths
+            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize];
+        if paths.is_empty() || !paths.iter().all(|path| path.flags.filled) {
+            continue;
+        }
+
+        let mut contours = Vec::new();
+        let mut supported = true;
+        for path in paths {
+            if !path_to_polygon_contours(doc, path, &mut contours) {
+                supported = false;
+                break;
+            }
+        }
+        if !supported || contours.len() < 2 {
+            continue;
+        }
+
+        let result = contours.simplify_shape(OverlayFillRule::NonZero);
+        let contours = polygon_shapes_to_contours(result);
+        if contours.is_empty() {
+            continue;
+        }
+
+        let path_id = doc.push_compound_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            contours,
+        );
+        let feature = &mut doc.features[feature_index];
+        feature.path_start = path_id;
+        feature.path_count = 1;
     }
 }
 
@@ -300,6 +350,68 @@ fn ir_point(point: kurbo::Point) -> Point {
     Point::new(point.x, point.y)
 }
 
+fn path_to_polygon_contours(
+    doc: &GeometryDocument,
+    path: &GeometryPath,
+    out: &mut Vec<PolygonContour>,
+) -> bool {
+    let bez_path = path_to_kurbo(doc, path);
+    let mut current = Vec::new();
+    kurbo::flatten(bez_path, 0.005, |element| match element {
+        PathEl::MoveTo(point) => {
+            push_polygon_contour(out, &mut current);
+            current.push([point.x, point.y]);
+        }
+        PathEl::LineTo(point) => current.push([point.x, point.y]),
+        PathEl::ClosePath => push_polygon_contour(out, &mut current),
+        PathEl::QuadTo(..) | PathEl::CurveTo(..) => unreachable!("kurbo::flatten emits lines"),
+    });
+    push_polygon_contour(out, &mut current);
+    true
+}
+
+fn push_polygon_contour(out: &mut Vec<PolygonContour>, contour: &mut PolygonContour) {
+    if contour.len() < 3 {
+        contour.clear();
+        return;
+    }
+
+    if contour.first() == contour.last() {
+        contour.pop();
+    }
+    if contour.len() >= 3 {
+        out.push(std::mem::take(contour));
+    } else {
+        contour.clear();
+    }
+}
+
+fn polygon_shapes_to_contours(shapes: Vec<Vec<PolygonContour>>) -> Vec<ContourPayload> {
+    let mut contours = Vec::new();
+    for shape in shapes {
+        for contour in shape {
+            if contour.len() < 3 {
+                continue;
+            }
+
+            let mut bbox = BBox::empty();
+            let mut cmds = Vec::with_capacity(contour.len() + 2);
+            for (index, [x, y]) in contour.into_iter().enumerate() {
+                let point = Point::new(x, y);
+                bbox.include_point(point);
+                if index == 0 {
+                    cmds.push(PathCmd::move_to(point));
+                } else {
+                    cmds.push(PathCmd::line_to(point));
+                }
+            }
+            cmds.push(PathCmd::close());
+            contours.push((bbox, cmds));
+        }
+    }
+    contours
+}
+
 fn contour_bbox(doc: &GeometryDocument, contour_index: usize) -> BBox {
     let contour = &doc.contours[contour_index];
     let mut bbox = BBox::empty();
@@ -428,5 +540,45 @@ mod tests {
 
         assert_eq!(doc.features[0].path_start, 0);
         assert_eq!(doc.features[0].path_count, 2);
+    }
+
+    #[test]
+    fn unions_filled_trace_geometry_inside_one_feature() {
+        let mut doc = GeometryDocument::new("test".to_string());
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 2.0, 1.0),
+        );
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(1.0, 0.0, 3.0, 1.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 2,
+            ..GeometryFeature::new(
+                FeatureKind::Trace,
+                FeatureBucket::Trace,
+                GeometryPolarity::Positive,
+            )
+        });
+
+        process_document(&mut doc);
+
+        assert_eq!(doc.features[0].path_count, 1);
+        let path = &doc.paths[doc.features[0].path_start as usize];
+        assert!(path.flags.filled);
+        assert_eq!(path.contour_count, 1);
+        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(path.bbox.max, Point::new(3.0, 1.0));
+    }
+
+    fn rect_cmds(x0: f64, y0: f64, x1: f64, y1: f64) -> [PathCmd; 5] {
+        [
+            PathCmd::move_to(Point::new(x0, y0)),
+            PathCmd::line_to(Point::new(x1, y0)),
+            PathCmd::line_to(Point::new(x1, y1)),
+            PathCmd::line_to(Point::new(x0, y1)),
+            PathCmd::close(),
+        ]
     }
 }

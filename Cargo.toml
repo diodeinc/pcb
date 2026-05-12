@@ -135,6 +135,7 @@ rust_decimal_macros = "1.38"
 comfy-table = { version = "7.2", features = ["custom_styling"] }
 url = "2.5"
 ignore = "0.4"
+i_overlay = "6"
 sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }
 quick-xml = "0.39"
