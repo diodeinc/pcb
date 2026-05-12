@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb new board <name> <repo-url>` now creates a one-board workspace repository directly, replacing the separate `pcb new workspace` flow.
+
 ## [0.3.81] - 2026-05-11
 
 ### Changed

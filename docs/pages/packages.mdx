@@ -120,27 +120,27 @@ represented. When this happens, packages that depend on the old API cannot
 immediately upgrade—they need time to adapt.
 
 The package system supports **multiple major versions in a single build**. If your
-workspace contains:
+dependency graph contains:
 
 ```toml
-# Board WV0001 (not yet migrated)
+# Library X (not yet migrated)
 [dependencies]
 "github.com/diodeinc/stdlib" = "0.3"
 
-# Board WV0002 (migrated to new API)
+# Library Y (migrated to new API)
 [dependencies]
 "github.com/diodeinc/stdlib" = "1.0"
 ```
 
-Both boards can build together. The system maintains separate copies of
-`stdlib@0.3.x` and `stdlib@1.0.x`, each used by the boards that require them.
+Both libraries can build together. The system maintains separate copies of
+`stdlib@0.3.x` and `stdlib@1.0.x`, each used by the packages that require them.
 Types and values from different major versions are distinct and cannot be mixed.
 
 This approach has two key benefits:
 
-**No flag day upgrades.** Teams can migrate board-by-board over weeks or months,
+**No flag day upgrades.** Teams can migrate package-by-package over weeks or months,
 validating each migration before moving to the next. The old version remains
-available as long as any board needs it.
+available as long as any package needs it.
 
 **Diamond dependencies work.** If Board A uses Library X (stdlib 0.3) and Library Y
 (stdlib 1.0), both libraries function correctly. Library X sees stdlib 0.3 types,
@@ -278,7 +278,7 @@ manifest declares which version of each package to use:
 ```toml
 [dependencies]
 "github.com/diodeinc/stdlib" = "0.3"
-"github.com/diodeinc/registry/reference/ti/tps54331" = "1.0"
+"github.com/diodeinc/registry/components/ti/tps54331" = "1.0"
 ```
 
 This separation means:
@@ -293,8 +293,8 @@ The lockfile (`pcb.sum`) records exact versions and cryptographic hashes:
 ```
 github.com/diodeinc/stdlib v0.3.2 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo=
 github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:abc123def456...
-github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0 h1:ghi789jkl012...
-github.com/diodeinc/registry/reference/ti/tps54331 v1.0.0/pcb.toml h1:mno345pqr678...
+github.com/diodeinc/registry/components/ti/tps54331 v1.0.0 h1:ghi789jkl012...
+github.com/diodeinc/registry/components/ti/tps54331 v1.0.0/pcb.toml h1:mno345pqr678...
 ```
 
 Each dependency has two entries:
@@ -459,7 +459,7 @@ fetches packages, and verifies the lockfile.
 
 ```bash
 pcb build                    # Build default board
-pcb build boards/WV0002      # Build specific board
+pcb build WV0002.zen         # Build a specific board file
 pcb build --offline          # Build using only cached/vendored packages
 ```
 

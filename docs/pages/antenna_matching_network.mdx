@@ -10,7 +10,7 @@ layers of the language:
 - a reusable `Module()` for the matching network
 - a top-level `Board()` that composes the RF path
 
-This guide follows the workspace and package model from the
+This guide follows the board repository and package model from the
 [language spec](/pages/spec). In particular:
 
 - the top-level design uses `Board(...)`, not `Layout(...)`
@@ -19,17 +19,14 @@ This guide follows the workspace and package model from the
 
 ![](/images/Antenna_PCB_Render.png)
 
-## Workspace Layout
+## Repository Layout
 
-Start with a normal workspace and give each reusable block its own package:
+Start with a normal board repository and give each reusable block its own package:
 
 ```text
 my-rf-demo/
 ├── pcb.toml
-├── boards/
-│   └── AntennaDemo/
-│       ├── AntennaDemo.zen
-│       └── pcb.toml
+├── AntennaDemo.zen
 ├── modules/
 │   └── AntennaMatch/
 │       ├── AntennaMatch.zen
@@ -48,14 +45,18 @@ The root `pcb.toml` can be as small as:
 ```toml
 [workspace]
 pcb-version = "0.3"
-members = ["boards/*", "modules/*", "components/**"]
+members = ["modules/*", "components/**"]
+
+[board]
+name = "AntennaDemo"
+path = "AntennaDemo.zen"
+description = "Replace with concise board description."
 ```
 
 <Info>
-Use `pcb new workspace`, `pcb new board`, and `pcb new package` to create this
-structure. The values in this guide are starting points only. Real matching
-values should come from your antenna datasheet, PCB stackup, and VNA
-measurements.
+Use `pcb new board` and `pcb new package` to create this structure. The values
+in this guide are starting points only. Real matching values should come from
+your antenna datasheet, PCB stackup, and VNA measurements.
 </Info>
 
 ## 1. Wrap The Physical Endpoints
@@ -194,10 +195,10 @@ declared explicitly.
 Now instantiate the connector, matching network, and antenna on a real board:
 
 ```python
-# boards/AntennaDemo/AntennaDemo.zen
-SMAConnector = Module("../../components/SMAConnector/SMAConnector.zen")
-ChipAntenna = Module("../../components/ChipAntenna/ChipAntenna.zen")
-AntennaMatch = Module("../../modules/AntennaMatch/AntennaMatch.zen")
+# AntennaDemo.zen
+SMAConnector = Module("./components/SMAConnector/SMAConnector.zen")
+ChipAntenna = Module("./components/ChipAntenna/ChipAntenna.zen")
+AntennaMatch = Module("./modules/AntennaMatch/AntennaMatch.zen")
 
 rf_source = Net("RF_SOURCE")
 rf_feed = Net("RF_FEED")
@@ -248,8 +249,8 @@ SMA center -> series inductor -> tuning node -> series resistor -> antenna feed
 Build and lay out the board with the normal CLI flow:
 
 ```bash
-pcb build boards/AntennaDemo/AntennaDemo.zen
-pcb layout boards/AntennaDemo/AntennaDemo.zen
+pcb build AntennaDemo.zen
+pcb layout AntennaDemo.zen
 ```
 
 If the design validates, KiCad will open with a generated board you can tune and
