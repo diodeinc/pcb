@@ -77,16 +77,14 @@ pcb bom <board-or-module-path> -f json
 
 When no suitable registry content exists, or a close match needs to be changed before it is safe to use, stop the registry search workflow and prepare a librarian request instead of authoring or patching the package inline.
 
-A good request includes:
+If you are already operating inside a registry checkout or explicit registry-authoring task, use the `librarian` skill and continue authoring there unless the user asks you to dispatch a remote librarian. If you are working outside the registry, offer to prepare a remote librarian request for reusable registry content: new component packages, new reference designs, package/API fixes, symbol/footprint/sourceability cleanup, or anything other boards should be able to search, trust, and instantiate. Keep work inline only when it is board/subsystem-local: consuming existing registry packages, wiring, configuration, straps, glue circuitry, or placeholders the user accepts.
 
-- board/subsystem context and why the package is needed
-- required function and fundamental schematic topology, if known
-- electrical requirements: rails, current, speed, accuracy, protection, temperature, qualification
-- physical constraints: package/footprint, height, connector style, pinout constraints, assembly limits
-- preferred or user-specified MPNs, manufacturers, and acceptable alternates
-- sourcing constraints: region, stock, lifecycle, target cost, approved distributors
-- searches tried, candidates rejected, and why they failed
-- close registry matches that need tweaks, with the exact missing API, circuit, symbol, footprint, sourcing, or documentation change
-- needed deliverable: primitive component, reference-design module, connector module, family selector, or patch to an existing package
+Default librarian requests to the canonical `github.com/diodeinc/registry` registry. Do not override the target unless the user or project context explicitly names a different registry.
+
+Avoid surprising the user with remote librarian dispatches. Before creating a session, make sure the user's current instructions reasonably imply that dispatching librarian work is okay. If that is unclear, briefly say what you would dispatch and ask. If the `pcb-glass` skill is available, use it for command mechanics and give the user the resulting registry chat URL.
+
+Only the user can merge librarian output into the registry. Do not import or instantiate newly generated packages until the user confirms the registry changes are merged; after merge, search or inspect the registry again before using the new content.
+
+The request should give enough context for the librarian to understand the reusable registry content you need: the part, manufacturer, function, required public configs or IO, and any constraints that matter to the consuming design. Do not over-specify pinouts, symbol details, footprints, or implementation steps unless the user specifically requires them; the librarian is expected to research the part family, make package decisions, and design reusable content.
 
 Keep the board moving with a placeholder only if the user accepts the risk and the unresolved librarian request is recorded in the spec or TODOs.

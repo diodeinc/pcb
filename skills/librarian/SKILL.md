@@ -9,6 +9,8 @@ Create sourceable, evidence-backed registry packages that board designers can se
 
 Use this for new registry components, package fixes, family selectors, symbol/footprint cleanup, datasheet-backed reference circuitry, and requests produced by registry search during board work.
 
+If you are already operating inside a registry checkout or remote librarian session, continue authoring in that registry unless the user explicitly asks you to dispatch another librarian. Remote librarian dispatch is for agents working outside the registry, such as board or spec work that discovers missing reusable content.
+
 ## Intake And Scope
 
 Start by clarifying the deliverable:
