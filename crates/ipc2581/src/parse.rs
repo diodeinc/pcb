@@ -1460,6 +1460,7 @@ impl Parser {
         // Single pass through children
         let mut datum = None;
         let mut profile = None;
+        let mut step_repeats = Vec::new();
         let mut padstack_defs = Vec::new();
         let mut packages = Vec::new();
         let mut components = Vec::new();
@@ -1471,6 +1472,7 @@ impl Parser {
             match child.tag_name().name() {
                 "Datum" => datum = Some(self.parse_datum(&child)?),
                 "Profile" => profile = Some(self.parse_profile(&child)?),
+                "StepRepeat" => step_repeats.push(self.parse_step_repeat(&child)?),
                 "PadStackDef" => padstack_defs.push(self.parse_padstack_def(&child)?),
                 "Package" => packages.push(self.parse_package(&child)?),
                 "Component" => components.push(self.parse_component(&child)?),
@@ -1485,12 +1487,57 @@ impl Parser {
             name,
             datum,
             profile,
+            step_repeats,
             padstack_defs,
             packages,
             components,
             logical_nets,
             phy_net_groups,
             layer_features,
+        })
+    }
+
+    fn parse_step_repeat(&mut self, node: &Node) -> Result<StepRepeat> {
+        // StepRepeat is in ECAD section, use ECAD units.
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+
+        let step_ref = self.required_attr(node, "stepRef", "StepRepeat")?;
+        let x = self
+            .parse_optional_f64_attr_with_units(node, "x", units)?
+            .unwrap_or(0.0);
+        let y = self
+            .parse_optional_f64_attr_with_units(node, "y", units)?
+            .unwrap_or(0.0);
+        let nx = self.parse_optional_u32_attr(node, "nx")?.unwrap_or(1);
+        let ny = self.parse_optional_u32_attr(node, "ny")?.unwrap_or(1);
+        let dx = self
+            .parse_optional_f64_attr_with_units(node, "dx", units)?
+            .unwrap_or(0.0);
+        let dy = self
+            .parse_optional_f64_attr_with_units(node, "dy", units)?
+            .unwrap_or(0.0);
+        let angle = self.parse_optional_f64_attr(node, "angle")?.unwrap_or(0.0);
+        let mirror = match node.attribute("mirror") {
+            Some(value) if value.eq_ignore_ascii_case("true") => true,
+            Some(value) if value.eq_ignore_ascii_case("false") => false,
+            Some(_) => {
+                return Err(Ipc2581Error::InvalidAttribute(
+                    "Invalid bool value for mirror".to_string(),
+                ));
+            }
+            None => false,
+        };
+
+        Ok(StepRepeat {
+            step_ref,
+            x,
+            y,
+            nx,
+            ny,
+            dx,
+            dy,
+            angle,
+            mirror,
         })
     }
 
