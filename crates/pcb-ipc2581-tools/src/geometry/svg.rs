@@ -120,7 +120,7 @@ fn write_path(
             line_cap(path.line_cap)
         )
         .unwrap();
-    } else {
+    } else if path.flags.filled {
         writeln!(
             svg,
             "    <path d='{}' fill='{}' fill-opacity='{}' fill-rule='{}'/>",

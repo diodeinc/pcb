@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use ipc2581::types::{
     FillProperty, LayerFunction, LineEnd, PadUse, PlatingStatus, Polarity, PolyStep, SlotShape,
-    StandardPrimitive, Styled, ecad::Layer,
+    StandardPrimitive, ecad::Layer,
 };
 use ipc2581::{Ipc2581, Symbol};
 
@@ -14,6 +14,13 @@ struct ExtractContext<'a> {
     padstacks: HashMap<Symbol, &'a ipc2581::types::PadStackDef>,
     line_descs: HashMap<Symbol, ipc2581::types::LineDesc>,
     standard_primitives: HashMap<Symbol, &'a StandardPrimitive>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrimitivePaint {
+    Fill,
+    Hollow,
+    Void,
 }
 
 pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
@@ -304,14 +311,22 @@ fn extract_pad(
     };
 
     let path_start = doc.paths.len() as u32;
-    lower_standard_primitive(context, doc, primitive, transform, bucket)?;
+    let paint = lower_standard_primitive(context, doc, primitive, transform, bucket)?;
     let path_count = doc.paths.len() as u32 - path_start;
     if path_count == 0 {
         return Ok(None);
     }
     let bbox = paths_bbox(doc, path_start, path_count);
 
-    let mut feature = GeometryFeature::new(FeatureKind::Padstack, bucket, polarity);
+    let mut feature = GeometryFeature::new(
+        FeatureKind::Padstack,
+        bucket,
+        if paint == PrimitivePaint::Void {
+            GeometryPolarity::Negative
+        } else {
+            polarity
+        },
+    );
     feature.net = net;
     feature.source = source;
     feature.transform = transform;
@@ -509,7 +524,13 @@ fn extract_slot(
             push_polygon_path(doc, polygon, transform, FillRule::NonZero);
         }
         SlotShape::Primitive(primitive) => {
-            lower_standard_primitive(context, doc, primitive, transform, FeatureBucket::Cutout)?;
+            let _ = lower_standard_primitive(
+                context,
+                doc,
+                primitive,
+                transform,
+                FeatureBucket::Cutout,
+            )?;
         }
     }
 
@@ -535,7 +556,8 @@ fn lower_standard_primitive(
     primitive: &StandardPrimitive,
     transform: Affine2,
     bucket: FeatureBucket,
-) -> Result<()> {
+) -> Result<PrimitivePaint> {
+    let path_start = doc.paths.len() as u32;
     match primitive {
         StandardPrimitive::Circle(circle) => {
             push_ellipse_path(doc, transform, circle.shape.diameter, circle.shape.diameter);
@@ -686,8 +708,26 @@ fn lower_standard_primitive(
         // just here to make the bucket dependency explicit for future styling.
     }
 
-    let _ = context;
-    Ok(())
+    let paint = primitive_paint(primitive);
+    match paint {
+        PrimitivePaint::Fill => {}
+        PrimitivePaint::Hollow => {
+            let Some(line_desc) = primitive_line_desc(context, primitive) else {
+                doc.warn("Skipping hollow primitive without LineDescRef");
+                make_paths_unpainted(doc, path_start);
+                return Ok(paint);
+            };
+            make_paths_stroked(
+                doc,
+                path_start,
+                line_desc.line_width,
+                map_line_cap(line_desc.line_end),
+            );
+        }
+        PrimitivePaint::Void => {}
+    }
+
+    Ok(paint)
 }
 
 fn push_polygon_path(
@@ -698,6 +738,75 @@ fn push_polygon_path(
 ) {
     let (bbox, cmds) = polygon_contour(polygon, transform);
     doc.push_path(GeometryPath::filled(fill_rule, bbox), cmds);
+}
+
+fn primitive_paint(primitive: &StandardPrimitive) -> PrimitivePaint {
+    match primitive_fill_property(primitive) {
+        Some(FillProperty::Hollow) => PrimitivePaint::Hollow,
+        Some(FillProperty::Void) => PrimitivePaint::Void,
+        _ => PrimitivePaint::Fill,
+    }
+}
+
+fn primitive_fill_property(primitive: &StandardPrimitive) -> Option<FillProperty> {
+    match primitive {
+        StandardPrimitive::Circle(styled) => styled.fill_property,
+        StandardPrimitive::RectCenter(styled) => styled.fill_property,
+        StandardPrimitive::RectRound(styled) => styled.fill_property,
+        StandardPrimitive::RectCham(styled) => styled.fill_property,
+        StandardPrimitive::RectCorner(styled) => styled.fill_property,
+        StandardPrimitive::Oval(styled) => styled.fill_property,
+        StandardPrimitive::Butterfly(styled) => styled.fill_property,
+        StandardPrimitive::Diamond(styled) => styled.fill_property,
+        StandardPrimitive::Donut(styled) => styled.fill_property,
+        StandardPrimitive::Ellipse(styled) => styled.fill_property,
+        StandardPrimitive::Hexagon(styled) => styled.fill_property,
+        StandardPrimitive::Octagon(styled) => styled.fill_property,
+        StandardPrimitive::Thermal(styled) => styled.fill_property,
+        StandardPrimitive::Triangle(styled) => styled.fill_property,
+        StandardPrimitive::Moire(_) | StandardPrimitive::Contour(_) => None,
+    }
+}
+
+fn primitive_line_desc(
+    context: &ExtractContext<'_>,
+    primitive: &StandardPrimitive,
+) -> Option<ipc2581::types::LineDesc> {
+    let line_desc_ref = match primitive {
+        StandardPrimitive::Circle(styled) => styled.line_desc_ref,
+        StandardPrimitive::RectCenter(styled) => styled.line_desc_ref,
+        StandardPrimitive::RectRound(styled) => styled.line_desc_ref,
+        StandardPrimitive::RectCham(styled) => styled.line_desc_ref,
+        StandardPrimitive::RectCorner(styled) => styled.line_desc_ref,
+        StandardPrimitive::Oval(styled) => styled.line_desc_ref,
+        StandardPrimitive::Butterfly(styled) => styled.line_desc_ref,
+        StandardPrimitive::Diamond(styled) => styled.line_desc_ref,
+        StandardPrimitive::Donut(styled) => styled.line_desc_ref,
+        StandardPrimitive::Ellipse(styled) => styled.line_desc_ref,
+        StandardPrimitive::Hexagon(styled) => styled.line_desc_ref,
+        StandardPrimitive::Octagon(styled) => styled.line_desc_ref,
+        StandardPrimitive::Thermal(styled) => styled.line_desc_ref,
+        StandardPrimitive::Triangle(styled) => styled.line_desc_ref,
+        StandardPrimitive::Moire(_) | StandardPrimitive::Contour(_) => None,
+    }?;
+    context.line_descs.get(&line_desc_ref).copied()
+}
+
+fn make_paths_stroked(doc: &mut GeometryDocument, path_start: u32, width: f64, line_cap: LineCap) {
+    for path in &mut doc.paths[path_start as usize..] {
+        path.flags.filled = false;
+        path.flags.stroked = true;
+        path.fill_rule = FillRule::NonZero;
+        path.stroke_width = width;
+        path.line_cap = line_cap;
+    }
+}
+
+fn make_paths_unpainted(doc: &mut GeometryDocument, path_start: u32) {
+    for path in &mut doc.paths[path_start as usize..] {
+        path.flags.filled = false;
+        path.flags.stroked = false;
+    }
 }
 
 fn polygon_contour(polygon: &ipc2581::types::Polygon, transform: Affine2) -> (BBox, Vec<PathCmd>) {
@@ -1108,8 +1217,9 @@ fn push_butterfly_path(
 
 fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc2581::types::Moire) {
     for index in 0..moire.ring_number {
-        let outer_diameter = moire.diameter - 2.0 * index as f64 * moire.ring_gap;
-        let inner_diameter = outer_diameter - 2.0 * moire.ring_width;
+        let centerline_diameter = moire.diameter - 2.0 * index as f64 * moire.ring_gap;
+        let outer_diameter = centerline_diameter + moire.ring_width;
+        let inner_diameter = centerline_diameter - moire.ring_width;
         if outer_diameter <= 0.0 {
             break;
         }
@@ -1230,13 +1340,6 @@ fn map_line_cap(line_end: LineEnd) -> LineCap {
     }
 }
 
-fn _styled_is_filled<T>(styled: &Styled<T>) -> bool {
-    !matches!(
-        styled.fill_property,
-        Some(FillProperty::Hollow | FillProperty::Void)
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1266,8 +1369,32 @@ mod tests {
         assert_eq!(doc.paths[2].contour_count, 2);
         assert_eq!(doc.paths[3].fill_rule, FillRule::NonZero);
         assert_eq!(doc.paths[4].fill_rule, FillRule::NonZero);
-        assert_eq!(doc.paths[1].bbox.min, Point::new(-3.0, -3.0));
-        assert_eq!(doc.paths[1].bbox.max, Point::new(3.0, 3.0));
+        assert_eq!(doc.paths[0].bbox.min, Point::new(-4.25, -4.25));
+        assert_eq!(doc.paths[0].bbox.max, Point::new(4.25, 4.25));
+        assert_eq!(doc.paths[1].bbox.min, Point::new(-3.25, -3.25));
+        assert_eq!(doc.paths[1].bbox.max, Point::new(3.25, 3.25));
+    }
+
+    #[test]
+    fn reads_standard_primitive_fill_properties() {
+        let circle = ipc2581::types::StandardPrimitive::Circle(ipc2581::types::Styled {
+            shape: ipc2581::types::Circle { diameter: 1.0 },
+            fill_property: Some(FillProperty::Hollow),
+            line_desc_ref: None,
+        });
+        let rect = ipc2581::types::StandardPrimitive::RectCenter(ipc2581::types::Styled {
+            shape: ipc2581::types::RectCenter {
+                size: ipc2581::types::Size {
+                    width: 1.0,
+                    height: 1.0,
+                },
+            },
+            fill_property: Some(FillProperty::Void),
+            line_desc_ref: None,
+        });
+
+        assert_eq!(primitive_paint(&circle), PrimitivePaint::Hollow);
+        assert_eq!(primitive_paint(&rect), PrimitivePaint::Void);
     }
 
     #[test]
@@ -1405,7 +1532,7 @@ mod tests {
     fn test_slot(z_axis_dim: bool) -> ipc2581::types::Slot {
         ipc2581::types::Slot {
             name: None,
-            shape: SlotShape::Primitive(StandardPrimitive::Circle(Styled {
+            shape: SlotShape::Primitive(StandardPrimitive::Circle(ipc2581::types::Styled {
                 shape: ipc2581::types::Circle { diameter: 1.0 },
                 fill_property: None,
                 line_desc_ref: None,
