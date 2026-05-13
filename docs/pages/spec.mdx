@@ -56,7 +56,7 @@ load("@stdlib/interfaces.zen", "Spi")
 
 # Remote packages (version declared in pcb.toml)
 Resistor = Module("@stdlib/generics/Resistor.zen")
-TPS54331 = Module("github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen")
+TPS54331 = Module("github.com/diodeinc/registry/components/TPS54331/TPS54331.zen")
 ```
 
 The `@stdlib` alias is special and virtual—its content is controlled by the toolchain. You don't need to declare it in `[dependencies]`.
@@ -65,7 +65,7 @@ Remote package URLs don't include version information. Versions are declared sep
 
 ```toml
 [dependencies]
-"github.com/diodeinc/registry/reference/TPS54331" = "1.0"
+"github.com/diodeinc/registry/components/TPS54331" = "1.0"
 ```
 
 ### Dependency Resolution
@@ -101,16 +101,17 @@ See [Packages](/pages/packages) for complete details on version resolution and d
 
 ### Project Structure
 
-A Zener project is a git repository containing a workspace with boards, modules, and components. Create a new project with `pcb new workspace`:
+Zener projects use one of two repository shapes: a board repository or a registry repository.
+
+#### Board repository
+
+A board repository contains one board plus any local modules and components it owns. Create one with `pcb new board <name> <repo-url>`:
 
 ```
-my-project/
-├── pcb.toml              # Workspace manifest
+MainBoard/
+├── pcb.toml              # Workspace and board manifest
 ├── pcb.sum               # Dependency lock file
-├── boards/
-│   └── MainBoard/
-│       ├── pcb.toml      # Board manifest
-│       └── MainBoard.zen
+├── MainBoard.zen
 ├── modules/
 │   └── PowerSupply/
 │       ├── pcb.toml      # Package manifest
@@ -121,45 +122,67 @@ my-project/
         └── TPS54331.zen
 ```
 
-Use `pcb new board <name>` to add boards and `pcb new package <path>` to add modules or components.
+Use `pcb new package <path>` to add modules or components inside the board repository.
 
-**Workspace manifest** (root `pcb.toml`):
+**Manifest** (root `pcb.toml`):
 
 ```toml
 [workspace]
-repository = "github.com/myorg/my-project"
+repository = "github.com/myorg/MainBoard"
 pcb-version = "0.3"
 endpoint = "diode.computer"
-members = ["boards/*", "modules/*", "components/*"]
+members = ["components/**", "modules/*"]
+
+[board]
+name = "MainBoard"
+path = "MainBoard.zen"
+description = "Replace with concise board description."
 ```
 
 - `repository`: Git remote URL (used to derive package URLs for publishing)
 - `pcb-version`: Minimum compatible `pcb` toolchain release series (e.g., `"0.3"`). Required for workspaces.
 - `endpoint`: Optional Diode host suffix used for workspace-scoped app/API URLs. `"diode.computer"` resolves to `app.diode.computer` and `api.diode.computer`.
-- `members`: Glob patterns matching subdirectories that contain packages
+- `members`: Glob patterns matching subdirectories that contain local packages
+- `[board]`: Defines the repository's buildable board with `name`, entry `path`, and a short `description`
 
 V1 workspaces are no longer supported. If you have an older project, run `pcb migrate` to upgrade manifests and import paths.
 Only the workspace root `pcb.toml` should contain a `[workspace]` section.
+Board dependencies are also declared in the root manifest's `[dependencies]` table.
 
-**Board manifest** (e.g., `boards/MainBoard/pcb.toml`):
+#### Registry repository
 
-```toml
-[board]
-name = "WV0001"
-path = "MainBoard.zen"
+A registry repository contains reusable packages but no board at the root. It uses top-level `components/` and `modules/` directories:
 
-[dependencies]
-"github.com/diodeinc/registry/reference/TPS54331" = "1.0"
+```
+registry/
+├── pcb.toml              # Workspace manifest
+├── pcb.sum               # Dependency lock file
+├── components/
+│   └── TPS54331/
+│       ├── pcb.toml      # Package manifest
+│       ├── TPS54331.zen
+│       ├── TPS54331.kicad_sym
+│       └── TPS54331.kicad_mod
+└── modules/
+    └── UsbCSink/
+        ├── pcb.toml      # Package manifest
+        └── UsbCSink.zen
 ```
 
-- `[board]`: Defines a buildable board with `name` and entry `path`
-- `[dependencies]`: Version constraints for this board's dependencies
+Registry manifests include `[workspace]` but do not include `[board]`:
+
+```toml
+[workspace]
+repository = "github.com/myorg/registry"
+pcb-version = "0.3"
+members = ["components/**", "modules/*"]
+```
 
 **Package manifest** (e.g., `modules/PowerSupply/pcb.toml`):
 
 ```toml
 [dependencies]
-"github.com/diodeinc/registry/reference/TPS54331" = "1.0"
+"github.com/diodeinc/registry/components/TPS54331" = "1.0"
 
 parts = [
   { mpn = "TPS54331DR", symbol = "TPS54331.kicad_sym", symbol_name = "TPS54331", manufacturer = "Texas Instruments", qualifications = ["Preferred"] },
@@ -425,7 +448,7 @@ Modules are reusable subcircuits — `.zen` files that declare their electrical 
 
 ```python
 PowerSupply = Module("./modules/PowerSupply.zen")
-TPS54331 = Module("github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen")
+TPS54331 = Module("github.com/diodeinc/registry/components/TPS54331/TPS54331.zen")
 ```
 
 Instantiation takes a required `name` and passes remaining arguments as inputs to the module's `io()` and `config()` declarations:
@@ -549,7 +572,7 @@ Layout(name="LedIndicator", path="layout/LedIndicator")
 Instantiated by a parent board:
 
 ```python
-# boards/MainBoard/MainBoard.zen
+# MainBoard.zen
 LedIndicator = Module("./modules/LedIndicator.zen")
 
 vcc = Power("VCC_3V3", voltage="3.3V")

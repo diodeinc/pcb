@@ -90,17 +90,18 @@ pcb layout blinky.zen
 
 ## Project Structure
 
-A typical Zener workspace:
+Zener projects use one of two repository shapes.
+
+### Board repository
+
+A board repository contains one board plus any local modules and components it owns:
 
 ```
-project/
-├── pcb.toml              # Workspace configuration
+MyBoard/
+├── pcb.toml              # Workspace and board manifest
 ├── pcb.sum               # Dependency lock file
-├── boards/               # Board designs
-│   └── MyBoard/
-│       ├── MyBoard.zen   # Board schematic
-│       ├── pcb.toml      # Board metadata & dependencies
-│       └── layout/       # KiCad layout files
+├── MyBoard.zen           # Board schematic
+├── layout/               # KiCad layout files
 ├── modules/              # Reusable circuit modules
 │   └── PowerSupply/
 │       ├── PowerSupply.zen
@@ -113,11 +114,51 @@ project/
 └── vendor/               # Vendored dependencies
 ```
 
-**Workspace `pcb.toml`:**
+Create one with:
+
+```bash
+pcb new board MyBoard https://github.com/myorg/MyBoard
+```
+
+**Board repository `pcb.toml`:**
 ```toml
 [workspace]
+repository = "github.com/myorg/MyBoard"
 pcb-version = "0.3"
-members = ["boards/*", "modules/*", "components/**"]
+members = ["components/**", "modules/*"]
+
+[board]
+name = "MyBoard"
+path = "MyBoard.zen"
+description = "Replace with concise board description."
+```
+
+### Registry repository
+
+A registry repository contains reusable packages and no board:
+
+```
+registry/
+├── pcb.toml              # Workspace manifest
+├── pcb.sum               # Dependency lock file
+├── components/           # Component packages
+│   └── TPS54331/
+│       ├── TPS54331.zen
+│       ├── TPS54331.kicad_sym
+│       ├── TPS54331.kicad_mod
+│       └── pcb.toml
+└── modules/              # Reusable module packages
+    └── UsbCSink/
+        ├── UsbCSink.zen
+        └── pcb.toml
+```
+
+**Registry `pcb.toml`:**
+```toml
+[workspace]
+repository = "github.com/myorg/registry"
+pcb-version = "0.3"
+members = ["components/**", "modules/*"]
 ```
 
 ## Core Concepts

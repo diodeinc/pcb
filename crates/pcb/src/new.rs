@@ -12,26 +12,17 @@ use std::process::{Command, Stdio};
 use crate::codegen;
 
 const GITIGNORE_TEMPLATE: &str = include_str!("templates/gitignore");
-const WORKSPACE_PCB_TOML: &str = include_str!("templates/workspace_pcb_toml.jinja");
-const WORKSPACE_README: &str = include_str!("templates/workspace_readme.jinja");
 const BOARD_PCB_TOML: &str = include_str!("templates/board_pcb_toml.jinja");
 const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
 const BOARD_README: &str = include_str!("templates/board_readme.jinja");
-const BOARD_CHANGELOG: &str = include_str!("templates/board_changelog.jinja");
 const PACKAGE_ZEN: &str = include_str!("templates/package_zen.jinja");
 const PACKAGE_README: &str = include_str!("templates/package_readme.jinja");
 
 fn create_template_env() -> Environment<'static> {
     let mut env = Environment::new();
-    env.add_template("workspace_pcb_toml", WORKSPACE_PCB_TOML)
-        .unwrap();
-    env.add_template("workspace_readme", WORKSPACE_README)
-        .unwrap();
     env.add_template("board_pcb_toml", BOARD_PCB_TOML).unwrap();
     env.add_template("board_zen", BOARD_ZEN).unwrap();
     env.add_template("board_readme", BOARD_README).unwrap();
-    env.add_template("board_changelog", BOARD_CHANGELOG)
-        .unwrap();
     env.add_template("package_zen", PACKAGE_ZEN).unwrap();
     env.add_template("package_readme", PACKAGE_README).unwrap();
     env
@@ -39,11 +30,10 @@ fn create_template_env() -> Environment<'static> {
 
 #[derive(Args, Debug)]
 #[command(
-    about = "Create a new PCB workspace, board, package, or component",
-    long_about = "Create a new PCB workspace, board, package, or component.\n\n\
+    about = "Create a new PCB board, package, or component",
+    long_about = "Create a new PCB board, package, or component.\n\n\
         Examples:\n  \
-        pcb new workspace my-project --repo https://github.com/user/my-project\n  \
-        pcb new board MainBoard\n  \
+        pcb new board MainBoard https://github.com/user/MainBoard\n  \
         pcb new package modules/power_supply\n  \
         pcb new component\n  \
         pcb new component path/to/component-dir"
@@ -55,10 +45,7 @@ pub struct NewArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum NewCommand {
-    /// Create a new workspace directory with git init
-    Workspace(NewWorkspaceArgs),
-
-    /// Create a new board in boards/<NAME>/ (requires existing workspace)
+    /// Create a new board repository with git init
     Board(NewBoardArgs),
 
     /// Create a new package at the given path (requires existing workspace)
@@ -69,21 +56,14 @@ pub enum NewCommand {
 }
 
 #[derive(Args, Debug)]
-pub struct NewWorkspaceArgs {
-    /// Workspace name (directory name)
-    #[arg(value_name = "NAME")]
-    pub name: String,
-
-    /// Git repository URL for the workspace
-    #[arg(long, value_name = "URL")]
-    pub repo: String,
-}
-
-#[derive(Args, Debug)]
 pub struct NewBoardArgs {
-    /// Board name
+    /// Board name (also used as the directory name)
     #[arg(value_name = "NAME")]
     pub name: String,
+
+    /// Git repository URL for the board
+    #[arg(value_name = "REPO_URL")]
+    pub repo: String,
 }
 
 #[derive(Args, Debug)]
@@ -112,7 +92,7 @@ pub struct NewComponentArgs {
     pub manufacturer: Option<String>,
 }
 
-/// Validate a name for use as directory/git repo name (used for workspaces and boards)
+/// Validate a name for use as a directory/git repo name.
 fn validate_name(name: &str, kind: &str) -> Result<()> {
     if name.is_empty() {
         bail!("{} name cannot be empty", kind);
@@ -178,8 +158,7 @@ fn clean_repo_url(url: &str) -> Result<String> {
 
 pub fn execute(args: NewArgs) -> Result<()> {
     match args.command {
-        Some(NewCommand::Workspace(command)) => execute_new_workspace(&command.name, &command.repo),
-        Some(NewCommand::Board(command)) => execute_new_board(&command.name),
+        Some(NewCommand::Board(command)) => execute_new_board(&command.name, &command.repo),
         Some(NewCommand::Package(command)) => execute_new_package(&command.path),
         Some(NewCommand::Component(command)) => execute_new_component(command),
         None => execute_interactive(),
@@ -233,36 +212,23 @@ fn execute_new_component(_args: NewComponentArgs) -> Result<()> {
 fn execute_interactive() -> Result<()> {
     if get_workspace().is_some() {
         #[cfg(feature = "api")]
-        let options = vec!["board", "package", "component"];
+        let options = vec!["package", "component"];
         #[cfg(not(feature = "api"))]
-        let options = vec!["board", "package"];
+        let options = vec!["package"];
 
         let selection = Select::new("What would you like to create?", options)
             .prompt()
             .context("Failed to get selection")?;
 
         match selection {
-            "board" => prompt_new_board(),
             "package" => prompt_new_package(),
             #[cfg(feature = "api")]
             "component" => execute_new_component(NewComponentArgs::default()),
             _ => unreachable!(),
         }
     } else {
-        prompt_new_workspace()
+        prompt_new_board()
     }
-}
-
-fn prompt_new_workspace() -> Result<()> {
-    let name = Text::new("Workspace name:")
-        .prompt()
-        .context("Failed to get workspace name")?;
-
-    let repo = Text::new("Repository URL:")
-        .prompt()
-        .context("Failed to get repository URL")?;
-
-    execute_new_workspace(&name, &repo)
 }
 
 fn prompt_new_board() -> Result<()> {
@@ -270,7 +236,11 @@ fn prompt_new_board() -> Result<()> {
         .prompt()
         .context("Failed to get board name")?;
 
-    execute_new_board(&name)
+    let repo = Text::new("Repository URL:")
+        .prompt()
+        .context("Failed to get repository URL")?;
+
+    execute_new_board(&name, &repo)
 }
 
 fn prompt_new_package() -> Result<()> {
@@ -281,9 +251,7 @@ fn prompt_new_package() -> Result<()> {
     execute_new_package(&path)
 }
 
-/// Initialize workspace scaffolding in an existing directory: pcb.toml, pcb.sum,
-/// README, .gitignore, git init. `repository` may be empty.
-pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
+fn init_git(dir: &Path) -> Result<()> {
     if !dir.join(".git").exists() {
         let status = Command::new("git")
             .args(["init", "-b", "main"])
@@ -297,22 +265,68 @@ pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn execute_new_board(board: &str, repo: &str) -> Result<()> {
+    if get_workspace().is_some() {
+        bail!("Cannot create a board inside an existing workspace");
+    }
+
+    validate_name(board, "Board")?;
+
+    let repository = clean_repo_url(repo)?;
+
+    let board_path = Path::new(board);
+
+    if board_path.exists() {
+        bail!("Directory '{}' already exists", board);
+    }
+
+    std::fs::create_dir_all(board_path)
+        .with_context(|| format!("Failed to create directory '{}'", board))?;
+
+    init_board_repo(board_path, board, &repository)?;
+
+    eprintln!(
+        "{} board {} ({})",
+        "Created".green(),
+        board.bold(),
+        repository.cyan()
+    );
+
+    Ok(())
+}
+
+pub(crate) fn init_board_repo(dir: &Path, board: &str, repository: &str) -> Result<()> {
+    init_git(dir)?;
+
     let env = create_template_env();
     let ctx = context! {
+        board => board,
         repository => repository,
         pcb_version => pcb_version_from_cargo(),
     };
 
     let pcb_toml_content = env
-        .get_template("workspace_pcb_toml")
+        .get_template("board_pcb_toml")
         .unwrap()
         .render(&ctx)
         .context("Failed to render pcb.toml template")?;
     std::fs::write(dir.join("pcb.toml"), pcb_toml_content).context("Failed to write pcb.toml")?;
     std::fs::write(dir.join("pcb.sum"), "").context("Failed to write pcb.sum")?;
 
+    let zen_content = env
+        .get_template("board_zen")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render .zen template")?;
+    let board_zen = dir.join(format!("{}.zen", board));
+    codegen::zen::write_zen_formatted(&board_zen, &zen_content)
+        .context("Failed to write .zen file")?;
+
     let readme_content = env
-        .get_template("workspace_readme")
+        .get_template("board_readme")
         .unwrap()
         .render(&ctx)
         .context("Failed to render README.md template")?;
@@ -322,115 +336,6 @@ pub(crate) fn init_workspace(dir: &Path, repository: &str) -> Result<()> {
         .context("Failed to write .gitignore")?;
 
     Ok(())
-}
-
-fn execute_new_workspace(workspace: &str, repo: &str) -> Result<()> {
-    if get_workspace().is_some() {
-        bail!("Cannot create a workspace inside an existing workspace");
-    }
-
-    validate_name(workspace, "Workspace")?;
-
-    let repository = clean_repo_url(repo)?;
-
-    let workspace_path = Path::new(workspace);
-
-    if workspace_path.exists() {
-        bail!("Directory '{}' already exists", workspace);
-    }
-
-    std::fs::create_dir_all(workspace_path)
-        .with_context(|| format!("Failed to create directory '{}'", workspace))?;
-
-    init_workspace(workspace_path, &repository)?;
-
-    eprintln!(
-        "{} {} ({})",
-        "Created".green(),
-        workspace.bold(),
-        repository.cyan()
-    );
-
-    Ok(())
-}
-
-fn execute_new_board(board: &str) -> Result<()> {
-    validate_name(board, "Board")?;
-
-    let (workspace_root, _) = require_workspace()?;
-    let scaffold = scaffold_board(&workspace_root, board)?;
-
-    eprintln!(
-        "{} board {} at {}",
-        "Created".green(),
-        board.bold(),
-        scaffold
-            .board_dir
-            .strip_prefix(&workspace_root)
-            .unwrap_or(&scaffold.board_dir)
-            .display()
-            .to_string()
-            .cyan()
-    );
-
-    Ok(())
-}
-
-pub(crate) struct BoardScaffold {
-    pub board_dir: std::path::PathBuf,
-}
-
-pub(crate) fn scaffold_board(workspace_root: &Path, board: &str) -> Result<BoardScaffold> {
-    validate_name(board, "Board")?;
-
-    let board_dir = workspace_root.join("boards").join(board);
-    if board_dir.exists() {
-        bail!("Board directory '{}' already exists", board_dir.display());
-    }
-
-    std::fs::create_dir_all(&board_dir)
-        .with_context(|| format!("Failed to create directory '{}'", board_dir.display()))?;
-
-    let env = create_template_env();
-    let ctx = context! {
-        board => board,
-        pcb_version => pcb_version_from_cargo(),
-    };
-
-    let pcb_toml_content = env
-        .get_template("board_pcb_toml")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render pcb.toml template")?;
-    std::fs::write(board_dir.join("pcb.toml"), pcb_toml_content)
-        .context("Failed to write pcb.toml")?;
-
-    let zen_content = env
-        .get_template("board_zen")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render .zen template")?;
-    let board_zen = board_dir.join(format!("{}.zen", board));
-    codegen::zen::write_zen_formatted(&board_zen, &zen_content)
-        .context("Failed to write .zen file")?;
-
-    let readme_content = env
-        .get_template("board_readme")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render README.md template")?;
-    std::fs::write(board_dir.join("README.md"), readme_content)
-        .context("Failed to write README.md")?;
-
-    let changelog_content = env
-        .get_template("board_changelog")
-        .unwrap()
-        .render(&ctx)
-        .context("Failed to render CHANGELOG.md template")?;
-    std::fs::write(board_dir.join("CHANGELOG.md"), changelog_content)
-        .context("Failed to write CHANGELOG.md")?;
-
-    Ok(BoardScaffold { board_dir })
 }
 
 fn execute_new_package(package_path: &str) -> Result<()> {
@@ -526,17 +431,17 @@ mod tests {
     #[test]
     fn test_validate_name() {
         // Valid names
-        assert!(validate_name("my-project", "Workspace").is_ok());
+        assert!(validate_name("my-project", "Board").is_ok());
         assert!(validate_name("my_project", "Board").is_ok());
-        assert!(validate_name("myProject123", "Workspace").is_ok());
+        assert!(validate_name("myProject123", "Board").is_ok());
         assert!(validate_name("project.v2", "Board").is_ok());
 
         // Invalid names
-        assert!(validate_name("", "Workspace").is_err());
+        assert!(validate_name("", "Board").is_err());
         assert!(validate_name(".hidden", "Board").is_err());
-        assert!(validate_name("-invalid", "Workspace").is_err());
+        assert!(validate_name("-invalid", "Board").is_err());
         assert!(validate_name("has spaces", "Board").is_err());
-        assert!(validate_name("has/slash", "Workspace").is_err());
+        assert!(validate_name("has/slash", "Board").is_err());
         assert!(validate_name(&"a".repeat(101), "Board").is_err());
     }
 
@@ -596,6 +501,25 @@ mod tests {
 
         let parsed = TestCli::try_parse_from(["pcb"]).unwrap();
         assert!(parsed.args.command.is_none());
+    }
+
+    #[test]
+    fn test_board_requires_repo() {
+        let parsed = TestCli::try_parse_from([
+            "pcb",
+            "board",
+            "MainBoard",
+            "https://github.com/user/MainBoard",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.args.command,
+            Some(NewCommand::Board(NewBoardArgs { ref name, ref repo }))
+                if name == "MainBoard" && repo == "https://github.com/user/MainBoard"
+        ));
+
+        assert!(TestCli::try_parse_from(["pcb", "board", "MainBoard"]).is_err());
+        assert!(TestCli::try_parse_from(["pcb", "workspace", "my-project"]).is_err());
     }
 
     #[test]

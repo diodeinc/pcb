@@ -94,17 +94,17 @@ impl From<String> for KiCadLibId {
 }
 
 #[derive(Args, Debug, Clone)]
-#[command(about = "Import KiCad projects into a Zener workspace")]
+#[command(about = "Import KiCad projects into a Zener board repository")]
 pub struct ImportArgs {
     /// Path to a KiCad project file (.kicad_pro)
     #[arg(value_name = "KICAD_PRO", value_hint = clap::ValueHint::AnyPath)]
     pub kicad_pro: PathBuf,
 
-    /// Output directory (a workspace will be created if needed)
+    /// Output directory (a board repository will be created if needed)
     #[arg(value_name = "OUTPUT_DIR", value_hint = clap::ValueHint::AnyPath)]
     pub output_dir: PathBuf,
 
-    /// Overwrite existing board directory if it already exists
+    /// Overwrite generated files if the board repository already exists
     #[arg(long = "force")]
     pub force: bool,
 }

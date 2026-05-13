@@ -11,7 +11,7 @@ pub(super) fn resolve_paths(args: &ImportArgs) -> Result<ImportPaths> {
         .context("A .kicad_pro path must have a parent directory")?
         .to_path_buf();
 
-    let workspace_root = ensure_workspace_root(&args.output_dir)?;
+    let workspace_root = ensure_board_repo_root(&args.output_dir)?;
     Ok(ImportPaths {
         workspace_root,
         kicad_project_root,
@@ -28,12 +28,11 @@ fn require_kicad_pro_file(path: &Path) -> Result<PathBuf> {
     Ok(fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
-fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
+fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
     if path.exists() && !path.is_dir() {
         anyhow::bail!("Output directory is not a directory: {}", path.display());
     }
-    let created = !path.exists();
-    if created {
+    if !path.exists() {
         fs::create_dir_all(path)
             .with_context(|| format!("Failed to create output directory: {}", path.display()))?;
     }
@@ -47,6 +46,12 @@ fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
         if !config.is_workspace() {
             anyhow::bail!(
                 "Output directory contains a pcb.toml but it is not a workspace: {}",
+                pcb_toml.display()
+            );
+        }
+        if !config.is_board() {
+            anyhow::bail!(
+                "Output directory contains a pcb.toml but it is not a board repository: {}",
                 pcb_toml.display()
             );
         }
@@ -64,16 +69,10 @@ fn ensure_workspace_root(path: &Path) -> Result<PathBuf> {
         .filter(|e| e.file_name() != OsStr::new(".DS_Store"));
     if entries.next().is_some() {
         anyhow::bail!(
-            "Output directory is not an empty workspace (missing pcb.toml): {}",
+            "Output directory is not an empty board repository (missing pcb.toml): {}",
             workspace_root.display()
         );
     }
 
-    if let Err(e) = crate::new::init_workspace(&workspace_root, "") {
-        if created {
-            let _ = fs::remove_dir_all(&workspace_root);
-        }
-        return Err(e);
-    }
     Ok(workspace_root)
 }

@@ -33,14 +33,14 @@ Joins (schematic/netlist/layout) should use this key rather than refdes.
 
 ## Output Layout
 
-For an imported board named `<board>`:
+For an imported board named `<board>`, `<output-dir>` is a board repository:
 
-- `boards/<board>/<board>.zen` (root board module)
-- `boards/<board>/modules/<SheetName>/<SheetName>.zen` (sheet modules)
-- `boards/<board>/components/.../*.zen` (imported components)
-- `boards/<board>/layout/<selected.kicad_pro>` (KiCad project file; original filename preserved)
-- `boards/<board>/layout/<selected.kicad_pcb>` (patched KiCad PCB; original filename preserved)
-- `boards/<board>/.kicad.import.extraction.json` (extraction report)
+- `<output-dir>/<board>.zen` (root board module)
+- `<output-dir>/modules/<SheetName>/<SheetName>.zen` (sheet modules)
+- `<output-dir>/components/.../*.zen` (imported components)
+- `<output-dir>/layout/<selected.kicad_pro>` (KiCad project file; original filename preserved)
+- `<output-dir>/layout/<selected.kicad_pcb>` (patched KiCad PCB; original filename preserved)
+- `<output-dir>/.kicad.import.extraction.json` (extraction report)
 
 ## Footprint De-Instancing (.kicad_pcb -> .kicad_mod)
 

@@ -70,33 +70,141 @@ fn prepare_output(
     selection: &ImportSelection,
     args: &ImportArgs,
 ) -> Result<()> {
-    let board_dir = paths
-        .workspace_root
-        .join("boards")
-        .join(&selection.board_name);
-    if board_dir.exists() {
-        if args.force {
-            std::fs::remove_dir_all(&board_dir).with_context(|| {
-                format!(
-                    "Failed to remove existing board dir {}",
-                    board_dir.display()
-                )
-            })?;
-        } else {
-            anyhow::bail!(
-                "Board directory already exists: {}. Use --force to overwrite.",
-                board_dir.display()
-            );
-        }
+    let board_repo = &paths.workspace_root;
+    let pcb_toml = board_repo.join("pcb.toml");
+    let existing_board_repo = pcb_toml.exists();
+
+    if existing_board_repo && !args.force {
+        anyhow::bail!(
+            "Board repository already exists: {}. Use --force to overwrite generated files.",
+            board_repo.display()
+        );
     }
 
-    let board_scaffold = crate::new::scaffold_board(&paths.workspace_root, &selection.board_name)?;
-    let portable_kicad_project_zip = board_scaffold
-        .board_dir
-        .join(format!("{}.kicad.archive.zip", selection.board_name));
+    if args.force {
+        remove_generated_output(board_repo, &selection.board_name)?;
+    }
+
+    if !existing_board_repo {
+        crate::new::init_board_repo(board_repo, &selection.board_name, "")?;
+    }
+
+    let portable_kicad_project_zip =
+        board_repo.join(format!("{}.kicad.archive.zip", selection.board_name));
     portable::write_portable_zip(&selection.portable, &portable_kicad_project_zip)
         .context("Failed to write portable KiCad project archive")?;
     Ok(())
+}
+
+fn remove_generated_output(board_dir: &std::path::Path, board_name: &str) -> Result<()> {
+    for path in [
+        board_dir.join(format!("{board_name}.zen")),
+        board_dir.join("modules"),
+        board_dir.join("components"),
+        board_dir.join("layout"),
+        board_dir.join(".kicad.import.extraction.json"),
+        board_dir.join(".kicad.validation.diagnostics.json"),
+        board_dir.join(format!("{board_name}.kicad.archive.zip")),
+    ] {
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+                .with_context(|| format!("Failed to remove {}", path.display()))?;
+        } else if path.exists() {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("Failed to remove {}", path.display()))?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn force_import_preserves_existing_board_repo_metadata() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let board_repo = temp.path().join("board");
+        std::fs::create_dir(&board_repo)?;
+
+        let pcb_toml = board_repo.join("pcb.toml");
+        let pcb_sum = board_repo.join("pcb.sum");
+        let readme = board_repo.join("README.md");
+        let gitignore = board_repo.join(".gitignore");
+        let board_zen = board_repo.join("ImportedBoard.zen");
+        let modules = board_repo.join("modules");
+
+        let pcb_toml_contents = r#"[workspace]
+members = ["modules/*"]
+repository = "github.com/example/custom-board"
+endpoint = "https://example.invalid"
+
+[board]
+name = "ImportedBoard"
+path = "ImportedBoard.zen"
+description = "Custom board description."
+
+[dependencies]
+foo = { path = "modules/foo" }
+"#;
+        let pcb_sum_contents = "custom lockfile contents\n";
+        let readme_contents = "# Custom README\n";
+        let gitignore_contents = "custom-ignore\n";
+
+        std::fs::write(&pcb_toml, pcb_toml_contents)?;
+        std::fs::write(&pcb_sum, pcb_sum_contents)?;
+        std::fs::write(&readme, readme_contents)?;
+        std::fs::write(&gitignore, gitignore_contents)?;
+        std::fs::write(&board_zen, "old generated board\n")?;
+        std::fs::create_dir(&modules)?;
+        std::fs::write(modules.join("old.zen"), "old generated module\n")?;
+
+        let paths = ImportPaths {
+            workspace_root: board_repo.clone(),
+            kicad_project_root: temp.path().to_path_buf(),
+            kicad_pro_abs: temp.path().join("ImportedBoard.kicad_pro"),
+        };
+        let selection = ImportSelection {
+            board_name: "ImportedBoard".to_string(),
+            board_name_source: BoardNameSource::KicadProArgument,
+            files: KicadDiscoveredFiles::default(),
+            selected: SelectedKicadFiles {
+                kicad_pro: PathBuf::from("ImportedBoard.kicad_pro"),
+                kicad_sch: PathBuf::from("ImportedBoard.kicad_sch"),
+                kicad_pcb: PathBuf::from("ImportedBoard.kicad_pcb"),
+            },
+            portable: PortableKicadProject {
+                project_dir: temp.path().to_path_buf(),
+                project_name: "ImportedBoard".to_string(),
+                kicad_pro_rel: PathBuf::from("ImportedBoard.kicad_pro"),
+                root_schematic_rel: PathBuf::from("ImportedBoard.kicad_sch"),
+                primary_kicad_pcb_rel: PathBuf::from("ImportedBoard.kicad_pcb"),
+                schematic_files_rel: Vec::new(),
+                files_to_bundle_rel: Vec::new(),
+                extra_files_to_bundle: Vec::new(),
+                manifest_json: "{}".to_string(),
+            },
+        };
+        let args = ImportArgs {
+            kicad_pro: paths.kicad_pro_abs.clone(),
+            output_dir: board_repo.clone(),
+            force: true,
+        };
+
+        prepare_output(&paths, &selection, &args)?;
+
+        assert_eq!(std::fs::read_to_string(&pcb_toml)?, pcb_toml_contents);
+        assert_eq!(std::fs::read_to_string(&pcb_sum)?, pcb_sum_contents);
+        assert_eq!(std::fs::read_to_string(&readme)?, readme_contents);
+        assert_eq!(std::fs::read_to_string(&gitignore)?, gitignore_contents);
+        assert!(!board_zen.exists());
+        assert!(!modules.exists());
+        assert!(board_repo.join("ImportedBoard.kicad.archive.zip").is_file());
+
+        Ok(())
+    }
 }
 
 struct Validated {

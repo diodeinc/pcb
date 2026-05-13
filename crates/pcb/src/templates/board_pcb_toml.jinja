@@ -1,3 +1,16 @@
+[workspace]
+{% if repository %}repository = "{{ repository }}"
+{% endif %}pcb-version = "{{ pcb_version }}"
+members = [
+    "components/**",
+    "modules/*",
+]
+vendor = ["github.com/diodeinc/registry/**"]
+
 [board]
 name = "{{ board }}"
 path = "{{ board }}.zen"
+description = "Replace with concise board description."
+
+[access]
+allow = ["*"]

@@ -84,10 +84,8 @@ jobs:
       - name: Test pcb new
         run: |
           cd /tmp
-          pcb new workspace test-ws --repo github.com/test/test-ws
-          cd test-ws
-          pcb new board TB0001
-          pcb new package reference/ref_a
+          pcb new board TB0001 github.com/test/TB0001
+          cd TB0001
           pcb new package modules/mod_a
           pcb build .
 
@@ -105,12 +103,12 @@ jobs:
         run: |
           find kicad-test-fixtures -name '*.kicad_pro' | while IFS= read -r pro; do
             echo "=== Importing $pro ==="
-            pcb import "$pro" ./test-import
+            out="./test-import/$(basename "${pro%.kicad_pro}")"
+            pcb import "$pro" "$out"
           done
-          for board_dir in ./test-import/boards/*/; do
-            board=$(basename "$board_dir")
-            echo "=== Build $board ==="
-            pcb build "./test-import/boards/$board/$board.zen"
-            echo "=== Layout $board ==="
-            pcb layout "./test-import/boards/$board/$board.zen" --no-open
+          for board_zen in ./test-import/*/*.zen; do
+            echo "=== Build $board_zen ==="
+            pcb build "$board_zen"
+            echo "=== Layout $board_zen ==="
+            pcb layout "$board_zen" --no-open
           done

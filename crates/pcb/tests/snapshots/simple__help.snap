@@ -18,12 +18,12 @@ Commands:
   mod         Manage package dependency manifests
   add         Add or update a direct dependency
   sync        Reconcile source imports and hydrate package dependency manifests
-  new         Create a new workspace, board, package, or component
+  new         Create a new board, package, or component
   update      Update dependencies to latest compatible versions
   self        Update the pcb tool itself
   bom         Generate Bill of Materials (BOM)
   info        Display workspace and board information
-  import      Import KiCad projects into a Zener workspace
+  import      Import KiCad projects into a Zener board repository
   doc         Generate package documentation
   layout      Layout PCB designs
   fmt         Format .zen files

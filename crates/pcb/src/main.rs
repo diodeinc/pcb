@@ -95,7 +95,7 @@ enum Commands {
     /// Reconcile source imports and hydrate package dependency manifests
     Sync(pcb_mod::SyncArgs),
 
-    /// Create a new workspace, board, package, or component
+    /// Create a new board, package, or component
     New(new::NewArgs),
 
     /// Update dependencies to latest compatible versions
@@ -111,7 +111,7 @@ enum Commands {
     /// Display workspace and board information
     Info(info::InfoArgs),
 
-    /// Import KiCad projects into a Zener workspace
+    /// Import KiCad projects into a Zener board repository
     Import(import::ImportArgs),
 
     /// Generate package documentation

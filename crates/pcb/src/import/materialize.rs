@@ -10,10 +10,7 @@ pub(super) fn materialize_board(
     selection: &ImportSelection,
     validation: &ImportValidationRun,
 ) -> Result<MaterializedBoard> {
-    let board_dir = paths
-        .workspace_root
-        .join("boards")
-        .join(&selection.board_name);
+    let board_dir = paths.workspace_root.clone();
     let board_zen = board_dir.join(format!("{}.zen", selection.board_name));
     let import_extraction_json = board_dir.join(".kicad.import.extraction.json");
     let portable_kicad_project_zip =
@@ -155,7 +152,7 @@ mod tests {
     fn setup_sources(with_dru: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let dir = tempfile::tempdir().expect("tempdir");
         let src_root = dir.path().join("src");
-        let board_dir = dir.path().join("out/boards/test");
+        let board_dir = dir.path().join("out");
         fs::create_dir_all(&src_root).expect("mkdir src");
 
         fs::write(src_root.join("board.kicad_pro"), "(kicad_pro)").expect("write pro");
