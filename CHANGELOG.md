@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Added IPC-2581C XSD validation APIs to the `ipc2581` crate.
 - Added initial `pcb ipc2581 render` support for rendering a single IPC-2581 layer to SVG.
 - Added PNG output support to `pcb ipc2581 render`.
 - Added Kitty-compatible terminal graphics output for `pcb ipc2581 render` when no output path is provided.

@@ -36,5 +36,20 @@ pub enum Mode {
     Dfx,
 }
 
+impl Mode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserDef => "USERDEF",
+            Self::Bom => "BOM",
+            Self::Stackup => "STACKUP",
+            Self::Fabrication => "FABRICATION",
+            Self::Assembly => "ASSEMBLY",
+            Self::Test => "TEST",
+            Self::Stencil => "STENCIL",
+            Self::Dfx => "DFX",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Level(pub u8);

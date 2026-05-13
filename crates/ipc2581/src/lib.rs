@@ -10,14 +10,23 @@ pub use types::*;
 
 use checksum::validate_checksum;
 use parse::Parser;
-use roxmltree::Document;
 use std::path::Path;
+use std::sync::LazyLock;
 use thiserror::Error;
+use uppsala::XsdValidator;
+
+const IPC_2581C_XSD: &str = include_str!("../IPC-2581C.xsd");
+
+static IPC_2581C_VALIDATOR: LazyLock<std::result::Result<XsdValidator, String>> =
+    LazyLock::new(|| {
+        let schema_doc = uppsala::parse(IPC_2581C_XSD).map_err(|err| err.to_string())?;
+        XsdValidator::from_schema(&schema_doc).map_err(|err| err.to_string())
+    });
 
 #[derive(Debug, Error)]
 pub enum Ipc2581Error {
     #[error("XML parse error: {0}")]
-    XmlParse(#[from] roxmltree::Error),
+    XmlParse(String),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -42,9 +51,39 @@ pub enum Ipc2581Error {
 
     #[error("Unsupported revision: {0}")]
     UnsupportedRevision(String),
+
+    #[error("IPC-2581 schema validation failed: {0}")]
+    SchemaValidation(String),
 }
 
 pub type Result<T> = std::result::Result<T, Ipc2581Error>;
+
+/// Validate IPC-2581 XML against the vendored IPC-2581C XML Schema.
+pub fn validate(xml: &str) -> Result<()> {
+    let validator = IPC_2581C_VALIDATOR
+        .as_ref()
+        .map_err(|err| Ipc2581Error::SchemaValidation(err.clone()))?;
+    let doc = uppsala::parse(xml).map_err(|err| Ipc2581Error::SchemaValidation(err.to_string()))?;
+
+    let errors = validator.validate(&doc);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Ipc2581Error::SchemaValidation(
+            errors
+                .into_iter()
+                .map(|err| err.to_string())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ))
+    }
+}
+
+/// Validate an IPC-2581 XML file against the vendored IPC-2581C XML Schema.
+pub fn validate_file(path: impl AsRef<Path>) -> Result<()> {
+    let xml = std::fs::read_to_string(path)?;
+    validate(&xml)
+}
 
 /// Main IPC-2581 document structure
 #[derive(Debug)]
@@ -60,20 +99,33 @@ pub struct Ipc2581 {
 }
 
 impl Ipc2581 {
+    /// Validate IPC-2581 XML against the vendored IPC-2581C XML Schema.
+    pub fn validate(xml: &str) -> Result<()> {
+        validate(xml)
+    }
+
+    /// Validate an IPC-2581 XML file against the vendored IPC-2581C XML Schema.
+    pub fn validate_file(path: impl AsRef<Path>) -> Result<()> {
+        validate_file(path)
+    }
+
     /// Parse IPC-2581 from XML string
     pub fn parse(xml: &str) -> Result<Self> {
         // Validate checksum if present
         validate_checksum(xml)?;
 
-        // Parse XML with roxmltree
-        let doc = Document::parse(xml)?;
+        // Parse XML with Uppsala's arena-backed DOM.
+        let doc = uppsala::parse(xml).map_err(|err| Ipc2581Error::XmlParse(err.to_string()))?;
 
         // Validate namespace
-        let root = doc.root_element();
-        if root.tag_name().namespace() != Some("http://webstds.ipc.org/2581") {
+        let root = doc
+            .document_element()
+            .ok_or(Ipc2581Error::MissingElement("IPC-2581"))?;
+        let root_name = doc.element(root).expect("root is an element").name.clone();
+        if root_name.namespace_uri.as_deref() != Some("http://webstds.ipc.org/2581") {
             return Err(Ipc2581Error::InvalidStructure(format!(
                 "Expected IPC-2581 namespace, got {:?}",
-                root.tag_name().namespace()
+                root_name.namespace_uri
             )));
         }
 
@@ -196,6 +248,20 @@ mod tests {
         let doc = result.unwrap();
         assert_eq!(doc.revision(), "C");
         assert_eq!(doc.resolve(doc.content().role_ref), "Owner");
+    }
+
+    #[test]
+    fn validate_reports_schema_errors() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="NOT_A_MODE"/>
+  </Content>
+</IPC-2581>"#;
+
+        let err = validate(xml).unwrap_err().to_string();
+        assert!(err.contains("schema validation failed"));
+        assert!(err.contains("LogisticHeader"));
     }
 
     #[test]

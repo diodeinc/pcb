@@ -57,9 +57,9 @@ pub fn generate_html(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<
     let content = ipc.content();
     let ipc_revision = ipc.revision();
     let mode_str = if let Some(level) = content.function_mode.level {
-        format!("{:?}/{:?}", content.function_mode.mode, level)
+        format!("{}/{:?}", content.function_mode.mode.as_str(), level)
     } else {
-        format!("{:?}", content.function_mode.mode)
+        content.function_mode.mode.as_str().to_string()
     };
     let file_metadata = accessor.file_metadata();
 
