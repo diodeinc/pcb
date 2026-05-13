@@ -1,0 +1,21 @@
+---
+source: crates/pcb/tests/layout.rs
+assertion_line: 33
+expression: output
+---
+Command: pcb layout --no-open bad_layout_path.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Warning: layout generation needs a root `Board` macro with `layout_path`
+   ╭─[ bad_layout_path.zen:6:24 ]
+   │
+ 6 │ signal = Net("SIGNAL")
+   │                        │ 
+   │                        ╰─ insert the board declaration here
+   │ 
+   │ Help: add this to bad_layout_path.zen:
+   │           Board(name="bad_layout_path", layers=4, layout_path="layout/bad_layout_path")
+───╯

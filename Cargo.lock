@@ -4402,6 +4402,7 @@ name = "pcb"
 version = "0.3.81"
 dependencies = [
  "anyhow",
+ "ariadne",
  "axoupdater",
  "canon-json",
  "chrono",
