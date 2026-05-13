@@ -24,6 +24,15 @@ enum PadPrimitiveRef {
     User(Symbol),
 }
 
+#[derive(Debug, Clone, Copy)]
+struct StrokedFeatureStyle {
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    width: f64,
+    line_cap: LineCap,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrimitivePaint {
     Fill,
@@ -191,6 +200,9 @@ fn extract_step_layer(
                     )),
                     SetFeature::Line(line) => Some(extract_line(
                         &context, set.net, polarity, source, line, &mut doc,
+                    )),
+                    SetFeature::Arc(arc) => Some(extract_arc(
+                        &context, set.net, polarity, source, arc, &mut doc,
                     )),
                     SetFeature::Polyline(polyline) => Some(extract_feature_polyline(
                         &context, set.net, polarity, source, polyline, &mut doc,
@@ -745,15 +757,17 @@ fn extract_line(
 
     push_stroked_polyline(
         doc,
-        net,
-        polarity,
-        source,
+        StrokedFeatureStyle {
+            net,
+            polarity,
+            source,
+            width: line_width,
+            line_cap,
+        },
         vec![
             Point::new(line.start_x, line.start_y),
             Point::new(line.end_x, line.end_y),
         ],
-        line_width,
-        line_cap,
     )
 }
 
@@ -778,13 +792,50 @@ fn extract_feature_polyline(
 
     push_stroked_steps(
         doc,
-        net,
-        polarity,
-        source,
+        StrokedFeatureStyle {
+            net,
+            polarity,
+            source,
+            width: line_width,
+            line_cap,
+        },
         Point::new(polyline.begin.x, polyline.begin.y),
         &polyline.steps,
-        line_width,
-        line_cap,
+    )
+}
+
+fn extract_arc(
+    context: &ExtractContext<'_>,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    arc: &ipc2581::types::ecad::FeatureArc,
+    doc: &mut GeometryDocument,
+) -> GeometryFeature {
+    let line_desc = arc
+        .line_desc_ref
+        .and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
+    let line_width = line_desc
+        .map(|desc| desc.line_width)
+        .unwrap_or(arc.line_width);
+    let line_cap = line_desc
+        .map(|desc| map_line_cap(desc.line_end))
+        .or_else(|| arc.line_end.map(map_line_cap))
+        .unwrap_or(LineCap::Round);
+
+    push_stroked_arc(
+        doc,
+        StrokedFeatureStyle {
+            net,
+            polarity,
+            source,
+            width: line_width,
+            line_cap,
+        },
+        Point::new(arc.start.x, arc.start.y),
+        Point::new(arc.end.x, arc.end.y),
+        Point::new(arc.center.x, arc.center.y),
+        arc.clockwise,
     )
 }
 
@@ -811,12 +862,8 @@ fn extract_polygon(
 
 fn push_stroked_polyline(
     doc: &mut GeometryDocument,
-    net: Option<Symbol>,
-    polarity: GeometryPolarity,
-    source: SourceRef,
+    style: StrokedFeatureStyle,
     points: Vec<Point>,
-    width: f64,
-    line_cap: LineCap,
 ) -> GeometryFeature {
     let mut bbox = BBox::empty();
     let mut cmds = Vec::new();
@@ -828,19 +875,57 @@ fn push_stroked_polyline(
             PathCmd::line_to(point)
         });
     }
-    bbox = bbox.expand(width / 2.0);
+    bbox = bbox.expand(style.width / 2.0);
 
     let path_start = doc.paths.len() as u32;
-    doc.push_path(GeometryPath::stroked(width, line_cap, bbox), cmds);
+    doc.push_path(
+        GeometryPath::stroked(style.width, style.line_cap, bbox),
+        cmds,
+    );
 
-    let mut feature = GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, polarity);
-    feature.net = net;
-    feature.source = source;
+    let mut feature =
+        GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, style.polarity);
+    feature.net = style.net;
+    feature.source = style.source;
     feature.bbox = bbox;
     feature.path_start = path_start;
     feature.path_count = 1;
-    feature.stroke_width = width;
-    feature.line_cap = line_cap;
+    feature.stroke_width = style.width;
+    feature.line_cap = style.line_cap;
+    feature.flags.lowered_to_paths = true;
+    feature
+}
+
+fn push_stroked_arc(
+    doc: &mut GeometryDocument,
+    style: StrokedFeatureStyle,
+    start: Point,
+    end: Point,
+    center: Point,
+    clockwise: bool,
+) -> GeometryFeature {
+    let mut bbox = BBox::empty();
+    bbox.include_circular_arc(start, end, center, clockwise);
+    bbox = bbox.expand(style.width / 2.0);
+
+    let path_start = doc.paths.len() as u32;
+    doc.push_path(
+        GeometryPath::stroked(style.width, style.line_cap, bbox),
+        vec![
+            PathCmd::move_to(start),
+            PathCmd::arc_to(end, center, clockwise),
+        ],
+    );
+
+    let mut feature =
+        GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, style.polarity);
+    feature.net = style.net;
+    feature.source = style.source;
+    feature.bbox = bbox;
+    feature.path_start = path_start;
+    feature.path_count = 1;
+    feature.stroke_width = style.width;
+    feature.line_cap = style.line_cap;
     feature.flags.lowered_to_paths = true;
     feature
 }
@@ -860,30 +945,38 @@ fn push_stroked_trace(
             .iter()
             .map(|point| Point::new(point.x, point.y))
             .collect();
-        return push_stroked_polyline(doc, net, polarity, source, points, width, line_cap);
+        return push_stroked_polyline(
+            doc,
+            StrokedFeatureStyle {
+                net,
+                polarity,
+                source,
+                width,
+                line_cap,
+            },
+            points,
+        );
     }
 
     push_stroked_steps(
         doc,
-        net,
-        polarity,
-        source,
+        StrokedFeatureStyle {
+            net,
+            polarity,
+            source,
+            width,
+            line_cap,
+        },
         Point::new(trace.points[0].x, trace.points[0].y),
         &trace.steps,
-        width,
-        line_cap,
     )
 }
 
 fn push_stroked_steps(
     doc: &mut GeometryDocument,
-    net: Option<Symbol>,
-    polarity: GeometryPolarity,
-    source: SourceRef,
+    style: StrokedFeatureStyle,
     begin: Point,
     steps: &[PolyStep],
-    width: f64,
-    line_cap: LineCap,
 ) -> GeometryFeature {
     let mut current = begin;
     let mut bbox = BBox::from_point(current);
@@ -904,19 +997,23 @@ fn push_stroked_steps(
             }
         }
     }
-    bbox = bbox.expand(width / 2.0);
+    bbox = bbox.expand(style.width / 2.0);
 
     let path_start = doc.paths.len() as u32;
-    doc.push_path(GeometryPath::stroked(width, line_cap, bbox), cmds);
+    doc.push_path(
+        GeometryPath::stroked(style.width, style.line_cap, bbox),
+        cmds,
+    );
 
-    let mut feature = GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, polarity);
-    feature.net = net;
-    feature.source = source;
+    let mut feature =
+        GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, style.polarity);
+    feature.net = style.net;
+    feature.source = style.source;
     feature.bbox = bbox;
     feature.path_start = path_start;
     feature.path_count = 1;
-    feature.stroke_width = width;
-    feature.line_cap = line_cap;
+    feature.stroke_width = style.width;
+    feature.line_cap = style.line_cap;
     feature.flags.lowered_to_paths = true;
     feature
 }
@@ -1192,6 +1289,21 @@ fn lower_user_primitive(
                     UserShapeType::Oval(oval) => {
                         push_oval_path(doc, transform, oval.size.width, oval.size.height);
                     }
+                    UserShapeType::RectRound(rect) => {
+                        push_rounded_rect_path(
+                            doc,
+                            transform,
+                            rect.size.width,
+                            rect.size.height,
+                            rect.radius,
+                            [
+                                rect.upper_right,
+                                rect.lower_right,
+                                rect.lower_left,
+                                rect.upper_left,
+                            ],
+                        );
+                    }
                     UserShapeType::Polygon(polygon) => {
                         push_polygon_path(doc, polygon, transform, FillRule::NonZero);
                     }
@@ -1199,9 +1311,21 @@ fn lower_user_primitive(
                         let line_desc = user_shape_line_desc(context, shape);
                         push_user_line_path(doc, line, transform, line_desc);
                     }
+                    UserShapeType::Arc(arc) => {
+                        let line_desc = user_shape_line_desc(context, shape);
+                        push_user_arc_path(doc, arc, transform, line_desc);
+                    }
                     UserShapeType::Polyline(polyline) => {
                         let line_desc = user_shape_line_desc(context, shape);
                         push_user_polyline_path(doc, polyline, transform, line_desc);
+                    }
+                    UserShapeType::UserPrimitiveRef(primitive_ref) => {
+                        if let Some(primitive) = context.user_primitives.get(primitive_ref).copied()
+                        {
+                            let _ = lower_user_primitive(context, doc, primitive, transform);
+                        } else {
+                            make_paths_unpainted(doc, path_start);
+                        }
                     }
                 }
 
@@ -1262,6 +1386,36 @@ fn push_user_line_path(
     doc.push_path(
         GeometryPath::stroked(width, line_cap, bbox),
         vec![PathCmd::move_to(start), PathCmd::line_to(end)],
+    );
+}
+
+fn push_user_arc_path(
+    doc: &mut GeometryDocument,
+    arc: &ipc2581::types::Arc,
+    transform: Affine2,
+    line_desc: Option<ipc2581::types::LineDesc>,
+) {
+    let start = transform.transform_point(Point::new(arc.start.x, arc.start.y));
+    let end = transform.transform_point(Point::new(arc.end.x, arc.end.y));
+    let center = transform.transform_point(Point::new(arc.center.x, arc.center.y));
+    let clockwise = if transform.determinant() < 0.0 {
+        !arc.clockwise
+    } else {
+        arc.clockwise
+    };
+    let width = line_desc.map(|desc| desc.line_width).unwrap_or(0.25);
+    let line_cap = line_desc
+        .map(|desc| map_line_cap(desc.line_end))
+        .unwrap_or(LineCap::Round);
+    let mut bbox = BBox::empty();
+    bbox.include_circular_arc(start, end, center, clockwise);
+    bbox = bbox.expand(width / 2.0);
+    doc.push_path(
+        GeometryPath::stroked(width, line_cap, bbox),
+        vec![
+            PathCmd::move_to(start),
+            PathCmd::arc_to(end, center, clockwise),
+        ],
     );
 }
 

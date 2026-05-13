@@ -257,6 +257,7 @@ pub enum SetFeature {
     Trace(Trace),
     Polygon(super::Polygon),
     Line(Line),
+    Arc(FeatureArc),
     Polyline(FeaturePolyline),
     StandardPrimitiveRef(FeaturePrimitiveRef),
     UserPrimitiveRef(FeaturePrimitiveRef),
@@ -287,6 +288,18 @@ pub struct Line {
 pub struct FeaturePolyline {
     pub begin: super::Point,
     pub steps: Vec<super::PolyStep>,
+    pub line_desc_ref: Option<Symbol>,
+    pub line_width: f64,
+    pub line_end: Option<super::LineEnd>,
+}
+
+/// Arc feature preserving center and direction.
+#[derive(Debug, Clone)]
+pub struct FeatureArc {
+    pub start: super::Point,
+    pub end: super::Point,
+    pub center: super::Point,
+    pub clockwise: bool,
     pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,

@@ -778,6 +778,12 @@ impl<'a> Parser<'a> {
         for child in self.element_children(node) {
             let tag_name = self.name(&child);
 
+            if tag_name == "UserSpecial" {
+                let UserPrimitive::UserSpecial(nested) = self.parse_user_special(&child, units)?;
+                shapes.extend(nested.shapes);
+                continue;
+            }
+
             // Parse shape based on tag name
             let shape_type = match tag_name {
                 "Contour" => self
@@ -812,6 +818,27 @@ impl<'a> Parser<'a> {
                         height: self.parse_f64_attr_with_units(&child, "height", "Oval", units)?,
                     },
                 })),
+                "RectRound" => Some(UserShapeType::RectRound(RectRound {
+                    size: Size {
+                        width: self.parse_f64_attr_with_units(
+                            &child,
+                            "width",
+                            "RectRound",
+                            units,
+                        )?,
+                        height: self.parse_f64_attr_with_units(
+                            &child,
+                            "height",
+                            "RectRound",
+                            units,
+                        )?,
+                    },
+                    radius: self.parse_f64_attr_with_units(&child, "radius", "RectRound", units)?,
+                    upper_right: self.parse_bool_attr(&child, "upperRight").unwrap_or(false),
+                    upper_left: self.parse_bool_attr(&child, "upperLeft").unwrap_or(false),
+                    lower_right: self.parse_bool_attr(&child, "lowerRight").unwrap_or(false),
+                    lower_left: self.parse_bool_attr(&child, "lowerLeft").unwrap_or(false),
+                })),
                 "Polygon" => Some(UserShapeType::Polygon(self.parse_polygon(&child, units)?)),
                 "Line" => Some(UserShapeType::Line(crate::types::primitives::Line {
                     start: Point {
@@ -823,9 +850,13 @@ impl<'a> Parser<'a> {
                         y: self.parse_f64_attr_with_units(&child, "endY", "Line", units)?,
                     },
                 })),
+                "Arc" => Some(UserShapeType::Arc(self.parse_user_arc(&child, units)?)),
                 "Polyline" => Some(UserShapeType::Polyline(
                     self.parse_user_polyline(&child, units)?,
                 )),
+                "UserPrimitiveRef" => child
+                    .attribute("id")
+                    .map(|id| UserShapeType::UserPrimitiveRef(self.interner.intern(id))),
                 _ => None,
             };
 
@@ -923,6 +954,24 @@ impl<'a> Parser<'a> {
         Ok(Polyline {
             begin: begin.ok_or(Ipc2581Error::MissingElement("PolyBegin in Polyline"))?,
             steps,
+        })
+    }
+
+    fn parse_user_arc(&mut self, node: &Node, units: Units) -> Result<Arc> {
+        Ok(Arc {
+            start: Point {
+                x: self.parse_f64_attr_with_units(node, "startX", "Arc", units)?,
+                y: self.parse_f64_attr_with_units(node, "startY", "Arc", units)?,
+            },
+            end: Point {
+                x: self.parse_f64_attr_with_units(node, "endX", "Arc", units)?,
+                y: self.parse_f64_attr_with_units(node, "endY", "Arc", units)?,
+            },
+            center: Point {
+                x: self.parse_f64_attr_with_units(node, "centerX", "Arc", units)?,
+                y: self.parse_f64_attr_with_units(node, "centerY", "Arc", units)?,
+            },
+            clockwise: self.parse_bool_attr(node, "clockwise")?,
         })
     }
 
@@ -1884,7 +1933,8 @@ impl<'a> Parser<'a> {
                             ecad::SetFeature::Polyline(polyline) => {
                                 polylines.push(polyline.clone())
                             }
-                            ecad::SetFeature::StandardPrimitiveRef(_)
+                            ecad::SetFeature::Arc(_)
+                            | ecad::SetFeature::StandardPrimitiveRef(_)
                             | ecad::SetFeature::UserPrimitiveRef(_) => {}
                             _ => {}
                         }
@@ -1965,6 +2015,16 @@ impl<'a> Parser<'a> {
                         features.push(ecad::SetFeature::Polyline(polyline));
                     }
                 }
+                "Line" => {
+                    if let Ok(line) = self.parse_line(&child, units, offset_x, offset_y) {
+                        features.push(ecad::SetFeature::Line(line));
+                    }
+                }
+                "Arc" => {
+                    if let Ok(arc) = self.parse_feature_arc(&child, units, offset_x, offset_y) {
+                        features.push(ecad::SetFeature::Arc(arc));
+                    }
+                }
                 "UserSpecial" => {
                     // UserSpecial contains Contour > Polygon, Line, or Polyline.
                     for inner in self.element_children(&child) {
@@ -1979,8 +2039,16 @@ impl<'a> Parser<'a> {
                                 }
                             }
                             "Line" => {
-                                if let Ok(line) = self.parse_line(&inner, units) {
+                                if let Ok(line) = self.parse_line(&inner, units, offset_x, offset_y)
+                                {
                                     features.push(ecad::SetFeature::Line(line));
+                                }
+                            }
+                            "Arc" => {
+                                if let Ok(arc) =
+                                    self.parse_feature_arc(&inner, units, offset_x, offset_y)
+                                {
+                                    features.push(ecad::SetFeature::Arc(arc));
                                 }
                             }
                             "Polyline" => {
@@ -1988,6 +2056,17 @@ impl<'a> Parser<'a> {
                                     self.parse_feature_polyline(&inner, units, offset_x, offset_y)
                                 {
                                     features.push(ecad::SetFeature::Polyline(polyline));
+                                }
+                            }
+                            "UserPrimitiveRef" => {
+                                if let Some(id) = inner.attribute("id") {
+                                    features.push(ecad::SetFeature::UserPrimitiveRef(
+                                        ecad::FeaturePrimitiveRef {
+                                            id: self.interner.intern(id),
+                                            x: offset_x,
+                                            y: offset_y,
+                                        },
+                                    ));
                                 }
                             }
                             _ => {}
@@ -2023,11 +2102,17 @@ impl<'a> Parser<'a> {
         features
     }
 
-    fn parse_line(&mut self, node: &Node, units: Units) -> Result<ecad::Line> {
-        let start_x = self.parse_f64_attr_with_units(node, "startX", "Line", units)?;
-        let start_y = self.parse_f64_attr_with_units(node, "startY", "Line", units)?;
-        let end_x = self.parse_f64_attr_with_units(node, "endX", "Line", units)?;
-        let end_y = self.parse_f64_attr_with_units(node, "endY", "Line", units)?;
+    fn parse_line(
+        &mut self,
+        node: &Node,
+        units: Units,
+        offset_x: f64,
+        offset_y: f64,
+    ) -> Result<ecad::Line> {
+        let start_x = self.parse_f64_attr_with_units(node, "startX", "Line", units)? + offset_x;
+        let start_y = self.parse_f64_attr_with_units(node, "startY", "Line", units)? + offset_y;
+        let end_x = self.parse_f64_attr_with_units(node, "endX", "Line", units)? + offset_x;
+        let end_y = self.parse_f64_attr_with_units(node, "endY", "Line", units)? + offset_y;
 
         let mut line_width = 0.25;
         let mut line_end = None;
@@ -2062,6 +2147,62 @@ impl<'a> Parser<'a> {
             start_y,
             end_x,
             end_y,
+            line_desc_ref,
+            line_width,
+            line_end,
+        })
+    }
+
+    fn parse_feature_arc(
+        &mut self,
+        node: &Node,
+        units: Units,
+        offset_x: f64,
+        offset_y: f64,
+    ) -> Result<ecad::FeatureArc> {
+        let arc = self.parse_user_arc(node, units)?;
+        let mut line_width = 0.25;
+        let mut line_end = None;
+        let mut line_desc_ref = None;
+
+        for child in node.children().filter(|n| n.is_element()) {
+            match child.tag_name().name() {
+                "LineDesc" => {
+                    line_width = child
+                        .attribute("lineWidth")
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .map(|v| crate::units::to_mm(v, units))
+                        .unwrap_or(0.25);
+                    line_end = child.attribute("lineEnd").and_then(|s| match s {
+                        "ROUND" => Some(LineEnd::Round),
+                        "SQUARE" => Some(LineEnd::Square),
+                        "FLAT" => Some(LineEnd::Flat),
+                        _ => None,
+                    });
+                }
+                "LineDescRef" => {
+                    if let Some(id) = child.attribute("id") {
+                        line_desc_ref = Some(self.interner.intern(id));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(ecad::FeatureArc {
+            start: Point {
+                x: arc.start.x + offset_x,
+                y: arc.start.y + offset_y,
+            },
+            end: Point {
+                x: arc.end.x + offset_x,
+                y: arc.end.y + offset_y,
+            },
+            center: Point {
+                x: arc.center.x + offset_x,
+                y: arc.center.y + offset_y,
+            },
+            clockwise: arc.clockwise,
             line_desc_ref,
             line_width,
             line_end,

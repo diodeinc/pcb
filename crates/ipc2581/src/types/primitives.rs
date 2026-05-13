@@ -317,9 +317,12 @@ pub enum UserShapeType {
     Circle(Circle),
     RectCenter(RectCenter),
     Oval(Oval),
+    RectRound(RectRound),
     Polygon(Polygon),
     Line(Line),
+    Arc(Arc),
     Polyline(Polyline),
+    UserPrimitiveRef(Symbol),
 }
 
 // FromStr implementations for shape enums
