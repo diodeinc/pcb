@@ -24,6 +24,7 @@ pub fn process_document(doc: &mut GeometryDocument) {
     outline_stroked_paths(doc);
     union_feature_filled_paths(doc);
     coalesce_related_trace_features(doc);
+    resolve_set_voids(doc);
     resolve_negative_polarity(doc);
     subtract_layer_cutouts(doc);
     normalize_bounds(doc);
@@ -212,6 +213,52 @@ pub fn coalesce_related_trace_features(doc: &mut GeometryDocument) {
     }
 }
 
+pub fn resolve_set_voids(doc: &mut GeometryDocument) {
+    for layer_index in 0..doc.layers.len() {
+        let layer = doc.layers[layer_index].clone();
+        for mut feature_indices in layer_features_by_set(doc, &layer).into_values() {
+            feature_indices.sort_by_key(|&index| doc.features[index].source.feature_index);
+            let mut previous = Vec::new();
+
+            for feature_index in feature_indices {
+                let feature = doc.features[feature_index].clone();
+                if feature.bucket == FeatureBucket::Cutout {
+                    continue;
+                }
+
+                if feature.flags.clears_previous_in_set {
+                    let cutters = feature_filled_contours(doc, &feature);
+                    if !cutters.is_empty() {
+                        for subject_index in previous.iter().copied() {
+                            subtract_contours_from_feature(doc, subject_index, &cutters);
+                        }
+                    }
+                    clear_feature_paths(doc, feature_index);
+                    continue;
+                }
+
+                if feature.polarity == GeometryPolarity::Positive {
+                    previous.push(feature_index);
+                }
+            }
+        }
+    }
+}
+
+fn layer_features_by_set(
+    doc: &GeometryDocument,
+    layer: &GeometryLayer,
+) -> HashMap<u32, Vec<usize>> {
+    let mut features_by_set = HashMap::new();
+    for feature_index in layer_features(layer) {
+        features_by_set
+            .entry(doc.features[feature_index].source.set_index)
+            .or_insert_with(Vec::new)
+            .push(feature_index);
+    }
+    features_by_set
+}
+
 pub fn resolve_negative_polarity(doc: &mut GeometryDocument) {
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
@@ -219,6 +266,7 @@ pub fn resolve_negative_polarity(doc: &mut GeometryDocument) {
             .filter(|&feature_index| {
                 let feature = &doc.features[feature_index];
                 feature.bucket != FeatureBucket::Cutout
+                    && !feature.flags.clears_previous_in_set
                     && feature.polarity == GeometryPolarity::Negative
             })
             .collect::<Vec<_>>();
@@ -270,14 +318,15 @@ pub fn subtract_layer_cutouts(doc: &mut GeometryDocument) {
 fn subtract_contours_from_feature(
     doc: &mut GeometryDocument,
     feature_index: usize,
-    cutters: &Vec<PolygonContour>,
+    cutters: &[PolygonContour],
 ) {
     let subject = feature_filled_contours(doc, &doc.features[feature_index]);
     if subject.is_empty() {
         return;
     }
 
-    let result = subject.overlay(cutters, OverlayRule::Difference, OverlayFillRule::NonZero);
+    let cutters = cutters.to_vec();
+    let result = subject.overlay(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero);
     let contours = polygon_shapes_to_contours(result);
     if contours.is_empty() {
         clear_feature_paths(doc, feature_index);
@@ -943,6 +992,156 @@ mod tests {
         assert_eq!(path.bbox.max, Point::new(4.0, 4.0));
         assert_eq!(doc.features[1].path_count, 0);
         assert!(doc.features[1].bbox.is_empty());
+    }
+
+    #[test]
+    fn resolves_voids_against_previous_features_in_same_set_only() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 4.0, 4.0),
+        );
+        doc.features.push(GeometryFeature {
+            source: SourceRef {
+                set_index: 1,
+                feature_index: 0,
+            },
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(10.0, 0.0, 14.0, 4.0),
+        );
+        doc.features.push(GeometryFeature {
+            source: SourceRef {
+                set_index: 2,
+                feature_index: 0,
+            },
+            path_start: 1,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(1.0, 1.0, 3.0, 3.0),
+        );
+        doc.features.push(GeometryFeature {
+            source: SourceRef {
+                set_index: 1,
+                feature_index: 1,
+            },
+            path_start: 2,
+            path_count: 1,
+            flags: FeatureFlags {
+                clears_previous_in_set: true,
+                ..FeatureFlags::default()
+            },
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Negative,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(1.0, 1.0, 3.0, 3.0),
+        );
+        doc.features.push(GeometryFeature {
+            source: SourceRef {
+                set_index: 1,
+                feature_index: 2,
+            },
+            path_start: 3,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 4,
+            bbox: BBox::empty(),
+        });
+
+        process_document(&mut doc);
+
+        assert!(doc.paths[doc.features[0].path_start as usize].contour_count > 1);
+        assert_eq!(doc.features[1].bbox.min, Point::new(10.0, 0.0));
+        assert_eq!(doc.features[1].bbox.max, Point::new(14.0, 4.0));
+        assert_eq!(doc.features[2].path_count, 0);
+        assert_eq!(doc.features[3].bbox.min, Point::new(1.0, 1.0));
+        assert_eq!(doc.features[3].bbox.max, Point::new(3.0, 3.0));
+    }
+
+    #[test]
+    fn resolves_voids_by_source_feature_order_within_set() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(1.0, 1.0, 3.0, 3.0),
+        );
+        doc.features.push(GeometryFeature {
+            source: SourceRef {
+                set_index: 1,
+                feature_index: 1,
+            },
+            path_count: 1,
+            flags: FeatureFlags {
+                clears_previous_in_set: true,
+                ..FeatureFlags::default()
+            },
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Negative,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 4.0, 4.0),
+        );
+        doc.features.push(GeometryFeature {
+            source: SourceRef {
+                set_index: 1,
+                feature_index: 0,
+            },
+            path_start: 1,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 2,
+            bbox: BBox::empty(),
+        });
+
+        process_document(&mut doc);
+
+        assert_eq!(doc.features[0].path_count, 0);
+        assert!(doc.paths[doc.features[1].path_start as usize].contour_count > 1);
+        assert_eq!(doc.features[1].bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(doc.features[1].bbox.max, Point::new(4.0, 4.0));
     }
 
     #[test]

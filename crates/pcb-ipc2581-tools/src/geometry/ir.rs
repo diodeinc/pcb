@@ -315,6 +315,7 @@ pub enum FillRule {
 pub struct FeatureFlags {
     pub expanded_padstack: bool,
     pub lowered_to_paths: bool,
+    pub clears_previous_in_set: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

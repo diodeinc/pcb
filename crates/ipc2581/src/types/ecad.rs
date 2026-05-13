@@ -237,13 +237,30 @@ pub struct FeatureSet {
     pub net: Option<Symbol>,      // Net name from Set element
     pub geometry: Option<Symbol>, // Reference to PadStackDef or other geometry definition
     pub polarity: Option<Polarity>,
+    pub features: Vec<SetFeature>,
     pub holes: Vec<Hole>,
     pub slots: Vec<Slot>,
     pub pads: Vec<Pad>,
     pub traces: Vec<Trace>,
     pub polygons: Vec<super::Polygon>, // Copper pours from Features
     pub lines: Vec<Line>,              // Trace lines from Features > UserSpecial > Line
+    pub polylines: Vec<FeaturePolyline>,
     pub nonstandard_attributes: Vec<NonstandardAttribute>,
+}
+
+/// Geometry-bearing children of a Set in source document order.
+#[derive(Debug, Clone)]
+pub enum SetFeature {
+    Hole(Hole),
+    Slot(Slot),
+    Pad(Pad),
+    Trace(Trace),
+    Polygon(super::Polygon),
+    Line(Line),
+    Arc(FeatureArc),
+    Polyline(FeaturePolyline),
+    StandardPrimitiveRef(FeaturePrimitiveRef),
+    UserPrimitiveRef(FeaturePrimitiveRef),
 }
 
 /// NonstandardAttribute from Set elements
@@ -261,8 +278,39 @@ pub struct Line {
     pub start_y: f64,
     pub end_x: f64,
     pub end_y: f64,
+    pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
+}
+
+/// Open polyline feature preserving straight and curved PolyStep order.
+#[derive(Debug, Clone)]
+pub struct FeaturePolyline {
+    pub begin: super::Point,
+    pub steps: Vec<super::PolyStep>,
+    pub line_desc_ref: Option<Symbol>,
+    pub line_width: f64,
+    pub line_end: Option<super::LineEnd>,
+}
+
+/// Arc feature preserving center and direction.
+#[derive(Debug, Clone)]
+pub struct FeatureArc {
+    pub start: super::Point,
+    pub end: super::Point,
+    pub center: super::Point,
+    pub clockwise: bool,
+    pub line_desc_ref: Option<Symbol>,
+    pub line_width: f64,
+    pub line_end: Option<super::LineEnd>,
+}
+
+/// Primitive reference used directly as feature geometry.
+#[derive(Debug, Clone)]
+pub struct FeaturePrimitiveRef {
+    pub id: Symbol,
+    pub x: f64,
+    pub y: f64,
 }
 
 /// Hole represents a drilled hole instance
@@ -317,6 +365,7 @@ pub struct Pad {
 pub struct Trace {
     pub line_desc_ref: Option<Symbol>,
     pub points: Vec<TracePoint>,
+    pub steps: Vec<super::PolyStep>,
 }
 
 /// Point in a trace

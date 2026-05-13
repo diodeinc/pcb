@@ -307,6 +307,7 @@ pub struct UserSpecial {
 pub struct UserShape {
     pub shape: UserShapeType,
     pub line_desc: Option<LineDesc>,
+    pub line_desc_ref: Option<Symbol>,
     pub fill_desc: Option<FillDesc>,
 }
 
@@ -316,8 +317,12 @@ pub enum UserShapeType {
     Circle(Circle),
     RectCenter(RectCenter),
     Oval(Oval),
+    RectRound(RectRound),
     Polygon(Polygon),
-    // Other standard shapes as needed (e.g., Polyline)
+    Line(Line),
+    Arc(Arc),
+    Polyline(Polyline),
+    UserPrimitiveRef(Symbol),
 }
 
 // FromStr implementations for shape enums
