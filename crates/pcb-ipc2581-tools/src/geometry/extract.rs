@@ -145,7 +145,9 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
         let is_routing_layer = source_layer.layer_function == LayerFunction::Rout;
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
-            if is_drill_layer {
+            if is_drill_layer
+                && layer_span_applies_to_layer(source_layer, layer, &ecad.cad_data.layers)
+            {
                 for (feature_index, hole) in set.holes.iter().enumerate() {
                     let feature = extract_hole(
                         SourceRef {
@@ -202,6 +204,14 @@ fn slot_applies_to_layer(
         return source_layer.name == target_layer.name;
     }
 
+    layer_span_applies_to_layer(source_layer, target_layer, layers)
+}
+
+fn layer_span_applies_to_layer(
+    source_layer: &Layer,
+    target_layer: &Layer,
+    layers: &[Layer],
+) -> bool {
     let Some(span) = source_layer.span else {
         return true;
     };
@@ -1172,6 +1182,9 @@ mod tests {
         assert!(slot_applies_to_layer(&route, &l1, &layers, &slot));
         assert!(slot_applies_to_layer(&route, &l2, &layers, &slot));
         assert!(!slot_applies_to_layer(&route, &l3, &layers, &slot));
+        assert!(layer_span_applies_to_layer(&route, &l1, &layers));
+        assert!(layer_span_applies_to_layer(&route, &l2, &layers));
+        assert!(!layer_span_applies_to_layer(&route, &l3, &layers));
     }
 
     #[test]
