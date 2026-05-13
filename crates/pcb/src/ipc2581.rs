@@ -60,6 +60,15 @@ enum Commands {
         #[arg(short, long, default_value = "mm")]
         units: UnitFormat,
     },
+    /// Export the board outline as a KiCad-importable DXF
+    Outline {
+        /// IPC-2581 XML file to export from
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Output DXF file path
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
     /// Render processed geometry for a single IPC-2581 layer
     Render {
         /// IPC-2581 XML file to render from
@@ -135,6 +144,9 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             output,
             units,
         } => commands::html_export::execute(&file, output.as_deref(), units),
+        Commands::Outline { file, output } => {
+            commands::outline::execute(&file, &commands::outline::OutlineOptions { output })
+        }
         Commands::Render {
             file,
             layer,

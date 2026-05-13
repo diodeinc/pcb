@@ -1,3 +1,4 @@
+pub mod dxf;
 mod extract;
 pub mod ir;
 pub mod process;
