@@ -620,14 +620,16 @@ fn lower_standard_primitive(
             let spoke_width = thermal
                 .shape
                 .spoke_width
-                .unwrap_or(thermal.shape.outer_diameter * 0.15);
+                .unwrap_or(thermal.shape.outer_diameter - thermal.shape.inner_diameter)
+                .max(0.0);
             push_thermal_path(
                 doc,
                 transform,
                 thermal.shape.outer_diameter,
                 thermal.shape.inner_diameter,
                 spoke_width,
-                thermal.shape.spoke_count.max(1),
+                thermal.shape.spoke_count,
+                thermal.shape.spoke_start_angle.unwrap_or(45.0),
             );
         }
         StandardPrimitive::Contour(contour) => {
@@ -1148,13 +1150,19 @@ fn push_thermal_path(
     inner_diameter: f64,
     spoke_width: f64,
     spoke_count: u32,
+    spoke_start_angle: f64,
 ) {
-    push_donut_path(doc, transform, outer_diameter, inner_diameter);
+    if spoke_count == 0 {
+        push_donut_path(doc, transform, outer_diameter, inner_diameter);
+        return;
+    }
+
     let outer_radius = outer_diameter / 2.0;
     let inner_radius = inner_diameter / 2.0;
     let length = (outer_radius - inner_radius).max(0.0);
     for index in 0..spoke_count {
-        let angle = index as f64 * std::f64::consts::TAU / spoke_count as f64;
+        let angle = spoke_start_angle.to_radians()
+            + index as f64 * std::f64::consts::TAU / spoke_count as f64;
         let center_radius = inner_radius + length / 2.0;
         let center = Point::new(center_radius * angle.cos(), center_radius * angle.sin());
         let spoke_transform =
@@ -1258,6 +1266,8 @@ mod tests {
         assert_eq!(doc.paths[2].contour_count, 2);
         assert_eq!(doc.paths[3].fill_rule, FillRule::NonZero);
         assert_eq!(doc.paths[4].fill_rule, FillRule::NonZero);
+        assert_eq!(doc.paths[1].bbox.min, Point::new(-3.0, -3.0));
+        assert_eq!(doc.paths[1].bbox.max, Point::new(3.0, 3.0));
     }
 
     #[test]
@@ -1281,6 +1291,33 @@ mod tests {
         assert_eq!(doc.paths[0].contour_count, 2);
         assert_eq!(doc.paths[1].contour_count, 2);
         assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+    }
+
+    #[test]
+    fn lowers_thermal_as_spokes_without_redundant_ring() {
+        let mut doc = GeometryDocument::new("test".to_string());
+
+        push_thermal_path(&mut doc, Affine2::identity(), 10.0, 6.0, 2.0, 4, 0.0);
+
+        assert_eq!(doc.paths.len(), 4);
+        assert!(
+            doc.paths
+                .iter()
+                .all(|path| path.fill_rule == FillRule::NonZero && path.contour_count == 1)
+        );
+        assert_eq!(doc.paths[0].bbox.min, Point::new(3.0, -1.0));
+        assert_eq!(doc.paths[0].bbox.max, Point::new(5.0, 1.0));
+    }
+
+    #[test]
+    fn lowers_spokeless_thermal_as_donut() {
+        let mut doc = GeometryDocument::new("test".to_string());
+
+        push_thermal_path(&mut doc, Affine2::identity(), 10.0, 6.0, 2.0, 0, 0.0);
+
+        assert_eq!(doc.paths.len(), 1);
+        assert_eq!(doc.paths[0].fill_rule, FillRule::EvenOdd);
+        assert_eq!(doc.paths[0].contour_count, 2);
     }
 
     #[test]
