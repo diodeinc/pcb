@@ -156,11 +156,33 @@ fn path_data(doc: &GeometryDocument, path: &GeometryPath) -> String {
                 }
                 PathOp::ArcTo => {
                     let radius = current.distance_to(cmd.p1);
+                    let sweep = if cmd.clockwise { 0 } else { 1 };
+                    if current.distance_to(cmd.p0) <= 1e-9 && radius > 0.0 {
+                        let mid =
+                            Point::new(2.0 * cmd.p1.x - current.x, 2.0 * cmd.p1.y - current.y);
+                        write!(
+                            data,
+                            " A{} {} 0 0 {} {} {} A{} {} 0 0 {} {} {}",
+                            fmt_num(radius),
+                            fmt_num(radius),
+                            sweep,
+                            fmt_num(mid.x),
+                            fmt_num(mid.y),
+                            fmt_num(radius),
+                            fmt_num(radius),
+                            sweep,
+                            fmt_num(cmd.p0.x),
+                            fmt_num(cmd.p0.y)
+                        )
+                        .unwrap();
+                        current = cmd.p0;
+                        continue;
+                    }
+
                     let large_arc = u8::from(
                         arc_sweep_radians(current, cmd.p0, cmd.p1, cmd.clockwise)
                             > std::f64::consts::PI,
                     );
-                    let sweep = if cmd.clockwise { 0 } else { 1 };
                     current = cmd.p0;
                     write!(
                         data,
@@ -294,6 +316,44 @@ mod tests {
         let svg = render_layer_svg(&doc, 0);
 
         assert!(svg.contains(" A1 1 0 0 0 -1 0"));
+    }
+
+    #[test]
+    fn renders_full_circle_arc_as_two_svg_arcs() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        let bbox = BBox {
+            min: Point::new(-1.0, -1.0),
+            max: Point::new(1.0, 1.0),
+        };
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, bbox),
+            [
+                PathCmd::move_to(Point::new(1.0, 0.0)),
+                PathCmd::arc_to(Point::new(1.0, 0.0), Point::new(0.0, 0.0), false),
+                PathCmd::close(),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            bbox,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 1,
+            bbox,
+        });
+
+        let svg = render_layer_svg(&doc, 0);
+
+        assert!(svg.contains(" A1 1 0 0 1 -1 0 A1 1 0 0 1 1 0"));
     }
 
     #[test]

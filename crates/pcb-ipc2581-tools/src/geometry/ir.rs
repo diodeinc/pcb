@@ -456,6 +456,10 @@ impl Default for BBox {
 }
 
 pub fn arc_sweep_radians(start: Point, end: Point, center: Point, clockwise: bool) -> f64 {
+    if start.distance_to(end) <= 1e-9 && start.distance_to(center) > 1e-9 {
+        return std::f64::consts::TAU;
+    }
+
     let start_angle = start.angle_from(center);
     let end_angle = end.angle_from(center);
     if clockwise {
@@ -466,6 +470,10 @@ pub fn arc_sweep_radians(start: Point, end: Point, center: Point, clockwise: boo
 }
 
 fn angle_is_on_arc(start: f64, end: f64, angle: f64, clockwise: bool) -> bool {
+    if normalize_angle(end - start) <= 1e-12 {
+        return true;
+    }
+
     if clockwise {
         normalize_angle(start - angle) <= normalize_angle(start - end) + 1e-12
     } else {

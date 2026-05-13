@@ -672,10 +672,10 @@ fn lower_standard_primitive(
             );
         }
         StandardPrimitive::Butterfly(butterfly) => {
-            push_ellipse_path(doc, transform, butterfly.shape.size, butterfly.shape.size);
+            push_butterfly_path(doc, transform, butterfly.shape.shape, butterfly.shape.size);
         }
         StandardPrimitive::Moire(moire) => {
-            push_ellipse_path(doc, transform, moire.diameter, moire.diameter);
+            push_moire_path(doc, transform, moire);
         }
     }
 
@@ -1079,6 +1079,68 @@ fn push_donut_path(
     );
 }
 
+fn push_butterfly_path(
+    doc: &mut GeometryDocument,
+    transform: Affine2,
+    shape: ipc2581::types::ButterflyShape,
+    size: f64,
+) {
+    let radius = size / 2.0;
+    match shape {
+        ipc2581::types::ButterflyShape::Round => doc.push_compound_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            [
+                circular_sector_contour(transform, radius, 90.0, 180.0),
+                circular_sector_contour(transform, radius, 270.0, 360.0),
+            ],
+        ),
+        ipc2581::types::ButterflyShape::Square => doc.push_compound_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            [
+                rect_contour(transform, -radius, 0.0, 0.0, radius),
+                rect_contour(transform, 0.0, -radius, radius, 0.0),
+            ],
+        ),
+    };
+}
+
+fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc2581::types::Moire) {
+    for index in 0..moire.ring_number {
+        let outer_diameter = moire.diameter - 2.0 * index as f64 * moire.ring_gap;
+        let inner_diameter = outer_diameter - 2.0 * moire.ring_width;
+        if outer_diameter <= 0.0 {
+            break;
+        }
+
+        if inner_diameter > 0.0 {
+            push_donut_path(doc, transform, outer_diameter, inner_diameter);
+        } else {
+            push_ellipse_path(doc, transform, outer_diameter, outer_diameter);
+        }
+    }
+
+    if let (Some(width), Some(length)) = (moire.line_width, moire.line_length) {
+        let angle = moire.line_angle.unwrap_or(0.0);
+        push_rect_path(
+            doc,
+            transform.concat(Affine2::placement(Point::default(), angle, false, 1.0)),
+            length,
+            width,
+        );
+        push_rect_path(
+            doc,
+            transform.concat(Affine2::placement(
+                Point::default(),
+                angle + 90.0,
+                false,
+                1.0,
+            )),
+            length,
+            width,
+        );
+    }
+}
+
 fn push_thermal_path(
     doc: &mut GeometryDocument,
     transform: Affine2,
@@ -1099,6 +1161,44 @@ fn push_thermal_path(
             transform.concat(Affine2::placement(center, angle.to_degrees(), false, 1.0));
         push_rect_path(doc, spoke_transform, length, spoke_width);
     }
+}
+
+fn circular_sector_contour(
+    transform: Affine2,
+    radius: f64,
+    start_degrees: f64,
+    end_degrees: f64,
+) -> (BBox, Vec<PathCmd>) {
+    let start_angle = start_degrees.to_radians();
+    let end_angle = end_degrees.to_radians();
+    let start = Point::new(radius * start_angle.cos(), radius * start_angle.sin());
+    let end = Point::new(radius * end_angle.cos(), radius * end_angle.sin());
+    let mut bbox = BBox::empty();
+    let cmds = [
+        PathCmd::move_to(Point::default()),
+        PathCmd::line_to(start),
+        PathCmd::arc_to(end, Point::default(), false),
+        PathCmd::close(),
+    ]
+    .into_iter()
+    .map(|cmd| transform_path_cmd(cmd, transform, &mut bbox))
+    .collect();
+    (bbox, cmds)
+}
+
+fn rect_contour(transform: Affine2, x0: f64, y0: f64, x1: f64, y1: f64) -> (BBox, Vec<PathCmd>) {
+    let mut bbox = BBox::empty();
+    let cmds = [
+        PathCmd::move_to(Point::new(x0, y0)),
+        PathCmd::line_to(Point::new(x1, y0)),
+        PathCmd::line_to(Point::new(x1, y1)),
+        PathCmd::line_to(Point::new(x0, y1)),
+        PathCmd::close(),
+    ]
+    .into_iter()
+    .map(|cmd| transform_path_cmd(cmd, transform, &mut bbox))
+    .collect();
+    (bbox, cmds)
 }
 
 fn paths_bbox(doc: &GeometryDocument, path_start: u32, path_count: u32) -> BBox {
@@ -1132,6 +1232,56 @@ fn _styled_is_filled<T>(styled: &Styled<T>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lowers_moire_as_rings_and_crosshair() {
+        let mut doc = GeometryDocument::new("test".to_string());
+
+        push_moire_path(
+            &mut doc,
+            Affine2::identity(),
+            &ipc2581::types::Moire {
+                diameter: 8.0,
+                ring_width: 0.5,
+                ring_gap: 1.0,
+                ring_number: 3,
+                line_width: Some(0.2),
+                line_length: Some(10.0),
+                line_angle: Some(0.0),
+            },
+        );
+
+        assert_eq!(doc.paths.len(), 5);
+        assert_eq!(doc.paths[0].fill_rule, FillRule::EvenOdd);
+        assert_eq!(doc.paths[0].contour_count, 2);
+        assert_eq!(doc.paths[1].contour_count, 2);
+        assert_eq!(doc.paths[2].contour_count, 2);
+        assert_eq!(doc.paths[3].fill_rule, FillRule::NonZero);
+        assert_eq!(doc.paths[4].fill_rule, FillRule::NonZero);
+    }
+
+    #[test]
+    fn lowers_butterfly_with_removed_quadrants() {
+        let mut doc = GeometryDocument::new("test".to_string());
+
+        push_butterfly_path(
+            &mut doc,
+            Affine2::identity(),
+            ipc2581::types::ButterflyShape::Square,
+            4.0,
+        );
+        push_butterfly_path(
+            &mut doc,
+            Affine2::identity(),
+            ipc2581::types::ButterflyShape::Round,
+            4.0,
+        );
+
+        assert_eq!(doc.paths.len(), 2);
+        assert_eq!(doc.paths[0].contour_count, 2);
+        assert_eq!(doc.paths[1].contour_count, 2);
+        assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+    }
 
     #[test]
     fn chamfered_rect_respects_corner_flags() {
