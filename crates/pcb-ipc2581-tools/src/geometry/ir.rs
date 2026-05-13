@@ -292,7 +292,7 @@ pub enum FeatureBucket {
     Antipad,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GeometryPolarity {
     Positive,
     Negative,
@@ -305,7 +305,7 @@ pub enum LineCap {
     Butt,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FillRule {
     NonZero,
     EvenOdd,

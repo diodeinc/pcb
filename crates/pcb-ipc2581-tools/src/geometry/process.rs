@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::ir::*;
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -8,11 +10,20 @@ use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 type ContourPayload = (BBox, Vec<PathCmd>);
 type PolygonContour = Vec<[f64; 2]>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TraceGroupKey {
+    net: Option<ipc2581::Symbol>,
+    set_index: u32,
+    polarity: GeometryPolarity,
+    fill_rule: FillRule,
+}
+
 pub fn process_document(doc: &mut GeometryDocument) {
     normalize_bounds(doc);
     compose_feature_paths(doc);
     outline_stroked_paths(doc);
     union_feature_filled_paths(doc);
+    coalesce_related_trace_features(doc);
     subtract_layer_cutouts(doc);
     normalize_bounds(doc);
 }
@@ -108,13 +119,16 @@ pub fn union_feature_filled_paths(doc: &mut GeometryDocument) {
         if paths.is_empty() || !paths.iter().all(|path| path.flags.filled) {
             continue;
         }
+        let Some(fill_rule) = feature_fill_rule(paths) else {
+            continue;
+        };
 
         let contours = feature_polygon_contours(doc, &feature);
         if contours.len() < 2 {
             continue;
         }
 
-        let result = contours.simplify_shape(OverlayFillRule::NonZero);
+        let result = contours.simplify_shape(overlay_fill_rule(fill_rule));
         let contours = polygon_shapes_to_contours(result);
         if contours.is_empty() {
             continue;
@@ -123,9 +137,77 @@ pub fn union_feature_filled_paths(doc: &mut GeometryDocument) {
         replace_feature_with_compound_path(
             doc,
             feature_index,
-            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            GeometryPath::filled(fill_rule, BBox::empty()),
             contours,
         );
+    }
+}
+
+pub fn coalesce_related_trace_features(doc: &mut GeometryDocument) {
+    for layer_index in 0..doc.layers.len() {
+        let layer = doc.layers[layer_index].clone();
+        let mut groups: HashMap<TraceGroupKey, Vec<usize>> = HashMap::new();
+
+        for feature_index in layer.feature_start..layer.feature_start + layer.feature_count {
+            let feature_index = feature_index as usize;
+            let feature = &doc.features[feature_index];
+            if feature.bucket != FeatureBucket::Trace
+                || feature.polarity != GeometryPolarity::Positive
+            {
+                continue;
+            }
+
+            let paths = &doc.paths
+                [feature.path_start as usize..(feature.path_start + feature.path_count) as usize];
+            if paths.is_empty() || !paths.iter().all(|path| path.flags.filled) {
+                continue;
+            }
+
+            let Some(fill_rule) = feature_fill_rule(paths) else {
+                continue;
+            };
+            groups
+                .entry(TraceGroupKey {
+                    net: feature.net,
+                    set_index: feature.source.set_index,
+                    polarity: feature.polarity,
+                    fill_rule,
+                })
+                .or_default()
+                .push(feature_index);
+        }
+
+        for (key, group) in groups {
+            if group.len() < 2 {
+                continue;
+            }
+
+            let contours = group
+                .iter()
+                .flat_map(|&feature_index| {
+                    feature_polygon_contours(doc, &doc.features[feature_index])
+                })
+                .collect::<Vec<_>>();
+            if contours.len() < 2 {
+                continue;
+            }
+
+            let result = contours.simplify_shape(overlay_fill_rule(key.fill_rule));
+            let contours = polygon_shapes_to_contours(result);
+            if contours.is_empty() {
+                continue;
+            }
+
+            replace_feature_with_compound_path(
+                doc,
+                group[0],
+                GeometryPath::filled(key.fill_rule, BBox::empty()),
+                contours,
+            );
+            for &feature_index in &group[1..] {
+                clear_feature_paths(doc, feature_index);
+            }
+        }
     }
 }
 
@@ -148,16 +230,13 @@ pub fn subtract_layer_cutouts(doc: &mut GeometryDocument) {
             if paths.is_empty() || !paths.iter().all(|path| path.flags.filled) {
                 continue;
             }
-            let Some(fill_rule) = feature_fill_rule(paths) else {
-                continue;
-            };
-
-            let subject = feature_polygon_contours(doc, &feature);
+            let subject = feature_filled_contours(doc, &feature);
             if subject.is_empty() {
                 continue;
             }
 
-            let result = subject.overlay(&cutouts, OverlayRule::Difference, fill_rule);
+            let result =
+                subject.overlay(&cutouts, OverlayRule::Difference, OverlayFillRule::NonZero);
             let contours = polygon_shapes_to_contours(result);
             if contours.is_empty() {
                 clear_feature_paths(doc, feature_index as usize);
@@ -181,12 +260,12 @@ fn compatible_paths(a: &GeometryPath, b: &GeometryPath) -> bool {
         && (!a.flags.stroked || (a.stroke_width == b.stroke_width && a.line_cap == b.line_cap))
 }
 
-fn feature_fill_rule(paths: &[GeometryPath]) -> Option<OverlayFillRule> {
+fn feature_fill_rule(paths: &[GeometryPath]) -> Option<FillRule> {
     let fill_rule = paths.first()?.fill_rule;
     paths
         .iter()
         .all(|path| path.fill_rule == fill_rule)
-        .then_some(overlay_fill_rule(fill_rule))
+        .then_some(fill_rule)
 }
 
 fn overlay_fill_rule(fill_rule: FillRule) -> OverlayFillRule {
@@ -234,8 +313,34 @@ fn layer_cutout_contours(doc: &GeometryDocument, layer: &GeometryLayer) -> Vec<P
     doc.features[layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
         .iter()
         .filter(|feature| feature.bucket == FeatureBucket::Cutout)
-        .flat_map(|feature| feature_polygon_contours(doc, feature))
+        .flat_map(|feature| feature_filled_contours(doc, feature))
         .collect()
+}
+
+fn feature_filled_contours(
+    doc: &GeometryDocument,
+    feature: &GeometryFeature,
+) -> Vec<PolygonContour> {
+    let mut groups: HashMap<FillRule, Vec<PolygonContour>> = HashMap::new();
+    for path in
+        &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+    {
+        if path.flags.filled {
+            groups
+                .entry(path.fill_rule)
+                .or_default()
+                .extend(path_polygon_contours(doc, path));
+        }
+    }
+
+    let mut contours = groups
+        .into_iter()
+        .flat_map(|(fill_rule, contours)| simplify_polygon_contours(contours, fill_rule))
+        .collect::<Vec<_>>();
+    if contours.len() > 1 {
+        contours = simplify_polygon_contours(contours, FillRule::NonZero);
+    }
+    contours
 }
 
 fn feature_polygon_contours(
@@ -474,6 +579,17 @@ fn push_polygon_contour(out: &mut Vec<PolygonContour>, contour: &mut PolygonCont
     }
 }
 
+fn simplify_polygon_contours(
+    contours: Vec<PolygonContour>,
+    fill_rule: FillRule,
+) -> Vec<PolygonContour> {
+    polygon_shapes_to_polygon_contours(contours.simplify_shape(overlay_fill_rule(fill_rule)))
+}
+
+fn polygon_shapes_to_polygon_contours(shapes: Vec<Vec<PolygonContour>>) -> Vec<PolygonContour> {
+    shapes.into_iter().flatten().collect()
+}
+
 fn polygon_shapes_to_contours(shapes: Vec<Vec<PolygonContour>>) -> Vec<ContourPayload> {
     let mut contours = Vec::new();
     for shape in shapes {
@@ -655,6 +771,83 @@ mod tests {
         assert_eq!(doc.features[0].path_count, 1);
         let path = &doc.paths[doc.features[0].path_start as usize];
         assert!(path.flags.filled);
+        assert_eq!(path.contour_count, 1);
+        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(path.bbox.max, Point::new(3.0, 1.0));
+    }
+
+    #[test]
+    fn coalesces_related_trace_features_inside_one_source_set() {
+        let mut interner = ipc2581::Interner::new();
+        let net = interner.intern("N1");
+        let mut doc = GeometryDocument::new("test".to_string());
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 2.0, 1.0),
+        );
+        doc.features.push(GeometryFeature {
+            net: Some(net),
+            source: SourceRef {
+                set_index: 7,
+                feature_index: 0,
+            },
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Trace,
+                FeatureBucket::Trace,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(1.0, 0.0, 3.0, 1.0),
+        );
+        doc.features.push(GeometryFeature {
+            net: Some(net),
+            source: SourceRef {
+                set_index: 7,
+                feature_index: 1,
+            },
+            path_start: 1,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Trace,
+                FeatureBucket::Trace,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(10.0, 0.0, 11.0, 1.0),
+        );
+        doc.features.push(GeometryFeature {
+            net: Some(net),
+            source: SourceRef {
+                set_index: 8,
+                feature_index: 0,
+            },
+            path_start: 2,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Trace,
+                FeatureBucket::Trace,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 3,
+            bbox: BBox::empty(),
+        });
+
+        process_document(&mut doc);
+
+        assert_eq!(doc.features[0].path_count, 1);
+        assert_eq!(doc.features[1].path_count, 0);
+        assert_eq!(doc.features[2].path_count, 1);
+        let path = &doc.paths[doc.features[0].path_start as usize];
         assert_eq!(path.contour_count, 1);
         assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
         assert_eq!(path.bbox.max, Point::new(3.0, 1.0));
@@ -848,6 +1041,59 @@ mod tests {
         assert_eq!(path.contour_count, 2);
         assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
         assert_eq!(path.bbox.max, Point::new(4.0, 4.0));
+    }
+
+    #[test]
+    fn subtracts_cutouts_from_mixed_fill_rule_features() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        doc.push_compound_path(
+            GeometryPath::filled(FillRule::EvenOdd, BBox::empty()),
+            vec![
+                (BBox::empty(), rect_cmds(0.0, 0.0, 4.0, 4.0).to_vec()),
+                (BBox::empty(), rect_cmds(1.0, 1.0, 3.0, 3.0).to_vec()),
+            ],
+        );
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(2.0, 1.5, 4.5, 2.5),
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 2,
+            ..GeometryFeature::new(
+                FeatureKind::Padstack,
+                FeatureBucket::Thermal,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(3.5, 0.0, 5.0, 4.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_start: 2,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Slot,
+                FeatureBucket::Cutout,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 2,
+            bbox: BBox::empty(),
+        });
+
+        process_document(&mut doc);
+
+        let feature = &doc.features[0];
+        assert_eq!(feature.path_count, 1);
+        let path = &doc.paths[feature.path_start as usize];
+        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(path.bbox.max, Point::new(3.5, 4.0));
     }
 
     fn rect_cmds(x0: f64, y0: f64, x1: f64, y1: f64) -> [PathCmd; 5] {
