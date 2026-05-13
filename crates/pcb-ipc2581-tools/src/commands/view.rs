@@ -7,14 +7,17 @@ use quick_xml::{
 };
 use std::io::Cursor;
 
+use ipc2581::Mode;
+
 use crate::ViewMode;
 use crate::utils::file as file_utils;
 
 /// Defines which sections to exclude for each mode
 /// Based on IPC-2581C Function Mode Table (Table 4)
-fn excluded_sections(mode: ViewMode) -> &'static [&'static str] {
+fn excluded_sections(mode: Mode) -> &'static [&'static str] {
     match mode {
-        ViewMode::Bom => &[
+        Mode::UserDef => &[],
+        Mode::Bom => &[
             // ECAD data
             "PadstackDef",
             "Package",
@@ -27,15 +30,15 @@ fn excluded_sections(mode: ViewMode) -> &'static [&'static str] {
             // Layers - BOM doesn't need any layer data
             "Layer",
         ],
-        ViewMode::Assembly => &[
+        Mode::Assembly => &[
             // Assembly needs most data except stackup details
             "Stackup",
         ],
-        ViewMode::Fabrication => &[
+        Mode::Fabrication => &[
             // Fabrication doesn't need component placement
             "Component",
         ],
-        ViewMode::Stackup => &[
+        Mode::Stackup => &[
             // Stackup only needs layer definitions and stackup info
             "PadstackDef",
             "Package",
@@ -43,13 +46,13 @@ fn excluded_sections(mode: ViewMode) -> &'static [&'static str] {
             "PhyNetGroup",
             "LayerFeature",
         ],
-        ViewMode::Test => &[
+        Mode::Test => &[
             // Test needs placement and nets but not fabrication details
             "PadstackDef",
             "Stackup",
             "LayerFeature",
         ],
-        ViewMode::Stencil => &[
+        Mode::Stencil => &[
             // Stencil only needs paste layers
             "PadstackDef",
             "Package",
@@ -60,7 +63,7 @@ fn excluded_sections(mode: ViewMode) -> &'static [&'static str] {
             "LogicalNet",
             "PhyNetGroup",
         ],
-        ViewMode::Dfx => &[
+        Mode::Dfx => &[
             // DFX only needs measurement data
             "PadstackDef",
             "Package",
@@ -92,7 +95,7 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
 }
 
 fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
-    let excluded = excluded_sections(mode);
+    let excluded = excluded_sections(mode.as_ipc_mode());
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut buf = Vec::new();
@@ -157,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_bom_excludes_components() {
-        let excluded = excluded_sections(ViewMode::Bom);
+        let excluded = excluded_sections(Mode::Bom);
         assert!(excluded.contains(&"Component"));
         assert!(excluded.contains(&"Package"));
         assert!(excluded.contains(&"Layer"));
@@ -165,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_assembly_minimal_exclusions() {
-        let excluded = excluded_sections(ViewMode::Assembly);
+        let excluded = excluded_sections(Mode::Assembly);
         assert!(excluded.contains(&"Stackup"));
         assert!(!excluded.contains(&"Component"));
     }

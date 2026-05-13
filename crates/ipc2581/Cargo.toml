@@ -5,7 +5,7 @@ edition.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
-description = "Pure IPC-2581 XML parser - spec-compliant, zero dependencies on visualization"
+description = "IPC-2581 XML parser, typed data model, and XSD validation for PCB manufacturing data"
 license = "MIT OR Apache-2.0"
 keywords = ["pcb", "ipc-2581", "parser", "eda"]
 categories = ["parsing", "hardware-support"]
@@ -17,6 +17,7 @@ quick-xml = { workspace = true }
 md-5 = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
+uppsala = { workspace = true }
 
 [dev-dependencies]
 zstd = { workspace = true }

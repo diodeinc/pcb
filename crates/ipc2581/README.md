@@ -9,6 +9,9 @@ use ipc2581::Ipc2581;
 
 let doc = Ipc2581::parse_file("design.xml")?;
 
+// Optionally validate XML against the vendored IPC-2581C XSD.
+ipc2581::validate_file("design.xml")?;
+
 // Access parsed data
 println!("Revision: {}", doc.revision());
 
