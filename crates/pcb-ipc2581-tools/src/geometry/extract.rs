@@ -744,16 +744,8 @@ fn extract_line(
     line: &ipc2581::types::ecad::Line,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let line_desc = line
-        .line_desc_ref
-        .and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
-    let line_width = line_desc
-        .map(|desc| desc.line_width)
-        .unwrap_or(line.line_width);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .or_else(|| line.line_end.map(map_line_cap))
-        .unwrap_or(LineCap::Round);
+    let (line_width, line_cap) =
+        resolve_feature_line_style(context, line.line_desc_ref, line.line_width, line.line_end);
 
     push_stroked_polyline(
         doc,
@@ -779,16 +771,12 @@ fn extract_feature_polyline(
     polyline: &ipc2581::types::ecad::FeaturePolyline,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let line_desc = polyline
-        .line_desc_ref
-        .and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
-    let line_width = line_desc
-        .map(|desc| desc.line_width)
-        .unwrap_or(polyline.line_width);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .or_else(|| polyline.line_end.map(map_line_cap))
-        .unwrap_or(LineCap::Round);
+    let (line_width, line_cap) = resolve_feature_line_style(
+        context,
+        polyline.line_desc_ref,
+        polyline.line_width,
+        polyline.line_end,
+    );
 
     push_stroked_steps(
         doc,
@@ -812,16 +800,8 @@ fn extract_arc(
     arc: &ipc2581::types::ecad::FeatureArc,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let line_desc = arc
-        .line_desc_ref
-        .and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
-    let line_width = line_desc
-        .map(|desc| desc.line_width)
-        .unwrap_or(arc.line_width);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .or_else(|| arc.line_end.map(map_line_cap))
-        .unwrap_or(LineCap::Round);
+    let (line_width, line_cap) =
+        resolve_feature_line_style(context, arc.line_desc_ref, arc.line_width, arc.line_end);
 
     push_stroked_arc(
         doc,
@@ -837,6 +817,24 @@ fn extract_arc(
         Point::new(arc.center.x, arc.center.y),
         arc.clockwise,
     )
+}
+
+fn resolve_feature_line_style(
+    context: &ExtractContext<'_>,
+    line_desc_ref: Option<Symbol>,
+    inline_width: f64,
+    inline_end: Option<LineEnd>,
+) -> (f64, LineCap) {
+    let line_desc =
+        line_desc_ref.and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
+    let width = line_desc
+        .map(|desc| desc.line_width)
+        .unwrap_or(inline_width);
+    let line_cap = line_desc
+        .map(|desc| map_line_cap(desc.line_end))
+        .or_else(|| inline_end.map(map_line_cap))
+        .unwrap_or(LineCap::Round);
+    (width, line_cap)
 }
 
 fn extract_polygon(
@@ -1279,6 +1277,7 @@ fn lower_user_primitive(
             let mut paint = PrimitivePaint::Fill;
             for shape in &user_special.shapes {
                 let path_start = doc.paths.len() as u32;
+                let mut nested_paint = None;
                 match &shape.shape {
                     UserShapeType::Circle(circle) => {
                         push_ellipse_path(doc, transform, circle.diameter, circle.diameter);
@@ -1322,7 +1321,8 @@ fn lower_user_primitive(
                     UserShapeType::UserPrimitiveRef(primitive_ref) => {
                         if let Some(primitive) = context.user_primitives.get(primitive_ref).copied()
                         {
-                            let _ = lower_user_primitive(context, doc, primitive, transform);
+                            nested_paint =
+                                Some(lower_user_primitive(context, doc, primitive, transform));
                         } else {
                             make_paths_unpainted(doc, path_start);
                         }
@@ -1348,8 +1348,12 @@ fn lower_user_primitive(
                     }
                     Some(FillProperty::Fill)
                     | Some(FillProperty::Hatch)
-                    | Some(FillProperty::Mesh)
-                    | None => {}
+                    | Some(FillProperty::Mesh) => {}
+                    None => {
+                        if let Some(nested_paint) = nested_paint {
+                            paint = nested_paint;
+                        }
+                    }
                 }
             }
             paint
