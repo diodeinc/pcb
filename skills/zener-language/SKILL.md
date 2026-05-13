@@ -158,10 +158,10 @@ Imports and dependencies:
 
 - `@stdlib/...` is implicit and toolchain-managed; do not declare it in `[dependencies]`.
 
-`pcb.toml` per package type:
+`pcb.toml` per repository/package type:
 
-- Workspace root: `[workspace]` metadata and members.
-- Board packages: `[board]` and `[dependencies]`.
+- Board repository root: `[workspace]` metadata, `[board]` with `name`, `path`, and `description`, and board `[dependencies]`.
+- Registry repository root: `[workspace]` metadata and top-level `components/**` / `modules/*` members; no `[board]`.
 - Reusable packages (modules, components): `[dependencies]` and optional default `parts`.
 
 ## Stdlib

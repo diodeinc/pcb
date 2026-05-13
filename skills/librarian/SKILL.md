@@ -99,7 +99,7 @@ Include checked-in datasheet PDFs under `docs/`. Include a real `.kicad_mod`; no
 
 The README is for realistic usage examples and concise integration notes only. Put rationale and design evidence in the `.zen` docstring.
 
-Legacy `reference/` packages are examples, not placement for new reusable circuitry.
+Place new reusable circuitry in the relevant component package, not in a separate top-level package category.
 
 ## Reference Circuit Quality
 
