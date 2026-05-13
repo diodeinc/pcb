@@ -9,6 +9,7 @@ use ipc2581::types::{
 use ipc2581::{Ipc2581, Symbol};
 
 use super::ir::*;
+use super::primary_step;
 
 struct ExtractContext<'a> {
     ipc: &'a Ipc2581,
@@ -62,16 +63,6 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
     }
 
     extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)
-}
-
-fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Result<&'a Step> {
-    if let Some(step_ref) = ipc.content().step_refs.first()
-        && let Some(step) = steps.iter().find(|step| step.name == *step_ref)
-    {
-        return Ok(step);
-    }
-
-    steps.first().context("IPC-2581 ECAD section has no Step")
 }
 
 fn extract_panel_layer(
