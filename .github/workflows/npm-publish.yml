@@ -3,7 +3,10 @@ name: Publish to npm
 on:
   push:
     tags:
-      - '**[0-9]+.[0-9]+.[0-9]+*'
+      # Only publish the top-level PCB npm package from top-level PCB release tags.
+      # Crate-specific tags like crate/ipc2581/v0.3.0 are used for crates.io
+      # publishing and must not trigger npm publishing.
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
   workflow_dispatch:
 
 permissions:
