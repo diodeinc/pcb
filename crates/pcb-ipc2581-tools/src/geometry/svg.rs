@@ -4,6 +4,25 @@ use super::ir::*;
 
 const VIEWBOX_PADDING_MM: f64 = 1.0;
 
+pub fn render_layer_bbox(doc: &GeometryDocument, layer_index: usize) -> BBox {
+    let layer = &doc.layers[layer_index];
+    let bbox = doc
+        .board_outlines
+        .iter()
+        .fold(layer.bbox, |bbox, outline| bbox.union(outline.bbox));
+
+    if bbox.is_empty() {
+        BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(100.0, 100.0),
+        }
+    } else if doc.board_outlines.is_empty() {
+        bbox
+    } else {
+        bbox.expand(VIEWBOX_PADDING_MM)
+    }
+}
+
 pub fn render_layer_svg(doc: &GeometryDocument, layer_index: usize) -> String {
     render_layer_svg_with_size(doc, layer_index, None)
 }
@@ -23,18 +42,7 @@ fn render_layer_svg_with_size(
     pixel_size: Option<(u32, u32)>,
 ) -> String {
     let layer = &doc.layers[layer_index];
-    let layer_bbox = doc
-        .board_outlines
-        .iter()
-        .fold(layer.bbox, |bbox, outline| bbox.union(outline.bbox));
-    let geometry_bbox = if layer_bbox.is_empty() {
-        BBox {
-            min: Point::new(0.0, 0.0),
-            max: Point::new(100.0, 100.0),
-        }
-    } else {
-        layer_bbox.expand(VIEWBOX_PADDING_MM)
-    };
+    let geometry_bbox = render_layer_bbox(doc, layer_index);
     let viewbox_y = -geometry_bbox.max.y;
 
     let mut svg = String::new();
@@ -499,6 +507,27 @@ mod tests {
 
         assert_eq!(svg.matches("<path d='").count(), 2);
         assert!(svg.find("fill='#2f9e44'").unwrap() < svg.find("fill='#64748b'").unwrap());
+    }
+
+    #[test]
+    fn renders_layer_without_outline_without_viewbox_padding() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        let bbox = BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(10.0, 5.0),
+        };
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 0,
+            bbox,
+        });
+
+        let svg = render_layer_svg(&doc, 0);
+
+        assert!(svg.contains("viewBox='0 -5 10 5'"));
     }
 
     #[test]

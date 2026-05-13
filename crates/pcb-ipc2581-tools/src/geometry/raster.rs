@@ -42,7 +42,7 @@ fn pixel_size_for_layer(
     layer_index: usize,
     max_dimension_px: u32,
 ) -> (u32, u32) {
-    let bbox = doc.layers[layer_index].bbox;
+    let bbox = super::svg::render_layer_bbox(doc, layer_index);
     if bbox.is_empty() || bbox.width() <= 0.0 || bbox.height() <= 0.0 {
         return (max_dimension_px, max_dimension_px);
     }
@@ -56,7 +56,7 @@ fn pixel_size_for_layer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::ir::{BBox, GeometryLayer, Point};
+    use crate::geometry::ir::{BBox, BoardOutline, GeometryLayer, Point};
 
     #[test]
     fn preserves_layer_aspect_ratio_for_png_size() {
@@ -74,5 +74,29 @@ mod tests {
         });
 
         assert_eq!(pixel_size_for_layer(&doc, 0, 1600), (1600, 800));
+    }
+
+    #[test]
+    fn sizes_png_from_board_outline_bounds_when_layer_has_no_features() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        let bbox = BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(40.0, 20.0),
+        };
+        doc.board_outlines.push(BoardOutline {
+            path_start: 0,
+            path_count: 0,
+            bbox,
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 0,
+            bbox: BBox::empty(),
+        });
+
+        assert_eq!(pixel_size_for_layer(&doc, 0, 2100), (2100, 1100));
     }
 }
