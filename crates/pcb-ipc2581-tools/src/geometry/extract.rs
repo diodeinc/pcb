@@ -563,6 +563,7 @@ fn extract_pad(
     feature.primitive_ref = Some(primitive_ref);
     feature.flags.expanded_padstack = true;
     feature.flags.lowered_to_paths = true;
+    feature.flags.clears_previous_in_set = paint == PrimitivePaint::Void;
 
     Ok(Some(feature))
 }
