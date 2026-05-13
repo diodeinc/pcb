@@ -1981,47 +1981,29 @@ impl<'a> Parser<'a> {
     fn parse_features(&mut self, features_node: &Node) -> Vec<ecad::SetFeature> {
         let mut features = Vec::new();
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
-
-        // Check for Location offset (applies to all geometry in Features)
-        let mut offset_x = 0.0;
-        let mut offset_y = 0.0;
-        for child in self.element_children(features_node) {
-            if self.name(&child) == "Location" {
-                offset_x = self
-                    .attr(&child, "x")
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|v| crate::units::to_mm(v, units))
-                    .unwrap_or(0.0);
-                offset_y = self
-                    .attr(&child, "y")
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|v| crate::units::to_mm(v, units))
-                    .unwrap_or(0.0);
-                break;
-            }
-        }
+        let offset = self.parse_features_location(features_node, units);
 
         for child in self.element_children(features_node) {
             match self.name(&child) {
                 "Polygon" => {
-                    if let Ok(poly) = self.parse_polygon(&child, units) {
-                        features.push(ecad::SetFeature::Polygon(poly));
+                    if let Some(feature) = self.parse_feature_polygon(&child, units, offset) {
+                        features.push(feature);
                     }
                 }
                 "Polyline" => {
                     if let Ok(polyline) =
-                        self.parse_feature_polyline(&child, units, offset_x, offset_y)
+                        self.parse_feature_polyline(&child, units, offset.x, offset.y)
                     {
                         features.push(ecad::SetFeature::Polyline(polyline));
                     }
                 }
                 "Line" => {
-                    if let Ok(line) = self.parse_line(&child, units, offset_x, offset_y) {
+                    if let Ok(line) = self.parse_line(&child, units, offset.x, offset.y) {
                         features.push(ecad::SetFeature::Line(line));
                     }
                 }
                 "Arc" => {
-                    if let Ok(arc) = self.parse_feature_arc(&child, units, offset_x, offset_y) {
+                    if let Ok(arc) = self.parse_feature_arc(&child, units, offset.x, offset.y) {
                         features.push(ecad::SetFeature::Arc(arc));
                     }
                 }
@@ -2032,28 +2014,29 @@ impl<'a> Parser<'a> {
                             "Contour" => {
                                 for poly_node in self.element_children(&inner) {
                                     if self.name(&poly_node) == "Polygon"
-                                        && let Ok(poly) = self.parse_polygon(&poly_node, units)
+                                        && let Some(feature) =
+                                            self.parse_feature_polygon(&poly_node, units, offset)
                                     {
-                                        features.push(ecad::SetFeature::Polygon(poly));
+                                        features.push(feature);
                                     }
                                 }
                             }
                             "Line" => {
-                                if let Ok(line) = self.parse_line(&inner, units, offset_x, offset_y)
+                                if let Ok(line) = self.parse_line(&inner, units, offset.x, offset.y)
                                 {
                                     features.push(ecad::SetFeature::Line(line));
                                 }
                             }
                             "Arc" => {
                                 if let Ok(arc) =
-                                    self.parse_feature_arc(&inner, units, offset_x, offset_y)
+                                    self.parse_feature_arc(&inner, units, offset.x, offset.y)
                                 {
                                     features.push(ecad::SetFeature::Arc(arc));
                                 }
                             }
                             "Polyline" => {
                                 if let Ok(polyline) =
-                                    self.parse_feature_polyline(&inner, units, offset_x, offset_y)
+                                    self.parse_feature_polyline(&inner, units, offset.x, offset.y)
                                 {
                                     features.push(ecad::SetFeature::Polyline(polyline));
                                 }
@@ -2063,8 +2046,8 @@ impl<'a> Parser<'a> {
                                     features.push(ecad::SetFeature::UserPrimitiveRef(
                                         ecad::FeaturePrimitiveRef {
                                             id: self.interner.intern(id),
-                                            x: offset_x,
-                                            y: offset_y,
+                                            x: offset.x,
+                                            y: offset.y,
                                         },
                                     ));
                                 }
@@ -2078,8 +2061,8 @@ impl<'a> Parser<'a> {
                         features.push(ecad::SetFeature::StandardPrimitiveRef(
                             ecad::FeaturePrimitiveRef {
                                 id: self.interner.intern(id),
-                                x: offset_x,
-                                y: offset_y,
+                                x: offset.x,
+                                y: offset.y,
                             },
                         ));
                     }
@@ -2089,8 +2072,8 @@ impl<'a> Parser<'a> {
                         features.push(ecad::SetFeature::UserPrimitiveRef(
                             ecad::FeaturePrimitiveRef {
                                 id: self.interner.intern(id),
-                                x: offset_x,
-                                y: offset_y,
+                                x: offset.x,
+                                y: offset.y,
                             },
                         ));
                     }
@@ -2100,6 +2083,56 @@ impl<'a> Parser<'a> {
         }
 
         features
+    }
+
+    fn parse_features_location(&self, features_node: &Node, units: Units) -> Point {
+        self.element_children(features_node)
+            .find(|child| self.name(child) == "Location")
+            .map(|location| Point {
+                x: self
+                    .attr(&location, "x")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| crate::units::to_mm(v, units))
+                    .unwrap_or(0.0),
+                y: self
+                    .attr(&location, "y")
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|v| crate::units::to_mm(v, units))
+                    .unwrap_or(0.0),
+            })
+            .unwrap_or(Point { x: 0.0, y: 0.0 })
+    }
+
+    fn parse_feature_polygon(
+        &mut self,
+        node: &Node,
+        units: Units,
+        offset: Point,
+    ) -> Option<ecad::SetFeature> {
+        self.parse_polygon(node, units)
+            .ok()
+            .map(|polygon| ecad::SetFeature::Polygon(Self::translate_polygon(polygon, offset)))
+    }
+
+    fn translate_polygon(mut polygon: Polygon, offset: Point) -> Polygon {
+        Self::translate_point(&mut polygon.begin, offset);
+        for step in &mut polygon.steps {
+            match step {
+                PolyStep::Segment(segment) => {
+                    Self::translate_point(&mut segment.point, offset);
+                }
+                PolyStep::Curve(curve) => {
+                    Self::translate_point(&mut curve.point, offset);
+                    Self::translate_point(&mut curve.center, offset);
+                }
+            }
+        }
+        polygon
+    }
+
+    fn translate_point(point: &mut Point, offset: Point) {
+        point.x += offset.x;
+        point.y += offset.y;
     }
 
     fn parse_line(

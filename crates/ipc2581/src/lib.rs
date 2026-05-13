@@ -391,6 +391,60 @@ mod tests {
     }
 
     #[test]
+    fn applies_features_location_to_polygons() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.SilkS" layerFunction="LEGEND"/>
+      <Step name="Board">
+        <LayerFeature layerRef="F.SilkS">
+          <Set>
+            <Features>
+              <Location x="10" y="20"/>
+              <Polygon>
+                <PolyBegin x="0" y="0"/>
+                <PolyStepSegment x="1" y="0"/>
+                <PolyStepCurve x="0" y="1" centerX="0" centerY="0" clockwise="false"/>
+                <PolyStepSegment x="0" y="0"/>
+              </Polygon>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="2" y="0"/>
+                    <PolyStepSegment x="3" y="0"/>
+                    <PolyStepSegment x="2" y="0"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
+        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+
+        assert_eq!(set.polygons.len(), 2);
+        assert_eq!(set.polygons[0].begin, Point { x: 10.0, y: 20.0 });
+        assert!(matches!(
+            set.polygons[0].steps[1],
+            PolyStep::Curve(PolyStepCurve {
+                center: Point { x: 10.0, y: 20.0 },
+                ..
+            })
+        ));
+        assert_eq!(set.polygons[1].begin, Point { x: 12.0, y: 20.0 });
+    }
+
+    #[test]
     fn parses_user_special_contours_lines_polylines_and_line_desc_refs() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
