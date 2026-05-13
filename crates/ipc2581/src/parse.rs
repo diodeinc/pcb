@@ -1700,7 +1700,7 @@ impl<'a> Parser<'a> {
             .parse_optional_f64_attr_with_units(node, "dy", units)?
             .unwrap_or(0.0);
         let angle = self.parse_optional_f64_attr(node, "angle")?.unwrap_or(0.0);
-        let mirror = match node.attribute("mirror") {
+        let mirror = match self.attr(node, "mirror") {
             Some(value) if value.eq_ignore_ascii_case("true") => true,
             Some(value) if value.eq_ignore_ascii_case("false") => false,
             Some(_) => {
