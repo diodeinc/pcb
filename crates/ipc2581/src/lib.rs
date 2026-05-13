@@ -10,7 +10,6 @@ pub use types::*;
 
 use checksum::validate_checksum;
 use parse::Parser;
-use roxmltree::Document;
 use std::path::Path;
 use thiserror::Error;
 use uppsala::XsdValidator;
@@ -20,7 +19,7 @@ const IPC_2581C_XSD: &str = include_str!("../IPC-2581C.xsd");
 #[derive(Debug, Error)]
 pub enum Ipc2581Error {
     #[error("XML parse error: {0}")]
-    XmlParse(#[from] roxmltree::Error),
+    XmlParse(String),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -109,15 +108,18 @@ impl Ipc2581 {
         // Validate checksum if present
         validate_checksum(xml)?;
 
-        // Parse XML with roxmltree
-        let doc = Document::parse(xml)?;
+        // Parse XML with Uppsala's arena-backed DOM.
+        let doc = uppsala::parse(xml).map_err(|err| Ipc2581Error::XmlParse(err.to_string()))?;
 
         // Validate namespace
-        let root = doc.root_element();
-        if root.tag_name().namespace() != Some("http://webstds.ipc.org/2581") {
+        let root = doc
+            .document_element()
+            .ok_or(Ipc2581Error::MissingElement("IPC-2581"))?;
+        let root_name = doc.element(root).expect("root is an element").name.clone();
+        if root_name.namespace_uri.as_deref() != Some("http://webstds.ipc.org/2581") {
             return Err(Ipc2581Error::InvalidStructure(format!(
                 "Expected IPC-2581 namespace, got {:?}",
-                root.tag_name().namespace()
+                root_name.namespace_uri
             )));
         }
 

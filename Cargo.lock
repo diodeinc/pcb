@@ -3256,7 +3256,6 @@ dependencies = [
  "hex",
  "md-5",
  "quick-xml",
- "roxmltree 0.21.1",
  "thiserror 2.0.18",
  "uppsala",
  "zstd",
