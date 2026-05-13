@@ -290,6 +290,65 @@ mod tests {
     }
 
     #[test]
+    fn preserves_set_feature_source_order() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu" layerFunction="SIGNAL"/>
+      <Step name="Board">
+        <LayerFeature layerRef="F.Cu">
+          <Set>
+            <Polyline>
+              <PolyBegin x="0" y="0"/>
+              <PolyStepSegment x="1" y="0"/>
+              <LineDescRef id="trace"/>
+            </Polyline>
+            <Features>
+              <Polygon>
+                <PolyBegin x="0" y="0"/>
+                <PolyStepSegment x="1" y="0"/>
+                <PolyStepSegment x="1" y="1"/>
+                <PolyStepSegment x="0" y="0"/>
+              </Polygon>
+              <UserSpecial>
+                <Line startX="0" startY="0" endX="0" endY="1">
+                  <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+                </Line>
+              </UserSpecial>
+            </Features>
+            <Polyline>
+              <PolyBegin x="2" y="0"/>
+              <PolyStepCurve x="3" y="1" centerX="2" centerY="1" clockwise="true"/>
+              <LineDescRef id="trace"/>
+            </Polyline>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
+        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+
+        assert_eq!(set.features.len(), 4);
+        assert!(matches!(set.features[0], ecad::SetFeature::Trace(_)));
+        assert!(matches!(set.features[1], ecad::SetFeature::Polygon(_)));
+        assert!(matches!(set.features[2], ecad::SetFeature::Line(_)));
+        assert!(matches!(set.features[3], ecad::SetFeature::Trace(_)));
+
+        assert_eq!(set.traces.len(), 2);
+        assert!(matches!(set.traces[1].steps[0], PolyStep::Curve(_)));
+        assert_eq!(set.polygons.len(), 1);
+        assert_eq!(set.lines.len(), 1);
+    }
+
+    #[test]
     fn parse_document_with_avl() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

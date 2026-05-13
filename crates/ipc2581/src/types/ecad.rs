@@ -237,6 +237,7 @@ pub struct FeatureSet {
     pub net: Option<Symbol>,      // Net name from Set element
     pub geometry: Option<Symbol>, // Reference to PadStackDef or other geometry definition
     pub polarity: Option<Polarity>,
+    pub features: Vec<SetFeature>,
     pub holes: Vec<Hole>,
     pub slots: Vec<Slot>,
     pub pads: Vec<Pad>,
@@ -244,6 +245,17 @@ pub struct FeatureSet {
     pub polygons: Vec<super::Polygon>, // Copper pours from Features
     pub lines: Vec<Line>,              // Trace lines from Features > UserSpecial > Line
     pub nonstandard_attributes: Vec<NonstandardAttribute>,
+}
+
+/// Geometry-bearing children of a Set in source document order.
+#[derive(Debug, Clone)]
+pub enum SetFeature {
+    Hole(Hole),
+    Slot(Slot),
+    Pad(Pad),
+    Trace(Trace),
+    Polygon(super::Polygon),
+    Line(Line),
 }
 
 /// NonstandardAttribute from Set elements
@@ -317,6 +329,7 @@ pub struct Pad {
 pub struct Trace {
     pub line_desc_ref: Option<Symbol>,
     pub points: Vec<TracePoint>,
+    pub steps: Vec<super::PolyStep>,
 }
 
 /// Point in a trace

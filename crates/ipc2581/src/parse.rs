@@ -1759,19 +1759,40 @@ impl<'a> Parser<'a> {
         let mut traces = Vec::new();
         let mut polygons = Vec::new();
         let mut lines = Vec::new();
+        let mut features = Vec::new();
         let mut nonstandard_attributes = Vec::new();
 
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Hole" => holes.push(self.parse_hole(&child)?),
-                "SlotCavity" => slots.push(self.parse_slot_cavity(&child)?),
-                "Pad" => pads.push(self.parse_pad(&child)?),
-                "Polyline" => traces.push(self.parse_trace(&child)?),
+                "Hole" => {
+                    let hole = self.parse_hole(&child)?;
+                    features.push(ecad::SetFeature::Hole(hole.clone()));
+                    holes.push(hole);
+                }
+                "SlotCavity" => {
+                    let slot = self.parse_slot_cavity(&child)?;
+                    features.push(ecad::SetFeature::Slot(slot.clone()));
+                    slots.push(slot);
+                }
+                "Pad" => {
+                    let pad = self.parse_pad(&child)?;
+                    features.push(ecad::SetFeature::Pad(pad.clone()));
+                    pads.push(pad);
+                }
+                "Polyline" => {
+                    let trace = self.parse_trace(&child)?;
+                    features.push(ecad::SetFeature::Trace(trace.clone()));
+                    traces.push(trace);
+                }
                 "Features" => {
-                    // Parse polygons and lines from Features
-                    let (feat_polygons, feat_lines) = self.parse_features(&child);
-                    polygons.extend(feat_polygons);
-                    lines.extend(feat_lines);
+                    for feature in self.parse_features(&child) {
+                        match &feature {
+                            ecad::SetFeature::Polygon(polygon) => polygons.push(polygon.clone()),
+                            ecad::SetFeature::Line(line) => lines.push(line.clone()),
+                            _ => {}
+                        }
+                        features.push(feature);
+                    }
                 }
                 "NonstandardAttribute" => {
                     if let Ok(attr) = self.parse_nonstandard_attribute(&child) {
@@ -1786,6 +1807,7 @@ impl<'a> Parser<'a> {
             net,
             geometry,
             polarity,
+            features,
             holes,
             slots,
             pads,
@@ -1808,9 +1830,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_features(&mut self, features_node: &Node) -> (Vec<Polygon>, Vec<ecad::Line>) {
-        let mut polygons = Vec::new();
-        let mut lines = Vec::new();
+    fn parse_features(&mut self, features_node: &Node) -> Vec<ecad::SetFeature> {
+        let mut features = Vec::new();
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
 
         // Check for Location offset (applies to all geometry in Features)
@@ -1836,12 +1857,16 @@ impl<'a> Parser<'a> {
             match self.name(&child) {
                 "Polygon" => {
                     if let Ok(poly) = self.parse_polygon(&child, units) {
-                        polygons.push(poly);
+                        features.push(ecad::SetFeature::Polygon(poly));
                     }
                 }
                 "Polyline" => {
                     // Polyline traces in Features
-                    lines.extend(self.parse_polyline_to_lines(&child, units, offset_x, offset_y));
+                    features.extend(
+                        self.parse_polyline_to_lines(&child, units, offset_x, offset_y)
+                            .into_iter()
+                            .map(ecad::SetFeature::Line),
+                    );
                 }
                 "UserSpecial" => {
                     // UserSpecial contains Contour > Polygon OR Line
@@ -1852,13 +1877,13 @@ impl<'a> Parser<'a> {
                                     if self.name(&poly_node) == "Polygon"
                                         && let Ok(poly) = self.parse_polygon(&poly_node, units)
                                     {
-                                        polygons.push(poly);
+                                        features.push(ecad::SetFeature::Polygon(poly));
                                     }
                                 }
                             }
                             "Line" => {
                                 if let Ok(line) = self.parse_line(&inner, units) {
-                                    lines.push(line);
+                                    features.push(ecad::SetFeature::Line(line));
                                 }
                             }
                             _ => {}
@@ -1869,7 +1894,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        (polygons, lines)
+        features
     }
 
     fn parse_line(&mut self, node: &Node, units: Units) -> Result<ecad::Line> {
@@ -2180,12 +2205,41 @@ impl<'a> Parser<'a> {
             .map(|s| self.interner.intern(s));
 
         let mut points = Vec::new();
+        let mut steps = Vec::new();
         for child in self.element_children(node) {
             match self.name(&child) {
-                "PolyBegin" | "PolyStepSegment" => {
+                "PolyBegin" => {
                     let x = self.parse_f64_attr_with_units(&child, "x", "TracePoint", units)?;
                     let y = self.parse_f64_attr_with_units(&child, "y", "TracePoint", units)?;
                     points.push(TracePoint { x, y });
+                }
+                "PolyStepSegment" => {
+                    let x = self.parse_f64_attr_with_units(&child, "x", "TracePoint", units)?;
+                    let y = self.parse_f64_attr_with_units(&child, "y", "TracePoint", units)?;
+                    let point = Point { x, y };
+                    points.push(TracePoint { x, y });
+                    steps.push(PolyStep::Segment(PolyStepSegment { point }));
+                }
+                "PolyStepCurve" => {
+                    let x = self.parse_f64_attr_with_units(&child, "x", "TracePoint", units)?;
+                    let y = self.parse_f64_attr_with_units(&child, "y", "TracePoint", units)?;
+                    let center_x =
+                        self.parse_f64_attr_with_units(&child, "centerX", "PolyStepCurve", units)?;
+                    let center_y =
+                        self.parse_f64_attr_with_units(&child, "centerY", "PolyStepCurve", units)?;
+                    let clockwise = self
+                        .attr(&child, "clockwise")
+                        .map(|value| value == "true" || value == "1")
+                        .unwrap_or(false);
+                    points.push(TracePoint { x, y });
+                    steps.push(PolyStep::Curve(PolyStepCurve {
+                        point: Point { x, y },
+                        center: Point {
+                            x: center_x,
+                            y: center_y,
+                        },
+                        clockwise,
+                    }));
                 }
                 "LineDescRef" => {
                     if let Some(id) = self.attr(&child, "id") {
@@ -2199,6 +2253,7 @@ impl<'a> Parser<'a> {
         Ok(Trace {
             line_desc_ref,
             points,
+            steps,
         })
     }
 

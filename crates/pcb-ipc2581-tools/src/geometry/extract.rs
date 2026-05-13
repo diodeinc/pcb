@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use ipc2581::types::{
     FillProperty, LayerFunction, LineEnd, PadUse, PlatingStatus, Polarity, PolyStep, SlotShape,
     StandardPrimitive,
-    ecad::{Layer, Step, StepRepeat},
+    ecad::{Layer, SetFeature, Step, StepRepeat},
 };
 use ipc2581::{Ipc2581, Symbol};
 
@@ -161,69 +161,31 @@ fn extract_step_layer(
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
 
-            for (feature_index, pad) in set.pads.iter().enumerate() {
-                if let Some(feature) = extract_pad(
-                    &context,
-                    layer.name,
-                    set.net,
-                    polarity,
-                    SourceRef {
-                        set_index: set_index as u32,
-                        feature_index: feature_index as u32,
-                    },
-                    pad,
-                    &mut doc,
-                )? {
+            for (feature_index, set_feature) in set.features.iter().enumerate() {
+                let source = SourceRef {
+                    set_index: set_index as u32,
+                    feature_index: feature_index as u32,
+                };
+                let feature = match set_feature {
+                    SetFeature::Pad(pad) => extract_pad(
+                        &context, layer.name, set.net, polarity, source, pad, &mut doc,
+                    )?,
+                    SetFeature::Trace(trace) => {
+                        extract_trace(&context, set.net, polarity, source, trace, &mut doc)
+                    }
+                    SetFeature::Polygon(polygon) => Some(extract_polygon(
+                        set.net, polarity, source, polygon, &mut doc,
+                    )),
+                    SetFeature::Line(line) => {
+                        Some(extract_line(set.net, polarity, source, line, &mut doc))
+                    }
+                    SetFeature::Hole(_) | SetFeature::Slot(_) => None,
+                };
+
+                if let Some(feature) = feature {
                     layer_bbox = layer_bbox.union(feature.bbox);
                     doc.features.push(feature);
                 }
-            }
-
-            for (feature_index, trace) in set.traces.iter().enumerate() {
-                if let Some(feature) = extract_trace(
-                    &context,
-                    set.net,
-                    polarity,
-                    SourceRef {
-                        set_index: set_index as u32,
-                        feature_index: feature_index as u32,
-                    },
-                    trace,
-                    &mut doc,
-                ) {
-                    layer_bbox = layer_bbox.union(feature.bbox);
-                    doc.features.push(feature);
-                }
-            }
-
-            for (feature_index, polygon) in set.polygons.iter().enumerate() {
-                let feature = extract_polygon(
-                    set.net,
-                    polarity,
-                    SourceRef {
-                        set_index: set_index as u32,
-                        feature_index: feature_index as u32,
-                    },
-                    polygon,
-                    &mut doc,
-                );
-                layer_bbox = layer_bbox.union(feature.bbox);
-                doc.features.push(feature);
-            }
-
-            for (feature_index, line) in set.lines.iter().enumerate() {
-                let feature = extract_line(
-                    set.net,
-                    polarity,
-                    SourceRef {
-                        set_index: set_index as u32,
-                        feature_index: feature_index as u32,
-                    },
-                    line,
-                    &mut doc,
-                );
-                layer_bbox = layer_bbox.union(feature.bbox);
-                doc.features.push(feature);
             }
         }
     }
@@ -240,23 +202,27 @@ fn extract_step_layer(
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             if is_drill_layer && layer_span_applies_to_layer(source_layer, layer, layers) {
-                for (feature_index, hole) in set.holes.iter().enumerate() {
-                    let feature = extract_hole(
-                        SourceRef {
-                            set_index: set_index as u32,
-                            feature_index: feature_index as u32,
-                        },
-                        hole,
-                        &mut doc,
-                    );
-                    layer_bbox = layer_bbox.union(feature.bbox);
-                    doc.features.push(feature);
+                for (feature_index, set_feature) in set.features.iter().enumerate() {
+                    if let SetFeature::Hole(hole) = set_feature {
+                        let feature = extract_hole(
+                            SourceRef {
+                                set_index: set_index as u32,
+                                feature_index: feature_index as u32,
+                            },
+                            hole,
+                            &mut doc,
+                        );
+                        layer_bbox = layer_bbox.union(feature.bbox);
+                        doc.features.push(feature);
+                    }
                 }
             }
 
             if is_drill_layer || is_routing_layer {
-                for (feature_index, slot) in set.slots.iter().enumerate() {
-                    if slot_applies_to_layer(source_layer, layer, layers, slot) {
+                for (feature_index, set_feature) in set.features.iter().enumerate() {
+                    if let SetFeature::Slot(slot) = set_feature
+                        && slot_applies_to_layer(source_layer, layer, layers, slot)
+                    {
                         let feature = extract_slot(
                             &context,
                             SourceRef {
@@ -610,17 +576,12 @@ fn extract_trace(
         return None;
     };
 
-    let points: Vec<Point> = trace
-        .points
-        .iter()
-        .map(|point| Point::new(point.x, point.y))
-        .collect();
-    Some(push_stroked_polyline(
+    Some(push_stroked_trace(
         doc,
         net,
         polarity,
         source,
-        points,
+        trace,
         line_desc.line_width,
         map_line_cap(line_desc.line_end),
     ))
@@ -686,6 +647,60 @@ fn push_stroked_polyline(
         } else {
             PathCmd::line_to(point)
         });
+    }
+    bbox = bbox.expand(width / 2.0);
+
+    let path_start = doc.paths.len() as u32;
+    doc.push_path(GeometryPath::stroked(width, line_cap, bbox), cmds);
+
+    let mut feature = GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, polarity);
+    feature.net = net;
+    feature.source = source;
+    feature.bbox = bbox;
+    feature.path_start = path_start;
+    feature.path_count = 1;
+    feature.stroke_width = width;
+    feature.line_cap = line_cap;
+    feature.flags.lowered_to_paths = true;
+    feature
+}
+
+fn push_stroked_trace(
+    doc: &mut GeometryDocument,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    trace: &ipc2581::types::Trace,
+    width: f64,
+    line_cap: LineCap,
+) -> GeometryFeature {
+    if trace.steps.is_empty() {
+        let points = trace
+            .points
+            .iter()
+            .map(|point| Point::new(point.x, point.y))
+            .collect();
+        return push_stroked_polyline(doc, net, polarity, source, points, width, line_cap);
+    }
+
+    let mut current = Point::new(trace.points[0].x, trace.points[0].y);
+    let mut bbox = BBox::from_point(current);
+    let mut cmds = vec![PathCmd::move_to(current)];
+    for step in &trace.steps {
+        match step {
+            PolyStep::Segment(segment) => {
+                current = Point::new(segment.point.x, segment.point.y);
+                bbox.include_point(current);
+                cmds.push(PathCmd::line_to(current));
+            }
+            PolyStep::Curve(curve) => {
+                let end = Point::new(curve.point.x, curve.point.y);
+                let center = Point::new(curve.center.x, curve.center.y);
+                bbox.include_circular_arc(current, end, center, curve.clockwise);
+                cmds.push(PathCmd::arc_to(end, center, curve.clockwise));
+                current = end;
+            }
+        }
     }
     bbox = bbox.expand(width / 2.0);
 
@@ -1619,6 +1634,38 @@ mod tests {
 
         assert_eq!(primitive_paint(&circle), PrimitivePaint::Hollow);
         assert_eq!(primitive_paint(&rect), PrimitivePaint::Void);
+    }
+
+    #[test]
+    fn lowers_trace_poly_step_curves_as_arcs() {
+        let mut doc = GeometryDocument::new("test".to_string());
+        let trace = ipc2581::types::Trace {
+            line_desc_ref: None,
+            points: vec![
+                ipc2581::types::ecad::TracePoint { x: 1.0, y: 0.0 },
+                ipc2581::types::ecad::TracePoint { x: 0.0, y: 1.0 },
+            ],
+            steps: vec![PolyStep::Curve(ipc2581::types::PolyStepCurve {
+                point: ipc2581::types::Point { x: 0.0, y: 1.0 },
+                center: ipc2581::types::Point { x: 0.0, y: 0.0 },
+                clockwise: false,
+            })],
+        };
+
+        let feature = push_stroked_trace(
+            &mut doc,
+            None,
+            GeometryPolarity::Positive,
+            SourceRef::default(),
+            &trace,
+            0.2,
+            LineCap::Round,
+        );
+
+        assert_eq!(feature.path_count, 1);
+        assert_eq!(doc.paths[0].bbox.min, Point::new(-0.1, -0.1));
+        assert_eq!(doc.paths[0].bbox.max, Point::new(1.1, 1.1));
+        assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
     }
 
     #[test]
