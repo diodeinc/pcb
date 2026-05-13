@@ -9,6 +9,7 @@ use ipc2581::types::{
 use ipc2581::{Ipc2581, Symbol};
 
 use super::ir::*;
+use super::primary_step;
 
 struct ExtractContext<'a> {
     ipc: &'a Ipc2581,
@@ -64,16 +65,6 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
     extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)
 }
 
-fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Result<&'a Step> {
-    if let Some(step_ref) = ipc.content().step_refs.first()
-        && let Some(step) = steps.iter().find(|step| step.name == *step_ref)
-    {
-        return Ok(step);
-    }
-
-    steps.first().context("IPC-2581 ECAD section has no Step")
-}
-
 fn extract_panel_layer(
     ipc: &Ipc2581,
     steps: &[Step],
@@ -96,6 +87,11 @@ fn extract_panel_layer(
         0,
         Affine2::identity(),
     )?);
+    layer_bbox = layer_bbox.union(append_transformed_outlines(
+        &mut doc,
+        &panel_doc,
+        Affine2::identity(),
+    ));
 
     for repeat in &panel.step_repeats {
         let source_step = steps
@@ -119,6 +115,11 @@ fn extract_panel_layer(
                     0,
                     transform,
                 )?);
+                layer_bbox = layer_bbox.union(append_transformed_outlines(
+                    &mut doc,
+                    &source_doc,
+                    transform,
+                ));
             }
         }
     }
@@ -286,6 +287,8 @@ fn extract_step_layer(
         }
     }
 
+    layer_bbox = layer_bbox.union(push_board_outline(&mut doc, step, Affine2::identity()));
+
     let feature_count = doc.features.len() as u32 - feature_start;
     doc.layers.push(GeometryLayer {
         name: layer_name.to_string(),
@@ -393,6 +396,31 @@ fn append_transformed_layer(
     }
 
     Ok(layer_bbox)
+}
+
+fn append_transformed_outlines(
+    target: &mut GeometryDocument,
+    source: &GeometryDocument,
+    transform: Affine2,
+) -> BBox {
+    let mut outline_bbox = BBox::empty();
+    for outline in &source.board_outlines {
+        let path_start = target.paths.len() as u32;
+        for path in &source.paths
+            [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
+        {
+            append_transformed_path(target, source, path, transform);
+        }
+        let path_count = target.paths.len() as u32 - path_start;
+        let bbox = paths_bbox(target, path_start, path_count);
+        target.board_outlines.push(BoardOutline {
+            path_start,
+            path_count,
+            bbox,
+        });
+        outline_bbox = outline_bbox.union(bbox);
+    }
+    outline_bbox
 }
 
 fn append_transformed_path(
@@ -856,6 +884,46 @@ fn extract_polygon(
     feature.path_count = path_count;
     feature.flags.lowered_to_paths = true;
     feature
+}
+
+const BOARD_OUTLINE_STROKE_WIDTH: f64 = 0.1;
+
+fn push_board_outline(doc: &mut GeometryDocument, step: &Step, transform: Affine2) -> BBox {
+    let Some(profile) = &step.profile else {
+        return BBox::empty();
+    };
+
+    let path_start = doc.paths.len() as u32;
+    push_outline_polygon(doc, &profile.polygon, transform);
+    for cutout in &profile.cutouts {
+        push_outline_polygon(doc, cutout, transform);
+    }
+    let path_count = doc.paths.len() as u32 - path_start;
+    let bbox = paths_bbox(doc, path_start, path_count);
+    if path_count > 0 {
+        doc.board_outlines.push(BoardOutline {
+            path_start,
+            path_count,
+            bbox,
+        });
+    }
+    bbox
+}
+
+fn push_outline_polygon(
+    doc: &mut GeometryDocument,
+    polygon: &ipc2581::types::Polygon,
+    transform: Affine2,
+) {
+    let (bbox, cmds) = polygon_contour(polygon, transform);
+    doc.push_path(
+        GeometryPath::stroked(
+            BOARD_OUTLINE_STROKE_WIDTH,
+            LineCap::Round,
+            bbox.expand(BOARD_OUTLINE_STROKE_WIDTH / 2.0),
+        ),
+        cmds,
+    );
 }
 
 fn push_stroked_polyline(
@@ -2400,6 +2468,20 @@ mod tests {
     }
 
     #[test]
+    fn extracts_step_profile_and_cutouts_as_board_outlines() {
+        let ipc = ipc2581::Ipc2581::parse(profile_fixture())
+            .expect("synthetic profile fixture should parse");
+        let doc = extract_layer(&ipc, "TOP").expect("profile outline should extract");
+
+        assert_eq!(doc.board_outlines.len(), 1);
+        assert_eq!(doc.board_outlines[0].path_count, 2);
+        assert_eq!(doc.layers[0].bbox.min, Point::new(-0.05, -0.05));
+        assert_eq!(doc.layers[0].bbox.max, Point::new(20.05, 10.05));
+        assert!(doc.paths.iter().all(|path| path.flags.stroked));
+        assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+    }
+
+    #[test]
     fn chamfered_rect_respects_corner_flags() {
         let mut doc = GeometryDocument::new("test".to_string());
 
@@ -2576,6 +2658,40 @@ mod tests {
       </Step>
       <Step name="panel" type="PALLET">
         <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="20" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn profile_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+          </Polygon>
+          <Cutout>
+            <Polygon>
+              <PolyBegin x="6" y="5"/>
+              <PolyStepCurve x="4" y="5" centerX="5" centerY="5" clockwise="false"/>
+              <PolyStepCurve x="6" y="5" centerX="5" centerY="5" clockwise="false"/>
+            </Polygon>
+          </Cutout>
+        </Profile>
       </Step>
     </CadData>
   </Ecad>

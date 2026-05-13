@@ -31,6 +31,7 @@
               ./crates/pcb/src/fortune.txt
               ./crates/pcb/src/templates
               ./crates/pcb-component-gen/templates
+              ./crates/ipc2581/IPC-2581C.xsd
               ./crates/pcb-ipc2581-tools/src/commands/html_template.html.jinja
               ./crates/pcb-ipc2581-tools/src/commands/style.css
               ./crates/pcb-layout/src/scripts

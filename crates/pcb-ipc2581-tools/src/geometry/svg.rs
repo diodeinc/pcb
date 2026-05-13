@@ -2,6 +2,27 @@ use std::fmt::Write;
 
 use super::ir::*;
 
+const VIEWBOX_PADDING_MM: f64 = 1.0;
+
+pub fn render_layer_bbox(doc: &GeometryDocument, layer_index: usize) -> BBox {
+    let layer = &doc.layers[layer_index];
+    let bbox = doc
+        .board_outlines
+        .iter()
+        .fold(layer.bbox, |bbox, outline| bbox.union(outline.bbox));
+
+    if bbox.is_empty() {
+        BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(100.0, 100.0),
+        }
+    } else if doc.board_outlines.is_empty() {
+        bbox
+    } else {
+        bbox.expand(VIEWBOX_PADDING_MM)
+    }
+}
+
 pub fn render_layer_svg(doc: &GeometryDocument, layer_index: usize) -> String {
     render_layer_svg_with_size(doc, layer_index, None)
 }
@@ -21,14 +42,7 @@ fn render_layer_svg_with_size(
     pixel_size: Option<(u32, u32)>,
 ) -> String {
     let layer = &doc.layers[layer_index];
-    let geometry_bbox = if layer.bbox.is_empty() {
-        BBox {
-            min: Point::new(0.0, 0.0),
-            max: Point::new(100.0, 100.0),
-        }
-    } else {
-        layer.bbox
-    };
+    let geometry_bbox = render_layer_bbox(doc, layer_index);
     let viewbox_y = -geometry_bbox.max.y;
 
     let mut svg = String::new();
@@ -73,9 +87,28 @@ fn render_layer_svg_with_size(
         write_feature_paths(&mut svg, doc, feature, true);
     }
 
+    write_board_outlines(&mut svg, doc);
+
     writeln!(svg, "  </g>").unwrap();
     writeln!(svg, "</svg>").unwrap();
     svg
+}
+
+fn write_board_outlines(svg: &mut String, doc: &GeometryDocument) {
+    for outline in &doc.board_outlines {
+        for path in &doc.paths
+            [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
+        {
+            writeln!(
+                svg,
+                "    <path d='{}' fill='none' stroke='#000000' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='round' data-board-outline='true'/>",
+                path_data(doc, path),
+                fmt_num(path.stroke_width),
+                line_cap(path.line_cap)
+            )
+            .unwrap();
+        }
+    }
 }
 
 fn write_feature_paths(
@@ -474,5 +507,63 @@ mod tests {
 
         assert_eq!(svg.matches("<path d='").count(), 2);
         assert!(svg.find("fill='#2f9e44'").unwrap() < svg.find("fill='#64748b'").unwrap());
+    }
+
+    #[test]
+    fn renders_layer_without_outline_without_viewbox_padding() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        let bbox = BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(10.0, 5.0),
+        };
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 0,
+            bbox,
+        });
+
+        let svg = render_layer_svg(&doc, 0);
+
+        assert!(svg.contains("viewBox='0 -5 10 5'"));
+    }
+
+    #[test]
+    fn renders_board_outline_as_black_overlay_and_includes_it_in_viewbox() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        let bbox = BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(10.0, 5.0),
+        };
+        doc.push_path(
+            GeometryPath::stroked(0.1, LineCap::Round, bbox),
+            [
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 5.0)),
+                PathCmd::close(),
+            ],
+        );
+        doc.board_outlines.push(BoardOutline {
+            path_start: 0,
+            path_count: 1,
+            bbox,
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 0,
+            bbox: BBox::empty(),
+        });
+
+        let svg = render_layer_svg(&doc, 0);
+
+        assert!(svg.contains("viewBox='-1 -6 12 7'"));
+        assert!(svg.contains("stroke='#000000'"));
+        assert!(svg.contains("data-board-outline='true'"));
     }
 }
