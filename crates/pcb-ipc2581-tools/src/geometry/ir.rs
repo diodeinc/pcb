@@ -4,6 +4,7 @@ use ipc2581::Symbol;
 pub struct GeometryDocument {
     pub board_name: String,
     pub layers: Vec<GeometryLayer>,
+    pub board_outlines: Vec<BoardOutline>,
     pub features: Vec<GeometryFeature>,
     pub paths: Vec<GeometryPath>,
     pub contours: Vec<GeometryContour>,
@@ -16,6 +17,7 @@ impl GeometryDocument {
         Self {
             board_name,
             layers: Vec::new(),
+            board_outlines: Vec::new(),
             features: Vec::new(),
             paths: Vec::new(),
             contours: Vec::new(),
@@ -84,6 +86,13 @@ impl GeometryDocument {
             message: message.into(),
         });
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct BoardOutline {
+    pub path_start: u32,
+    pub path_count: u32,
+    pub bbox: BBox,
 }
 
 #[derive(Debug, Clone)]

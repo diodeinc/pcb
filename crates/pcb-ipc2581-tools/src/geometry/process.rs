@@ -39,6 +39,12 @@ pub fn normalize_bounds(doc: &mut GeometryDocument) {
         doc.paths[path_index].bbox = path_bbox(doc, path_index);
     }
 
+    for outline_index in 0..doc.board_outlines.len() {
+        let outline = &doc.board_outlines[outline_index];
+        doc.board_outlines[outline_index].bbox =
+            paths_bbox(doc, outline.path_start, outline.path_count);
+    }
+
     for feature_index in 0..doc.features.len() {
         doc.features[feature_index].bbox = feature_bbox(doc, feature_index);
     }
@@ -752,7 +758,11 @@ fn path_bbox(doc: &GeometryDocument, path_index: usize) -> BBox {
 
 fn feature_bbox(doc: &GeometryDocument, feature_index: usize) -> BBox {
     let feature = &doc.features[feature_index];
-    doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+    paths_bbox(doc, feature.path_start, feature.path_count)
+}
+
+fn paths_bbox(doc: &GeometryDocument, path_start: u32, path_count: u32) -> BBox {
+    doc.paths[path_start as usize..(path_start + path_count) as usize]
         .iter()
         .fold(BBox::empty(), |bbox, path| bbox.union(path.bbox))
 }
