@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use ipc2581::types::{
     FillProperty, LayerFunction, LineEnd, PadUse, PlatingStatus, Polarity, PolyStep, SlotShape,
-    StandardPrimitive, ecad::Layer,
+    StandardPrimitive,
+    ecad::{Layer, Step, StepRepeat},
 };
 use ipc2581::{Ipc2581, Symbol};
 
@@ -25,18 +26,106 @@ enum PrimitivePaint {
 
 pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let step = ecad
-        .cad_data
-        .steps
-        .first()
-        .context("IPC-2581 ECAD section has no Step")?;
     let layer = ecad
         .cad_data
         .layers
         .iter()
         .find(|layer| ipc.resolve(layer.name) == layer_name)
         .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))?;
+    let step = primary_step(ipc, &ecad.cad_data.steps)?;
 
+    if !step.step_repeats.is_empty() {
+        return extract_panel_layer(
+            ipc,
+            &ecad.cad_data.steps,
+            &ecad.cad_data.layers,
+            step,
+            layer,
+            layer_name,
+        );
+    }
+
+    extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)
+}
+
+fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Result<&'a Step> {
+    if let Some(step_ref) = ipc.content().step_refs.first()
+        && let Some(step) = steps.iter().find(|step| step.name == *step_ref)
+    {
+        return Ok(step);
+    }
+
+    steps.first().context("IPC-2581 ECAD section has no Step")
+}
+
+fn extract_panel_layer(
+    ipc: &Ipc2581,
+    steps: &[Step],
+    layers: &[Layer],
+    panel: &Step,
+    layer: &Layer,
+    layer_name: &str,
+) -> Result<GeometryDocument> {
+    let mut doc = GeometryDocument::new(ipc.resolve(panel.name).to_string());
+    let feature_start = doc.features.len() as u32;
+    let mut layer_bbox = BBox::empty();
+    let mut append_state = LayerAppendState::default();
+
+    let panel_doc = extract_step_layer(ipc, panel, layers, layer, layer_name)?;
+    doc.diagnostics
+        .extend(panel_doc.diagnostics.iter().cloned());
+    layer_bbox = layer_bbox.union(append_state.append_layer(
+        &mut doc,
+        &panel_doc,
+        0,
+        Affine2::identity(),
+    )?);
+
+    for repeat in &panel.step_repeats {
+        let source_step = steps
+            .iter()
+            .find(|step| step.name == repeat.step_ref)
+            .with_context(|| {
+                format!(
+                    "StepRepeat references unknown Step '{}'",
+                    ipc.resolve(repeat.step_ref)
+                )
+            })?;
+        let source_doc = extract_step_layer(ipc, source_step, layers, layer, layer_name)?;
+        doc.diagnostics.extend(source_doc.diagnostics.clone());
+
+        for iy in 0..repeat.ny {
+            for ix in 0..repeat.nx {
+                let transform = step_repeat_transform(repeat, ix, iy);
+                layer_bbox = layer_bbox.union(append_state.append_layer(
+                    &mut doc,
+                    &source_doc,
+                    0,
+                    transform,
+                )?);
+            }
+        }
+    }
+
+    let feature_count = doc.features.len() as u32 - feature_start;
+    doc.layers.push(GeometryLayer {
+        name: layer_name.to_string(),
+        source_layer_ref: layer.name,
+        feature_start,
+        feature_count,
+        bbox: layer_bbox,
+    });
+
+    Ok(doc)
+}
+
+fn extract_step_layer(
+    ipc: &Ipc2581,
+    step: &Step,
+    layers: &[Layer],
+    layer: &Layer,
+    layer_name: &str,
+) -> Result<GeometryDocument> {
     let content = ipc.content();
     let context = ExtractContext {
         ipc,
@@ -140,9 +229,7 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
     }
 
     for layer_feature in &step.layer_features {
-        let Some(source_layer) = ecad
-            .cad_data
-            .layers
+        let Some(source_layer) = layers
             .iter()
             .find(|candidate| candidate.name == layer_feature.layer_ref)
         else {
@@ -152,9 +239,7 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
         let is_routing_layer = source_layer.layer_function == LayerFunction::Rout;
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
-            if is_drill_layer
-                && layer_span_applies_to_layer(source_layer, layer, &ecad.cad_data.layers)
-            {
+            if is_drill_layer && layer_span_applies_to_layer(source_layer, layer, layers) {
                 for (feature_index, hole) in set.holes.iter().enumerate() {
                     let feature = extract_hole(
                         SourceRef {
@@ -171,7 +256,7 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
 
             if is_drill_layer || is_routing_layer {
                 for (feature_index, slot) in set.slots.iter().enumerate() {
-                    if slot_applies_to_layer(source_layer, layer, &ecad.cad_data.layers, slot) {
+                    if slot_applies_to_layer(source_layer, layer, layers, slot) {
                         let feature = extract_slot(
                             &context,
                             SourceRef {
@@ -199,6 +284,144 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
     });
 
     Ok(doc)
+}
+
+fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
+    Affine2::placement(
+        Point::new(
+            repeat.x + ix as f64 * repeat.dx,
+            repeat.y + iy as f64 * repeat.dy,
+        ),
+        repeat.angle,
+        repeat.mirror,
+        1.0,
+    )
+}
+
+#[derive(Debug, Default)]
+struct LayerAppendState {
+    next_source_set_index: u32,
+}
+
+impl LayerAppendState {
+    fn append_layer(
+        &mut self,
+        target: &mut GeometryDocument,
+        source: &GeometryDocument,
+        layer_index: usize,
+        transform: Affine2,
+    ) -> Result<BBox> {
+        let source_set_offset = self.next_source_set_index;
+        let source_set_span = source_layer_set_span(source, layer_index)?;
+        let bbox =
+            append_transformed_layer(target, source, layer_index, transform, source_set_offset)?;
+        self.next_source_set_index = self
+            .next_source_set_index
+            .checked_add(source_set_span)
+            .context("Panel contains too many repeated source feature sets")?;
+        Ok(bbox)
+    }
+}
+
+fn source_layer_set_span(source: &GeometryDocument, layer_index: usize) -> Result<u32> {
+    let layer = &source.layers[layer_index];
+    let mut span = 0;
+    for feature in source_layer_features(source, layer) {
+        let set_end = feature
+            .source
+            .set_index
+            .checked_add(1)
+            .context("Source feature set index overflow")?;
+        span = span.max(set_end);
+    }
+    Ok(span)
+}
+
+fn source_layer_features<'a>(
+    source: &'a GeometryDocument,
+    layer: &GeometryLayer,
+) -> &'a [GeometryFeature] {
+    &source.features
+        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
+}
+
+fn append_transformed_layer(
+    target: &mut GeometryDocument,
+    source: &GeometryDocument,
+    layer_index: usize,
+    transform: Affine2,
+    source_set_offset: u32,
+) -> Result<BBox> {
+    let layer = &source.layers[layer_index];
+    let mut layer_bbox = BBox::empty();
+
+    for feature in source_layer_features(source, layer) {
+        let path_start = target.paths.len() as u32;
+        for path in &source.paths
+            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+        {
+            append_transformed_path(target, source, path, transform);
+        }
+        let path_count = target.paths.len() as u32 - path_start;
+        let bbox = paths_bbox(target, path_start, path_count);
+
+        let mut feature = feature.clone();
+        feature.transform = transform.concat(feature.transform);
+        feature.bbox = bbox;
+        feature.path_start = path_start;
+        feature.path_count = path_count;
+        feature.center = transform.transform_point(feature.center);
+        feature.source.set_index = feature
+            .source
+            .set_index
+            .checked_add(source_set_offset)
+            .context("Panel source feature set index overflow")?;
+        target.features.push(feature);
+        layer_bbox = layer_bbox.union(bbox);
+    }
+
+    Ok(layer_bbox)
+}
+
+fn append_transformed_path(
+    target: &mut GeometryDocument,
+    source: &GeometryDocument,
+    path: &GeometryPath,
+    transform: Affine2,
+) {
+    let contour_start = target.contours.len() as u32;
+    let mut path_bbox = BBox::empty();
+
+    for contour in &source.contours
+        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+    {
+        let cmd_start = target.path_cmds.len() as u32;
+        let mut contour_bbox = BBox::empty();
+        for cmd in &source.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+        {
+            target
+                .path_cmds
+                .push(transform_path_cmd(*cmd, transform, &mut contour_bbox));
+        }
+        if path.flags.stroked {
+            contour_bbox = contour_bbox.expand(path.stroke_width / 2.0);
+        }
+
+        let cmd_count = target.path_cmds.len() as u32 - cmd_start;
+        target.contours.push(GeometryContour {
+            cmd_start,
+            cmd_count,
+            bbox: contour_bbox,
+        });
+        path_bbox = path_bbox.union(contour_bbox);
+    }
+
+    let mut path = path.clone();
+    path.contour_start = contour_start;
+    path.contour_count = target.contours.len() as u32 - contour_start;
+    path.bbox = path_bbox;
+    target.paths.push(path);
 }
 
 fn slot_applies_to_layer(
@@ -1448,6 +1671,47 @@ mod tests {
     }
 
     #[test]
+    fn extracts_panel_and_repeated_layer_instances() {
+        let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
+            .expect("synthetic panel fixture should parse");
+        let doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
+        let layer = &doc.layers[0];
+        let features = &doc.features
+            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
+
+        assert_eq!(doc.board_name, "panel");
+        assert_eq!(features.len(), 3);
+        assert_eq!(features[0].center, Point::new(40.0, 5.0));
+        assert_eq!(features[1].center, Point::new(12.0, 23.0));
+        assert_eq!(features[2].center, Point::new(27.0, 23.0));
+        assert_eq!(features[0].source.set_index, 0);
+        assert_eq!(features[1].source.set_index, 1);
+        assert_eq!(features[2].source.set_index, 2);
+        assert_eq!(layer.bbox.min, Point::new(11.5, 4.5));
+        assert_eq!(layer.bbox.max, Point::new(40.5, 23.5));
+    }
+
+    #[test]
+    fn repeated_panel_traces_keep_distinct_source_sets_after_processing() {
+        let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
+            .expect("synthetic panel fixture should parse");
+        let mut doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
+        crate::geometry::process::process_document(&mut doc);
+
+        let layer = &doc.layers[0];
+        let traces = doc.features
+            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
+            .iter()
+            .filter(|feature| feature.bucket == FeatureBucket::Trace)
+            .collect::<Vec<_>>();
+
+        assert_eq!(traces.len(), 2);
+        assert!(traces.iter().all(|feature| feature.path_count > 0));
+        assert_eq!(traces[0].source.set_index, 0);
+        assert_eq!(traces[1].source.set_index, 1);
+    }
+
+    #[test]
     fn chamfered_rect_respects_corner_flags() {
         let mut doc = GeometryDocument::new("test".to_string());
 
@@ -1542,5 +1806,91 @@ mod tests {
             x: 0.0,
             y: 0.0,
         }
+    }
+
+    fn panel_layer_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad">
+        <Circle diameter="1"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Pad padstackDefRef="padstack">
+              <Location x="2" y="3"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <PadStackDef name="panel_padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Pad padstackDefRef="panel_padstack">
+              <Location x="40" y="5"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="15" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn panel_trace_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    <LayerRef name="TOP"/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="trace">
+        <LineDesc lineWidth="1" lineEnd="ROUND"/>
+      </EntryLineDesc>
+    </DictionaryLineDesc>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set net="N1">
+            <Polyline lineDescRef="trace">
+              <PolyBegin x="0" y="0"/>
+              <PolyStepSegment x="10" y="0"/>
+            </Polyline>
+          </Set>
+        </LayerFeature>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="20" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
     }
 }

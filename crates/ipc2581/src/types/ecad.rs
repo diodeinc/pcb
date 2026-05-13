@@ -81,12 +81,27 @@ pub struct Step {
     pub name: Symbol,
     pub datum: Option<Datum>,
     pub profile: Option<Profile>,
+    pub step_repeats: Vec<StepRepeat>,
     pub padstack_defs: Vec<PadStackDef>,
     pub packages: Vec<Package>,
     pub components: Vec<Component>,
     pub logical_nets: Vec<LogicalNet>,
     pub phy_net_groups: Vec<PhyNetGroup>,
     pub layer_features: Vec<LayerFeature>,
+}
+
+/// StepRepeat places one Step within another Step, usually a board within a panel.
+#[derive(Debug, Clone)]
+pub struct StepRepeat {
+    pub step_ref: Symbol,
+    pub x: f64,
+    pub y: f64,
+    pub nx: u32,
+    pub ny: u32,
+    pub dx: f64,
+    pub dy: f64,
+    pub angle: f64,
+    pub mirror: bool,
 }
 
 /// Datum defines the origin point for a Step
