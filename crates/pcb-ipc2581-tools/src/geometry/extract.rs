@@ -192,6 +192,9 @@ fn extract_step_layer(
                     SetFeature::Line(line) => Some(extract_line(
                         &context, set.net, polarity, source, line, &mut doc,
                     )),
+                    SetFeature::Polyline(polyline) => Some(extract_feature_polyline(
+                        &context, set.net, polarity, source, polyline, &mut doc,
+                    )),
                     SetFeature::Hole(_) | SetFeature::Slot(_) => None,
                 };
 
@@ -666,6 +669,37 @@ fn extract_line(
     )
 }
 
+fn extract_feature_polyline(
+    context: &ExtractContext<'_>,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    polyline: &ipc2581::types::ecad::FeaturePolyline,
+    doc: &mut GeometryDocument,
+) -> GeometryFeature {
+    let line_desc = polyline
+        .line_desc_ref
+        .and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
+    let line_width = line_desc
+        .map(|desc| desc.line_width)
+        .unwrap_or(polyline.line_width);
+    let line_cap = line_desc
+        .map(|desc| map_line_cap(desc.line_end))
+        .or_else(|| polyline.line_end.map(map_line_cap))
+        .unwrap_or(LineCap::Round);
+
+    push_stroked_steps(
+        doc,
+        net,
+        polarity,
+        source,
+        Point::new(polyline.begin.x, polyline.begin.y),
+        &polyline.steps,
+        line_width,
+        line_cap,
+    )
+}
+
 fn extract_polygon(
     net: Option<Symbol>,
     polarity: GeometryPolarity,
@@ -741,10 +775,32 @@ fn push_stroked_trace(
         return push_stroked_polyline(doc, net, polarity, source, points, width, line_cap);
     }
 
-    let mut current = Point::new(trace.points[0].x, trace.points[0].y);
+    push_stroked_steps(
+        doc,
+        net,
+        polarity,
+        source,
+        Point::new(trace.points[0].x, trace.points[0].y),
+        &trace.steps,
+        width,
+        line_cap,
+    )
+}
+
+fn push_stroked_steps(
+    doc: &mut GeometryDocument,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    begin: Point,
+    steps: &[PolyStep],
+    width: f64,
+    line_cap: LineCap,
+) -> GeometryFeature {
+    let mut current = begin;
     let mut bbox = BBox::from_point(current);
     let mut cmds = vec![PathCmd::move_to(current)];
-    for step in &trace.steps {
+    for step in steps {
         match step {
             PolyStep::Segment(segment) => {
                 current = Point::new(segment.point.x, segment.point.y);
@@ -1771,6 +1827,45 @@ mod tests {
             &trace,
             0.2,
             LineCap::Round,
+        );
+
+        assert_eq!(feature.path_count, 1);
+        assert_eq!(doc.paths[0].bbox.min, Point::new(-0.1, -0.1));
+        assert_eq!(doc.paths[0].bbox.max, Point::new(1.1, 1.1));
+        assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+    }
+
+    #[test]
+    fn lowers_feature_poly_step_curves_as_arcs() {
+        let mut doc = GeometryDocument::new("test".to_string());
+        let polyline = ipc2581::types::ecad::FeaturePolyline {
+            begin: ipc2581::types::Point { x: 1.0, y: 0.0 },
+            steps: vec![PolyStep::Curve(ipc2581::types::PolyStepCurve {
+                point: ipc2581::types::Point { x: 0.0, y: 1.0 },
+                center: ipc2581::types::Point { x: 0.0, y: 0.0 },
+                clockwise: false,
+            })],
+            line_desc_ref: None,
+            line_width: 0.2,
+            line_end: Some(LineEnd::Round),
+        };
+
+        let feature = extract_feature_polyline(
+            &ExtractContext {
+                ipc: &Ipc2581::parse(
+                    r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
+                )
+                .unwrap(),
+                padstacks: HashMap::new(),
+                line_descs: HashMap::new(),
+                standard_primitives: HashMap::new(),
+                user_primitives: HashMap::new(),
+            },
+            None,
+            GeometryPolarity::Positive,
+            SourceRef::default(),
+            &polyline,
+            &mut doc,
         );
 
         assert_eq!(feature.path_count, 1);

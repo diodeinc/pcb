@@ -349,6 +349,48 @@ mod tests {
     }
 
     #[test]
+    fn preserves_feature_polyline_curves() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.SilkS" layerFunction="LEGEND"/>
+      <Step name="Board">
+        <LayerFeature layerRef="F.SilkS">
+          <Set>
+            <Features>
+              <Location x="10" y="20"/>
+              <Polyline>
+                <PolyBegin x="1" y="0"/>
+                <PolyStepCurve x="0" y="1" centerX="0" centerY="0" clockwise="false"/>
+                <LineDescRef id="fine"/>
+              </Polyline>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
+        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+
+        assert_eq!(set.features.len(), 1);
+        let ecad::SetFeature::Polyline(polyline) = &set.features[0] else {
+            panic!("expected feature polyline");
+        };
+        assert_eq!(polyline.begin, Point { x: 11.0, y: 20.0 });
+        assert!(matches!(polyline.steps[0], PolyStep::Curve(_)));
+        assert_eq!(set.polylines.len(), 1);
+        assert!(set.lines.is_empty());
+    }
+
+    #[test]
     fn parse_document_with_avl() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

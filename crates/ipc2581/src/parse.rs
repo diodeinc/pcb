@@ -1759,6 +1759,7 @@ impl<'a> Parser<'a> {
         let mut traces = Vec::new();
         let mut polygons = Vec::new();
         let mut lines = Vec::new();
+        let mut polylines = Vec::new();
         let mut features = Vec::new();
         let mut nonstandard_attributes = Vec::new();
 
@@ -1789,6 +1790,9 @@ impl<'a> Parser<'a> {
                         match &feature {
                             ecad::SetFeature::Polygon(polygon) => polygons.push(polygon.clone()),
                             ecad::SetFeature::Line(line) => lines.push(line.clone()),
+                            ecad::SetFeature::Polyline(polyline) => {
+                                polylines.push(polyline.clone())
+                            }
                             _ => {}
                         }
                         features.push(feature);
@@ -1814,6 +1818,7 @@ impl<'a> Parser<'a> {
             traces,
             polygons,
             lines,
+            polylines,
             nonstandard_attributes,
         })
     }
@@ -1861,15 +1866,14 @@ impl<'a> Parser<'a> {
                     }
                 }
                 "Polyline" => {
-                    // Polyline traces in Features
-                    features.extend(
-                        self.parse_polyline_to_lines(&child, units, offset_x, offset_y)
-                            .into_iter()
-                            .map(ecad::SetFeature::Line),
-                    );
+                    if let Ok(polyline) =
+                        self.parse_feature_polyline(&child, units, offset_x, offset_y)
+                    {
+                        features.push(ecad::SetFeature::Polyline(polyline));
+                    }
                 }
                 "UserSpecial" => {
-                    // UserSpecial contains Contour > Polygon OR Line
+                    // UserSpecial contains Contour > Polygon, Line, or Polyline.
                     for inner in self.element_children(&child) {
                         match self.name(&inner) {
                             "Contour" => {
@@ -1884,6 +1888,13 @@ impl<'a> Parser<'a> {
                             "Line" => {
                                 if let Ok(line) = self.parse_line(&inner, units) {
                                     features.push(ecad::SetFeature::Line(line));
+                                }
+                            }
+                            "Polyline" => {
+                                if let Ok(polyline) =
+                                    self.parse_feature_polyline(&inner, units, offset_x, offset_y)
+                                {
+                                    features.push(ecad::SetFeature::Polyline(polyline));
                                 }
                             }
                             _ => {}
@@ -1942,83 +1953,79 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_polyline_to_lines(
+    fn parse_feature_polyline(
         &mut self,
         node: &Node,
         units: Units,
         offset_x: f64,
         offset_y: f64,
-    ) -> Vec<ecad::Line> {
-        let mut out = Vec::new();
-        let mut current_x = offset_x;
-        let mut current_y = offset_y;
+    ) -> Result<ecad::FeaturePolyline> {
+        let mut begin = None;
+        let mut steps = Vec::new();
         let mut line_width = 0.25;
         let mut line_end = None;
         let mut line_desc_ref = None;
 
-        // Parse points and LineDesc, tessellating curves
         for child in self.element_children(node) {
             match self.name(&child) {
                 "PolyBegin" => {
-                    current_x = self
-                        .parse_f64_attr_with_units(&child, "x", "PolyBegin", units)
-                        .unwrap_or(0.0)
-                        + offset_x;
-                    current_y = self
-                        .parse_f64_attr_with_units(&child, "y", "PolyBegin", units)
-                        .unwrap_or(0.0)
-                        + offset_y;
+                    begin = Some(Point {
+                        x: self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units)?
+                            + offset_x,
+                        y: self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units)?
+                            + offset_y,
+                    });
                 }
                 "PolyStepSegment" => {
-                    let x = self
-                        .parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units)
-                        .unwrap_or(0.0)
-                        + offset_x;
-                    let y = self
-                        .parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units)
-                        .unwrap_or(0.0)
-                        + offset_y;
-
-                    out.push(ecad::Line {
-                        start_x: current_x,
-                        start_y: current_y,
-                        end_x: x,
-                        end_y: y,
-                        line_desc_ref,
-                        line_width,
-                        line_end,
-                    });
-
-                    current_x = x;
-                    current_y = y;
+                    steps.push(PolyStep::Segment(PolyStepSegment {
+                        point: Point {
+                            x: self.parse_f64_attr_with_units(
+                                &child,
+                                "x",
+                                "PolyStepSegment",
+                                units,
+                            )? + offset_x,
+                            y: self.parse_f64_attr_with_units(
+                                &child,
+                                "y",
+                                "PolyStepSegment",
+                                units,
+                            )? + offset_y,
+                        },
+                    }));
                 }
                 "PolyStepCurve" => {
-                    // TODO: Properly handle arcs in UserSpecial
-                    // Currently we skip arcs to keep parser pure (no tessellation dependencies)
-                    // This should store raw Arc data and let downstream code handle tessellation
-                    let end_x = self
-                        .parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units)
-                        .unwrap_or(0.0)
-                        + offset_x;
-                    let end_y = self
-                        .parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units)
-                        .unwrap_or(0.0)
-                        + offset_y;
-
-                    // For now, create straight line from current to end point
-                    // Proper fix: store Arc data in UserSpecial and tessellate in ipc2581-tools
-                    out.push(ecad::Line {
-                        start_x: current_x,
-                        start_y: current_y,
-                        end_x,
-                        end_y,
-                        line_desc_ref,
-                        line_width,
-                        line_end,
-                    });
-
-                    current_x = end_x;
-                    current_y = end_y;
+                    steps.push(PolyStep::Curve(PolyStepCurve {
+                        point: Point {
+                            x: self.parse_f64_attr_with_units(
+                                &child,
+                                "x",
+                                "PolyStepCurve",
+                                units,
+                            )? + offset_x,
+                            y: self.parse_f64_attr_with_units(
+                                &child,
+                                "y",
+                                "PolyStepCurve",
+                                units,
+                            )? + offset_y,
+                        },
+                        center: Point {
+                            x: self.parse_f64_attr_with_units(
+                                &child,
+                                "centerX",
+                                "PolyStepCurve",
+                                units,
+                            )? + offset_x,
+                            y: self.parse_f64_attr_with_units(
+                                &child,
+                                "centerY",
+                                "PolyStepCurve",
+                                units,
+                            )? + offset_y,
+                        },
+                        clockwise: self.parse_bool_attr(&child, "clockwise")?,
+                    }));
                 }
                 "LineDesc" => {
                     line_width = self
@@ -2042,7 +2049,13 @@ impl<'a> Parser<'a> {
             }
         }
 
-        out
+        Ok(ecad::FeaturePolyline {
+            begin: begin.ok_or(Ipc2581Error::MissingElement("PolyBegin in Polyline"))?,
+            steps,
+            line_desc_ref,
+            line_width,
+            line_end,
+        })
     }
 
     fn parse_hole(&mut self, node: &Node) -> Result<Hole> {

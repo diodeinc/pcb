@@ -244,6 +244,7 @@ pub struct FeatureSet {
     pub traces: Vec<Trace>,
     pub polygons: Vec<super::Polygon>, // Copper pours from Features
     pub lines: Vec<Line>,              // Trace lines from Features > UserSpecial > Line
+    pub polylines: Vec<FeaturePolyline>,
     pub nonstandard_attributes: Vec<NonstandardAttribute>,
 }
 
@@ -256,6 +257,7 @@ pub enum SetFeature {
     Trace(Trace),
     Polygon(super::Polygon),
     Line(Line),
+    Polyline(FeaturePolyline),
 }
 
 /// NonstandardAttribute from Set elements
@@ -273,6 +275,16 @@ pub struct Line {
     pub start_y: f64,
     pub end_x: f64,
     pub end_y: f64,
+    pub line_desc_ref: Option<Symbol>,
+    pub line_width: f64,
+    pub line_end: Option<super::LineEnd>,
+}
+
+/// Open polyline feature preserving straight and curved PolyStep order.
+#[derive(Debug, Clone)]
+pub struct FeaturePolyline {
+    pub begin: super::Point,
+    pub steps: Vec<super::PolyStep>,
     pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
