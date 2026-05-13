@@ -1905,23 +1905,29 @@ impl<'a> Parser<'a> {
 
         let mut line_width = 0.25;
         let mut line_end = None;
+        let mut line_desc_ref = None;
 
-        // Look for LineDesc child
         for child in self.element_children(node) {
-            if self.name(&child) == "LineDesc" {
-                line_width = self
-                    .attr(&child, "lineWidth")
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|v| crate::units::to_mm(v, units))
-                    .unwrap_or(0.25);
-
-                line_end = self.attr(&child, "lineEnd").and_then(|s| match s {
-                    "ROUND" => Some(LineEnd::Round),
-                    "SQUARE" => Some(LineEnd::Square),
-                    "FLAT" => Some(LineEnd::Flat),
-                    _ => None,
-                });
-                break;
+            match self.name(&child) {
+                "LineDesc" => {
+                    line_width = self
+                        .attr(&child, "lineWidth")
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .map(|v| crate::units::to_mm(v, units))
+                        .unwrap_or(0.25);
+                    line_end = self.attr(&child, "lineEnd").and_then(|s| match s {
+                        "ROUND" => Some(LineEnd::Round),
+                        "SQUARE" => Some(LineEnd::Square),
+                        "FLAT" => Some(LineEnd::Flat),
+                        _ => None,
+                    });
+                }
+                "LineDescRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        line_desc_ref = Some(self.interner.intern(id));
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -1930,6 +1936,7 @@ impl<'a> Parser<'a> {
             start_y,
             end_x,
             end_y,
+            line_desc_ref,
             line_width,
             line_end,
         })
@@ -1947,6 +1954,7 @@ impl<'a> Parser<'a> {
         let mut current_y = offset_y;
         let mut line_width = 0.25;
         let mut line_end = None;
+        let mut line_desc_ref = None;
 
         // Parse points and LineDesc, tessellating curves
         for child in self.element_children(node) {
@@ -1976,6 +1984,7 @@ impl<'a> Parser<'a> {
                         start_y: current_y,
                         end_x: x,
                         end_y: y,
+                        line_desc_ref,
                         line_width,
                         line_end,
                     });
@@ -2003,6 +2012,7 @@ impl<'a> Parser<'a> {
                         start_y: current_y,
                         end_x,
                         end_y,
+                        line_desc_ref,
                         line_width,
                         line_end,
                     });
@@ -2022,6 +2032,11 @@ impl<'a> Parser<'a> {
                         "FLAT" => Some(LineEnd::Flat),
                         _ => None,
                     });
+                }
+                "LineDescRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        line_desc_ref = Some(self.interner.intern(id));
+                    }
                 }
                 _ => {}
             }

@@ -273,6 +273,7 @@ pub struct Line {
     pub start_y: f64,
     pub end_x: f64,
     pub end_y: f64,
+    pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
 }

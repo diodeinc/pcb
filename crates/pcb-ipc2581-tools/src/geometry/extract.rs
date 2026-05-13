@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use ipc2581::types::{
     FillProperty, LayerFunction, LineEnd, PadUse, PlatingStatus, Polarity, PolyStep, SlotShape,
-    StandardPrimitive,
+    StandardPrimitive, UserPrimitive, UserShapeType,
     ecad::{Layer, SetFeature, Step, StepRepeat},
 };
 use ipc2581::{Ipc2581, Symbol};
@@ -15,6 +15,13 @@ struct ExtractContext<'a> {
     padstacks: HashMap<Symbol, &'a ipc2581::types::PadStackDef>,
     line_descs: HashMap<Symbol, ipc2581::types::LineDesc>,
     standard_primitives: HashMap<Symbol, &'a StandardPrimitive>,
+    user_primitives: HashMap<Symbol, &'a UserPrimitive>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PadPrimitiveRef {
+    Standard(Symbol),
+    User(Symbol),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +153,12 @@ fn extract_step_layer(
             .iter()
             .map(|entry| (entry.id, &entry.primitive))
             .collect(),
+        user_primitives: content
+            .dictionary_user
+            .entries
+            .iter()
+            .map(|entry| (entry.id, &entry.primitive))
+            .collect(),
     };
 
     let mut doc = GeometryDocument::new(ipc.resolve(step.name).to_string());
@@ -176,9 +189,9 @@ fn extract_step_layer(
                     SetFeature::Polygon(polygon) => Some(extract_polygon(
                         set.net, polarity, source, polygon, &mut doc,
                     )),
-                    SetFeature::Line(line) => {
-                        Some(extract_line(set.net, polarity, source, line, &mut doc))
-                    }
+                    SetFeature::Line(line) => Some(extract_line(
+                        &context, set.net, polarity, source, line, &mut doc,
+                    )),
                     SetFeature::Hole(_) | SetFeature::Slot(_) => None,
                 };
 
@@ -479,9 +492,7 @@ fn extract_pad(
     let center = Point::new(x + offset.x, y + offset.y);
     let transform = Affine2::placement(center, xform.rotation, xform.mirror, xform.scale);
 
-    let primitive_ref = pad
-        .standard_primitive_ref
-        .or_else(|| find_pad_primitive_ref(padstack, layer_ref));
+    let primitive_ref = pad_primitive_ref(pad, padstack, layer_ref);
     let Some(primitive_ref) = primitive_ref else {
         doc.warn(format!(
             "Skipping padstack '{}' because it has no regular primitive for layer '{}'",
@@ -490,17 +501,32 @@ fn extract_pad(
         ));
         return Ok(None);
     };
-    let Some(primitive) = context.standard_primitives.get(&primitive_ref).copied() else {
-        doc.warn(format!(
-            "Skipping padstack '{}' because primitive '{}' is missing",
-            context.ipc.resolve(padstack.name),
-            context.ipc.resolve(primitive_ref)
-        ));
-        return Ok(None);
-    };
 
     let path_start = doc.paths.len() as u32;
-    let paint = lower_standard_primitive(context, doc, primitive, transform, bucket)?;
+    let paint = match primitive_ref {
+        PadPrimitiveRef::Standard(primitive_ref) => {
+            let Some(primitive) = context.standard_primitives.get(&primitive_ref).copied() else {
+                doc.warn(format!(
+                    "Skipping padstack '{}' because primitive '{}' is missing",
+                    context.ipc.resolve(padstack.name),
+                    context.ipc.resolve(primitive_ref)
+                ));
+                return Ok(None);
+            };
+            lower_standard_primitive(context, doc, primitive, transform, bucket)?
+        }
+        PadPrimitiveRef::User(primitive_ref) => {
+            let Some(primitive) = context.user_primitives.get(&primitive_ref).copied() else {
+                doc.warn(format!(
+                    "Skipping padstack '{}' because user primitive '{}' is missing",
+                    context.ipc.resolve(padstack.name),
+                    context.ipc.resolve(primitive_ref)
+                ));
+                return Ok(None);
+            };
+            lower_user_primitive(doc, primitive, transform)
+        }
+    };
     let path_count = doc.paths.len() as u32 - path_start;
     if path_count == 0 {
         return Ok(None);
@@ -526,7 +552,11 @@ fn extract_pad(
     feature.rotation_degrees = xform.rotation;
     feature.scale = xform.scale;
     feature.padstack_ref = Some(padstack_ref);
-    feature.primitive_ref = Some(primitive_ref);
+    feature.primitive_ref = match primitive_ref {
+        PadPrimitiveRef::Standard(primitive_ref) | PadPrimitiveRef::User(primitive_ref) => {
+            Some(primitive_ref)
+        }
+    };
     feature.flags.expanded_padstack = true;
     feature.flags.lowered_to_paths = true;
     feature.flags.clears_previous_in_set = paint == PrimitivePaint::Void;
@@ -534,10 +564,21 @@ fn extract_pad(
     Ok(Some(feature))
 }
 
+fn pad_primitive_ref(
+    pad: &ipc2581::types::Pad,
+    padstack: &ipc2581::types::PadStackDef,
+    layer_ref: Symbol,
+) -> Option<PadPrimitiveRef> {
+    pad.standard_primitive_ref
+        .map(PadPrimitiveRef::Standard)
+        .or_else(|| pad.user_primitive_ref.map(PadPrimitiveRef::User))
+        .or_else(|| find_pad_primitive_ref(padstack, layer_ref))
+}
+
 fn find_pad_primitive_ref(
     padstack: &ipc2581::types::PadStackDef,
     layer_ref: Symbol,
-) -> Option<Symbol> {
+) -> Option<PadPrimitiveRef> {
     padstack
         .pad_defs
         .iter()
@@ -547,7 +588,12 @@ fn find_pad_primitive_ref(
                 pad_def.layer_ref == layer_ref && pad_def.pad_use == PadUse::Thermal
             })
         })
-        .and_then(|pad_def| pad_def.standard_primitive_ref)
+        .and_then(|pad_def| {
+            pad_def
+                .standard_primitive_ref
+                .map(PadPrimitiveRef::Standard)
+                .or_else(|| pad_def.user_primitive_ref.map(PadPrimitiveRef::User))
+        })
 }
 
 fn extract_trace(
@@ -588,12 +634,24 @@ fn extract_trace(
 }
 
 fn extract_line(
+    context: &ExtractContext<'_>,
     net: Option<Symbol>,
     polarity: GeometryPolarity,
     source: SourceRef,
     line: &ipc2581::types::ecad::Line,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
+    let line_desc = line
+        .line_desc_ref
+        .and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
+    let line_width = line_desc
+        .map(|desc| desc.line_width)
+        .unwrap_or(line.line_width);
+    let line_cap = line_desc
+        .map(|desc| map_line_cap(desc.line_end))
+        .or_else(|| line.line_end.map(map_line_cap))
+        .unwrap_or(LineCap::Round);
+
     push_stroked_polyline(
         doc,
         net,
@@ -603,8 +661,8 @@ fn extract_line(
             Point::new(line.start_x, line.start_y),
             Point::new(line.end_x, line.end_y),
         ],
-        line.line_width,
-        line.line_end.map(map_line_cap).unwrap_or(LineCap::Round),
+        line_width,
+        line_cap,
     )
 }
 
@@ -967,6 +1025,59 @@ fn lower_standard_primitive(
     }
 
     Ok(paint)
+}
+
+fn lower_user_primitive(
+    doc: &mut GeometryDocument,
+    primitive: &UserPrimitive,
+    transform: Affine2,
+) -> PrimitivePaint {
+    match primitive {
+        UserPrimitive::UserSpecial(user_special) => {
+            let mut paint = PrimitivePaint::Fill;
+            for shape in &user_special.shapes {
+                let path_start = doc.paths.len() as u32;
+                match &shape.shape {
+                    UserShapeType::Circle(circle) => {
+                        push_ellipse_path(doc, transform, circle.diameter, circle.diameter);
+                    }
+                    UserShapeType::RectCenter(rect) => {
+                        push_rect_path(doc, transform, rect.size.width, rect.size.height);
+                    }
+                    UserShapeType::Oval(oval) => {
+                        push_oval_path(doc, transform, oval.size.width, oval.size.height);
+                    }
+                    UserShapeType::Polygon(polygon) => {
+                        push_polygon_path(doc, polygon, transform, FillRule::NonZero);
+                    }
+                }
+
+                match shape.fill_desc.map(|desc| desc.fill_property) {
+                    Some(FillProperty::Hollow) => {
+                        if let Some(line_desc) = shape.line_desc {
+                            make_paths_stroked(
+                                doc,
+                                path_start,
+                                line_desc.line_width,
+                                map_line_cap(line_desc.line_end),
+                            );
+                        } else {
+                            make_paths_unpainted(doc, path_start);
+                        }
+                        paint = PrimitivePaint::Hollow;
+                    }
+                    Some(FillProperty::Void) => {
+                        paint = PrimitivePaint::Void;
+                    }
+                    Some(FillProperty::Fill)
+                    | Some(FillProperty::Hatch)
+                    | Some(FillProperty::Mesh)
+                    | None => {}
+                }
+            }
+            paint
+        }
+    }
 }
 
 fn push_polygon_path(
@@ -1666,6 +1777,36 @@ mod tests {
         assert_eq!(doc.paths[0].bbox.min, Point::new(-0.1, -0.1));
         assert_eq!(doc.paths[0].bbox.max, Point::new(1.1, 1.1));
         assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+    }
+
+    #[test]
+    fn lowers_hollow_user_circle_as_stroked_path() {
+        let mut doc = GeometryDocument::new("test".to_string());
+        let primitive = UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
+            shapes: vec![ipc2581::types::UserShape {
+                shape: UserShapeType::Circle(ipc2581::types::Circle { diameter: 1.4 }),
+                line_desc: Some(ipc2581::types::LineDesc {
+                    line_width: 0.1,
+                    line_end: LineEnd::Round,
+                    line_property: None,
+                }),
+                fill_desc: Some(ipc2581::types::FillDesc {
+                    fill_property: FillProperty::Hollow,
+                    angle1: None,
+                    angle2: None,
+                }),
+            }],
+        });
+
+        let paint = lower_user_primitive(&mut doc, &primitive, Affine2::identity());
+
+        assert_eq!(paint, PrimitivePaint::Hollow);
+        assert_eq!(doc.paths.len(), 1);
+        assert!(doc.paths[0].flags.stroked);
+        assert!(!doc.paths[0].flags.filled);
+        assert_eq!(doc.paths[0].stroke_width, 0.1);
+        assert_eq!(doc.paths[0].bbox.min, Point::new(-0.7, -0.7));
+        assert_eq!(doc.paths[0].bbox.max, Point::new(0.7, 0.7));
     }
 
     #[test]
