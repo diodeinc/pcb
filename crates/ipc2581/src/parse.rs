@@ -871,7 +871,7 @@ impl<'a> Parser<'a> {
 
     fn parse_history_record(&mut self, node: &Node) -> Result<HistoryRecord> {
         // Parse number as f64 first, then convert to u32 (some files use "1.0")
-        let number = match self.attr(&node, "number") {
+        let number = match self.attr(node, "number") {
             Some(s) => {
                 if let Ok(f) = s.parse::<f64>() {
                     f as u32
@@ -964,13 +964,13 @@ impl<'a> Parser<'a> {
         attr: &'static str,
         element: &'static str,
     ) -> Result<Symbol> {
-        self.attr(&node, attr)
+        self.attr(node, attr)
             .ok_or(Ipc2581Error::MissingAttribute { element, attr })
             .map(|s| self.interner.intern(s))
     }
 
     fn optional_attr(&mut self, node: &Node, attr: &str) -> Option<Symbol> {
-        self.attr(&node, attr).map(|s| self.interner.intern(s))
+        self.attr(node, attr).map(|s| self.interner.intern(s))
     }
 
     fn parse_f64_attr(
@@ -1035,7 +1035,7 @@ impl<'a> Parser<'a> {
 
     /// Parse optional f64 attribute (no unit conversion)
     fn parse_optional_f64_attr(&self, node: &Node, attr: &'static str) -> Result<Option<f64>> {
-        self.attr(&node, attr)
+        self.attr(node, attr)
             .map(|v| {
                 v.parse::<f64>().map_err(|_| {
                     Ipc2581Error::InvalidAttribute(format!("Invalid f64 value for {}", attr))
@@ -1046,7 +1046,7 @@ impl<'a> Parser<'a> {
 
     /// Parse optional u32 attribute
     fn parse_optional_u32_attr(&self, node: &Node, attr: &'static str) -> Result<Option<u32>> {
-        self.attr(&node, attr)
+        self.attr(node, attr)
             .map(|v| {
                 v.parse::<u32>().map_err(|_| {
                     Ipc2581Error::InvalidAttribute(format!("Invalid u32 value for {}", attr))
@@ -1062,13 +1062,13 @@ impl<'a> Parser<'a> {
         attr: &'static str,
         units: Units,
     ) -> Result<Option<f64>> {
-        self.attr(&node, attr)
+        self.attr(node, attr)
             .map(|v| self.parse_f64_str_with_units(v, units))
             .transpose()
     }
 
     fn parse_bool_attr(&self, node: &Node, attr: &'static str) -> Result<bool> {
-        match self.attr(&node, attr) {
+        match self.attr(node, attr) {
             Some("true") => Ok(true),
             Some("false") => Ok(false),
             Some(_) => Err(Ipc2581Error::InvalidAttribute(format!(
@@ -1249,9 +1249,9 @@ impl<'a> Parser<'a> {
         // KiCad bug format: <SurfaceFinish><Finish type="S"/></SurfaceFinish>
 
         // First, try the correct IPC-2581C format: type attribute directly on SurfaceFinish
-        if let Some(finish_type_str) = self.attr(&node, "type") {
+        if let Some(finish_type_str) = self.attr(node, "type") {
             let finish_type = self.parse_finish_type(finish_type_str)?;
-            let comment = self.attr(&node, "comment").map(|s| self.interner.intern(s));
+            let comment = self.attr(node, "comment").map(|s| self.interner.intern(s));
 
             let mut products = Vec::new();
             for product_node in self.element_children(node) {
@@ -1458,7 +1458,7 @@ impl<'a> Parser<'a> {
             .and_then(|s| s.parse::<f64>().ok())
             .map(|v| crate::units::to_mm(v, units));
 
-        let layer_number = self.attr(&node, "sequence").and_then(|s| s.parse().ok());
+        let layer_number = self.attr(node, "sequence").and_then(|s| s.parse().ok());
 
         // Look up material and dielectric properties from Spec via SpecRef
         let mut material = None;
@@ -1575,8 +1575,8 @@ impl<'a> Parser<'a> {
     fn parse_package(&mut self, node: &Node) -> Result<Package> {
         let name = self.required_attr(node, "name", "Package")?;
         let package_type = self.required_attr(node, "type", "Package")?;
-        let pin_one = self.attr(&node, "pinOne").map(|s| self.interner.intern(s));
-        let height = self.attr(&node, "height").and_then(|s| s.parse().ok());
+        let pin_one = self.attr(node, "pinOne").map(|s| self.interner.intern(s));
+        let height = self.attr(node, "height").and_then(|s| s.parse().ok());
 
         Ok(Package {
             name,
@@ -1591,13 +1591,13 @@ impl<'a> Parser<'a> {
         let package_ref = self.required_attr(node, "packageRef", "Component")?;
         let layer_ref = self.required_attr(node, "layerRef", "Component")?;
 
-        let mount_type = self.attr(&node, "mountType").map(|s| match s {
+        let mount_type = self.attr(node, "mountType").map(|s| match s {
             "SMT" => MountType::Smt,
             "THT" => MountType::Tht,
             _ => MountType::Other,
         });
 
-        let part = self.attr(&node, "part").map(|s| self.interner.intern(s));
+        let part = self.attr(node, "part").map(|s| self.interner.intern(s));
 
         Ok(Component {
             ref_des,
@@ -1696,13 +1696,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_feature_set(&mut self, node: &Node) -> Result<FeatureSet> {
-        let net = self.attr(&node, "net").map(|s| self.interner.intern(s));
-        let geometry = self
-            .attr(&node, "geometry")
-            .map(|s| self.interner.intern(s));
+        let net = self.attr(node, "net").map(|s| self.interner.intern(s));
+        let geometry = self.attr(node, "geometry").map(|s| self.interner.intern(s));
 
         // Parse polarity attribute
-        let polarity = self.attr(&node, "polarity").and_then(|s| match s {
+        let polarity = self.attr(node, "polarity").and_then(|s| match s {
             "POSITIVE" => Some(Polarity::Positive),
             "NEGATIVE" => Some(Polarity::Negative),
             _ => None,
@@ -1753,8 +1751,8 @@ impl<'a> Parser<'a> {
 
     fn parse_nonstandard_attribute(&mut self, node: &Node) -> Result<ecad::NonstandardAttribute> {
         let name = self.required_attr(node, "name", "NonstandardAttribute")?;
-        let value = self.attr(&node, "value").map(|s| self.interner.intern(s));
-        let attr_type = self.attr(&node, "type").map(|s| self.interner.intern(s));
+        let value = self.attr(node, "value").map(|s| self.interner.intern(s));
+        let attr_type = self.attr(node, "type").map(|s| self.interner.intern(s));
 
         Ok(ecad::NonstandardAttribute {
             name,
@@ -1964,7 +1962,7 @@ impl<'a> Parser<'a> {
         // Hole is in ECAD section, use ECAD units
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
 
-        let name = self.attr(&node, "name").map(|s| self.interner.intern(s));
+        let name = self.attr(node, "name").map(|s| self.interner.intern(s));
         let diameter = self.parse_f64_attr_with_units(node, "diameter", "Hole", units)?;
         let plating_status_str = self.required_attr(node, "platingStatus", "Hole")?;
         let plating_status =
@@ -1985,7 +1983,7 @@ impl<'a> Parser<'a> {
         // SlotCavity is in ECAD section, use ECAD units
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
 
-        let name = self.attr(&node, "name").map(|s| self.interner.intern(s));
+        let name = self.attr(node, "name").map(|s| self.interner.intern(s));
         let plating_status_str = self.required_attr(node, "platingStatus", "SlotCavity")?;
         let plating_status =
             self.parse_plating_status(self.interner.resolve(plating_status_str))?;
@@ -2387,10 +2385,10 @@ impl<'a> Parser<'a> {
     fn parse_bom_item(&mut self, node: &Node) -> Result<BomItem> {
         let oem_design_number_ref = self.required_attr(node, "OEMDesignNumberRef", "BomItem")?;
 
-        let quantity = self.attr(&node, "quantity").and_then(|s| s.parse().ok());
-        let pin_count = self.attr(&node, "pinCount").and_then(|s| s.parse().ok());
+        let quantity = self.attr(node, "quantity").and_then(|s| s.parse().ok());
+        let pin_count = self.attr(node, "pinCount").and_then(|s| s.parse().ok());
 
-        let category = self.attr(&node, "category").map(|s| match s {
+        let category = self.attr(node, "category").map(|s| match s {
             "ELECTRICAL" => BomCategory::Electrical,
             "MECHANICAL" => BomCategory::Mechanical,
             "DOCUMENT" => BomCategory::Document,
@@ -2442,7 +2440,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_characteristics(&mut self, node: &Node) -> Result<Characteristics> {
-        let category = self.attr(&node, "category").map(|s| match s {
+        let category = self.attr(node, "category").map(|s| match s {
             "ELECTRICAL" => BomCategory::Electrical,
             "MECHANICAL" => BomCategory::Mechanical,
             "DOCUMENT" => BomCategory::Document,
@@ -2554,9 +2552,9 @@ impl<'a> Parser<'a> {
         let evpl_vendor = self.optional_attr(node, "evplVendor");
         let evpl_mpn = self.optional_attr(node, "evplMpn");
 
-        let qualified = self.attr(&node, "qualified").map(|s| s == "true");
+        let qualified = self.attr(node, "qualified").map(|s| s == "true");
 
-        let chosen = self.attr(&node, "chosen").map(|s| s == "true");
+        let chosen = self.attr(node, "chosen").map(|s| s == "true");
 
         let mut mpns = Vec::new();
         let mut vendors = Vec::new();
@@ -2582,15 +2580,15 @@ impl<'a> Parser<'a> {
     fn parse_avl_mpn(&mut self, node: &Node) -> Result<AvlMpn> {
         let name = self.required_attr(node, "name", "AvlMpn")?;
 
-        let rank = self.attr(&node, "rank").and_then(|s| s.parse().ok());
+        let rank = self.attr(node, "rank").and_then(|s| s.parse().ok());
 
-        let cost = self.attr(&node, "cost").and_then(|s| s.parse().ok());
+        let cost = self.attr(node, "cost").and_then(|s| s.parse().ok());
 
         let moisture_sensitivity = self
             .attr(node, "moistureSensitivity")
             .and_then(MoistureSensitivity::parse);
 
-        let availability = self.attr(&node, "availability").map(|s| s == "true");
+        let availability = self.attr(node, "availability").map(|s| s == "true");
 
         let other = self.optional_attr(node, "other");
 
