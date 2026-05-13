@@ -11,10 +11,17 @@ pub use types::*;
 use checksum::validate_checksum;
 use parse::Parser;
 use std::path::Path;
+use std::sync::LazyLock;
 use thiserror::Error;
 use uppsala::XsdValidator;
 
 const IPC_2581C_XSD: &str = include_str!("../IPC-2581C.xsd");
+
+static IPC_2581C_VALIDATOR: LazyLock<std::result::Result<XsdValidator, String>> =
+    LazyLock::new(|| {
+        let schema_doc = uppsala::parse(IPC_2581C_XSD).map_err(|err| err.to_string())?;
+        XsdValidator::from_schema(&schema_doc).map_err(|err| err.to_string())
+    });
 
 #[derive(Debug, Error)]
 pub enum Ipc2581Error {
@@ -53,10 +60,9 @@ pub type Result<T> = std::result::Result<T, Ipc2581Error>;
 
 /// Validate IPC-2581 XML against the vendored IPC-2581C XML Schema.
 pub fn validate(xml: &str) -> Result<()> {
-    let schema_doc = uppsala::parse(IPC_2581C_XSD)
-        .map_err(|err| Ipc2581Error::SchemaValidation(err.to_string()))?;
-    let validator = XsdValidator::from_schema(&schema_doc)
-        .map_err(|err| Ipc2581Error::SchemaValidation(err.to_string()))?;
+    let validator = IPC_2581C_VALIDATOR
+        .as_ref()
+        .map_err(|err| Ipc2581Error::SchemaValidation(err.clone()))?;
     let doc = uppsala::parse(xml).map_err(|err| Ipc2581Error::SchemaValidation(err.to_string()))?;
 
     let errors = validator.validate(&doc);
