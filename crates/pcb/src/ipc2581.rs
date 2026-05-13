@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
-use pcb_ipc2581_tools::{OutputFormat, UnitFormat, ViewMode, commands, utils};
+use pcb_ipc2581_tools::{OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, utils};
 
 #[derive(Args)]
 pub struct Ipc2581Args {
@@ -59,6 +59,21 @@ enum Commands {
         /// Unit format for dimensions
         #[arg(short, long, default_value = "mm")]
         units: UnitFormat,
+    },
+    /// Render processed geometry for a single IPC-2581 layer
+    Render {
+        /// IPC-2581 XML file to render from
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Layer name to render, for example TOP or BOTTOM
+        #[arg(short, long)]
+        layer: String,
+        /// Output file path. If omitted, auto renders to the terminal when possible.
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+        /// Render format. Auto infers SVG/PNG from the output extension or uses terminal graphics.
+        #[arg(short, long, default_value = "auto")]
+        format: RenderFormat,
     },
 }
 
@@ -120,5 +135,18 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             output,
             units,
         } => commands::html_export::execute(&file, output.as_deref(), units),
+        Commands::Render {
+            file,
+            layer,
+            output,
+            format,
+        } => commands::render::execute(
+            &file,
+            &commands::render::RenderOptions {
+                layer,
+                output,
+                format,
+            },
+        ),
     }
 }

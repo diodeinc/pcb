@@ -2,6 +2,7 @@ use clap::ValueEnum;
 
 pub mod accessors;
 pub mod commands;
+pub mod geometry;
 pub mod utils;
 
 // Re-export ipc2581 for external use
@@ -11,6 +12,13 @@ pub use ipc2581;
 pub enum OutputFormat {
     Text,
     Json,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+pub enum RenderFormat {
+    Auto,
+    Svg,
+    Png,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]

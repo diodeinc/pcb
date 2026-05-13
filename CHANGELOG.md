@@ -8,10 +8,22 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added initial `pcb ipc2581 render` support for rendering a single IPC-2581 layer to SVG.
+- Added PNG output support to `pcb ipc2581 render`.
+- Added Kitty-compatible terminal graphics output for `pcb ipc2581 render` when no output path is provided.
+
+### Fixed
+
+- Preserved IPC-2581 `PolyStepCurve` arc geometry when rendering layer SVGs.
+- Applied IPC-2581 slot/cavity cutouts only to affected layers and subtracted them from rendered layer geometry.
+
 ### Changed
 
 - `pcb new board <name> <repo-url>` now creates a board repository directly, replacing the separate `pcb new workspace` flow.
 - `pcb import` now writes directly into a board repository root instead of creating `boards/<name>/` under a workspace.
+- Increased default `pcb ipc2581 render` PNG resolution.
 
 ## [0.3.81] - 2026-05-11
 

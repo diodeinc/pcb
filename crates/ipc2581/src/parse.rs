@@ -1603,12 +1603,22 @@ impl Parser {
             .map(|s| self.parse_polarity(s))
             .transpose()?;
 
-        // Parse layer-specific Profile (for rigid-flex)
+        let mut span = None;
         let mut profile = None;
         for child in node.children().filter(|n| n.is_element()) {
-            if child.tag_name().name() == "Profile" {
-                profile = Some(self.parse_profile(&child)?);
-                break;
+            match child.tag_name().name() {
+                "Span" => {
+                    span = Some(ecad::LayerSpan {
+                        from_layer: child
+                            .attribute("fromLayer")
+                            .map(|s| self.interner.intern(s)),
+                        to_layer: child.attribute("toLayer").map(|s| self.interner.intern(s)),
+                    });
+                }
+                "Profile" => {
+                    profile = Some(self.parse_profile(&child)?);
+                }
+                _ => {}
             }
         }
 
@@ -1617,6 +1627,7 @@ impl Parser {
             layer_function,
             side,
             polarity,
+            span,
             profile,
         })
     }
@@ -1984,10 +1995,13 @@ impl Parser {
             SlotShape::Primitive(self.parse_standard_primitive(&primitive_node, units)?)
         };
 
+        let z_axis_dim = has_z_axis_dim(node);
+
         Ok(Slot {
             name,
             shape,
             plating_status,
+            z_axis_dim,
             x,
             y,
         })
@@ -2567,6 +2581,46 @@ impl Parser {
             mirror,
             scale,
         }
+    }
+}
+
+fn has_z_axis_dim(node: &Node) -> bool {
+    node.children()
+        .filter(|child| child.is_element())
+        .any(|child| {
+            matches!(child.tag_name().name(), "MaterialCut" | "MaterialLeft")
+                || (matches!(child.tag_name().name(), "Z_AxisDim" | "ZAxisDim")
+                    && child
+                        .children()
+                        .filter(|grandchild| grandchild.is_element())
+                        .any(|grandchild| {
+                            matches!(grandchild.tag_name().name(), "MaterialCut" | "MaterialLeft")
+                        }))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_slot_cavity_z_axis_substitution_children() {
+        let doc = Document::parse(
+            r#"<SlotCavity><Location x="0" y="0"/><MaterialCut depth="0.1"/></SlotCavity>"#,
+        )
+        .unwrap();
+
+        assert!(has_z_axis_dim(&doc.root_element()));
+    }
+
+    #[test]
+    fn detects_wrapped_slot_cavity_z_axis_dimensions() {
+        let doc = Document::parse(
+            r#"<SlotCavity><Location x="0" y="0"/><ZAxisDim><MaterialLeft thickness="0.1"/></ZAxisDim></SlotCavity>"#,
+        )
+        .unwrap();
+
+        assert!(has_z_axis_dim(&doc.root_element()));
     }
 }
 
