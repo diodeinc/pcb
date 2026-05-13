@@ -391,6 +391,63 @@ mod tests {
     }
 
     #[test]
+    fn parses_user_special_contours_lines_polylines_and_line_desc_refs() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <DictionaryUser units="MILLIMETER">
+      <EntryUser id="U1">
+        <UserSpecial>
+          <Contour>
+            <Polygon>
+              <PolyBegin x="0" y="0"/>
+              <PolyStepSegment x="1" y="0"/>
+              <PolyStepSegment x="0" y="0"/>
+              <LineDescRef id="fine"/>
+              <FillDesc fillProperty="HOLLOW"/>
+            </Polygon>
+          </Contour>
+          <Line startX="0" startY="0" endX="1" endY="0">
+            <LineDescRef id="fine"/>
+          </Line>
+          <Polyline>
+            <PolyBegin x="1" y="0"/>
+            <PolyStepCurve x="0" y="1" centerX="0" centerY="0" clockwise="false"/>
+            <LineDescRef id="fine"/>
+          </Polyline>
+        </UserSpecial>
+      </EntryUser>
+    </DictionaryUser>
+  </Content>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
+        let primitive = &doc.content().dictionary_user.entries[0].primitive;
+        let UserPrimitive::UserSpecial(user_special) = primitive;
+
+        assert_eq!(user_special.shapes.len(), 3);
+        assert!(matches!(
+            user_special.shapes[0].shape,
+            UserShapeType::Polygon(_)
+        ));
+        assert_eq!(
+            user_special.shapes[0]
+                .line_desc_ref
+                .map(|symbol| doc.resolve(symbol)),
+            Some("fine")
+        );
+        assert!(matches!(
+            user_special.shapes[1].shape,
+            UserShapeType::Line(_)
+        ));
+        assert!(matches!(
+            user_special.shapes[2].shape,
+            UserShapeType::Polyline(_)
+        ));
+    }
+
+    #[test]
     fn parse_document_with_avl() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

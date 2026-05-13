@@ -780,6 +780,12 @@ impl<'a> Parser<'a> {
 
             // Parse shape based on tag name
             let shape_type = match tag_name {
+                "Contour" => self
+                    .element_children(&child)
+                    .find(|n| self.name(n) == "Polygon")
+                    .map(|polygon| self.parse_polygon(&polygon, units))
+                    .transpose()?
+                    .map(UserShapeType::Polygon),
                 "Circle" => Some(UserShapeType::Circle(Circle {
                     diameter: self
                         .parse_f64_attr_with_units(&child, "diameter", "Circle", units)?,
@@ -807,32 +813,117 @@ impl<'a> Parser<'a> {
                     },
                 })),
                 "Polygon" => Some(UserShapeType::Polygon(self.parse_polygon(&child, units)?)),
+                "Line" => Some(UserShapeType::Line(crate::types::primitives::Line {
+                    start: Point {
+                        x: self.parse_f64_attr_with_units(&child, "startX", "Line", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "startY", "Line", units)?,
+                    },
+                    end: Point {
+                        x: self.parse_f64_attr_with_units(&child, "endX", "Line", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "endY", "Line", units)?,
+                    },
+                })),
+                "Polyline" => Some(UserShapeType::Polyline(
+                    self.parse_user_polyline(&child, units)?,
+                )),
                 _ => None,
             };
 
             if let Some(shape_type) = shape_type {
-                // Parse optional LineDesc and FillDesc children
-                let line_desc = self
-                    .element_children(&child)
-                    .find(|n| self.name(n) == "LineDesc")
-                    .map(|n| self.parse_line_desc(&n, units))
-                    .transpose()?;
-
-                let fill_desc = self
-                    .element_children(&child)
-                    .find(|n| self.name(n) == "FillDesc")
-                    .map(|n| self.parse_fill_desc(&n))
-                    .transpose()?;
+                let style_node = if tag_name == "Contour" {
+                    self.element_children(&child)
+                        .find(|n| self.name(n) == "Polygon")
+                        .unwrap_or(child)
+                } else {
+                    child
+                };
+                let (line_desc, line_desc_ref, fill_desc) =
+                    self.parse_user_shape_style(&style_node, units)?;
 
                 shapes.push(UserShape {
                     shape: shape_type,
                     line_desc,
+                    line_desc_ref,
                     fill_desc,
                 });
             }
         }
 
         Ok(UserPrimitive::UserSpecial(UserSpecial { shapes }))
+    }
+
+    fn parse_user_shape_style(
+        &mut self,
+        node: &Node,
+        units: Units,
+    ) -> Result<(Option<LineDesc>, Option<Symbol>, Option<FillDesc>)> {
+        let mut line_desc = None;
+        let mut line_desc_ref = None;
+        let mut fill_desc = None;
+
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "LineDesc" => line_desc = Some(self.parse_line_desc(&child, units)?),
+                "LineDescRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        line_desc_ref = Some(self.interner.intern(id));
+                    }
+                }
+                "FillDesc" => fill_desc = Some(self.parse_fill_desc(&child)?),
+                _ => {}
+            }
+        }
+
+        Ok((line_desc, line_desc_ref, fill_desc))
+    }
+
+    fn parse_user_polyline(&mut self, node: &Node, units: Units) -> Result<Polyline> {
+        let mut begin = None;
+        let mut steps = Vec::new();
+
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "PolyBegin" => {
+                    begin = Some(Point {
+                        x: self.parse_f64_attr_with_units(&child, "x", "PolyBegin", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "y", "PolyBegin", units)?,
+                    });
+                }
+                "PolyStepSegment" => steps.push(PolyStep::Segment(PolyStepSegment {
+                    point: Point {
+                        x: self.parse_f64_attr_with_units(&child, "x", "PolyStepSegment", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "y", "PolyStepSegment", units)?,
+                    },
+                })),
+                "PolyStepCurve" => steps.push(PolyStep::Curve(PolyStepCurve {
+                    point: Point {
+                        x: self.parse_f64_attr_with_units(&child, "x", "PolyStepCurve", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "y", "PolyStepCurve", units)?,
+                    },
+                    center: Point {
+                        x: self.parse_f64_attr_with_units(
+                            &child,
+                            "centerX",
+                            "PolyStepCurve",
+                            units,
+                        )?,
+                        y: self.parse_f64_attr_with_units(
+                            &child,
+                            "centerY",
+                            "PolyStepCurve",
+                            units,
+                        )?,
+                    },
+                    clockwise: self.parse_bool_attr(&child, "clockwise")?,
+                })),
+                _ => {}
+            }
+        }
+
+        Ok(Polyline {
+            begin: begin.ok_or(Ipc2581Error::MissingElement("PolyBegin in Polyline"))?,
+            steps,
+        })
     }
 
     fn parse_logistic_header(&mut self, node: &Node) -> Result<LogisticHeader> {
@@ -1793,6 +1884,8 @@ impl<'a> Parser<'a> {
                             ecad::SetFeature::Polyline(polyline) => {
                                 polylines.push(polyline.clone())
                             }
+                            ecad::SetFeature::StandardPrimitiveRef(_)
+                            | ecad::SetFeature::UserPrimitiveRef(_) => {}
                             _ => {}
                         }
                         features.push(feature);
@@ -1899,6 +1992,28 @@ impl<'a> Parser<'a> {
                             }
                             _ => {}
                         }
+                    }
+                }
+                "StandardPrimitiveRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        features.push(ecad::SetFeature::StandardPrimitiveRef(
+                            ecad::FeaturePrimitiveRef {
+                                id: self.interner.intern(id),
+                                x: offset_x,
+                                y: offset_y,
+                            },
+                        ));
+                    }
+                }
+                "UserPrimitiveRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        features.push(ecad::SetFeature::UserPrimitiveRef(
+                            ecad::FeaturePrimitiveRef {
+                                id: self.interner.intern(id),
+                                x: offset_x,
+                                y: offset_y,
+                            },
+                        ));
                     }
                 }
                 _ => {}

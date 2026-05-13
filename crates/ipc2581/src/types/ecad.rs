@@ -258,6 +258,8 @@ pub enum SetFeature {
     Polygon(super::Polygon),
     Line(Line),
     Polyline(FeaturePolyline),
+    StandardPrimitiveRef(FeaturePrimitiveRef),
+    UserPrimitiveRef(FeaturePrimitiveRef),
 }
 
 /// NonstandardAttribute from Set elements
@@ -288,6 +290,14 @@ pub struct FeaturePolyline {
     pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
+}
+
+/// Primitive reference used directly as feature geometry.
+#[derive(Debug, Clone)]
+pub struct FeaturePrimitiveRef {
+    pub id: Symbol,
+    pub x: f64,
+    pub y: f64,
 }
 
 /// Hole represents a drilled hole instance
