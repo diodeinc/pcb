@@ -854,8 +854,8 @@ impl<'a> Parser<'a> {
                 "Polyline" => Some(UserShapeType::Polyline(
                     self.parse_user_polyline(&child, units)?,
                 )),
-                "UserPrimitiveRef" => child
-                    .attribute("id")
+                "UserPrimitiveRef" => self
+                    .attr(&child, "id")
                     .map(|id| UserShapeType::UserPrimitiveRef(self.interner.intern(id))),
                 _ => None,
             };
@@ -2059,7 +2059,7 @@ impl<'a> Parser<'a> {
                                 }
                             }
                             "UserPrimitiveRef" => {
-                                if let Some(id) = inner.attribute("id") {
+                                if let Some(id) = self.attr(&inner, "id") {
                                     features.push(ecad::SetFeature::UserPrimitiveRef(
                                         ecad::FeaturePrimitiveRef {
                                             id: self.interner.intern(id),
@@ -2165,15 +2165,15 @@ impl<'a> Parser<'a> {
         let mut line_end = None;
         let mut line_desc_ref = None;
 
-        for child in node.children().filter(|n| n.is_element()) {
-            match child.tag_name().name() {
+        for child in self.element_children(node) {
+            match self.name(&child) {
                 "LineDesc" => {
-                    line_width = child
-                        .attribute("lineWidth")
+                    line_width = self
+                        .attr(&child, "lineWidth")
                         .and_then(|s| s.parse::<f64>().ok())
                         .map(|v| crate::units::to_mm(v, units))
                         .unwrap_or(0.25);
-                    line_end = child.attribute("lineEnd").and_then(|s| match s {
+                    line_end = self.attr(&child, "lineEnd").and_then(|s| match s {
                         "ROUND" => Some(LineEnd::Round),
                         "SQUARE" => Some(LineEnd::Square),
                         "FLAT" => Some(LineEnd::Flat),
@@ -2181,7 +2181,7 @@ impl<'a> Parser<'a> {
                     });
                 }
                 "LineDescRef" => {
-                    if let Some(id) = child.attribute("id") {
+                    if let Some(id) = self.attr(&child, "id") {
                         line_desc_ref = Some(self.interner.intern(id));
                     }
                 }
@@ -2511,10 +2511,7 @@ impl<'a> Parser<'a> {
                         self.parse_f64_attr_with_units(&child, "centerX", "PolyStepCurve", units)?;
                     let center_y =
                         self.parse_f64_attr_with_units(&child, "centerY", "PolyStepCurve", units)?;
-                    let clockwise = self
-                        .attr(&child, "clockwise")
-                        .map(|value| value == "true" || value == "1")
-                        .unwrap_or(false);
+                    let clockwise = self.parse_bool_attr(&child, "clockwise")?;
                     points.push(TracePoint { x, y });
                     steps.push(PolyStep::Curve(PolyStepCurve {
                         point: Point { x, y },
