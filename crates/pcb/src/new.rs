@@ -119,6 +119,32 @@ fn validate_name(name: &str, kind: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a board name for use as a directory/git repo name.
+fn validate_board_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("Board name cannot be empty");
+    }
+
+    if name.len() > 40 {
+        bail!("Board name cannot exceed 40 characters");
+    }
+
+    if name.starts_with('.') || name.starts_with('-') {
+        bail!("Board name cannot start with '.' or '-'");
+    }
+
+    for c in name.chars() {
+        if !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.' {
+            bail!(
+                "Board name contains invalid character '{}'. Only alphanumeric, hyphens, underscores, and dots are allowed",
+                c
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Clean a git repository URL to the canonical format (e.g., "github.com/user/repo")
 fn clean_repo_url(url: &str) -> Result<String> {
     let url = url.trim();
@@ -273,7 +299,7 @@ fn execute_new_board(board: &str, repo: &str) -> Result<()> {
         bail!("Cannot create a board inside an existing workspace");
     }
 
-    validate_name(board, "Board")?;
+    validate_board_name(board)?;
 
     let repository = clean_repo_url(repo)?;
 
@@ -429,20 +455,29 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_name() {
+    fn test_validate_board_name() {
         // Valid names
-        assert!(validate_name("my-project", "Board").is_ok());
-        assert!(validate_name("my_project", "Board").is_ok());
-        assert!(validate_name("myProject123", "Board").is_ok());
-        assert!(validate_name("project.v2", "Board").is_ok());
+        assert!(validate_board_name("my-project").is_ok());
+        assert!(validate_board_name("my_project").is_ok());
+        assert!(validate_board_name("myProject123").is_ok());
+        assert!(validate_board_name("project.v2").is_ok());
+        assert!(validate_board_name(&"a".repeat(40)).is_ok());
 
         // Invalid names
-        assert!(validate_name("", "Board").is_err());
-        assert!(validate_name(".hidden", "Board").is_err());
-        assert!(validate_name("-invalid", "Board").is_err());
-        assert!(validate_name("has spaces", "Board").is_err());
-        assert!(validate_name("has/slash", "Board").is_err());
-        assert!(validate_name(&"a".repeat(101), "Board").is_err());
+        assert!(validate_board_name("").is_err());
+        assert!(validate_board_name(".hidden").is_err());
+        assert!(validate_board_name("-invalid").is_err());
+        assert!(validate_board_name("has spaces").is_err());
+        assert!(validate_board_name("has/slash").is_err());
+        assert!(validate_board_name(&"a".repeat(41)).is_err());
+    }
+
+    #[test]
+    fn test_validate_name() {
+        // Package names still allow dots and up to 100 characters.
+        assert!(validate_name("project.v2", "Package").is_ok());
+        assert!(validate_name(&"a".repeat(100), "Package").is_ok());
+        assert!(validate_name(&"a".repeat(101), "Package").is_err());
     }
 
     #[test]
