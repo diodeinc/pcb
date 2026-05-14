@@ -374,6 +374,17 @@ vendor = ["github.com/myorg/**"]
 - `pcb vendor` without `--all` uses `[workspace].vendor`.
 - `pcb vendor --all` vendors everything.
 
+## Workspace Name (`[workspace].name`)
+
+Workspace manifests can override the Diode workspace name used by board release uploads:
+
+```toml
+[workspace]
+name = "my-workspace"
+```
+
+If `name` is omitted, `pcb publish` derives the workspace name from the first path segment of `[workspace].repository`. For example, `anything.com/XYZ/boards/MyBoard` uses `XYZ`.
+
 ## Endpoint (`[workspace].endpoint`)
 
 Workspace manifests can override the Diode host suffix used by CLI commands that talk to Diode services:

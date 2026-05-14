@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb new board <name> <repo-url>` now creates a board repository directly, replacing the separate `pcb new workspace` flow.
 - `pcb import` now writes directly into a board repository root instead of creating `boards/<name>/` under a workspace.
+- Board release uploads now derive the Diode workspace name from the first path segment of `[workspace].repository`, with `[workspace].name` available as an override.
 
 ### Fixed
 

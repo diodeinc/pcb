@@ -598,28 +598,39 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
 }
 
 fn release_workspace_name(workspace: &WorkspaceInfo) -> Result<String> {
+    if let Some(name) = workspace.config.as_ref().and_then(|config| {
+        config
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.name.as_deref())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    }) {
+        return Ok(name.to_string());
+    }
+
     if let Some(name) = workspace
         .repository()
-        .and_then(workspace_name_from_code_diode_repository)
+        .and_then(workspace_name_from_repository)
     {
         return Ok(name);
     }
 
-    workspace
-        .root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(str::to_string)
-        .context("Invalid workspace root")
+    bail!(
+        "Unable to determine Diode workspace name. Set [workspace].name or [workspace].repository in pcb.toml."
+    )
 }
 
-fn workspace_name_from_code_diode_repository(repository: &str) -> Option<String> {
+fn workspace_name_from_repository(repository: &str) -> Option<String> {
+    let repository = git::parse_remote_url(repository).unwrap_or_else(|_| repository.trim().into());
     repository
-        .trim()
-        .strip_prefix("code.diode.computer/")
-        .and_then(|path| path.split('/').next())
-        .filter(|workspace| !workspace.is_empty())
-        .map(str::to_string)
+        .split('/')
+        .nth(1)
+        .map(str::trim)
+        .and_then(|segment| {
+            let segment = segment.strip_suffix(".git").unwrap_or(segment);
+            (!segment.is_empty()).then(|| segment.to_string())
+        })
 }
 
 fn ensure_board_publish_has_no_workspace_overrides(workspace: &WorkspaceInfo) -> Result<()> {
@@ -1477,12 +1488,17 @@ P1 = io(Net)
         urls.iter().map(|url| (*url).to_string()).collect()
     }
 
-    fn workspace_with_repository(root: &str, repository: Option<&str>) -> WorkspaceInfo {
+    fn workspace_with_config(
+        root: &str,
+        name: Option<&str>,
+        repository: Option<&str>,
+    ) -> WorkspaceInfo {
         WorkspaceInfo {
             root: PathBuf::from(root),
             cache_dir: PathBuf::new(),
             config: Some(PcbToml {
                 workspace: Some(WorkspaceConfig {
+                    name: name.map(str::to_string),
                     repository: repository.map(str::to_string),
                     ..WorkspaceConfig::default()
                 }),
@@ -1495,19 +1511,60 @@ P1 = io(Net)
     }
 
     #[test]
-    fn release_workspace_name_uses_code_diode_repository_owner_segment() {
+    fn release_workspace_name_uses_workspace_name_override() {
+        let workspace = workspace_with_config(
+            "/tmp/IP0010",
+            Some("custom"),
+            Some("code.diode.computer/diode/b/IP0010"),
+        );
+
+        assert_eq!(release_workspace_name(&workspace).unwrap(), "custom");
+    }
+
+    #[test]
+    fn release_workspace_name_uses_first_repository_path_segment() {
         let workspace =
-            workspace_with_repository("/tmp/IP0010", Some("code.diode.computer/diode/b/IP0010"));
+            workspace_with_config("/tmp/IP0010", None, Some("anything.com/XYZ/boards/IP0010"));
+
+        assert_eq!(release_workspace_name(&workspace).unwrap(), "XYZ");
+    }
+
+    #[test]
+    fn release_workspace_name_handles_repository_url_forms() {
+        assert_eq!(
+            workspace_name_from_repository("https://anything.com/XYZ/boards/IP0010.git"),
+            Some("XYZ".to_string())
+        );
+        assert_eq!(
+            workspace_name_from_repository("git@anything.com:XYZ/boards/IP0010.git"),
+            Some("XYZ".to_string())
+        );
+        assert_eq!(
+            workspace_name_from_repository("anything.com/XYZ.git"),
+            Some("XYZ".to_string())
+        );
+    }
+
+    #[test]
+    fn release_workspace_name_preserves_code_diode_owner_segment() {
+        let workspace = workspace_with_config(
+            "/tmp/IP0010",
+            None,
+            Some("code.diode.computer/diode/b/IP0010"),
+        );
 
         assert_eq!(release_workspace_name(&workspace).unwrap(), "diode");
     }
 
     #[test]
-    fn release_workspace_name_falls_back_to_workspace_directory() {
-        let workspace =
-            workspace_with_repository("/tmp/IP0010", Some("github.com/diodeinc/IP0010"));
+    fn release_workspace_name_requires_name_or_repository() {
+        let workspace = workspace_with_config("/tmp/IP0010", None, None);
 
-        assert_eq!(release_workspace_name(&workspace).unwrap(), "IP0010");
+        let err = release_workspace_name(&workspace).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unable to determine Diode workspace name")
+        );
     }
 
     /// Helper to create a dependency map from a list of (package, [dependencies])

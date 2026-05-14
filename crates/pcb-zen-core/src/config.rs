@@ -356,7 +356,7 @@ impl PcbToml {
 /// Workspace configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
-    /// Optional workspace name (legacy; ignored)
+    /// Optional Diode workspace name override.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
