@@ -24,6 +24,7 @@ pub struct Attribute {
 pub struct ApertureDefinition {
     pub code: i32,
     pub template: ApertureTemplate,
+    pub geometry: Option<ApertureGeometry>,
     /// Aperture attributes active at definition time.
     pub attributes: Vec<Attribute>,
 }
@@ -61,6 +62,34 @@ pub struct ApertureMacro {
     pub name: Symbol,
     /// Raw macro body commands. Macro expression lowering will be layered on this.
     pub body: Vec<Symbol>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApertureGeometry {
+    pub paths: Vec<GeometryPath>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryPath {
+    pub contours: Vec<GeometryContour>,
+    pub polarity: Polarity,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryContour {
+    pub commands: Vec<PathCommand>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathCommand {
+    MoveTo(Point),
+    LineTo(Point),
+    ArcTo {
+        end: Point,
+        center: Point,
+        clockwise: bool,
+    },
+    Close,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,6 +234,11 @@ pub struct GraphicalObject {
     pub scaling: f64,
     pub aperture_attributes: Vec<Attribute>,
     pub object_attributes: Vec<Attribute>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectStream {
+    pub objects: Vec<GraphicalObject>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

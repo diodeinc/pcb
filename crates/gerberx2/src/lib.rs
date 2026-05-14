@@ -35,6 +35,7 @@ pub struct GerberX2 {
     object_attributes: Vec<Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
     aperture_macros: Vec<ApertureMacro>,
+    objects: Vec<GraphicalObject>,
     final_state: GraphicsState,
 }
 
@@ -73,6 +74,10 @@ impl GerberX2 {
         &self.aperture_macros
     }
 
+    pub fn objects(&self) -> &[GraphicalObject] {
+        &self.objects
+    }
+
     pub fn final_state(&self) -> &GraphicsState {
         &self.final_state
     }
@@ -99,6 +104,7 @@ mod tests {
 
         assert_eq!(gerber.aperture_definitions().len(), 1);
         assert_eq!(gerber.file_attributes().len(), 1);
+        assert_eq!(gerber.objects().len(), 1);
         assert!(matches!(gerber.commands().last(), Some(Command::EndOfFile)));
     }
 }

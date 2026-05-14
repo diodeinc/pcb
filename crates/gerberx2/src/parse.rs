@@ -11,9 +11,18 @@ pub struct Parser<'a> {
     aperture_attributes: HashMap<Symbol, Attribute>,
     object_attributes: HashMap<Symbol, Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
+    aperture_lookup: HashMap<i32, ApertureDefinition>,
     aperture_macros: Vec<ApertureMacro>,
+    objects: Vec<GraphicalObject>,
+    region: Option<RegionBuilder>,
     state: GraphicsState,
     saw_m02: bool,
+}
+
+#[derive(Debug, Default)]
+struct RegionBuilder {
+    contours: Vec<Contour>,
+    current: Option<Contour>,
 }
 
 impl<'a> Parser<'a> {
@@ -27,7 +36,10 @@ impl<'a> Parser<'a> {
             aperture_attributes: HashMap::new(),
             object_attributes: HashMap::new(),
             aperture_definitions: Vec::new(),
+            aperture_lookup: HashMap::new(),
             aperture_macros: Vec::new(),
+            objects: Vec::new(),
+            region: None,
             state: GraphicsState::default(),
             saw_m02: false,
         }
@@ -64,6 +76,7 @@ impl<'a> Parser<'a> {
             object_attributes,
             aperture_definitions: std::mem::take(&mut self.aperture_definitions),
             aperture_macros: std::mem::take(&mut self.aperture_macros),
+            objects: std::mem::take(&mut self.objects),
             final_state: self.state.clone(),
         })
     }
@@ -140,6 +153,7 @@ impl<'a> Parser<'a> {
             let aperture = self.parse_aperture_definition(rest)?;
             self.commands
                 .push(Command::ApertureDefinition(aperture.clone()));
+            self.aperture_lookup.insert(aperture.code, aperture.clone());
             self.aperture_definitions.push(aperture);
             return Ok(());
         }
@@ -280,10 +294,27 @@ impl<'a> Parser<'a> {
                 return Ok(());
             }
             "G36" => {
+                if self.region.is_some() {
+                    return Err(self.syntax("nested region statements are not allowed"));
+                }
+                self.region = Some(RegionBuilder::default());
                 self.commands.push(Command::BeginRegion);
                 return Ok(());
             }
             "G37" => {
+                let mut region = self
+                    .region
+                    .take()
+                    .ok_or_else(|| self.syntax("G37 without matching G36"))?;
+                if let Some(contour) = region.current.take() {
+                    region.contours.push(contour);
+                }
+                if region.contours.is_empty() {
+                    return Err(self.syntax("empty region statement"));
+                }
+                self.objects.push(self.graphical_object(ObjectKind::Region {
+                    contours: region.contours,
+                }));
                 self.commands.push(Command::EndRegion);
                 return Ok(());
             }
@@ -302,8 +333,180 @@ impl<'a> Parser<'a> {
         }
 
         let (fields, code) = parse_operation(word)?;
+        self.interpret_operation(fields, code)?;
         self.commands.push(Command::Operation { fields, code });
         Ok(())
+    }
+
+    fn interpret_operation(&mut self, fields: CoordinateFields, code: OperationCode) -> Result<()> {
+        let point = self.operation_point(fields)?;
+        match code {
+            OperationCode::Move => {
+                if let Some(region) = &mut self.region {
+                    if let Some(contour) = region.current.take() {
+                        region.contours.push(contour);
+                    }
+                    region.current = Some(Contour {
+                        segments: Vec::new(),
+                    });
+                }
+                self.state.current_point = Some(point);
+            }
+            OperationCode::Flash => {
+                if self.region.is_some() {
+                    return Err(self.syntax("D03 flash is not allowed inside a region"));
+                }
+                let aperture = self.current_aperture()?;
+                self.objects.push(self.graphical_object(ObjectKind::Flash {
+                    at: point,
+                    aperture,
+                }));
+                self.state.current_point = Some(point);
+            }
+            OperationCode::Plot => {
+                let start = self
+                    .state
+                    .current_point
+                    .ok_or_else(|| self.syntax("D01 plot requires a current point"))?;
+                let plot_mode = self
+                    .state
+                    .plot_mode
+                    .ok_or_else(|| self.syntax("D01 plot requires G01/G02/G03 plot mode"))?;
+                let segment = match plot_mode {
+                    PlotMode::Linear => ContourSegment::Line { start, end: point },
+                    PlotMode::ClockwiseArc | PlotMode::CounterclockwiseArc => {
+                        let center_offset = self.coordinate_offset(fields)?;
+                        ContourSegment::Arc {
+                            start,
+                            end: point,
+                            center_offset,
+                            clockwise: plot_mode == PlotMode::ClockwiseArc,
+                        }
+                    }
+                };
+                if let Some(region) = &mut self.region {
+                    let Some(contour) = region.current.as_mut() else {
+                        return Err(GerberError::Syntax {
+                            offset: self.pos,
+                            message: "region D01 must follow D02 contour start".to_string(),
+                        });
+                    };
+                    contour.segments.push(segment);
+                } else {
+                    let aperture = self.current_aperture()?;
+                    let kind = match segment {
+                        ContourSegment::Line { start, end } => ObjectKind::Draw {
+                            start,
+                            end,
+                            aperture,
+                        },
+                        ContourSegment::Arc {
+                            start,
+                            end,
+                            center_offset,
+                            clockwise,
+                        } => ObjectKind::Arc {
+                            start,
+                            end,
+                            center_offset,
+                            clockwise,
+                            aperture,
+                        },
+                    };
+                    self.objects.push(self.graphical_object(kind));
+                }
+                self.state.current_point = Some(point);
+            }
+        }
+        Ok(())
+    }
+
+    fn operation_point(&self, fields: CoordinateFields) -> Result<Point> {
+        let current = self.state.current_point;
+        let x = match fields.x {
+            Some(x) => self.decode_x(x)?,
+            None => current
+                .map(|point| point.x)
+                .ok_or_else(|| self.syntax("modal X coordinate requires a current point"))?,
+        };
+        let y = match fields.y {
+            Some(y) => self.decode_y(y)?,
+            None => current
+                .map(|point| point.y)
+                .ok_or_else(|| self.syntax("modal Y coordinate requires a current point"))?,
+        };
+        Ok(Point { x, y })
+    }
+
+    fn coordinate_offset(&self, fields: CoordinateFields) -> Result<Point> {
+        let i = fields
+            .i
+            .ok_or_else(|| self.syntax("arc D01 requires I offset"))?;
+        let j = fields
+            .j
+            .ok_or_else(|| self.syntax("arc D01 requires J offset"))?;
+        Ok(Point {
+            x: self.decode_x(i)?,
+            y: self.decode_y(j)?,
+        })
+    }
+
+    fn decode_x(&self, value: i64) -> Result<f64> {
+        let format = self.coordinate_format()?;
+        Ok(scale_coordinate(
+            value,
+            format.x_decimal_digits,
+            self.unit()?,
+        ))
+    }
+
+    fn decode_y(&self, value: i64) -> Result<f64> {
+        let format = self.coordinate_format()?;
+        Ok(scale_coordinate(
+            value,
+            format.y_decimal_digits,
+            self.unit()?,
+        ))
+    }
+
+    fn unit(&self) -> Result<Unit> {
+        self.state
+            .unit
+            .ok_or_else(|| self.syntax("operation requires MO unit command first"))
+    }
+
+    fn coordinate_format(&self) -> Result<CoordinateFormat> {
+        self.state
+            .coordinate_format
+            .ok_or_else(|| self.syntax("operation requires FS coordinate format first"))
+    }
+
+    fn current_aperture(&self) -> Result<i32> {
+        self.state
+            .current_aperture
+            .ok_or_else(|| self.syntax("operation requires current aperture"))
+    }
+
+    fn graphical_object(&self, kind: ObjectKind) -> GraphicalObject {
+        let aperture_attributes = match &kind {
+            ObjectKind::Draw { aperture, .. }
+            | ObjectKind::Arc { aperture, .. }
+            | ObjectKind::Flash { aperture, .. } => self
+                .aperture_lookup
+                .get(aperture)
+                .map(|aperture| aperture.attributes.clone())
+                .unwrap_or_default(),
+            ObjectKind::Region { .. } => self.aperture_attributes.values().cloned().collect(),
+        };
+        GraphicalObject {
+            kind,
+            polarity: self.state.polarity,
+            mirroring: self.state.mirroring,
+            rotation_degrees: self.state.rotation_degrees,
+            scaling: self.state.scaling,
+            aperture_attributes,
+            object_attributes: self.object_attributes.values().cloned().collect(),
+        }
     }
 
     fn parse_attribute(&mut self, rest: &str) -> Result<Attribute> {
@@ -326,9 +529,11 @@ impl<'a> Parser<'a> {
         let code = parse_aperture_code(&rest[..d_len])?;
         let template_call = &rest[d_len..];
         let template = self.parse_template_call(template_call)?;
+        let geometry = lower_standard_aperture(&template);
         Ok(ApertureDefinition {
             code,
             template,
+            geometry,
             attributes: self.aperture_attributes.values().cloned().collect(),
         })
     }
@@ -412,6 +617,200 @@ fn parse_format(rest: &str) -> Option<CoordinateFormat> {
         y_integer_digits,
         y_decimal_digits,
     })
+}
+
+fn scale_coordinate(value: i64, decimal_digits: u8, unit: Unit) -> f64 {
+    let value = value as f64 / 10_f64.powi(decimal_digits as i32);
+    match unit {
+        Unit::Millimeter => value,
+        Unit::Inch => value * 25.4,
+    }
+}
+
+fn lower_standard_aperture(template: &ApertureTemplate) -> Option<ApertureGeometry> {
+    let paths = match *template {
+        ApertureTemplate::Circle {
+            diameter,
+            hole_diameter,
+        } => circle_paths(diameter, hole_diameter),
+        ApertureTemplate::Rectangle {
+            width,
+            height,
+            hole_diameter,
+        } => rect_paths(width, height, hole_diameter),
+        ApertureTemplate::Obround {
+            width,
+            height,
+            hole_diameter,
+        } => obround_paths(width, height, hole_diameter),
+        ApertureTemplate::Polygon {
+            outer_diameter,
+            vertices,
+            rotation_degrees,
+            hole_diameter,
+        } => polygon_paths(
+            outer_diameter,
+            vertices,
+            rotation_degrees.unwrap_or(0.0),
+            hole_diameter,
+        ),
+        ApertureTemplate::Macro { .. } => return None,
+    };
+    Some(ApertureGeometry { paths })
+}
+
+fn circle_paths(diameter: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
+    let mut paths = Vec::new();
+    if diameter > 0.0 {
+        paths.push(circle_path(diameter / 2.0, Polarity::Dark));
+    }
+    if let Some(hole_diameter) = hole_diameter
+        && hole_diameter > 0.0
+    {
+        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
+    }
+    paths
+}
+
+fn rect_paths(width: f64, height: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
+    let mut paths = vec![rect_path(width, height, Polarity::Dark)];
+    if let Some(hole_diameter) = hole_diameter
+        && hole_diameter > 0.0
+    {
+        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
+    }
+    paths
+}
+
+fn obround_paths(width: f64, height: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
+    let mut paths = Vec::new();
+    let rx = width / 2.0;
+    let ry = height / 2.0;
+    let commands = if width >= height {
+        let r = ry;
+        let cx = rx - r;
+        vec![
+            PathCommand::MoveTo(Point { x: -cx, y: -r }),
+            PathCommand::LineTo(Point { x: cx, y: -r }),
+            PathCommand::ArcTo {
+                end: Point { x: cx, y: r },
+                center: Point { x: cx, y: 0.0 },
+                clockwise: false,
+            },
+            PathCommand::LineTo(Point { x: -cx, y: r }),
+            PathCommand::ArcTo {
+                end: Point { x: -cx, y: -r },
+                center: Point { x: -cx, y: 0.0 },
+                clockwise: false,
+            },
+            PathCommand::Close,
+        ]
+    } else {
+        let r = rx;
+        let cy = ry - r;
+        vec![
+            PathCommand::MoveTo(Point { x: r, y: -cy }),
+            PathCommand::LineTo(Point { x: r, y: cy }),
+            PathCommand::ArcTo {
+                end: Point { x: -r, y: cy },
+                center: Point { x: 0.0, y: cy },
+                clockwise: false,
+            },
+            PathCommand::LineTo(Point { x: -r, y: -cy }),
+            PathCommand::ArcTo {
+                end: Point { x: r, y: -cy },
+                center: Point { x: 0.0, y: -cy },
+                clockwise: false,
+            },
+            PathCommand::Close,
+        ]
+    };
+    paths.push(GeometryPath {
+        contours: vec![GeometryContour { commands }],
+        polarity: Polarity::Dark,
+    });
+    if let Some(hole_diameter) = hole_diameter
+        && hole_diameter > 0.0
+    {
+        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
+    }
+    paths
+}
+
+fn polygon_paths(
+    outer_diameter: f64,
+    vertices: i32,
+    rotation_degrees: f64,
+    hole_diameter: Option<f64>,
+) -> Vec<GeometryPath> {
+    let mut paths = Vec::new();
+    if vertices >= 3 {
+        let radius = outer_diameter / 2.0;
+        let rotation = rotation_degrees.to_radians();
+        let mut commands = Vec::new();
+        for i in 0..vertices {
+            let angle = rotation + i as f64 * std::f64::consts::TAU / vertices as f64;
+            let point = Point {
+                x: radius * angle.cos(),
+                y: radius * angle.sin(),
+            };
+            if i == 0 {
+                commands.push(PathCommand::MoveTo(point));
+            } else {
+                commands.push(PathCommand::LineTo(point));
+            }
+        }
+        commands.push(PathCommand::Close);
+        paths.push(GeometryPath {
+            contours: vec![GeometryContour { commands }],
+            polarity: Polarity::Dark,
+        });
+    }
+    if let Some(hole_diameter) = hole_diameter
+        && hole_diameter > 0.0
+    {
+        paths.push(circle_path(hole_diameter / 2.0, Polarity::Clear));
+    }
+    paths
+}
+
+fn circle_path(radius: f64, polarity: Polarity) -> GeometryPath {
+    GeometryPath {
+        contours: vec![GeometryContour {
+            commands: vec![
+                PathCommand::MoveTo(Point { x: radius, y: 0.0 }),
+                PathCommand::ArcTo {
+                    end: Point { x: -radius, y: 0.0 },
+                    center: Point { x: 0.0, y: 0.0 },
+                    clockwise: false,
+                },
+                PathCommand::ArcTo {
+                    end: Point { x: radius, y: 0.0 },
+                    center: Point { x: 0.0, y: 0.0 },
+                    clockwise: false,
+                },
+                PathCommand::Close,
+            ],
+        }],
+        polarity,
+    }
+}
+
+fn rect_path(width: f64, height: f64, polarity: Polarity) -> GeometryPath {
+    let hw = width / 2.0;
+    let hh = height / 2.0;
+    GeometryPath {
+        contours: vec![GeometryContour {
+            commands: vec![
+                PathCommand::MoveTo(Point { x: -hw, y: -hh }),
+                PathCommand::LineTo(Point { x: hw, y: -hh }),
+                PathCommand::LineTo(Point { x: hw, y: hh }),
+                PathCommand::LineTo(Point { x: -hw, y: hh }),
+                PathCommand::Close,
+            ],
+        }],
+        polarity,
+    }
 }
 
 fn parse_aperture_code(value: &str) -> Result<i32> {

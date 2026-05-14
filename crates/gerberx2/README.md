@@ -67,12 +67,10 @@ This keeps the original command stream for round-trip/generation work while prov
 
 Next implementation steps:
 
-1. Parse and evaluate fixed-format coordinates into real units using `FS` + `MO`.
-2. Maintain graphics state while parsing commands.
-3. Build ordered `GraphicalObject`s for `D01/D02/D03` outside regions.
-4. Build region contours for `G36/G37`.
-5. Lower standard apertures to geometry paths.
-6. Add aperture macro expression parsing/evaluation.
-7. Add block aperture and step-repeat object expansion.
-8. Add Gerber writer that emits attributes comprehensively.
-9. Add SVG renderer using the same geometry/rendering concepts as IPC-2581 tools.
+1. Add aperture macro expression parsing/evaluation.
+2. Add block aperture and step-repeat object expansion.
+3. Validate region contours for closure/connectivity/self-intersection constraints.
+4. Add Gerber writer that emits attributes comprehensively.
+5. Add SVG renderer using the same geometry/rendering concepts as IPC-2581 tools.
+
+Initial support already decodes fixed-format coordinates through `FS` + `MO`, maintains graphics state for operations, builds ordered graphical objects for flashes/draws/arcs/regions, and lowers standard apertures (`C`, `R`, `O`, `P`) to geometry paths.
