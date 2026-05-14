@@ -30,6 +30,59 @@ pub fn process_document(doc: &mut GeometryDocument) {
     normalize_bounds(doc);
 }
 
+pub fn flatten_layers_to_masks(doc: &mut GeometryDocument) {
+    for layer_index in 0..doc.layers.len() {
+        let layer = doc.layers[layer_index].clone();
+        if layer.feature_count == 0 {
+            continue;
+        }
+
+        let feature_indices = layer_features(&layer).collect::<Vec<_>>();
+        let contours = feature_indices
+            .iter()
+            .flat_map(|&feature_index| {
+                let feature = &doc.features[feature_index];
+                if feature.bucket == FeatureBucket::Cutout
+                    || feature.polarity != GeometryPolarity::Positive
+                {
+                    Vec::new()
+                } else {
+                    feature_filled_contours(doc, feature)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for &feature_index in &feature_indices {
+            clear_feature_paths(doc, feature_index);
+        }
+
+        if contours.is_empty() {
+            continue;
+        }
+
+        let contours =
+            polygon_shapes_to_contours(contours.simplify_shape(OverlayFillRule::NonZero));
+        if contours.is_empty() {
+            continue;
+        }
+
+        let mask_index = feature_indices[0];
+        replace_feature_with_compound_path(
+            doc,
+            mask_index,
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            contours,
+        );
+        let mask = &mut doc.features[mask_index];
+        mask.kind = FeatureKind::FlattenedBucket;
+        mask.bucket = FeatureBucket::Fill;
+        mask.polarity = GeometryPolarity::Positive;
+        mask.net = None;
+    }
+
+    normalize_bounds(doc);
+}
+
 pub fn normalize_bounds(doc: &mut GeometryDocument) {
     for contour_index in 0..doc.contours.len() {
         doc.contours[contour_index].bbox = contour_bbox(doc, contour_index);
@@ -1413,6 +1466,58 @@ mod tests {
         let path = &doc.paths[feature.path_start as usize];
         assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
         assert_eq!(path.bbox.max, Point::new(3.5, 4.0));
+    }
+
+    #[test]
+    fn flattens_processed_layer_features_to_single_mask() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 2.0, 1.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Padstack,
+                FeatureBucket::Smd,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(1.0, 0.0, 3.0, 1.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_start: 1,
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Trace,
+                FeatureBucket::Trace,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            feature_start: 0,
+            feature_count: 2,
+            bbox: BBox::empty(),
+        });
+
+        process_document(&mut doc);
+        flatten_layers_to_masks(&mut doc);
+
+        assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
+        assert_eq!(doc.features[0].bucket, FeatureBucket::Fill);
+        assert_eq!(doc.features[0].path_count, 1);
+        assert_eq!(doc.features[1].path_count, 0);
+        let path = &doc.paths[doc.features[0].path_start as usize];
+        assert_eq!(path.contour_count, 1);
+        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(path.bbox.max, Point::new(3.0, 1.0));
+        assert_eq!(doc.layers[0].bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(doc.layers[0].bbox.max, Point::new(3.0, 1.0));
     }
 
     fn rect_cmds(x0: f64, y0: f64, x1: f64, y1: f64) -> [PathCmd; 5] {

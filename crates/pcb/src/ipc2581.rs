@@ -83,6 +83,9 @@ enum Commands {
         /// Render format. Auto infers SVG/PNG from the output extension or uses terminal graphics.
         #[arg(short, long, default_value = "auto")]
         format: RenderFormat,
+        /// Flatten the layer into a single Gerber-style mask before rendering.
+        #[arg(long)]
+        flat: bool,
     },
 }
 
@@ -152,12 +155,14 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             layer,
             output,
             format,
+            flat,
         } => commands::render::execute(
             &file,
             &commands::render::RenderOptions {
                 layer,
                 output,
                 format,
+                flat,
             },
         ),
     }
