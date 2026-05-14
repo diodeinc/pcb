@@ -192,3 +192,32 @@ fn process_applies_clear_polarity_cutouts() {
     let path = &geometry.paths[composite.path_start as usize];
     assert!(path.contour_count >= 2);
 }
+
+#[test]
+fn extracts_non_circular_aperture_sweeps_without_diagnostics() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,0.2X0.4*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nM02*\n",
+    )
+    .unwrap();
+
+    let geometry = gerberx2::geometry::extract_document(&gerber);
+    assert!(geometry.diagnostics.is_empty());
+    assert!(geometry.paths.len() > 1);
+}
+
+#[test]
+fn renders_svg_and_png_from_processed_geometry() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Paste,Top*%\n%ADD10R,1.0X1.0*%\nD10*\nX0Y0D03*\nM02*\n",
+    )
+    .unwrap();
+
+    let mut geometry = gerberx2::geometry::extract_document(&gerber);
+    gerberx2::geometry::process::process_document(&mut geometry);
+    let svg = gerberx2::geometry::svg::render_svg(&geometry);
+    assert!(svg.contains("<svg"));
+    assert!(svg.contains("<path"));
+    assert!(svg.contains("Paste, Top"));
+    let png = gerberx2::geometry::raster::render_png_with_max_dimension(&geometry, 64).unwrap();
+    assert!(png.starts_with(b"\x89PNG"));
+}

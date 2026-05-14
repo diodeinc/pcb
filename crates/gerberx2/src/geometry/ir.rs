@@ -309,6 +309,36 @@ impl BBox {
         self.max.x = self.max.x.max(p.x);
         self.max.y = self.max.y.max(p.y);
     }
+
+    pub fn include_circular_arc(
+        &mut self,
+        start: Point,
+        end: Point,
+        center: Point,
+        clockwise: bool,
+    ) {
+        self.include_point(start);
+        self.include_point(end);
+        let radius = start.distance_to(center).max(end.distance_to(center));
+        if radius <= 0.0 {
+            return;
+        }
+        let start_angle = start.angle_from(center);
+        let end_angle = end.angle_from(center);
+        for angle in [
+            0.0,
+            std::f64::consts::FRAC_PI_2,
+            std::f64::consts::PI,
+            std::f64::consts::PI * 1.5,
+        ] {
+            if angle_is_on_arc(start_angle, end_angle, angle, clockwise) {
+                self.include_point(Point::new(
+                    center.x + radius * angle.cos(),
+                    center.y + radius * angle.sin(),
+                ));
+            }
+        }
+    }
     pub fn union(mut self, other: BBox) -> Self {
         if other.is_empty() {
             return self;
@@ -327,6 +357,12 @@ impl BBox {
             }
         }
     }
+    pub fn width(&self) -> f64 {
+        self.max.x - self.min.x
+    }
+    pub fn height(&self) -> f64 {
+        self.max.y - self.min.y
+    }
     pub fn is_empty(&self) -> bool {
         self.min.x.is_infinite() || self.min.y.is_infinite()
     }
@@ -336,6 +372,34 @@ impl Default for BBox {
     fn default() -> Self {
         Self::empty()
     }
+}
+
+pub fn arc_sweep_radians(start: Point, end: Point, center: Point, clockwise: bool) -> f64 {
+    if start.distance_to(end) <= 1e-9 && start.distance_to(center) > 1e-9 {
+        return std::f64::consts::TAU;
+    }
+    let start_angle = start.angle_from(center);
+    let end_angle = end.angle_from(center);
+    if clockwise {
+        normalize_angle(start_angle - end_angle)
+    } else {
+        normalize_angle(end_angle - start_angle)
+    }
+}
+
+fn angle_is_on_arc(start: f64, end: f64, angle: f64, clockwise: bool) -> bool {
+    if normalize_angle(end - start) <= 1e-12 {
+        return true;
+    }
+    if clockwise {
+        normalize_angle(start - angle) <= normalize_angle(start - end) + 1e-12
+    } else {
+        normalize_angle(angle - start) <= normalize_angle(end - start) + 1e-12
+    }
+}
+
+fn normalize_angle(angle: f64) -> f64 {
+    angle.rem_euclid(std::f64::consts::TAU)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

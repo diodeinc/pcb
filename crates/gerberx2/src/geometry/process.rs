@@ -338,15 +338,18 @@ fn path_contours(doc: &GeometryDocument, path: &GeometryPath) -> Vec<ContourPayl
 fn contour_bbox(doc: &GeometryDocument, contour_index: usize) -> BBox {
     let contour = &doc.contours[contour_index];
     let mut bbox = BBox::empty();
+    let mut current = Point::default();
     for cmd in
         &doc.path_cmds[contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
     {
         match cmd.op {
-            PathOp::MoveTo | PathOp::LineTo | PathOp::ArcTo => {
+            PathOp::MoveTo | PathOp::LineTo => {
                 bbox.include_point(cmd.p0);
-                if cmd.op == PathOp::ArcTo {
-                    bbox.include_point(cmd.p1);
-                }
+                current = cmd.p0;
+            }
+            PathOp::ArcTo => {
+                bbox.include_circular_arc(current, cmd.p0, cmd.p1, cmd.clockwise);
+                current = cmd.p0;
             }
             PathOp::Close => {}
         }
@@ -372,23 +375,6 @@ fn feature_bbox(doc: &GeometryDocument, feature_index: usize) -> BBox {
     doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         .iter()
         .fold(BBox::empty(), |bbox, path| bbox.union(path.bbox))
-}
-
-fn arc_sweep_radians(start: Point, end: Point, center: Point, clockwise: bool) -> f64 {
-    if start.distance_to(end) <= 1e-9 && start.distance_to(center) > 1e-9 {
-        return std::f64::consts::TAU;
-    }
-    let start_angle = start.angle_from(center);
-    let end_angle = end.angle_from(center);
-    if clockwise {
-        normalize_angle(start_angle - end_angle)
-    } else {
-        normalize_angle(end_angle - start_angle)
-    }
-}
-
-fn normalize_angle(angle: f64) -> f64 {
-    angle.rem_euclid(std::f64::consts::TAU)
 }
 
 fn kurbo_cap(line_cap: LineCap) -> Cap {
