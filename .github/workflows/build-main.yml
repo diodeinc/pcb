@@ -22,6 +22,8 @@ jobs:
       
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-bin: false
       
       - name: Build PCB CLI
         run: cargo build --release --bin pcb
