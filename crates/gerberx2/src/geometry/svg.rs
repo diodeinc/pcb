@@ -121,6 +121,21 @@ fn write_path(
         FillRule::NonZero => "nonzero",
         FillRule::EvenOdd => "evenodd",
     };
+    if mode == RenderMode::Final && is_profile_layer(doc) {
+        let stroke_width = if path.stroke_width > 0.0 {
+            path.stroke_width
+        } else {
+            0.1
+        };
+        writeln!(
+            svg,
+            "    <path d='{d}' fill='none' stroke='#000000' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='round' data-board-outline='true'/>",
+            fmt_num(stroke_width),
+            line_cap(path.line_cap)
+        )
+        .unwrap();
+        return;
+    }
     if path.flags.stroked {
         writeln!(
             svg,
@@ -134,6 +149,13 @@ fn write_path(
             style.color, fmt_num(style.opacity), feature.kind, feature.bucket
         ).unwrap();
     }
+}
+
+fn is_profile_layer(doc: &GeometryDocument) -> bool {
+    matches!(
+        doc.file_function.first().map(String::as_str),
+        Some("Profile")
+    )
 }
 
 fn path_data(doc: &GeometryDocument, path: &GeometryPath) -> String {

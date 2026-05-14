@@ -415,3 +415,19 @@ fn renders_svg_and_png_from_processed_geometry() {
     let png = gerberx2::geometry::raster::render_png_with_max_dimension(&geometry, 64).unwrap();
     assert!(png.starts_with(b"\x89PNG"));
 }
+
+#[test]
+fn renders_profile_gerber_as_black_board_outline() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Profile,NP*%\n%ADD10C,0.1*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nX1000000Y1000000D01*\nX0Y1000000D01*\nX0Y0D01*\nM02*\n",
+    )
+    .unwrap();
+
+    let mut geometry = gerberx2::geometry::extract_document(&gerber);
+    gerberx2::geometry::process::process_document(&mut geometry);
+    let svg = gerberx2::geometry::svg::render_svg(&geometry);
+
+    assert!(svg.contains("fill='none' stroke='#000000'"));
+    assert!(svg.contains("data-board-outline='true'"));
+    assert!(!svg.contains("fill='#606060'"));
+}

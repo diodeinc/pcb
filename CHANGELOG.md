@@ -21,6 +21,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `pcb gerber render` now draws Profile layers as black board outlines instead of grey filled geometry.
+- `pcb ipc2581 render --flat` now uses Gerber-style colors for copper, paste, mask, legend, profile, and unknown layers.
 - `pcb new board <name> <repo-url>` now creates a board repository directly, replacing the separate `pcb new workspace` flow.
 - `pcb import` now writes directly into a board repository root instead of creating `boards/<name>/` under a workspace.
 - Board release uploads now derive the Diode workspace name from the first path segment of `[workspace].repository`, with `[workspace].name` available as an override.
