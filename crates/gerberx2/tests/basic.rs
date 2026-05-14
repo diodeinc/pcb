@@ -1,4 +1,8 @@
-use gerberx2::{ApertureTemplate, Command, GerberX2, ObjectKind, PathCommand, Polarity, Unit};
+use gerberx2::{
+    ApertureTemplate, AttributeValue, Command, Contour, ContourSegment, GerberLayer, GerberX2,
+    ObjectKind, PathCommand, Point, Polarity, Unit, WriterAperture, WriterApertureMacro,
+    WriterApertureTemplate, WriterMacroExpression, WriterMacroPrimitive, WriterObject,
+};
 
 #[test]
 fn parses_basic_x2_layer() {
@@ -31,6 +35,196 @@ fn parses_basic_x2_layer() {
             at,
             aperture: 10,
         } if at.x == 142.0 && at.y == -108.55
+    ));
+}
+
+#[test]
+fn writes_idiomatic_x2_layer_from_object_ir() {
+    let mut layer = GerberLayer {
+        file_attributes: vec![
+            AttributeValue::new(".FileFunction", ["Copper", "L1", "Top"]),
+            AttributeValue::new(".Part", ["Single"]),
+        ],
+        apertures: vec![
+            WriterAperture {
+                code: 10,
+                template: WriterApertureTemplate::Circle {
+                    diameter: 0.2,
+                    hole_diameter: None,
+                },
+                attributes: vec![AttributeValue::new(".AperFunction", ["Conductor"])],
+            },
+            WriterAperture {
+                code: 11,
+                template: WriterApertureTemplate::Rectangle {
+                    width: 1.0,
+                    height: 1.5,
+                    hole_diameter: None,
+                },
+                attributes: vec![AttributeValue::new(".AperFunction", ["SMDPad", "CuDef"])],
+            },
+        ],
+        ..GerberLayer::default()
+    };
+    layer.objects = vec![
+        WriterObject {
+            kind: ObjectKind::Flash {
+                at: Point { x: 1.0, y: 2.0 },
+                aperture: 11,
+            },
+            polarity: Polarity::Dark,
+            attributes: vec![
+                AttributeValue::new(".N", ["GND"]),
+                AttributeValue::new(".C", ["U1"]),
+                AttributeValue::new(".P", ["1"]),
+            ],
+        },
+        WriterObject::dark(ObjectKind::Draw {
+            start: Point { x: 1.0, y: 2.0 },
+            end: Point { x: 3.0, y: 2.0 },
+            aperture: 10,
+        }),
+        WriterObject::dark(ObjectKind::Arc {
+            start: Point { x: 3.0, y: 2.0 },
+            end: Point { x: 4.0, y: 3.0 },
+            center_offset: Point { x: 0.5, y: 0.5 },
+            clockwise: false,
+            aperture: 10,
+        }),
+        WriterObject::dark(ObjectKind::Region {
+            contours: vec![Contour {
+                segments: vec![
+                    ContourSegment::Line {
+                        start: Point { x: 0.0, y: 0.0 },
+                        end: Point { x: 1.0, y: 0.0 },
+                    },
+                    ContourSegment::Line {
+                        start: Point { x: 1.0, y: 0.0 },
+                        end: Point { x: 1.0, y: 1.0 },
+                    },
+                    ContourSegment::Line {
+                        start: Point { x: 1.0, y: 1.0 },
+                        end: Point { x: 0.0, y: 0.0 },
+                    },
+                ],
+            }],
+        }),
+    ];
+
+    let output = gerberx2::write_layer(&layer).unwrap();
+    assert!(output.contains("%TF.FileFunction,Copper,L1,Top*%"));
+    assert!(output.contains("%TA.AperFunction,SMDPad,CuDef*%"));
+    assert!(output.contains("%TO.N,GND*%"));
+    assert!(output.contains("G36*"));
+
+    let parsed = GerberX2::parse(&output).unwrap();
+    assert_eq!(parsed.file_attributes().len(), 2);
+    assert_eq!(parsed.aperture_definitions().len(), 2);
+    assert_eq!(parsed.objects().len(), 4);
+    assert!(matches!(
+        parsed.objects()[0].kind,
+        ObjectKind::Flash { at, aperture: 11 } if at.x == 1.0 && at.y == 2.0
+    ));
+    assert!(matches!(
+        parsed.objects()[2].kind,
+        ObjectKind::Arc {
+            clockwise: false,
+            ..
+        }
+    ));
+    assert_eq!(parsed.objects()[0].object_attributes.len(), 3);
+}
+
+#[test]
+fn writes_macro_and_block_apertures_without_flattening() {
+    let layer = GerberLayer {
+        aperture_macros: vec![WriterApertureMacro {
+            name: "ROUNDRECT".to_string(),
+            primitives: vec![
+                WriterMacroPrimitive::Comment("rounded rectangle test macro".to_string()),
+                WriterMacroPrimitive::VariableDefinition {
+                    variable: 3,
+                    expression: WriterMacroExpression::Add(
+                        Box::new(WriterMacroExpression::Variable(1)),
+                        Box::new(WriterMacroExpression::Multiply(
+                            Box::new(WriterMacroExpression::Variable(2)),
+                            Box::new(WriterMacroExpression::Number(2.0)),
+                        )),
+                    ),
+                },
+                WriterMacroPrimitive::Shape {
+                    code: 1,
+                    parameters: vec![
+                        WriterMacroExpression::Number(1.0),
+                        WriterMacroExpression::Variable(3),
+                        WriterMacroExpression::Number(0.0),
+                        WriterMacroExpression::Number(0.0),
+                        WriterMacroExpression::Number(0.0),
+                    ],
+                },
+            ],
+        }],
+        apertures: vec![
+            WriterAperture {
+                code: 10,
+                template: WriterApertureTemplate::Circle {
+                    diameter: 0.1,
+                    hole_diameter: None,
+                },
+                attributes: Vec::new(),
+            },
+            WriterAperture {
+                code: 11,
+                template: WriterApertureTemplate::Macro {
+                    name: "ROUNDRECT".to_string(),
+                    parameters: vec![0.2, 0.4],
+                },
+                attributes: vec![AttributeValue::new(".AperFunction", ["SMDPad", "CuDef"])],
+            },
+            WriterAperture {
+                code: 20,
+                template: WriterApertureTemplate::Block {
+                    objects: vec![WriterObject::dark(ObjectKind::Flash {
+                        at: Point { x: 1.0, y: 0.0 },
+                        aperture: 10,
+                    })],
+                },
+                attributes: Vec::new(),
+            },
+        ],
+        objects: vec![
+            WriterObject::dark(ObjectKind::Flash {
+                at: Point { x: 0.0, y: 0.0 },
+                aperture: 11,
+            }),
+            WriterObject::dark(ObjectKind::Flash {
+                at: Point { x: 2.0, y: 3.0 },
+                aperture: 20,
+            }),
+        ],
+        ..GerberLayer::default()
+    };
+
+    let output = gerberx2::write_layer(&layer).unwrap();
+    assert!(output.contains("%AMROUNDRECT*"));
+    assert!(output.contains("%ADD11ROUNDRECT,0.2X0.4*%"));
+    assert!(output.contains("%ABD20*%"));
+
+    let parsed = GerberX2::parse(&output).unwrap();
+    assert_eq!(parsed.aperture_macros().len(), 1);
+    assert_eq!(parsed.aperture_definitions().len(), 3);
+    assert!(matches!(
+        parsed.aperture_definitions()[1].template,
+        ApertureTemplate::Macro { .. }
+    ));
+    assert!(matches!(
+        parsed.aperture_definitions()[2].template,
+        ApertureTemplate::Block { .. }
+    ));
+    assert_eq!(parsed.objects().len(), 2);
+    assert!(matches!(
+        parsed.objects()[1].kind,
+        ObjectKind::Flash { at, aperture: 10 } if at.x == 3.0 && at.y == 3.0
     ));
 }
 

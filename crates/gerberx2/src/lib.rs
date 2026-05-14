@@ -2,9 +2,14 @@ pub mod geometry;
 mod intern;
 mod parse;
 pub mod types;
+pub mod write;
 
 pub use intern::{Interner, Symbol};
 pub use types::*;
+pub use write::{
+    AttributeValue, GerberLayer, WriterAperture, WriterApertureMacro, WriterApertureTemplate,
+    WriterMacroExpression, WriterMacroPrimitive, WriterObject, write_layer,
+};
 
 use parse::Parser;
 use std::path::Path;

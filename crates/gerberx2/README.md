@@ -65,12 +65,30 @@ pub struct GraphicalObject {
 
 This keeps the original command stream for round-trip/generation work while providing a direct, renderer-friendly object list for SVG and IPC-2581 conversion.
 
-Next implementation steps:
+Remaining implementation steps:
 
-1. Add aperture macro expression parsing/evaluation.
-2. Add block aperture and step-repeat object expansion.
-3. Validate region contours for closure/connectivity/self-intersection constraints.
-4. Add Gerber writer that emits attributes comprehensively.
-5. Add SVG renderer using the same geometry/rendering concepts as IPC-2581 tools.
+1. Validate region contours for self-intersection constraints.
+2. Broaden writer coverage as IPC-2581 lowering exposes additional Gerber constructs.
+3. Add end-to-end IPC-2581-to-Gerber smoke tests once IPC lowering is wired to the writer.
 
 Initial support already decodes fixed-format coordinates through `FS` + `MO`, maintains graphics state for operations, builds ordered graphical objects for flashes/draws/arcs/regions, and lowers standard apertures (`C`, `R`, `O`, `P`) to geometry paths.
+
+## Writer direction for IPC-2581 export
+
+The writer intentionally accepts a string-backed artwork/object IR (`GerberLayer`) rather than flattened render geometry. IPC-2581 export should lower manufacturing layers into this level so semantic Gerber X2 can be emitted:
+
+- standard pads as aperture flashes,
+- tracks as aperture draws and native circular arcs,
+- filled copper/mask/paste/legend as regions,
+- file/aperture/object attributes as `TF`/`TA`/`TO`,
+- flattened regions only when a source feature cannot be represented faithfully as a Gerber primitive.
+
+The current writer emits standard apertures, aperture macros, block apertures, flashes, draws, arcs, regions, polarity changes, and X2 file/aperture/object attributes. Macro and block apertures are emitted as native Gerber constructs rather than silently flattened or approximated.
+
+The intended smoke test for IPC-2581 export is geometry-level comparison between two generated fabrication sets:
+
+1. `layout.kicad_pcb` → KiCad Gerber X2 export.
+2. `layout.kicad_pcb` → KiCad IPC-2581 export → `gerberx2` writer export.
+3. Parse both Gerber sets, process both to final `GeometryDocument`s, and compare each matching layer with `geometry::compare::compare_documents`.
+
+This comparison deliberately allows different command streams/aperture tables, but fails on layer function, final image bounds, or filled area drift beyond tolerance.

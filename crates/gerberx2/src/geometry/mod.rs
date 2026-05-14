@@ -1,3 +1,4 @@
+pub mod compare;
 pub mod extract;
 pub mod ir;
 pub mod process;
