@@ -27,7 +27,6 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
           components: rustfmt, clippy
 
       - name: Check All
@@ -125,7 +124,6 @@ jobs:
         if: runner.os != 'Windows'
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
           components: rustfmt, clippy
 
       - name: Install nextest
