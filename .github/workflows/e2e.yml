@@ -57,12 +57,9 @@ jobs:
           brew install --cask kicad
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
 
       - name: Build and install pcb CLI
         run: |

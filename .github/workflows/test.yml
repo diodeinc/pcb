@@ -27,8 +27,8 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
           components: rustfmt, clippy
+          cache-bin: false
 
       - name: Check All
         run: cargo check --workspace --all
@@ -120,13 +120,14 @@ jobs:
           rustflags: ""
           toolchain: stable-x86_64-pc-windows-msvc
           components: rustfmt, clippy
+          cache-bin: false
 
       - name: Install Rust
         if: runner.os != 'Windows'
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
           components: rustfmt, clippy
+          cache-bin: false
 
       - name: Install nextest
         uses: taiki-e/install-action@nextest

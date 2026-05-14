@@ -21,10 +21,9 @@ jobs:
           submodules: recursive
       
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-bin: false
       
       - name: Build PCB CLI
         run: cargo build --release --bin pcb
