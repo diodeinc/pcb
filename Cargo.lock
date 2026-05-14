@@ -4617,6 +4617,7 @@ dependencies = [
  "clap",
  "colored",
  "comfy-table",
+ "gerberx2",
  "i_overlay",
  "ipc2581",
  "jiff",

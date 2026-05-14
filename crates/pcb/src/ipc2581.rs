@@ -1,7 +1,9 @@
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
-use pcb_ipc2581_tools::{OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, utils};
+use pcb_ipc2581_tools::{
+    OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, gerber, utils,
+};
 
 #[derive(Args)]
 pub struct Ipc2581Args {
@@ -87,6 +89,15 @@ enum Commands {
         #[arg(long)]
         flat: bool,
     },
+    /// Export IPC-2581 fabrication layers as Gerber X2 files
+    Gerber {
+        /// IPC-2581 XML file to export from
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Output directory for generated Gerber files
+        #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -165,5 +176,14 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 flat,
             },
         ),
+        Commands::Gerber { file, output } => {
+            let set = gerber::execute_file(&file, &output)?;
+            println!(
+                "✓ IPC-2581 exported {} Gerber X2 file(s) to {}",
+                set.files.len(),
+                output.display()
+            );
+            Ok(())
+        }
     }
 }

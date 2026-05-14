@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Added native aperture macro and block aperture emission to the Gerber X2 writer.
 - Added Gerber geometry comparison helpers for IPC-2581-to-Gerber smoke tests.
 - Added `pcb ipc2581 render --flat` to render a layer as a single Gerber-style mask.
+- Added `pcb ipc2581 gerber` to export IPC-2581 fabrication layers as Gerber X2 files through a canonical artwork pipeline.
 
 ### Changed
 

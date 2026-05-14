@@ -4,6 +4,7 @@ use ipc2581::Mode;
 pub mod accessors;
 pub mod commands;
 pub mod geometry;
+pub mod gerber;
 pub mod utils;
 
 // Re-export ipc2581 for external use

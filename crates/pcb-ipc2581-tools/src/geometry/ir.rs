@@ -309,7 +309,7 @@ pub enum GeometryPolarity {
     Negative,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LineCap {
     Round,
     Square,
