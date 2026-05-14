@@ -4,14 +4,9 @@ Fast Gerber X2 parser, typed data model, and writer scaffolding for PCB fabricat
 
 This crate is intentionally shaped like `ipc2581`: a pure parser/data-model crate with no CLI concerns. Higher-level tools should live in a separate crate or in `pcb` commands.
 
-## Spec references read
+## Gerber concepts
 
-Primary local reference:
-
-- PDF: `/Users/akhilles/.pcb/cache/datasheets/materialized/c8655187-b74b-558f-985f-dc59209475c9/gerber-layer-format-specification-revision-2022-02_en.pdf`
-- Markdown: `/Users/akhilles/.pcb/cache/datasheets/materialized/c8655187-b74b-558f-985f-dc59209475c9/gerber-layer-format-specification-revision-2022-02_en.md`
-
-Important concepts from the spec:
+Important concepts from the Gerber layer format specification:
 
 - A Gerber file is one complete 2D binary vector image, represented as an ordered command stream.
 - X2 means the file uses attributes: `TF`, `TA`, `TO`, `TD`.
