@@ -1,3 +1,4 @@
+pub mod geometry;
 mod intern;
 mod parse;
 pub mod types;

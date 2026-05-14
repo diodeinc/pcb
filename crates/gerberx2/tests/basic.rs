@@ -155,3 +155,40 @@ fn rejects_unclosed_region_contours() {
 
     assert!(err.to_string().contains("region contour must be closed"));
 }
+
+#[test]
+fn extracts_and_processes_render_geometry() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Copper,L1,Top*%\n%ADD10C,0.2*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nX1000000Y1000000D03*\nM02*\n",
+    )
+    .unwrap();
+
+    let mut geometry = gerberx2::geometry::extract_document(&gerber);
+    assert_eq!(geometry.file_function, vec!["Copper", "L1", "Top"]);
+    assert_eq!(geometry.features.len(), 2);
+    assert!(geometry.paths.iter().any(|path| path.flags.stroked));
+
+    gerberx2::geometry::process::process_document(&mut geometry);
+    assert!(geometry.features.iter().any(|feature| {
+        feature.kind == gerberx2::geometry::ir::FeatureKind::Composite && feature.path_count == 1
+    }));
+    assert!(!geometry.bbox.is_empty());
+}
+
+#[test]
+fn process_applies_clear_polarity_cutouts() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,2.0X2.0*%\n%ADD11C,1.0*%\nD10*\nX0Y0D03*\n%LPC*%\nD11*\nX0Y0D03*\nM02*\n",
+    )
+    .unwrap();
+
+    let mut geometry = gerberx2::geometry::extract_document(&gerber);
+    gerberx2::geometry::process::process_document(&mut geometry);
+    let composite = geometry
+        .features
+        .iter()
+        .find(|feature| feature.kind == gerberx2::geometry::ir::FeatureKind::Composite)
+        .unwrap();
+    let path = &geometry.paths[composite.path_start as usize];
+    assert!(path.contour_count >= 2);
+}

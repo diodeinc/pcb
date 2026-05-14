@@ -2450,6 +2450,8 @@ dependencies = [
 name = "gerberx2"
 version = "0.1.0"
 dependencies = [
+ "i_overlay",
+ "kurbo",
  "thiserror 2.0.18",
 ]
 
