@@ -4424,6 +4424,7 @@ dependencies = [
  "ctrlc",
  "dirs",
  "env_logger",
+ "gerberx2",
  "glam",
  "globset",
  "gltfpack-sys",

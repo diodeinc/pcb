@@ -21,6 +21,7 @@ mod drc;
 mod embed_step;
 mod file_walker;
 mod fmt;
+mod gerber;
 mod import;
 mod info;
 mod ipc2581;
@@ -173,6 +174,9 @@ enum Commands {
     /// IPC-2581 parser and inspection tool
     Ipc2581(ipc2581::Ipc2581Args),
 
+    /// Gerber X2 parser and rendering tool
+    Gerber(gerber::GerberArgs),
+
     /// Inspect KiCad symbol libraries as structured JSON
     #[command(hide = true)]
     Kq(kq::KqArgs),
@@ -254,6 +258,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Route(args) => route::execute(args),
         Commands::Simulate(args) => sim::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
+        Commands::Gerber(args) => gerber::execute(args),
         Commands::Kq(args) => kq::execute(args),
         Commands::Package(args) => package::execute(args),
         Commands::External(args) => {

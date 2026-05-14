@@ -13,7 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Added IPC-2581C XSD validation APIs to the `ipc2581` crate.
 - Added `pcb ipc2581 render` for processed IPC-2581 layer output to SVG, PNG, and terminal graphics, including board outline overlays.
 - Added `pcb ipc2581 outline` to export the IPC-2581 board profile as a KiCad-importable DXF.
-- Added initial `gerberx2` crate support for parsing Gerber X2 command streams and metadata, decoding coordinates, building graphical objects, lowering aperture geometry, extracting/processing render geometry, and rendering SVG/PNG/terminal previews.
+- Added initial `gerberx2` crate and `pcb gerber render` support for parsing Gerber X2 command streams and metadata, decoding coordinates, building graphical objects, lowering aperture geometry, extracting/processing render geometry, and rendering SVG/PNG/terminal previews.
 
 ### Changed
 

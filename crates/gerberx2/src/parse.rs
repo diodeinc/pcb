@@ -1218,16 +1218,16 @@ fn vector_line_path(
                     y: start.y + ny,
                 }),
                 PathCommand::LineTo(Point {
-                    x: end.x + nx,
-                    y: end.y + ny,
+                    x: start.x - nx,
+                    y: start.y - ny,
                 }),
                 PathCommand::LineTo(Point {
                     x: end.x - nx,
                     y: end.y - ny,
                 }),
                 PathCommand::LineTo(Point {
-                    x: start.x - nx,
-                    y: start.y - ny,
+                    x: end.x + nx,
+                    y: end.y + ny,
                 }),
                 PathCommand::Close,
             ],
