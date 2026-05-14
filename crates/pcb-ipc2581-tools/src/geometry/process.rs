@@ -992,6 +992,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 3,
             bbox: BBox::empty(),
@@ -1040,6 +1041,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox: BBox::empty(),
@@ -1135,6 +1137,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 4,
             bbox: BBox::empty(),
@@ -1194,6 +1197,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox: BBox::empty(),
@@ -1257,6 +1261,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox: BBox::empty(),
@@ -1307,6 +1312,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox: BBox::empty(),
@@ -1354,6 +1360,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox: BBox::empty(),
@@ -1400,6 +1407,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox: BBox::empty(),
@@ -1454,6 +1462,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox: BBox::empty(),
@@ -1500,6 +1509,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox: BBox::empty(),

@@ -1,4 +1,5 @@
 use ipc2581::Symbol;
+use ipc2581::types::LayerFunction;
 
 #[derive(Debug, Clone)]
 pub struct GeometryDocument {
@@ -99,6 +100,7 @@ pub struct BoardOutline {
 pub struct GeometryLayer {
     pub name: String,
     pub source_layer_ref: Symbol,
+    pub layer_function: LayerFunction,
     pub feature_start: u32,
     pub feature_count: u32,
     pub bbox: BBox,

@@ -128,6 +128,7 @@ fn extract_panel_layer(
     doc.layers.push(GeometryLayer {
         name: layer_name.to_string(),
         source_layer_ref: layer.name,
+        layer_function: layer.layer_function,
         feature_start,
         feature_count,
         bbox: layer_bbox,
@@ -293,6 +294,7 @@ fn extract_step_layer(
     doc.layers.push(GeometryLayer {
         name: layer_name.to_string(),
         source_layer_ref: layer.name,
+        layer_function: layer.layer_function,
         feature_start,
         feature_count,
         bbox: layer_bbox,

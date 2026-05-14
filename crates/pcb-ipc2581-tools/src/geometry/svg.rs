@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
 use super::ir::*;
+use ipc2581::types::LayerFunction;
 
 const VIEWBOX_PADDING_MM: f64 = 1.0;
 
@@ -275,26 +276,37 @@ fn style_for_feature(layer: &GeometryLayer, feature: &GeometryFeature) -> Style 
 }
 
 fn flat_layer_style(layer: &GeometryLayer) -> Style {
-    let name = layer.name.to_ascii_lowercase();
-    let (color, opacity) = if name.contains("paste") {
-        ("#aeb4bb", 0.9)
-    } else if name.contains("mask") {
-        ("#159447", 0.55)
-    } else if name.contains("legend") || name.contains("silk") {
-        ("#f8f9fa", 0.95)
-    } else if name.contains("profile") || name.contains("outline") || name.contains("rout") {
-        ("#606060", 1.0)
-    } else if name.contains("cu")
-        || name.contains("copper")
-        || name == "top"
-        || name == "bottom"
-        || name.starts_with('l')
-    {
-        ("#d87822", 0.9)
-    } else {
-        ("#5c7cfa", 0.85)
-    };
-    Style { color, opacity }
+    match layer.layer_function {
+        LayerFunction::Conductor
+        | LayerFunction::CondFilm
+        | LayerFunction::CondFoil
+        | LayerFunction::Plane
+        | LayerFunction::Signal
+        | LayerFunction::Mixed => Style {
+            color: "#d87822",
+            opacity: 0.9,
+        },
+        LayerFunction::Solderpaste | LayerFunction::Pastemask => Style {
+            color: "#aeb4bb",
+            opacity: 0.9,
+        },
+        LayerFunction::Soldermask => Style {
+            color: "#159447",
+            opacity: 0.55,
+        },
+        LayerFunction::Silkscreen | LayerFunction::Legend => Style {
+            color: "#f8f9fa",
+            opacity: 0.95,
+        },
+        LayerFunction::Rout | LayerFunction::BoardOutline => Style {
+            color: "#606060",
+            opacity: 1.0,
+        },
+        _ => Style {
+            color: "#5c7cfa",
+            opacity: 0.85,
+        },
+    }
 }
 
 fn color_for_bucket(bucket: FeatureBucket, polarity: GeometryPolarity) -> &'static str {
@@ -390,6 +402,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 1,
             bbox,
@@ -428,6 +441,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 1,
             bbox,
@@ -487,6 +501,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 1,
             bbox: outer,
@@ -547,6 +562,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox,
@@ -593,6 +609,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 4,
             bbox,
@@ -613,13 +630,19 @@ mod tests {
 
     #[test]
     fn renders_flattened_masks_with_gerber_layer_colors() {
-        assert_flat_color("F.Cu", "#d87822", "0.9");
-        assert_flat_color("F.Paste", "#aeb4bb", "0.9");
-        assert_flat_color("F.Mask", "#159447", "0.55");
-        assert_flat_color("F.SilkS", "#f8f9fa", "0.95");
+        assert_flat_color("F.Cu", LayerFunction::Signal, "#d87822", "0.9");
+        assert_flat_color("F.Paste", LayerFunction::Solderpaste, "#aeb4bb", "0.9");
+        assert_flat_color("F.Mask", LayerFunction::Soldermask, "#159447", "0.55");
+        assert_flat_color("F.SilkS", LayerFunction::Silkscreen, "#f8f9fa", "0.95");
+        assert_flat_color("LAMINATE", LayerFunction::DielCore, "#5c7cfa", "0.85");
     }
 
-    fn assert_flat_color(layer_name: &str, color: &str, opacity: &str) {
+    fn assert_flat_color(
+        layer_name: &str,
+        layer_function: LayerFunction,
+        color: &str,
+        opacity: &str,
+    ) {
         let mut interner = ipc2581::Interner::new();
         let mut doc = GeometryDocument::new("test".to_string());
         let bbox = BBox {
@@ -647,6 +670,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: layer_name.to_string(),
             source_layer_ref: interner.intern(layer_name),
+            layer_function,
             feature_start: 0,
             feature_count: 1,
             bbox,
@@ -668,6 +692,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 0,
             bbox,
@@ -703,6 +728,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 0,
             bbox: BBox::empty(),
