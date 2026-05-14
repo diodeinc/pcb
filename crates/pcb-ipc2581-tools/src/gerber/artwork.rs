@@ -1,11 +1,8 @@
-use ipc2581::types::{LayerFunction, Side};
-
-use crate::geometry::ir::{LineCap, Point};
+use crate::geometry::ir::Point;
 
 #[derive(Debug, Clone)]
 pub struct ArtworkLayer {
-    pub function: LayerFunction,
-    pub side: Option<Side>,
+    pub file_function: Vec<String>,
     pub objects: Vec<ArtworkObject>,
 }
 
@@ -13,12 +10,19 @@ pub struct ArtworkLayer {
 pub enum ArtworkObject {
     Region {
         contours: Vec<ArtworkContour>,
+        attributes: ObjectAttributes,
     },
     Stroke {
         width: f64,
-        line_cap: LineCap,
         contours: Vec<ArtworkContour>,
+        aperture_function: String,
+        attributes: ObjectAttributes,
     },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ObjectAttributes {
+    pub net: Option<String>,
 }
 
 #[derive(Debug, Clone)]

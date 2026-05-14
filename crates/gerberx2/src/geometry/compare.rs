@@ -1,4 +1,10 @@
 use super::ir::*;
+use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
+use i_overlay::core::overlay_rule::OverlayRule;
+use i_overlay::float::simplify::SimplifyShape;
+use i_overlay::float::single::SingleFloatOverlay;
+
+type PolygonContour = Vec<[f64; 2]>;
 
 /// Tolerances for comparing two processed Gerber geometry documents.
 ///
@@ -82,6 +88,14 @@ pub fn compare_documents(
         ));
     }
 
+    let symmetric_difference_area = symmetric_difference_area(reference, candidate);
+    if symmetric_difference_area > tolerance.area_mm2 {
+        mismatches.push(format!(
+            "symmetric difference area is {symmetric_difference_area:.6} mm², tolerance={:.6}",
+            tolerance.area_mm2
+        ));
+    }
+
     GeometryCompareReport {
         reference: reference_summary,
         candidate: candidate_summary,
@@ -133,7 +147,18 @@ fn compare_bbox(
 }
 
 fn filled_area(doc: &GeometryDocument) -> f64 {
-    let mut area = 0.0;
+    polygon_area(&document_image_contours(doc))
+}
+
+fn symmetric_difference_area(reference: &GeometryDocument, candidate: &GeometryDocument) -> f64 {
+    let reference = document_image_contours(reference);
+    let candidate = document_image_contours(candidate);
+    polygon_area(&difference_contours(reference.clone(), candidate.clone()))
+        + polygon_area(&difference_contours(candidate, reference))
+}
+
+fn document_image_contours(doc: &GeometryDocument) -> Vec<PolygonContour> {
+    let mut contours = Vec::new();
     for feature in &doc.features {
         for path in &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
@@ -144,14 +169,14 @@ fn filled_area(doc: &GeometryDocument) -> f64 {
             for contour in &doc.contours
                 [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
             {
-                area += contour_signed_area(doc, contour);
+                contours.push(contour_polygon(doc, contour));
             }
         }
     }
-    area.abs()
+    union_contours(contours)
 }
 
-fn contour_signed_area(doc: &GeometryDocument, contour: &GeometryContour) -> f64 {
+fn contour_polygon(doc: &GeometryDocument, contour: &GeometryContour) -> PolygonContour {
     let mut points = Vec::new();
     let mut current = Point::default();
     for cmd in
@@ -183,7 +208,46 @@ fn contour_signed_area(doc: &GeometryDocument, contour: &GeometryContour) -> f64
             PathOp::Close => {}
         }
     }
-    signed_area(&points)
+    points.into_iter().map(|point| [point.x, point.y]).collect()
+}
+
+fn polygon_area(contours: &[PolygonContour]) -> f64 {
+    contours
+        .iter()
+        .map(|contour| {
+            let points = contour
+                .iter()
+                .map(|[x, y]| Point::new(*x, *y))
+                .collect::<Vec<_>>();
+            signed_area(&points)
+        })
+        .sum::<f64>()
+        .abs()
+}
+
+fn union_contours(contours: Vec<PolygonContour>) -> Vec<PolygonContour> {
+    contours
+        .into_iter()
+        .filter(|contour| contour.len() >= 3)
+        .collect::<Vec<_>>()
+        .simplify_shape(OverlayFillRule::NonZero)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+fn difference_contours(
+    subject: Vec<PolygonContour>,
+    cutters: Vec<PolygonContour>,
+) -> Vec<PolygonContour> {
+    if subject.is_empty() || cutters.is_empty() {
+        return subject;
+    }
+    subject
+        .overlay(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 fn signed_area(points: &[Point]) -> f64 {
@@ -253,6 +317,36 @@ mod tests {
         let report = compare_documents(&reference, &candidate, GeometryCompareTolerance::default());
         assert!(!report.is_match());
         assert!(report.mismatches[0].contains("file function differs"));
+    }
+
+    #[test]
+    fn detects_symmetric_difference_with_same_area_geometry() {
+        let reference = triangle_doc("Top");
+        let mut candidate = triangle_doc("Top");
+        for cmd in &mut candidate.path_cmds {
+            cmd.p0.x += 0.25;
+            cmd.p1.x += 0.25;
+        }
+        super::super::process::normalize_bounds(&mut candidate);
+
+        let report = compare_documents(
+            &reference,
+            &candidate,
+            GeometryCompareTolerance {
+                bbox_mm: 1.0,
+                area_mm2: 0.001,
+            },
+        );
+
+        assert!(!report.is_match());
+        assert!(
+            report
+                .mismatches
+                .iter()
+                .any(|message| message.contains("symmetric difference")),
+            "{:#?}",
+            report.mismatches
+        );
     }
 
     fn triangle_doc(side: &str) -> GeometryDocument {

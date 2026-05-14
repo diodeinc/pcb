@@ -3,9 +3,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use gerberx2::{GerberLayer, write_layer};
 use ipc2581::Ipc2581;
-use ipc2581::types::{LayerFunction, Side};
+use ipc2581::types::{LayerFunction, Side, ecad::Layer};
 
-use super::artwork::{ArtworkContour, ArtworkLayer, ArtworkObject, ArtworkSegment};
+use super::artwork::{
+    ArtworkContour, ArtworkLayer, ArtworkObject, ArtworkSegment, ObjectAttributes,
+};
 use super::lower::lower_artwork_layer;
 use crate::geometry::ir::{GeometryDocument, GeometryPath, PathCmd, PathOp, Point};
 use crate::{geometry, ipc2581 as ipc};
@@ -31,11 +33,10 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut files = Vec::new();
     let mut first_doc = None;
+    let plans = export_layer_plans(&ecad.cad_data.layers);
 
-    for source_layer in &ecad.cad_data.layers {
-        if !is_gerber_layer_function(source_layer.layer_function) {
-            continue;
-        }
+    for plan in &plans {
+        let source_layer = plan.layer;
         let layer_name = ipc.resolve(source_layer.name);
         let mut doc = geometry::extract_layer(ipc, layer_name)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
@@ -43,11 +44,11 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
         if first_doc.is_none() {
             first_doc = Some(doc.clone());
         }
-        let artwork = artwork_from_processed_layer(&doc, 0, source_layer.side)?;
+        let artwork = artwork_from_processed_layer(ipc, &doc, 0, plan.file_function.clone())?;
         let layer = lower_artwork_layer(&artwork)?;
         let contents = write_layer(&layer)?;
         files.push(GerberExportFile {
-            filename: format!("{}.gbr", sanitize_filename(layer_name)),
+            filename: plan.filename.clone(),
             layer,
             contents,
         });
@@ -86,29 +87,143 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
     Ok(GerberExportSet { files })
 }
 
-fn is_gerber_layer_function(function: LayerFunction) -> bool {
-    matches!(
-        function,
+struct ExportLayerPlan<'a> {
+    layer: &'a Layer,
+    filename: String,
+    file_function: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GerberLayerRole {
+    Copper,
+    Paste,
+    Soldermask,
+    Legend,
+    Profile,
+}
+
+fn export_layer_plans(layers: &[Layer]) -> Vec<ExportLayerPlan<'_>> {
+    let copper_count = layers
+        .iter()
+        .filter(|layer| gerber_layer_role(layer.layer_function) == Some(GerberLayerRole::Copper))
+        .count();
+    let mut copper_index = 0;
+    let mut plans = Vec::new();
+
+    for layer in layers {
+        let Some(role) = gerber_layer_role(layer.layer_function) else {
+            continue;
+        };
+        if role == GerberLayerRole::Copper {
+            copper_index += 1;
+        }
+        let (filename, file_function) = layer_output(role, layer.side, copper_index, copper_count);
+        plans.push(ExportLayerPlan {
+            layer,
+            filename,
+            file_function,
+        });
+    }
+
+    plans
+}
+
+fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
+    match function {
         LayerFunction::Conductor
-            | LayerFunction::CondFilm
-            | LayerFunction::CondFoil
-            | LayerFunction::Plane
-            | LayerFunction::Signal
-            | LayerFunction::Mixed
-            | LayerFunction::Solderpaste
-            | LayerFunction::Pastemask
-            | LayerFunction::Soldermask
-            | LayerFunction::Silkscreen
-            | LayerFunction::Legend
-            | LayerFunction::Rout
-            | LayerFunction::BoardOutline
+        | LayerFunction::CondFilm
+        | LayerFunction::CondFoil
+        | LayerFunction::Plane
+        | LayerFunction::Signal
+        | LayerFunction::Mixed => Some(GerberLayerRole::Copper),
+        LayerFunction::Solderpaste | LayerFunction::Pastemask => Some(GerberLayerRole::Paste),
+        LayerFunction::Soldermask => Some(GerberLayerRole::Soldermask),
+        LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),
+        LayerFunction::Rout | LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
+        _ => None,
+    }
+}
+
+fn layer_output(
+    role: GerberLayerRole,
+    side: Option<Side>,
+    copper_index: usize,
+    copper_count: usize,
+) -> (String, Vec<String>) {
+    match role {
+        GerberLayerRole::Copper => copper_layer_output(side, copper_index, copper_count),
+        GerberLayerRole::Paste => match side {
+            Some(Side::Bottom) => (
+                "B_Paste.gbp".to_string(),
+                vec!["Paste".into(), "Bot".into()],
+            ),
+            _ => (
+                "F_Paste.gtp".to_string(),
+                vec!["Paste".into(), "Top".into()],
+            ),
+        },
+        GerberLayerRole::Soldermask => match side {
+            Some(Side::Bottom) => (
+                "B_Mask.gbs".to_string(),
+                vec!["Soldermask".into(), "Bot".into()],
+            ),
+            _ => (
+                "F_Mask.gts".to_string(),
+                vec!["Soldermask".into(), "Top".into()],
+            ),
+        },
+        GerberLayerRole::Legend => match side {
+            Some(Side::Bottom) => (
+                "B_SilkS.gbo".to_string(),
+                vec!["Legend".into(), "Bot".into()],
+            ),
+            _ => (
+                "F_SilkS.gto".to_string(),
+                vec!["Legend".into(), "Top".into()],
+            ),
+        },
+        GerberLayerRole::Profile => (
+            "Edge_Cuts.gm1".to_string(),
+            vec!["Profile".into(), "NP".into()],
+        ),
+    }
+}
+
+fn copper_layer_output(
+    side: Option<Side>,
+    copper_index: usize,
+    copper_count: usize,
+) -> (String, Vec<String>) {
+    let side_field = match side {
+        Some(Side::Top) => "Top",
+        Some(Side::Bottom) => "Bot",
+        _ => "Inr",
+    };
+    let filename = match side {
+        Some(Side::Top) => "F_Cu.gtl".to_string(),
+        Some(Side::Bottom) => "B_Cu.gbl".to_string(),
+        _ => format!("In{}_Cu.gbr", copper_index),
+    };
+    let index = match side {
+        Some(Side::Top) => 1,
+        Some(Side::Bottom) => copper_count,
+        _ => copper_index,
+    };
+    (
+        filename,
+        vec![
+            "Copper".to_string(),
+            format!("L{index}"),
+            side_field.to_string(),
+        ],
     )
 }
 
 fn artwork_from_processed_layer(
+    ipc: &Ipc2581,
     doc: &GeometryDocument,
     layer_index: usize,
-    side: Option<Side>,
+    file_function: Vec<String>,
 ) -> Result<ArtworkLayer> {
     let layer = &doc.layers[layer_index];
     let mut objects = Vec::new();
@@ -121,12 +236,14 @@ fn artwork_from_processed_layer(
             if path.flags.filled {
                 objects.push(ArtworkObject::Region {
                     contours: artwork_contours(doc, path)?,
+                    attributes: object_attributes(ipc, feature.net),
                 });
             } else if path.flags.stroked {
                 objects.push(ArtworkObject::Stroke {
                     width: path.stroke_width,
-                    line_cap: path.line_cap,
                     contours: artwork_contours(doc, path)?,
+                    aperture_function: aperture_function(feature.bucket).to_string(),
+                    attributes: object_attributes(ipc, feature.net),
                 });
             } else {
                 bail!(
@@ -137,8 +254,7 @@ fn artwork_from_processed_layer(
         }
     }
     Ok(ArtworkLayer {
-        function: layer.layer_function,
-        side,
+        file_function,
         objects,
     })
 }
@@ -152,12 +268,14 @@ fn profile_artwork_from_outlines(doc: &GeometryDocument) -> Result<ArtworkLayer>
             if path.flags.stroked {
                 objects.push(ArtworkObject::Stroke {
                     width: path.stroke_width,
-                    line_cap: path.line_cap,
                     contours: artwork_contours(doc, path)?,
+                    aperture_function: "Profile".to_string(),
+                    attributes: ObjectAttributes::default(),
                 });
             } else if path.flags.filled {
                 objects.push(ArtworkObject::Region {
                     contours: artwork_contours(doc, path)?,
+                    attributes: ObjectAttributes::default(),
                 });
             } else {
                 bail!("IPC board outline path is neither filled nor stroked");
@@ -165,10 +283,28 @@ fn profile_artwork_from_outlines(doc: &GeometryDocument) -> Result<ArtworkLayer>
         }
     }
     Ok(ArtworkLayer {
-        function: LayerFunction::BoardOutline,
-        side: None,
+        file_function: vec!["Profile".into(), "NP".into()],
         objects,
     })
+}
+
+fn object_attributes(ipc: &Ipc2581, net: Option<ipc2581::Symbol>) -> ObjectAttributes {
+    ObjectAttributes {
+        net: net.map(|symbol| ipc.resolve(symbol).to_string()),
+    }
+}
+
+fn aperture_function(bucket: crate::geometry::ir::FeatureBucket) -> &'static str {
+    match bucket {
+        crate::geometry::ir::FeatureBucket::Smd => "SMDPad",
+        crate::geometry::ir::FeatureBucket::Pth => "ComponentPad",
+        crate::geometry::ir::FeatureBucket::Via => "ViaPad",
+        crate::geometry::ir::FeatureBucket::Trace => "Conductor",
+        crate::geometry::ir::FeatureBucket::Fill => "Conductor",
+        crate::geometry::ir::FeatureBucket::Cutout => "Other",
+        crate::geometry::ir::FeatureBucket::Thermal => "ThermalRelief",
+        crate::geometry::ir::FeatureBucket::Antipad => "AntiPad",
+    }
 }
 
 fn artwork_contours(doc: &GeometryDocument, path: &GeometryPath) -> Result<Vec<ArtworkContour>> {
@@ -258,22 +394,6 @@ fn cubic_point(start: Point, c1: Point, c2: Point, end: Point, t: f64) -> Point 
     )
 }
 
-fn sanitize_filename(name: &str) -> String {
-    let mut out = String::new();
-    for ch in name.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-            out.push(ch);
-        } else {
-            out.push('_');
-        }
-    }
-    if out.is_empty() {
-        "layer".to_string()
-    } else {
-        out
-    }
-}
-
 pub fn execute_file(input_file: &Path, output_dir: &Path) -> Result<GerberExportSet> {
     let content = crate::utils::file::load_ipc_file(input_file)?;
     let ipc = ipc::Ipc2581::parse(&content)?;
@@ -321,7 +441,7 @@ mod tests {
           </PadstackPadDef>
         </PadStackDef>
         <LayerFeature layerRef="TOP">
-          <Set>
+          <Set net="N1">
             <Pad padstackDefRef="padstack"><Location x="2" y="3"/></Pad>
           </Set>
         </LayerFeature>
@@ -337,10 +457,17 @@ mod tests {
 
         let set = export_gerber_x2(&ipc, &GerberExportOptions { output_dir }).unwrap();
 
-        assert!(set.files.iter().any(|file| file.filename == "TOP.gbr"));
+        assert!(set.files.iter().any(|file| file.filename == "F_Cu.gtl"));
         assert!(set.files.iter().any(|file| file.filename == "profile.gbr"));
         for file in &set.files {
             gerberx2::GerberX2::parse(&file.contents).unwrap();
         }
+        let copper = set
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert!(copper.contents.contains("%TF.FileFunction,Copper,L1,Top*%"));
+        assert!(copper.contents.contains("%TO.N,N1*%"));
     }
 }

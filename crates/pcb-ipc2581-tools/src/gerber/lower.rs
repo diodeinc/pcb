@@ -5,10 +5,11 @@ use gerberx2::{
     AttributeValue, Contour, ContourSegment, GerberLayer, ObjectKind, Point as GerberPoint,
     WriterAperture, WriterApertureTemplate, WriterObject,
 };
-use ipc2581::types::{LayerFunction, Side};
 
-use super::artwork::{ArtworkContour, ArtworkLayer, ArtworkObject, ArtworkSegment};
-use crate::geometry::ir::{LineCap, Point};
+use super::artwork::{
+    ArtworkContour, ArtworkLayer, ArtworkObject, ArtworkSegment, ObjectAttributes,
+};
+use crate::geometry::ir::Point;
 
 pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
     let mut apertures = ApertureTable::default();
@@ -16,41 +17,51 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
 
     for object in &layer.objects {
         match object {
-            ArtworkObject::Region { contours } => {
-                objects.push(WriterObject::dark(ObjectKind::Region {
+            ArtworkObject::Region {
+                contours,
+                attributes,
+            } => objects.push(WriterObject {
+                kind: ObjectKind::Region {
                     contours: lower_region_contours(contours)?,
-                }));
-            }
+                },
+                polarity: gerberx2::Polarity::Dark,
+                attributes: lower_object_attributes(attributes),
+            }),
             ArtworkObject::Stroke {
                 width,
-                line_cap,
                 contours,
+                aperture_function,
+                attributes,
             } => {
-                let aperture = apertures.circle(*width, *line_cap)?;
+                let aperture = apertures.circle(*width, aperture_function)?;
                 for contour in contours {
                     for segment in &contour.segments {
-                        objects.push(WriterObject::dark(match *segment {
-                            ArtworkSegment::Line { start, end } => ObjectKind::Draw {
-                                start: lower_point(start),
-                                end: lower_point(end),
-                                aperture,
+                        objects.push(WriterObject {
+                            kind: match *segment {
+                                ArtworkSegment::Line { start, end } => ObjectKind::Draw {
+                                    start: lower_point(start),
+                                    end: lower_point(end),
+                                    aperture,
+                                },
+                                ArtworkSegment::Arc {
+                                    start,
+                                    end,
+                                    center,
+                                    clockwise,
+                                } => ObjectKind::Arc {
+                                    start: lower_point(start),
+                                    end: lower_point(end),
+                                    center_offset: lower_point(Point::new(
+                                        center.x - start.x,
+                                        center.y - start.y,
+                                    )),
+                                    clockwise,
+                                    aperture,
+                                },
                             },
-                            ArtworkSegment::Arc {
-                                start,
-                                end,
-                                center,
-                                clockwise,
-                            } => ObjectKind::Arc {
-                                start: lower_point(start),
-                                end: lower_point(end),
-                                center_offset: lower_point(Point::new(
-                                    center.x - start.x,
-                                    center.y - start.y,
-                                )),
-                                clockwise,
-                                aperture,
-                            },
-                        }));
+                            polarity: gerberx2::Polarity::Dark,
+                            attributes: lower_object_attributes(attributes),
+                        });
                     }
                 }
             }
@@ -60,7 +71,7 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
     Ok(GerberLayer {
         file_attributes: vec![AttributeValue::new(
             ".FileFunction",
-            file_function_fields(layer.function, layer.side),
+            layer.file_function.iter().cloned(),
         )],
         apertures: apertures.into_apertures(),
         objects,
@@ -75,20 +86,20 @@ struct ApertureTable {
     apertures: Vec<WriterAperture>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ApertureKey {
     diameter_nm: i64,
-    line_cap: LineCap,
+    function: String,
 }
 
 impl ApertureTable {
-    fn circle(&mut self, diameter: f64, line_cap: LineCap) -> Result<i32> {
+    fn circle(&mut self, diameter: f64, function: &str) -> Result<i32> {
         if diameter <= 0.0 {
             bail!("cannot export non-positive Gerber stroke aperture diameter {diameter}");
         }
         let key = ApertureKey {
             diameter_nm: quantize_mm(diameter),
-            line_cap,
+            function: function.to_string(),
         };
         if let Some(code) = self.by_key.get(&key) {
             return Ok(*code);
@@ -107,7 +118,7 @@ impl ApertureTable {
                 diameter,
                 hole_diameter: None,
             },
-            attributes: Vec::new(),
+            attributes: vec![AttributeValue::new(".AperFunction", [function.to_string()])],
         });
         Ok(code)
     }
@@ -155,54 +166,18 @@ fn lower_region_contours(contours: &[ArtworkContour]) -> Result<Vec<Contour>> {
         .context("failed to lower artwork contours to Gerber regions")
 }
 
+fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue> {
+    attributes
+        .net
+        .as_ref()
+        .map(|net| vec![AttributeValue::new(".N", [net.clone()])])
+        .unwrap_or_default()
+}
+
 fn lower_point(point: Point) -> GerberPoint {
     GerberPoint {
         x: point.x,
         y: point.y,
-    }
-}
-
-fn file_function_fields(function: LayerFunction, side: Option<Side>) -> Vec<String> {
-    match function {
-        LayerFunction::Conductor
-        | LayerFunction::CondFilm
-        | LayerFunction::CondFoil
-        | LayerFunction::Plane
-        | LayerFunction::Signal
-        | LayerFunction::Mixed => vec![
-            "Copper".to_string(),
-            side_layer_field(side).to_string(),
-            side_field(side).to_string(),
-        ],
-        LayerFunction::Solderpaste | LayerFunction::Pastemask => {
-            vec!["Paste".to_string(), side_field(side).to_string()]
-        }
-        LayerFunction::Soldermask => vec!["Soldermask".to_string(), side_field(side).to_string()],
-        LayerFunction::Silkscreen | LayerFunction::Legend => {
-            vec!["Legend".to_string(), side_field(side).to_string()]
-        }
-        LayerFunction::Rout | LayerFunction::BoardOutline => {
-            vec!["Profile".to_string(), "NP".to_string()]
-        }
-        LayerFunction::Drill => vec!["Drill".to_string(), "PTH".to_string()],
-        _ => vec![format!("{:?}", function)],
-    }
-}
-
-fn side_field(side: Option<Side>) -> &'static str {
-    match side {
-        Some(Side::Top) => "Top",
-        Some(Side::Bottom) => "Bot",
-        Some(Side::Internal) => "Inr",
-        _ => "Other",
-    }
-}
-
-fn side_layer_field(side: Option<Side>) -> &'static str {
-    match side {
-        Some(Side::Top) => "L1",
-        Some(Side::Bottom) => "L2",
-        _ => "L0",
     }
 }
 
