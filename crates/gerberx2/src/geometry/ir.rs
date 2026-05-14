@@ -454,4 +454,8 @@ impl Affine2 {
             self.m10 * p.x + self.m11 * p.y + self.m12,
         )
     }
+
+    pub fn determinant(&self) -> f64 {
+        self.m00 * self.m11 - self.m01 * self.m10
+    }
 }

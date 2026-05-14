@@ -221,26 +221,24 @@ fn feature_image_contours(
     doc: &GeometryDocument,
     feature: &GeometryFeature,
 ) -> Vec<PolygonContour> {
-    let mut positive = Vec::new();
-    let mut cutters = Vec::new();
+    let mut image = Vec::new();
     for path in
         &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
     {
         if !path.flags.filled {
             continue;
         }
+        let path_contours = path_polygon_contours(doc, path);
+        if path_contours.is_empty() {
+            continue;
+        }
         if path.polarity == Polarity::Clear {
-            cutters.extend(path_polygon_contours(doc, path));
+            image = difference_contours(image, union_contours(path_contours));
         } else {
-            positive.extend(path_polygon_contours(doc, path));
+            image = union_contours(image.into_iter().chain(path_contours).collect());
         }
     }
-    let positive = union_contours(positive);
-    if cutters.is_empty() {
-        positive
-    } else {
-        difference_contours(positive, union_contours(cutters))
-    }
+    image
 }
 
 fn path_polygon_contours(doc: &GeometryDocument, path: &GeometryPath) -> Vec<PolygonContour> {

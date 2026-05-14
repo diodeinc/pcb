@@ -55,7 +55,14 @@ pub fn extract_document(gerber: &GerberX2) -> GeometryDocument {
                 );
                 feature.aperture = Some(*aperture);
                 if let Some(width) = circular_aperture_diameter(&apertures, *aperture) {
-                    doc.push_feature(feature, vec![line_path(point(*start), point(*end), width)]);
+                    doc.push_feature(
+                        feature,
+                        vec![line_path(
+                            point(*start),
+                            point(*end),
+                            width * object.scaling.abs(),
+                        )],
+                    );
                 } else if let Some(geometry) = aperture_geometry(&apertures, *aperture) {
                     doc.push_feature(
                         feature,
@@ -84,7 +91,13 @@ pub fn extract_document(gerber: &GerberX2) -> GeometryDocument {
                 if let Some(width) = circular_aperture_diameter(&apertures, *aperture) {
                     doc.push_feature(
                         feature,
-                        vec![arc_path(start, point(*end), center, *clockwise, width)],
+                        vec![arc_path(
+                            start,
+                            point(*end),
+                            center,
+                            *clockwise,
+                            width * object.scaling.abs(),
+                        )],
                     );
                 } else if let Some(geometry) = aperture_geometry(&apertures, *aperture) {
                     doc.push_feature(
@@ -191,6 +204,7 @@ fn aperture_paths(geometry: &gerber::ApertureGeometry, transform: Affine2) -> Ve
 fn transform_contour(commands: &[gerber::PathCommand], transform: Affine2) -> ContourPayload {
     let mut bbox = BBox::empty();
     let mut cmds = Vec::new();
+    let flips_orientation = transform.determinant() < 0.0;
     for command in commands {
         let cmd = match *command {
             gerber::PathCommand::MoveTo(p) => PathCmd::move_to(transform.transform_point(point(p))),
@@ -202,7 +216,7 @@ fn transform_contour(commands: &[gerber::PathCommand], transform: Affine2) -> Co
             } => PathCmd::arc_to(
                 transform.transform_point(point(end)),
                 transform.transform_point(point(center)),
-                clockwise,
+                clockwise ^ flips_orientation,
             ),
             gerber::PathCommand::Close => PathCmd::close(),
         };

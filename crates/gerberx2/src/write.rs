@@ -387,9 +387,9 @@ impl<'a> Writer<'a> {
                 self.write_decimal(*outer_diameter);
                 self.output.push('X');
                 self.output.push_str(&vertices.to_string());
-                if let Some(rotation_degrees) = rotation_degrees {
+                if rotation_degrees.is_some() || hole_diameter.is_some() {
                     self.output.push('X');
-                    self.write_decimal(*rotation_degrees);
+                    self.write_decimal(rotation_degrees.unwrap_or(0.0));
                 }
                 if let Some(hole_diameter) = hole_diameter {
                     self.output.push('X');

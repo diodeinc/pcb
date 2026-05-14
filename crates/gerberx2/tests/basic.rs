@@ -323,6 +323,26 @@ fn expands_block_apertures_when_flashed() {
 }
 
 #[test]
+fn expands_block_apertures_with_flash_transform() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\nX1000000Y0D03*\n%AB*%\n%LR90*%\n%LS2*%\nD20*\nX2000000Y3000000D03*\nM02*\n",
+    )
+    .unwrap();
+
+    assert_eq!(gerber.objects().len(), 1);
+    let object = &gerber.objects()[0];
+    assert!(matches!(
+        object.kind,
+        ObjectKind::Flash {
+            at,
+            aperture: 10,
+        } if close(at.x, 2.0) && close(at.y, 5.0)
+    ));
+    assert!(close(object.rotation_degrees, 90.0));
+    assert!(close(object.scaling, 2.0));
+}
+
+#[test]
 fn expands_step_repeat_in_y_then_x_order() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\nD10*\n%SRX2Y2I1.0J2.0*%\nX0Y0D03*\n%SR*%\nM02*\n",
@@ -388,6 +408,56 @@ fn process_applies_clear_polarity_cutouts() {
 }
 
 #[test]
+fn process_preserves_ordered_aperture_path_polarity() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%AMORDERED*\n21,1,4,4,0,0,0*\n21,0,2,2,0,0,0*\n21,1,1,1,0,0,0*\n%\n%ADD10ORDERED*%\nD10*\nX0Y0D03*\nM02*\n",
+    )
+    .unwrap();
+
+    let mut geometry = gerberx2::geometry::extract_document(&gerber);
+    gerberx2::geometry::process::process_document(&mut geometry);
+    let summary = gerberx2::geometry::compare::summarize(&geometry);
+
+    assert!(
+        close(summary.area_mm2, 13.0),
+        "area was {}",
+        summary.area_mm2
+    );
+}
+
+#[test]
+fn extraction_applies_scaling_to_circular_draw_width() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.2*%\n%LS2*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nM02*\n",
+    )
+    .unwrap();
+
+    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let path = geometry
+        .paths
+        .iter()
+        .find(|path| path.flags.stroked)
+        .unwrap();
+    assert!(close(path.stroke_width, 0.4));
+}
+
+#[test]
+fn extraction_flips_mirrored_aperture_arc_direction() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10O,2.0X1.0*%\n%LMX*%\nD10*\nX0Y0D03*\nM02*\n",
+    )
+    .unwrap();
+
+    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let arc = geometry
+        .path_cmds
+        .iter()
+        .find(|cmd| cmd.op == gerberx2::geometry::ir::PathOp::ArcTo)
+        .unwrap();
+    assert!(arc.clockwise);
+}
+
+#[test]
 fn extracts_non_circular_aperture_sweeps_without_diagnostics() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,0.2X0.4*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nM02*\n",
@@ -430,4 +500,42 @@ fn renders_profile_gerber_as_black_board_outline() {
     assert!(svg.contains("fill='none' stroke='#000000'"));
     assert!(svg.contains("data-board-outline='true'"));
     assert!(!svg.contains("fill='#606060'"));
+}
+
+#[test]
+fn writes_polygon_hole_with_explicit_zero_rotation() {
+    let layer = GerberLayer {
+        apertures: vec![WriterAperture {
+            code: 10,
+            template: WriterApertureTemplate::Polygon {
+                outer_diameter: 2.0,
+                vertices: 6,
+                rotation_degrees: None,
+                hole_diameter: Some(0.5),
+            },
+            attributes: Vec::new(),
+        }],
+        objects: vec![WriterObject::dark(ObjectKind::Flash {
+            at: Point { x: 0.0, y: 0.0 },
+            aperture: 10,
+        })],
+        ..GerberLayer::default()
+    };
+
+    let output = gerberx2::write_layer(&layer).unwrap();
+    assert!(output.contains("%ADD10P,2X6X0X0.5*%"));
+
+    let parsed = GerberX2::parse(&output).unwrap();
+    assert!(matches!(
+        parsed.aperture_definitions()[0].template,
+        ApertureTemplate::Polygon {
+            rotation_degrees: Some(rotation),
+            hole_diameter: Some(hole),
+            ..
+        } if close(rotation, 0.0) && close(hole, 0.5)
+    ));
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9
 }
