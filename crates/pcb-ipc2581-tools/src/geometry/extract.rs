@@ -482,6 +482,10 @@ fn layer_span_applies_to_layer(
     target_layer: &Layer,
     layers: &[Layer],
 ) -> bool {
+    if source_layer.name == target_layer.name {
+        return true;
+    }
+
     let Some(span) = source_layer.span else {
         return true;
     };
@@ -2530,9 +2534,11 @@ mod tests {
         assert!(slot_applies_to_layer(&route, &l1, &layers, &slot));
         assert!(slot_applies_to_layer(&route, &l2, &layers, &slot));
         assert!(!slot_applies_to_layer(&route, &l3, &layers, &slot));
+        assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
         assert!(layer_span_applies_to_layer(&route, &l1, &layers));
         assert!(layer_span_applies_to_layer(&route, &l2, &layers));
         assert!(!layer_span_applies_to_layer(&route, &l3, &layers));
+        assert!(layer_span_applies_to_layer(&route, &route, &layers));
     }
 
     #[test]
