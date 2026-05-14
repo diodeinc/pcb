@@ -55,13 +55,39 @@ pub enum ApertureTemplate {
         name: Symbol,
         parameters: Vec<f64>,
     },
+    Block {
+        objects: Vec<GraphicalObject>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApertureMacro {
     pub name: Symbol,
-    /// Raw macro body commands. Macro expression lowering will be layered on this.
-    pub body: Vec<Symbol>,
+    pub primitives: Vec<MacroPrimitive>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MacroPrimitive {
+    Comment(Symbol),
+    VariableDefinition {
+        variable: usize,
+        expression: MacroExpression,
+    },
+    Shape {
+        code: i32,
+        parameters: Vec<MacroExpression>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MacroExpression {
+    Number(f64),
+    Variable(usize),
+    UnaryMinus(Box<MacroExpression>),
+    Add(Box<MacroExpression>, Box<MacroExpression>),
+    Subtract(Box<MacroExpression>, Box<MacroExpression>),
+    Multiply(Box<MacroExpression>, Box<MacroExpression>),
+    Divide(Box<MacroExpression>, Box<MacroExpression>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

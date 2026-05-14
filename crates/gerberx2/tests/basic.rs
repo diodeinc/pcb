@@ -1,4 +1,4 @@
-use gerberx2::{ApertureTemplate, Command, GerberX2, ObjectKind, PathCommand, Unit};
+use gerberx2::{ApertureTemplate, Command, GerberX2, ObjectKind, PathCommand, Polarity, Unit};
 
 #[test]
 fn parses_basic_x2_layer() {
@@ -86,4 +86,72 @@ fn lowers_standard_apertures_to_geometry_paths() {
     assert_eq!(obround.paths[0].contours[0].commands.len(), 6);
     let polygon = gerber.aperture_definitions()[3].geometry.as_ref().unwrap();
     assert_eq!(polygon.paths[0].contours[0].commands.len(), 7);
+}
+
+#[test]
+fn lowers_aperture_macro_primitives_to_geometry_paths() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%AMMAC*\n0 comment*\n$3=$1+$2x2*\n1,1,$3,0,0,0*\n20,1,0.1,-0.5,0,0.5,0,0*\n21,0,0.2,0.3,0,0,0*\n4,1,3,0,0,1,0,0,1,0,0,0*\n5,1,6,0,0,1.2,30*\n7,0,0,1.0,0.5,0.1,45*\n%\n%ADD10MAC,0.2X0.4*%\nD10*\nX0Y0D03*\nM02*\n",
+    )
+    .unwrap();
+
+    assert_eq!(gerber.aperture_macros().len(), 1);
+    let geometry = gerber.aperture_definitions()[0].geometry.as_ref().unwrap();
+    assert_eq!(geometry.paths.len(), 9);
+    assert_eq!(geometry.paths[0].polarity, Polarity::Dark);
+    assert_eq!(geometry.paths[2].polarity, Polarity::Clear);
+    assert!(matches!(
+        geometry.paths[3].contours[0].commands.last(),
+        Some(PathCommand::Close)
+    ));
+}
+
+#[test]
+fn expands_block_apertures_when_flashed() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\nX1000000Y0D03*\n%AB*%\nD20*\nX2000000Y3000000D03*\nM02*\n",
+    )
+    .unwrap();
+
+    assert_eq!(gerber.aperture_definitions().len(), 2);
+    assert!(matches!(
+        gerber.aperture_definitions()[1].template,
+        ApertureTemplate::Block { .. }
+    ));
+    assert_eq!(gerber.objects().len(), 1);
+    assert!(matches!(
+        gerber.objects()[0].kind,
+        ObjectKind::Flash {
+            at,
+            aperture: 10,
+        } if at.x == 3.0 && at.y == 3.0
+    ));
+}
+
+#[test]
+fn expands_step_repeat_in_y_then_x_order() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\nD10*\n%SRX2Y2I1.0J2.0*%\nX0Y0D03*\n%SR*%\nM02*\n",
+    )
+    .unwrap();
+
+    let points = gerber
+        .objects()
+        .iter()
+        .map(|object| match object.kind {
+            ObjectKind::Flash { at, .. } => (at.x, at.y),
+            _ => unreachable!(),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(points, vec![(0.0, 0.0), (0.0, 2.0), (1.0, 0.0), (1.0, 2.0)]);
+}
+
+#[test]
+fn rejects_unclosed_region_contours() {
+    let err = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\nG36*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nX1000000Y1000000D01*\nG37*\nM02*\n",
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("region contour must be closed"));
 }

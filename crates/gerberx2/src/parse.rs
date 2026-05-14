@@ -12,9 +12,13 @@ pub struct Parser<'a> {
     object_attributes: HashMap<Symbol, Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
     aperture_lookup: HashMap<i32, ApertureDefinition>,
+    macro_lookup: HashMap<Symbol, ApertureMacro>,
+    block_lookup: HashMap<i32, Vec<GraphicalObject>>,
     aperture_macros: Vec<ApertureMacro>,
     objects: Vec<GraphicalObject>,
     region: Option<RegionBuilder>,
+    block: Option<BlockBuilder>,
+    step_repeat: Option<StepRepeatBuilder>,
     state: GraphicsState,
     saw_m02: bool,
 }
@@ -23,6 +27,18 @@ pub struct Parser<'a> {
 struct RegionBuilder {
     contours: Vec<Contour>,
     current: Option<Contour>,
+}
+
+#[derive(Debug)]
+struct BlockBuilder {
+    aperture_code: i32,
+    object_start: usize,
+}
+
+#[derive(Debug)]
+struct StepRepeatBuilder {
+    repeat: StepRepeat,
+    object_start: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -37,9 +53,13 @@ impl<'a> Parser<'a> {
             object_attributes: HashMap::new(),
             aperture_definitions: Vec::new(),
             aperture_lookup: HashMap::new(),
+            macro_lookup: HashMap::new(),
+            block_lookup: HashMap::new(),
             aperture_macros: Vec::new(),
             objects: Vec::new(),
             region: None,
+            block: None,
+            step_repeat: None,
             state: GraphicsState::default(),
             saw_m02: false,
         }
@@ -63,6 +83,21 @@ impl<'a> Parser<'a> {
         if !self.saw_m02 {
             return Err(GerberError::InvalidStructure(
                 "missing required M02 end-of-file command".to_string(),
+            ));
+        }
+        if self.region.is_some() {
+            return Err(GerberError::InvalidStructure(
+                "G36 region was not closed before M02".to_string(),
+            ));
+        }
+        if self.block.is_some() {
+            return Err(GerberError::InvalidStructure(
+                "AB block aperture was not closed before M02".to_string(),
+            ));
+        }
+        if self.step_repeat.is_some() {
+            return Err(GerberError::InvalidStructure(
+                "SR step-repeat was not closed before M02".to_string(),
             ));
         }
 
@@ -121,6 +156,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_extended_command(&mut self, command: &'a str) -> Result<()> {
+        if command.starts_with("AM") {
+            return self.parse_extended_word(command.trim_end_matches('*'));
+        }
         for word in command.split_terminator('*') {
             if word.is_empty() {
                 continue;
@@ -162,6 +200,7 @@ impl<'a> Parser<'a> {
             let macro_def = self.parse_aperture_macro(rest)?;
             self.commands
                 .push(Command::ApertureMacro(macro_def.clone()));
+            self.macro_lookup.insert(macro_def.name, macro_def.clone());
             self.aperture_macros.push(macro_def);
             return Ok(());
         }
@@ -206,9 +245,31 @@ impl<'a> Parser<'a> {
 
         if let Some(rest) = word.strip_prefix("AB") {
             if rest.is_empty() {
+                let block = self
+                    .block
+                    .take()
+                    .ok_or_else(|| self.syntax("AB close without matching AB open"))?;
+                let objects = self.objects.split_off(block.object_start);
+                self.block_lookup
+                    .insert(block.aperture_code, objects.clone());
+                let aperture = ApertureDefinition {
+                    code: block.aperture_code,
+                    template: ApertureTemplate::Block { objects },
+                    geometry: None,
+                    attributes: self.aperture_attributes.values().cloned().collect(),
+                };
+                self.aperture_lookup.insert(aperture.code, aperture.clone());
+                self.aperture_definitions.push(aperture);
                 self.commands.push(Command::EndBlockAperture);
             } else {
                 let code = parse_aperture_code(rest)?;
+                if self.block.is_some() {
+                    return Err(self.syntax("nested AB block apertures are not supported"));
+                }
+                self.block = Some(BlockBuilder {
+                    aperture_code: code,
+                    object_start: self.objects.len(),
+                });
                 self.commands.push(Command::BeginBlockAperture(code));
             }
             return Ok(());
@@ -216,9 +277,34 @@ impl<'a> Parser<'a> {
 
         if let Some(rest) = word.strip_prefix("SR") {
             if rest.is_empty() {
+                let step = self
+                    .step_repeat
+                    .take()
+                    .ok_or_else(|| self.syntax("SR close without matching SR open"))?;
+                let seed = self.objects.split_off(step.object_start);
+                let mut expanded = Vec::new();
+                for ix in 0..step.repeat.x_repeats {
+                    for iy in 0..step.repeat.y_repeats {
+                        let dx = ix as f64 * step.repeat.x_step;
+                        let dy = iy as f64 * step.repeat.y_step;
+                        expanded.extend(
+                            seed.iter()
+                                .cloned()
+                                .map(|object| translate_object(object, dx, dy)),
+                        );
+                    }
+                }
+                self.objects.extend(expanded);
                 self.commands.push(Command::EndStepRepeat);
             } else {
                 let sr = parse_step_repeat(rest)?;
+                if self.step_repeat.is_some() {
+                    return Err(self.syntax("nested SR statements are not supported"));
+                }
+                self.step_repeat = Some(StepRepeatBuilder {
+                    repeat: sr,
+                    object_start: self.objects.len(),
+                });
                 self.commands.push(Command::BeginStepRepeat(sr));
             }
             return Ok(());
@@ -312,6 +398,7 @@ impl<'a> Parser<'a> {
                 if region.contours.is_empty() {
                     return Err(self.syntax("empty region statement"));
                 }
+                validate_region_contours(&region.contours)?;
                 self.objects.push(self.graphical_object(ObjectKind::Region {
                     contours: region.contours,
                 }));
@@ -357,10 +444,18 @@ impl<'a> Parser<'a> {
                     return Err(self.syntax("D03 flash is not allowed inside a region"));
                 }
                 let aperture = self.current_aperture()?;
-                self.objects.push(self.graphical_object(ObjectKind::Flash {
-                    at: point,
-                    aperture,
-                }));
+                if let Some(block_objects) = self.block_lookup.get(&aperture) {
+                    let objects = block_objects
+                        .iter()
+                        .cloned()
+                        .map(|object| translate_object(object, point.x, point.y));
+                    self.objects.extend(objects);
+                } else {
+                    self.objects.push(self.graphical_object(ObjectKind::Flash {
+                        at: point,
+                        aperture,
+                    }));
+                }
                 self.state.current_point = Some(point);
             }
             OperationCode::Plot => {
@@ -529,13 +624,26 @@ impl<'a> Parser<'a> {
         let code = parse_aperture_code(&rest[..d_len])?;
         let template_call = &rest[d_len..];
         let template = self.parse_template_call(template_call)?;
-        let geometry = lower_standard_aperture(&template);
+        let geometry = self.lower_aperture(&template)?;
         Ok(ApertureDefinition {
             code,
             template,
             geometry,
             attributes: self.aperture_attributes.values().cloned().collect(),
         })
+    }
+
+    fn lower_aperture(&self, template: &ApertureTemplate) -> Result<Option<ApertureGeometry>> {
+        if let ApertureTemplate::Macro { name, parameters } = template {
+            let Some(macro_def) = self.macro_lookup.get(name) else {
+                return Err(GerberError::InvalidStructure(format!(
+                    "aperture macro '{}' was not defined before use",
+                    self.interner.resolve(*name)
+                )));
+            };
+            return lower_macro_aperture(macro_def, parameters);
+        }
+        Ok(lower_standard_aperture(template))
     }
 
     fn parse_template_call(&mut self, template_call: &str) -> Result<ApertureTemplate> {
@@ -580,13 +688,43 @@ impl<'a> Parser<'a> {
         let Some((name, body)) = rest.split_once('*') else {
             return Err(self.syntax("AM missing body"));
         };
+        let mut primitives = Vec::new();
+        for word in body
+            .split_terminator('*')
+            .map(str::trim)
+            .filter(|word| !word.is_empty())
+        {
+            if let Some(text) = word.strip_prefix('0') {
+                primitives.push(MacroPrimitive::Comment(
+                    self.interner.intern(text.trim_start()),
+                ));
+            } else if let Some((variable, expression)) = word.split_once('=') {
+                let variable = variable
+                    .strip_prefix('$')
+                    .ok_or_else(|| self.syntax("macro variable definition missing $ prefix"))?
+                    .parse::<usize>()
+                    .map_err(|_| GerberError::InvalidNumber(variable.to_string()))?;
+                let mut parser = MacroExpressionParser::new(expression);
+                primitives.push(MacroPrimitive::VariableDefinition {
+                    variable,
+                    expression: parser.parse()?,
+                });
+            } else {
+                let mut fields = word.split(',');
+                let code = fields
+                    .next()
+                    .ok_or_else(|| self.syntax("macro primitive missing code"))?
+                    .parse::<i32>()
+                    .map_err(|_| GerberError::InvalidNumber(word.to_string()))?;
+                let parameters = fields
+                    .map(|field| MacroExpressionParser::new(field).parse())
+                    .collect::<Result<Vec<_>>>()?;
+                primitives.push(MacroPrimitive::Shape { code, parameters });
+            }
+        }
         Ok(ApertureMacro {
             name: self.interner.intern(name),
-            body: body
-                .split_terminator('*')
-                .filter(|word| !word.is_empty())
-                .map(|word| self.interner.intern(word))
-                .collect(),
+            primitives,
         })
     }
 
@@ -654,9 +792,211 @@ fn lower_standard_aperture(template: &ApertureTemplate) -> Option<ApertureGeomet
             rotation_degrees.unwrap_or(0.0),
             hole_diameter,
         ),
-        ApertureTemplate::Macro { .. } => return None,
+        ApertureTemplate::Macro { .. } | ApertureTemplate::Block { .. } => return None,
     };
     Some(ApertureGeometry { paths })
+}
+
+fn lower_macro_aperture(
+    macro_def: &ApertureMacro,
+    parameters: &[f64],
+) -> Result<Option<ApertureGeometry>> {
+    let mut vars: HashMap<usize, f64> = parameters
+        .iter()
+        .enumerate()
+        .map(|(index, value)| (index + 1, *value))
+        .collect();
+    let mut paths = Vec::new();
+    for primitive in &macro_def.primitives {
+        match primitive {
+            MacroPrimitive::Comment(_) => {}
+            MacroPrimitive::VariableDefinition {
+                variable,
+                expression,
+            } => {
+                vars.insert(*variable, eval_macro_expr(expression, &vars)?);
+            }
+            MacroPrimitive::Shape { code, parameters } => {
+                let values = parameters
+                    .iter()
+                    .map(|expr| eval_macro_expr(expr, &vars))
+                    .collect::<Result<Vec<_>>>()?;
+                paths.extend(lower_macro_shape(*code, &values)?);
+            }
+        }
+    }
+    Ok(Some(ApertureGeometry { paths }))
+}
+
+fn lower_macro_shape(code: i32, values: &[f64]) -> Result<Vec<GeometryPath>> {
+    match code {
+        1 => {
+            let exposure = macro_bool(values, 0)?;
+            let diameter = macro_value(values, 1, "macro circle diameter")?;
+            let center = Point {
+                x: macro_value(values, 2, "macro circle center x")?,
+                y: macro_value(values, 3, "macro circle center y")?,
+            };
+            let rotation = values.get(4).copied().unwrap_or(0.0);
+            Ok(vec![transform_path(
+                circle_path(diameter / 2.0, exposure),
+                center,
+                rotation,
+            )])
+        }
+        20 => {
+            let exposure = macro_bool(values, 0)?;
+            let width = macro_value(values, 1, "macro vector line width")?;
+            let start = Point {
+                x: macro_value(values, 2, "macro vector line start x")?,
+                y: macro_value(values, 3, "macro vector line start y")?,
+            };
+            let end = Point {
+                x: macro_value(values, 4, "macro vector line end x")?,
+                y: macro_value(values, 5, "macro vector line end y")?,
+            };
+            let rotation = macro_value(values, 6, "macro vector line rotation")?;
+            Ok(vec![vector_line_path(
+                start, end, width, exposure, rotation,
+            )])
+        }
+        21 => {
+            let exposure = macro_bool(values, 0)?;
+            let width = macro_value(values, 1, "macro center line width")?;
+            let height = macro_value(values, 2, "macro center line height")?;
+            let center = Point {
+                x: macro_value(values, 3, "macro center line x")?,
+                y: macro_value(values, 4, "macro center line y")?,
+            };
+            let rotation = macro_value(values, 5, "macro center line rotation")?;
+            Ok(vec![transform_path(
+                rect_path(width, height, exposure),
+                center,
+                rotation,
+            )])
+        }
+        4 => {
+            let exposure = macro_bool(values, 0)?;
+            let vertices = macro_value(values, 1, "macro outline vertices")? as usize;
+            let expected = 2 + (vertices + 1) * 2 + 1;
+            if values.len() != expected {
+                return Err(GerberError::InvalidStructure(
+                    "macro outline has the wrong number of parameters".to_string(),
+                ));
+            }
+            if vertices < 3 {
+                return Err(GerberError::InvalidStructure(
+                    "macro outline requires at least 3 vertices".to_string(),
+                ));
+            }
+            let rotation = values[expected - 1];
+            let first = Point {
+                x: values[2],
+                y: values[3],
+            };
+            let last = Point {
+                x: values[2 + vertices * 2],
+                y: values[3 + vertices * 2],
+            };
+            if !points_close(first, last) {
+                return Err(GerberError::InvalidStructure(
+                    "macro outline last vertex must equal first vertex".to_string(),
+                ));
+            }
+            let mut commands = Vec::new();
+            for index in 0..=vertices {
+                let point = rotate_point(
+                    Point {
+                        x: values[2 + index * 2],
+                        y: values[3 + index * 2],
+                    },
+                    rotation,
+                );
+                if index == 0 {
+                    commands.push(PathCommand::MoveTo(point));
+                } else {
+                    commands.push(PathCommand::LineTo(point));
+                }
+            }
+            commands.push(PathCommand::Close);
+            Ok(vec![GeometryPath {
+                contours: vec![GeometryContour { commands }],
+                polarity: exposure,
+            }])
+        }
+        5 => {
+            let exposure = macro_bool(values, 0)?;
+            let vertices = macro_value(values, 1, "macro polygon vertices")? as i32;
+            let center = Point {
+                x: macro_value(values, 2, "macro polygon center x")?,
+                y: macro_value(values, 3, "macro polygon center y")?,
+            };
+            let diameter = macro_value(values, 4, "macro polygon diameter")?;
+            let rotation = macro_value(values, 5, "macro polygon rotation")?;
+            Ok(polygon_paths(diameter, vertices, rotation, None)
+                .into_iter()
+                .map(|path| transform_path(repolarity(path, exposure), center, 0.0))
+                .collect())
+        }
+        7 => {
+            let center = Point {
+                x: macro_value(values, 0, "macro thermal center x")?,
+                y: macro_value(values, 1, "macro thermal center y")?,
+            };
+            let outer = macro_value(values, 2, "macro thermal outer diameter")?;
+            let inner = macro_value(values, 3, "macro thermal inner diameter")?;
+            let gap = macro_value(values, 4, "macro thermal gap")?;
+            let rotation = macro_value(values, 5, "macro thermal rotation")?;
+            let mut paths = circle_paths(outer, Some(inner));
+            paths.push(rect_path(outer, gap, Polarity::Clear));
+            paths.push(rect_path(gap, outer, Polarity::Clear));
+            Ok(paths
+                .into_iter()
+                .map(|path| transform_path(path, center, rotation))
+                .collect())
+        }
+        _ => Err(GerberError::InvalidStructure(format!(
+            "unsupported aperture macro primitive {code}"
+        ))),
+    }
+}
+
+fn validate_region_contours(contours: &[Contour]) -> Result<()> {
+    for contour in contours {
+        if contour.segments.is_empty() {
+            return Err(GerberError::InvalidStructure(
+                "region contour has no segments".to_string(),
+            ));
+        }
+        let mut first = None;
+        let mut previous = None;
+        for segment in &contour.segments {
+            let (start, end) = match *segment {
+                ContourSegment::Line { start, end } | ContourSegment::Arc { start, end, .. } => {
+                    (start, end)
+                }
+            };
+            if let Some(previous) = previous
+                && !points_close(previous, start)
+            {
+                return Err(GerberError::InvalidStructure(
+                    "region contour segments must be connected".to_string(),
+                ));
+            }
+            first.get_or_insert(start);
+            previous = Some(end);
+        }
+        if !points_close(first.unwrap(), previous.unwrap()) {
+            return Err(GerberError::InvalidStructure(
+                "region contour must be closed".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn points_close(a: Point, b: Point) -> bool {
+    (a.x - b.x).abs() <= 1e-9 && (a.y - b.y).abs() <= 1e-9
 }
 
 fn circle_paths(diameter: f64, hole_diameter: Option<f64>) -> Vec<GeometryPath> {
@@ -810,6 +1150,275 @@ fn rect_path(width: f64, height: f64, polarity: Polarity) -> GeometryPath {
             ],
         }],
         polarity,
+    }
+}
+
+fn macro_value(values: &[f64], index: usize, name: &str) -> Result<f64> {
+    values
+        .get(index)
+        .copied()
+        .ok_or_else(|| GerberError::InvalidStructure(format!("missing {name}")))
+}
+
+fn macro_bool(values: &[f64], index: usize) -> Result<Polarity> {
+    Ok(if macro_value(values, index, "macro exposure")? == 0.0 {
+        Polarity::Clear
+    } else {
+        Polarity::Dark
+    })
+}
+
+fn eval_macro_expr(expr: &MacroExpression, vars: &HashMap<usize, f64>) -> Result<f64> {
+    Ok(match expr {
+        MacroExpression::Number(value) => *value,
+        MacroExpression::Variable(index) => *vars.get(index).ok_or_else(|| {
+            GerberError::InvalidStructure(format!("macro variable ${index} used before definition"))
+        })?,
+        MacroExpression::UnaryMinus(inner) => -eval_macro_expr(inner, vars)?,
+        MacroExpression::Add(left, right) => {
+            eval_macro_expr(left, vars)? + eval_macro_expr(right, vars)?
+        }
+        MacroExpression::Subtract(left, right) => {
+            eval_macro_expr(left, vars)? - eval_macro_expr(right, vars)?
+        }
+        MacroExpression::Multiply(left, right) => {
+            eval_macro_expr(left, vars)? * eval_macro_expr(right, vars)?
+        }
+        MacroExpression::Divide(left, right) => {
+            eval_macro_expr(left, vars)? / eval_macro_expr(right, vars)?
+        }
+    })
+}
+
+fn repolarity(mut path: GeometryPath, polarity: Polarity) -> GeometryPath {
+    path.polarity = polarity;
+    path
+}
+
+fn vector_line_path(
+    start: Point,
+    end: Point,
+    width: f64,
+    polarity: Polarity,
+    rotation: f64,
+) -> GeometryPath {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len == 0.0 {
+        return transform_path(rect_path(0.0, width, polarity), start, rotation);
+    }
+    let nx = -dy / len * width / 2.0;
+    let ny = dx / len * width / 2.0;
+    let mut path = GeometryPath {
+        contours: vec![GeometryContour {
+            commands: vec![
+                PathCommand::MoveTo(Point {
+                    x: start.x + nx,
+                    y: start.y + ny,
+                }),
+                PathCommand::LineTo(Point {
+                    x: end.x + nx,
+                    y: end.y + ny,
+                }),
+                PathCommand::LineTo(Point {
+                    x: end.x - nx,
+                    y: end.y - ny,
+                }),
+                PathCommand::LineTo(Point {
+                    x: start.x - nx,
+                    y: start.y - ny,
+                }),
+                PathCommand::Close,
+            ],
+        }],
+        polarity,
+    };
+    if rotation != 0.0 {
+        path = transform_path(path, Point { x: 0.0, y: 0.0 }, rotation);
+    }
+    path
+}
+
+fn transform_path(mut path: GeometryPath, offset: Point, rotation: f64) -> GeometryPath {
+    for contour in &mut path.contours {
+        for command in &mut contour.commands {
+            match command {
+                PathCommand::MoveTo(point) | PathCommand::LineTo(point) => {
+                    *point = translate_point(rotate_point(*point, rotation), offset.x, offset.y);
+                }
+                PathCommand::ArcTo { end, center, .. } => {
+                    *end = translate_point(rotate_point(*end, rotation), offset.x, offset.y);
+                    *center = translate_point(rotate_point(*center, rotation), offset.x, offset.y);
+                }
+                PathCommand::Close => {}
+            }
+        }
+    }
+    path
+}
+
+fn translate_object(mut object: GraphicalObject, dx: f64, dy: f64) -> GraphicalObject {
+    match &mut object.kind {
+        ObjectKind::Draw { start, end, .. } => {
+            *start = translate_point(*start, dx, dy);
+            *end = translate_point(*end, dx, dy);
+        }
+        ObjectKind::Arc { start, end, .. } => {
+            *start = translate_point(*start, dx, dy);
+            *end = translate_point(*end, dx, dy);
+        }
+        ObjectKind::Flash { at, .. } => *at = translate_point(*at, dx, dy),
+        ObjectKind::Region { contours } => {
+            for contour in contours {
+                for segment in &mut contour.segments {
+                    match segment {
+                        ContourSegment::Line { start, end } => {
+                            *start = translate_point(*start, dx, dy);
+                            *end = translate_point(*end, dx, dy);
+                        }
+                        ContourSegment::Arc { start, end, .. } => {
+                            *start = translate_point(*start, dx, dy);
+                            *end = translate_point(*end, dx, dy);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    object
+}
+
+fn translate_point(point: Point, dx: f64, dy: f64) -> Point {
+    Point {
+        x: point.x + dx,
+        y: point.y + dy,
+    }
+}
+
+fn rotate_point(point: Point, degrees: f64) -> Point {
+    if degrees == 0.0 {
+        return point;
+    }
+    let radians = degrees.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    Point {
+        x: point.x * cos - point.y * sin,
+        y: point.x * sin + point.y * cos,
+    }
+}
+
+struct MacroExpressionParser<'a> {
+    input: &'a str,
+    pos: usize,
+}
+
+impl<'a> MacroExpressionParser<'a> {
+    fn new(input: &'a str) -> Self {
+        Self { input, pos: 0 }
+    }
+
+    fn parse(&mut self) -> Result<MacroExpression> {
+        let expr = self.parse_add_sub()?;
+        self.skip_ws();
+        if self.pos != self.input.len() {
+            return Err(GerberError::InvalidStructure(format!(
+                "invalid macro expression '{}'",
+                self.input
+            )));
+        }
+        Ok(expr)
+    }
+
+    fn parse_add_sub(&mut self) -> Result<MacroExpression> {
+        let mut expr = self.parse_mul_div()?;
+        loop {
+            self.skip_ws();
+            if self.eat('+') {
+                expr = MacroExpression::Add(Box::new(expr), Box::new(self.parse_mul_div()?));
+            } else if self.eat('-') {
+                expr = MacroExpression::Subtract(Box::new(expr), Box::new(self.parse_mul_div()?));
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+
+    fn parse_mul_div(&mut self) -> Result<MacroExpression> {
+        let mut expr = self.parse_factor()?;
+        loop {
+            self.skip_ws();
+            if self.eat('x') || self.eat('X') {
+                expr = MacroExpression::Multiply(Box::new(expr), Box::new(self.parse_factor()?));
+            } else if self.eat('/') {
+                expr = MacroExpression::Divide(Box::new(expr), Box::new(self.parse_factor()?));
+            } else {
+                break;
+            }
+        }
+        Ok(expr)
+    }
+
+    fn parse_factor(&mut self) -> Result<MacroExpression> {
+        self.skip_ws();
+        if self.eat('-') {
+            return Ok(MacroExpression::UnaryMinus(Box::new(self.parse_factor()?)));
+        }
+        if self.eat('+') {
+            return self.parse_factor();
+        }
+        if self.eat('(') {
+            let expr = self.parse_add_sub()?;
+            self.skip_ws();
+            if !self.eat(')') {
+                return Err(GerberError::InvalidStructure(format!(
+                    "unclosed macro expression '{}'",
+                    self.input
+                )));
+            }
+            return Ok(expr);
+        }
+        if self.eat('$') {
+            let start = self.pos;
+            while self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                self.pos += 1;
+            }
+            return Ok(MacroExpression::Variable(
+                self.input[start..self.pos]
+                    .parse()
+                    .map_err(|_| GerberError::InvalidNumber(self.input.to_string()))?,
+            ));
+        }
+        let start = self.pos;
+        while self.peek().is_some_and(|c| c.is_ascii_digit() || c == '.') {
+            self.pos += 1;
+        }
+        if start == self.pos {
+            return Err(GerberError::InvalidNumber(self.input.to_string()));
+        }
+        Ok(MacroExpression::Number(
+            self.input[start..self.pos]
+                .parse()
+                .map_err(|_| GerberError::InvalidNumber(self.input[start..self.pos].to_string()))?,
+        ))
+    }
+
+    fn skip_ws(&mut self) {
+        while self.peek().is_some_and(char::is_whitespace) {
+            self.pos += 1;
+        }
+    }
+    fn peek(&self) -> Option<char> {
+        self.input[self.pos..].chars().next()
+    }
+    fn eat(&mut self, ch: char) -> bool {
+        if self.peek() == Some(ch) {
+            self.pos += ch.len_utf8();
+            true
+        } else {
+            false
+        }
     }
 }
 
