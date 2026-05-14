@@ -623,8 +623,9 @@ impl<'a> Parser<'a> {
         }
         let code = parse_aperture_code(&rest[..d_len])?;
         let template_call = &rest[d_len..];
-        let template = self.parse_template_call(template_call)?;
-        let geometry = self.lower_aperture(&template)?;
+        let unit = self.unit()?;
+        let template = self.parse_template_call(template_call, unit)?;
+        let geometry = self.lower_aperture(&template, unit)?;
         Ok(ApertureDefinition {
             code,
             template,
@@ -633,7 +634,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn lower_aperture(&self, template: &ApertureTemplate) -> Result<Option<ApertureGeometry>> {
+    fn lower_aperture(
+        &self,
+        template: &ApertureTemplate,
+        unit: Unit,
+    ) -> Result<Option<ApertureGeometry>> {
         if let ApertureTemplate::Macro { name, parameters } = template {
             let Some(macro_def) = self.macro_lookup.get(name) else {
                 return Err(GerberError::InvalidStructure(format!(
@@ -641,12 +646,12 @@ impl<'a> Parser<'a> {
                     self.interner.resolve(*name)
                 )));
             };
-            return lower_macro_aperture(macro_def, parameters);
+            return lower_macro_aperture(macro_def, parameters, unit);
         }
         Ok(lower_standard_aperture(template))
     }
 
-    fn parse_template_call(&mut self, template_call: &str) -> Result<ApertureTemplate> {
+    fn parse_template_call(&mut self, template_call: &str, unit: Unit) -> Result<ApertureTemplate> {
         let (name, params) = template_call
             .split_once(',')
             .map(|(name, params)| (name, params.split('X').collect::<Vec<_>>()))
@@ -658,24 +663,39 @@ impl<'a> Parser<'a> {
 
         match name {
             "C" => Ok(ApertureTemplate::Circle {
-                diameter: required_param(&values, 0, "circle diameter")?,
-                hole_diameter: values.get(1).copied(),
+                diameter: scale_length(required_param(&values, 0, "circle diameter")?, unit),
+                hole_diameter: values
+                    .get(1)
+                    .copied()
+                    .map(|value| scale_length(value, unit)),
             }),
             "R" => Ok(ApertureTemplate::Rectangle {
-                width: required_param(&values, 0, "rectangle width")?,
-                height: required_param(&values, 1, "rectangle height")?,
-                hole_diameter: values.get(2).copied(),
+                width: scale_length(required_param(&values, 0, "rectangle width")?, unit),
+                height: scale_length(required_param(&values, 1, "rectangle height")?, unit),
+                hole_diameter: values
+                    .get(2)
+                    .copied()
+                    .map(|value| scale_length(value, unit)),
             }),
             "O" => Ok(ApertureTemplate::Obround {
-                width: required_param(&values, 0, "obround width")?,
-                height: required_param(&values, 1, "obround height")?,
-                hole_diameter: values.get(2).copied(),
+                width: scale_length(required_param(&values, 0, "obround width")?, unit),
+                height: scale_length(required_param(&values, 1, "obround height")?, unit),
+                hole_diameter: values
+                    .get(2)
+                    .copied()
+                    .map(|value| scale_length(value, unit)),
             }),
             "P" => Ok(ApertureTemplate::Polygon {
-                outer_diameter: required_param(&values, 0, "polygon outer diameter")?,
+                outer_diameter: scale_length(
+                    required_param(&values, 0, "polygon outer diameter")?,
+                    unit,
+                ),
                 vertices: required_param(&values, 1, "polygon vertices")? as i32,
                 rotation_degrees: values.get(2).copied(),
-                hole_diameter: values.get(3).copied(),
+                hole_diameter: values
+                    .get(3)
+                    .copied()
+                    .map(|value| scale_length(value, unit)),
             }),
             _ => Ok(ApertureTemplate::Macro {
                 name: self.interner.intern(name),
@@ -759,6 +779,10 @@ fn parse_format(rest: &str) -> Option<CoordinateFormat> {
 
 fn scale_coordinate(value: i64, decimal_digits: u8, unit: Unit) -> f64 {
     let value = value as f64 / 10_f64.powi(decimal_digits as i32);
+    scale_length(value, unit)
+}
+
+fn scale_length(value: f64, unit: Unit) -> f64 {
     match unit {
         Unit::Millimeter => value,
         Unit::Inch => value * 25.4,
@@ -800,6 +824,7 @@ fn lower_standard_aperture(template: &ApertureTemplate) -> Option<ApertureGeomet
 fn lower_macro_aperture(
     macro_def: &ApertureMacro,
     parameters: &[f64],
+    unit: Unit,
 ) -> Result<Option<ApertureGeometry>> {
     let mut vars: HashMap<usize, f64> = parameters
         .iter()
@@ -821,21 +846,21 @@ fn lower_macro_aperture(
                     .iter()
                     .map(|expr| eval_macro_expr(expr, &vars))
                     .collect::<Result<Vec<_>>>()?;
-                paths.extend(lower_macro_shape(*code, &values)?);
+                paths.extend(lower_macro_shape(*code, &values, unit)?);
             }
         }
     }
     Ok(Some(ApertureGeometry { paths }))
 }
 
-fn lower_macro_shape(code: i32, values: &[f64]) -> Result<Vec<GeometryPath>> {
+fn lower_macro_shape(code: i32, values: &[f64], unit: Unit) -> Result<Vec<GeometryPath>> {
     match code {
         1 => {
             let exposure = macro_bool(values, 0)?;
-            let diameter = macro_value(values, 1, "macro circle diameter")?;
+            let diameter = macro_length(values, 1, "macro circle diameter", unit)?;
             let center = Point {
-                x: macro_value(values, 2, "macro circle center x")?,
-                y: macro_value(values, 3, "macro circle center y")?,
+                x: macro_length(values, 2, "macro circle center x", unit)?,
+                y: macro_length(values, 3, "macro circle center y", unit)?,
             };
             let rotation = values.get(4).copied().unwrap_or(0.0);
             Ok(vec![transform_path(
@@ -846,14 +871,14 @@ fn lower_macro_shape(code: i32, values: &[f64]) -> Result<Vec<GeometryPath>> {
         }
         20 => {
             let exposure = macro_bool(values, 0)?;
-            let width = macro_value(values, 1, "macro vector line width")?;
+            let width = macro_length(values, 1, "macro vector line width", unit)?;
             let start = Point {
-                x: macro_value(values, 2, "macro vector line start x")?,
-                y: macro_value(values, 3, "macro vector line start y")?,
+                x: macro_length(values, 2, "macro vector line start x", unit)?,
+                y: macro_length(values, 3, "macro vector line start y", unit)?,
             };
             let end = Point {
-                x: macro_value(values, 4, "macro vector line end x")?,
-                y: macro_value(values, 5, "macro vector line end y")?,
+                x: macro_length(values, 4, "macro vector line end x", unit)?,
+                y: macro_length(values, 5, "macro vector line end y", unit)?,
             };
             let rotation = macro_value(values, 6, "macro vector line rotation")?;
             Ok(vec![vector_line_path(
@@ -862,11 +887,11 @@ fn lower_macro_shape(code: i32, values: &[f64]) -> Result<Vec<GeometryPath>> {
         }
         21 => {
             let exposure = macro_bool(values, 0)?;
-            let width = macro_value(values, 1, "macro center line width")?;
-            let height = macro_value(values, 2, "macro center line height")?;
+            let width = macro_length(values, 1, "macro center line width", unit)?;
+            let height = macro_length(values, 2, "macro center line height", unit)?;
             let center = Point {
-                x: macro_value(values, 3, "macro center line x")?,
-                y: macro_value(values, 4, "macro center line y")?,
+                x: macro_length(values, 3, "macro center line x", unit)?,
+                y: macro_length(values, 4, "macro center line y", unit)?,
             };
             let rotation = macro_value(values, 5, "macro center line rotation")?;
             Ok(vec![transform_path(
@@ -907,8 +932,8 @@ fn lower_macro_shape(code: i32, values: &[f64]) -> Result<Vec<GeometryPath>> {
             for index in 0..=vertices {
                 let point = rotate_point(
                     Point {
-                        x: values[2 + index * 2],
-                        y: values[3 + index * 2],
+                        x: scale_length(values[2 + index * 2], unit),
+                        y: scale_length(values[3 + index * 2], unit),
                     },
                     rotation,
                 );
@@ -928,10 +953,10 @@ fn lower_macro_shape(code: i32, values: &[f64]) -> Result<Vec<GeometryPath>> {
             let exposure = macro_bool(values, 0)?;
             let vertices = macro_value(values, 1, "macro polygon vertices")? as i32;
             let center = Point {
-                x: macro_value(values, 2, "macro polygon center x")?,
-                y: macro_value(values, 3, "macro polygon center y")?,
+                x: macro_length(values, 2, "macro polygon center x", unit)?,
+                y: macro_length(values, 3, "macro polygon center y", unit)?,
             };
-            let diameter = macro_value(values, 4, "macro polygon diameter")?;
+            let diameter = macro_length(values, 4, "macro polygon diameter", unit)?;
             let rotation = macro_value(values, 5, "macro polygon rotation")?;
             Ok(polygon_paths(diameter, vertices, rotation, None)
                 .into_iter()
@@ -940,12 +965,12 @@ fn lower_macro_shape(code: i32, values: &[f64]) -> Result<Vec<GeometryPath>> {
         }
         7 => {
             let center = Point {
-                x: macro_value(values, 0, "macro thermal center x")?,
-                y: macro_value(values, 1, "macro thermal center y")?,
+                x: macro_length(values, 0, "macro thermal center x", unit)?,
+                y: macro_length(values, 1, "macro thermal center y", unit)?,
             };
-            let outer = macro_value(values, 2, "macro thermal outer diameter")?;
-            let inner = macro_value(values, 3, "macro thermal inner diameter")?;
-            let gap = macro_value(values, 4, "macro thermal gap")?;
+            let outer = macro_length(values, 2, "macro thermal outer diameter", unit)?;
+            let inner = macro_length(values, 3, "macro thermal inner diameter", unit)?;
+            let gap = macro_length(values, 4, "macro thermal gap", unit)?;
             let rotation = macro_value(values, 5, "macro thermal rotation")?;
             let mut paths = circle_paths(outer, Some(inner));
             paths.push(rect_path(outer, gap, Polarity::Clear));
@@ -1158,6 +1183,10 @@ fn macro_value(values: &[f64], index: usize, name: &str) -> Result<f64> {
         .get(index)
         .copied()
         .ok_or_else(|| GerberError::InvalidStructure(format!("missing {name}")))
+}
+
+fn macro_length(values: &[f64], index: usize, name: &str, unit: Unit) -> Result<f64> {
+    Ok(scale_length(macro_value(values, index, name)?, unit))
 }
 
 fn macro_bool(values: &[f64], index: usize) -> Result<Polarity> {

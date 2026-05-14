@@ -283,6 +283,30 @@ fn lowers_standard_apertures_to_geometry_paths() {
 }
 
 #[test]
+fn normalizes_inch_coordinates_and_standard_apertures_to_mm() {
+    let gerber =
+        GerberX2::parse("%FSLAX26Y26*%\n%MOIN*%\n%ADD10C,0.1X0.02*%\nD10*\nX1000000Y0D03*\nM02*\n")
+            .unwrap();
+
+    assert!(matches!(
+        gerber.aperture_definitions()[0].template,
+        ApertureTemplate::Circle {
+            diameter,
+            hole_diameter: Some(hole),
+        } if close(diameter, 2.54) && close(hole, 0.508)
+    ));
+    assert!(matches!(
+        gerber.objects()[0].kind,
+        ObjectKind::Flash { at, .. } if close(at.x, 25.4) && close(at.y, 0.0)
+    ));
+
+    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let feature = &geometry.features[0];
+    assert!(close(feature.bbox.min.x, 25.4 - 1.27));
+    assert!(close(feature.bbox.max.x, 25.4 + 1.27));
+}
+
+#[test]
 fn lowers_aperture_macro_primitives_to_geometry_paths() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%AMMAC*\n0 comment*\n$3=$1+$2x2*\n1,1,$3,0,0,0*\n20,1,0.1,-0.5,0,0.5,0,0*\n21,0,0.2,0.3,0,0,0*\n4,1,3,0,0,1,0,0,1,0,0,0*\n5,1,6,0,0,1.2,30*\n7,0,0,1.0,0.5,0.1,45*\n%\n%ADD10MAC,0.2X0.4*%\nD10*\nX0Y0D03*\nM02*\n",
@@ -297,6 +321,20 @@ fn lowers_aperture_macro_primitives_to_geometry_paths() {
     assert!(matches!(
         geometry.paths[3].contours[0].commands.last(),
         Some(PathCommand::Close)
+    ));
+}
+
+#[test]
+fn normalizes_inch_macro_aperture_geometry_to_mm() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOIN*%\n%AMMAC*\n1,1,$1,0,0,0*\n%\n%ADD10MAC,0.1*%\nD10*\nX0Y0D03*\nM02*\n",
+    )
+    .unwrap();
+
+    let geometry = gerber.aperture_definitions()[0].geometry.as_ref().unwrap();
+    assert!(matches!(
+        geometry.paths[0].contours[0].commands[0],
+        PathCommand::MoveTo(point) if close(point.x, 1.27) && close(point.y, 0.0)
     ));
 }
 
