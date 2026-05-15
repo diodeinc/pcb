@@ -27,6 +27,7 @@ similar = "3"
 
 ipc2581 = { path = "crates/ipc2581" }
 gerberx2 = { path = "crates/gerberx2" }
+pcb-ir = { path = "crates/pcb-ir" }
 pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }
 pcb-component-gen = { path = "crates/pcb-component-gen" }

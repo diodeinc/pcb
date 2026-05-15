@@ -1,5 +1,6 @@
 use crate::types::*;
 use crate::{GerberError, Result};
+use pcb_ir::dialects::gerber::Polarity;
 
 /// String-backed X2 attribute used by the Gerber writer.
 ///
@@ -20,6 +21,28 @@ impl AttributeValue {
             name: name.into(),
             fields: fields.into_iter().map(Into::into).collect(),
         }
+    }
+}
+
+/// Convert arbitrary metadata into a Gerber X2 attribute field.
+///
+/// Gerber attributes are comma-separated and commands are terminated by `*`
+/// inside `%...%` extended commands, so those characters cannot appear
+/// literally in a field. The writer keeps validation strict; source dialects
+/// should normalize free-form metadata through this helper when lowering into
+/// Gerber writer IR.
+pub fn sanitize_attribute_field(field: &str) -> String {
+    let sanitized = field
+        .chars()
+        .map(|ch| match ch {
+            '*' | '%' | ',' => '_',
+            _ => ch,
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "_".to_string()
+    } else {
+        sanitized
     }
 }
 
@@ -626,9 +649,9 @@ fn validate_identifier(value: &str, label: &str) -> Result<()> {
 }
 
 fn validate_no_command_delimiters(value: &str, label: &str) -> Result<()> {
-    if value.contains(['*', '%']) {
+    if value.contains(['*', '%', ',']) {
         return Err(GerberError::InvalidStructure(format!(
-            "{label} must not contain Gerber command delimiters"
+            "{label} must not contain Gerber command delimiters or field separators"
         )));
     }
     Ok(())
@@ -694,5 +717,27 @@ fn format_macro_factor(expression: &WriterMacroExpression) -> String {
             format_macro_expression(expression)
         }
         _ => format!("({})", format_macro_expression(expression)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitizes_freeform_attribute_fields() {
+        assert_eq!(sanitize_attribute_field("PWR_RST*,A%B"), "PWR_RST__A_B");
+        assert_eq!(sanitize_attribute_field(""), "_");
+    }
+
+    #[test]
+    fn rejects_attribute_field_separators() {
+        let layer = GerberLayer {
+            file_attributes: vec![AttributeValue::new(".FileFunction", ["Copper,Top"])],
+            ..GerberLayer::default()
+        };
+
+        let err = write_layer(&layer).unwrap_err().to_string();
+        assert!(err.contains("field separators"), "{err}");
     }
 }

@@ -1,5 +1,5 @@
-use super::ir::*;
-use crate::types::Polarity;
+use crate::common::*;
+use crate::dialects::gerber::*;
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::simplify::SimplifyShape;
@@ -8,14 +8,14 @@ use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 
 type PolygonContour = Vec<[f64; 2]>;
 
-pub fn process_document(doc: &mut GeometryDocument) {
+pub fn process_document<A: Clone>(doc: &mut GeometryDocument<A>) {
     normalize_bounds(doc);
     outline_stroked_paths(doc);
     resolve_polarity_and_cutouts(doc);
     normalize_bounds(doc);
 }
 
-pub fn normalize_bounds(doc: &mut GeometryDocument) {
+pub fn normalize_bounds<A>(doc: &mut GeometryDocument<A>) {
     for contour_index in 0..doc.contours.len() {
         doc.contours[contour_index].bbox = contour_bbox(doc, contour_index);
     }
@@ -32,7 +32,7 @@ pub fn normalize_bounds(doc: &mut GeometryDocument) {
         .fold(BBox::empty(), |bbox, feature| bbox.union(feature.bbox));
 }
 
-pub fn outline_stroked_paths(doc: &mut GeometryDocument) {
+pub fn outline_stroked_paths<A: Clone>(doc: &mut GeometryDocument<A>) {
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
         let feature = doc.features[feature_index].clone();
@@ -60,7 +60,7 @@ pub fn outline_stroked_paths(doc: &mut GeometryDocument) {
     }
 }
 
-pub fn resolve_polarity_and_cutouts(doc: &mut GeometryDocument) {
+pub fn resolve_polarity_and_cutouts<A>(doc: &mut GeometryDocument<A>) {
     let mut image = Vec::new();
     for feature in &doc.features {
         let feature_image = feature_image_contours(doc, feature);
@@ -83,7 +83,7 @@ pub fn resolve_polarity_and_cutouts(doc: &mut GeometryDocument) {
         polygon_contours_to_contours(image),
     );
     let mut composite =
-        GeometryFeature::new(FeatureKind::Composite, FeatureBucket::Fill, Polarity::Dark);
+        GeometryFeature::<A>::new(FeatureKind::Composite, FeatureBucket::Fill, Polarity::Dark);
     composite.path_start = path_id;
     composite.path_count = 1;
     composite.object_index = doc.features.len() as u32;
@@ -91,7 +91,7 @@ pub fn resolve_polarity_and_cutouts(doc: &mut GeometryDocument) {
     doc.features.push(composite);
 }
 
-fn stroked_path_outline(doc: &GeometryDocument, path: &GeometryPath) -> Option<PathPayload> {
+fn stroked_path_outline<A>(doc: &GeometryDocument<A>, path: &GeometryPath) -> Option<PathPayload> {
     if path.stroke_width <= 0.0 {
         return None;
     }
@@ -110,7 +110,7 @@ fn stroked_path_outline(doc: &GeometryDocument, path: &GeometryPath) -> Option<P
     })
 }
 
-fn path_to_kurbo(doc: &GeometryDocument, path: &GeometryPath) -> BezPath {
+fn path_to_kurbo<A>(doc: &GeometryDocument<A>, path: &GeometryPath) -> BezPath {
     let mut out = BezPath::new();
     let mut current = Point::default();
     for contour in &doc.contours
@@ -217,9 +217,9 @@ fn push_line_contour(contours: &mut Vec<ContourPayload>, points: &mut Vec<Point>
     contours.push(ContourPayload { bbox, cmds });
 }
 
-fn feature_image_contours(
-    doc: &GeometryDocument,
-    feature: &GeometryFeature,
+fn feature_image_contours<A>(
+    doc: &GeometryDocument<A>,
+    feature: &GeometryFeature<A>,
 ) -> Vec<PolygonContour> {
     let mut image = Vec::new();
     for path in
@@ -241,7 +241,7 @@ fn feature_image_contours(
     image
 }
 
-fn path_polygon_contours(doc: &GeometryDocument, path: &GeometryPath) -> Vec<PolygonContour> {
+fn path_polygon_contours<A>(doc: &GeometryDocument<A>, path: &GeometryPath) -> Vec<PolygonContour> {
     let mut contours = Vec::new();
     let bez_path = path_to_kurbo(doc, path);
     let mut current = Vec::new();
@@ -313,7 +313,7 @@ fn polygon_contours_to_contours(contours: Vec<PolygonContour>) -> Vec<ContourPay
         .collect()
 }
 
-fn clear_all_features(doc: &mut GeometryDocument) {
+fn clear_all_features<A>(doc: &mut GeometryDocument<A>) {
     let path_start = doc.paths.len() as u32;
     for feature in &mut doc.features {
         feature.path_count = 0;
@@ -321,7 +321,7 @@ fn clear_all_features(doc: &mut GeometryDocument) {
     }
 }
 
-fn path_contours(doc: &GeometryDocument, path: &GeometryPath) -> Vec<ContourPayload> {
+fn path_contours<A>(doc: &GeometryDocument<A>, path: &GeometryPath) -> Vec<ContourPayload> {
     doc.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
         .iter()
         .map(|contour| ContourPayload {
@@ -333,7 +333,7 @@ fn path_contours(doc: &GeometryDocument, path: &GeometryPath) -> Vec<ContourPayl
         .collect()
 }
 
-fn contour_bbox(doc: &GeometryDocument, contour_index: usize) -> BBox {
+fn contour_bbox<A>(doc: &GeometryDocument<A>, contour_index: usize) -> BBox {
     let contour = &doc.contours[contour_index];
     let mut bbox = BBox::empty();
     let mut current = Point::default();
@@ -355,7 +355,7 @@ fn contour_bbox(doc: &GeometryDocument, contour_index: usize) -> BBox {
     bbox
 }
 
-fn path_bbox(doc: &GeometryDocument, path_index: usize) -> BBox {
+fn path_bbox<A>(doc: &GeometryDocument<A>, path_index: usize) -> BBox {
     let path = &doc.paths[path_index];
     let bbox = doc.contours
         [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
@@ -368,7 +368,7 @@ fn path_bbox(doc: &GeometryDocument, path_index: usize) -> BBox {
     }
 }
 
-fn feature_bbox(doc: &GeometryDocument, feature_index: usize) -> BBox {
+fn feature_bbox<A>(doc: &GeometryDocument<A>, feature_index: usize) -> BBox {
     let feature = &doc.features[feature_index];
     doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         .iter()

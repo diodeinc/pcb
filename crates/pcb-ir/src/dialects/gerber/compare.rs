@@ -1,4 +1,5 @@
-use super::ir::*;
+use crate::common::*;
+use crate::dialects::gerber::*;
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::simplify::SimplifyShape;
@@ -56,9 +57,9 @@ pub struct GeometrySummary {
 /// image, then compares the final image bounds and filled area. It intentionally
 /// does not compare object counts or command streams, because idiomatic exports
 /// may use different apertures/regions while preserving geometry.
-pub fn compare_documents(
-    reference: &GeometryDocument,
-    candidate: &GeometryDocument,
+pub fn compare_documents<A, B>(
+    reference: &GeometryDocument<A>,
+    candidate: &GeometryDocument<B>,
     tolerance: GeometryCompareTolerance,
 ) -> GeometryCompareReport {
     let reference_summary = summarize(reference);
@@ -103,7 +104,7 @@ pub fn compare_documents(
     }
 }
 
-pub fn summarize(doc: &GeometryDocument) -> GeometrySummary {
+pub fn summarize<A>(doc: &GeometryDocument<A>) -> GeometrySummary {
     GeometrySummary {
         file_function: doc.file_function.clone(),
         bbox: doc.bbox,
@@ -146,18 +147,21 @@ fn compare_bbox(
     }
 }
 
-fn filled_area(doc: &GeometryDocument) -> f64 {
+fn filled_area<A>(doc: &GeometryDocument<A>) -> f64 {
     polygon_area(&document_image_contours(doc))
 }
 
-fn symmetric_difference_area(reference: &GeometryDocument, candidate: &GeometryDocument) -> f64 {
+fn symmetric_difference_area<A, B>(
+    reference: &GeometryDocument<A>,
+    candidate: &GeometryDocument<B>,
+) -> f64 {
     let reference = document_image_contours(reference);
     let candidate = document_image_contours(candidate);
     polygon_area(&difference_contours(reference.clone(), candidate.clone()))
         + polygon_area(&difference_contours(candidate, reference))
 }
 
-fn document_image_contours(doc: &GeometryDocument) -> Vec<PolygonContour> {
+fn document_image_contours<A>(doc: &GeometryDocument<A>) -> Vec<PolygonContour> {
     let mut contours = Vec::new();
     for feature in &doc.features {
         for path in &doc.paths
@@ -176,7 +180,7 @@ fn document_image_contours(doc: &GeometryDocument) -> Vec<PolygonContour> {
     union_contours(contours)
 }
 
-fn contour_polygon(doc: &GeometryDocument, contour: &GeometryContour) -> PolygonContour {
+fn contour_polygon<A>(doc: &GeometryDocument<A>, contour: &GeometryContour) -> PolygonContour {
     let mut points = Vec::new();
     let mut current = Point::default();
     for cmd in
@@ -327,7 +331,7 @@ mod tests {
             cmd.p0.x += 0.25;
             cmd.p1.x += 0.25;
         }
-        super::super::process::normalize_bounds(&mut candidate);
+        super::process::normalize_bounds(&mut candidate);
 
         let report = compare_documents(
             &reference,
@@ -370,15 +374,12 @@ mod tests {
                 ],
             }],
         );
-        let mut feature = GeometryFeature::new(
-            FeatureKind::Composite,
-            FeatureBucket::Fill,
-            crate::Polarity::Dark,
-        );
+        let mut feature =
+            GeometryFeature::new(FeatureKind::Composite, FeatureBucket::Fill, Polarity::Dark);
         feature.path_start = path;
         feature.path_count = 1;
         doc.features.push(feature);
-        super::super::process::normalize_bounds(&mut doc);
+        super::process::normalize_bounds(&mut doc);
         doc
     }
 }

@@ -8,8 +8,13 @@ use ipc2581::types::{
 };
 use ipc2581::{Ipc2581, Symbol};
 
-use super::ir::*;
 use super::primary_step;
+use pcb_ir::common::*;
+use pcb_ir::dialects::ipc::*;
+
+type GeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<Symbol, LayerFunction>;
+type GeometryLayer = pcb_ir::dialects::ipc::GeometryLayer<Symbol, LayerFunction>;
+type GeometryFeature = pcb_ir::dialects::ipc::GeometryFeature<Symbol>;
 
 struct ExtractContext<'a> {
     ipc: &'a Ipc2581,
@@ -2458,7 +2463,7 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
             .expect("synthetic panel fixture should parse");
         let mut doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
-        crate::geometry::process::process_document(&mut doc);
+        pcb_ir::dialects::ipc::process::process_document(&mut doc);
 
         let layer = &doc.layers[0];
         let traces = doc.features

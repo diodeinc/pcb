@@ -9,8 +9,9 @@ use super::artwork::{
     ArtworkContour, ArtworkLayer, ArtworkObject, ArtworkSegment, ObjectAttributes,
 };
 use super::lower::lower_artwork_layer;
-use crate::geometry::ir::{GeometryDocument, GeometryPath, PathCmd, PathOp, Point};
 use crate::{geometry, ipc2581 as ipc};
+use pcb_ir::common::Point;
+use pcb_ir::dialects::ipc::{FeatureBucket, GeometryPath, PathCmd, PathOp};
 
 #[derive(Debug, Clone)]
 pub struct GerberExportOptions {
@@ -40,7 +41,7 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
         let layer_name = ipc.resolve(source_layer.name);
         let mut doc = geometry::extract_layer(ipc, layer_name)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
-        geometry::process::process_document(&mut doc);
+        pcb_ir::dialects::ipc::process::process_document(&mut doc);
         if first_doc.is_none() {
             first_doc = Some(doc.clone());
         }
@@ -221,7 +222,7 @@ fn copper_layer_output(
 
 fn artwork_from_processed_layer(
     ipc: &Ipc2581,
-    doc: &GeometryDocument,
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
     layer_index: usize,
     file_function: Vec<String>,
 ) -> Result<ArtworkLayer> {
@@ -247,7 +248,7 @@ fn artwork_from_processed_layer(
                 });
             } else {
                 bail!(
-                    "IPC geometry path is neither filled nor stroked on layer '{}'",
+                    "processed IPC geometry path is neither filled nor stroked on layer '{}'",
                     layer.name
                 );
             }
@@ -259,7 +260,9 @@ fn artwork_from_processed_layer(
     })
 }
 
-fn profile_artwork_from_outlines(doc: &GeometryDocument) -> Result<ArtworkLayer> {
+fn profile_artwork_from_outlines(
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+) -> Result<ArtworkLayer> {
     let mut objects = Vec::new();
     for outline in &doc.board_outlines {
         for path in &doc.paths
@@ -278,7 +281,7 @@ fn profile_artwork_from_outlines(doc: &GeometryDocument) -> Result<ArtworkLayer>
                     attributes: ObjectAttributes::default(),
                 });
             } else {
-                bail!("IPC board outline path is neither filled nor stroked");
+                bail!("processed IPC board outline path is neither filled nor stroked");
             }
         }
     }
@@ -294,20 +297,23 @@ fn object_attributes(ipc: &Ipc2581, net: Option<ipc2581::Symbol>) -> ObjectAttri
     }
 }
 
-fn aperture_function(bucket: crate::geometry::ir::FeatureBucket) -> &'static str {
+fn aperture_function(bucket: FeatureBucket) -> &'static str {
     match bucket {
-        crate::geometry::ir::FeatureBucket::Smd => "SMDPad",
-        crate::geometry::ir::FeatureBucket::Pth => "ComponentPad",
-        crate::geometry::ir::FeatureBucket::Via => "ViaPad",
-        crate::geometry::ir::FeatureBucket::Trace => "Conductor",
-        crate::geometry::ir::FeatureBucket::Fill => "Conductor",
-        crate::geometry::ir::FeatureBucket::Cutout => "Other",
-        crate::geometry::ir::FeatureBucket::Thermal => "ThermalRelief",
-        crate::geometry::ir::FeatureBucket::Antipad => "AntiPad",
+        FeatureBucket::Smd => "SMDPad",
+        FeatureBucket::Pth => "ComponentPad",
+        FeatureBucket::Via => "ViaPad",
+        FeatureBucket::Trace => "Conductor",
+        FeatureBucket::Fill => "Conductor",
+        FeatureBucket::Cutout => "Other",
+        FeatureBucket::Thermal => "ThermalRelief",
+        FeatureBucket::Antipad => "AntiPad",
     }
 }
 
-fn artwork_contours(doc: &GeometryDocument, path: &GeometryPath) -> Result<Vec<ArtworkContour>> {
+fn artwork_contours(
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    path: &GeometryPath,
+) -> Result<Vec<ArtworkContour>> {
     let mut contours = Vec::new();
     for contour in &doc.contours
         [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]

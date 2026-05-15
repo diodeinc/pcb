@@ -3,13 +3,14 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, bail};
 use gerberx2::{
     AttributeValue, Contour, ContourSegment, GerberLayer, ObjectKind, Point as GerberPoint,
-    WriterAperture, WriterApertureTemplate, WriterObject,
+    WriterAperture, WriterApertureTemplate, WriterObject, sanitize_attribute_field,
 };
+use pcb_ir::dialects::gerber::Polarity;
 
 use super::artwork::{
     ArtworkContour, ArtworkLayer, ArtworkObject, ArtworkSegment, ObjectAttributes,
 };
-use crate::geometry::ir::Point;
+use pcb_ir::common::Point;
 
 pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
     let mut apertures = ApertureTable::default();
@@ -24,7 +25,7 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
                 kind: ObjectKind::Region {
                     contours: lower_region_contours(contours)?,
                 },
-                polarity: gerberx2::Polarity::Dark,
+                polarity: Polarity::Dark,
                 attributes: lower_object_attributes(attributes),
             }),
             ArtworkObject::Stroke {
@@ -59,7 +60,7 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
                                     aperture,
                                 },
                             },
-                            polarity: gerberx2::Polarity::Dark,
+                            polarity: Polarity::Dark,
                             attributes: lower_object_attributes(attributes),
                         });
                     }
@@ -170,7 +171,7 @@ fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue>
     attributes
         .net
         .as_ref()
-        .map(|net| vec![AttributeValue::new(".N", [net.clone()])])
+        .map(|net| vec![AttributeValue::new(".N", [sanitize_attribute_field(net)])])
         .unwrap_or_default()
 }
 
@@ -183,4 +184,19 @@ fn lower_point(point: Point) -> GerberPoint {
 
 fn quantize_mm(value: f64) -> i64 {
     (value * 1_000_000.0).round() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitizes_net_names_for_gerber_attribute_fields() {
+        let attributes = lower_object_attributes(&ObjectAttributes {
+            net: Some("PWR_RST*,A%B".to_string()),
+        });
+
+        assert_eq!(attributes[0].name, ".N");
+        assert_eq!(attributes[0].fields, ["PWR_RST__A_B"]);
+    }
 }

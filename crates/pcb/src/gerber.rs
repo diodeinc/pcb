@@ -64,7 +64,7 @@ fn render(
         .with_context(|| format!("Failed to parse Gerber file {}", file.display()))?;
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
     if !debug_geometry {
-        gerberx2::geometry::process::process_document(&mut geometry);
+        pcb_ir::dialects::gerber::process::process_document(&mut geometry);
     }
 
     for diagnostic in &geometry.diagnostics {
@@ -73,16 +73,16 @@ fn render(
 
     match target {
         RenderTarget::Svg => {
-            let options = gerberx2::geometry::svg::SvgOptions {
+            let options = pcb_ir::dialects::gerber::svg::SvgOptions {
                 mode: if debug_geometry {
-                    gerberx2::geometry::svg::RenderMode::Debug
+                    pcb_ir::dialects::gerber::svg::RenderMode::Debug
                 } else {
-                    gerberx2::geometry::svg::RenderMode::Final
+                    pcb_ir::dialects::gerber::svg::RenderMode::Final
                 },
                 width_px: None,
                 height_px: None,
             };
-            let svg = gerberx2::geometry::svg::render_svg_with_options(&geometry, options);
+            let svg = pcb_ir::dialects::gerber::svg::render_svg_with_options(&geometry, options);
             if let Some(output) = output {
                 std::fs::write(output, svg)
                     .with_context(|| format!("Failed to write SVG to {}", output.display()))?;
@@ -92,7 +92,8 @@ fn render(
             }
         }
         RenderTarget::Png => {
-            let png = gerberx2::geometry::raster::render_png(&geometry)?;
+            let png = pcb_ir::dialects::gerber::raster::render_png(&geometry)
+                .map_err(gerberx2::GerberError::Render)?;
             if let Some(output) = output {
                 std::fs::write(output, png)
                     .with_context(|| format!("Failed to write PNG to {}", output.display()))?;
@@ -104,7 +105,8 @@ fn render(
                     .context("Failed to write PNG to stdout")?;
             }
         }
-        RenderTarget::Terminal => gerberx2::geometry::terminal::render_to_terminal(&geometry)?,
+        RenderTarget::Terminal => pcb_ir::dialects::gerber::terminal::render_to_terminal(&geometry)
+            .map_err(gerberx2::GerberError::Render)?,
     }
 
     Ok(())
@@ -115,7 +117,7 @@ fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderT
         RenderFormat::Auto => {
             if let Some(output) = output {
                 infer_format_from_output(output)
-            } else if gerberx2::geometry::terminal::can_render_to_terminal() {
+            } else if pcb_ir::dialects::gerber::terminal::can_render_to_terminal() {
                 Ok(RenderTarget::Terminal)
             } else {
                 bail!(
