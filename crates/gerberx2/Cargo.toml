@@ -11,9 +11,5 @@ keywords = ["pcb", "gerber", "x2", "parser", "eda"]
 categories = ["parsing", "hardware-support"]
 
 [dependencies]
-base64 = { workspace = true }
-i_overlay = { workspace = true }
-kurbo = { workspace = true }
-resvg = { workspace = true }
-terminal_size = { workspace = true }
+pcb-ir = { workspace = true }
 thiserror = { workspace = true }

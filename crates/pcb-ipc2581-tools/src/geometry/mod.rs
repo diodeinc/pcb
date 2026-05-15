@@ -1,10 +1,5 @@
 pub mod dxf;
 mod extract;
-pub mod ir;
-pub mod process;
-pub mod raster;
-pub mod svg;
-pub mod terminal;
 
 use anyhow::{Context, Result};
 use ipc2581::Ipc2581;

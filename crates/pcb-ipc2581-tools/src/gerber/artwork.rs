@@ -1,4 +1,4 @@
-use crate::geometry::ir::Point;
+use pcb_ir::common::Point;
 
 #[derive(Debug, Clone)]
 pub struct ArtworkLayer {

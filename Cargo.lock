@@ -2450,11 +2450,7 @@ dependencies = [
 name = "gerberx2"
 version = "0.1.0"
 dependencies = [
- "base64",
- "i_overlay",
- "kurbo",
- "resvg",
- "terminal_size",
+ "pcb-ir",
  "thiserror 2.0.18",
 ]
 
@@ -4444,6 +4440,7 @@ dependencies = [
  "pcb-eda",
  "pcb-fmt",
  "pcb-ipc2581-tools",
+ "pcb-ir",
  "pcb-kicad",
  "pcb-layout",
  "pcb-sch",
@@ -4612,27 +4609,34 @@ name = "pcb-ipc2581-tools"
 version = "0.3.81"
 dependencies = [
  "anyhow",
- "base64",
  "chrono",
  "clap",
  "colored",
  "comfy-table",
  "gerberx2",
- "i_overlay",
  "ipc2581",
  "jiff",
- "kurbo",
  "log",
  "minijinja",
  "pcb-diode-api",
+ "pcb-ir",
  "pcb-sch",
  "pcb-ui",
  "quick-xml",
- "resvg",
  "serde",
  "serde_json",
- "terminal_size",
  "zstd",
+]
+
+[[package]]
+name = "pcb-ir"
+version = "0.3.81"
+dependencies = [
+ "base64",
+ "i_overlay",
+ "kurbo",
+ "resvg",
+ "terminal_size",
 ]
 
 [[package]]

@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 
-use super::ir::*;
 use crate::GerberX2;
 use crate::types as gerber;
+use pcb_ir::common::*;
+use pcb_ir::dialects::gerber::*;
 
 const SWEEP_SAMPLE_MM: f64 = 0.025;
 
-pub fn extract_document(gerber: &GerberX2) -> GeometryDocument {
-    let mut doc = GeometryDocument::new(file_function(gerber));
+pub fn extract_document(gerber: &GerberX2) -> GeometryDocument<gerber::Attribute> {
+    let mut doc = GeometryDocument::<gerber::Attribute>::new(file_function(gerber));
     let apertures = gerber
         .aperture_definitions()
         .iter()
@@ -120,7 +121,7 @@ pub fn extract_document(gerber: &GerberX2) -> GeometryDocument {
         }
     }
 
-    super::process::normalize_bounds(&mut doc);
+    pcb_ir::dialects::gerber::process::normalize_bounds(&mut doc);
     doc
 }
 
@@ -150,7 +151,7 @@ fn feature_from_object(
     object_index: usize,
     kind: FeatureKind,
     bucket: FeatureBucket,
-) -> GeometryFeature {
+) -> GeometryFeature<gerber::Attribute> {
     let mut feature = GeometryFeature::new(kind, bucket, object.polarity);
     feature.object_index = object_index as u32;
     feature.aperture_attributes = object.aperture_attributes.clone();
@@ -162,7 +163,7 @@ fn feature_from_object(
 }
 
 fn classify_bucket(object: &gerber::GraphicalObject, kind: FeatureKind) -> FeatureBucket {
-    if object.polarity == gerber::Polarity::Clear {
+    if object.polarity == Polarity::Clear {
         return FeatureBucket::Cutout;
     }
     match kind {

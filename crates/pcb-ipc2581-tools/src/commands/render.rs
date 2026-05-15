@@ -22,15 +22,20 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let mut geometry = geometry::extract_layer(&ipc, &options.layer)?;
-    geometry::process::process_document(&mut geometry);
+    pcb_ir::dialects::ipc::process::process_document(&mut geometry);
     if options.flat {
-        geometry::process::flatten_layers_to_masks(&mut geometry);
+        pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut geometry);
     }
 
     match target {
         RenderTarget::Svg => render_svg(&geometry, options)?,
         RenderTarget::Png => render_png(&geometry, options)?,
-        RenderTarget::Terminal => geometry::terminal::render_layer_to_terminal(&geometry, 0)?,
+        RenderTarget::Terminal => pcb_ir::dialects::ipc::terminal::render_layer_to_terminal(
+            &geometry,
+            0,
+            flat_layer_style,
+        )
+        .map_err(anyhow::Error::msg)?,
     }
 
     for diagnostic in &geometry.diagnostics {
@@ -51,7 +56,7 @@ fn resolve_target(options: &RenderOptions) -> Result<RenderTarget> {
         RenderFormat::Auto => {
             if let Some(output) = &options.output {
                 infer_format_from_output(output)
-            } else if geometry::terminal::can_render_to_terminal() {
+            } else if pcb_ir::dialects::ipc::terminal::can_render_to_terminal() {
                 Ok(RenderTarget::Terminal)
             } else {
                 bail!(
@@ -80,8 +85,15 @@ fn infer_format_from_output(output: &Path) -> Result<RenderTarget> {
     }
 }
 
-fn render_svg(geometry: &geometry::ir::GeometryDocument, options: &RenderOptions) -> Result<()> {
-    let svg = geometry::svg::render_layer_svg(geometry, 0);
+fn render_svg(
+    geometry: &pcb_ir::dialects::ipc::GeometryDocument<
+        ipc2581::Symbol,
+        ipc2581::types::LayerFunction,
+    >,
+    options: &RenderOptions,
+) -> Result<()> {
+    let svg =
+        pcb_ir::dialects::ipc::svg::render_layer_svg_with_style(geometry, 0, flat_layer_style);
 
     if let Some(output) = &options.output {
         std::fs::write(output, svg)
@@ -98,8 +110,15 @@ fn render_svg(geometry: &geometry::ir::GeometryDocument, options: &RenderOptions
     Ok(())
 }
 
-fn render_png(geometry: &geometry::ir::GeometryDocument, options: &RenderOptions) -> Result<()> {
-    let png = geometry::raster::render_layer_png(geometry, 0)?;
+fn render_png(
+    geometry: &pcb_ir::dialects::ipc::GeometryDocument<
+        ipc2581::Symbol,
+        ipc2581::types::LayerFunction,
+    >,
+    options: &RenderOptions,
+) -> Result<()> {
+    let png = pcb_ir::dialects::ipc::raster::render_layer_png(geometry, 0, flat_layer_style)
+        .map_err(anyhow::Error::msg)?;
 
     if let Some(output) = &options.output {
         std::fs::write(output, png)
@@ -117,4 +136,22 @@ fn render_png(geometry: &geometry::ir::GeometryDocument, options: &RenderOptions
     }
 
     Ok(())
+}
+
+fn flat_layer_style(function: &ipc2581::types::LayerFunction) -> (&'static str, f64) {
+    use ipc2581::types::LayerFunction;
+
+    match function {
+        LayerFunction::Conductor
+        | LayerFunction::CondFilm
+        | LayerFunction::CondFoil
+        | LayerFunction::Plane
+        | LayerFunction::Signal
+        | LayerFunction::Mixed => ("#d87822", 0.9),
+        LayerFunction::Solderpaste | LayerFunction::Pastemask => ("#aeb4bb", 0.9),
+        LayerFunction::Soldermask => ("#159447", 0.55),
+        LayerFunction::Silkscreen | LayerFunction::Legend => ("#f8f9fa", 0.95),
+        LayerFunction::Rout | LayerFunction::BoardOutline => ("#606060", 1.0),
+        _ => ("#5c7cfa", 0.85),
+    }
 }

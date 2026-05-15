@@ -5,11 +5,12 @@ use gerberx2::{
     AttributeValue, Contour, ContourSegment, GerberLayer, ObjectKind, Point as GerberPoint,
     WriterAperture, WriterApertureTemplate, WriterObject,
 };
+use pcb_ir::dialects::gerber::Polarity;
 
 use super::artwork::{
     ArtworkContour, ArtworkLayer, ArtworkObject, ArtworkSegment, ObjectAttributes,
 };
-use crate::geometry::ir::Point;
+use pcb_ir::common::Point;
 
 pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
     let mut apertures = ApertureTable::default();
@@ -24,7 +25,7 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
                 kind: ObjectKind::Region {
                     contours: lower_region_contours(contours)?,
                 },
-                polarity: gerberx2::Polarity::Dark,
+                polarity: Polarity::Dark,
                 attributes: lower_object_attributes(attributes),
             }),
             ArtworkObject::Stroke {
@@ -59,7 +60,7 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
                                     aperture,
                                 },
                             },
-                            polarity: gerberx2::Polarity::Dark,
+                            polarity: Polarity::Dark,
                             attributes: lower_object_attributes(attributes),
                         });
                     }

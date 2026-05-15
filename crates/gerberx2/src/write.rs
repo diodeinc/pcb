@@ -1,5 +1,6 @@
 use crate::types::*;
 use crate::{GerberError, Result};
+use pcb_ir::dialects::gerber::Polarity;
 
 /// String-backed X2 attribute used by the Gerber writer.
 ///

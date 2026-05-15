@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
-use super::ir::*;
+use crate::common::*;
+use crate::dialects::gerber::*;
 
 const VIEWBOX_PADDING_MM: f64 = 1.0;
 
@@ -27,11 +28,11 @@ impl Default for SvgOptions {
     }
 }
 
-pub fn render_svg(doc: &GeometryDocument) -> String {
+pub fn render_svg<A>(doc: &GeometryDocument<A>) -> String {
     render_svg_with_options(doc, SvgOptions::default())
 }
 
-pub fn render_svg_sized(doc: &GeometryDocument, width_px: u32, height_px: u32) -> String {
+pub fn render_svg_sized<A>(doc: &GeometryDocument<A>, width_px: u32, height_px: u32) -> String {
     render_svg_with_options(
         doc,
         SvgOptions {
@@ -42,7 +43,7 @@ pub fn render_svg_sized(doc: &GeometryDocument, width_px: u32, height_px: u32) -
     )
 }
 
-pub fn render_svg_with_options(doc: &GeometryDocument, options: SvgOptions) -> String {
+pub fn render_svg_with_options<A>(doc: &GeometryDocument<A>, options: SvgOptions) -> String {
     let bbox = render_bbox(doc);
     let viewbox_y = -bbox.max.y;
     let mut svg = String::new();
@@ -81,7 +82,7 @@ pub fn render_svg_with_options(doc: &GeometryDocument, options: SvgOptions) -> S
     svg
 }
 
-pub fn render_bbox(doc: &GeometryDocument) -> BBox {
+pub fn render_bbox<A>(doc: &GeometryDocument<A>) -> BBox {
     if doc.bbox.is_empty() {
         BBox {
             min: Point::new(0.0, 0.0),
@@ -105,10 +106,10 @@ fn bucket_order(mode: RenderMode) -> &'static [FeatureBucket] {
     }
 }
 
-fn write_path(
+fn write_path<A>(
     svg: &mut String,
-    doc: &GeometryDocument,
-    feature: &GeometryFeature,
+    doc: &GeometryDocument<A>,
+    feature: &GeometryFeature<A>,
     path: &GeometryPath,
     mode: RenderMode,
 ) {
@@ -151,14 +152,14 @@ fn write_path(
     }
 }
 
-fn is_profile_layer(doc: &GeometryDocument) -> bool {
+fn is_profile_layer<A>(doc: &GeometryDocument<A>) -> bool {
     matches!(
         doc.file_function.first().map(String::as_str),
         Some("Profile")
     )
 }
 
-fn path_data(doc: &GeometryDocument, path: &GeometryPath) -> String {
+fn path_data<A>(doc: &GeometryDocument<A>, path: &GeometryPath) -> String {
     let mut data = String::new();
     for contour in &doc.contours
         [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
@@ -227,7 +228,11 @@ struct Style {
     opacity: f64,
 }
 
-fn style_for(doc: &GeometryDocument, feature: &GeometryFeature, mode: RenderMode) -> Style {
+fn style_for<A>(
+    doc: &GeometryDocument<A>,
+    feature: &GeometryFeature<A>,
+    mode: RenderMode,
+) -> Style {
     if mode == RenderMode::Debug {
         return match feature.bucket {
             FeatureBucket::Pad => Style {
@@ -280,7 +285,7 @@ fn style_for(doc: &GeometryDocument, feature: &GeometryFeature, mode: RenderMode
     }
 }
 
-fn layer_title(doc: &GeometryDocument) -> String {
+fn layer_title<A>(doc: &GeometryDocument<A>) -> String {
     if doc.file_function.is_empty() {
         "Gerber X2 layer".to_string()
     } else {

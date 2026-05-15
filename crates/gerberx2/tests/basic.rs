@@ -1,8 +1,9 @@
 use gerberx2::{
     ApertureTemplate, AttributeValue, Command, Contour, ContourSegment, GerberLayer, GerberX2,
-    ObjectKind, PathCommand, Point, Polarity, Unit, WriterAperture, WriterApertureMacro,
+    ObjectKind, PathCommand, Point, Unit, WriterAperture, WriterApertureMacro,
     WriterApertureTemplate, WriterMacroExpression, WriterMacroPrimitive, WriterObject,
 };
+use pcb_ir::dialects::gerber::Polarity;
 
 #[test]
 fn parses_basic_x2_layer() {
@@ -420,9 +421,9 @@ fn extracts_and_processes_render_geometry() {
     assert_eq!(geometry.features.len(), 2);
     assert!(geometry.paths.iter().any(|path| path.flags.stroked));
 
-    gerberx2::geometry::process::process_document(&mut geometry);
+    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
     assert!(geometry.features.iter().any(|feature| {
-        feature.kind == gerberx2::geometry::ir::FeatureKind::Composite && feature.path_count == 1
+        feature.kind == pcb_ir::dialects::gerber::FeatureKind::Composite && feature.path_count == 1
     }));
     assert!(!geometry.bbox.is_empty());
 }
@@ -435,11 +436,11 @@ fn process_applies_clear_polarity_cutouts() {
     .unwrap();
 
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    gerberx2::geometry::process::process_document(&mut geometry);
+    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
     let composite = geometry
         .features
         .iter()
-        .find(|feature| feature.kind == gerberx2::geometry::ir::FeatureKind::Composite)
+        .find(|feature| feature.kind == pcb_ir::dialects::gerber::FeatureKind::Composite)
         .unwrap();
     let path = &geometry.paths[composite.path_start as usize];
     assert!(path.contour_count >= 2);
@@ -453,8 +454,8 @@ fn process_preserves_ordered_aperture_path_polarity() {
     .unwrap();
 
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    gerberx2::geometry::process::process_document(&mut geometry);
-    let summary = gerberx2::geometry::compare::summarize(&geometry);
+    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
 
     assert!(
         close(summary.area_mm2, 13.0),
@@ -490,7 +491,7 @@ fn extraction_flips_mirrored_aperture_arc_direction() {
     let arc = geometry
         .path_cmds
         .iter()
-        .find(|cmd| cmd.op == gerberx2::geometry::ir::PathOp::ArcTo)
+        .find(|cmd| cmd.op == pcb_ir::dialects::gerber::PathOp::ArcTo)
         .unwrap();
     assert!(arc.clockwise);
 }
@@ -515,12 +516,13 @@ fn renders_svg_and_png_from_processed_geometry() {
     .unwrap();
 
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    gerberx2::geometry::process::process_document(&mut geometry);
-    let svg = gerberx2::geometry::svg::render_svg(&geometry);
+    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
     assert!(svg.contains("<svg"));
     assert!(svg.contains("<path"));
     assert!(svg.contains("Paste, Top"));
-    let png = gerberx2::geometry::raster::render_png_with_max_dimension(&geometry, 64).unwrap();
+    let png =
+        pcb_ir::dialects::gerber::raster::render_png_with_max_dimension(&geometry, 64).unwrap();
     assert!(png.starts_with(b"\x89PNG"));
 }
 
@@ -532,8 +534,8 @@ fn renders_profile_gerber_as_black_board_outline() {
     .unwrap();
 
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    gerberx2::geometry::process::process_document(&mut geometry);
-    let svg = gerberx2::geometry::svg::render_svg(&geometry);
+    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
 
     assert!(svg.contains("fill='none' stroke='#000000'"));
     assert!(svg.contains("data-board-outline='true'"));

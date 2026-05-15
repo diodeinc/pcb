@@ -1,4 +1,5 @@
 use crate::Symbol;
+use pcb_ir::dialects::gerber::{Mirroring, Polarity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unit {
@@ -123,20 +124,6 @@ pub enum PlotMode {
     Linear,
     ClockwiseArc,
     CounterclockwiseArc,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Polarity {
-    Dark,
-    Clear,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mirroring {
-    None,
-    X,
-    Y,
-    XY,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
