@@ -248,7 +248,7 @@ fn artwork_from_processed_layer(
                 });
             } else {
                 bail!(
-                    "IPC geometry path is neither filled nor stroked on layer '{}'",
+                    "processed IPC geometry path is neither filled nor stroked on layer '{}'",
                     layer.name
                 );
             }
@@ -281,7 +281,7 @@ fn profile_artwork_from_outlines(
                     attributes: ObjectAttributes::default(),
                 });
             } else {
-                bail!("IPC board outline path is neither filled nor stroked");
+                bail!("processed IPC board outline path is neither filled nor stroked");
             }
         }
     }

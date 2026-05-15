@@ -26,6 +26,7 @@ where
     L: Clone,
 {
     normalize_bounds(doc);
+    prune_unpainted_paths(doc);
     compose_feature_paths(doc);
     outline_stroked_paths(doc);
     union_feature_filled_paths(doc);
@@ -34,6 +35,53 @@ where
     resolve_negative_polarity(doc);
     subtract_layer_cutouts(doc);
     normalize_bounds(doc);
+}
+
+pub fn prune_unpainted_paths<S, L>(doc: &mut GeometryDocument<S, L>) {
+    for feature_index in 0..doc.features.len() {
+        let feature = &doc.features[feature_index];
+        let path_start = feature.path_start;
+        let path_count = feature.path_count;
+        let (path_start, path_count) = prune_unpainted_path_range(doc, path_start, path_count);
+        let feature = &mut doc.features[feature_index];
+        feature.path_start = path_start;
+        feature.path_count = path_count;
+    }
+
+    for outline_index in 0..doc.board_outlines.len() {
+        let outline = &doc.board_outlines[outline_index];
+        let path_start = outline.path_start;
+        let path_count = outline.path_count;
+        let (path_start, path_count) = prune_unpainted_path_range(doc, path_start, path_count);
+        let outline = &mut doc.board_outlines[outline_index];
+        outline.path_start = path_start;
+        outline.path_count = path_count;
+    }
+}
+
+fn prune_unpainted_path_range<S, L>(
+    doc: &mut GeometryDocument<S, L>,
+    path_start: u32,
+    path_count: u32,
+) -> (u32, u32) {
+    let paths = &doc.paths[path_start as usize..(path_start + path_count) as usize];
+    if paths
+        .iter()
+        .all(|path| path.flags.filled || path.flags.stroked)
+    {
+        return (path_start, path_count);
+    }
+
+    let painted_paths = paths
+        .iter()
+        .filter(|path| path.flags.filled || path.flags.stroked)
+        .cloned()
+        .collect::<Vec<_>>();
+    let new_path_start = doc.paths.len() as u32;
+    for path in painted_paths {
+        copy_path(doc, &path);
+    }
+    (new_path_start, doc.paths.len() as u32 - new_path_start)
 }
 
 pub fn flatten_layers_to_masks<S, L>(doc: &mut GeometryDocument<S, L>)
@@ -891,6 +939,70 @@ mod tests {
         assert!(!path.flags.stroked);
         assert_eq!(path.bbox.min, Point::new(-1.0, -1.0));
         assert_eq!(path.bbox.max, Point::new(11.0, 1.0));
+    }
+
+    #[test]
+    fn process_prunes_unpainted_feature_and_outline_paths() {
+        let mut doc = TestDoc::new("test".to_string());
+        doc.layers.push(GeometryLayer {
+            name: "TOP".to_string(),
+            source_layer_ref: 0,
+            layer_function: (),
+            feature_start: 0,
+            feature_count: 1,
+            bbox: BBox::empty(),
+        });
+
+        let painted_feature_path = doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 1.0, 1.0),
+        );
+        let mut unpainted = GeometryPath::filled(FillRule::NonZero, BBox::empty());
+        unpainted.flags.filled = false;
+        let _unpainted_feature_path = doc.push_path(unpainted, rect_cmds(2.0, 2.0, 3.0, 3.0));
+        doc.features.push(GeometryFeature {
+            path_start: painted_feature_path,
+            path_count: 2,
+            ..GeometryFeature::new(
+                FeatureKind::Padstack,
+                FeatureBucket::Smd,
+                GeometryPolarity::Positive,
+            )
+        });
+
+        let painted_outline_path = doc.push_path(
+            GeometryPath::stroked(0.1, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+            ],
+        );
+        let mut unpainted = GeometryPath::stroked(0.1, LineCap::Round, BBox::empty());
+        unpainted.flags.stroked = false;
+        let _unpainted_outline_path = doc.push_path(
+            unpainted,
+            [
+                PathCmd::move_to(Point::new(1.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+            ],
+        );
+        doc.board_outlines.push(BoardOutline {
+            path_start: painted_outline_path,
+            path_count: 2,
+            bbox: BBox::empty(),
+        });
+
+        process_document(&mut doc);
+
+        let feature_paths = &doc.paths[doc.features[0].path_start as usize
+            ..(doc.features[0].path_start + doc.features[0].path_count) as usize];
+        assert_eq!(feature_paths.len(), 1);
+        assert!(feature_paths[0].flags.filled);
+
+        let outline_paths = &doc.paths[doc.board_outlines[0].path_start as usize
+            ..(doc.board_outlines[0].path_start + doc.board_outlines[0].path_count) as usize];
+        assert_eq!(outline_paths.len(), 1);
+        assert!(outline_paths[0].flags.stroked);
     }
 
     #[test]
