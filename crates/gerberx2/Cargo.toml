@@ -1,0 +1,19 @@
+[package]
+name = "gerberx2"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Fast Gerber X2 parser, typed data model, and writer scaffolding for PCB fabrication layers"
+license = "MIT OR Apache-2.0"
+keywords = ["pcb", "gerber", "x2", "parser", "eda"]
+categories = ["parsing", "hardware-support"]
+
+[dependencies]
+base64 = { workspace = true }
+i_overlay = { workspace = true }
+kurbo = { workspace = true }
+resvg = { workspace = true }
+terminal_size = { workspace = true }
+thiserror = { workspace = true }

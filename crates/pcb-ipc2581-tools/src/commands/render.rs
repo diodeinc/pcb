@@ -13,6 +13,7 @@ pub struct RenderOptions {
     pub layer: String,
     pub output: Option<PathBuf>,
     pub format: RenderFormat,
+    pub flat: bool,
 }
 
 /// Render processed geometry for one IPC-2581 layer.
@@ -22,6 +23,9 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let mut geometry = geometry::extract_layer(&ipc, &options.layer)?;
     geometry::process::process_document(&mut geometry);
+    if options.flat {
+        geometry::process::flatten_layers_to_masks(&mut geometry);
+    }
 
     match target {
         RenderTarget::Svg => render_svg(&geometry, options)?,

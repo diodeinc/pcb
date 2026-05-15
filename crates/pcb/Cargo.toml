@@ -49,6 +49,7 @@ open = { workspace = true }
 inquire = { workspace = true }
 pcb-ui = { workspace = true }
 pcb-fmt = { workspace = true }
+gerberx2 = { workspace = true }
 similar = { workspace = true }
 pathdiff = { workspace = true }
 petgraph = { workspace = true }

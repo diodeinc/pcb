@@ -15,6 +15,7 @@ colored = { workspace = true }
 comfy-table = { workspace = true }
 i_overlay = { workspace = true }
 ipc2581 = { workspace = true }
+gerberx2 = { workspace = true }
 jiff = { workspace = true }
 kurbo = { workspace = true }
 log = { workspace = true }

@@ -13,9 +13,17 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Added IPC-2581C XSD validation APIs to the `ipc2581` crate.
 - Added `pcb ipc2581 render` for processed IPC-2581 layer output to SVG, PNG, and terminal graphics, including board outline overlays.
 - Added `pcb ipc2581 outline` to export the IPC-2581 board profile as a KiCad-importable DXF.
+- Added initial `gerberx2` crate and `pcb gerber render` SVG/PNG/terminal previews.
+- Added Gerber X2 writer scaffolding over an artwork/object IR with file, aperture, and object attributes.
+- Added native aperture macro and block aperture emission to the Gerber X2 writer.
+- Added Gerber geometry comparison helpers for IPC-2581-to-Gerber smoke tests.
+- Added `pcb ipc2581 render --flat` to render a layer as a single Gerber-style mask.
+- Added `pcb ipc2581 gerber` to export IPC-2581 fabrication layers as Gerber X2 files through a canonical artwork pipeline.
 
 ### Changed
 
+- `pcb gerber render` now draws Profile layers as black board outlines instead of grey filled geometry.
+- `pcb ipc2581 render --flat` now uses Gerber-style colors for copper, paste, mask, legend, profile, and unknown layers.
 - `pcb new board <name> <repo-url>` now creates a board repository directly, replacing the separate `pcb new workspace` flow.
 - `pcb import` now writes directly into a board repository root instead of creating `boards/<name>/` under a workspace.
 - Board release uploads now derive the Diode workspace name from the first path segment of `[workspace].repository`, with `[workspace].name` available as an override.

@@ -1,7 +1,9 @@
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
-use pcb_ipc2581_tools::{OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, utils};
+use pcb_ipc2581_tools::{
+    OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, gerber, utils,
+};
 
 #[derive(Args)]
 pub struct Ipc2581Args {
@@ -83,6 +85,18 @@ enum Commands {
         /// Render format. Auto infers SVG/PNG from the output extension or uses terminal graphics.
         #[arg(short, long, default_value = "auto")]
         format: RenderFormat,
+        /// Flatten the layer into a single Gerber-style mask before rendering.
+        #[arg(long)]
+        flat: bool,
+    },
+    /// Export IPC-2581 fabrication layers as Gerber X2 files
+    Gerber {
+        /// IPC-2581 XML file to export from
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Output directory for generated Gerber files
+        #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
+        output: PathBuf,
     },
 }
 
@@ -152,13 +166,24 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             layer,
             output,
             format,
+            flat,
         } => commands::render::execute(
             &file,
             &commands::render::RenderOptions {
                 layer,
                 output,
                 format,
+                flat,
             },
         ),
+        Commands::Gerber { file, output } => {
+            let set = gerber::execute_file(&file, &output)?;
+            println!(
+                "✓ IPC-2581 exported {} Gerber X2 file(s) to {}",
+                set.files.len(),
+                output.display()
+            );
+            Ok(())
+        }
     }
 }

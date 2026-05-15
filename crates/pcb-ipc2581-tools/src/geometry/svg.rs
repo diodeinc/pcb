@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
 use super::ir::*;
+use ipc2581::types::LayerFunction;
 
 const VIEWBOX_PADDING_MM: f64 = 1.0;
 
@@ -75,17 +76,21 @@ fn render_layer_svg_with_size(
     )
     .unwrap();
 
-    for feature in &doc.features
-        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
-    {
-        write_feature_paths(&mut svg, doc, feature, false);
-    }
-
-    for feature in &doc.features
-        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
-    {
-        write_feature_paths(&mut svg, doc, feature, true);
-    }
+    write_feature_paths_by_bucket(&mut svg, doc, layer, &[FeatureBucket::Fill]);
+    write_feature_paths_by_bucket(&mut svg, doc, layer, &[FeatureBucket::Trace]);
+    write_feature_paths_by_bucket(&mut svg, doc, layer, &[FeatureBucket::Smd]);
+    write_feature_paths_by_bucket(&mut svg, doc, layer, &[FeatureBucket::Thermal]);
+    write_feature_paths_by_bucket(
+        &mut svg,
+        doc,
+        layer,
+        &[
+            FeatureBucket::Pth,
+            FeatureBucket::Via,
+            FeatureBucket::Cutout,
+            FeatureBucket::Antipad,
+        ],
+    );
 
     write_board_outlines(&mut svg, doc);
 
@@ -111,32 +116,36 @@ fn write_board_outlines(svg: &mut String, doc: &GeometryDocument) {
     }
 }
 
-fn write_feature_paths(
+fn write_feature_paths_by_bucket(
     svg: &mut String,
     doc: &GeometryDocument,
-    feature: &GeometryFeature,
-    cutouts: bool,
+    layer: &GeometryLayer,
+    buckets: &[FeatureBucket],
 ) {
-    if (feature.bucket == FeatureBucket::Cutout) != cutouts {
-        return;
-    }
-
-    for path in
-        &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+    for feature in &doc.features
+        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
     {
-        write_path(svg, doc, feature, path);
+        if !buckets.contains(&feature.bucket) {
+            continue;
+        }
+
+        for path in &doc.paths
+            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+        {
+            write_path(svg, doc, layer, feature, path);
+        }
     }
 }
 
 fn write_path(
     svg: &mut String,
     doc: &GeometryDocument,
+    layer: &GeometryLayer,
     feature: &GeometryFeature,
     path: &GeometryPath,
 ) {
     let d = path_data(doc, path);
-    let color = color_for_bucket(feature.bucket, feature.polarity);
-    let opacity = opacity_for_bucket(feature.bucket, feature.polarity);
+    let style = style_for_feature(layer, feature);
     let fill_rule = match path.fill_rule {
         FillRule::NonZero => "nonzero",
         FillRule::EvenOdd => "evenodd",
@@ -147,8 +156,8 @@ fn write_path(
             svg,
             "    <path d='{}' fill='none' stroke='{}' stroke-opacity='{}' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='round'/>",
             d,
-            color,
-            fmt_num(opacity),
+            style.color,
+            fmt_num(style.opacity),
             fmt_num(path.stroke_width),
             line_cap(path.line_cap)
         )
@@ -158,8 +167,8 @@ fn write_path(
             svg,
             "    <path d='{}' fill='{}' fill-opacity='{}' fill-rule='{}'/>",
             d,
-            color,
-            fmt_num(opacity),
+            style.color,
+            fmt_num(style.opacity),
             fill_rule
         )
         .unwrap();
@@ -248,6 +257,58 @@ fn path_data(doc: &GeometryDocument, path: &GeometryPath) -> String {
     data
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Style {
+    color: &'static str,
+    opacity: f64,
+}
+
+fn style_for_feature(layer: &GeometryLayer, feature: &GeometryFeature) -> Style {
+    if feature.kind == FeatureKind::FlattenedBucket
+        && feature.polarity == GeometryPolarity::Positive
+    {
+        return flat_layer_style(layer);
+    }
+    Style {
+        color: color_for_bucket(feature.bucket, feature.polarity),
+        opacity: opacity_for_bucket(feature.bucket, feature.polarity),
+    }
+}
+
+fn flat_layer_style(layer: &GeometryLayer) -> Style {
+    match layer.layer_function {
+        LayerFunction::Conductor
+        | LayerFunction::CondFilm
+        | LayerFunction::CondFoil
+        | LayerFunction::Plane
+        | LayerFunction::Signal
+        | LayerFunction::Mixed => Style {
+            color: "#d87822",
+            opacity: 0.9,
+        },
+        LayerFunction::Solderpaste | LayerFunction::Pastemask => Style {
+            color: "#aeb4bb",
+            opacity: 0.9,
+        },
+        LayerFunction::Soldermask => Style {
+            color: "#159447",
+            opacity: 0.55,
+        },
+        LayerFunction::Silkscreen | LayerFunction::Legend => Style {
+            color: "#f8f9fa",
+            opacity: 0.95,
+        },
+        LayerFunction::Rout | LayerFunction::BoardOutline => Style {
+            color: "#606060",
+            opacity: 1.0,
+        },
+        _ => Style {
+            color: "#5c7cfa",
+            opacity: 0.85,
+        },
+    }
+}
+
 fn color_for_bucket(bucket: FeatureBucket, polarity: GeometryPolarity) -> &'static str {
     if polarity == GeometryPolarity::Negative {
         return "#111827";
@@ -271,11 +332,11 @@ fn opacity_for_bucket(bucket: FeatureBucket, polarity: GeometryPolarity) -> f64 
     }
 
     match bucket {
-        FeatureBucket::Fill => 0.82,
+        FeatureBucket::Fill => 0.78,
         FeatureBucket::Trace => 0.95,
         FeatureBucket::Smd | FeatureBucket::Pth => 0.95,
         FeatureBucket::Via => 0.9,
-        FeatureBucket::Cutout | FeatureBucket::Antipad => 0.85,
+        FeatureBucket::Cutout | FeatureBucket::Antipad => 1.0,
         FeatureBucket::Thermal => 0.92,
     }
 }
@@ -341,6 +402,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 1,
             bbox,
@@ -379,6 +441,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 1,
             bbox,
@@ -438,6 +501,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 1,
             bbox: outer,
@@ -498,6 +562,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 2,
             bbox,
@@ -507,6 +572,113 @@ mod tests {
 
         assert_eq!(svg.matches("<path d='").count(), 2);
         assert!(svg.find("fill='#2f9e44'").unwrap() < svg.find("fill='#64748b'").unwrap());
+    }
+
+    #[test]
+    fn renders_features_in_visual_stack_order() {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        let bbox = BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(1.0, 1.0),
+        };
+
+        for (kind, bucket) in [
+            (FeatureKind::Hole, FeatureBucket::Cutout),
+            (FeatureKind::Padstack, FeatureBucket::Smd),
+            (FeatureKind::Trace, FeatureBucket::Trace),
+            (FeatureKind::Polygon, FeatureBucket::Fill),
+        ] {
+            let path_start = doc.paths.len() as u32;
+            doc.push_path(
+                GeometryPath::filled(FillRule::NonZero, bbox),
+                [
+                    PathCmd::move_to(Point::new(0.0, 0.0)),
+                    PathCmd::line_to(Point::new(1.0, 0.0)),
+                    PathCmd::line_to(Point::new(1.0, 1.0)),
+                    PathCmd::close(),
+                ],
+            );
+            doc.features.push(GeometryFeature {
+                path_start,
+                path_count: 1,
+                bbox,
+                ..GeometryFeature::new(kind, bucket, GeometryPolarity::Positive)
+            });
+        }
+        doc.layers.push(GeometryLayer {
+            name: "F.Cu".to_string(),
+            source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
+            feature_start: 0,
+            feature_count: 4,
+            bbox,
+        });
+
+        let svg = render_layer_svg(&doc, 0);
+
+        let fill = svg.find("fill='#2f9e44'").unwrap();
+        let trace = svg.find("fill='#c2410c'").unwrap();
+        let smd = svg.find("fill='#d97706'").unwrap();
+        let cutout = svg.find("fill='#64748b'").unwrap();
+        assert!(fill < trace);
+        assert!(trace < smd);
+        assert!(smd < cutout);
+        assert!(svg.contains("fill='#2f9e44' fill-opacity='0.78'"));
+        assert!(svg.contains("fill='#64748b' fill-opacity='1'"));
+    }
+
+    #[test]
+    fn renders_flattened_masks_with_gerber_layer_colors() {
+        assert_flat_color("F.Cu", LayerFunction::Signal, "#d87822", "0.9");
+        assert_flat_color("F.Paste", LayerFunction::Solderpaste, "#aeb4bb", "0.9");
+        assert_flat_color("F.Mask", LayerFunction::Soldermask, "#159447", "0.55");
+        assert_flat_color("F.SilkS", LayerFunction::Silkscreen, "#f8f9fa", "0.95");
+        assert_flat_color("LAMINATE", LayerFunction::DielCore, "#5c7cfa", "0.85");
+    }
+
+    fn assert_flat_color(
+        layer_name: &str,
+        layer_function: LayerFunction,
+        color: &str,
+        opacity: &str,
+    ) {
+        let mut interner = ipc2581::Interner::new();
+        let mut doc = GeometryDocument::new("test".to_string());
+        let bbox = BBox {
+            min: Point::new(0.0, 0.0),
+            max: Point::new(1.0, 1.0),
+        };
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, bbox),
+            [
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+                PathCmd::close(),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            bbox,
+            ..GeometryFeature::new(
+                FeatureKind::FlattenedBucket,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+        doc.layers.push(GeometryLayer {
+            name: layer_name.to_string(),
+            source_layer_ref: interner.intern(layer_name),
+            layer_function,
+            feature_start: 0,
+            feature_count: 1,
+            bbox,
+        });
+
+        let svg = render_layer_svg(&doc, 0);
+
+        assert!(svg.contains(&format!("fill='{color}' fill-opacity='{opacity}'")));
     }
 
     #[test]
@@ -520,6 +692,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 0,
             bbox,
@@ -555,6 +728,7 @@ mod tests {
         doc.layers.push(GeometryLayer {
             name: "F.Cu".to_string(),
             source_layer_ref: interner.intern("F.Cu"),
+            layer_function: ipc2581::types::LayerFunction::Signal,
             feature_start: 0,
             feature_count: 0,
             bbox: BBox::empty(),

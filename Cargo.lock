@@ -2447,6 +2447,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gerberx2"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "i_overlay",
+ "kurbo",
+ "resvg",
+ "terminal_size",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "get-size-derive2"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4412,6 +4424,7 @@ dependencies = [
  "ctrlc",
  "dirs",
  "env_logger",
+ "gerberx2",
  "glam",
  "globset",
  "gltfpack-sys",
@@ -4604,6 +4617,7 @@ dependencies = [
  "clap",
  "colored",
  "comfy-table",
+ "gerberx2",
  "i_overlay",
  "ipc2581",
  "jiff",
