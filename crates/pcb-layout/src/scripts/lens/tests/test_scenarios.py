@@ -600,43 +600,8 @@ class TestUnmanagedFootprints:
         entity_id = list(view.footprints.keys())[0]
         assert str(entity_id.path) == path_str
 
-    def test_footprint_with_missing_kiid_path_is_unmanaged(self):
-        """Footprint with empty KIID_PATH should be detected as unmanaged."""
-        from unittest.mock import Mock
-        from ..lens import extract
-
-        path_str = "Power.R1"
-
-        # Mock footprint with empty KIID_PATH (like a manual copy)
-        fp = Mock()
-        fp.GetFieldByName.return_value = Mock(GetText=lambda: path_str)
-        fp.GetPath.return_value = Mock(AsString=lambda: "")  # Empty!
-        fp.GetFPIDAsString.return_value = "Resistor_SMD:R_0603"
-        fp.GetReference.return_value = "R1"
-        fp.m_Uuid = Mock(AsString=lambda: "fake-uuid-1234")
-
-        # Mock board
-        board = Mock()
-        board.GetFootprints.return_value = [fp]
-        board.Groups.return_value = []
-
-        # Mock pcbnew
-        pcbnew = Mock()
-
-        diagnostics: list[dict[str, Any]] = []
-        view, complement = extract(board, pcbnew, None, diagnostics)
-
-        # Should NOT be extracted
-        assert len(view.footprints) == 0
-
-        # Should have warning diagnostic
-        assert len(diagnostics) == 1
-        assert diagnostics[0]["kind"] == "layout.sync.unmanaged_footprint"
-        assert diagnostics[0]["severity"] == "warning"
-        assert path_str in diagnostics[0]["body"]
-
-    def test_footprint_with_wrong_kiid_path_is_unmanaged(self):
-        """Footprint with mismatched KIID_PATH should be detected as unmanaged."""
+    def test_footprint_with_wrong_kiid_path_is_not_extracted(self):
+        """Footprint with mismatched KIID_PATH should not be extracted as managed."""
         from unittest.mock import Mock
         from ..lens import extract
 
@@ -666,66 +631,43 @@ class TestUnmanagedFootprints:
         # Should NOT be extracted
         assert len(view.footprints) == 0
 
-        # Should have warning diagnostic
-        assert len(diagnostics) == 1
-        assert diagnostics[0]["kind"] == "layout.sync.unmanaged_footprint"
+        # Normal sync prunes these during apply; extraction should not warn.
+        assert len(diagnostics) == 0
 
-    def test_multiple_footprints_with_same_path_one_managed(self):
-        """Only the footprint with correct KIID_PATH should be managed."""
-        import uuid as uuid_module
+    def test_apply_prunes_footprint_with_wrong_kiid_path(self):
+        """Normal sync should delete footprints with a Path but wrong KIID_PATH."""
         from unittest.mock import Mock
-        from ..lens import extract
+        from ..changeset import SyncChangeset
+        from ..kicad_adapter import apply_changeset
 
-        path_str = "Power.R1"
-        expected_uuid = str(uuid_module.uuid5(uuid_module.NAMESPACE_URL, path_str))
-        expected_kiid_path = f"/{expected_uuid}/{expected_uuid}"
+        path_a = "Power.R1"
+        path_b = "Power.R2"
 
-        # Mock managed footprint (correct KIID_PATH)
-        fp_managed = Mock()
-        fp_managed.GetFieldByName.return_value = Mock(GetText=lambda: path_str)
-        fp_managed.GetPath.return_value = Mock(AsString=lambda: expected_kiid_path)
-        fp_managed.GetFPIDAsString.return_value = "Resistor_SMD:R_0603"
-        fp_managed.GetReference.return_value = "R1"
-        fp_managed.GetValue.return_value = "10k"
-        fp_managed.IsDNP.return_value = False
-        fp_managed.IsExcludedFromBOM.return_value = False
-        fp_managed.IsExcludedFromPosFiles.return_value = False
-        fp_managed.GetFields.return_value = []
-        fp_managed.GetPosition.return_value = Mock(x=1000, y=2000)
-        fp_managed.GetOrientation.return_value = Mock(AsDegrees=lambda: 0.0)
-        fp_managed.GetLayer.return_value = 0
-        fp_managed.IsLocked.return_value = False
-        fp_managed.Reference.return_value = Mock(
-            GetPosition=lambda: Mock(x=1000, y=2000), IsVisible=lambda: True
-        )
-        fp_managed.Value.return_value = Mock(
-            GetPosition=lambda: Mock(x=1000, y=2000), IsVisible=lambda: False
-        )
-        fp_managed.Pads.return_value = []
+        fp_wrong = Mock()
+        fp_wrong.GetFieldByName.return_value = Mock(GetText=lambda: path_a)
+        fp_wrong.GetPath.return_value = Mock(AsString=lambda: "/wrong-uuid/wrong-uuid")
 
-        # Mock duplicate footprint (empty KIID_PATH - manual copy)
-        fp_duplicate = Mock()
-        fp_duplicate.GetFieldByName.return_value = Mock(GetText=lambda: path_str)
-        fp_duplicate.GetPath.return_value = Mock(AsString=lambda: "")  # Empty!
-        fp_duplicate.GetFPIDAsString.return_value = "Resistor_SMD:R_0603"
-        fp_duplicate.GetReference.return_value = "R1"
-        fp_duplicate.m_Uuid = Mock(AsString=lambda: "duplicate-uuid")
+        fp_empty = Mock()
+        fp_empty.GetFieldByName.return_value = Mock(GetText=lambda: path_b)
+        fp_empty.GetPath.return_value = Mock(AsString=lambda: "")
 
-        # Mock board with both footprints
         board = Mock()
-        board.GetFootprints.return_value = [fp_managed, fp_duplicate]
+        footprints = [fp_wrong, fp_empty]
+        board.GetFootprints.side_effect = lambda: list(footprints)
         board.Groups.return_value = []
 
-        # Mock pcbnew
-        pcbnew = Mock()
-        pcbnew.B_Cu = 31
+        def delete(item: Any) -> None:
+            footprints.remove(item)
 
-        diagnostics: list[dict[str, Any]] = []
-        view, complement = extract(board, pcbnew, None, diagnostics)
+        board.Delete.side_effect = delete
 
-        # Only managed footprint should be extracted
-        assert len(view.footprints) == 1
+        changeset = SyncChangeset(view=BoardView(), complement=BoardComplement())
 
-        # Duplicate should generate warning
-        assert len(diagnostics) == 1
-        assert diagnostics[0]["kind"] == "layout.sync.unmanaged_footprint"
+        oplog = apply_changeset(changeset, board, Mock(), {}, package_roots={})
+
+        assert board.GetFootprints() == []
+        assert board.Delete.call_count == 2
+        removed_paths = {
+            event.fields["path"] for event in oplog.events if event.kind == "FP_REMOVE"
+        }
+        assert removed_paths == {path_a, path_b}

@@ -301,7 +301,7 @@ def extract(
         board: KiCad board object
         pcbnew: KiCad pcbnew module
         kiid_to_path: Optional map from KIID UUID to path string (for old boards without Path field)
-        diagnostics: Optional list to append warning diagnostics for unmanaged footprints
+        diagnostics: Optional list to append warning diagnostics
 
     Returns:
         (view, complement) tuple where:
@@ -350,18 +350,6 @@ def extract(
         actual_kiid_path = fp.GetPath().AsString()
 
         if actual_kiid_path != expected_kiid_path:
-            if diagnostics is not None:
-                reference = fp.GetReference()
-                fpid = fp.GetFPIDAsString()
-                diagnostics.append(
-                    {
-                        "kind": "layout.sync.unmanaged_footprint",
-                        "severity": "warning",
-                        "body": f"Footprint {reference} ({path_str}:{fpid}) is not managed by sync",
-                        "path": path_str,
-                        "reference": reference,
-                    }
-                )
             continue
 
         entity_path = EntityPath.from_string(path_str)

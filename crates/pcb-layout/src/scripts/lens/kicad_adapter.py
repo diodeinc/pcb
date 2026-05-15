@@ -755,6 +755,18 @@ def apply_changeset(
     view = changeset.view
     layout_dir = board_path.parent if board_path else None
 
+    for fp in list(kicad_board.GetFootprints()):
+        path_field = get_footprint_field(fp, "Path")
+        path_str = path_field.GetText() if path_field else ""
+        if not path_str:
+            continue
+        expected_uuid = uuid_module.uuid5(uuid_module.NAMESPACE_URL, path_str)
+        expected = f"/{expected_uuid}/{expected_uuid}"
+        if fp.GetPath().AsString() != expected:
+            kicad_board.Delete(fp)
+            oplog.fp_remove(path_str)
+            logger.info("Removed unexpected footprint: %s", path_str)
+
     # Build initial indices - will be invalidated by structural changes
     fps_by_entity_id = _build_footprints_index(kicad_board)
     groups_by_name = _build_groups_index(kicad_board)
