@@ -1,4 +1,5 @@
 use crate::common::*;
+use crate::dialects::{geom, path as common_path};
 
 #[derive(Debug, Clone)]
 pub struct GeometryDocument<Attribute = ()> {
@@ -68,6 +69,104 @@ impl<Attribute> GeometryDocument<Attribute> {
             severity: DiagnosticSeverity::Warning,
             message: message.into(),
         });
+    }
+}
+
+pub fn lower_to_geom<Attribute: Clone>(
+    doc: &GeometryDocument<Attribute>,
+) -> geom::GeomDocument<Vec<String>, Vec<Attribute>> {
+    let mut geom = geom::GeomDocument::new(Unit::Millimeter);
+    let layer = geom.push_layer(geom::GeomLayer {
+        name: doc.file_function.join(", "),
+        role: layer_role(&doc.file_function),
+        side: layer_side(&doc.file_function),
+        object_start: 0,
+        object_count: 0,
+        bbox: doc.bbox,
+        meta: doc.file_function.clone(),
+    });
+
+    for feature in &doc.features {
+        for path in &doc.paths
+            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+        {
+            let geom_path = if path.flags.filled {
+                geom::GeomPath::filled(path.fill_rule)
+            } else if path.flags.stroked {
+                geom::GeomPath::stroked(path.stroke_width, path.line_cap, LineJoin::Round)
+            } else {
+                continue;
+            };
+            let path_id = geom.push_path(geom_path, path_payloads(doc, path));
+            geom.push_object(
+                layer,
+                geom::GeomObject {
+                    paint: paint_polarity(path.polarity),
+                    path: path_id,
+                    bbox: path.bbox,
+                    meta: feature.object_attributes.clone(),
+                },
+            );
+        }
+    }
+
+    geom.diagnostics.extend(doc.diagnostics.clone());
+    geom
+}
+
+fn path_payloads<Attribute>(
+    doc: &GeometryDocument<Attribute>,
+    path: &GeometryPath,
+) -> Vec<common_path::PathPayload> {
+    doc.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+        .iter()
+        .map(|contour| common_path::PathPayload {
+            bbox: contour.bbox,
+            cmds: doc.path_cmds
+                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+                .iter()
+                .map(path_cmd)
+                .collect(),
+        })
+        .collect()
+}
+
+fn path_cmd(cmd: &PathCmd) -> common_path::PathCmd {
+    match cmd.op {
+        PathOp::MoveTo => common_path::PathCmd::move_to(cmd.p0),
+        PathOp::LineTo => common_path::PathCmd::line_to(cmd.p0),
+        PathOp::ArcTo => common_path::PathCmd::arc_to(cmd.p0, cmd.p1, cmd.clockwise),
+        PathOp::Close => common_path::PathCmd::close(),
+    }
+}
+
+fn paint_polarity(polarity: Polarity) -> PaintPolarity {
+    match polarity {
+        Polarity::Dark => PaintPolarity::Dark,
+        Polarity::Clear => PaintPolarity::Clear,
+    }
+}
+
+fn layer_role(file_function: &[String]) -> LayerRole {
+    match file_function.first().map(String::as_str) {
+        Some("Copper") => LayerRole::Copper,
+        Some("Soldermask") => LayerRole::Soldermask,
+        Some("Paste") => LayerRole::Paste,
+        Some("Legend") => LayerRole::Legend,
+        Some("Profile") => LayerRole::Profile,
+        _ => LayerRole::Other,
+    }
+}
+
+fn layer_side(file_function: &[String]) -> Side {
+    if file_function.iter().any(|field| field == "Top") {
+        Side::Top
+    } else if file_function.iter().any(|field| field == "Bot") {
+        Side::Bottom
+    } else if file_function.iter().any(|field| field == "Inr") {
+        Side::Inner
+    } else {
+        Side::None
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::common::*;
+use crate::dialects::{geom, path as common_path};
 
 #[derive(Debug, Clone)]
 pub struct GeometryDocument<Symbol, LayerFunction> {
@@ -85,6 +86,88 @@ impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
             severity: DiagnosticSeverity::Warning,
             message: message.into(),
         });
+    }
+}
+
+pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    layer_index: usize,
+    role: LayerRole,
+    side: Side,
+) -> geom::GeomDocument<LayerFunction, Option<Symbol>> {
+    let mut geom = geom::GeomDocument::new(Unit::Millimeter);
+    let layer = &doc.layers[layer_index];
+    let geom_layer = geom.push_layer(geom::GeomLayer {
+        name: layer.name.clone(),
+        role,
+        side,
+        object_start: 0,
+        object_count: 0,
+        bbox: layer.bbox,
+        meta: layer.layer_function.clone(),
+    });
+
+    for feature in &doc.features
+        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
+    {
+        for path in &doc.paths
+            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+        {
+            let geom_path = if path.flags.filled {
+                geom::GeomPath::filled(path.fill_rule)
+            } else if path.flags.stroked {
+                geom::GeomPath::stroked(path.stroke_width, path.line_cap, LineJoin::Round)
+            } else {
+                continue;
+            };
+            let path_id = geom.push_path(geom_path, path_payloads(doc, path));
+            geom.push_object(
+                geom_layer,
+                geom::GeomObject {
+                    paint: paint_polarity(feature.polarity),
+                    path: path_id,
+                    bbox: path.bbox,
+                    meta: feature.net.clone(),
+                },
+            );
+        }
+    }
+
+    geom.diagnostics.extend(doc.diagnostics.clone());
+    geom
+}
+
+fn path_payloads<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    path: &GeometryPath,
+) -> Vec<common_path::PathPayload> {
+    doc.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+        .iter()
+        .map(|contour| common_path::PathPayload {
+            bbox: contour.bbox,
+            cmds: doc.path_cmds
+                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+                .iter()
+                .map(path_cmd)
+                .collect(),
+        })
+        .collect()
+}
+
+fn path_cmd(cmd: &PathCmd) -> common_path::PathCmd {
+    match cmd.op {
+        PathOp::MoveTo => common_path::PathCmd::move_to(cmd.p0),
+        PathOp::LineTo => common_path::PathCmd::line_to(cmd.p0),
+        PathOp::ArcTo => common_path::PathCmd::arc_to(cmd.p0, cmd.p1, cmd.clockwise),
+        PathOp::CubicTo => common_path::PathCmd::cubic_to(cmd.p0, cmd.p1, cmd.p2),
+        PathOp::Close => common_path::PathCmd::close(),
+    }
+}
+
+fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
+    match polarity {
+        GeometryPolarity::Positive => PaintPolarity::Dark,
+        GeometryPolarity::Negative => PaintPolarity::Clear,
     }
 }
 

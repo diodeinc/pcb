@@ -28,11 +28,15 @@ impl Default for SvgOptions {
     }
 }
 
-pub fn render_svg<A>(doc: &GeometryDocument<A>) -> String {
+pub fn render_svg<A: Clone>(doc: &GeometryDocument<A>) -> String {
     render_svg_with_options(doc, SvgOptions::default())
 }
 
-pub fn render_svg_sized<A>(doc: &GeometryDocument<A>, width_px: u32, height_px: u32) -> String {
+pub fn render_svg_sized<A: Clone>(
+    doc: &GeometryDocument<A>,
+    width_px: u32,
+    height_px: u32,
+) -> String {
     render_svg_with_options(
         doc,
         SvgOptions {
@@ -43,7 +47,18 @@ pub fn render_svg_sized<A>(doc: &GeometryDocument<A>, width_px: u32, height_px: 
     )
 }
 
-pub fn render_svg_with_options<A>(doc: &GeometryDocument<A>, options: SvgOptions) -> String {
+pub fn render_svg_with_options<A: Clone>(doc: &GeometryDocument<A>, options: SvgOptions) -> String {
+    if options.mode == RenderMode::Final {
+        let geom = lower_to_geom(doc);
+        let mask = crate::dialects::geom::lower_filled_to_mask(&geom);
+        return match (options.width_px, options.height_px) {
+            (Some(width), Some(height)) => {
+                crate::dialects::mask::render_svg_sized(&mask, 0, width, height)
+            }
+            _ => crate::dialects::mask::render_svg(&mask, 0),
+        };
+    }
+
     let bbox = render_bbox(doc);
     let viewbox_y = -bbox.max.y;
     let mut svg = String::new();

@@ -6,9 +6,48 @@ pub enum LineCap {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LineJoin {
+    Round,
+    Miter,
+    Bevel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FillRule {
     NonZero,
     EvenOdd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Unit {
+    Millimeter,
+    Inch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Side {
+    Top,
+    Bottom,
+    Inner,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LayerRole {
+    Copper,
+    Soldermask,
+    Paste,
+    Legend,
+    Profile,
+    Drill,
+    Mechanical,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PaintPolarity {
+    Dark,
+    Clear,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

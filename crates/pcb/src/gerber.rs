@@ -73,16 +73,16 @@ fn render(
 
     match target {
         RenderTarget::Svg => {
-            let options = pcb_ir::dialects::gerber::svg::SvgOptions {
-                mode: if debug_geometry {
-                    pcb_ir::dialects::gerber::svg::RenderMode::Debug
-                } else {
-                    pcb_ir::dialects::gerber::svg::RenderMode::Final
-                },
-                width_px: None,
-                height_px: None,
+            let svg = if debug_geometry {
+                let options = pcb_ir::dialects::gerber::svg::SvgOptions {
+                    mode: pcb_ir::dialects::gerber::svg::RenderMode::Debug,
+                    width_px: None,
+                    height_px: None,
+                };
+                pcb_ir::dialects::gerber::svg::render_svg_with_options(&geometry, options)
+            } else {
+                pcb_ir::dialects::gerber::svg::render_svg(&geometry)
             };
-            let svg = pcb_ir::dialects::gerber::svg::render_svg_with_options(&geometry, options);
             if let Some(output) = output {
                 std::fs::write(output, svg)
                     .with_context(|| format!("Failed to write SVG to {}", output.display()))?;
@@ -105,8 +105,10 @@ fn render(
                     .context("Failed to write PNG to stdout")?;
             }
         }
-        RenderTarget::Terminal => pcb_ir::dialects::gerber::terminal::render_to_terminal(&geometry)
-            .map_err(gerberx2::GerberError::Render)?,
+        RenderTarget::Terminal => {
+            pcb_ir::dialects::gerber::terminal::render_to_terminal(&geometry)
+                .map_err(gerberx2::GerberError::Render)?;
+        }
     }
 
     Ok(())
@@ -117,7 +119,7 @@ fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderT
         RenderFormat::Auto => {
             if let Some(output) = output {
                 infer_format_from_output(output)
-            } else if pcb_ir::dialects::gerber::terminal::can_render_to_terminal() {
+            } else if pcb_ir::dialects::mask::can_render_to_terminal() {
                 Ok(RenderTarget::Terminal)
             } else {
                 bail!(
