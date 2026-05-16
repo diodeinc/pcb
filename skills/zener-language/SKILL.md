@@ -1,31 +1,17 @@
 ---
 name: zener-language
-description: Canonical Zener HDL guidance. Use for any non-trivial `.zen` work or whenever syntax, `Module()`, `io()`, `config()`, imports, `pcb.toml`, stdlib APIs, package APIs, source lookup, generics, DNP patterns, or validation are uncertain.
+description: Canonical Zener HDL semantics and workflow. Use before reading or modifying `.zen` files. Covers module loading and instantiation, `io()`/`config()` API design, nets/interfaces/power domains, components and sourcing, `pcb.toml` manifests, stdlib/package discovery with `pcb doc`, physical units, generics, checks, DNP patterns, naming, and validation.
 ---
 
 # Zener Language
 
-Canonical Zener HDL semantics and authoring guidance. Start from nearby code; use `pcb doc` for package APIs and source locations before searching elsewhere.
+Canonical Zener HDL semantics and authoring guidance.
 
 ## Workflow
 
-1. Start from nearby workspace code. Prefer the local package's patterns before generic examples.
-2. Check exact semantics here before editing unfamiliar syntax, manifests, imports, stdlib APIs, package interfaces, or authoring patterns.
-3. Use `pcb doc` first for interface fields, generic parameters, stdlib/package APIs, file trees, and source roots.
-4. Read source from the path reported by `pcb doc` when behavior matters. Do not search broad filesystem roots or random cache directories to find stdlib/package source.
-5. Never invent syntax, stdlib modules, interfaces, fields, package APIs, footprints, or part names.
-6. Preserve trailing `# pcb:sch ...` comments. Only update names inside an existing comment when you rename the matching component or net.
-7. For recent Zener, stdlib, and `pcb` CLI changes, check the pcb changelog entries for the installed version and nearby previous releases: <https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md>
-
-## Using `pcb doc`
-
-`pcb doc` is the entry point for Zener package discovery. It works for `@stdlib`, local paths, installed packages, and registry/Git URL packages.
-
-- `pcb doc --package @stdlib` or `pcb doc --package <package>` prints API docs and a `<!-- source: ... -->` root; read files under that root when docs are not enough. Pin URL packages with `@<version>`, e.g. `github.com/org/repo/path@v0.2.5`.
-- Add `--list` to print the `.zen` file tree, e.g. `pcb doc --package @stdlib --list`, before opening files like `interfaces.zen`, `units.zen`, `generics/Resistor.zen`, or `bom/match_generics.zen`.
-- Warnings do not necessarily make the command useless; partial output can still reveal the source root or file tree.
-
-Use docs for signatures and public surfaces, then read source for exact behavior. For stdlib/package source lookup, `pcb doc --package ...` replaces ad hoc `find /`, `find /Users`, or broad cache searches.
+1. Use `pcb doc --package @stdlib` or `pcb doc --package <package>` to find the public API and source root (`<!-- source: ... -->`); add `--list` for the file tree. Read source from that root for exact behavior.
+2. Preserve trailing `# pcb:sch ...` comments. Only update names inside an existing comment when you rename the matching component or net.
+3. For recent Zener, stdlib, and `pcb` CLI changes, check the pcb changelog entries for the installed version and nearby previous releases: <https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md>
 
 ## Language
 
@@ -43,7 +29,6 @@ Nets and interfaces:
 - `Net(name=None, voltage=None, impedance=None)` is the base connection type.
 - `Power`, `Ground`, and `NotConnected` are specialized net types; more specialized net types live in stdlib.
 - Across `io()` boundaries: `NotConnected` can promote to any net type; specialized nets can demote to plain `Net`; plain `Net` does not auto-promote to specialized types. Use explicit casts like `Power(net, voltage=...)` or `Net(power_net)` when needed.
-- For buses and grouped signals, use stdlib interfaces from `@stdlib/interfaces.zen` (e.g. `I2c`, `Spi`, `Uart`, `Usb2`) instead of loose net bundles.
 
 Components and sourcing:
 
@@ -55,21 +40,19 @@ Components and sourcing:
 
 `io()`:
 
-- Preferred form: `NAME = io(template, ...)` where `template` is a net/interface type or instance (e.g. `Power(voltage="3.3V")`).
-- Name is inferred from the assignment target or struct field: `VDD = io(Power())` infers `"VDD"`. Use UPPERCASE names by convention.
-- `optional=True` means omitted inputs get auto-generated nets or interfaces.
+- Preferred form: `NAME = io(template, ...)` where `template` is a net/interface type or instance, e.g. `Power(voltage="3.3V")`.
+- Name is inferred from the assignment target or struct field. `optional=True` means omitted inputs get auto-generated nets or interfaces.
 
 `config()`:
 
-- Preferred form: `name = config(typ, default=..., ...)`. Name is inferred from the assignment target. Use lowercase names by convention.
-- `typ` can be primitive types, enums, records, or physical value constructors like `Voltage` or `Resistance`.
-- `allowed=` constrains accepted values to a discrete set.
-- Strings auto-convert when possible: `"10k"` can become `Resistance("10k")`; `"0603"` can become an enum value.
-- Use physical types from `@stdlib/units.zen` for physical-value configs. Use `enum()` only for discrete design choices.
+- Preferred form: `name = config(typ, default=..., ...)`; name is inferred from the assignment target.
+- `typ` can be primitive types, enums, records, or physical values such as `Voltage` or `Resistance`.
+- `allowed=` constrains accepted values to a discrete set. Strings auto-convert when possible, e.g. `"10k"` to `Resistance("10k")`.
+- For discrete physical values, prefer a physical type with `allowed=[...]` over an ad hoc enum.
+- Use physical types from `@stdlib/units.zen` for physical-value configs. Use `enum()` only for non-physical design choices.
 
 Utilities:
 
-- `Board(name, layout_path, layers=..., config=...)` defines board-level defaults. Define once near the top of a board file and usually set `name`, `layers`, and `layout_path`.
 - `Layout(name, path)` associates reusable layout metadata to a module.
 - `check(condition, message)`, `warn(message)`, and `error(message)` are the validation and diagnostic primitives.
 
@@ -77,10 +60,10 @@ Utilities:
 
 ### Power, Interfaces, And Checks
 
-- Keep power domains explicit with `Power(voltage=...)`, `Ground`, typed bus interfaces, and `@stdlib/checks.zen` helpers such as `voltage_within(...)`.
-- Every `Power` `io()` declares its voltage range in the template unless the existing local API intentionally keeps it generic.
+- Keep rails explicit with prelude `Power(voltage=...)` and `Ground`; each public `Power` `io()` declares its voltage range unless the local API intentionally keeps it generic.
+- Use `@stdlib/interfaces.zen` interfaces for buses and grouped signals that are not in the prelude.
+- Use typed values and validation primitives (`check(...)`, `warn(...)`, `error(...)`, `@stdlib/checks.zen`) for electrical constraints instead of comments when possible.
 - Connect `Power` and `Ground` ios directly to pins and passives.
-- Use `help=` when it adds integrator-visible meaning that is not already obvious from the name, type, or default. Keep it concise; prefer one-line `io()` / `config()` declarations when readable. Omit help text that merely restates those fields.
 
 ```zen
 VDD = io(Power(voltage="3.0V to 5.5V"))
@@ -122,25 +105,32 @@ voltage_out = config(Voltage, default="5V", allowed=["3.3V", "5V"])
 VOUT = io(Power(voltage=voltage_out))
 GND = io(Ground())
 
-_VFB = Voltage("0.8V")
-_R_FB_TOP_VAL = Resistance("100kohm")
+VFB_REF = Voltage("0.8V")
+R_FB_TOP_VAL = Resistance("100kohm")
 
-def _fb_bottom(vout):
+def fb_bottom(vout):
     """Datasheet Table 1: R2 = R1 × VFB / (VOUT − VFB)"""
-    return e96(_R_FB_TOP_VAL * _VFB / (vout - _VFB))
+    return e96(R_FB_TOP_VAL * VFB_REF / (vout - VFB_REF))
 
 VCC = Power()
 FB = Net()
 MSYNC = Net()
 
 # Same feedback divider instances and nets for every output voltage; only value changes.
-Resistor(name="R_FB_TOP", value=_R_FB_TOP_VAL.with_tolerance("1%"), package="0402", P1=VOUT, P2=FB)
-Resistor(name="R_FB_BOT", value=_fb_bottom(voltage_out).with_tolerance("1%"), package="0402", P1=FB, P2=GND)
+Resistor(name="R_FB_TOP", value=R_FB_TOP_VAL.with_tolerance("1%"), package="0402", P1=VOUT, P2=FB)
+Resistor(name="R_FB_BOT", value=fb_bottom(voltage_out).with_tolerance("1%"), package="0402", P1=FB, P2=GND)
 
 # Same strap options and nets for every mode; only population changes.
 Resistor(name="R_MSYNC_GND", value="0ohm", package="0402", P1=MSYNC, P2=GND, dnp=mode != Mode("PFM"))
 Resistor(name="R_MSYNC_VCC", value="0ohm", package="0402", P1=MSYNC, P2=VCC, dnp=mode != Mode("PWM"))
 ```
+
+### Style
+
+- Prefer concise one-line `io()` and `config()` declarations when readable.
+- Avoid overly verbose `help=` text. Use `help=` only when it adds integrator-visible meaning that is not already obvious from the name, type, or default.
+- Omit comments and help text that merely restate the code.
+- Do not use decorative section-divider comments such as `# ===== Config =====`, `# ----- IOs -----`, or multi-line banner blocks. They add no value.
 
 ### Naming
 
@@ -148,7 +138,6 @@ Resistor(name="R_MSYNC_VCC", value="0ohm", package="0402", P1=MSYNC, P2=VCC, dnp
 |---|---|---|
 | `io()` names | UPPERCASE | `VDD`, `GND`, `I2C` |
 | `config()` names | lowercase | `input_filter`, `output_voltage` |
-| Internal nets | `_` prefix | `_VREF`, `_XI`, `_RBIAS` |
 | Components | Uppercase functional prefix | `R_LOAD`, `C_VDD`, `U_LDO` |
 | Differential pairs | `_P` / `_N` suffixes | `IN_P`, `IN_N` |
 
@@ -167,6 +156,18 @@ Imports and dependencies:
 ## Stdlib
 
 Prelude symbols available in `.zen` files without `load()`: `Net`, `Power`, `Ground`, `NotConnected`, `Board`, `Layout`, `Part`. Local definitions can shadow them.
+
+`@stdlib/board_config.zen`:
+
+- `Board` is a prelude helper backed by `@stdlib/board_config.zen`. For standard boards, prefer the `layers=` helper instead of manually writing stackups and design rules:
+
+  ```zen
+  Board(name="MainBoard", layout_path="layout/MainBoard", layers=4)
+  ```
+
+- `layers` selects default stackup, netclasses, constraints, and predefined sizes for common 2/4/6/8/10-layer boards.
+- `outer_copper_weight`, `copper_finish`, `solder_mask_color`, `track_widths`, and `via_dimensions` customize those defaults. Extra track widths and vias are appended, deduplicated, and sorted.
+- Use explicit `BoardConfig`, `Stackup`, `DesignRules`, `NetClass`, and related records only when the standard defaults are insufficient; if both `layers` and `config` are provided, `config` is merged over the layers-derived defaults.
 
 `@stdlib/interfaces.zen`:
 
@@ -202,5 +203,5 @@ Prelude symbols available in `.zen` files without `load()`: `Net`, `Power`, `Gro
 
 `@stdlib/generics/*`:
 
-- Prefer generics for common parts: `Resistor`, `Capacitor`, `Inductor`, `FerriteBead`, `Led`, `Rectifier`, `Zener`, `Tvs`, `Crystal`, `Thermistor`, `TestPoint`, `PinHeader`, `TerminalBlock`, `NetTie`, `SolderJumper`, `MountingHole`, `Standoff`, `Fiducial`, `Version`.
+- Prefer generics for common parts: `Resistor`, `Capacitor`, `Inductor`, `FerriteBead`, `Led`, `Rectifier`, `Zener`, `Tvs`, `Crystal`, `TestPoint`, `PinHeader`, `NetTie`, `SolderJumper`, `MountingHole`, `Fiducial`, `Version`.
 - `Diode` is deprecated; use `Rectifier` (standard/Schottky), `Zener` (breakdown/reference), or `Tvs` (transient suppressor).
