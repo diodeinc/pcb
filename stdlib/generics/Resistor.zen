@@ -45,7 +45,7 @@ def _symbol(mount: Mount, package: Package, use_us_symbol: bool):
     if use_us_symbol:
         name = "R_US"
     else:
-        name = "R"
+        name = "R_Small"
 
     return {
         "library": "@kicad-symbols/Device.kicad_sym",
