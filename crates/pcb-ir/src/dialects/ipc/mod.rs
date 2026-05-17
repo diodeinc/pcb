@@ -405,6 +405,3 @@ pub struct SourceRef {
 }
 
 pub mod process;
-pub mod raster;
-pub mod svg;
-pub mod terminal;
