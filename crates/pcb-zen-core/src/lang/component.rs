@@ -335,6 +335,7 @@ const LEGACY_COMPONENT_PROPERTY_KEYS: &[(&str, &str)] = &[
     ("Manufacturer", "manufacturer"),
     ("datasheet", "datasheet"),
     ("description", "description"),
+    ("Description", "description"),
 ];
 
 /// Emit warnings for legacy `Component()` inputs. Each warning points users at
@@ -955,6 +956,7 @@ fn remove_consolidated_component_properties<'v>(properties_map: &mut SmallMap<St
     properties_map.shift_remove("Manufacturer");
     properties_map.shift_remove("datasheet");
     properties_map.shift_remove("description");
+    properties_map.shift_remove("Description");
     properties_map.shift_remove("type");
     properties_map.shift_remove("Type");
     // Remove DNP legacy keys.

@@ -1915,7 +1915,7 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         eval.add_diagnostic(
             crate::Diagnostic::categorized(
                 &path,
-                "`add_property(...)` is deprecated; use `builtin.add_property(...)` instead",
+                "`add_property(...)` is deprecated",
                 "deprecated.add_property",
                 starlark::errors::EvalSeverity::Warning,
             )

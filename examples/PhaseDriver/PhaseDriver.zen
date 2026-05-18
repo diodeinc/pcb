@@ -212,7 +212,6 @@ Capacitor(
     value="10uF 20%",
     voltage="100V",
     package="1210",
-    mpn="GMC32X7S106K100NT",
     P1=POWER_PHASE,
     P2=P_GROUND,
 )
