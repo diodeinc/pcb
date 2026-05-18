@@ -35,7 +35,6 @@ struct DeclArgs<'v> {
     checks: Option<Value<'v>>,
     default: Option<Value<'v>>,
     allowed: Option<Value<'v>>,
-    convert: Option<Value<'v>>,
     optional: Option<bool>,
     help: Option<String>,
     direction: Option<IoDirection>,
@@ -81,10 +80,6 @@ impl ParamKind {
             ParamKind::Config => "config(...)",
             ParamKind::Io => "io(...)",
         }
-    }
-
-    fn allows_convert(self) -> bool {
-        matches!(self, ParamKind::Config)
     }
 
     fn allows_allowed(self) -> bool {
@@ -232,7 +227,6 @@ fn parse_decl_args<'v>(
     let mut default = None;
     let mut checks = None;
     let mut allowed = None;
-    let mut convert = None;
     let mut optional = None;
     let mut help = None;
     let mut direction = None;
@@ -242,7 +236,6 @@ fn parse_decl_args<'v>(
             "checks" => checks = none_if_none(value),
             "default" => default = none_if_none(value),
             "allowed" if kind.allows_allowed() => allowed = none_if_none(value),
-            "convert" if kind.allows_convert() => convert = none_if_none(value),
             "optional" => optional = Some(unpack_bool_arg(value, function, "optional")?),
             "help" => help = unpack_optional_string_arg(value, function, "help")?,
             "direction" if kind.allows_direction() => {
@@ -299,29 +292,11 @@ fn parse_decl_args<'v>(
             checks: checks.or(positional_checks),
             default,
             allowed,
-            convert,
             optional,
             help,
             direction,
         },
     ))
-}
-
-fn warn_deprecated_config_convert(
-    declaration_site: &DeclarationSite,
-    eval: &mut Evaluator<'_, '_, '_>,
-) {
-    let msg = "config() parameter `convert` is deprecated and will be removed in a future release"
-        .to_string();
-    eval.add_diagnostic(
-        crate::Diagnostic::categorized(
-            &declaration_site.path,
-            &msg,
-            "deprecated.config_convert",
-            starlark::errors::EvalSeverity::Warning,
-        )
-        .with_span(declaration_site.span),
-    );
 }
 
 fn warn_deprecated_io_default(
@@ -410,8 +385,7 @@ fn resolve_config<'v>(
     }
 
     let convert_value = |eval: &mut Evaluator<'v, '_, '_>, value| {
-        validate_or_convert(name, value, args.typ, args.convert, eval)
-            .map_err(starlark::Error::from)
+        validate_or_convert(name, value, args.typ, eval).map_err(starlark::Error::from)
     };
     let allowed_values = normalize_allowed_values(name, args.typ, args.allowed, eval)
         .map_err(starlark::Error::from)?;
@@ -420,7 +394,6 @@ fn resolve_config<'v>(
         args.default,
         args.typ,
         allowed_values.as_deref(),
-        args.convert,
         eval,
     )
     .map_err(starlark::Error::from)?;
@@ -507,8 +480,7 @@ fn resolve_io<'v>(
                 .instantiate(name, for_metadata_only, eval)
                 .map(|value| stamp_io_declaration_site(value, eval))
         } else if let Some(default) = args.default {
-            validate_or_convert(name, default, normalized.typ, None, eval)
-                .map_err(starlark::Error::from)
+            validate_or_convert(name, default, normalized.typ, eval).map_err(starlark::Error::from)
         } else {
             io_generated_default(eval, normalized.typ, name, for_metadata_only)
                 .map(|value| stamp_io_declaration_site(value, eval))
@@ -516,7 +488,7 @@ fn resolve_io<'v>(
     };
 
     let (value, metadata_default) = if let Some(provided) = eval.request_input(name)? {
-        let converted = validate_or_convert(name, provided, normalized.typ, None, eval)?;
+        let converted = validate_or_convert(name, provided, normalized.typ, eval)?;
         for failure in run_implicit_checks(name, &normalized.implicit_checks, converted) {
             eval.add_diagnostic(implicit_check_diag(failure, declaration_site));
         }
@@ -578,9 +550,6 @@ pub(crate) fn invoke_config<'v>(
     let kind = ParamKind::Config;
     let declaration_site = kind.declaration_site(eval);
     let (name, args) = parse_decl_args(kind, args, eval.heap())?;
-    if args.convert.is_some() {
-        warn_deprecated_config_convert(&declaration_site, eval);
-    }
     invoke_decl(kind, args, declaration_site, eval, name)
 }
 

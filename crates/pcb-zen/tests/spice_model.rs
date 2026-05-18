@@ -68,7 +68,6 @@ R1 p n {RVAL}
     env.add_file(
         "myresistor.zen",
         r#"
-load("@stdlib/config.zen", "config_properties")
 load("@stdlib/units.zen", "Resistance", "Voltage")
 load("@stdlib/utils.zen", "format_value")
 
@@ -90,12 +89,12 @@ value = config(Resistance)
 voltage = config(Voltage, optional = True)
 
 # Properties - combined and normalized
-properties = config_properties({
+properties = {
     "value": format_value(value, voltage),
     "package": package,
     "resistance": value,
     "voltage": voltage,
-})
+}
 
 # -----------------------------------------------------------------------------
 # IO ports
@@ -162,7 +161,6 @@ R1 p n {RVAL}
     env.add_file(
         "myresistor.zen",
         r#"
-load("@stdlib/config.zen", "config_properties")
 load("@stdlib/units.zen", "Resistance", "Voltage")
 load("@stdlib/utils.zen", "format_value")
 
@@ -172,12 +170,12 @@ package = config(Package, default = Package("0603"))
 value = config(Resistance)
 voltage = config(Voltage, optional = True)
 
-properties = config_properties({
+properties = {
     "value": format_value(value, voltage),
     "package": package,
     "resistance": value,
     "voltage": voltage,
-})
+}
 
 P1 = io(Net)
 P2 = io(Net)
@@ -266,7 +264,6 @@ R1 p n {RVAL}
     env.add_file(
         "myresistor.zen",
         r#"
-load("@stdlib/config.zen", "config_properties")
 load("@stdlib/units.zen", "Resistance", "Voltage")
 load("@stdlib/utils.zen", "format_value")
 
@@ -276,12 +273,12 @@ package = config("package", Package, default = Package("0603"))
 value = config("value", Resistance)
 voltage = config("voltage", Voltage, optional = True)
 
-properties = config_properties({
+properties = {
     "value": format_value(value, voltage),
     "package": package,
     "resistance": value,
     "voltage": voltage,
-})
+}
 
 P1 = io("P1", Net)
 P2 = io("P2", Net)
@@ -334,7 +331,6 @@ R1 p n {RVAL}
     env.add_file(
         "myresistor.zen",
         r#"
-load("@stdlib/config.zen", "config_properties")
 load("@stdlib/units.zen", "Resistance", "Voltage")
 load("@stdlib/utils.zen", "format_value")
 
@@ -344,12 +340,12 @@ package = config(Package, default = Package("0603"))
 value = config(Resistance)
 voltage = config(Voltage, optional = True)
 
-properties = config_properties({
+properties = {
     "value": format_value(value, voltage),
     "package": package,
     "resistance": value,
     "voltage": voltage,
-})
+}
 
 P1 = io(Net)
 P2 = io(Net)

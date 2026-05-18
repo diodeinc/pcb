@@ -734,7 +734,6 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
     /// Returns the runtime parameter specification for parsing arguments
     fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
         let mut named_params = vec![
-            ("NET", ParametersSpecParam::Optional),
             ("name", ParametersSpecParam::Optional),
             ("__register", ParametersSpecParam::Optional),
         ];
@@ -748,7 +747,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             [("value", ParametersSpecParam::Optional)], // positional-only - accepts string or NetValue
             [],                                         // pos_or_named (args)
             false,
-            named_params, // named-only (NET, name + fields + __register)
+            named_params, // named-only (name + fields + __register)
             false,
         )
     }
@@ -885,30 +884,6 @@ pub(crate) fn instantiate_generated_net<'v>(
     .into())
 }
 
-fn emit_net_keyword_deprecation<'v>(eval: &Evaluator<'v, '_, '_>, type_name: &str) {
-    let message = format!(
-        "{type_name}() keyword argument `NET=` is deprecated; use the positional form `{type_name}(other_net)` instead"
-    );
-    let (path, span) = match eval.call_stack_top_location() {
-        Some(location) => (
-            location.filename().to_owned(),
-            Some(location.resolve_span()),
-        ),
-        None => (eval.source_path().unwrap_or_default(), None),
-    };
-
-    eval.add_diagnostic(
-        crate::Diagnostic::categorized(
-            &path,
-            &message,
-            "deprecated.net_constructor_kwarg",
-            starlark::errors::EvalSeverity::Warning,
-        )
-        .with_span(span)
-        .with_call_stack(Some(eval.call_stack())),
-    );
-}
-
 #[starlark_value(type = "NetType")]
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for NetTypeGen<V>
 where
@@ -925,9 +900,8 @@ where
             .parser(args, eval, |param_parser, eval| {
                 let type_name = self.instance_ty_name();
 
-                // Parse arguments: positional value, NET= keyword, name= keyword, and field values
+                // Parse arguments: positional value, name= keyword, and field values
                 let positional_value: Option<Value> = param_parser.next_opt()?;
-                let net_keyword: Option<Value> = param_parser.next_opt()?;
                 let name_keyword: Option<Value> = param_parser.next_opt()?;
 
                 // Parse hidden __register parameter (for internal use only)
@@ -973,25 +947,6 @@ where
                         )
                         .into());
                     }
-                }
-
-                if let Some(v) = net_keyword {
-                    let nv = NetValue::from_value(v).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "{}() NET= expects Net value, got {}",
-                            type_name,
-                            v.get_type()
-                        )
-                    })?;
-                    if base_net.is_some() {
-                        return Err(anyhow::anyhow!(
-                            "{}() cannot provide both a positional Net and NET=",
-                            type_name
-                        )
-                        .into());
-                    }
-                    base_net = Some(nv);
-                    emit_net_keyword_deprecation(eval, &type_name);
                 }
 
                 // Choose requested name: name= overrides positional string, which overrides base net's original name
