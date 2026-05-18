@@ -2,6 +2,8 @@ load("../io.zen", "io")
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
+warn("generics/Standoff.zen is deprecated.", kind="deprecated")
+
 # Thread sizes for Würth WA-SMSI series (SMD Spacer Internal Thread)
 Thread = enum("M1.6", "M2", "M2.5", "M3")
 

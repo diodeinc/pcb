@@ -28,6 +28,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb import` now writes directly into a board repository root instead of creating `boards/<name>/` under a workspace.
 - Board release uploads now derive the Diode workspace name from the first path segment of `[workspace].repository`, with `[workspace].name` available as an override.
 - `pcb layout` now deletes stale copied synced footprints.
+- Deprecated stdlib generic modules `generics/TerminalBlock.zen` and `generics/Standoff.zen`, and removed generic BOM matching for standoffs.
 
 ### Fixed
 

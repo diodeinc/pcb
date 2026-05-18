@@ -2,7 +2,6 @@
 
 load("../../interfaces.zen", "Net")
 load("../../properties.zen", "Layout")
-load("../../bom/match_generics.zen", "assign_house_parts")
 
 Standoff = Module("../Standoff.zen")
 
@@ -54,6 +53,3 @@ Standoff(
     thread="M3",
     height="5mm",
 )
-
-# Add house parts modifier to check matching
-builtin.add_component_modifier(assign_house_parts)

@@ -35,6 +35,8 @@ load("../io.zen", "io")
 load("../interfaces.zen", "Net")
 load("../utils.zen", "format_value")
 
+warn("generics/TerminalBlock.zen is deprecated.", kind="deprecated")
+
 Pitch = enum("2.54mm", "5.0mm")
 
 pins = config(int, default=2, help="Number of terminals")
