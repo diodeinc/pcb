@@ -133,6 +133,10 @@ pub fn render_svg_layers<LayerMeta>(
     render_svg_layers_with_size(doc, layer_indices, None)
 }
 
+pub fn render_svg_all<LayerMeta>(doc: &MaskDocument<LayerMeta>) -> String {
+    render_svg_layers(doc, &all_layer_indices(doc))
+}
+
 pub fn render_svg_layers_sized<LayerMeta>(
     doc: &MaskDocument<LayerMeta>,
     layer_indices: &[usize],
@@ -208,6 +212,10 @@ pub fn render_png_layers<LayerMeta>(
     render_png_layers_with_max_dimension(doc, layer_indices, DEFAULT_MAX_DIMENSION_PX)
 }
 
+pub fn render_png_all<LayerMeta>(doc: &MaskDocument<LayerMeta>) -> Result<Vec<u8>, String> {
+    render_png_layers(doc, &all_layer_indices(doc))
+}
+
 pub fn render_png_layers_with_max_dimension<LayerMeta>(
     doc: &MaskDocument<LayerMeta>,
     layer_indices: &[usize],
@@ -226,31 +234,31 @@ pub fn render_to_terminal<LayerMeta>(
     doc: &MaskDocument<LayerMeta>,
     layer_index: usize,
 ) -> Result<(), String> {
-    if !io::stdout().is_terminal() {
-        return Err(
-            "stdout is not an interactive terminal; pass an SVG or PNG output path".to_string(),
-        );
-    }
     let png = render_png_with_max_dimension(doc, layer_index, terminal_max_dimension_px())?;
-    let mut stdout = io::stdout().lock();
-    write_kitty_png(&mut stdout, &png).map_err(|err| err.to_string())?;
-    stdout.write_all(b"\n").map_err(|err| err.to_string())?;
-    Ok(())
+    render_png_to_terminal(&png)
 }
 
 pub fn render_layers_to_terminal<LayerMeta>(
     doc: &MaskDocument<LayerMeta>,
     layer_indices: &[usize],
 ) -> Result<(), String> {
+    let png =
+        render_png_layers_with_max_dimension(doc, layer_indices, terminal_max_dimension_px())?;
+    render_png_to_terminal(&png)
+}
+
+pub fn render_all_to_terminal<LayerMeta>(doc: &MaskDocument<LayerMeta>) -> Result<(), String> {
+    render_layers_to_terminal(doc, &all_layer_indices(doc))
+}
+
+fn render_png_to_terminal(png: &[u8]) -> Result<(), String> {
     if !io::stdout().is_terminal() {
         return Err(
             "stdout is not an interactive terminal; pass an SVG or PNG output path".to_string(),
         );
     }
-    let png =
-        render_png_layers_with_max_dimension(doc, layer_indices, terminal_max_dimension_px())?;
     let mut stdout = io::stdout().lock();
-    write_kitty_png(&mut stdout, &png).map_err(|err| err.to_string())?;
+    write_kitty_png(&mut stdout, png).map_err(|err| err.to_string())?;
     stdout.write_all(b"\n").map_err(|err| err.to_string())?;
     Ok(())
 }
@@ -416,6 +424,10 @@ fn pixel_size<LayerMeta>(
         (bbox.width() * scale).ceil().max(1.0) as u32,
         (bbox.height() * scale).ceil().max(1.0) as u32,
     )
+}
+
+fn all_layer_indices<LayerMeta>(doc: &MaskDocument<LayerMeta>) -> Vec<usize> {
+    (0..doc.layers.len()).collect()
 }
 
 fn svg_to_png(svg: &str) -> Result<Vec<u8>, String> {

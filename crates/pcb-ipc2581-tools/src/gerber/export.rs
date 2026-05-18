@@ -264,43 +264,18 @@ fn artwork_from_processed_layer(
         for path in &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         {
-            if path.flags.filled {
-                let path =
-                    push_artwork_path(&mut artwork, ArtworkPath::filled(path.fill_rule), doc, path);
-                artwork.push_object(
-                    artwork_layer,
-                    ArtworkObject {
-                        paint: PaintPolarity::Dark,
-                        geometry: ArtworkGeometry::Region { path },
-                        net: None,
-                        bbox: artwork.paths[path as usize].bbox,
-                        meta: object_attributes(ipc, feature.net, None),
-                    },
-                );
-            } else if path.flags.stroked {
-                let artwork_path =
-                    ArtworkPath::stroked(path.stroke_width, path.line_cap, LineJoin::Round);
-                let path = push_artwork_path(&mut artwork, artwork_path, doc, path);
-                artwork.push_object(
-                    artwork_layer,
-                    ArtworkObject {
-                        paint: PaintPolarity::Dark,
-                        geometry: ArtworkGeometry::Stroke { path },
-                        net: None,
-                        bbox: artwork.paths[path as usize].bbox,
-                        meta: object_attributes(
-                            ipc,
-                            feature.net,
-                            Some(aperture_function(feature.bucket).to_string()),
-                        ),
-                    },
-                );
-            } else {
-                bail!(
-                    "processed IPC geometry path is neither filled nor stroked on layer '{}'",
-                    layer.name
-                );
-            }
+            let aperture_function = path
+                .flags
+                .stroked
+                .then(|| aperture_function(feature.bucket).to_string());
+            push_artwork_object(
+                &mut artwork,
+                artwork_layer,
+                doc,
+                path,
+                object_attributes(ipc, feature.net, aperture_function),
+                &layer.name,
+            )?;
         }
     }
     Ok(artwork)
@@ -323,39 +298,15 @@ fn profile_artwork_from_outlines(
         for path in &doc.paths
             [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
         {
-            if path.flags.stroked {
-                let artwork_path =
-                    ArtworkPath::stroked(path.stroke_width, path.line_cap, LineJoin::Round);
-                let path = push_artwork_path(&mut artwork, artwork_path, doc, path);
-                artwork.push_object(
-                    artwork_layer,
-                    ArtworkObject {
-                        paint: PaintPolarity::Dark,
-                        geometry: ArtworkGeometry::Stroke { path },
-                        net: None,
-                        bbox: artwork.paths[path as usize].bbox,
-                        meta: ObjectAttributes {
-                            aperture_function: Some("Profile".to_string()),
-                            net: None,
-                        },
-                    },
-                );
-            } else if path.flags.filled {
-                let path =
-                    push_artwork_path(&mut artwork, ArtworkPath::filled(path.fill_rule), doc, path);
-                artwork.push_object(
-                    artwork_layer,
-                    ArtworkObject {
-                        paint: PaintPolarity::Dark,
-                        geometry: ArtworkGeometry::Region { path },
-                        net: None,
-                        bbox: artwork.paths[path as usize].bbox,
-                        meta: ObjectAttributes::default(),
-                    },
-                );
+            let meta = if path.flags.stroked {
+                ObjectAttributes {
+                    aperture_function: Some("Profile".to_string()),
+                    net: None,
+                }
             } else {
-                bail!("processed IPC board outline path is neither filled nor stroked");
-            }
+                ObjectAttributes::default()
+            };
+            push_artwork_object(&mut artwork, artwork_layer, doc, path, meta, "Profile")?;
         }
     }
     Ok(artwork)
@@ -392,6 +343,37 @@ fn push_artwork_path(
     path: &GeometryPath,
 ) -> u32 {
     artwork.push_path(artwork_path, artwork_contours(doc, path))
+}
+
+fn push_artwork_object(
+    artwork: &mut ArtworkLayer,
+    artwork_layer: u32,
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    path: &GeometryPath,
+    meta: ObjectAttributes,
+    layer_name: &str,
+) -> Result<()> {
+    let (geometry, path_id) = if path.flags.filled {
+        let path = push_artwork_path(artwork, ArtworkPath::filled(path.fill_rule), doc, path);
+        (ArtworkGeometry::Region { path }, path)
+    } else if path.flags.stroked {
+        let artwork_path = ArtworkPath::stroked(path.stroke_width, path.line_cap, LineJoin::Round);
+        let path = push_artwork_path(artwork, artwork_path, doc, path);
+        (ArtworkGeometry::Stroke { path }, path)
+    } else {
+        bail!("processed IPC geometry path is neither filled nor stroked on layer '{layer_name}'");
+    };
+    artwork.push_object(
+        artwork_layer,
+        ArtworkObject {
+            paint: PaintPolarity::Dark,
+            geometry,
+            net: None,
+            bbox: artwork.paths[path_id as usize].bbox,
+            meta,
+        },
+    );
+    Ok(())
 }
 
 fn artwork_contours(
