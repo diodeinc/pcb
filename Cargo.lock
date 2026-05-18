@@ -2448,7 +2448,7 @@ dependencies = [
 
 [[package]]
 name = "gerberx2"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "pcb-ir",
  "thiserror 2.0.18",
@@ -3258,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "ipc2581"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "base64",
  "hex",
@@ -4630,7 +4630,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-ir"
-version = "0.3.81"
+version = "0.3.82"
 dependencies = [
  "base64",
  "i_overlay",

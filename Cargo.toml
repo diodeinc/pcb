@@ -25,9 +25,9 @@ mimalloc = "0.1"
 
 similar = "3"
 
-ipc2581 = { path = "crates/ipc2581" }
-gerberx2 = { path = "crates/gerberx2" }
-pcb-ir = { path = "crates/pcb-ir", version = "0.3.81" }
+ipc2581 = { path = "crates/ipc2581", version = "0.3.3" }
+gerberx2 = { path = "crates/gerberx2", version = "0.1.2" }
+pcb-ir = { path = "crates/pcb-ir", version = "0.3.82" }
 pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }
 pcb-component-gen = { path = "crates/pcb-component-gen" }
