@@ -651,24 +651,6 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             net_name.clone()
         };
 
-        if base_net.is_none() && !net_name.is_empty() {
-            let legacy_suffix = match self.type_name.as_str() {
-                "Power" => Some("VCC"),
-                "Ground" => Some("GND"),
-                _ => None,
-            };
-
-            if let Some(suffix) = legacy_suffix
-                && let Some(ctx) = eval
-                    .module()
-                    .extra_value()
-                    .and_then(|e| e.downcast_ref::<ContextValue>())
-            {
-                let old_name = format!("{net_name}_{suffix}");
-                ctx.add_moved_directive(old_name, net_name.clone(), true);
-            }
-        }
-
         Ok(heap.alloc(NetValue {
             net_id,
             name: final_name,
