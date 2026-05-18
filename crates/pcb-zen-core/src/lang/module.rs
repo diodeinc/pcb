@@ -1003,6 +1003,8 @@ where
         let mut override_name: Option<String> = None;
         // Optional map of properties passed via `properties = {...}`.
         let mut properties_override: Option<SmallMap<String, Value<'v>>> = None;
+        // Legacy DNP keys found in `properties = {...}`, warned after `final_name` is set.
+        let mut legacy_dnp_keys_in_properties: Vec<String> = Vec::new();
 
         for (arg_name, value) in args.names_map()? {
             if arg_name.as_str() == "name" {
@@ -1037,6 +1039,9 @@ where
                     let key_str = k.unpack_str().ok_or_else(|| {
                         starlark::Error::new_other(anyhow::anyhow!("property keys must be strings"))
                     })?;
+                    if LEGACY_MODULE_DNP_KEYS.contains(&key_str) {
+                        legacy_dnp_keys_in_properties.push(key_str.to_string());
+                    }
                     map.insert(key_str.to_string(), v);
                 }
 
@@ -1109,6 +1114,10 @@ where
             // Use the file-stem derived name from the loader as a fallback.
             self.name.clone()
         };
+
+        for key in &legacy_dnp_keys_in_properties {
+            warn_legacy_module_dnp_properties_dict(eval, &final_name, key);
+        }
 
         let context = eval
             .module()
@@ -1890,6 +1899,58 @@ impl std::fmt::Display for ModuleType {
     }
 }
 
+/// Legacy property keys used to mark a module DNP. The endorsed path is the
+/// typed `dnp=` kwarg on `Module(...)`.
+pub(crate) const LEGACY_MODULE_DNP_KEYS: &[&str] =
+    &["do_not_populate", "Do_not_populate", "DNP", "dnp"];
+
+pub(crate) fn warn_legacy_module_dnp_add_property(eval: &Evaluator<'_, '_, '_>, key: &str) {
+    if !LEGACY_MODULE_DNP_KEYS.contains(&key) {
+        return;
+    }
+    let (path, span) = eval
+        .call_stack_top_location()
+        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+    let message = format!(
+        "`add_property(\"{key}\", ...)` is deprecated; pass `dnp=True` to Module() instead"
+    );
+    eval.add_diagnostic(
+        crate::Diagnostic::categorized(
+            &path,
+            &message,
+            "deprecated.module_property",
+            starlark::errors::EvalSeverity::Warning,
+        )
+        .with_span(span)
+        .with_call_stack(Some(eval.call_stack())),
+    );
+}
+
+fn warn_legacy_module_dnp_properties_dict(
+    eval: &Evaluator<'_, '_, '_>,
+    module_name: &str,
+    key: &str,
+) {
+    let (path, span) = eval
+        .call_stack_top_location()
+        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+    let message = format!(
+        "Module '{module_name}': `properties[\"{key}\"]` is deprecated; pass `dnp=True` to Module() instead"
+    );
+    eval.add_diagnostic(
+        crate::Diagnostic::categorized(
+            &path,
+            &message,
+            "deprecated.module_property",
+            starlark::errors::EvalSeverity::Warning,
+        )
+        .with_span(span)
+        .with_call_stack(Some(eval.call_stack())),
+    );
+}
+
 #[starlark_module]
 pub fn module_globals(builder: &mut GlobalsBuilder) {
     const Module: ModuleType = ModuleType;
@@ -1922,6 +1983,8 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
             .with_span(span)
             .with_call_stack(Some(eval.call_stack())),
         );
+
+        warn_legacy_module_dnp_add_property(eval, &name);
 
         eval.add_property(&name, value);
 

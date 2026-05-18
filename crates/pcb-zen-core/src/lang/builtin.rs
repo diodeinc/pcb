@@ -253,6 +253,7 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         #[starlark(require = pos)] value: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<NoneType> {
+        crate::lang::module::warn_legacy_module_dnp_add_property(eval, &name);
         eval.add_property(&name, value);
         Ok(NoneType)
     }

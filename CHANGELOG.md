@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `Component()` now emits a `deprecated.component_property` warning when its `properties=` dict contains a legacy key with a typed kwarg replacement (e.g. `do_not_populate`, `Exclude_from_bom`, `type`, `mpn`, `manufacturer`, `datasheet`, `description`), or when `mpn=`/`manufacturer=` kwargs are used instead of `part=Part(...)`; the legacy values continue to be honored.
 - `add_property(...)` is now exposed as `builtin.add_property(...)`; the bare global remains available but emits a `deprecated.add_property` warning.
+- `Module(...)` now emits a `deprecated.module_property` warning when its `properties=` dict contains a legacy DNP key (`do_not_populate`, `Do_not_populate`, `DNP`, `dnp`), and `add_property(...)` / `builtin.add_property(...)` warn when called with those same keys; pass `dnp=True` to `Module(...)` instead. Legacy values continue to be honored.
 - `pcb new board <name> <repo-url>` now creates a board repository directly, replacing the separate `pcb new workspace` flow.
 - `pcb import` now writes directly into a board repository root instead of creating `boards/<name>/` under a workspace.
 - Board release uploads now derive the Diode workspace name from the first path segment of `[workspace].repository`, with `[workspace].name` available as an override.
