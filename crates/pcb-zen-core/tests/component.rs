@@ -1561,6 +1561,7 @@ Component(
         "Manufacturer": "M",
         "datasheet": "ds.pdf",
         "description": "desc",
+        "Description": "desc",
     },
 )
 "#
@@ -1580,12 +1581,9 @@ Component(
         ("exclude_from_pos_files", "skip_pos"),
         ("type", "type"),
         ("Type", "type"),
-        ("mpn", "mpn"),
-        ("Mpn", "mpn"),
-        ("manufacturer", "manufacturer"),
-        ("Manufacturer", "manufacturer"),
         ("datasheet", "datasheet"),
         ("description", "description"),
+        ("Description", "description"),
     ] {
         let expected = format!(
             "Component 'R1': `properties[\"{legacy_key}\"]` is deprecated; pass `{typed_kwarg}=...` to Component() instead"
@@ -1593,6 +1591,17 @@ Component(
         assert!(
             bodies.iter().any(|b| b == &expected),
             "expected legacy-property warning for `{legacy_key}`, got: {:?}",
+            bodies
+        );
+    }
+
+    for sourcing_key in ["mpn", "Mpn", "manufacturer", "Manufacturer"] {
+        let expected = format!(
+            "Component 'R1': `properties[\"{sourcing_key}\"]` is deprecated; pass `part=Part(mpn=..., manufacturer=...)` to Component() instead"
+        );
+        assert!(
+            bodies.iter().any(|b| b == &expected),
+            "expected sourcing-key warning for `{sourcing_key}`, got: {:?}",
             bodies
         );
     }

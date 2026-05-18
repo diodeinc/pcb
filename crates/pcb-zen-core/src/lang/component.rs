@@ -329,17 +329,18 @@ const LEGACY_COMPONENT_PROPERTY_KEYS: &[(&str, &str)] = &[
     ("exclude_from_pos_files", "skip_pos"),
     ("type", "type"),
     ("Type", "type"),
-    ("mpn", "mpn"),
-    ("Mpn", "mpn"),
-    ("manufacturer", "manufacturer"),
-    ("Manufacturer", "manufacturer"),
     ("datasheet", "datasheet"),
     ("description", "description"),
     ("Description", "description"),
 ];
 
+/// Legacy sourcing inputs (kwargs or `properties[...]` entries) whose endorsed
+/// replacement is `part=Part(mpn=..., manufacturer=...)`.
+const LEGACY_COMPONENT_SOURCING_PROPERTY_KEYS: &[&str] =
+    &["mpn", "Mpn", "manufacturer", "Manufacturer"];
+
 /// Emit warnings for legacy `Component()` inputs. Each warning points users at
-/// the endorsed typed kwarg; legacy values continue to be honored elsewhere.
+/// the endorsed replacement; legacy values continue to be honored elsewhere.
 fn warn_legacy_component_inputs<'v>(
     eval: &Evaluator<'v, '_, '_>,
     component_name: &str,
@@ -357,13 +358,21 @@ fn warn_legacy_component_inputs<'v>(
         }
     }
 
+    let part_suggestion = "pass `part=Part(mpn=..., manufacturer=...)` to Component() instead";
+    for key in LEGACY_COMPONENT_SOURCING_PROPERTY_KEYS {
+        if properties_map.contains_key(*key) {
+            messages.push(format!(
+                "Component '{component_name}': `properties[\"{key}\"]` is deprecated; {part_suggestion}",
+            ));
+        }
+    }
     for (kwarg, present) in [
         ("mpn", mpn_val.is_some()),
         ("manufacturer", manufacturer_val.is_some()),
     ] {
         if present {
             messages.push(format!(
-                "Component '{component_name}': `{kwarg}=...` is deprecated; pass `part=Part(mpn=..., manufacturer=...)` to Component() instead",
+                "Component '{component_name}': `{kwarg}=...` is deprecated; {part_suggestion}",
             ));
         }
     }
