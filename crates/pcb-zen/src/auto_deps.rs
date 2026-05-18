@@ -377,7 +377,7 @@ fn extract_from_str(s: &str, result: &mut CollectedImports) {
             LoadSpec::Package { package, .. } => {
                 result.aliases.insert(package);
             }
-            LoadSpec::Github { .. } | LoadSpec::Gitlab { .. } => {
+            LoadSpec::Url { .. } => {
                 result.urls.insert(s.to_string());
             }
             LoadSpec::Path { path, .. } => {

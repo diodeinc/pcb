@@ -10,14 +10,8 @@ pub enum LoadSpec {
     Stdlib {
         path: PathBuf,
     },
-    Github {
-        user: String,
-        repo: String,
-        path: PathBuf,
-    },
-    Gitlab {
-        project_path: String, // Can be "user/repo" or "group/subgroup/repo"
-        path: PathBuf,
+    Url {
+        url: String,
     },
     Path {
         path: PathBuf,
@@ -45,21 +39,8 @@ impl std::fmt::Display for LoadSpec {
                     write!(f, "@{}/{}", crate::STDLIB_MODULE_PATH, path.display())
                 }
             }
-            LoadSpec::Github { user, repo, path } => {
-                let base = format!("github.com/{user}/{repo}");
-                if path.as_os_str().is_empty() {
-                    write!(f, "{base}")
-                } else {
-                    write!(f, "{base}/{}", path.display())
-                }
-            }
-            LoadSpec::Gitlab { project_path, path } => {
-                let base = format!("gitlab.com/{project_path}");
-                if path.as_os_str().is_empty() {
-                    write!(f, "{base}")
-                } else {
-                    write!(f, "{base}/{}", path.display())
-                }
+            LoadSpec::Url { url } => {
+                write!(f, "{url}")
             }
             LoadSpec::Path { path, .. } => {
                 write!(f, "{}", path.display())
@@ -113,29 +94,10 @@ impl LoadSpec {
     ///   assumed.
     ///   Example: `"@stdlib:1.2.3/math.zen"` or `"@stdlib/math.zen"`.
     ///
-    /// • **GitHub repository** –
-    ///   `"@github/<user>/<repo>[:<rev>]/<path>"`.
-    ///   If `<rev>` is omitted the special value [`DEFAULT_GITHUB_REV`] (currently
-    ///   `"HEAD"`) is assumed.
-    ///   The `<rev>` component can be a branch name, tag, or a short/long commit
-    ///   SHA (7–40 hexadecimal characters).
-    ///   Example: `"@github/foo/bar:abc123/scripts/build.zen".
-    ///
-    /// • **GitLab repository** –
-    ///   `"@gitlab/<user>/<repo>[:<rev>]/<path>"`.
-    ///   If `<rev>` is omitted the special value [`DEFAULT_GITLAB_REV`] (currently
-    ///   `"HEAD"`) is assumed.
-    ///   The `<rev>` component can be a branch name, tag, or a short/long commit
-    ///   SHA (7–40 hexadecimal characters).
-    ///   
-    ///   For nested groups, include the full path before the revision:
-    ///   `"@gitlab/group/subgroup/repo:rev/path"`.
-    ///   Without a revision, the first two path components are assumed to be the project path.
-    ///   
-    ///   Examples:
-    ///   - `"@gitlab/foo/bar:main/src/lib.zen"` - Simple user/repo with revision
-    ///   - `"@gitlab/foo/bar/src/lib.zen"` - Simple user/repo without revision (assumes HEAD)
-    ///   - `"@gitlab/kicad/libraries/kicad-symbols:main/Device.kicad_sym"` - Nested groups with revision
+    /// • **Package URL** – `"<host>/<package>/<path>"`.
+    ///   The host must be domain-like and versions are declared in `pcb.toml`.
+    ///   Examples: `"github.com/foo/bar/scripts/build.zen"`,
+    ///   `"code.example.com/acme/registry/components/Part/Part.zen"`.
     ///
     /// • **Package URI** – `"package://<url>/<path>"`.
     ///   A stable, machine-independent reference to a file within a resolved package.
@@ -162,59 +124,7 @@ impl LoadSpec {
             return Some(LoadSpec::PackageUri { uri: s.to_string() });
         }
 
-        if let Some(rest) = s.strip_prefix("github.com/") {
-            // GitHub style: github.com/user/repo/path...
-            // Assumes standard user/repo structure (2 components)
-            let mut parts = rest.splitn(3, '/');
-            let user = parts.next().unwrap_or("").to_string();
-            let repo = parts.next().unwrap_or("").to_string();
-            let path_str = parts.next().unwrap_or("");
-
-            if user.is_empty() || repo.is_empty() {
-                return None;
-            }
-
-            Some(LoadSpec::Github {
-                user,
-                repo,
-                path: PathBuf::from(path_str),
-            })
-        } else if let Some(rest) = s.strip_prefix("gitlab.com/") {
-            // GitLab style: gitlab.com/group/subgroup/project/path...
-            // GitLab supports nested groups, so we need to find the boundary between
-            // project path and file path using file extension heuristic
-
-            let parts: Vec<&str> = rest.split('/').collect();
-
-            // Find where the file path starts (first component with extension)
-            let mut project_parts = Vec::new();
-            let mut file_parts = Vec::new();
-            let mut found_file = false;
-
-            for part in parts {
-                if !found_file && (part.contains('.') || !file_parts.is_empty()) {
-                    found_file = true;
-                }
-
-                if found_file {
-                    file_parts.push(part);
-                } else {
-                    project_parts.push(part);
-                }
-            }
-
-            if project_parts.is_empty() {
-                return None;
-            }
-
-            let project_path = project_parts.join("/");
-            let file_path = file_parts.join("/");
-
-            Some(LoadSpec::Gitlab {
-                project_path,
-                path: PathBuf::from(file_path),
-            })
-        } else if let Some(rest) = s.strip_prefix('@') {
+        if let Some(rest) = s.strip_prefix('@') {
             // Generic package: @<pkg>/optional/path
             // rest looks like "pkg/path..." or just "pkg"/"pkg:tag"
             let mut parts = rest.splitn(2, '/');
@@ -241,6 +151,8 @@ impl LoadSpec {
                 package: package.to_string(),
                 path: PathBuf::from(rel_path),
             })
+        } else if is_package_url(s) {
+            Some(LoadSpec::Url { url: s.to_string() })
         } else {
             // Raw file path (relative or absolute)
             Some(LoadSpec::local_path(s))
@@ -259,6 +171,18 @@ impl LoadSpec {
             }
         }
     }
+}
+
+fn is_package_url(s: &str) -> bool {
+    if s.starts_with("./") || s.starts_with("../") || s.starts_with('/') {
+        return false;
+    }
+
+    let Ok(url) = url::Url::parse(&format!("https://{s}")) else {
+        return false;
+    };
+
+    url.host_str().is_some_and(|host| host.contains('.')) && url.path() != "/"
 }
 
 #[cfg(test)]
@@ -281,11 +205,37 @@ mod tests {
         let spec = LoadSpec::parse("github.com/foo/bar/scripts/build.zen");
         assert_eq!(
             spec,
-            Some(LoadSpec::Github {
-                user: "foo".to_string(),
-                repo: "bar".to_string(),
-                path: PathBuf::from("scripts/build.zen"),
+            Some(LoadSpec::Url {
+                url: "github.com/foo/bar/scripts/build.zen".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn test_parse_load_spec_gitlab_nested_path() {
+        let spec = LoadSpec::parse("gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Url {
+                url: "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_load_spec_domain_like_package_url() {
+        let spec = LoadSpec::parse(
+            "code.diode.computer/diode/b/IP0010/components/Diodes_Inc/AP22653W6M7/AP22653W6M7.zen",
+        );
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Url {
+                url: "code.diode.computer/diode/b/IP0010/components/Diodes_Inc/AP22653W6M7/AP22653W6M7.zen".to_string(),
+            })
+        );
+        assert_eq!(
+            spec.and_then(|spec| spec.to_full_url()),
+            Some("code.diode.computer/diode/b/IP0010/components/Diodes_Inc/AP22653W6M7/AP22653W6M7.zen".to_string())
         );
     }
 
@@ -361,28 +311,9 @@ mod tests {
     }
 
     #[test]
-    fn test_github_spec_serialization() {
-        let spec = LoadSpec::Github {
-            user: "foo".to_string(),
-            repo: "bar".to_string(),
-            path: PathBuf::from("src/lib.zen"),
-        };
-
-        // Test serialization
-        let json = serde_json::to_string(&spec).expect("Failed to serialize LoadSpec");
-
-        // Test deserialization
-        let deserialized: LoadSpec =
-            serde_json::from_str(&json).expect("Failed to deserialize LoadSpec");
-
-        assert_eq!(spec, deserialized);
-    }
-
-    #[test]
-    fn test_gitlab_spec_serialization() {
-        let spec = LoadSpec::Gitlab {
-            project_path: "group/subgroup/repo".to_string(),
-            path: PathBuf::from("lib/module.zen"),
+    fn test_url_spec_serialization() {
+        let spec = LoadSpec::Url {
+            url: "github.com/foo/bar/src/lib.zen".to_string(),
         };
 
         // Test serialization
@@ -433,14 +364,8 @@ mod tests {
                 package: "github.com/example/lib".to_string(),
                 path: PathBuf::from("math.zen"),
             },
-            LoadSpec::Github {
-                user: "user".to_string(),
-                repo: "repo".to_string(),
-                path: PathBuf::from("src/lib.zen"),
-            },
-            LoadSpec::Gitlab {
-                project_path: "group/repo".to_string(),
-                path: PathBuf::from("lib/module.zen"),
+            LoadSpec::Url {
+                url: "code.diode.computer/diode/b/IP0010/module.zen".to_string(),
             },
             LoadSpec::local_path("./relative/file.zen"),
             LoadSpec::PackageUri {
