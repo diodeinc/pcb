@@ -3,30 +3,20 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
-use pcb_zen::ast_utils::{skip_vendor, visit_string_literals};
+use pcb_zen::ast_utils::skip_vendor;
 use pcb_zen::cache_index::CacheIndex;
+use pcb_zen::import_scanner::extract_imports;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::kicad_library::kicad_dependency_aliases;
-use pcb_zen_core::load_spec::LoadSpec;
 use pcb_zen_core::workspace::package_url_covers;
-use starlark::syntax::{AstModule, Dialect};
-use starlark_syntax::syntax::ast::StmtP;
-use starlark_syntax::syntax::top_level_stmts::top_level_stmts;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ScannedDirectDeps {
     pub(crate) remote: BTreeMap<String, DependencySpec>,
     pub(crate) workspace: BTreeSet<String>,
     pub(crate) implicit_remote: BTreeMap<String, DependencySpec>,
-}
-
-#[derive(Debug, Default)]
-struct CollectedImports {
-    aliases: BTreeSet<String>,
-    urls: BTreeSet<String>,
-    relative_paths: Vec<PathBuf>,
 }
 
 pub(crate) fn scan_package_direct_deps(
@@ -231,41 +221,4 @@ fn resolve_kicad_url(
             package_url_covers(repo, url)
                 .then(|| (repo.clone(), DependencySpec::Version(version.to_string())))
         })
-}
-
-fn extract_imports(content: &str) -> Option<CollectedImports> {
-    let mut dialect = Dialect::Extended;
-    dialect.enable_f_strings = true;
-
-    let ast = AstModule::parse("<memory>", content.to_owned(), &dialect).ok()?;
-    let mut result = CollectedImports::default();
-
-    ast.statement().visit_expr(|expr| {
-        visit_string_literals(expr, &mut |s, _| extract_from_str(s, &mut result));
-    });
-
-    for stmt in top_level_stmts(ast.statement()) {
-        if let StmtP::Load(load) = &stmt.node {
-            extract_from_str(&load.module.node, &mut result);
-        }
-    }
-
-    Some(result)
-}
-
-fn extract_from_str(s: &str, result: &mut CollectedImports) {
-    if let Some(spec) = LoadSpec::parse(s) {
-        match spec {
-            LoadSpec::Stdlib { .. } | LoadSpec::PackageUri { .. } => {}
-            LoadSpec::Package { package, .. } => {
-                result.aliases.insert(package);
-            }
-            LoadSpec::Url { .. } => {
-                result.urls.insert(s.to_string());
-            }
-            LoadSpec::Path { path, .. } => {
-                result.relative_paths.push(path);
-            }
-        }
-    }
 }

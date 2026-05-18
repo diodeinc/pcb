@@ -4,6 +4,7 @@ mod auto_deps;
 pub mod cache_index;
 pub mod diagnostics;
 pub mod git;
+pub mod import_scanner;
 pub mod lsp;
 pub mod resolve;
 pub mod suppression;
