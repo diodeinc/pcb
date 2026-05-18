@@ -6,9 +6,48 @@ pub enum LineCap {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LineJoin {
+    Round,
+    Miter,
+    Bevel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FillRule {
     NonZero,
     EvenOdd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Unit {
+    Millimeter,
+    Inch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Side {
+    Top,
+    Bottom,
+    Inner,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LayerRole {
+    Copper,
+    Soldermask,
+    Paste,
+    Legend,
+    Profile,
+    Drill,
+    Mechanical,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PaintPolarity {
+    Dark,
+    Clear,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -37,6 +76,10 @@ pub struct Point {
 impl Point {
     pub fn new(x: f64, y: f64) -> Self {
         Self { x, y }
+    }
+
+    pub fn is_finite(self) -> bool {
+        self.x.is_finite() && self.y.is_finite()
     }
 
     pub fn distance_to(self, other: Point) -> f64 {
@@ -135,6 +178,14 @@ impl BBox {
     pub fn is_empty(&self) -> bool {
         self.min.x.is_infinite() || self.min.y.is_infinite()
     }
+
+    pub fn is_valid(&self) -> bool {
+        self.is_empty()
+            || (self.min.is_finite()
+                && self.max.is_finite()
+                && self.min.x <= self.max.x
+                && self.min.y <= self.max.y)
+    }
 }
 
 impl Default for BBox {
@@ -171,6 +222,32 @@ fn angle_is_on_arc(start: f64, end: f64, angle: f64, clockwise: bool) -> bool {
 
 fn normalize_angle(angle: f64) -> f64 {
     angle.rem_euclid(std::f64::consts::TAU)
+}
+
+pub(crate) fn validate_range(
+    name: &str,
+    index: usize,
+    start: u32,
+    count: u32,
+    len: usize,
+) -> Result<(), String> {
+    let end = start as usize + count as usize;
+    if start as usize > len || end > len {
+        Err(format!(
+            "{name} range for item {index} is out of bounds: {start}..{} of {len}",
+            start + count
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn validate_bbox(name: &str, index: usize, bbox: BBox) -> Result<(), String> {
+    if bbox.is_valid() {
+        Ok(())
+    } else {
+        Err(format!("{name} {index} has invalid bbox {bbox:?}"))
+    }
 }
 
 pub trait MirrorAxes: Copy {

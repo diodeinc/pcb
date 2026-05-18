@@ -23,9 +23,6 @@ enum Commands {
         /// Render format. Auto infers SVG/PNG from output extension or uses terminal graphics.
         #[arg(short, long, default_value = "auto")]
         format: RenderFormat,
-        /// Render pre-composition feature buckets for debugging geometry extraction.
-        #[arg(long)]
-        debug_geometry: bool,
     },
 }
 
@@ -48,24 +45,16 @@ pub fn execute(args: GerberArgs) -> Result<()> {
             file,
             output,
             format,
-            debug_geometry,
-        } => render(&file, output.as_deref(), format, debug_geometry),
+        } => render(&file, output.as_deref(), format),
     }
 }
 
-fn render(
-    file: &Path,
-    output: Option<&Path>,
-    format: RenderFormat,
-    debug_geometry: bool,
-) -> Result<()> {
+fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()> {
     let target = resolve_target(output, format)?;
     let gerber = gerberx2::GerberX2::parse_file(file)
         .with_context(|| format!("Failed to parse Gerber file {}", file.display()))?;
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    if !debug_geometry {
-        pcb_ir::dialects::gerber::process::process_document(&mut geometry);
-    }
+    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
 
     for diagnostic in &geometry.diagnostics {
         eprintln!("warning: {}", diagnostic.message);
@@ -73,16 +62,7 @@ fn render(
 
     match target {
         RenderTarget::Svg => {
-            let options = pcb_ir::dialects::gerber::svg::SvgOptions {
-                mode: if debug_geometry {
-                    pcb_ir::dialects::gerber::svg::RenderMode::Debug
-                } else {
-                    pcb_ir::dialects::gerber::svg::RenderMode::Final
-                },
-                width_px: None,
-                height_px: None,
-            };
-            let svg = pcb_ir::dialects::gerber::svg::render_svg_with_options(&geometry, options);
+            let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
             if let Some(output) = output {
                 std::fs::write(output, svg)
                     .with_context(|| format!("Failed to write SVG to {}", output.display()))?;
@@ -105,8 +85,10 @@ fn render(
                     .context("Failed to write PNG to stdout")?;
             }
         }
-        RenderTarget::Terminal => pcb_ir::dialects::gerber::terminal::render_to_terminal(&geometry)
-            .map_err(gerberx2::GerberError::Render)?,
+        RenderTarget::Terminal => {
+            pcb_ir::dialects::gerber::terminal::render_to_terminal(&geometry)
+                .map_err(gerberx2::GerberError::Render)?;
+        }
     }
 
     Ok(())
@@ -117,7 +99,7 @@ fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderT
         RenderFormat::Auto => {
             if let Some(output) = output {
                 infer_format_from_output(output)
-            } else if pcb_ir::dialects::gerber::terminal::can_render_to_terminal() {
+            } else if pcb_ir::dialects::mask::can_render_to_terminal() {
                 Ok(RenderTarget::Terminal)
             } else {
                 bail!(

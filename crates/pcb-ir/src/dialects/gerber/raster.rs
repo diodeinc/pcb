@@ -1,51 +1,22 @@
-use resvg::{tiny_skia, usvg};
-
-use crate::dialects::gerber::GeometryDocument;
+use crate::dialects::gerber::{GeometryDocument, lower_to_geom};
+use crate::dialects::{geom, mask};
 
 const DEFAULT_MAX_DIMENSION_PX: u32 = 3200;
 
 pub type RenderResult<T> = Result<T, String>;
 
-pub fn render_png<A>(doc: &GeometryDocument<A>) -> RenderResult<Vec<u8>> {
+pub fn render_png<A: Clone>(doc: &GeometryDocument<A>) -> RenderResult<Vec<u8>> {
     render_png_with_max_dimension(doc, DEFAULT_MAX_DIMENSION_PX)
 }
 
 pub fn render_png_with_max_dimension<A>(
     doc: &GeometryDocument<A>,
     max_dimension_px: u32,
-) -> RenderResult<Vec<u8>> {
-    let (width_px, height_px) = pixel_size(doc, max_dimension_px);
-    let svg = super::svg::render_svg_sized(doc, width_px, height_px);
-    svg_to_png(&svg)
-}
-
-fn svg_to_png(svg: &str) -> RenderResult<Vec<u8>> {
-    let options = usvg::Options::default();
-    let tree = usvg::Tree::from_data(svg.as_bytes(), &options)
-        .map_err(|err| format!("failed to parse SVG: {err}"))?;
-    let size = tree.size();
-    let width = size.width().ceil().max(1.0) as u32;
-    let height = size.height().ceil().max(1.0) as u32;
-    let mut pixmap = tiny_skia::Pixmap::new(width, height)
-        .ok_or_else(|| format!("failed to allocate {width}x{height} PNG raster"))?;
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::identity(),
-        &mut pixmap.as_mut(),
-    );
-    pixmap
-        .encode_png()
-        .map_err(|err| format!("failed to encode PNG: {err}"))
-}
-
-fn pixel_size<A>(doc: &GeometryDocument<A>, max_dimension_px: u32) -> (u32, u32) {
-    let bbox = super::svg::render_bbox(doc);
-    if bbox.is_empty() || bbox.width() <= 0.0 || bbox.height() <= 0.0 {
-        return (max_dimension_px, max_dimension_px);
-    }
-    let scale = max_dimension_px as f64 / bbox.width().max(bbox.height());
-    (
-        (bbox.width() * scale).ceil().max(1.0) as u32,
-        (bbox.height() * scale).ceil().max(1.0) as u32,
-    )
+) -> RenderResult<Vec<u8>>
+where
+    A: Clone,
+{
+    let geom = lower_to_geom(doc);
+    let mask = geom::lower_filled_to_mask(&geom);
+    mask::render_png_with_max_dimension(&mask, 0, max_dimension_px)
 }

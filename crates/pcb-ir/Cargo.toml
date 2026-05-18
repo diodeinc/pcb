@@ -1,6 +1,6 @@
 [package]
 name = "pcb-ir"
-version = "0.3.81"
+version = "0.3.82"
 edition.workspace = true
 repository.workspace = true
 homepage.workspace = true

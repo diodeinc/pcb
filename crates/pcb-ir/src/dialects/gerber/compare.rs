@@ -1,11 +1,5 @@
-use crate::common::*;
 use crate::dialects::gerber::*;
-use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
-use i_overlay::core::overlay_rule::OverlayRule;
-use i_overlay::float::simplify::SimplifyShape;
-use i_overlay::float::single::SingleFloatOverlay;
-
-type PolygonContour = Vec<[f64; 2]>;
+use crate::dialects::path as common_path;
 
 /// Tolerances for comparing two processed Gerber geometry documents.
 ///
@@ -157,11 +151,13 @@ fn symmetric_difference_area<A, B>(
 ) -> f64 {
     let reference = document_image_contours(reference);
     let candidate = document_image_contours(candidate);
-    polygon_area(&difference_contours(reference.clone(), candidate.clone()))
-        + polygon_area(&difference_contours(candidate, reference))
+    polygon_area(&common_path::difference_contours(
+        reference.clone(),
+        candidate.clone(),
+    )) + polygon_area(&common_path::difference_contours(candidate, reference))
 }
 
-fn document_image_contours<A>(doc: &GeometryDocument<A>) -> Vec<PolygonContour> {
+fn document_image_contours<A>(doc: &GeometryDocument<A>) -> Vec<common_path::PolygonContour> {
     let mut contours = Vec::new();
     for feature in &doc.features {
         for path in &doc.paths
@@ -173,49 +169,21 @@ fn document_image_contours<A>(doc: &GeometryDocument<A>) -> Vec<PolygonContour> 
             for contour in &doc.contours
                 [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
             {
-                contours.push(contour_polygon(doc, contour));
+                contours.extend(common_path::payloads_to_polygon_contours(&[
+                    common_path::PathPayload {
+                        bbox: contour.bbox,
+                        cmds: doc.path_cmds[contour.cmd_start as usize
+                            ..(contour.cmd_start + contour.cmd_count) as usize]
+                            .to_vec(),
+                    },
+                ]));
             }
         }
     }
-    union_contours(contours)
+    common_path::union_contours(contours, FillRule::NonZero)
 }
 
-fn contour_polygon<A>(doc: &GeometryDocument<A>, contour: &GeometryContour) -> PolygonContour {
-    let mut points = Vec::new();
-    let mut current = Point::default();
-    for cmd in
-        &doc.path_cmds[contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
-    {
-        match cmd.op {
-            PathOp::MoveTo => {
-                current = cmd.p0;
-                points.push(cmd.p0);
-            }
-            PathOp::LineTo => {
-                current = cmd.p0;
-                points.push(cmd.p0);
-            }
-            PathOp::ArcTo => {
-                let steps = arc_steps(current, cmd.p0, cmd.p1, cmd.clockwise);
-                for index in 1..=steps {
-                    points.push(point_on_arc(
-                        current,
-                        cmd.p0,
-                        cmd.p1,
-                        cmd.clockwise,
-                        index,
-                        steps,
-                    ));
-                }
-                current = cmd.p0;
-            }
-            PathOp::Close => {}
-        }
-    }
-    points.into_iter().map(|point| [point.x, point.y]).collect()
-}
-
-fn polygon_area(contours: &[PolygonContour]) -> f64 {
+fn polygon_area(contours: &[common_path::PolygonContour]) -> f64 {
     contours
         .iter()
         .map(|contour| {
@@ -227,31 +195,6 @@ fn polygon_area(contours: &[PolygonContour]) -> f64 {
         })
         .sum::<f64>()
         .abs()
-}
-
-fn union_contours(contours: Vec<PolygonContour>) -> Vec<PolygonContour> {
-    contours
-        .into_iter()
-        .filter(|contour| contour.len() >= 3)
-        .collect::<Vec<_>>()
-        .simplify_shape(OverlayFillRule::NonZero)
-        .into_iter()
-        .flatten()
-        .collect()
-}
-
-fn difference_contours(
-    subject: Vec<PolygonContour>,
-    cutters: Vec<PolygonContour>,
-) -> Vec<PolygonContour> {
-    if subject.is_empty() || cutters.is_empty() {
-        return subject;
-    }
-    subject
-        .overlay(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
-        .into_iter()
-        .flatten()
-        .collect()
 }
 
 fn signed_area(points: &[Point]) -> f64 {
@@ -267,33 +210,6 @@ fn signed_area(points: &[Point]) -> f64 {
         area += a.x * b.y - b.x * a.y;
     }
     area * 0.5
-}
-
-fn arc_steps(start: Point, end: Point, center: Point, clockwise: bool) -> usize {
-    let sweep = arc_sweep_radians(start, end, center, clockwise);
-    (sweep / 0.05).ceil().max(8.0) as usize
-}
-
-fn point_on_arc(
-    start: Point,
-    end: Point,
-    center: Point,
-    clockwise: bool,
-    index: usize,
-    steps: usize,
-) -> Point {
-    let radius = start.distance_to(center);
-    if radius == 0.0 {
-        return end;
-    }
-    let start_angle = start.angle_from(center);
-    let sweep = arc_sweep_radians(start, end, center, clockwise);
-    let signed_sweep = if clockwise { -sweep } else { sweep };
-    let angle = start_angle + signed_sweep * index as f64 / steps as f64;
-    Point::new(
-        center.x + radius * angle.cos(),
-        center.y + radius * angle.sin(),
-    )
 }
 
 #[cfg(test)]
@@ -353,6 +269,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compares_cubic_curve_shape_not_just_endpoint() {
+        let reference = cubic_doc(Point::new(0.25, 1.0), Point::new(0.75, 1.0));
+        let candidate = cubic_doc(Point::new(0.25, 0.0), Point::new(0.75, 0.0));
+
+        let report = compare_documents(
+            &reference,
+            &candidate,
+            GeometryCompareTolerance {
+                bbox_mm: 1.0,
+                area_mm2: 0.001,
+            },
+        );
+
+        assert!(!report.is_match());
+        assert!(
+            report
+                .mismatches
+                .iter()
+                .any(|message| message.contains("area") || message.contains("symmetric difference")),
+            "{:#?}",
+            report.mismatches
+        );
+    }
+
     fn triangle_doc(side: &str) -> GeometryDocument {
         let mut doc = GeometryDocument::new(vec![
             "Copper".to_string(),
@@ -369,6 +310,36 @@ mod tests {
                 cmds: vec![
                     PathCmd::move_to(Point::new(0.0, 0.0)),
                     PathCmd::line_to(Point::new(1.0, 0.0)),
+                    PathCmd::line_to(Point::new(0.0, 1.0)),
+                    PathCmd::close(),
+                ],
+            }],
+        );
+        let mut feature =
+            GeometryFeature::new(FeatureKind::Composite, FeatureBucket::Fill, Polarity::Dark);
+        feature.path_start = path;
+        feature.path_count = 1;
+        doc.features.push(feature);
+        super::process::normalize_bounds(&mut doc);
+        doc
+    }
+
+    fn cubic_doc(c1: Point, c2: Point) -> GeometryDocument {
+        let mut doc = GeometryDocument::new(vec![
+            "Copper".to_string(),
+            "L1".to_string(),
+            "Top".to_string(),
+        ]);
+        let path = doc.push_path(
+            GeometryPath::filled(FillRule::NonZero),
+            vec![ContourPayload {
+                bbox: BBox {
+                    min: Point::new(0.0, 0.0),
+                    max: Point::new(1.0, 1.0),
+                },
+                cmds: vec![
+                    PathCmd::move_to(Point::new(0.0, 0.0)),
+                    PathCmd::cubic_to(c1, c2, Point::new(1.0, 0.0)),
                     PathCmd::line_to(Point::new(0.0, 1.0)),
                     PathCmd::close(),
                 ],

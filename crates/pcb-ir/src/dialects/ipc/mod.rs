@@ -1,4 +1,6 @@
 use crate::common::*;
+pub use crate::dialects::path::{PathCmd, PathOp};
+use crate::dialects::{geom, path as common_path};
 
 #[derive(Debug, Clone)]
 pub struct GeometryDocument<Symbol, LayerFunction> {
@@ -47,13 +49,14 @@ impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
     pub fn push_compound_path(
         &mut self,
         mut path: GeometryPath,
-        contours: impl IntoIterator<Item = (BBox, Vec<PathCmd>)>,
+        contours: impl IntoIterator<Item = impl Into<common_path::PathPayload>>,
     ) -> u32 {
         let contour_start = self.contours.len() as u32;
         let mut path_bbox = BBox::empty();
-        for (bbox, cmds) in contours {
-            path_bbox = path_bbox.union(bbox);
-            self.push_contour(bbox, cmds);
+        for contour in contours {
+            let contour = contour.into();
+            path_bbox = path_bbox.union(contour.bbox);
+            self.push_contour(contour.bbox, contour.cmds);
         }
         let contour_count = self.contours.len() as u32 - contour_start;
 
@@ -85,6 +88,129 @@ impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
             severity: DiagnosticSeverity::Warning,
             message: message.into(),
         });
+    }
+}
+
+pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    layer_index: usize,
+    role: LayerRole,
+    side: Side,
+) -> geom::GeomDocument<LayerFunction, Option<Symbol>> {
+    let mut geom = geom::GeomDocument::new(Unit::Millimeter);
+    let layer = &doc.layers[layer_index];
+    let geom_layer = geom.push_layer(geom::GeomLayer {
+        name: layer.name.clone(),
+        role,
+        side,
+        object_start: 0,
+        object_count: 0,
+        bbox: layer.bbox,
+        meta: layer.layer_function.clone(),
+    });
+
+    for feature in &doc.features
+        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
+    {
+        for path in &doc.paths
+            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+        {
+            let Some(geom_path) = lower_path_kind(path) else {
+                continue;
+            };
+            let path_id = geom.push_path(geom_path, path_payloads(doc, path));
+            geom.push_object(
+                geom_layer,
+                geom::GeomObject {
+                    paint: paint_polarity(feature.polarity),
+                    path: path_id,
+                    bbox: path.bbox,
+                    meta: feature.net.clone(),
+                },
+            );
+        }
+    }
+
+    geom.diagnostics.extend(doc.diagnostics.clone());
+    geom
+}
+
+pub fn lower_layer_with_board_outlines_to_geom<Symbol: Clone, LayerFunction: Clone>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    layer_index: usize,
+    role: LayerRole,
+    side: Side,
+) -> geom::GeomDocument<LayerFunction, Option<Symbol>> {
+    let mut geom = lower_layer_to_geom(doc, layer_index, role, side);
+    let layer = &doc.layers[layer_index];
+    let outline_layer = geom.push_layer(geom::GeomLayer {
+        name: "Profile".to_string(),
+        role: LayerRole::Profile,
+        side: Side::None,
+        object_start: 0,
+        object_count: 0,
+        bbox: BBox::empty(),
+        meta: layer.layer_function.clone(),
+    });
+
+    for outline in &doc.board_outlines {
+        for path in &doc.paths
+            [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
+        {
+            let Some(geom_path) = lower_path_kind(path) else {
+                continue;
+            };
+            let path_id = geom.push_path(geom_path, path_payloads(doc, path));
+            geom.push_object(
+                outline_layer,
+                geom::GeomObject {
+                    paint: PaintPolarity::Dark,
+                    path: path_id,
+                    bbox: path.bbox,
+                    meta: None,
+                },
+            );
+            geom.layers[outline_layer as usize].bbox =
+                geom.layers[outline_layer as usize].bbox.union(path.bbox);
+        }
+    }
+
+    geom
+}
+
+fn lower_path_kind(path: &GeometryPath) -> Option<geom::GeomPath> {
+    if path.flags.filled {
+        Some(geom::GeomPath::filled(path.fill_rule))
+    } else if path.flags.stroked {
+        Some(geom::GeomPath::stroked(
+            path.stroke_width,
+            path.line_cap,
+            LineJoin::Round,
+        ))
+    } else {
+        None
+    }
+}
+
+fn path_payloads<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    path: &GeometryPath,
+) -> Vec<common_path::PathPayload> {
+    doc.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+        .iter()
+        .map(|contour| common_path::PathPayload {
+            bbox: contour.bbox,
+            cmds: doc.path_cmds
+                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+                .to_vec(),
+        })
+        .collect()
+}
+
+fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
+    match polarity {
+        GeometryPolarity::Positive => PaintPolarity::Dark,
+        GeometryPolarity::Negative => PaintPolarity::Clear,
     }
 }
 
@@ -214,71 +340,6 @@ pub struct GeometryContour {
     pub bbox: BBox,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PathCmd {
-    pub op: PathOp,
-    pub p0: Point,
-    pub p1: Point,
-    pub p2: Point,
-    pub p3: Point,
-    pub clockwise: bool,
-}
-
-impl PathCmd {
-    pub fn move_to(p: Point) -> Self {
-        Self {
-            op: PathOp::MoveTo,
-            p0: p,
-            ..Self::default()
-        }
-    }
-
-    pub fn line_to(p: Point) -> Self {
-        Self {
-            op: PathOp::LineTo,
-            p0: p,
-            ..Self::default()
-        }
-    }
-
-    pub fn cubic_to(p1: Point, p2: Point, p3: Point) -> Self {
-        Self {
-            op: PathOp::CubicTo,
-            p0: p1,
-            p1: p2,
-            p2: p3,
-            ..Self::default()
-        }
-    }
-
-    pub fn arc_to(end: Point, center: Point, clockwise: bool) -> Self {
-        Self {
-            op: PathOp::ArcTo,
-            p0: end,
-            p1: center,
-            clockwise,
-            ..Self::default()
-        }
-    }
-
-    pub fn close() -> Self {
-        Self {
-            op: PathOp::Close,
-            ..Self::default()
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum PathOp {
-    #[default]
-    MoveTo,
-    LineTo,
-    ArcTo,
-    CubicTo,
-    Close,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeatureKind {
     Hole,
@@ -322,6 +383,3 @@ pub struct SourceRef {
 }
 
 pub mod process;
-pub mod raster;
-pub mod svg;
-pub mod terminal;

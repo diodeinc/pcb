@@ -30,12 +30,10 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
     match target {
         RenderTarget::Svg => render_svg(&geometry, options)?,
         RenderTarget::Png => render_png(&geometry, options)?,
-        RenderTarget::Terminal => pcb_ir::dialects::ipc::terminal::render_layer_to_terminal(
-            &geometry,
-            0,
-            flat_layer_style,
-        )
-        .map_err(anyhow::Error::msg)?,
+        RenderTarget::Terminal => {
+            let mask = common_mask(&geometry);
+            pcb_ir::dialects::mask::render_all_to_terminal(&mask).map_err(anyhow::Error::msg)?;
+        }
     }
 
     for diagnostic in &geometry.diagnostics {
@@ -56,7 +54,7 @@ fn resolve_target(options: &RenderOptions) -> Result<RenderTarget> {
         RenderFormat::Auto => {
             if let Some(output) = &options.output {
                 infer_format_from_output(output)
-            } else if pcb_ir::dialects::ipc::terminal::can_render_to_terminal() {
+            } else if pcb_ir::dialects::mask::can_render_to_terminal() {
                 Ok(RenderTarget::Terminal)
             } else {
                 bail!(
@@ -92,8 +90,8 @@ fn render_svg(
     >,
     options: &RenderOptions,
 ) -> Result<()> {
-    let svg =
-        pcb_ir::dialects::ipc::svg::render_layer_svg_with_style(geometry, 0, flat_layer_style);
+    let mask = common_mask(geometry);
+    let svg = pcb_ir::dialects::mask::render_svg_all(&mask);
 
     if let Some(output) = &options.output {
         std::fs::write(output, svg)
@@ -117,8 +115,8 @@ fn render_png(
     >,
     options: &RenderOptions,
 ) -> Result<()> {
-    let png = pcb_ir::dialects::ipc::raster::render_layer_png(geometry, 0, flat_layer_style)
-        .map_err(anyhow::Error::msg)?;
+    let mask = common_mask(geometry);
+    let png = pcb_ir::dialects::mask::render_png_all(&mask).map_err(anyhow::Error::msg)?;
 
     if let Some(output) = &options.output {
         std::fs::write(output, png)
@@ -138,20 +136,35 @@ fn render_png(
     Ok(())
 }
 
-fn flat_layer_style(function: &ipc2581::types::LayerFunction) -> (&'static str, f64) {
-    use ipc2581::types::LayerFunction;
+fn common_mask(
+    geometry: &pcb_ir::dialects::ipc::GeometryDocument<
+        ipc2581::Symbol,
+        ipc2581::types::LayerFunction,
+    >,
+) -> pcb_ir::dialects::mask::MaskDocument<ipc2581::types::LayerFunction> {
+    let layer = &geometry.layers[0];
+    let geom = pcb_ir::dialects::ipc::lower_layer_with_board_outlines_to_geom(
+        geometry,
+        0,
+        common_layer_role(layer.layer_function),
+        pcb_ir::common::Side::None,
+    );
+    pcb_ir::dialects::geom::lower_filled_to_mask(&pcb_ir::dialects::geom::outline_strokes(geom))
+}
 
+fn common_layer_role(function: ipc2581::types::LayerFunction) -> pcb_ir::common::LayerRole {
+    use ipc2581::types::LayerFunction;
     match function {
         LayerFunction::Conductor
         | LayerFunction::CondFilm
         | LayerFunction::CondFoil
         | LayerFunction::Plane
         | LayerFunction::Signal
-        | LayerFunction::Mixed => ("#d87822", 0.9),
-        LayerFunction::Solderpaste | LayerFunction::Pastemask => ("#aeb4bb", 0.9),
-        LayerFunction::Soldermask => ("#159447", 0.55),
-        LayerFunction::Silkscreen | LayerFunction::Legend => ("#f8f9fa", 0.95),
-        LayerFunction::Rout | LayerFunction::BoardOutline => ("#606060", 1.0),
-        _ => ("#5c7cfa", 0.85),
+        | LayerFunction::Mixed => pcb_ir::common::LayerRole::Copper,
+        LayerFunction::Solderpaste | LayerFunction::Pastemask => pcb_ir::common::LayerRole::Paste,
+        LayerFunction::Soldermask => pcb_ir::common::LayerRole::Soldermask,
+        LayerFunction::Silkscreen | LayerFunction::Legend => pcb_ir::common::LayerRole::Legend,
+        LayerFunction::Rout | LayerFunction::BoardOutline => pcb_ir::common::LayerRole::Profile,
+        _ => pcb_ir::common::LayerRole::Other,
     }
 }
