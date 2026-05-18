@@ -116,7 +116,7 @@ mod tests {
         result = CollectedImports::default();
         extract_from_literal("github.com/diodeinc/stdlib/units.zen", &mut result);
         assert!(result.aliases.is_empty());
-        assert!(result.urls.is_empty());
+        assert!(result.urls.contains("github.com/diodeinc/stdlib/units.zen"));
 
         result = CollectedImports::default();
         extract_from_literal("@kicad-footprints/{}.pretty/{}.kicad_mod", &mut result);
