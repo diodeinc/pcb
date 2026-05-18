@@ -1,6 +1,6 @@
 use crate::common::*;
 use crate::dialects::mask;
-use crate::dialects::path::{PathCmd, PathPayload};
+use crate::dialects::path::{self, PathCmd, PathPayload};
 
 /// Canonical source-independent vector geometry.
 ///
@@ -76,6 +76,49 @@ impl<LayerMeta, ObjectMeta> GeomDocument<LayerMeta, ObjectMeta> {
             bbox: contour.bbox,
         });
     }
+
+    pub fn validate(&self) -> Result<(), String> {
+        for (index, layer) in self.layers.iter().enumerate() {
+            validate_range(
+                "geom layer objects",
+                index,
+                layer.object_start,
+                layer.object_count,
+                self.objects.len(),
+            )?;
+            validate_bbox("geom layer", index, layer.bbox)?;
+        }
+        for (index, object) in self.objects.iter().enumerate() {
+            if object.path as usize >= self.paths.len() {
+                return Err(format!(
+                    "geom object {index} references missing path {}",
+                    object.path
+                ));
+            }
+            validate_bbox("geom object", index, object.bbox)?;
+        }
+        for (index, path) in self.paths.iter().enumerate() {
+            validate_range(
+                "geom path contours",
+                index,
+                path.contour_start,
+                path.contour_count,
+                self.contours.len(),
+            )?;
+            validate_bbox("geom path", index, path.bbox)?;
+        }
+        for (index, contour) in self.contours.iter().enumerate() {
+            validate_range(
+                "geom contour commands",
+                index,
+                contour.cmd_start,
+                contour.cmd_count,
+                self.path_cmds.len(),
+            )?;
+            validate_bbox("geom contour", index, contour.bbox)?;
+        }
+        path::validate_cmd_points("geom", &self.path_cmds)
+    }
 }
 
 pub fn lower_filled_to_mask<LayerMeta: Clone, ObjectMeta>(
@@ -108,7 +151,13 @@ pub fn lower_filled_to_mask<LayerMeta: Clone, ObjectMeta>(
                 continue;
             }
 
-            let path = &geom.paths[object.path as usize];
+            let Some(path) = geom.paths.get(object.path as usize) else {
+                mask.diagnostics.push(GeometryDiagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    message: "Skipping geometry object with invalid path reference".to_string(),
+                });
+                continue;
+            };
             let GeomPathKind::Fill { fill_rule } = path.kind else {
                 mask.diagnostics.push(GeometryDiagnostic {
                     severity: DiagnosticSeverity::Warning,
@@ -263,6 +312,7 @@ mod tests {
         assert_eq!(doc.layers[layer as usize].object_count, 1);
         assert_eq!(doc.objects[0].path, path);
         assert_eq!(doc.contours.len(), 1);
+        doc.validate().unwrap();
     }
 
     #[test]
@@ -284,5 +334,6 @@ mod tests {
         assert_eq!(mask.layers[0].shape_count, 1);
         assert_eq!(mask.shapes[0].contour_count, 1);
         assert!(mask.diagnostics.is_empty());
+        mask.validate().unwrap();
     }
 }

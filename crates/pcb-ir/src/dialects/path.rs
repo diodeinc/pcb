@@ -77,6 +77,17 @@ pub enum PathOp {
     Close,
 }
 
+pub(crate) fn validate_cmd_points(name: &str, cmds: &[PathCmd]) -> Result<(), String> {
+    for (index, cmd) in cmds.iter().enumerate() {
+        if !cmd.p0.is_finite() || !cmd.p1.is_finite() || !cmd.p2.is_finite() {
+            return Err(format!(
+                "{name} path command {index} contains non-finite point"
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
     let mut bbox = BBox::empty();
     let mut current = Point::default();

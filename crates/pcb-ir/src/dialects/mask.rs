@@ -1,5 +1,5 @@
 use crate::common::*;
-use crate::dialects::path::{PathCmd, PathPayload};
+use crate::dialects::path::{self, PathCmd, PathPayload};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use resvg::{tiny_skia, usvg};
@@ -75,6 +75,40 @@ impl<LayerMeta> MaskDocument<LayerMeta> {
             cmd_count: self.path_cmds.len() as u32 - cmd_start,
             bbox: contour.bbox,
         });
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        for (index, layer) in self.layers.iter().enumerate() {
+            validate_range(
+                "mask layer shapes",
+                index,
+                layer.shape_start,
+                layer.shape_count,
+                self.shapes.len(),
+            )?;
+            validate_bbox("mask layer", index, layer.bbox)?;
+        }
+        for (index, shape) in self.shapes.iter().enumerate() {
+            validate_range(
+                "mask shape contours",
+                index,
+                shape.contour_start,
+                shape.contour_count,
+                self.contours.len(),
+            )?;
+            validate_bbox("mask shape", index, shape.bbox)?;
+        }
+        for (index, contour) in self.contours.iter().enumerate() {
+            validate_range(
+                "mask contour commands",
+                index,
+                contour.cmd_start,
+                contour.cmd_count,
+                self.path_cmds.len(),
+            )?;
+            validate_bbox("mask contour", index, contour.bbox)?;
+        }
+        path::validate_cmd_points("mask", &self.path_cmds)
     }
 }
 
@@ -430,5 +464,6 @@ mod tests {
         assert_eq!(doc.layers[0].shape_count, 1);
         assert_eq!(doc.shapes[0].contour_count, 1);
         assert_eq!(doc.path_cmds.len(), 2);
+        doc.validate().unwrap();
     }
 }

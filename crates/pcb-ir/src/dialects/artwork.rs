@@ -1,6 +1,6 @@
 use crate::common::*;
 use crate::dialects::geom;
-use crate::dialects::path::{PathCmd, PathPayload};
+use crate::dialects::path::{self, PathCmd, PathPayload};
 
 /// Source-independent ordered fabrication artwork.
 ///
@@ -77,6 +77,50 @@ impl<LayerMeta, ObjectMeta> ArtworkDocument<LayerMeta, ObjectMeta> {
             bbox: contour.bbox,
         });
     }
+
+    pub fn validate(&self) -> Result<(), String> {
+        for (index, layer) in self.layers.iter().enumerate() {
+            validate_range(
+                "artwork layer objects",
+                index,
+                layer.object_start,
+                layer.object_count,
+                self.objects.len(),
+            )?;
+            validate_bbox("artwork layer", index, layer.bbox)?;
+        }
+        for (index, object) in self.objects.iter().enumerate() {
+            if let Some(path) = object.geometry.path()
+                && path as usize >= self.paths.len()
+            {
+                return Err(format!(
+                    "artwork object {index} references missing path {path}"
+                ));
+            }
+            validate_bbox("artwork object", index, object.bbox)?;
+        }
+        for (index, path) in self.paths.iter().enumerate() {
+            validate_range(
+                "artwork path contours",
+                index,
+                path.contour_start,
+                path.contour_count,
+                self.contours.len(),
+            )?;
+            validate_bbox("artwork path", index, path.bbox)?;
+        }
+        for (index, contour) in self.contours.iter().enumerate() {
+            validate_range(
+                "artwork contour commands",
+                index,
+                contour.cmd_start,
+                contour.cmd_count,
+                self.path_cmds.len(),
+            )?;
+            validate_bbox("artwork contour", index, contour.bbox)?;
+        }
+        path::validate_cmd_points("artwork", &self.path_cmds)
+    }
 }
 
 pub fn lower_to_geom<LayerMeta: Clone, ObjectMeta: Clone>(
@@ -123,11 +167,18 @@ pub fn lower_to_geom<LayerMeta: Clone, ObjectMeta: Clone>(
                 });
                 continue;
             };
+            let Some(&path) = path_map.get(path as usize) else {
+                geom.diagnostics.push(GeometryDiagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    message: "Skipping artwork object with invalid path reference".to_string(),
+                });
+                continue;
+            };
             geom.push_object(
                 layer_index as u32,
                 geom::GeomObject {
                     paint: object.paint,
-                    path: path_map[path as usize],
+                    path,
                     bbox: object.bbox,
                     meta: object.meta.clone(),
                 },
@@ -294,6 +345,7 @@ mod tests {
         assert_eq!(doc.layers[0].object_count, 1);
         assert_eq!(doc.objects.len(), 1);
         assert_eq!(doc.paths[path as usize].contour_count, 1);
+        doc.validate().unwrap();
     }
 
     #[test]
@@ -326,5 +378,6 @@ mod tests {
             geom::GeomPathKind::Stroke { width, .. } if width == 0.15
         ));
         assert_eq!(geom.path_cmds.len(), 2);
+        geom.validate().unwrap();
     }
 }

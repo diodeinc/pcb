@@ -414,6 +414,7 @@ pub fn execute_file(input_file: &Path, output_dir: &Path) -> Result<GerberExport
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn exports_ipc_layer_to_parseable_gerber_x2() {
@@ -475,5 +476,71 @@ mod tests {
             .unwrap();
         assert!(copper.contents.contains("%TF.FileFunction,Copper,L1,Top*%"));
         assert!(copper.contents.contains("%TO.N,N1*%"));
+    }
+
+    #[test]
+    fn real_board_export_parseback_and_svg_paths_smoke() {
+        let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
+        let content = zstd::decode_all(Cursor::new(compressed)).unwrap();
+        let ipc = ipc::Ipc2581::parse(std::str::from_utf8(&content).unwrap()).unwrap();
+        let output_dir =
+            std::env::temp_dir().join(format!("pcb-ipc-gerber-real-smoke-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir: output_dir.clone(),
+            },
+        )
+        .unwrap();
+
+        assert!(set.files.len() >= 10);
+        assert!(set.files.iter().any(|file| file.filename == "F_Cu.gtl"));
+        assert!(
+            set.files
+                .iter()
+                .any(|file| file.filename == "Edge_Cuts.gm1")
+        );
+
+        for file in &set.files {
+            let parsed = gerberx2::GerberX2::parse(&file.contents).unwrap();
+            let mut geometry = gerberx2::geometry::extract_document(&parsed);
+            pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+            let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
+            assert!(svg.contains("<svg"), "{} did not render SVG", file.filename);
+
+            let geom = pcb_ir::dialects::gerber::lower_to_geom(&geometry);
+            geom.validate().unwrap();
+            let mask = pcb_ir::dialects::geom::lower_filled_to_mask(&geom);
+            mask.validate().unwrap();
+        }
+
+        let mut layer = geometry::extract_layer(&ipc, "F.Cu").unwrap();
+        pcb_ir::dialects::ipc::process::process_document(&mut layer);
+        let geom = pcb_ir::dialects::ipc::lower_layer_to_geom(
+            &layer,
+            0,
+            LayerRole::Copper,
+            pcb_ir::common::Side::Top,
+        );
+        geom.validate().unwrap();
+        let mask = pcb_ir::dialects::geom::lower_filled_to_mask(&geom);
+        mask.validate().unwrap();
+        assert!(pcb_ir::dialects::mask::render_svg(&mask, 0).contains("<svg"));
+
+        pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut layer);
+        let flat_geom = pcb_ir::dialects::ipc::lower_layer_to_geom(
+            &layer,
+            0,
+            LayerRole::Copper,
+            pcb_ir::common::Side::Top,
+        );
+        flat_geom.validate().unwrap();
+        let flat_mask = pcb_ir::dialects::geom::lower_filled_to_mask(&flat_geom);
+        flat_mask.validate().unwrap();
+        assert!(pcb_ir::dialects::mask::render_svg(&flat_mask, 0).contains("<svg"));
+
+        let _ = std::fs::remove_dir_all(&output_dir);
     }
 }
