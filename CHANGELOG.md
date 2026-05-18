@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Added Gerber geometry comparison helpers for IPC-2581-to-Gerber smoke tests.
 - Added `pcb ipc2581 render --flat` to render a layer as a single Gerber-style mask.
 - Added `pcb ipc2581 gerber` to export IPC-2581 fabrication layers as Gerber X2 files through a canonical artwork pipeline.
+- Added `pcb build --diagnostics <path>` to write structured JSON diagnostics for all evaluated root files.
 
 ### Changed
 
@@ -29,6 +30,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Board release uploads now derive the Diode workspace name from the first path segment of `[workspace].repository`, with `[workspace].name` available as an override.
 - `pcb layout` now deletes stale copied synced footprints.
 - Deprecated stdlib generic modules `generics/TerminalBlock.zen` and `generics/Standoff.zen`, and removed generic BOM matching for standoffs.
+- Removed the hidden `pcb build --board-config` JSON output option.
 
 ### Fixed
 
