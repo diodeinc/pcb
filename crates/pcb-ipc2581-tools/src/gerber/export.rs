@@ -5,13 +5,13 @@ use gerberx2::{GerberLayer, write_layer};
 use ipc2581::Ipc2581;
 use ipc2581::types::{LayerFunction, Side, ecad::Layer};
 
-use super::artwork::{
-    ArtworkContour, ArtworkLayer, ArtworkObject, ArtworkSegment, ObjectAttributes,
-};
+use super::artwork::{ArtworkLayer, ObjectAttributes};
 use super::lower::lower_artwork_layer;
 use crate::{geometry, ipc2581 as ipc};
-use pcb_ir::common::Point;
+use pcb_ir::common::{BBox, LayerRole, LineJoin, PaintPolarity, Unit};
+use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{FeatureBucket, GeometryPath, PathCmd, PathOp};
+use pcb_ir::dialects::path as common_path;
 
 #[derive(Debug, Clone)]
 pub struct GerberExportOptions {
@@ -227,7 +227,16 @@ fn artwork_from_processed_layer(
     file_function: Vec<String>,
 ) -> Result<ArtworkLayer> {
     let layer = &doc.layers[layer_index];
-    let mut objects = Vec::new();
+    let mut artwork = ArtworkLayer::new(Unit::Millimeter);
+    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
+        name: layer.name.clone(),
+        role: LayerRole::Copper,
+        side: pcb_ir::common::Side::None,
+        object_start: 0,
+        object_count: 0,
+        bbox: layer.bbox,
+        meta: file_function,
+    });
     for feature in &doc.features
         [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
     {
@@ -235,17 +244,36 @@ fn artwork_from_processed_layer(
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         {
             if path.flags.filled {
-                objects.push(ArtworkObject::Region {
-                    contours: artwork_contours(doc, path)?,
-                    attributes: object_attributes(ipc, feature.net),
-                });
+                let path =
+                    push_artwork_path(&mut artwork, ArtworkPath::filled(path.fill_rule), doc, path);
+                artwork.push_object(
+                    artwork_layer,
+                    ArtworkObject {
+                        paint: PaintPolarity::Dark,
+                        geometry: ArtworkGeometry::Region { path },
+                        net: None,
+                        bbox: artwork.paths[path as usize].bbox,
+                        meta: object_attributes(ipc, feature.net, None),
+                    },
+                );
             } else if path.flags.stroked {
-                objects.push(ArtworkObject::Stroke {
-                    width: path.stroke_width,
-                    contours: artwork_contours(doc, path)?,
-                    aperture_function: aperture_function(feature.bucket).to_string(),
-                    attributes: object_attributes(ipc, feature.net),
-                });
+                let artwork_path =
+                    ArtworkPath::stroked(path.stroke_width, path.line_cap, LineJoin::Round);
+                let path = push_artwork_path(&mut artwork, artwork_path, doc, path);
+                artwork.push_object(
+                    artwork_layer,
+                    ArtworkObject {
+                        paint: PaintPolarity::Dark,
+                        geometry: ArtworkGeometry::Stroke { path },
+                        net: None,
+                        bbox: artwork.paths[path as usize].bbox,
+                        meta: object_attributes(
+                            ipc,
+                            feature.net,
+                            Some(aperture_function(feature.bucket).to_string()),
+                        ),
+                    },
+                );
             } else {
                 bail!(
                     "processed IPC geometry path is neither filled nor stroked on layer '{}'",
@@ -254,45 +282,71 @@ fn artwork_from_processed_layer(
             }
         }
     }
-    Ok(ArtworkLayer {
-        file_function,
-        objects,
-    })
+    Ok(artwork)
 }
 
 fn profile_artwork_from_outlines(
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
 ) -> Result<ArtworkLayer> {
-    let mut objects = Vec::new();
+    let mut artwork = ArtworkLayer::new(Unit::Millimeter);
+    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
+        name: "Profile".to_string(),
+        role: LayerRole::Profile,
+        side: pcb_ir::common::Side::None,
+        object_start: 0,
+        object_count: 0,
+        bbox: BBox::empty(),
+        meta: vec!["Profile".into(), "NP".into()],
+    });
     for outline in &doc.board_outlines {
         for path in &doc.paths
             [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
         {
             if path.flags.stroked {
-                objects.push(ArtworkObject::Stroke {
-                    width: path.stroke_width,
-                    contours: artwork_contours(doc, path)?,
-                    aperture_function: "Profile".to_string(),
-                    attributes: ObjectAttributes::default(),
-                });
+                let artwork_path =
+                    ArtworkPath::stroked(path.stroke_width, path.line_cap, LineJoin::Round);
+                let path = push_artwork_path(&mut artwork, artwork_path, doc, path);
+                artwork.push_object(
+                    artwork_layer,
+                    ArtworkObject {
+                        paint: PaintPolarity::Dark,
+                        geometry: ArtworkGeometry::Stroke { path },
+                        net: None,
+                        bbox: artwork.paths[path as usize].bbox,
+                        meta: ObjectAttributes {
+                            aperture_function: Some("Profile".to_string()),
+                            net: None,
+                        },
+                    },
+                );
             } else if path.flags.filled {
-                objects.push(ArtworkObject::Region {
-                    contours: artwork_contours(doc, path)?,
-                    attributes: ObjectAttributes::default(),
-                });
+                let path =
+                    push_artwork_path(&mut artwork, ArtworkPath::filled(path.fill_rule), doc, path);
+                artwork.push_object(
+                    artwork_layer,
+                    ArtworkObject {
+                        paint: PaintPolarity::Dark,
+                        geometry: ArtworkGeometry::Region { path },
+                        net: None,
+                        bbox: artwork.paths[path as usize].bbox,
+                        meta: ObjectAttributes::default(),
+                    },
+                );
             } else {
                 bail!("processed IPC board outline path is neither filled nor stroked");
             }
         }
     }
-    Ok(ArtworkLayer {
-        file_function: vec!["Profile".into(), "NP".into()],
-        objects,
-    })
+    Ok(artwork)
 }
 
-fn object_attributes(ipc: &Ipc2581, net: Option<ipc2581::Symbol>) -> ObjectAttributes {
+fn object_attributes(
+    ipc: &Ipc2581,
+    net: Option<ipc2581::Symbol>,
+    aperture_function: Option<String>,
+) -> ObjectAttributes {
     ObjectAttributes {
+        aperture_function,
         net: net.map(|symbol| ipc.resolve(symbol).to_string()),
     }
 }
@@ -310,94 +364,40 @@ fn aperture_function(bucket: FeatureBucket) -> &'static str {
     }
 }
 
+fn push_artwork_path(
+    artwork: &mut ArtworkLayer,
+    artwork_path: ArtworkPath,
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    path: &GeometryPath,
+) -> u32 {
+    artwork.push_path(artwork_path, artwork_contours(doc, path))
+}
+
 fn artwork_contours(
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
     path: &GeometryPath,
-) -> Result<Vec<ArtworkContour>> {
-    let mut contours = Vec::new();
-    for contour in &doc.contours
-        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
-    {
-        let cmds = &doc.path_cmds
-            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
-        contours.push(ArtworkContour {
-            segments: artwork_segments(cmds)?,
-        });
+) -> Vec<common_path::PathPayload> {
+    doc.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+        .iter()
+        .map(|contour| common_path::PathPayload {
+            bbox: contour.bbox,
+            cmds: doc.path_cmds
+                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+                .iter()
+                .map(common_path_cmd)
+                .collect(),
+        })
+        .collect()
+}
+
+fn common_path_cmd(cmd: &PathCmd) -> common_path::PathCmd {
+    match cmd.op {
+        PathOp::MoveTo => common_path::PathCmd::move_to(cmd.p0),
+        PathOp::LineTo => common_path::PathCmd::line_to(cmd.p0),
+        PathOp::ArcTo => common_path::PathCmd::arc_to(cmd.p0, cmd.p1, cmd.clockwise),
+        PathOp::CubicTo => common_path::PathCmd::cubic_to(cmd.p0, cmd.p1, cmd.p2),
+        PathOp::Close => common_path::PathCmd::close(),
     }
-    Ok(contours)
-}
-
-fn artwork_segments(cmds: &[PathCmd]) -> Result<Vec<ArtworkSegment>> {
-    let mut first = None;
-    let mut current = None;
-    let mut segments = Vec::new();
-    for cmd in cmds {
-        match cmd.op {
-            PathOp::MoveTo => {
-                first = Some(cmd.p0);
-                current = Some(cmd.p0);
-            }
-            PathOp::LineTo => {
-                let start = current.context("path line command appears before move command")?;
-                segments.push(ArtworkSegment::Line { start, end: cmd.p0 });
-                current = Some(cmd.p0);
-            }
-            PathOp::ArcTo => {
-                let start = current.context("path arc command appears before move command")?;
-                segments.push(ArtworkSegment::Arc {
-                    start,
-                    end: cmd.p0,
-                    center: cmd.p1,
-                    clockwise: cmd.clockwise,
-                });
-                current = Some(cmd.p0);
-            }
-            PathOp::CubicTo => {
-                let start = current.context("path cubic command appears before move command")?;
-                let steps = 16;
-                for step in 1..=steps {
-                    let end =
-                        cubic_point(start, cmd.p0, cmd.p1, cmd.p2, step as f64 / steps as f64);
-                    let segment_start = current.unwrap_or(start);
-                    segments.push(ArtworkSegment::Line {
-                        start: segment_start,
-                        end,
-                    });
-                    current = Some(end);
-                }
-            }
-            PathOp::Close => {
-                if let (Some(start), Some(end)) = (first, current)
-                    && !points_close(start, end)
-                {
-                    segments.push(ArtworkSegment::Line {
-                        start: end,
-                        end: start,
-                    });
-                }
-                current = first;
-            }
-        }
-    }
-    Ok(segments)
-}
-
-fn points_close(a: Point, b: Point) -> bool {
-    a.distance_to(b) <= 1e-9
-}
-
-fn cubic_point(start: Point, c1: Point, c2: Point, end: Point, t: f64) -> Point {
-    let mt = 1.0 - t;
-    Point::new(
-        mt.powi(3) * start.x
-            + 3.0 * mt.powi(2) * t * c1.x
-            + 3.0 * mt * t.powi(2) * c2.x
-            + t.powi(3) * end.x,
-        mt.powi(3) * start.y
-            + 3.0 * mt.powi(2) * t * c1.y
-            + 3.0 * mt * t.powi(2) * c2.y
-            + t.powi(3) * end.y,
-    )
 }
 
 pub fn execute_file(input_file: &Path, output_dir: &Path) -> Result<GerberExportSet> {
