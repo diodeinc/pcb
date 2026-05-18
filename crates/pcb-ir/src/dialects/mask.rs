@@ -11,6 +11,7 @@ const VIEWBOX_PADDING_MM: f64 = 1.0;
 const DEFAULT_MAX_DIMENSION_PX: u32 = 3200;
 const KITTY_CHUNK_SIZE: usize = 4096;
 const MAX_TERMINAL_DIMENSION_PX: u32 = 1200;
+const POINT_EPSILON_MM: f64 = 1e-9;
 
 /// Fully composed layer image geometry.
 ///
@@ -262,21 +263,7 @@ fn path_data<LayerMeta>(doc: &MaskDocument<LayerMeta>, shape: &MaskShape) -> Str
                     write!(data, " L{} {}", fmt_num(cmd.p0.x), fmt_num(cmd.p0.y)).unwrap();
                 }
                 crate::dialects::path::PathOp::ArcTo => {
-                    let radius = current.distance_to(cmd.p1);
-                    let sweep_flag = if cmd.clockwise { 0 } else { 1 };
-                    let large_arc = u8::from(
-                        arc_sweep_radians(current, cmd.p0, cmd.p1, cmd.clockwise)
-                            > std::f64::consts::PI,
-                    );
-                    write!(
-                        data,
-                        " A{} {} 0 {large_arc} {sweep_flag} {} {}",
-                        fmt_num(radius),
-                        fmt_num(radius),
-                        fmt_num(cmd.p0.x),
-                        fmt_num(cmd.p0.y)
-                    )
-                    .unwrap();
+                    write_arc_to_path_data(&mut data, current, cmd.p0, cmd.p1, cmd.clockwise);
                     current = cmd.p0;
                 }
                 crate::dialects::path::PathOp::CubicTo => {
@@ -298,6 +285,44 @@ fn path_data<LayerMeta>(doc: &MaskDocument<LayerMeta>, shape: &MaskShape) -> Str
         }
     }
     data
+}
+
+fn write_arc_to_path_data(
+    data: &mut String,
+    start: Point,
+    end: Point,
+    center: Point,
+    clockwise: bool,
+) {
+    let radius = start.distance_to(center);
+    if radius <= POINT_EPSILON_MM {
+        write!(data, " L{} {}", fmt_num(end.x), fmt_num(end.y)).unwrap();
+        return;
+    }
+
+    let sweep_flag = if clockwise { 0 } else { 1 };
+    if start.distance_to(end) <= POINT_EPSILON_MM {
+        let midpoint = Point::new(2.0 * center.x - start.x, 2.0 * center.y - start.y);
+        write_svg_arc(data, radius, 0, sweep_flag, midpoint);
+        write_svg_arc(data, radius, 0, sweep_flag, end);
+        return;
+    }
+
+    let large_arc =
+        u8::from(arc_sweep_radians(start, end, center, clockwise) > std::f64::consts::PI);
+    write_svg_arc(data, radius, large_arc, sweep_flag, end);
+}
+
+fn write_svg_arc(data: &mut String, radius: f64, large_arc: u8, sweep_flag: u8, end: Point) {
+    write!(
+        data,
+        " A{} {} 0 {large_arc} {sweep_flag} {} {}",
+        fmt_num(radius),
+        fmt_num(radius),
+        fmt_num(end.x),
+        fmt_num(end.y)
+    )
+    .unwrap();
 }
 
 fn layer_style(role: LayerRole) -> (&'static str, f64) {
@@ -465,5 +490,31 @@ mod tests {
         assert_eq!(doc.shapes[0].contour_count, 1);
         assert_eq!(doc.path_cmds.len(), 2);
         doc.validate().unwrap();
+    }
+
+    #[test]
+    fn renders_full_circle_arc_as_two_svg_arcs() {
+        let mut doc = MaskDocument::<()>::new(Unit::Millimeter);
+        let layer = doc.push_layer(MaskLayer::new("F.Cu", LayerRole::Copper, Side::Top));
+        doc.push_shape(
+            layer,
+            MaskShape::new(FillRule::NonZero),
+            vec![PathPayload {
+                bbox: BBox {
+                    min: Point::new(-1.0, -1.0),
+                    max: Point::new(1.0, 1.0),
+                },
+                cmds: vec![
+                    PathCmd::move_to(Point::new(1.0, 0.0)),
+                    PathCmd::arc_to(Point::new(1.0, 0.0), Point::new(0.0, 0.0), false),
+                    PathCmd::close(),
+                ],
+            }],
+        );
+
+        let svg = render_svg(&doc, 0);
+
+        assert_eq!(svg.matches(" A1 1 0 0 1 ").count(), 2);
+        assert!(svg.contains("-1 0"));
     }
 }

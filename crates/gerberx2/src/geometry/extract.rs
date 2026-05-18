@@ -362,8 +362,8 @@ fn include_cmd_bbox(bbox: &mut BBox, previous: Option<PathCmd>, cmd: PathCmd) {
     match cmd.op {
         PathOp::MoveTo | PathOp::LineTo => bbox.include_point(cmd.p0),
         PathOp::ArcTo => {
-            if let Some(previous) = previous {
-                bbox.include_circular_arc(previous.p0, cmd.p0, cmd.p1, cmd.clockwise);
+            if let Some(start) = previous.and_then(PathCmd::end_point) {
+                bbox.include_circular_arc(start, cmd.p0, cmd.p1, cmd.clockwise);
             } else {
                 bbox.include_point(cmd.p0);
                 bbox.include_point(cmd.p1);
@@ -380,4 +380,26 @@ fn include_cmd_bbox(bbox: &mut BBox, previous: Option<PathCmd>, cmd: PathCmd) {
 
 fn point(p: gerber::Point) -> Point {
     Point::new(p.x, p.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arc_bbox_after_cubic_uses_cubic_endpoint() {
+        let mut bbox = BBox::empty();
+        include_cmd_bbox(
+            &mut bbox,
+            Some(PathCmd::cubic_to(
+                Point::new(100.0, 100.0),
+                Point::new(100.0, 100.0),
+                Point::new(1.0, 0.0),
+            )),
+            PathCmd::arc_to(Point::new(0.0, 1.0), Point::new(0.0, 0.0), false),
+        );
+
+        assert!(bbox.max.x <= 1.0);
+        assert!(bbox.max.y <= 1.0);
+    }
 }

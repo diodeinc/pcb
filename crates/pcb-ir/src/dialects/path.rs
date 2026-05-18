@@ -71,6 +71,14 @@ impl PathCmd {
             ..Self::default()
         }
     }
+
+    pub fn end_point(self) -> Option<Point> {
+        match self.op {
+            PathOp::MoveTo | PathOp::LineTo | PathOp::ArcTo => Some(self.p0),
+            PathOp::CubicTo => Some(self.p2),
+            PathOp::Close => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
