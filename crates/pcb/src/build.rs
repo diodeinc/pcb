@@ -1,12 +1,15 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
 use pcb_zen_core::resolution::ResolutionResult;
-use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalContextConfig, FileProvider};
+use pcb_zen_core::{
+    DefaultFileProvider, Diagnostics, EvalContext, EvalContextConfig, FileProvider,
+};
 use serde_json::Value as JsonValue;
 use starlark::collections::SmallMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info_span, instrument};
@@ -18,6 +21,11 @@ struct BuildEvalState {
     session: pcb_zen_core::lang::eval::EvalSession,
     file_provider: Arc<DefaultFileProvider>,
     resolution: Arc<ResolutionResult>,
+}
+
+struct BuildResult {
+    schematic: Option<Schematic>,
+    diagnostics: Diagnostics,
 }
 
 impl BuildEvalState {
@@ -61,7 +69,7 @@ impl BuildEvalState {
         deny_warnings: bool,
         has_errors: &mut bool,
         has_warnings: &mut bool,
-    ) -> Option<Schematic> {
+    ) -> BuildResult {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
 
         debug!("Compiling Zener file: {}", zen_path.display());
@@ -127,10 +135,16 @@ impl BuildEvalState {
                 pcb_ui::icons::error(),
                 file_name.with_style(Style::Red).bold()
             );
-            return None;
+            return BuildResult {
+                schematic: None,
+                diagnostics,
+            };
         }
 
-        schematic
+        BuildResult {
+            schematic,
+            diagnostics,
+        }
     }
 }
 
@@ -184,6 +198,10 @@ pub struct BuildArgs {
     /// Print JSON netlist to stdout (undocumented)
     #[arg(long = "netlist", hide = true)]
     pub netlist: bool,
+
+    /// Write build diagnostics as JSON to PATH, or '-' for stdout
+    #[arg(long = "diagnostics", value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
+    pub diagnostics: Option<PathBuf>,
 
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
@@ -239,18 +257,58 @@ pub fn build(
 ) -> Option<Schematic> {
     let eval_state = BuildEvalState::new(resolution);
 
-    eval_state.build(
-        zen_path,
-        inputs,
-        passes,
-        deny_warnings,
-        has_errors,
-        has_warnings,
-    )
+    eval_state
+        .build(
+            zen_path,
+            inputs,
+            passes,
+            deny_warnings,
+            has_errors,
+            has_warnings,
+        )
+        .schematic
+}
+
+fn workspace_relative_path(path: &Path, workspace_root: &Path) -> String {
+    path.strip_prefix(workspace_root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn diagnostics_report_for_file(
+    source_file: String,
+    diagnostics: &Diagnostics,
+) -> Vec<pcb_zen_core::DiagnosticReport> {
+    pcb_zen_core::DiagnosticsReport::from_diagnostics(diagnostics, &source_file)
+        .files
+        .remove(&source_file)
+        .unwrap_or_default()
+}
+
+fn write_diagnostics_report(
+    output_path: &Path,
+    report: &BTreeMap<String, Vec<pcb_zen_core::DiagnosticReport>>,
+) -> Result<()> {
+    let json = serde_json::to_string_pretty(report).context("Failed to serialize diagnostics")?;
+
+    if output_path == Path::new("-") {
+        println!("{json}");
+        return Ok(());
+    }
+
+    std::fs::write(output_path, json)
+        .with_context(|| format!("Failed to write diagnostics to {}", output_path.display()))
 }
 
 pub fn execute(args: BuildArgs) -> Result<()> {
     let mut has_errors = false;
+
+    if args.netlist && args.diagnostics.as_deref() == Some(Path::new("-")) {
+        anyhow::bail!(
+            "--diagnostics - cannot be used with --netlist because both write JSON to stdout"
+        );
+    }
 
     if !args.config.is_empty() {
         let Some(path) = args.path.as_deref() else {
@@ -268,6 +326,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
 
     // Resolve dependencies before finding .zen files
     let resolution = crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
+    let workspace_root = resolution.workspace_info.root.clone();
 
     // Process .zen files using shared walker - always recursive for directories
     let zen_files =
@@ -278,16 +337,27 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());
     let mut has_warnings = false;
+    let mut diagnostics_report = BTreeMap::new();
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
-        let Some(schematic) = eval_state.build(
+        let build_result = eval_state.build(
             zen_path,
             config_inputs.clone(),
             create_diagnostics_passes(&args.suppress, &args.warn),
             deny_warnings,
             &mut has_errors,
             &mut has_warnings,
-        ) else {
+        );
+
+        if args.diagnostics.is_some() {
+            let source_file = workspace_relative_path(zen_path, &workspace_root);
+            diagnostics_report.insert(
+                source_file.clone(),
+                diagnostics_report_for_file(source_file, &build_result.diagnostics),
+            );
+        }
+
+        let Some(schematic) = build_result.schematic else {
             continue;
         };
 
@@ -302,6 +372,10 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         } else {
             print_build_success(&file_name, &schematic);
         }
+    }
+
+    if let Some(output_path) = &args.diagnostics {
+        write_diagnostics_report(output_path, &diagnostics_report)?;
     }
 
     if has_errors {

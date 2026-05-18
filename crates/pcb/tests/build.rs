@@ -759,6 +759,65 @@ fn test_suppress_by_exact_kind() {
 }
 
 #[test]
+fn test_build_writes_diagnostics_json() {
+    let mut sandbox = Sandbox::new();
+    sandbox.write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN);
+
+    sandbox
+        .run(
+            "pcb",
+            ["build", "test.zen", "--diagnostics", "diagnostics.json"],
+        )
+        .run()
+        .expect("build should succeed");
+
+    let report_path = sandbox.root_path().join("diagnostics.json");
+    let report: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(report_path).expect("diagnostics report should be written"),
+    )
+    .expect("diagnostics report should be valid JSON");
+
+    let diagnostics = report
+        .get("test.zen")
+        .and_then(|value| value.as_array())
+        .expect("report should include diagnostics for the evaluated root file");
+    assert_eq!(diagnostics.len(), 4);
+    assert_eq!(diagnostics[0]["severity"], "warning");
+    assert_eq!(diagnostics[0]["body"], "Voltage mismatch detected");
+    assert_eq!(diagnostics[0]["suppressed"], false);
+}
+
+#[test]
+fn test_build_writes_diagnostics_json_on_failure() {
+    let mut sandbox = Sandbox::new();
+    sandbox.write("test.zen", r#"error("Build failed")"#);
+
+    let output = sandbox
+        .run(
+            "pcb",
+            ["build", "test.zen", "--diagnostics", "diagnostics.json"],
+        )
+        .unchecked()
+        .run()
+        .expect("build command should run");
+    assert!(!output.status.success());
+
+    let report_path = sandbox.root_path().join("diagnostics.json");
+    let report: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(report_path).expect("diagnostics report should be written"),
+    )
+    .expect("diagnostics report should be valid JSON");
+
+    let diagnostics = report
+        .get("test.zen")
+        .and_then(|value| value.as_array())
+        .expect("report should include diagnostics for the evaluated root file");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["severity"], "error");
+    assert_eq!(diagnostics[0]["body"], "Build failed");
+}
+
+#[test]
 fn test_suppress_by_hierarchical_kind() {
     // -S electrical should suppress all electrical.* warnings
     let output = Sandbox::new()
