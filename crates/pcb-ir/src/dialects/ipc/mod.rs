@@ -115,11 +115,7 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
         for path in &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         {
-            let geom_path = if path.flags.filled {
-                geom::GeomPath::filled(path.fill_rule)
-            } else if path.flags.stroked {
-                geom::GeomPath::stroked(path.stroke_width, path.line_cap, LineJoin::Round)
-            } else {
+            let Some(geom_path) = lower_path_kind(path) else {
                 continue;
             };
             let path_id = geom.push_path(geom_path, path_payloads(doc, path));
@@ -135,8 +131,42 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
         }
     }
 
+    for outline in &doc.board_outlines {
+        for path in &doc.paths
+            [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
+        {
+            let Some(geom_path) = lower_path_kind(path) else {
+                continue;
+            };
+            let path_id = geom.push_path(geom_path, path_payloads(doc, path));
+            geom.push_object(
+                geom_layer,
+                geom::GeomObject {
+                    paint: PaintPolarity::Dark,
+                    path: path_id,
+                    bbox: path.bbox,
+                    meta: None,
+                },
+            );
+        }
+    }
+
     geom.diagnostics.extend(doc.diagnostics.clone());
     geom
+}
+
+fn lower_path_kind(path: &GeometryPath) -> Option<geom::GeomPath> {
+    if path.flags.filled {
+        Some(geom::GeomPath::filled(path.fill_rule))
+    } else if path.flags.stroked {
+        Some(geom::GeomPath::stroked(
+            path.stroke_width,
+            path.line_cap,
+            LineJoin::Round,
+        ))
+    } else {
+        None
+    }
 }
 
 fn path_payloads<Symbol, LayerFunction>(

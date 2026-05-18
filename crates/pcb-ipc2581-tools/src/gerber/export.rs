@@ -45,7 +45,13 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
         if first_doc.is_none() {
             first_doc = Some(doc.clone());
         }
-        let artwork = artwork_from_processed_layer(ipc, &doc, 0, plan.file_function.clone())?;
+        let artwork = artwork_from_processed_layer(
+            ipc,
+            &doc,
+            0,
+            plan.role.ir_role(),
+            plan.file_function.clone(),
+        )?;
         let layer = lower_artwork_layer(&artwork)?;
         let contents = write_layer(&layer)?;
         files.push(GerberExportFile {
@@ -90,6 +96,7 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
 
 struct ExportLayerPlan<'a> {
     layer: &'a Layer,
+    role: GerberLayerRole,
     filename: String,
     file_function: Vec<String>,
 }
@@ -121,6 +128,7 @@ fn export_layer_plans(layers: &[Layer]) -> Vec<ExportLayerPlan<'_>> {
         let (filename, file_function) = layer_output(role, layer.side, copper_index, copper_count);
         plans.push(ExportLayerPlan {
             layer,
+            role,
             filename,
             file_function,
         });
@@ -142,6 +150,18 @@ fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
         LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),
         LayerFunction::Rout | LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
         _ => None,
+    }
+}
+
+impl GerberLayerRole {
+    fn ir_role(self) -> LayerRole {
+        match self {
+            GerberLayerRole::Copper => LayerRole::Copper,
+            GerberLayerRole::Paste => LayerRole::Paste,
+            GerberLayerRole::Soldermask => LayerRole::Soldermask,
+            GerberLayerRole::Legend => LayerRole::Legend,
+            GerberLayerRole::Profile => LayerRole::Profile,
+        }
     }
 }
 
@@ -224,13 +244,14 @@ fn artwork_from_processed_layer(
     ipc: &Ipc2581,
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
     layer_index: usize,
+    role: LayerRole,
     file_function: Vec<String>,
 ) -> Result<ArtworkLayer> {
     let layer = &doc.layers[layer_index];
     let mut artwork = ArtworkLayer::new(Unit::Millimeter);
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
         name: layer.name.clone(),
-        role: LayerRole::Copper,
+        role,
         side: pcb_ir::common::Side::None,
         object_start: 0,
         object_count: 0,

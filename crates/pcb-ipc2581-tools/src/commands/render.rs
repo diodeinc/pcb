@@ -149,7 +149,7 @@ fn common_mask(
         common_layer_role(layer.layer_function),
         pcb_ir::common::Side::None,
     );
-    pcb_ir::dialects::geom::lower_filled_to_mask(&geom)
+    pcb_ir::dialects::geom::lower_filled_to_mask(&pcb_ir::dialects::geom::outline_strokes(geom))
 }
 
 fn common_layer_role(function: ipc2581::types::LayerFunction) -> pcb_ir::common::LayerRole {

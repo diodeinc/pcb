@@ -179,6 +179,46 @@ pub fn lower_filled_to_mask<LayerMeta: Clone, ObjectMeta>(
     mask
 }
 
+pub fn outline_strokes<LayerMeta, ObjectMeta>(
+    mut geom: GeomDocument<LayerMeta, ObjectMeta>,
+) -> GeomDocument<LayerMeta, ObjectMeta> {
+    for object_index in 0..geom.objects.len() {
+        let path_index = geom.objects[object_index].path as usize;
+        let Some(path) = geom.paths.get(path_index).cloned() else {
+            geom.diagnostics.push(GeometryDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                message: "Skipping geometry object with invalid path reference".to_string(),
+            });
+            continue;
+        };
+        let GeomPathKind::Stroke {
+            width,
+            line_cap,
+            line_join,
+        } = path.kind
+        else {
+            continue;
+        };
+        let Some(contours) =
+            path::outline_stroke(&path_payloads(&geom, &path), width, line_cap, line_join)
+        else {
+            continue;
+        };
+        let path_id = geom.push_path(GeomPath::filled(FillRule::NonZero), contours);
+        geom.objects[object_index].path = path_id;
+        geom.objects[object_index].bbox = geom.paths[path_id as usize].bbox;
+    }
+
+    for layer in &mut geom.layers {
+        layer.bbox = geom.objects
+            [layer.object_start as usize..(layer.object_start + layer.object_count) as usize]
+            .iter()
+            .fold(BBox::empty(), |bbox, object| bbox.union(object.bbox));
+    }
+
+    geom
+}
+
 fn path_payloads<LayerMeta, ObjectMeta>(
     doc: &GeomDocument<LayerMeta, ObjectMeta>,
     path: &GeomPath,
