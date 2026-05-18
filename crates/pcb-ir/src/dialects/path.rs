@@ -119,12 +119,6 @@ pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
     bbox
 }
 
-pub fn payloads_bbox(payloads: &[PathPayload]) -> BBox {
-    payloads
-        .iter()
-        .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
-}
-
 pub fn outline_stroke(
     payloads: &[PathPayload],
     width: f64,
@@ -186,14 +180,6 @@ pub fn difference_contours(
         OverlayRule::Difference,
         OverlayFillRule::NonZero,
     ))
-}
-
-pub fn polygon_shapes_to_payloads(shapes: Vec<Vec<PolygonContour>>) -> Vec<PathPayload> {
-    shapes
-        .into_iter()
-        .flatten()
-        .filter_map(polygon_contour_to_payload)
-        .collect()
 }
 
 pub fn polygon_contours_to_payloads(contours: Vec<PolygonContour>) -> Vec<PathPayload> {
