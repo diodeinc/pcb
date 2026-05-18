@@ -783,8 +783,10 @@ fn test_build_writes_diagnostics_json() {
         .expect("report should include diagnostics for the evaluated root file");
     assert_eq!(diagnostics.len(), 4);
     assert_eq!(diagnostics[0]["severity"], "warning");
+    assert_eq!(diagnostics[0]["kind"], "electrical.voltage_mismatch");
     assert_eq!(diagnostics[0]["body"], "Voltage mismatch detected");
     assert_eq!(diagnostics[0]["suppressed"], false);
+    assert_eq!(diagnostics[3]["kind"], serde_json::Value::Null);
 }
 
 #[test]
