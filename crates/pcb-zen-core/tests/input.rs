@@ -1436,17 +1436,17 @@ snapshot_eval!(config_int_to_float_conversion, {
         power = config(float, optional = True)
         
         # Verify the values are floats
-        add_property("voltage_value", voltage)
-        add_property("voltage_type", type(voltage))
-        add_property("current_value", current) 
-        add_property("current_type", type(current))
+        builtin.add_property("voltage_value", voltage)
+        builtin.add_property("voltage_type", type(voltage))
+        builtin.add_property("current_value", current) 
+        builtin.add_property("current_type", type(current))
         
         # Test arithmetic to ensure they behave as floats
-        add_property("voltage_divided", voltage / 2)
-        add_property("current_multiplied", current * 1.5)
+        builtin.add_property("voltage_divided", voltage / 2)
+        builtin.add_property("current_multiplied", current * 1.5)
         
         # Optional power should be None when not provided
-        add_property("power_is_none", power == None)
+        builtin.add_property("power_is_none", power == None)
     "#,
     "top.zen" => r#"
         MyModule = Module("./Module.zen")
@@ -1469,15 +1469,15 @@ snapshot_eval!(config_mixed_numeric_types, {
         voltage3 = config(float, default = 0)  # int default
         
         # Verify all are floats
-        add_property("v1_value", voltage1)
-        add_property("v1_type", type(voltage1))
-        add_property("v2_value", voltage2)
-        add_property("v2_type", type(voltage2))
-        add_property("v3_value", voltage3)
-        add_property("v3_type", type(voltage3))
+        builtin.add_property("v1_value", voltage1)
+        builtin.add_property("v1_type", type(voltage1))
+        builtin.add_property("v2_value", voltage2)
+        builtin.add_property("v2_type", type(voltage2))
+        builtin.add_property("v3_value", voltage3)
+        builtin.add_property("v3_type", type(voltage3))
         
         # Test that float arithmetic works correctly
-        add_property("sum", voltage1 + voltage2 + voltage3)
+        builtin.add_property("sum", voltage1 + voltage2 + voltage3)
     "#,
     "top.zen" => r#"
         MyModule = Module("./Module.zen")

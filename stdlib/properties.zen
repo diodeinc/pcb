@@ -67,10 +67,10 @@ def Layout(
             builtin.add_component_modifier(bom_profile)
 
     if path:
-        add_property("layout_path", Path(path, allow_not_exist=True))
-    add_property("layout_name", name)
+        builtin.add_property("layout_path", Path(path, allow_not_exist=True))
+    builtin.add_property("layout_name", name)
     if hints:
-        add_property("layout_hints", hints)
+        builtin.add_property("layout_hints", hints)
 
 
 def Schematics(name: str, collapse: bool | None = None) -> None:
@@ -82,7 +82,7 @@ def Schematics(name: str, collapse: bool | None = None) -> None:
     )
 
     if collapse:
-        add_property("collapse", collapse)
+        builtin.add_property("collapse", collapse)
 
 
 def Simulation(

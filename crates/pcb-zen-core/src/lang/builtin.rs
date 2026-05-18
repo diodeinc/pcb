@@ -247,6 +247,16 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         Ok(NoneType)
     }
 
+    fn add_property<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        #[starlark(require = pos)] name: String,
+        #[starlark(require = pos)] value: Value<'v>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<NoneType> {
+        eval.add_property(&name, value);
+        Ok(NoneType)
+    }
+
     fn add_component_modifier<'v>(
         #[allow(unused_variables)] this: &Builtin,
         modifier_fn: Value<'v>,

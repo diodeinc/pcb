@@ -1908,6 +1908,21 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = pos)] value: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
+        let (path, span) = eval
+            .call_stack_top_location()
+            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+        eval.add_diagnostic(
+            crate::Diagnostic::categorized(
+                &path,
+                "`add_property(...)` is deprecated; use `builtin.add_property(...)` instead",
+                "deprecated.add_property",
+                starlark::errors::EvalSeverity::Warning,
+            )
+            .with_span(span)
+            .with_call_stack(Some(eval.call_stack())),
+        );
+
         eval.add_property(&name, value);
 
         Ok(Value::new_none())
