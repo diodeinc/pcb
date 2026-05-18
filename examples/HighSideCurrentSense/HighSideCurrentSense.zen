@@ -12,10 +12,8 @@ INA240A = Module("../INA240A/INA240A.zen")
 
 shunt_value = config(str, default="2mohm 1%", optional=True)
 shunt_package = config(str, default="2512", optional=True)
-shunt_mpn = config(str, optional=True)
 ina_gain = config(str, default="A1", optional=True)
 ina_package = config(str, default="TSSOP", optional=True)
-properties = config(dict, optional=True)
 ref_config = config(str, default="GROUND")
 
 POWER_BUS_IN = io(Power)  # Input power bus
@@ -25,8 +23,6 @@ ISENSE_OUT = io(Analog)  # Current sense output
 GND = io(Ground)  # Ground reference
 _IN_P = Analog()
 _IN_N = Analog()
-
-shunt_properties = {"mpn": shunt_mpn} if shunt_mpn else {}
 
 # Create nettie modules for power connections
 NetTie(name="isense_shunt_high", P1=POWER_BUS_IN, P2=_IN_P)
@@ -40,7 +36,6 @@ Resistor(
     package=shunt_package,
     P1=POWER_BUS_IN,
     P2=POWER_BUS_OUT,
-    properties=shunt_properties,
 )
 
 # INA240 current sense inalifier

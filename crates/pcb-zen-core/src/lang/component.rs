@@ -315,6 +315,87 @@ fn property_string<'v>(properties_map: &SmallMap<String, Value<'v>>, key: &str) 
         .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
 }
 
+/// Legacy `properties[...]` keys on `Component()` and the typed kwarg that
+/// replaces each one. The same key may appear in multiple casings to mirror
+/// what we historically accepted.
+const LEGACY_COMPONENT_PROPERTY_KEYS: &[(&str, &str)] = &[
+    ("do_not_populate", "dnp"),
+    ("Do_not_populate", "dnp"),
+    ("DNP", "dnp"),
+    ("dnp", "dnp"),
+    ("Exclude_from_bom", "skip_bom"),
+    ("exclude_from_bom", "skip_bom"),
+    ("Exclude_from_pos_files", "skip_pos"),
+    ("exclude_from_pos_files", "skip_pos"),
+    ("type", "type"),
+    ("Type", "type"),
+    ("datasheet", "datasheet"),
+    ("description", "description"),
+    ("Description", "description"),
+];
+
+/// Legacy sourcing inputs (kwargs or `properties[...]` entries) whose endorsed
+/// replacement is `part=Part(mpn=..., manufacturer=...)`.
+const LEGACY_COMPONENT_SOURCING_PROPERTY_KEYS: &[&str] =
+    &["mpn", "Mpn", "manufacturer", "Manufacturer"];
+
+/// Emit warnings for legacy `Component()` inputs. Each warning points users at
+/// the endorsed replacement; legacy values continue to be honored elsewhere.
+fn warn_legacy_component_inputs<'v>(
+    eval: &Evaluator<'v, '_, '_>,
+    component_name: &str,
+    mpn_val: Option<Value<'v>>,
+    manufacturer_val: Option<Value<'v>>,
+    properties_map: &SmallMap<String, Value<'v>>,
+) {
+    let mut messages: Vec<String> = Vec::new();
+
+    for (legacy_key, typed_kwarg) in LEGACY_COMPONENT_PROPERTY_KEYS {
+        if properties_map.contains_key(*legacy_key) {
+            messages.push(format!(
+                "Component '{component_name}': `properties[\"{legacy_key}\"]` is deprecated; pass `{typed_kwarg}=...` to Component() instead",
+            ));
+        }
+    }
+
+    let part_suggestion = "pass `part=Part(mpn=..., manufacturer=...)` to Component() instead";
+    for key in LEGACY_COMPONENT_SOURCING_PROPERTY_KEYS {
+        if properties_map.contains_key(*key) {
+            messages.push(format!(
+                "Component '{component_name}': `properties[\"{key}\"]` is deprecated; {part_suggestion}",
+            ));
+        }
+    }
+    for (kwarg, present) in [
+        ("mpn", mpn_val.is_some()),
+        ("manufacturer", manufacturer_val.is_some()),
+    ] {
+        if present {
+            messages.push(format!(
+                "Component '{component_name}': `{kwarg}=...` is deprecated; {part_suggestion}",
+            ));
+        }
+    }
+
+    if messages.is_empty() {
+        return;
+    }
+
+    let (path, span) = diagnostic_location(eval);
+    for message in messages {
+        eval.add_diagnostic(
+            crate::Diagnostic::categorized(
+                &path,
+                &message,
+                "deprecated.component_property",
+                EvalSeverity::Warning,
+            )
+            .with_span(span)
+            .with_call_stack(Some(eval.call_stack())),
+        );
+    }
+}
+
 fn parse_component_properties<'v>(
     properties_val: Value<'v>,
 ) -> starlark::Result<SmallMap<String, Value<'v>>> {
@@ -884,6 +965,7 @@ fn remove_consolidated_component_properties<'v>(properties_map: &mut SmallMap<St
     properties_map.shift_remove("Manufacturer");
     properties_map.shift_remove("datasheet");
     properties_map.shift_remove("description");
+    properties_map.shift_remove("Description");
     properties_map.shift_remove("type");
     properties_map.shift_remove("Type");
     // Remove DNP legacy keys.
@@ -1959,6 +2041,10 @@ where
 
             // Properties map.
             let mut properties_map = parse_component_properties(properties_val)?;
+
+            // Warn on any legacy `Component()` inputs that have a typed-kwarg
+            // replacement. The legacy values are still honored below.
+            warn_legacy_component_inputs(eval_ctx, &name, mpn, manufacturer, &properties_map);
 
             if let Some(name) = final_symbol.name() {
                 properties_map.insert(

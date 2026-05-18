@@ -338,7 +338,8 @@ snapshot_eval!(net_type_cast_preserves_name_across_modules, {
             footprint = "TEST:0402",
             pin_defs = {"P1": "1", "P2": "2"},
             pins = {"P1": P1, "P2": P2},
-            properties = {"value": "10kOhm", "type": "resistor"},
+            type = "resistor",
+            properties = {"value": "10kOhm"},
         )
     "#,
     "child.zen" => r#"

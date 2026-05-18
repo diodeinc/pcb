@@ -19,8 +19,6 @@ size = config(Size, default=Size("SMD_1x2mm"))
 properties = {
     "value": format_value(size),
     "size": size,
-    "exclude_from_bom": True,
-    "exclude_from_pos_files": True,
 }
 
 P1 = io(Net)
@@ -63,5 +61,7 @@ Component(
     footprint=File(_footprint(size)),
     prefix="P",
     pins={"Pin_1": P1},
+    skip_bom=True,
+    skip_pos=True,
     properties=properties,
 )

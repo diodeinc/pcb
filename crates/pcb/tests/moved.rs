@@ -23,7 +23,8 @@ Component(
     footprint = File("dummy.kicad_mod"),
     pin_defs = {"P1": "1", "P2": "2"},
     pins = {"P1": R1_P1, "P2": R1_P2},
-    properties = {"value": "1kOhm", "type": "resistor"}
+    type = "resistor",
+    properties = {"value": "1kOhm"}
 )
 
 Component(
@@ -32,7 +33,8 @@ Component(
     footprint = File("dummy.kicad_mod"),
     pin_defs = {"P1": "1", "P2": "2"},
     pins = {"P1": R2_P1, "P2": R2_P2},
-    properties = {"value": "1kOhm", "type": "resistor"}
+    type = "resistor",
+    properties = {"value": "1kOhm"}
 )
 
 # moved() directive claims OLD_RESISTOR was moved to NEW_RESISTOR
@@ -61,7 +63,8 @@ Component(
     footprint = File("dummy.kicad_mod"),
     pin_defs = {"P1": "1", "P2": "2"},
     pins = {"P1": R1_P1, "P2": R1_P2},
-    properties = {"value": "1kOhm", "type": "resistor"}
+    type = "resistor",
+    properties = {"value": "1kOhm"}
 )
 
 # moved() directive points to NEW_COMPONENT that doesn't exist - should warn
@@ -89,7 +92,8 @@ Component(
     footprint = File("dummy.kicad_mod"),
     pin_defs = {"VIN": "1", "VOUT": "2"},
     pins = {"VIN": R1_P1, "VOUT": R1_P2},
-    properties = {"value": "1kOhm", "type": "power_supply"}
+    type = "power_supply",
+    properties = {"value": "1kOhm"}
 )
 
 # moved() directive with old path existing and new path missing - should warn twice
@@ -120,7 +124,8 @@ Component(
     footprint = File("dummy.kicad_mod"),
     pin_defs = {"P1": "1", "P2": "2"},
     pins = {"P1": R1_P1, "P2": R1_P2},
-    properties = {"value": "1kOhm", "type": "resistor"}
+    type = "resistor",
+    properties = {"value": "1kOhm"}
 )
 
 # Valid moved() directive: old doesn't exist, new exists - should not warn

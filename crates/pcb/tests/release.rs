@@ -94,10 +94,10 @@ Component(
     footprint = File("test.kicad_mod"),
     pin_defs = {"P1": "1", "P2": "2"},
     pins = {"P1": P1, "P2": P2},
+    type = "resistor",
+    datasheet = File("datasheet.txt"),
     properties = {
         "value": value,
-        "type": "resistor",
-        "datasheet": File("datasheet.txt"),
     }
 )
 "#;
