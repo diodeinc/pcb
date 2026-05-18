@@ -322,7 +322,6 @@ impl PcbToml {
     ///
     /// Takes the last path segment as the alias key. Only creates alias if unique (no collisions).
     /// Examples:
-    /// - "github.com/diodeinc/stdlib" → "@stdlib"
     /// - "github.com/diodeinc/registry/reference/XAL7070-562MEx" → "@XAL7070-562MEx"
     /// - "gitlab.com/kicad/libraries/kicad-symbols" → "@kicad-symbols"
     pub fn auto_generated_aliases(&self) -> HashMap<String, String> {
@@ -1325,10 +1324,9 @@ pcb-version = "0.3.71"
 # pcb-version = "0.3"
 #
 # [dependencies]
-# "github.com/diodeinc/stdlib" = "0.3"
 # ```
 
-load("github.com/diodeinc/stdlib/units.zen", "Voltage")
+load("@stdlib/units.zen", "Voltage")
 "#;
 
         let result = extract_inline_manifest(zen_content);

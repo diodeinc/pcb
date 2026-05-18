@@ -5,7 +5,7 @@ description: "Package management, workspaces, and dependency resolution"
 
 A version identifies a specific, immutable snapshot of a package's source code.
 Versions give engineers a precise language for specifying requirements: when a
-package declares a dependency on `stdlib@0.3.2`, any engineer building it will
+package declares a dependency on `component-lib@0.3.2`, any engineer building it will
 use exactly that version, producing identical results regardless of when or where
 the build runs.
 
@@ -115,7 +115,7 @@ promises. The goal is to make keeping promises easy and breaking them hard.
 ## Coexisting Versions
 
 Sometimes breaking changes are necessary. A component library might need to
-restructure its pin definitions, or the stdlib might change how units are
+restructure its pin definitions, or a shared component library might change how interfaces are
 represented. When this happens, packages that depend on the old API cannot
 immediately upgrade—they need time to adapt.
 
@@ -125,15 +125,15 @@ dependency graph contains:
 ```toml
 # Library X (not yet migrated)
 [dependencies]
-"github.com/diodeinc/stdlib" = "0.3"
+"github.com/acme/component-lib" = "0.3"
 
 # Library Y (migrated to new API)
 [dependencies]
-"github.com/diodeinc/stdlib" = "1.0"
+"github.com/acme/component-lib" = "1.0"
 ```
 
 Both libraries can build together. The system maintains separate copies of
-`stdlib@0.3.x` and `stdlib@1.0.x`, each used by the packages that require them.
+`component-lib@0.3.x` and `component-lib@1.0.x`, each used by the packages that require them.
 Types and values from different major versions are distinct and cannot be mixed.
 
 This approach has two key benefits:
@@ -142,12 +142,12 @@ This approach has two key benefits:
 validating each migration before moving to the next. The old version remains
 available as long as any package needs it.
 
-**Diamond dependencies work.** If Board A uses Library X (stdlib 0.3) and Library Y
-(stdlib 1.0), both libraries function correctly. Library X sees stdlib 0.3 types,
-Library Y sees stdlib 1.0 types, and the board sees whatever version it declares.
+**Diamond dependencies work.** If Board A uses Library X (component-lib 0.3) and Library Y
+(component-lib 1.0), both libraries function correctly. Library X sees component-lib 0.3 types,
+Library Y sees component-lib 1.0 types, and the board sees whatever version it declares.
 
 The limitation is that types from different major versions may be incompatible. A
-`Net` from stdlib 0.3 cannot be passed to a function expecting a stdlib 1.0 `Net`.
+`Foo` from component-lib 0.3 cannot be passed to a function expecting a component-lib 1.0 `Foo`.
 Major versions represent potential breaking changes, and the system cannot guarantee
 compatibility across that boundary.
 
@@ -177,15 +177,15 @@ Consider this dependency graph:
 
 ```
 Board
-├── stdlib >= 0.3
+├── component-lib >= 0.3
 └── regulator >= 1.0
-    └── stdlib >= 0.3.2
+    └── component-lib >= 0.3.2
 ```
 
-The Board requires `stdlib >= 0.3.0`. The regulator requires `stdlib >= 0.3.2`.
-MVS selects `stdlib@0.3.2`—the minimum version that satisfies both constraints.
+The Board requires `component-lib >= 0.3.0`. The regulator requires `component-lib >= 0.3.2`.
+MVS selects `component-lib@0.3.2`—the minimum version that satisfies both constraints.
 
-Even if `stdlib@0.3.9` exists and is compatible, MVS chooses 0.3.2 because that's
+Even if `component-lib@0.3.9` exists and is compatible, MVS chooses 0.3.2 because that's
 what the dependencies explicitly require. The existence of newer versions is
 irrelevant.
 
@@ -194,7 +194,7 @@ irrelevant.
 This seems counterintuitive. Wouldn't you want the newest compatible version with
 all its bug fixes? The key insight is that **the author tested with specific versions**.
 
-When the regulator author published version 1.0.0, they tested it with `stdlib@0.3.2`.
+When the regulator author published version 1.0.0, they tested it with `component-lib@0.3.2`.
 They know it works with that version. They *hope* it works with 0.3.9, but they
 haven't tested it. By selecting the minimum, MVS chooses the versions that were
 actually tested together.
@@ -203,7 +203,7 @@ If you want newer versions, you explicitly upgrade:
 
 ```toml
 [dependencies]
-"github.com/diodeinc/stdlib" = "0.3.9"
+"github.com/acme/component-lib" = "0.3.9"
 ```
 
 Now MVS selects 0.3.9 because *you* require it. You're taking responsibility for
@@ -240,14 +240,14 @@ every place it's required and take the highest version. That's it.
 **Example with multiple semver families:**
 
 ```
-WV0001: stdlib = 0.2.13
-WV0002: stdlib = 0.3.2, regulator = 1.0
-WV0003: stdlib = 0.3.1
-regulator@1.0.0: stdlib = 0.3.0
+WV0001: component-lib = 0.2.13
+WV0002: component-lib = 0.3.2, regulator = 1.0
+WV0003: component-lib = 0.3.1
+regulator@1.0.0: component-lib = 0.3.0
 
 Result:
-  v0.2.x family → stdlib@0.2.13
-  v0.3.x family → stdlib@0.3.2 (max of 0.3.2, 0.3.1, 0.3.0)
+  v0.2.x family → component-lib@0.2.13
+  v0.3.x family → component-lib@0.3.2 (max of 0.3.2, 0.3.1, 0.3.0)
 ```
 
 Both versions coexist in the final build because they're in different semver families.
@@ -257,7 +257,7 @@ Both versions coexist in the final build because they're in different semver fam
 Import paths serve as globally unique package identifiers:
 
 ```python
-load("github.com/diodeinc/stdlib/units.zen", "Voltage")
+load("@stdlib/units.zen", "Voltage")
 load("github.com/myorg/components/capacitor.zen", "Capacitor")
 ```
 
@@ -277,7 +277,6 @@ manifest declares which version of each package to use:
 
 ```toml
 [dependencies]
-"github.com/diodeinc/stdlib" = "0.3"
 "github.com/diodeinc/registry/components/ti/tps54331" = "1.0"
 ```
 
@@ -291,8 +290,8 @@ This separation means:
 The lockfile (`pcb.sum`) records exact versions and cryptographic hashes:
 
 ```
-github.com/diodeinc/stdlib v0.3.2 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo=
-github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:abc123def456...
+github.com/acme/component-lib v0.3.2 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo=
+github.com/acme/component-lib v0.3.2/pcb.toml h1:abc123def456...
 github.com/diodeinc/registry/components/ti/tps54331 v1.0.0 h1:ghi789jkl012...
 github.com/diodeinc/registry/components/ti/tps54331 v1.0.0/pcb.toml h1:mno345pqr678...
 ```
@@ -419,10 +418,10 @@ Format: `v<base>-0.<timestamp>-<commit>`
 ```toml
 [dependencies]
 # Branch reference - resolved to pseudo-version
-"github.com/diodeinc/stdlib" = { branch = "main" }
+"github.com/acme/component-lib" = { branch = "main" }
 
 # Specific commit
-"github.com/diodeinc/stdlib" = { rev = "a1b2c3d4" }
+"github.com/acme/component-lib" = { rev = "a1b2c3d4" }
 ```
 
 When resolved, these become pseudo-versions like:
@@ -438,7 +437,7 @@ If the package has never been tagged, pseudo-versions start in the `0.1.1`
 family (for example `0.1.1-0.<timestamp>-<commit>`), one patch above the
 initial unpublished release version `0.1.0`.
 
-Pseudo-versions participate fully in MVS. If one package requires `stdlib@0.3.14`
+Pseudo-versions participate fully in MVS. If one package requires `component-lib@0.3.14`
 and another requires the pseudo-version above, MVS selects the pseudo-version
 (it's higher). This enables testing unreleased fixes without breaking version
 resolution.

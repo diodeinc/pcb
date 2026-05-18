@@ -53,20 +53,6 @@ impl std::fmt::Display for LoadSpec {
 }
 
 impl LoadSpec {
-    fn parse_legacy_stdlib(s: &str) -> Option<Self> {
-        if s == crate::LEGACY_STDLIB_MODULE_PATH {
-            return Some(LoadSpec::Stdlib {
-                path: PathBuf::new(),
-            });
-        }
-
-        s.strip_prefix(crate::LEGACY_STDLIB_MODULE_PATH)
-            .and_then(|rest| rest.strip_prefix('/'))
-            .map(|rel| LoadSpec::Stdlib {
-                path: PathBuf::from(rel),
-            })
-    }
-
     /// Create a new local path LoadSpec
     pub fn local_path<P: Into<PathBuf>>(path: P) -> Self {
         LoadSpec::Path {
@@ -113,10 +99,6 @@ impl LoadSpec {
     /// The function does not touch the filesystem – it only performs syntactic
     /// parsing.
     pub fn parse(s: &str) -> Option<LoadSpec> {
-        if let Some(spec) = Self::parse_legacy_stdlib(s) {
-            return Some(spec);
-        }
-
         if let Some(uri) = s.strip_prefix(pcb_sch::PACKAGE_URI_PREFIX) {
             if uri.is_empty() {
                 return None;
@@ -281,17 +263,6 @@ mod tests {
     fn test_parse_load_spec_package_uri_empty() {
         let spec = LoadSpec::parse("package://");
         assert_eq!(spec, None);
-    }
-
-    #[test]
-    fn test_parse_load_spec_legacy_stdlib_url() {
-        let spec = LoadSpec::parse("github.com/diodeinc/stdlib/units.zen");
-        assert_eq!(
-            spec,
-            Some(LoadSpec::Stdlib {
-                path: PathBuf::from("units.zen"),
-            })
-        );
     }
 
     #[test]
