@@ -11,12 +11,8 @@ def _sanitize(s):
     return str(s).replace(" ", "").replace(".", "p").replace("%", "pct")
 
 
-# Test all standard Package values. KICAD is deprecated and intentionally not
-# exercised here.
+# Test all Package values.
 for package in Inductor.Package.values():
-    if package == Inductor.Package("KICAD"):
-        continue
-
     name = "L_" + str(package)
     Inductor(
         name=name,

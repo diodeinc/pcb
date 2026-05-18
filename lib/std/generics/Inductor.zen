@@ -3,14 +3,10 @@ load("../interfaces.zen", "Net")
 load("../units.zen", "Capacitance", "Current", "Inductance", "Resistance")
 load("../utils.zen", "format_value")
 
-Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512", "KICAD")
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
 Mount = enum("SMD")
 package = config(Package)
 value = config(Inductance)
-if package == Package("KICAD"):
-    warn('Package("KICAD") is deprecated. Use a standard package instead.', kind="deprecated")
-    kicad_library = config(str, default="Inductor_SMD", help="KiCad footprint library name")
-    kicad_package = config(str, default="L_0603_1608Metric", help="KiCad footprint package name")
 mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
 mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
@@ -108,9 +104,7 @@ Component(
     name="L",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=Symbol(**_symbol(package)),
-    footprint=File(_footprint(package))
-    if package != Package("KICAD")
-    else File(f"@kicad-footprints/{kicad_library}.pretty/{kicad_package}.kicad_mod"),
+    footprint=File(_footprint(package)),
     prefix="L",
     pins={
         "1": P1,
