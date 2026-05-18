@@ -30,6 +30,24 @@ pub fn diagnostic_kind_short(diagnostic: &Diagnostic) -> Option<String> {
         .map(|c| c.kind.rsplit('.').next().unwrap_or(&c.kind).to_string())
 }
 
+/// Extract the full diagnostic kind, if it has one.
+pub fn diagnostic_kind(diagnostic: &Diagnostic) -> Option<String> {
+    use crate::lang::error::{CategorizedDiagnostic, SuppressedDiagnostics};
+
+    let innermost = diagnostic.innermost();
+    innermost
+        .source_error
+        .as_ref()
+        .and_then(|e| e.downcast_ref::<CategorizedDiagnostic>())
+        .map(|c| c.kind.clone())
+        .or_else(|| {
+            diagnostic
+                .downcast_error_ref::<SuppressedDiagnostics>()
+                .and_then(|suppressed| suppressed.suppressed.first())
+                .and_then(diagnostic_kind)
+        })
+}
+
 /// Prepare a diagnostic for compact, spanless-friendly rendering.
 pub fn compact_diagnostic(diagnostic: &Diagnostic) -> CompactDiagnostic {
     let mut lines = diagnostic.body.lines();
@@ -490,6 +508,8 @@ pub struct DiagnosticFrame {
 pub struct DiagnosticReport {
     /// Combined location of the innermost diagnostic
     pub location: String,
+    /// Full diagnostic kind, when available
+    pub kind: Option<String>,
     /// Severity of the innermost diagnostic
     pub severity: starlark::errors::EvalSeverity,
     /// Body/message of the innermost diagnostic
@@ -529,6 +549,7 @@ impl DiagnosticReport {
 
         DiagnosticReport {
             location: format_location(&innermost.path, innermost.span),
+            kind: diagnostic_kind(diagnostic),
             severity: innermost.severity,
             body: innermost.body.clone(),
             suppressed: diagnostic.suppressed, // Use outermost suppression status
