@@ -1003,7 +1003,8 @@ where
         let mut override_name: Option<String> = None;
         // Optional map of properties passed via `properties = {...}`.
         let mut properties_override: Option<SmallMap<String, Value<'v>>> = None;
-        // Legacy DNP keys found in `properties = {...}`, warned after `final_name` is set.
+        // Legacy DNP keys found in the user-authored `properties = {...}` dict.
+        // Collected here so we can emit warnings once `final_name` is known.
         let mut legacy_dnp_keys_in_properties: Vec<String> = Vec::new();
 
         for (arg_name, value) in args.names_map()? {
@@ -1904,17 +1905,11 @@ impl std::fmt::Display for ModuleType {
 pub(crate) const LEGACY_MODULE_DNP_KEYS: &[&str] =
     &["do_not_populate", "Do_not_populate", "DNP", "dnp"];
 
-pub(crate) fn warn_legacy_module_dnp_add_property(eval: &Evaluator<'_, '_, '_>, key: &str) {
-    if !LEGACY_MODULE_DNP_KEYS.contains(&key) {
-        return;
-    }
+fn warn_deprecated_module_property(eval: &Evaluator<'_, '_, '_>, message: String) {
     let (path, span) = eval
         .call_stack_top_location()
         .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
         .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-    let message = format!(
-        "`add_property(\"{key}\", ...)` is deprecated; pass `dnp=True` to Module() instead"
-    );
     eval.add_diagnostic(
         crate::Diagnostic::categorized(
             &path,
@@ -1927,27 +1922,28 @@ pub(crate) fn warn_legacy_module_dnp_add_property(eval: &Evaluator<'_, '_, '_>, 
     );
 }
 
+pub(crate) fn warn_legacy_module_dnp_add_property(eval: &Evaluator<'_, '_, '_>, key: &str) {
+    if !LEGACY_MODULE_DNP_KEYS.contains(&key) {
+        return;
+    }
+    warn_deprecated_module_property(
+        eval,
+        format!(
+            "`add_property(\"{key}\", ...)` is deprecated; pass `dnp=True` to Module() instead"
+        ),
+    );
+}
+
 fn warn_legacy_module_dnp_properties_dict(
     eval: &Evaluator<'_, '_, '_>,
     module_name: &str,
     key: &str,
 ) {
-    let (path, span) = eval
-        .call_stack_top_location()
-        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-    let message = format!(
-        "Module '{module_name}': `properties[\"{key}\"]` is deprecated; pass `dnp=True` to Module() instead"
-    );
-    eval.add_diagnostic(
-        crate::Diagnostic::categorized(
-            &path,
-            &message,
-            "deprecated.module_property",
-            starlark::errors::EvalSeverity::Warning,
-        )
-        .with_span(span)
-        .with_call_stack(Some(eval.call_stack())),
+    warn_deprecated_module_property(
+        eval,
+        format!(
+            "Module '{module_name}': `properties[\"{key}\"]` is deprecated; pass `dnp=True` to Module() instead"
+        ),
     );
 }
 
