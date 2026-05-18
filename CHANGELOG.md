@@ -19,6 +19,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Deprecated legacy `properties=` and sourcing kwargs on `Component()`/`Module()`; use typed kwargs (`dnp`, `skip_bom`, `skip_pos`, `type`, `description`, `part=Part(...)`).
+- Deprecated the bare `add_property(...)` global in favor of `builtin.add_property(...)`.
 - `pcb new board <name> <repo-url>` now creates a board repository directly, replacing the separate `pcb new workspace` flow.
 - `pcb import` now writes directly into a board repository root instead of creating `boards/<name>/` under a workspace.
 - Board release uploads now derive the Diode workspace name from the first path segment of `[workspace].repository`, with `[workspace].name` available as an override.

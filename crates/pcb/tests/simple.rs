@@ -79,7 +79,8 @@ Component(
     footprint = File("test.kicad_mod"),
     pin_defs = {"P1": "1", "P2": "2"},
     pins = {"P1": P1, "P2": P2},
-    properties = {"value": value, "type": "resistor"},
+    type = "resistor",
+    properties = {"value": value},
 )
 "#;
 
@@ -246,7 +247,8 @@ Component(
     footprint = File("test.kicad_mod"),
     pin_defs = {"P1": "1", "P2": "2"},
     pins = {"P1": P1, "P2": P2},
-    properties = {"value": value, "type": "resistor", "revision": "v2"},
+    type = "resistor",
+    properties = {"value": value, "revision": "v2"},
 )
 "#,
         )

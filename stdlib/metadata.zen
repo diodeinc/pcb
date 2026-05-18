@@ -10,9 +10,9 @@ hints = struct(
 
 # Layout hints
 def layout_hints(hints: list[str]):
-    return add_property("layout_hints", hints)
+    return builtin.add_property("layout_hints", hints)
 
 
 # Schematic group
 def schematic_group():
-    return add_property("schematic_group", True)
+    return builtin.add_property("schematic_group", True)

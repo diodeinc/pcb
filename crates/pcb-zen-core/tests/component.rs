@@ -414,24 +414,6 @@ snapshot_eval!(component_duplicate_pin_names, {
     "#
 });
 
-snapshot_eval!(component_with_manufacturer, {
-    "test.zen" => r#"
-        Component(
-            name = "test_comp",
-            footprint = "test_footprint",
-            manufacturer = "test_manufacturer",
-            pin_defs = {
-                "in": "1",
-                "out": "2",
-            },
-            pins = {
-                "in": Net("in"),
-                "out": Net("out"),
-            },
-        )
-    "#
-});
-
 snapshot_eval!(component_manufacturer_from_symbol, {
     "test_symbol.kicad_sym" => r#"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
   (symbol "TestSymbol" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
@@ -1528,4 +1510,217 @@ fn component_modifier_match_component_ignores_electrical_checks() {
     )]);
 
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}
+
+fn legacy_property_warnings(diagnostics: &pcb_zen_core::Diagnostics) -> Vec<String> {
+    diagnostics
+        .warnings()
+        .into_iter()
+        .filter_map(|diag| {
+            let kind = diag
+                .innermost()
+                .downcast_error_ref::<CategorizedDiagnostic>()?
+                .kind
+                .clone();
+            if kind == "deprecated.component_property" {
+                Some(diag.body.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn warns_for_each_legacy_component_property_key() {
+    let diagnostics = eval_component_diagnostics(vec![(
+        "test.zen".to_string(),
+        r#"
+P1 = Net()
+P2 = Net()
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    properties = {
+        "do_not_populate": True,
+        "Do_not_populate": True,
+        "DNP": True,
+        "dnp": True,
+        "Exclude_from_bom": True,
+        "exclude_from_bom": True,
+        "Exclude_from_pos_files": True,
+        "exclude_from_pos_files": True,
+        "type": "resistor",
+        "Type": "resistor",
+        "mpn": "X",
+        "Mpn": "X",
+        "manufacturer": "M",
+        "Manufacturer": "M",
+        "datasheet": "ds.pdf",
+        "description": "desc",
+        "Description": "desc",
+    },
+)
+"#
+        .to_string(),
+    )]);
+
+    let bodies = legacy_property_warnings(&diagnostics);
+
+    for (legacy_key, typed_kwarg) in [
+        ("do_not_populate", "dnp"),
+        ("Do_not_populate", "dnp"),
+        ("DNP", "dnp"),
+        ("dnp", "dnp"),
+        ("Exclude_from_bom", "skip_bom"),
+        ("exclude_from_bom", "skip_bom"),
+        ("Exclude_from_pos_files", "skip_pos"),
+        ("exclude_from_pos_files", "skip_pos"),
+        ("type", "type"),
+        ("Type", "type"),
+        ("datasheet", "datasheet"),
+        ("description", "description"),
+        ("Description", "description"),
+    ] {
+        let expected = format!(
+            "Component 'R1': `properties[\"{legacy_key}\"]` is deprecated; pass `{typed_kwarg}=...` to Component() instead"
+        );
+        assert!(
+            bodies.iter().any(|b| b == &expected),
+            "expected legacy-property warning for `{legacy_key}`, got: {:?}",
+            bodies
+        );
+    }
+
+    for sourcing_key in ["mpn", "Mpn", "manufacturer", "Manufacturer"] {
+        let expected = format!(
+            "Component 'R1': `properties[\"{sourcing_key}\"]` is deprecated; pass `part=Part(mpn=..., manufacturer=...)` to Component() instead"
+        );
+        assert!(
+            bodies.iter().any(|b| b == &expected),
+            "expected sourcing-key warning for `{sourcing_key}`, got: {:?}",
+            bodies
+        );
+    }
+}
+
+#[test]
+fn no_legacy_warning_when_typed_kwargs_are_used() {
+    let diagnostics = eval_component_diagnostics(vec![(
+        "test.zen".to_string(),
+        r#"
+P1 = Net()
+P2 = Net()
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    part = builtin.Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
+    type = "resistor",
+    dnp = True,
+    skip_bom = True,
+    skip_pos = True,
+    datasheet = "ds.pdf",
+    description = "desc",
+    properties = {"resistance": "1k"},
+)
+"#
+        .to_string(),
+    )]);
+
+    let bodies = legacy_property_warnings(&diagnostics);
+    assert!(
+        bodies.is_empty(),
+        "expected no legacy-property warnings, got: {:?}",
+        bodies
+    );
+}
+
+#[test]
+fn warns_for_mpn_and_manufacturer_kwargs() {
+    let diagnostics = eval_component_diagnostics(vec![(
+        "test.zen".to_string(),
+        r#"
+P1 = Net()
+P2 = Net()
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    mpn = "RC0603FR-071KL",
+    manufacturer = "Yageo",
+)
+"#
+        .to_string(),
+    )]);
+
+    let bodies = legacy_property_warnings(&diagnostics);
+
+    for kwarg in ["mpn", "manufacturer"] {
+        let expected = format!(
+            "Component 'R1': `{kwarg}=...` is deprecated; pass `part=Part(mpn=..., manufacturer=...)` to Component() instead"
+        );
+        assert!(
+            bodies.iter().any(|b| b == &expected),
+            "expected sourcing-kwarg warning for `{kwarg}`, got: {:?}",
+            bodies
+        );
+    }
+}
+
+#[test]
+fn part_kwarg_does_not_warn() {
+    let diagnostics = eval_component_diagnostics(vec![(
+        "test.zen".to_string(),
+        r#"
+P1 = Net()
+P2 = Net()
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    part = builtin.Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
+)
+"#
+        .to_string(),
+    )]);
+
+    let bodies = legacy_property_warnings(&diagnostics);
+    assert!(
+        bodies.is_empty(),
+        "expected no warnings when using part=Part(...), got: {:?}",
+        bodies
+    );
+}
+
+#[test]
+fn legacy_dnp_property_still_takes_effect() {
+    let component = eval_single_root_component(
+        r#"
+P1 = Net()
+P2 = Net()
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    properties = {"do_not_populate": True},
+)
+"#,
+    );
+
+    assert!(
+        component.dnp(),
+        "legacy do_not_populate should still set dnp"
+    );
 }

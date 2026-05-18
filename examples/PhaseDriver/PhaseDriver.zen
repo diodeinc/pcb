@@ -45,9 +45,9 @@ Component(
     name="D_BOOTSTRAP",
     symbol=Symbol(library="./B05100W-TP.kicad_sym"),
     footprint="Diode_SMD:D_SOD-123",
+    part=Part(mpn="B05100W", manufacturer="Diodes Incorporated"),
+    description="Schottky Diode",
     properties={
-        "mpn": "B05100W",
-        "description": "Schottky Diode",
         "voltage": "100V",
         "current": "1A",
     },
@@ -91,7 +91,6 @@ HighSideCurrentSense(
     ref_config="MIDSUPPLY",
     shunt_value="0.010ohm 1%",
     shunt_package="2512",
-    shunt_mpn="WSLP2010R0100FEA",
     POWER_BUS_IN=POWER_PHASE,
     POWER_BUS_OUT=POWER_PHASE_POST_SHUNT,
     POWER_3V3=POWER_3V3,
@@ -107,8 +106,8 @@ Component(
         mpn="STL100N8F7",
         manufacturer="STMicroelectronics",
     ),
+    description="N-Channel MOSFET",
     properties={
-        "description": "N-Channel MOSFET",
         "voltage": "80V",
         "current": "100A",
         "rds_on": "7.5mOhm",
@@ -134,8 +133,8 @@ Component(
         mpn="STL100N8F7",
         manufacturer="STMicroelectronics",
     ),
+    description="N-Channel MOSFET",
     properties={
-        "description": "N-Channel MOSFET",
         "voltage": "80V",
         "current": "100A",
         "rds_on": "7.5mOhm",
@@ -215,9 +214,6 @@ Capacitor(
     package="1210",
     P1=POWER_PHASE,
     P2=P_GROUND,
-    properties={
-        "mpn": "GMC32X7S106K100NT",
-    },
 )
 
 # Bemf
@@ -226,9 +222,9 @@ Component(
     name="bemf_d1",
     symbol=Symbol(library="./BAT30KFILM.kicad_sym"),
     footprint="Diode_SMD:D_SOD-123",
+    part=Part(mpn="BAT30KFILM", manufacturer="STMicroelectronics"),
+    description="Schottky Diode",
     properties={
-        "mpn": "BAT30KFILM",
-        "description": "Schottky Diode",
         "voltage": "30V",
         "current": "200mA",
     },
@@ -260,9 +256,9 @@ Component(
     name="bemf_d2",
     symbol=Symbol(library="./BAT30KFILM.kicad_sym"),
     footprint="Diode_SMD:D_SOD-123",
+    part=Part(mpn="BAT30KFILM", manufacturer="STMicroelectronics"),
+    description="Schottky Diode",
     properties={
-        "mpn": "BAT30KFILM",
-        "description": "Schottky Diode",
         "voltage": "30V",
         "current": "200mA",
     },

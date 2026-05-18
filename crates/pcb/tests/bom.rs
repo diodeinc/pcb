@@ -99,8 +99,7 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    mpn = "RC0603FR-071KL",
-    manufacturer = "Yageo",
+    part = Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
 )
 
 # Component with skip_bom kwarg - should NOT appear in BOM
@@ -127,8 +126,7 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    mpn = "RC0603FR-0710KL",
-    manufacturer = "Yageo",
+    part = Part(mpn = "RC0603FR-0710KL", manufacturer = "Yageo"),
 )
 "#;
 
@@ -147,8 +145,7 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    mpn = "RC0603FR-071KL",
-    manufacturer = "Yageo",
+    part = Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
 )
 
 # DNP component (via legacy property) - should appear in BOM with dnp=true
@@ -157,8 +154,7 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    mpn = "RC0603FR-0710KL",
-    manufacturer = "Yageo",
+    part = Part(mpn = "RC0603FR-0710KL", manufacturer = "Yageo"),
     properties = {"do_not_populate": True},
 )
 
@@ -168,8 +164,7 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    mpn = "RC0603FR-074K7L",
-    manufacturer = "Yageo",
+    part = Part(mpn = "RC0603FR-074K7L", manufacturer = "Yageo"),
     dnp = True,
 )
 
@@ -179,8 +174,7 @@ Component(
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    mpn = "RC0603FR-07100KL",
-    manufacturer = "Yageo",
+    part = Part(mpn = "RC0603FR-07100KL", manufacturer = "Yageo"),
     dnp = True,
     skip_bom = True,
 )

@@ -26,7 +26,7 @@ Component(
 "#
 });
 
-snapshot_netlist_eval!(part_overrides_scalars, {
+snapshot_netlist_eval!(part_populates_scalars, {
     "test.zen" => r#"
 P1 = Net()
 P2 = Net()
@@ -43,8 +43,6 @@ Component(
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = preferred,
-    mpn = "PART-B",
-    manufacturer = "MFR-B",
 )
 "#
 });
