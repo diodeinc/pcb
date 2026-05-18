@@ -32,7 +32,8 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
         RenderTarget::Png => render_png(&geometry, options)?,
         RenderTarget::Terminal => {
             let mask = common_mask(&geometry);
-            pcb_ir::dialects::mask::render_to_terminal(&mask, 0).map_err(anyhow::Error::msg)?;
+            pcb_ir::dialects::mask::render_layers_to_terminal(&mask, &visible_layers(&mask))
+                .map_err(anyhow::Error::msg)?;
         }
     }
 
@@ -91,7 +92,7 @@ fn render_svg(
     options: &RenderOptions,
 ) -> Result<()> {
     let mask = common_mask(geometry);
-    let svg = pcb_ir::dialects::mask::render_svg(&mask, 0);
+    let svg = pcb_ir::dialects::mask::render_svg_layers(&mask, &visible_layers(&mask));
 
     if let Some(output) = &options.output {
         std::fs::write(output, svg)
@@ -116,7 +117,8 @@ fn render_png(
     options: &RenderOptions,
 ) -> Result<()> {
     let mask = common_mask(geometry);
-    let png = pcb_ir::dialects::mask::render_png(&mask, 0).map_err(anyhow::Error::msg)?;
+    let png = pcb_ir::dialects::mask::render_png_layers(&mask, &visible_layers(&mask))
+        .map_err(anyhow::Error::msg)?;
 
     if let Some(output) = &options.output {
         std::fs::write(output, png)
@@ -143,13 +145,17 @@ fn common_mask(
     >,
 ) -> pcb_ir::dialects::mask::MaskDocument<ipc2581::types::LayerFunction> {
     let layer = &geometry.layers[0];
-    let geom = pcb_ir::dialects::ipc::lower_layer_to_geom(
+    let geom = pcb_ir::dialects::ipc::lower_layer_with_board_outlines_to_geom(
         geometry,
         0,
         common_layer_role(layer.layer_function),
         pcb_ir::common::Side::None,
     );
     pcb_ir::dialects::geom::lower_filled_to_mask(&pcb_ir::dialects::geom::outline_strokes(geom))
+}
+
+fn visible_layers<LayerMeta>(mask: &pcb_ir::dialects::mask::MaskDocument<LayerMeta>) -> Vec<usize> {
+    (0..mask.layers.len()).collect()
 }
 
 fn common_layer_role(function: ipc2581::types::LayerFunction) -> pcb_ir::common::LayerRole {

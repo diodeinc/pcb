@@ -131,6 +131,28 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
         }
     }
 
+    geom.diagnostics.extend(doc.diagnostics.clone());
+    geom
+}
+
+pub fn lower_layer_with_board_outlines_to_geom<Symbol: Clone, LayerFunction: Clone>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    layer_index: usize,
+    role: LayerRole,
+    side: Side,
+) -> geom::GeomDocument<LayerFunction, Option<Symbol>> {
+    let mut geom = lower_layer_to_geom(doc, layer_index, role, side);
+    let layer = &doc.layers[layer_index];
+    let outline_layer = geom.push_layer(geom::GeomLayer {
+        name: "Profile".to_string(),
+        role: LayerRole::Profile,
+        side: Side::None,
+        object_start: 0,
+        object_count: 0,
+        bbox: BBox::empty(),
+        meta: layer.layer_function.clone(),
+    });
+
     for outline in &doc.board_outlines {
         for path in &doc.paths
             [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
@@ -140,7 +162,7 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
             };
             let path_id = geom.push_path(geom_path, path_payloads(doc, path));
             geom.push_object(
-                geom_layer,
+                outline_layer,
                 geom::GeomObject {
                     paint: PaintPolarity::Dark,
                     path: path_id,
@@ -148,10 +170,11 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
                     meta: None,
                 },
             );
+            geom.layers[outline_layer as usize].bbox =
+                geom.layers[outline_layer as usize].bbox.union(path.bbox);
         }
     }
 
-    geom.diagnostics.extend(doc.diagnostics.clone());
     geom
 }
 

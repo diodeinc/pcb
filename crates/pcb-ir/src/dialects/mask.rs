@@ -114,7 +114,7 @@ impl<LayerMeta> MaskDocument<LayerMeta> {
 }
 
 pub fn render_svg<LayerMeta>(doc: &MaskDocument<LayerMeta>, layer_index: usize) -> String {
-    render_svg_with_size(doc, layer_index, None)
+    render_svg_layers_with_size(doc, &[layer_index], None)
 }
 
 pub fn render_svg_sized<LayerMeta>(
@@ -123,17 +123,32 @@ pub fn render_svg_sized<LayerMeta>(
     width_px: u32,
     height_px: u32,
 ) -> String {
-    render_svg_with_size(doc, layer_index, Some((width_px, height_px)))
+    render_svg_layers_with_size(doc, &[layer_index], Some((width_px, height_px)))
 }
 
-fn render_svg_with_size<LayerMeta>(
+pub fn render_svg_layers<LayerMeta>(
     doc: &MaskDocument<LayerMeta>,
-    layer_index: usize,
+    layer_indices: &[usize],
+) -> String {
+    render_svg_layers_with_size(doc, layer_indices, None)
+}
+
+pub fn render_svg_layers_sized<LayerMeta>(
+    doc: &MaskDocument<LayerMeta>,
+    layer_indices: &[usize],
+    width_px: u32,
+    height_px: u32,
+) -> String {
+    render_svg_layers_with_size(doc, layer_indices, Some((width_px, height_px)))
+}
+
+fn render_svg_layers_with_size<LayerMeta>(
+    doc: &MaskDocument<LayerMeta>,
+    layer_indices: &[usize],
     pixel_size: Option<(u32, u32)>,
 ) -> String {
-    let bbox = render_bbox(doc, layer_index);
+    let bbox = render_layers_bbox(doc, layer_indices);
     let viewbox_y = -bbox.max.y;
-    let layer = &doc.layers[layer_index];
     let mut svg = String::new();
     let size = pixel_size
         .map(|(width, height)| format!(" width='{width}' height='{height}'"))
@@ -147,13 +162,21 @@ fn render_svg_with_size<LayerMeta>(
         fmt_num(bbox.height())
     )
     .unwrap();
-    writeln!(svg, "  <title>{}</title>", escape_xml(&layer.name)).unwrap();
+    let title = layer_indices
+        .first()
+        .and_then(|&index| doc.layers.get(index))
+        .map(|layer| layer.name.as_str())
+        .unwrap_or("mask");
+    writeln!(svg, "  <title>{}</title>", escape_xml(title)).unwrap();
     writeln!(svg, "  <g transform='scale(1 -1)'>").unwrap();
 
-    for shape in
-        &doc.shapes[layer.shape_start as usize..(layer.shape_start + layer.shape_count) as usize]
-    {
-        write_shape(&mut svg, doc, layer, shape);
+    for &layer_index in layer_indices {
+        let layer = &doc.layers[layer_index];
+        for shape in &doc.shapes
+            [layer.shape_start as usize..(layer.shape_start + layer.shape_count) as usize]
+        {
+            write_shape(&mut svg, doc, layer, shape);
+        }
     }
 
     writeln!(svg, "  </g>").unwrap();
@@ -173,8 +196,25 @@ pub fn render_png_with_max_dimension<LayerMeta>(
     layer_index: usize,
     max_dimension_px: u32,
 ) -> Result<Vec<u8>, String> {
-    let (width_px, height_px) = pixel_size(doc, layer_index, max_dimension_px);
+    let (width_px, height_px) = pixel_size(doc, &[layer_index], max_dimension_px);
     let svg = render_svg_sized(doc, layer_index, width_px, height_px);
+    svg_to_png(&svg)
+}
+
+pub fn render_png_layers<LayerMeta>(
+    doc: &MaskDocument<LayerMeta>,
+    layer_indices: &[usize],
+) -> Result<Vec<u8>, String> {
+    render_png_layers_with_max_dimension(doc, layer_indices, DEFAULT_MAX_DIMENSION_PX)
+}
+
+pub fn render_png_layers_with_max_dimension<LayerMeta>(
+    doc: &MaskDocument<LayerMeta>,
+    layer_indices: &[usize],
+    max_dimension_px: u32,
+) -> Result<Vec<u8>, String> {
+    let (width_px, height_px) = pixel_size(doc, layer_indices, max_dimension_px);
+    let svg = render_svg_layers_sized(doc, layer_indices, width_px, height_px);
     svg_to_png(&svg)
 }
 
@@ -198,8 +238,34 @@ pub fn render_to_terminal<LayerMeta>(
     Ok(())
 }
 
+pub fn render_layers_to_terminal<LayerMeta>(
+    doc: &MaskDocument<LayerMeta>,
+    layer_indices: &[usize],
+) -> Result<(), String> {
+    if !io::stdout().is_terminal() {
+        return Err(
+            "stdout is not an interactive terminal; pass an SVG or PNG output path".to_string(),
+        );
+    }
+    let png =
+        render_png_layers_with_max_dimension(doc, layer_indices, terminal_max_dimension_px())?;
+    let mut stdout = io::stdout().lock();
+    write_kitty_png(&mut stdout, &png).map_err(|err| err.to_string())?;
+    stdout.write_all(b"\n").map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 pub fn render_bbox<LayerMeta>(doc: &MaskDocument<LayerMeta>, layer_index: usize) -> BBox {
-    let bbox = doc.layers[layer_index].bbox;
+    render_layers_bbox(doc, &[layer_index])
+}
+
+pub fn render_layers_bbox<LayerMeta>(
+    doc: &MaskDocument<LayerMeta>,
+    layer_indices: &[usize],
+) -> BBox {
+    let bbox = layer_indices.iter().fold(BBox::empty(), |bbox, &index| {
+        bbox.union(doc.layers[index].bbox)
+    });
     if bbox.is_empty() {
         BBox {
             min: Point::new(0.0, 0.0),
@@ -338,10 +404,10 @@ fn layer_style(role: LayerRole) -> (&'static str, f64) {
 
 fn pixel_size<LayerMeta>(
     doc: &MaskDocument<LayerMeta>,
-    layer_index: usize,
+    layer_indices: &[usize],
     max_dimension_px: u32,
 ) -> (u32, u32) {
-    let bbox = render_bbox(doc, layer_index);
+    let bbox = render_layers_bbox(doc, layer_indices);
     if bbox.is_empty() || bbox.width() <= 0.0 || bbox.height() <= 0.0 {
         return (max_dimension_px, max_dimension_px);
     }
@@ -516,5 +582,36 @@ mod tests {
 
         assert_eq!(svg.matches(" A1 1 0 0 1 ").count(), 2);
         assert!(svg.contains("-1 0"));
+    }
+
+    #[test]
+    fn renders_profile_layer_as_black_outline_overlay() {
+        let mut doc = MaskDocument::<()>::new(Unit::Millimeter);
+        let copper = doc.push_layer(MaskLayer::new("F.Cu", LayerRole::Copper, Side::Top));
+        let profile = doc.push_layer(MaskLayer::new("Profile", LayerRole::Profile, Side::None));
+        let contour = PathPayload {
+            bbox: BBox {
+                min: Point::new(0.0, 0.0),
+                max: Point::new(1.0, 1.0),
+            },
+            cmds: vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+                PathCmd::close(),
+            ],
+        };
+        doc.push_shape(
+            copper,
+            MaskShape::new(FillRule::NonZero),
+            vec![contour.clone()],
+        );
+        doc.push_shape(profile, MaskShape::new(FillRule::NonZero), vec![contour]);
+
+        let svg = render_svg_layers(&doc, &[copper as usize, profile as usize]);
+
+        assert!(svg.contains("fill='#d87822'"));
+        assert!(svg.contains("stroke='#000000'"));
+        assert!(svg.contains("data-board-outline='true'"));
     }
 }
