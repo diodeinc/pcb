@@ -449,21 +449,14 @@ code. For production builds, prefer tagged releases.
 
 ### pcb migrate
 
-Upgrades a legacy V1 project to the supported V2 format. Updates `pcb.toml` manifests and
-rewrites `.zen` files to use the new import syntax. V1 workspaces are no longer supported by
-`pcb build`, `pcb layout`, `pcb publish`, etc.
+Runs project migrations when a release provides them. The command is currently kept
+as a stable entry point, but this release does not include legacy V1 manifest or
+import-path migrations.
 
 ```bash
-pcb migrate                  # Migrate current workspace
+pcb migrate                  # Run available migrations, if any
 pcb migrate ./path/to/workspace
 ```
-
-The command:
-1. Detects the workspace root and git repository
-2. Converts `pcb.toml` files to V2 format (adds root `[workspace].pcb-version`, removes member `[workspace]` sections, converts `[packages]` to `[dependencies]`)
-3. Rewrites `.zen` files (expands aliases to full URLs, fixes paths)
-
-Review changes with `git diff` before committing.
 
 ### pcb build
 
