@@ -1,6 +1,5 @@
 ---
 source: crates/pcb/tests/simple.rs
-assertion_line: 318
 expression: snapshot
 ---
 --- online ---
@@ -20,5 +19,5 @@ Exit Code: 0
 --- STDERR ---
 ✓ B.zen (2 components)
 --- pcb.sum dep lines ---
-github.com/mycompany/components/SimpleResistor <SELECTED_PSEUDO_VERSION> h1:GrqnLkn0qNOSUNG3SdhjhQxVM0DSd41BfEnDaprDvLU=
+github.com/mycompany/components/SimpleResistor <SELECTED_PSEUDO_VERSION> h1:k8ADEeH8x7tlV4TOhiqNIfZD9BE0XgcFR0AxaUZc1Rg=
 github.com/mycompany/components/SimpleResistor <SELECTED_PSEUDO_VERSION>/pcb.toml h1:E3ma1g4h68BKGUerKwVIXkTssUyU3/mOx4I3AVS1nRA=

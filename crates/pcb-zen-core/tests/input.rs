@@ -600,7 +600,7 @@ fn inferred_config_values_work_in_component_kwargs() {
     let eval_result = eval_zen(vec![(
         "Module.zen".to_string(),
         r#"
-            manufacturer = config(str, default = "Acme")
+            description = config(str, default = "Acme")
             skip_bom = config(bool, default = True)
 
             Component(
@@ -608,7 +608,7 @@ fn inferred_config_values_work_in_component_kwargs() {
                 footprint = "TEST:0402",
                 pin_defs = {"P": "1"},
                 pins = {"P": Net("SIG")},
-                manufacturer = manufacturer,
+                description = description,
                 skip_bom = skip_bom,
             )
         "#
