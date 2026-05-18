@@ -1397,7 +1397,6 @@ pub(crate) fn validate_or_convert<'v>(
     name: &str,
     value: Value<'v>,
     typ: Value<'v>,
-    convert: Option<Value<'v>>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
     // First, try a direct type match.
@@ -1406,15 +1405,6 @@ pub(crate) fn validate_or_convert<'v>(
     }
 
     if let Some(converted) = try_implicit_type_conversion(value, typ, eval)? {
-        validate_type(name, converted, typ, eval.heap())?;
-        return Ok(converted);
-    }
-
-    // Keep the deprecated custom converter path working until it is fully removed.
-    if let Some(conv_fn) = convert {
-        let converted = eval
-            .eval_function(conv_fn, &[value], &[])
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         validate_type(name, converted, typ, eval.heap())?;
         return Ok(converted);
     }
@@ -1456,7 +1446,7 @@ pub(crate) fn normalize_allowed_values<'v>(
     let mut normalized = Vec::new();
     let mut seen = HashSet::new();
     for candidate in allowed_candidates(name, allowed)? {
-        let value = validate_or_convert(name, candidate, typ, None, eval)?;
+        let value = validate_or_convert(name, candidate, typ, eval)?;
         let key = value.to_repr();
 
         if !seen.insert(key.clone()) {
@@ -1519,14 +1509,13 @@ pub(crate) fn normalize_config_default<'v>(
     default: Option<Value<'v>>,
     typ: Value<'v>,
     allowed_values: Option<&[Value<'v>]>,
-    convert: Option<Value<'v>>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
     let Some(default) = default else {
         return Ok(None);
     };
 
-    let default = validate_or_convert(name, default, typ, convert, eval)?;
+    let default = validate_or_convert(name, default, typ, eval)?;
     validate_allowed_config_value(name, default, allowed_values)?;
     Ok(Some(default))
 }
