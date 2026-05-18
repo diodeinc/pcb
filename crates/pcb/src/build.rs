@@ -185,10 +185,6 @@ pub struct BuildArgs {
     #[arg(long = "netlist", hide = true)]
     pub netlist: bool,
 
-    /// Print board config JSON to stdout (undocumented)
-    #[arg(long = "board-config", hide = true)]
-    pub board_config: bool,
-
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
@@ -301,18 +297,6 @@ pub fn execute(args: BuildArgs) -> Result<()> {
                 Err(e) => {
                     eprintln!("Error serializing netlist to JSON: {e}");
                     has_errors = true;
-                }
-            }
-        } else if args.board_config {
-            match pcb_layout::utils::extract_board_config(&schematic) {
-                Some(config) => {
-                    if let Ok(json) = serde_json::to_string_pretty(&config) {
-                        println!("{json}");
-                    }
-                }
-                None => {
-                    eprintln!("No board config found in {}", file_name);
-                    std::process::exit(1);
                 }
             }
         } else {
