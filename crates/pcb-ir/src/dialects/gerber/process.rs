@@ -11,7 +11,10 @@ pub fn process_document<A: Clone>(doc: &mut GeometryDocument<A>) {
 pub fn normalize_bounds<A>(doc: &mut GeometryDocument<A>) {
     for contour_index in 0..doc.contours.len() {
         let contour = &doc.contours[contour_index];
-        doc.contours[contour_index].bbox = common_path::contour_bbox(&common_cmds(doc, contour));
+        doc.contours[contour_index].bbox = common_path::contour_bbox(
+            &doc.path_cmds
+                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize],
+        );
     }
     for path_index in 0..doc.paths.len() {
         doc.paths[path_index].bbox = path_bbox(doc, path_index);
@@ -49,10 +52,7 @@ pub fn outline_stroked_paths<A: Clone>(doc: &mut GeometryDocument<A>) {
                     let contours = common_path::polygon_contours_to_payloads(
                         common_path::payloads_to_polygon_contours(&contours),
                     );
-                    doc.push_path(
-                        GeometryPath::filled(FillRule::NonZero),
-                        gerber_payloads(contours),
-                    );
+                    doc.push_path(GeometryPath::filled(FillRule::NonZero), contours);
                 }
             } else {
                 doc.push_path(path.clone(), path_contours(doc, &path));
@@ -87,7 +87,7 @@ pub fn resolve_polarity_and_cutouts<A>(doc: &mut GeometryDocument<A>) {
 
     let path_id = doc.push_path(
         GeometryPath::filled(FillRule::NonZero),
-        gerber_payloads(common_path::polygon_contours_to_payloads(image)),
+        common_path::polygon_contours_to_payloads(image),
     );
     let mut composite =
         GeometryFeature::<A>::new(FeatureKind::Composite, FeatureBucket::Fill, Polarity::Dark);
@@ -137,7 +137,7 @@ fn clear_all_features<A>(doc: &mut GeometryDocument<A>) {
 }
 
 fn path_contours<A>(doc: &GeometryDocument<A>, path: &GeometryPath) -> Vec<ContourPayload> {
-    gerber_payloads(path_payloads(doc, path))
+    path_payloads(doc, path)
 }
 
 fn path_payloads<A>(
@@ -148,44 +148,9 @@ fn path_payloads<A>(
         .iter()
         .map(|contour| common_path::PathPayload {
             bbox: contour.bbox,
-            cmds: common_cmds(doc, contour),
-        })
-        .collect()
-}
-
-fn common_cmds<A>(
-    doc: &GeometryDocument<A>,
-    contour: &GeometryContour,
-) -> Vec<common_path::PathCmd> {
-    doc.path_cmds[contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
-        .iter()
-        .map(|cmd| match cmd.op {
-            PathOp::MoveTo => common_path::PathCmd::move_to(cmd.p0),
-            PathOp::LineTo => common_path::PathCmd::line_to(cmd.p0),
-            PathOp::ArcTo => common_path::PathCmd::arc_to(cmd.p0, cmd.p1, cmd.clockwise),
-            PathOp::Close => common_path::PathCmd::close(),
-        })
-        .collect()
-}
-
-fn gerber_payloads(payloads: Vec<common_path::PathPayload>) -> Vec<ContourPayload> {
-    payloads
-        .into_iter()
-        .map(|payload| ContourPayload {
-            bbox: payload.bbox,
-            cmds: payload
-                .cmds
-                .into_iter()
-                .map(|cmd| match cmd.op {
-                    common_path::PathOp::MoveTo => PathCmd::move_to(cmd.p0),
-                    common_path::PathOp::LineTo => PathCmd::line_to(cmd.p0),
-                    common_path::PathOp::ArcTo => PathCmd::arc_to(cmd.p0, cmd.p1, cmd.clockwise),
-                    common_path::PathOp::Close => PathCmd::close(),
-                    common_path::PathOp::CubicTo => {
-                        unreachable!("Gerber process flattens cubic paths")
-                    }
-                })
-                .collect(),
+            cmds: doc.path_cmds
+                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+                .to_vec(),
         })
         .collect()
 }

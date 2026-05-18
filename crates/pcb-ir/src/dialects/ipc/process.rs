@@ -4,7 +4,7 @@ use std::hash::Hash;
 use crate::dialects::ipc::*;
 use crate::dialects::path as common_path;
 
-type ContourPayload = (BBox, Vec<PathCmd>);
+type ContourPayload = common_path::PathPayload;
 type PolygonContour = common_path::PolygonContour;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -113,8 +113,9 @@ where
             continue;
         }
 
-        let contours = common_payloads_to_ipc(common_path::polygon_contours_to_payloads(
-            common_path::union_contours(contours, FillRule::NonZero),
+        let contours = common_path::polygon_contours_to_payloads(common_path::union_contours(
+            contours,
+            FillRule::NonZero,
         ));
         if contours.is_empty() {
             continue;
@@ -139,8 +140,11 @@ where
 
 pub fn normalize_bounds<S, L>(doc: &mut GeometryDocument<S, L>) {
     for contour_index in 0..doc.contours.len() {
-        doc.contours[contour_index].bbox =
-            common_path::contour_bbox(&common_cmds(doc, &doc.contours[contour_index]));
+        doc.contours[contour_index].bbox = common_path::contour_bbox(
+            &doc.path_cmds[doc.contours[contour_index].cmd_start as usize
+                ..(doc.contours[contour_index].cmd_start + doc.contours[contour_index].cmd_count)
+                    as usize],
+        );
     }
 
     for path_index in 0..doc.paths.len() {
@@ -247,8 +251,8 @@ pub fn union_feature_filled_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>)
             continue;
         }
 
-        let contours = common_payloads_to_ipc(common_path::polygon_contours_to_payloads(
-            common_path::union_contours(contours, fill_rule),
+        let contours = common_path::polygon_contours_to_payloads(common_path::union_contours(
+            contours, fill_rule,
         ));
         if contours.is_empty() {
             continue;
@@ -316,8 +320,9 @@ where
                 continue;
             }
 
-            let contours = common_payloads_to_ipc(common_path::polygon_contours_to_payloads(
-                common_path::union_contours(contours, key.fill_rule),
+            let contours = common_path::polygon_contours_to_payloads(common_path::union_contours(
+                contours,
+                key.fill_rule,
             ));
             if contours.is_empty() {
                 continue;
@@ -448,8 +453,9 @@ fn subtract_contours_from_feature<S, L>(
         return;
     }
 
-    let contours = common_payloads_to_ipc(common_path::polygon_contours_to_payloads(
-        common_path::difference_contours(subject, cutters.to_vec()),
+    let contours = common_path::polygon_contours_to_payloads(common_path::difference_contours(
+        subject,
+        cutters.to_vec(),
     ));
     if contours.is_empty() {
         clear_feature_paths(doc, feature_index);
@@ -506,7 +512,7 @@ fn clear_feature_paths<S, L>(doc: &mut GeometryDocument<S, L>, feature_index: us
 }
 
 fn path_contours<S, L>(doc: &GeometryDocument<S, L>, path: &GeometryPath) -> Vec<ContourPayload> {
-    common_payloads_to_ipc(path_payloads(doc, path))
+    path_payloads(doc, path)
 }
 
 fn path_payloads<S, L>(
@@ -517,47 +523,9 @@ fn path_payloads<S, L>(
         .iter()
         .map(|contour| common_path::PathPayload {
             bbox: contour.bbox,
-            cmds: common_cmds(doc, contour),
-        })
-        .collect()
-}
-
-fn common_cmds<S, L>(
-    doc: &GeometryDocument<S, L>,
-    contour: &GeometryContour,
-) -> Vec<common_path::PathCmd> {
-    doc.path_cmds[contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
-        .iter()
-        .map(|cmd| match cmd.op {
-            PathOp::MoveTo => common_path::PathCmd::move_to(cmd.p0),
-            PathOp::LineTo => common_path::PathCmd::line_to(cmd.p0),
-            PathOp::ArcTo => common_path::PathCmd::arc_to(cmd.p0, cmd.p1, cmd.clockwise),
-            PathOp::CubicTo => common_path::PathCmd::cubic_to(cmd.p0, cmd.p1, cmd.p2),
-            PathOp::Close => common_path::PathCmd::close(),
-        })
-        .collect()
-}
-
-fn common_payloads_to_ipc(payloads: Vec<common_path::PathPayload>) -> Vec<ContourPayload> {
-    payloads
-        .into_iter()
-        .map(|payload| {
-            (
-                payload.bbox,
-                payload
-                    .cmds
-                    .into_iter()
-                    .map(|cmd| match cmd.op {
-                        common_path::PathOp::MoveTo => PathCmd::move_to(cmd.p0),
-                        common_path::PathOp::LineTo => PathCmd::line_to(cmd.p0),
-                        common_path::PathOp::ArcTo => {
-                            PathCmd::arc_to(cmd.p0, cmd.p1, cmd.clockwise)
-                        }
-                        common_path::PathOp::CubicTo => PathCmd::cubic_to(cmd.p0, cmd.p1, cmd.p2),
-                        common_path::PathOp::Close => PathCmd::close(),
-                    })
-                    .collect(),
-            )
+            cmds: doc.path_cmds
+                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+                .to_vec(),
         })
         .collect()
 }
@@ -621,7 +589,6 @@ fn stroked_path_outline<S, L>(
         path.line_cap,
         LineJoin::Round,
     )
-    .map(common_payloads_to_ipc)
 }
 
 fn path_polygon_contours<S, L>(

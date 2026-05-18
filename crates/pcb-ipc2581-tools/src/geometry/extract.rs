@@ -1973,8 +1973,6 @@ fn transform_path_cmd(cmd: PathCmd, transform: Affine2, bbox: &mut BBox) -> Path
     } else if transform.determinant() < 0.0 {
         transformed.clockwise = !cmd.clockwise;
     }
-    transformed.p3 = transform.transform_point(cmd.p3);
-
     match cmd.op {
         PathOp::MoveTo | PathOp::LineTo => bbox.include_point(transformed.p0),
         PathOp::ArcTo => {

@@ -13,6 +13,12 @@ pub struct PathPayload {
     pub cmds: Vec<PathCmd>,
 }
 
+impl From<(BBox, Vec<PathCmd>)> for PathPayload {
+    fn from((bbox, cmds): (BBox, Vec<PathCmd>)) -> Self {
+        Self { bbox, cmds }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PathCmd {
     pub op: PathOp,

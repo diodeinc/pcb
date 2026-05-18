@@ -10,7 +10,7 @@ use super::lower::lower_artwork_layer;
 use crate::{geometry, ipc2581 as ipc};
 use pcb_ir::common::{BBox, LayerRole, LineJoin, PaintPolarity, Unit};
 use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkObject, ArtworkPath};
-use pcb_ir::dialects::ipc::{FeatureBucket, GeometryPath, PathCmd, PathOp};
+use pcb_ir::dialects::ipc::{FeatureBucket, GeometryPath};
 use pcb_ir::dialects::path as common_path;
 
 #[derive(Debug, Clone)]
@@ -383,21 +383,9 @@ fn artwork_contours(
             bbox: contour.bbox,
             cmds: doc.path_cmds
                 [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
-                .iter()
-                .map(common_path_cmd)
-                .collect(),
+                .to_vec(),
         })
         .collect()
-}
-
-fn common_path_cmd(cmd: &PathCmd) -> common_path::PathCmd {
-    match cmd.op {
-        PathOp::MoveTo => common_path::PathCmd::move_to(cmd.p0),
-        PathOp::LineTo => common_path::PathCmd::line_to(cmd.p0),
-        PathOp::ArcTo => common_path::PathCmd::arc_to(cmd.p0, cmd.p1, cmd.clockwise),
-        PathOp::CubicTo => common_path::PathCmd::cubic_to(cmd.p0, cmd.p1, cmd.p2),
-        PathOp::Close => common_path::PathCmd::close(),
-    }
 }
 
 pub fn execute_file(input_file: &Path, output_dir: &Path) -> Result<GerberExportSet> {

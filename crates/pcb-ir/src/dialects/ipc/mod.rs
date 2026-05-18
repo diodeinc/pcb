@@ -1,4 +1,5 @@
 use crate::common::*;
+pub use crate::dialects::path::{PathCmd, PathOp};
 use crate::dialects::{geom, path as common_path};
 
 #[derive(Debug, Clone)]
@@ -48,13 +49,14 @@ impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
     pub fn push_compound_path(
         &mut self,
         mut path: GeometryPath,
-        contours: impl IntoIterator<Item = (BBox, Vec<PathCmd>)>,
+        contours: impl IntoIterator<Item = impl Into<common_path::PathPayload>>,
     ) -> u32 {
         let contour_start = self.contours.len() as u32;
         let mut path_bbox = BBox::empty();
-        for (bbox, cmds) in contours {
-            path_bbox = path_bbox.union(bbox);
-            self.push_contour(bbox, cmds);
+        for contour in contours {
+            let contour = contour.into();
+            path_bbox = path_bbox.union(contour.bbox);
+            self.push_contour(contour.bbox, contour.cmds);
         }
         let contour_count = self.contours.len() as u32 - contour_start;
 
@@ -147,21 +149,9 @@ fn path_payloads<Symbol, LayerFunction>(
             bbox: contour.bbox,
             cmds: doc.path_cmds
                 [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
-                .iter()
-                .map(path_cmd)
-                .collect(),
+                .to_vec(),
         })
         .collect()
-}
-
-fn path_cmd(cmd: &PathCmd) -> common_path::PathCmd {
-    match cmd.op {
-        PathOp::MoveTo => common_path::PathCmd::move_to(cmd.p0),
-        PathOp::LineTo => common_path::PathCmd::line_to(cmd.p0),
-        PathOp::ArcTo => common_path::PathCmd::arc_to(cmd.p0, cmd.p1, cmd.clockwise),
-        PathOp::CubicTo => common_path::PathCmd::cubic_to(cmd.p0, cmd.p1, cmd.p2),
-        PathOp::Close => common_path::PathCmd::close(),
-    }
 }
 
 fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
@@ -295,71 +285,6 @@ pub struct GeometryContour {
     pub cmd_start: u32,
     pub cmd_count: u32,
     pub bbox: BBox,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PathCmd {
-    pub op: PathOp,
-    pub p0: Point,
-    pub p1: Point,
-    pub p2: Point,
-    pub p3: Point,
-    pub clockwise: bool,
-}
-
-impl PathCmd {
-    pub fn move_to(p: Point) -> Self {
-        Self {
-            op: PathOp::MoveTo,
-            p0: p,
-            ..Self::default()
-        }
-    }
-
-    pub fn line_to(p: Point) -> Self {
-        Self {
-            op: PathOp::LineTo,
-            p0: p,
-            ..Self::default()
-        }
-    }
-
-    pub fn cubic_to(p1: Point, p2: Point, p3: Point) -> Self {
-        Self {
-            op: PathOp::CubicTo,
-            p0: p1,
-            p1: p2,
-            p2: p3,
-            ..Self::default()
-        }
-    }
-
-    pub fn arc_to(end: Point, center: Point, clockwise: bool) -> Self {
-        Self {
-            op: PathOp::ArcTo,
-            p0: end,
-            p1: center,
-            clockwise,
-            ..Self::default()
-        }
-    }
-
-    pub fn close() -> Self {
-        Self {
-            op: PathOp::Close,
-            ..Self::default()
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum PathOp {
-    #[default]
-    MoveTo,
-    LineTo,
-    ArcTo,
-    CubicTo,
-    Close,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

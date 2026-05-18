@@ -209,6 +209,10 @@ fn contour_polygon<A>(doc: &GeometryDocument<A>, contour: &GeometryContour) -> P
                 }
                 current = cmd.p0;
             }
+            PathOp::CubicTo => {
+                current = cmd.p2;
+                points.push(cmd.p2);
+            }
             PathOp::Close => {}
         }
     }

@@ -369,6 +369,11 @@ fn include_cmd_bbox(bbox: &mut BBox, previous: Option<PathCmd>, cmd: PathCmd) {
                 bbox.include_point(cmd.p1);
             }
         }
+        PathOp::CubicTo => {
+            bbox.include_point(cmd.p0);
+            bbox.include_point(cmd.p1);
+            bbox.include_point(cmd.p2);
+        }
         PathOp::Close => {}
     }
 }
