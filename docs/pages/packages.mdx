@@ -469,25 +469,19 @@ code. For production builds, prefer tagged releases.
 
 ### pcb migrate
 
-Upgrades an older project to the supported manifest format. Updates `pcb.toml`
-manifests and rewrites `.zen` files to use the current import syntax. Older
-workspace formats are no longer supported by `pcb build`, `pcb layout`,
-`pcb publish`, etc.
+Runs project migrations when a release provides them. The command is currently kept
+as a stable entry point, but this release does not include legacy V1 manifest or
+import-path migrations.
 
 ```bash
-pcb migrate                  # Migrate current workspace
+pcb migrate                  # Run available migrations, if any
 pcb migrate ./path/to/workspace
 ```
-
-The command detects the workspace root, converts manifests and import paths, and
-hydrates dependency manifests.
-
-Review changes with `git diff` before committing.
 
 ### pcb sync
 
 Reconciles imports and hydrates package manifests. Run this after adding or
-removing imports, changing dependency versions, or migrating an older project.
+removing imports or changing dependency versions.
 
 ```bash
 pcb sync                    # Sync packages under the current workspace/package

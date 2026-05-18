@@ -9,28 +9,16 @@ use serde::{Deserialize, Serialize};
 use crate::FileProvider;
 
 /// Top-level pcb.toml configuration.
-///
-/// The toolchain only supports V2 manifests. Some legacy V1 fields still exist here so `pcb migrate`
-/// can parse and upgrade older projects, but V1 dependency resolution is not supported at runtime.
-///
-/// `is_v2()` is used to detect whether a manifest is V2-compatible (and to detect legacy V1 inputs).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PcbToml {
     /// Workspace configuration section
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<WorkspaceConfig>,
 
-    /// Module configuration section (legacy V1; used by `pcb migrate` only)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub module: Option<ModuleConfig>,
-
     /// Board configuration section
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board: Option<Board>,
-
-    /// Package aliases configuration section (legacy V1; used by `pcb migrate` only)
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub packages: HashMap<String, String>,
 
     /// Dependencies (V2 only - code packages with pcb.toml)
     #[serde(default, skip_serializing_if = "DependencyTable::is_empty")]
@@ -207,30 +195,6 @@ impl PcbToml {
         }
     }
 
-    /// Check if this uses legacy V1-only constructs.
-    fn requires_v1(&self) -> bool {
-        !self.packages.is_empty() || self.module.is_some()
-    }
-
-    /// Check if this manifest is V2-compatible.
-    ///
-    /// Returns `false` for legacy V1 manifests (used by `pcb migrate`).
-    pub fn is_v2(&self) -> bool {
-        if let Some(w) = &self.workspace {
-            // Workspace present: V2 if pcb-version >= 0.3
-            if let Some(version_str) = &w.pcb_version {
-                return parse_pcb_version(version_str)
-                    .map(|(major, minor)| major > 0 || minor >= 3)
-                    .unwrap_or(false);
-            }
-            // No pcb-version means legacy V1.
-            return false;
-        }
-
-        // No workspace: V2 unless it has V1-only constructs
-        !self.requires_v1()
-    }
-
     /// Parse from TOML string
     pub fn parse(content: &str) -> Result<Self> {
         let parsed: Self = toml::from_str(content).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -303,19 +267,9 @@ impl PcbToml {
         self.workspace.is_some()
     }
 
-    /// Check if this configuration represents a module (legacy V1; used by `pcb migrate` only)
-    pub fn is_module(&self) -> bool {
-        self.module.is_some()
-    }
-
     /// Check if this configuration represents a board
     pub fn is_board(&self) -> bool {
         self.board.is_some()
-    }
-
-    /// Get package aliases (legacy V1; V2 does not support aliases)
-    pub fn packages(&self) -> HashMap<String, String> {
-        self.packages.clone()
     }
 
     /// Auto-generate aliases from dependencies (V2 only)
@@ -354,6 +308,7 @@ impl PcbToml {
 
 /// Workspace configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkspaceConfig {
     /// Optional Diode workspace name override.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -370,10 +325,6 @@ pub struct WorkspaceConfig {
     /// Member package paths are inferred as: repository + "/" + path + "/" + relative_dir
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-
-    /// Dependency resolver version (legacy; ignored)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolver: Option<String>,
 
     /// Minimum compatible toolchain release series (e.g., "0.3")
     /// V2 only. Indicates breaking changes requiring newer compiler.
@@ -429,7 +380,6 @@ impl Default for WorkspaceConfig {
             name: None,
             repository: None,
             path: None,
-            resolver: None,
             pcb_version: None,
             endpoint: None,
             bom: BomConfig::default(),
@@ -522,7 +472,7 @@ fn is_default_kicad_library(value: &[KicadLibraryConfig]) -> bool {
     value == default_kicad_library().as_slice()
 }
 
-/// Access control configuration (shared by V1 and V2)
+/// Access control configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccessConfig {
     /// Access control list (email patterns)
@@ -530,14 +480,7 @@ pub struct AccessConfig {
     pub allow: Vec<String>,
 }
 
-/// Module configuration (V1 only)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModuleConfig {
-    /// Module name
-    pub name: String,
-}
-
-/// Board configuration (used in both V1 and V2)
+/// Board configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Board {
     /// Board name
@@ -944,7 +887,6 @@ mod tests {
 
     #[test]
     fn test_parse_board_only() {
-        // Board-only configs are V2 (no V1-specific constructs)
         let content = r#"
 [board]
 name = "TestBoard"
@@ -953,7 +895,6 @@ description = "A test board"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert!(config.is_v2()); // No V1 constructs, so it's V2
         assert!(config.is_board());
 
         let board = config.board.unwrap();
@@ -963,18 +904,42 @@ description = "A test board"
     }
 
     #[test]
-    fn test_parse_v1_module() {
-        // [module] section requires V1
-        let content = r#"
+    fn test_parse_rejects_legacy_module_section() {
+        let err = PcbToml::parse(
+            r#"
 [module]
-name = "stdlib"
-module_path = "github.com/diodeinc/stdlib"
-version = "0.3.0"
-"#;
+name = "legacy"
+"#,
+        )
+        .expect_err("legacy [module] should not parse");
 
-        let config = PcbToml::parse(content).unwrap();
-        assert!(!config.is_v2()); // Has [module], requires V1
-        assert!(config.is_module());
+        assert!(err.to_string().contains("unknown field `module`"));
+    }
+
+    #[test]
+    fn test_parse_rejects_legacy_packages_section() {
+        let err = PcbToml::parse(
+            r#"
+[packages]
+registry = "github.com/diodeinc/registry"
+"#,
+        )
+        .expect_err("legacy [packages] should not parse");
+
+        assert!(err.to_string().contains("unknown field `packages`"));
+    }
+
+    #[test]
+    fn test_parse_rejects_legacy_workspace_resolver() {
+        let err = PcbToml::parse(
+            r#"
+[workspace]
+resolver = "2"
+"#,
+        )
+        .expect_err("legacy workspace resolver should not parse");
+
+        assert!(err.to_string().contains("unknown field `resolver`"));
     }
 
     #[test]
@@ -990,7 +955,6 @@ description = "Power Regulator Board"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert!(config.is_v2());
 
         let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
@@ -1058,7 +1022,6 @@ allow = ["*@weaverobots.com"]
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert!(config.is_v2());
         assert!(config.is_workspace());
 
         let workspace = config.workspace.as_ref().unwrap();
@@ -1290,7 +1253,7 @@ name = "RootBoard"
     }
 
     #[test]
-    fn test_workspace_no_pcb_version_is_v1() {
+    fn test_workspace_no_pcb_version_parses() {
         let content = r#"
 [workspace]
 
@@ -1299,11 +1262,17 @@ name = "TestBoard"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert!(!config.is_v2());
+        assert_eq!(
+            config
+                .workspace
+                .as_ref()
+                .and_then(|w| w.pcb_version.as_deref()),
+            None
+        );
     }
 
     #[test]
-    fn test_workspace_old_pcb_version_is_v1() {
+    fn test_workspace_old_pcb_version_parses() {
         let content = r#"
 [workspace]
 pcb-version = "0.2"
@@ -1313,7 +1282,13 @@ name = "TestBoard"
 "#;
 
         let config = PcbToml::parse(content).unwrap();
-        assert!(!config.is_v2());
+        assert_eq!(
+            config
+                .workspace
+                .as_ref()
+                .and_then(|w| w.pcb_version.as_deref()),
+            Some("0.2")
+        );
     }
 
     #[test]
@@ -1330,10 +1305,10 @@ pcb-version = "0.3.71"
     }
 
     #[test]
-    fn test_empty_is_v2() {
-        // Empty pcb.toml is valid V2 (no V1 constructs)
+    fn test_empty_manifest_parses() {
         let config = PcbToml::parse("").unwrap();
-        assert!(config.is_v2());
+        assert!(config.workspace.is_none());
+        assert!(config.board.is_none());
     }
 
     #[test]
@@ -1410,12 +1385,11 @@ load("foo.zen", "Bar")
         let result = PcbToml::from_zen_content(zen_content);
         assert!(result.is_some());
         let config = result.unwrap().unwrap();
-        assert!(config.is_v2());
+        assert!(config.workspace.is_some());
     }
 
     #[test]
-    fn test_from_zen_content_v1() {
-        // V1 style inline manifest (no pcb-version)
+    fn test_from_zen_content_rejects_legacy_packages() {
         let zen_content = r#"# ```pcb
 # [packages]
 # stdlib = "@github/diodeinc/stdlib:v0.3.2"
@@ -1426,8 +1400,10 @@ load("@stdlib/foo.zen", "Bar")
 
         let result = PcbToml::from_zen_content(zen_content);
         assert!(result.is_some());
-        let config = result.unwrap().unwrap();
-        assert!(!config.is_v2()); // Has [packages] which requires V1
+        let err = result
+            .unwrap()
+            .expect_err("legacy [packages] should not parse");
+        assert!(err.to_string().contains("unknown field `packages`"));
     }
 
     #[test]
