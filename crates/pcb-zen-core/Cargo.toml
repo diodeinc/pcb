@@ -52,6 +52,7 @@ pcb-sexpr = { workspace = true }
 pcb-canonical = { workspace = true, optional = true }
 tracing = { workspace = true }
 rayon = { workspace = true, optional = true }
+url = { workspace = true }
 include_dir = "0.7.4"
 
 [dev-dependencies]

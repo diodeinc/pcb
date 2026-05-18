@@ -34,6 +34,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Fixed remote package imports from non-GitHub/non-GitLab hosts such as `code.diode.computer`.
 - Fixed stdlib LPDDR4 channel impedance defaults to use 40 Ω single-ended and 80 Ω differential routing targets.
 
 ## [0.3.81] - 2026-05-11
