@@ -5,6 +5,7 @@ use pcb_zen_core::DiagnosticsPass;
 use pcb_zen_core::SortPass;
 use pcb_zen_core::lang::component::FrozenComponentValue;
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
+use starlark::errors::EvalSeverity;
 
 fn eval_single_root_component(source: &str) -> FrozenComponentValue {
     let result = common::eval_zen(vec![("test.zen".to_string(), source.to_string())]);
@@ -1512,10 +1513,20 @@ fn component_modifier_match_component_ignores_electrical_checks() {
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
 }
 
-fn legacy_property_warnings(diagnostics: &pcb_zen_core::Diagnostics) -> Vec<String> {
+fn legacy_property_diagnostics(
+    diagnostics: &pcb_zen_core::Diagnostics,
+    severity: EvalSeverity,
+) -> Vec<String> {
     diagnostics
-        .warnings()
-        .into_iter()
+        .diagnostics
+        .iter()
+        .filter(|diag| {
+            matches!(
+                (&diag.severity, &severity),
+                (EvalSeverity::Warning, EvalSeverity::Warning)
+                    | (EvalSeverity::Advice, EvalSeverity::Advice)
+            )
+        })
         .filter_map(|diag| {
             let kind = diag
                 .innermost()
@@ -1568,7 +1579,8 @@ Component(
         .to_string(),
     )]);
 
-    let bodies = legacy_property_warnings(&diagnostics);
+    let warning_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Warning);
+    let advice_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Advice);
 
     for (legacy_key, typed_kwarg) in [
         ("do_not_populate", "dnp"),
@@ -1589,9 +1601,9 @@ Component(
             "Component 'R1': `properties[\"{legacy_key}\"]` is deprecated; pass `{typed_kwarg}=...` to Component() instead"
         );
         assert!(
-            bodies.iter().any(|b| b == &expected),
+            warning_bodies.iter().any(|b| b == &expected),
             "expected legacy-property warning for `{legacy_key}`, got: {:?}",
-            bodies
+            warning_bodies
         );
     }
 
@@ -1600,9 +1612,9 @@ Component(
             "Component 'R1': `properties[\"{sourcing_key}\"]` is deprecated; pass `part=Part(mpn=..., manufacturer=...)` to Component() instead"
         );
         assert!(
-            bodies.iter().any(|b| b == &expected),
-            "expected sourcing-key warning for `{sourcing_key}`, got: {:?}",
-            bodies
+            advice_bodies.iter().any(|b| b == &expected),
+            "expected sourcing-key advice for `{sourcing_key}`, got: {:?}",
+            advice_bodies
         );
     }
 }
@@ -1633,16 +1645,22 @@ Component(
         .to_string(),
     )]);
 
-    let bodies = legacy_property_warnings(&diagnostics);
+    let warning_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Warning);
+    let advice_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Advice);
     assert!(
-        bodies.is_empty(),
+        warning_bodies.is_empty(),
         "expected no legacy-property warnings, got: {:?}",
-        bodies
+        warning_bodies
+    );
+    assert!(
+        advice_bodies.is_empty(),
+        "expected no legacy-property advice, got: {:?}",
+        advice_bodies
     );
 }
 
 #[test]
-fn warns_for_mpn_and_manufacturer_kwargs() {
+fn advises_for_mpn_and_manufacturer_kwargs() {
     let diagnostics = eval_component_diagnostics(vec![(
         "test.zen".to_string(),
         r#"
@@ -1661,16 +1679,23 @@ Component(
         .to_string(),
     )]);
 
-    let bodies = legacy_property_warnings(&diagnostics);
+    let warning_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Warning);
+    let advice_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Advice);
+
+    assert!(
+        warning_bodies.is_empty(),
+        "expected sourcing kwargs to avoid warnings, got: {:?}",
+        warning_bodies
+    );
 
     for kwarg in ["mpn", "manufacturer"] {
         let expected = format!(
             "Component 'R1': `{kwarg}=...` is deprecated; pass `part=Part(mpn=..., manufacturer=...)` to Component() instead"
         );
         assert!(
-            bodies.iter().any(|b| b == &expected),
-            "expected sourcing-kwarg warning for `{kwarg}`, got: {:?}",
-            bodies
+            advice_bodies.iter().any(|b| b == &expected),
+            "expected sourcing-kwarg advice for `{kwarg}`, got: {:?}",
+            advice_bodies
         );
     }
 }
@@ -1694,11 +1719,17 @@ Component(
         .to_string(),
     )]);
 
-    let bodies = legacy_property_warnings(&diagnostics);
+    let warning_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Warning);
+    let advice_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Advice);
     assert!(
-        bodies.is_empty(),
+        warning_bodies.is_empty(),
         "expected no warnings when using part=Part(...), got: {:?}",
-        bodies
+        warning_bodies
+    );
+    assert!(
+        advice_bodies.is_empty(),
+        "expected no advice when using part=Part(...), got: {:?}",
+        advice_bodies
     );
 }
 
