@@ -42,12 +42,12 @@ jobs:
           role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Prepare latest main build
+      - name: Prepare main build
         run: |
           mkdir -p dist-main
           cp target/release/pcb dist-main/pcb
           shasum -a 256 dist-main/pcb | awk '{print $1}' > dist-main/pcb.sha256
-          cat > dist-main/latest.json <<EOF
+          cat > dist-main/main.json <<EOF
           {
             "sha": "${{ github.sha }}",
             "ref": "${{ github.ref_name }}",
@@ -56,7 +56,7 @@ jobs:
           }
           EOF
 
-      - name: Upload latest main build to S3
+      - name: Upload main build to S3
         run: |
-          aws s3 sync dist-main/ "s3://diode-pcb-releases/pcb/latest/" \
+          aws s3 sync dist-main/ "s3://diode-pcb-releases/pcb/main/" \
             --cache-control "public, max-age=60"

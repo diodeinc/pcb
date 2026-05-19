@@ -53,12 +53,15 @@ jobs:
               --cache-control "public, max-age=300"
           fi
 
-      - name: Publish latest release metadata
+      - name: Publish latest stable release
         run: |
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
-            echo "Skipping latest.json for prerelease $GITHUB_REF_NAME"
+            echo "Skipping latest release pointers for prerelease $GITHUB_REF_NAME"
             exit 0
           fi
+
+          aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/latest/" \
+            --cache-control "public, max-age=60"
 
           jq -n \
             --arg version "${GITHUB_REF_NAME#v}" \
