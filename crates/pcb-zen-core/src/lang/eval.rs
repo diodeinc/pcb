@@ -1704,35 +1704,35 @@ impl EvalContext {
                         if original == "NC" {
                             continue;
                         }
-                        diagnostics.push(crate::Diagnostic {
-                            path: path.clone(),
-                            span,
-                            severity: EvalSeverity::Warning,
-                            body: format!(
-                                "Net '{}' was renamed to '{}' due to name collision",
-                                original, net_info.final_name
-                            ),
-                            call_stack: Some(net_info.call_stack.clone()),
-                            child: None,
-                            source_error: None,
-                            related: Vec::new(),
-                            suppressed: false,
-                        });
+                        let body = format!(
+                            "Net '{}' was renamed to '{}' due to name collision",
+                            original, net_info.final_name
+                        );
+                        diagnostics.push(
+                            crate::Diagnostic::categorized(
+                                &path,
+                                &body,
+                                "net.name_collision",
+                                EvalSeverity::Warning,
+                            )
+                            .with_span(span)
+                            .with_call_stack(Some(net_info.call_stack.clone())),
+                        );
                     } else if net_info.auto_named {
-                        diagnostics.push(crate::Diagnostic {
-                            path,
-                            span,
-                            severity: EvalSeverity::Warning,
-                            body: format!(
-                                "Net had no explicit name; assigned '{}'",
-                                net_info.final_name
-                            ),
-                            call_stack: Some(net_info.call_stack.clone()),
-                            child: None,
-                            source_error: None,
-                            related: Vec::new(),
-                            suppressed: false,
-                        });
+                        let body = format!(
+                            "Net had no explicit name; assigned '{}'",
+                            net_info.final_name
+                        );
+                        diagnostics.push(
+                            crate::Diagnostic::categorized(
+                                &path,
+                                &body,
+                                "net.unnamed",
+                                EvalSeverity::Warning,
+                            )
+                            .with_span(span)
+                            .with_call_stack(Some(net_info.call_stack.clone())),
+                        );
                     }
                 }
 

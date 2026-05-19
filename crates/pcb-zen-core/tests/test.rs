@@ -151,7 +151,7 @@ snapshot_eval!(duplicate_component_name, {
             pins = {"1": vcc, "2": gnd}
         )
 
-        # Second component with the same name "R1" - should warn
+        # Second component with the same name "R1" - should error
         Component(
             name = "R1",
             footprint = "SMD:0402",
@@ -179,7 +179,7 @@ snapshot_eval!(duplicate_module_name, {
         # First module instance named "sub1"
         Sub(name = "sub1")
 
-        # Second module instance with the same name "sub1" - should warn
+        # Second module instance with the same name "sub1" - should error
         Sub(name = "sub1")
     "#
 });
@@ -210,7 +210,52 @@ snapshot_eval!(duplicate_module_component_collision, {
             pins = {"1": vcc, "2": gnd}
         )
 
-        # Module instance with the same name "widget" - should warn about collision
+        # Module instance with the same name "widget" - should error
         Sub(name = "widget")
     "#
 });
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn duplicate_child_name_has_diagnostic_kind() {
+    use pcb_zen_core::lang::error::CategorizedDiagnostic;
+    use starlark::errors::EvalSeverity;
+
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+vcc = Net(name = "VCC")
+gnd = Net(name = "GND")
+
+Component(
+    name = "R1",
+    footprint = "SMD:0402",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": vcc, "2": gnd}
+)
+
+Component(
+    name = "R1",
+    footprint = "SMD:0402",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": vcc, "2": gnd}
+)
+"#
+        .to_string(),
+    )]);
+
+    assert!(
+        !result.is_success(),
+        "expected duplicate child name to fail"
+    );
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| {
+            matches!(diagnostic.severity, EvalSeverity::Error)
+                && diagnostic
+                    .downcast_error_ref::<CategorizedDiagnostic>()
+                    .is_some_and(|categorized| categorized.kind == "module.duplicate_child_name")
+        }),
+        "expected module.duplicate_child_name error, got: {:?}",
+        result.diagnostics
+    );
+}

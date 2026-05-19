@@ -312,11 +312,15 @@ fn warn_deprecated_config_convert(
 ) {
     let msg = "config() parameter `convert` is deprecated and will be removed in a future release"
         .to_string();
-    let mut diag =
-        starlark::errors::EvalMessage::from_any_error(Path::new(&declaration_site.path), &msg);
-    diag.span = declaration_site.span;
-    diag.severity = starlark::errors::EvalSeverity::Warning;
-    eval.add_diagnostic(diag);
+    eval.add_diagnostic(
+        crate::Diagnostic::categorized(
+            &declaration_site.path,
+            &msg,
+            "deprecated.config_convert",
+            starlark::errors::EvalSeverity::Warning,
+        )
+        .with_span(declaration_site.span),
+    );
 }
 
 fn warn_deprecated_io_default(

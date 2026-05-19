@@ -228,8 +228,8 @@ impl<'v> ContextValue<'v> {
         None
     }
 
-    /// Emit a warning diagnostic for duplicate child name
-    pub(crate) fn warn_duplicate_child_name(
+    /// Emit an error diagnostic for duplicate child name
+    pub(crate) fn emit_duplicate_child_name_error(
         &self,
         name: &str,
         existing_type: &str,
@@ -237,21 +237,18 @@ impl<'v> ContextValue<'v> {
         span: starlark::codemap::ResolvedSpan,
         call_stack: Option<starlark::eval::CallStack>,
     ) {
-        use starlark::errors::EvalSeverity;
-        let diag = crate::Diagnostic {
-            path: path.to_string(),
-            span: Some(span),
-            severity: EvalSeverity::Warning,
-            body: format!(
-                "Duplicate child name '{}': a {} with this name already exists. This will become an error in a future release.",
-                name, existing_type
-            ),
-            call_stack,
-            child: None,
-            source_error: None,
-            related: Vec::new(),
-            suppressed: false,
-        };
+        let body = format!(
+            "Duplicate child name '{}': a {} with this name already exists.",
+            name, existing_type
+        );
+        let diag = crate::Diagnostic::categorized(
+            path,
+            &body,
+            "module.duplicate_child_name",
+            starlark::errors::EvalSeverity::Error,
+        )
+        .with_span(Some(span))
+        .with_call_stack(call_stack);
         self.add_diagnostic(diag);
     }
 
@@ -259,7 +256,7 @@ impl<'v> ContextValue<'v> {
     /// existing components and modules.
     pub(crate) fn enqueue_child(&self, child: PendingChild<'v>) {
         if let Some(existing_type) = self.find_existing_child_name(&child.final_name) {
-            self.warn_duplicate_child_name(
+            self.emit_duplicate_child_name_error(
                 &child.final_name,
                 existing_type,
                 &child.call_site_path,
@@ -283,7 +280,7 @@ impl<'v> ContextValue<'v> {
             && let Some(existing_type) = self.find_existing_child_name(child_name)
             && let Some(site) = call_site
         {
-            self.warn_duplicate_child_name(
+            self.emit_duplicate_child_name_error(
                 child_name,
                 existing_type,
                 site.filename(),
