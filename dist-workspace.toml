@@ -7,6 +7,10 @@ members = ["cargo:."]
 cargo-dist-version = "0.31.0"
 # CI backends to support
 ci = "github"
+# Release hosting backends. Use the CDN first, with GitHub Releases as a fallback.
+hosting = ["simple", "github"]
+# CDN base URL for statically-hosted release artifacts.
+simple-download-url = "https://pcb.api.diode.computer/pcb/{tag}"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
 # Target platforms to build apps for (Rust target-triple syntax)
