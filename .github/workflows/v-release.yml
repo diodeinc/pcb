@@ -16,7 +16,6 @@
 name: Release
 permissions:
   "contents": "write"
-  "id-token": "write"
 
 # This task will run whenever you push a git tag that looks like a version
 # like "1.0.0", "v0.1.0-prerelease.1", "my-app/0.1.0", "releases/v1.0.0", etc.
@@ -131,9 +130,9 @@ jobs:
         uses: "actions-rust-lang/setup-rust-toolchain@v1"
         if: "runner.os == 'Windows'"
         with:
+          "cache-bin": false
           "rustflags": ""
           "toolchain": "stable-x86_64-pc-windows-msvc"
-          "cache-bin": false
       - name: "Setup Rust toolchain"
         uses: "actions-rust-lang/setup-rust-toolchain@v1"
         if: "runner.os != 'Windows'"
@@ -290,27 +289,28 @@ jobs:
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
-  upload-s3:
+  custom-s3-release-upload:
     needs:
       - plan
-      - host
-    if: ${{ always() && needs.host.result == 'success' }}
-    permissions:
-      contents: read
-      id-token: write
+      - build-local-artifacts
+      - build-global-artifacts
     uses: ./.github/workflows/s3-release-upload.yml
     with:
-      plan: ${{ needs.host.outputs.val }}
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    permissions:
+      "contents": "read"
+      "id-token": "write"
 
   announce:
     needs:
       - plan
       - host
-      - upload-s3
+      - custom-s3-release-upload
     # use "always() && ..." to allow us to wait for all publish jobs while
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' && needs.upload-s3.result == 'success' }}
+    if: ${{ always() && needs.host.result == 'success' }}
     runs-on: "ubicloud-standard-30-ubuntu-2204"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
