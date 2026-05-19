@@ -19,7 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Added diagnostic kinds for more toolchain diagnostics and made duplicate child names an error.
+- Added diagnostic kinds for more toolchain diagnostics, including duplicate child names.
 - Deprecated legacy `properties=` and sourcing kwargs on `Component()`/`Module()`; use typed kwargs (`dnp`, `skip_bom`, `skip_pos`, `type`, `description`, `part=Part(...)`).
 - Deprecated the bare `add_property(...)` global in favor of `builtin.add_property(...)`.
 - `pcb new board <name> <repo-url>` now creates a board repository directly, replacing the separate `pcb new workspace` flow.

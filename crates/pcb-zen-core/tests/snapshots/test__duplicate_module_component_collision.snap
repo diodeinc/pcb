@@ -3,4 +3,79 @@ source: crates/pcb-zen-core/tests/test.rs
 assertion_line: 187
 expression: output
 ---
-Error: test.zen:19:1-21 Duplicate child name 'widget': a component with this name already exists.
+Warning: test.zen:19:1-21 Duplicate child name 'widget': a component with this name already exists.
+{
+    <root>: Module {
+        path: <root>,
+        source: "test.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "widget",
+                    footprint: "SMD:0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+    widget: Module {
+        path: widget,
+        source: "/sub.zen",
+        children: [
+            FrozenValue(
+                Component {
+                    name: "R1",
+                    footprint: "SMD:0402",
+                    prefix: "U",
+                    connections: {
+                        "1": FrozenValue(
+                            Net {
+                                name: "VCC",
+                                id: "<ID>",
+                            },
+                        ),
+                        "2": FrozenValue(
+                            Net {
+                                name: "GND",
+                                id: "<ID>",
+                            },
+                        ),
+                    },
+                    symbol: FrozenValue(
+                        Symbol {
+                            name: None,
+                            pins: {
+                                "1": "1",
+                                "2": "2",
+                            },
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+}
+[]

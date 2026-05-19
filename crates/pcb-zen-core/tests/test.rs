@@ -151,7 +151,7 @@ snapshot_eval!(duplicate_component_name, {
             pins = {"1": vcc, "2": gnd}
         )
 
-        # Second component with the same name "R1" - should error
+        # Second component with the same name "R1" - should warn
         Component(
             name = "R1",
             footprint = "SMD:0402",
@@ -179,7 +179,7 @@ snapshot_eval!(duplicate_module_name, {
         # First module instance named "sub1"
         Sub(name = "sub1")
 
-        # Second module instance with the same name "sub1" - should error
+        # Second module instance with the same name "sub1" - should warn
         Sub(name = "sub1")
     "#
 });
@@ -210,7 +210,7 @@ snapshot_eval!(duplicate_module_component_collision, {
             pins = {"1": vcc, "2": gnd}
         )
 
-        # Module instance with the same name "widget" - should error
+        # Module instance with the same name "widget" - should warn about collision
         Sub(name = "widget")
     "#
 });
@@ -245,17 +245,17 @@ Component(
     )]);
 
     assert!(
-        !result.is_success(),
-        "expected duplicate child name to fail"
+        result.is_success(),
+        "expected duplicate child name to warn without failing"
     );
     assert!(
         result.diagnostics.iter().any(|diagnostic| {
-            matches!(diagnostic.severity, EvalSeverity::Error)
+            matches!(diagnostic.severity, EvalSeverity::Warning)
                 && diagnostic
                     .downcast_error_ref::<CategorizedDiagnostic>()
                     .is_some_and(|categorized| categorized.kind == "module.duplicate_child_name")
         }),
-        "expected module.duplicate_child_name error, got: {:?}",
+        "expected module.duplicate_child_name warning, got: {:?}",
         result.diagnostics
     );
 }

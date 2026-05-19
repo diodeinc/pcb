@@ -228,8 +228,8 @@ impl<'v> ContextValue<'v> {
         None
     }
 
-    /// Emit an error diagnostic for duplicate child name
-    pub(crate) fn emit_duplicate_child_name_error(
+    /// Emit a warning diagnostic for duplicate child name
+    pub(crate) fn warn_duplicate_child_name(
         &self,
         name: &str,
         existing_type: &str,
@@ -245,7 +245,7 @@ impl<'v> ContextValue<'v> {
             path,
             &body,
             "module.duplicate_child_name",
-            starlark::errors::EvalSeverity::Error,
+            starlark::errors::EvalSeverity::Warning,
         )
         .with_span(Some(span))
         .with_call_stack(call_stack);
@@ -256,7 +256,7 @@ impl<'v> ContextValue<'v> {
     /// existing components and modules.
     pub(crate) fn enqueue_child(&self, child: PendingChild<'v>) {
         if let Some(existing_type) = self.find_existing_child_name(&child.final_name) {
-            self.emit_duplicate_child_name_error(
+            self.warn_duplicate_child_name(
                 &child.final_name,
                 existing_type,
                 &child.call_site_path,
@@ -280,7 +280,7 @@ impl<'v> ContextValue<'v> {
             && let Some(existing_type) = self.find_existing_child_name(child_name)
             && let Some(site) = call_site
         {
-            self.emit_duplicate_child_name_error(
+            self.warn_duplicate_child_name(
                 child_name,
                 existing_type,
                 site.filename(),
