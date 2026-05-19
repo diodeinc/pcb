@@ -18,10 +18,10 @@ use pcb_sch::position::{MirrorAxis, Position};
 use pcb_sch::{AttributeValue, Instance, InstanceKind, InstanceRef, ModuleRef, Net, Schematic};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
-use starlark::errors::EvalSeverity;
 use starlark::values::list::ListRef;
 use starlark::values::record::FrozenRecord;
 use starlark::values::{FrozenValue, Value, ValueLike, dict::DictRef};
+use starlark::{codemap::ResolvedSpan, errors::EvalSeverity};
 use std::collections::{BTreeMap, HashMap};
 use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
@@ -1061,6 +1061,18 @@ impl ModuleConverter {
                 let old_scoped = scoped_path(&module_path, old);
                 let new_scoped = scoped_path(&module_path, new);
                 let source = Path::new(module.source_path());
+                let mut push_moved_warning =
+                    |body: String, kind: &str, span: Option<ResolvedSpan>| {
+                        diagnostics.push(
+                            Diagnostic::categorized(
+                                &source.to_string_lossy(),
+                                &body,
+                                kind,
+                                EvalSeverity::Warning,
+                            )
+                            .with_span(span),
+                        );
+                    };
 
                 // Skip validation for auto-generated directives
                 if *auto_generated {
@@ -1082,21 +1094,18 @@ impl ModuleConverter {
                         path_depth(old),
                         path_depth(new)
                     );
-                    let diagnostic = Diagnostic::new(body, EvalSeverity::Warning, source);
-                    diagnostics.push(diagnostic.with_span(span));
+                    push_moved_warning(body, "moved.invalid_depth", span);
                     continue;
                 }
 
                 if existing.contains(&old_scoped) {
                     let span = find_moved_span(module.source_path(), old, new, false);
                     let body = format!("moved() references path '{}' that still exists.", old);
-                    let diagnostic = Diagnostic::new(body, EvalSeverity::Warning, source);
-                    diagnostics.push(diagnostic.with_span(span));
+                    push_moved_warning(body, "moved.old_path_exists", span);
                 } else if !existing.contains(&new_scoped) {
                     let span = find_moved_span(module.source_path(), old, new, true);
                     let body = format!("moved() references path '{}' that doesn't exist.", new);
-                    let diagnostic = Diagnostic::new(body, EvalSeverity::Warning, source);
-                    diagnostics.push(diagnostic.with_span(span));
+                    push_moved_warning(body, "moved.new_path_missing", span);
                 } else {
                     filtered.insert(old_scoped, new_scoped.clone());
                 }
