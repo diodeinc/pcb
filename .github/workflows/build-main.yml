@@ -11,6 +11,7 @@ concurrency:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build:
@@ -35,15 +36,27 @@ jobs:
           path: target/release/pcb
           retention-days: 30
 
-      - name: Update latest prerelease
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Prepare latest main build
         run: |
-          # Delete existing prerelease and tag if they exist
-          gh release delete latest --yes || true
-          git push origin --delete refs/tags/latest || true
-          # Create new prerelease
-          gh release create latest target/release/pcb \
-            --title "Latest Main Build" \
-            --notes "Automated build from main branch (commit: ${{ github.sha }})" \
-            --prerelease
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          mkdir -p dist-main
+          cp target/release/pcb dist-main/pcb
+          shasum -a 256 dist-main/pcb | awk '{print $1}' > dist-main/pcb.sha256
+          cat > dist-main/latest.json <<EOF
+          {
+            "sha": "${{ github.sha }}",
+            "ref": "${{ github.ref_name }}",
+            "run_id": "${{ github.run_id }}",
+            "run_attempt": "${{ github.run_attempt }}"
+          }
+          EOF
+
+      - name: Upload latest main build to S3
+        run: |
+          aws s3 sync dist-main/ "s3://diode-pcb-releases/pcb/latest/" \
+            --cache-control "public, max-age=60"

@@ -1,0 +1,54 @@
+name: Upload release artifacts to S3
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  upload:
+    name: upload-s3
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: artifacts-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Remove dist manifest artifacts
+        run: rm -f artifacts/*-dist-manifest.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Upload immutable release artifacts
+        run: |
+          aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ github.ref_name }}/" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "pcb-installer.sh" \
+            --exclude "pcb-installer.ps1"
+
+      - name: Upload installer scripts with short cache
+        run: |
+          if [ -f artifacts/pcb-installer.sh ]; then
+            aws s3 cp artifacts/pcb-installer.sh \
+              "s3://diode-pcb-releases/pcb/${{ github.ref_name }}/pcb-installer.sh" \
+              --cache-control "public, max-age=300"
+          fi
+
+          if [ -f artifacts/pcb-installer.ps1 ]; then
+            aws s3 cp artifacts/pcb-installer.ps1 \
+              "s3://diode-pcb-releases/pcb/${{ github.ref_name }}/pcb-installer.ps1" \
+              --cache-control "public, max-age=300"
+          fi
