@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.82] - 2026-05-19
+
 ### Added
 
 - Added `pcb ipc2581 render` for processed IPC-2581 layer output to SVG, PNG, and terminal graphics, including board outline overlays.
@@ -1062,7 +1064,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.81...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.82...HEAD
+[0.3.82]: https://github.com/diodeinc/pcb/compare/v0.3.81...v0.3.82
 [0.3.81]: https://github.com/diodeinc/pcb/compare/v0.3.80...v0.3.81
 [0.3.80]: https://github.com/diodeinc/pcb/compare/v0.3.79...v0.3.80
 [0.3.79]: https://github.com/diodeinc/pcb/compare/v0.3.78...v0.3.79
