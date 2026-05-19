@@ -13,7 +13,7 @@ use crate::drc;
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Generate PCB layout files from a .zen file")]
 pub struct LayoutArgs {
-    /// Path to .zen file
+    /// Path to .zen file or diode:// sandbox URI
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     pub file: PathBuf,
 
@@ -74,6 +74,14 @@ struct LayoutCommandResult {
 }
 
 pub fn execute(mut args: LayoutArgs) -> Result<()> {
+    #[cfg(feature = "api")]
+    if let Some(uri) = crate::sandbox_uri::parse_sandbox_file_arg(&args.file)? {
+        crate::sandbox_uri::require_remote_zen_file(&uri)?;
+        return crate::remote_sandbox::execute_layout(uri, args);
+    }
+    #[cfg(not(feature = "api"))]
+    crate::sandbox_uri::reject_if_diode_uri(&args.file)?;
+
     crate::file_walker::require_zen_file(&args.file)?;
     let config_inputs = parse_config_overrides(&args.config)?;
     let hide_progress = args.format == LayoutOutputFormat::Json;

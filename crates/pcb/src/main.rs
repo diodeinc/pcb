@@ -40,7 +40,10 @@ mod preview;
 mod publish;
 mod release;
 #[cfg(feature = "api")]
+mod remote_sandbox;
+#[cfg(feature = "api")]
 mod route;
+mod sandbox_uri;
 mod self_update;
 mod sim;
 mod test;
