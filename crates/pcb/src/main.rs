@@ -308,10 +308,12 @@ fn is_update_command(command: &Commands) -> bool {
 }
 
 fn check_and_update() {
-    let mut updater = axoupdater::AxoUpdater::new_for("pcb");
-    if let Ok(updater) = updater.load_receipt()
-        && let Ok(true) = updater.is_update_needed_sync()
-    {
+    if !self_update::update_check_due() {
+        return;
+    }
+    self_update::mark_update_checked();
+
+    if let Ok(true) = self_update::is_update_available() {
         eprintln!("{}", "A new version of pcb is available!".blue().bold());
         eprintln!("Run {} to update.", "pcb self update".yellow().bold());
     }

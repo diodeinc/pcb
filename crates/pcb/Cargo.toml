@@ -69,6 +69,7 @@ tempfile = { workspace = true }
 ignore = { workspace = true }
 globset = { workspace = true }
 semver = { workspace = true }
+self-replace = { workspace = true }
 rayon = { workspace = true }
 jiff = { workspace = true }
 crossterm = { workspace = true }
@@ -77,7 +78,6 @@ reqwest = { workspace = true }
 termimad = { workspace = true }
 syntect = { workspace = true }
 gltfpack-sys = { workspace = true }
-axoupdater = { workspace = true }
 thiserror = { workspace = true }
 minijinja = { workspace = true }
 canon-json = "0.2"
