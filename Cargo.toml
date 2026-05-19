@@ -55,7 +55,6 @@ aws-config = "1.8.16"
 aws-credential-types = "1.2.14"
 aws-sigv4 = "1.4.3"
 aws-smithy-runtime-api = "1.12.0"
-axoupdater = { version = "0.10", features = ["blocking"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 colored = "3"
@@ -116,6 +115,7 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 rand = "0.8"
 serde-wasm-bindgen = "0.6"
 serde_yaml = "0.9"
+self-replace = "1.5"
 serial_test = "3.0"
 smallvec = "1.15"
 strip-ansi-escapes = "0.2"

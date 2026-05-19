@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Standalone `pcb` releases now use the Diode CDN for faster, less exciting downloads and update checks.
+
 ## [0.3.82] - 2026-05-19
 
 ### Added

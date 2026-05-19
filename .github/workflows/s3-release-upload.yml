@@ -52,3 +52,28 @@ jobs:
               "s3://diode-pcb-releases/pcb/${{ github.ref_name }}/pcb-installer.ps1" \
               --cache-control "public, max-age=300"
           fi
+
+      - name: Publish latest release metadata
+        run: |
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "Skipping latest.json for prerelease $GITHUB_REF_NAME"
+            exit 0
+          fi
+
+          jq -n \
+            --arg version "${GITHUB_REF_NAME#v}" \
+            --arg tag "$GITHUB_REF_NAME" \
+            --arg published_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg base_url "https://pcb.api.diode.computer/pcb/$GITHUB_REF_NAME" \
+            '{
+              version: $version,
+              tag: $tag,
+              published_at: $published_at,
+              shell_installer: ($base_url + "/pcb-installer.sh"),
+              powershell_installer: ($base_url + "/pcb-installer.ps1"),
+              dist_manifest: ($base_url + "/dist-manifest.json")
+            }' > latest.json
+
+          aws s3 cp latest.json "s3://diode-pcb-releases/pcb/latest.json" \
+            --cache-control "public, max-age=60" \
+            --content-type "application/json"
