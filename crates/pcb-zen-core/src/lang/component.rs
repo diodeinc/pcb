@@ -339,8 +339,8 @@ const LEGACY_COMPONENT_PROPERTY_KEYS: &[(&str, &str)] = &[
 const LEGACY_COMPONENT_SOURCING_PROPERTY_KEYS: &[&str] =
     &["mpn", "Mpn", "manufacturer", "Manufacturer"];
 
-/// Emit warnings for legacy `Component()` inputs. Each warning points users at
-/// the endorsed replacement; legacy values continue to be honored elsewhere.
+/// Emit diagnostics for legacy `Component()` inputs. Each diagnostic points
+/// users at the endorsed replacement; legacy values continue to be honored elsewhere.
 fn warn_legacy_component_inputs<'v>(
     eval: &Evaluator<'v, '_, '_>,
     component_name: &str,
@@ -348,12 +348,15 @@ fn warn_legacy_component_inputs<'v>(
     manufacturer_val: Option<Value<'v>>,
     properties_map: &SmallMap<String, Value<'v>>,
 ) {
-    let mut messages: Vec<String> = Vec::new();
+    let mut diagnostics: Vec<(String, EvalSeverity)> = Vec::new();
 
     for (legacy_key, typed_kwarg) in LEGACY_COMPONENT_PROPERTY_KEYS {
         if properties_map.contains_key(*legacy_key) {
-            messages.push(format!(
-                "Component '{component_name}': `properties[\"{legacy_key}\"]` is deprecated; pass `{typed_kwarg}=...` to Component() instead",
+            diagnostics.push((
+                format!(
+                    "Component '{component_name}': `properties[\"{legacy_key}\"]` is deprecated; pass `{typed_kwarg}=...` to Component() instead",
+                ),
+                EvalSeverity::Warning,
             ));
         }
     }
@@ -361,8 +364,11 @@ fn warn_legacy_component_inputs<'v>(
     let part_suggestion = "pass `part=Part(mpn=..., manufacturer=...)` to Component() instead";
     for key in LEGACY_COMPONENT_SOURCING_PROPERTY_KEYS {
         if properties_map.contains_key(*key) {
-            messages.push(format!(
-                "Component '{component_name}': `properties[\"{key}\"]` is deprecated; {part_suggestion}",
+            diagnostics.push((
+                format!(
+                    "Component '{component_name}': `properties[\"{key}\"]` is deprecated; {part_suggestion}",
+                ),
+                EvalSeverity::Advice,
             ));
         }
     }
@@ -371,24 +377,27 @@ fn warn_legacy_component_inputs<'v>(
         ("manufacturer", manufacturer_val.is_some()),
     ] {
         if present {
-            messages.push(format!(
-                "Component '{component_name}': `{kwarg}=...` is deprecated; {part_suggestion}",
+            diagnostics.push((
+                format!(
+                    "Component '{component_name}': `{kwarg}=...` is deprecated; {part_suggestion}",
+                ),
+                EvalSeverity::Advice,
             ));
         }
     }
 
-    if messages.is_empty() {
+    if diagnostics.is_empty() {
         return;
     }
 
     let (path, span) = diagnostic_location(eval);
-    for message in messages {
+    for (message, severity) in diagnostics {
         eval.add_diagnostic(
             crate::Diagnostic::categorized(
                 &path,
                 &message,
                 "deprecated.component_property",
-                EvalSeverity::Warning,
+                severity,
             )
             .with_span(span)
             .with_call_stack(Some(eval.call_stack())),
