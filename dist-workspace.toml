@@ -26,7 +26,7 @@ pr-run-mode = "skip"
 # Additional build setup steps for generated release workflow
 github-build-setup = "../build-setup.yml"
 # Upload release artifacts to S3 after cargo-dist finishes hosting them.
-host-jobs = ["./s3-release-upload"]
+post-announce-jobs = ["./s3-release-upload"]
 github-custom-job-permissions = { "s3-release-upload" = { contents = "read", id-token = "write" } }
 
 [dist.github-custom-runners]
