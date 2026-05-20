@@ -439,19 +439,9 @@ fn ensure_installed(version: &Version) -> Result<PathBuf> {
 }
 
 fn install_toolchain(version: &Version) -> Result<PathBuf> {
-    let archive_name = toolchain_archive_name("pcb");
-    let archive_url = format!("{RELEASE_BASE_URL}/v{version}/{archive_name}");
-
     eprintln!("Installing pcbc {version} ({})...", target_triple());
 
-    let archive =
-        download_optional(&http_client(ARCHIVE_TIMEOUT)?, &archive_url)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "no pcb archive found for v{} on {}",
-                version,
-                target_triple()
-            )
-        })?;
+    let (archive_name, archive_url, archive) = download_toolchain_archive(version)?;
     let actual_sha256 = verify_archive_checksum(&archive_url, &archive)?;
 
     fs::create_dir_all(downloads_dir())?;
@@ -498,6 +488,23 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
     fs::rename(&staging_dir, &install_dir)?;
 
     Ok(install_dir.join(pcbc_binary_name()))
+}
+
+fn download_toolchain_archive(version: &Version) -> Result<(String, String, Vec<u8>)> {
+    let client = http_client(ARCHIVE_TIMEOUT)?;
+    for binary in ["pcbc", "pcb"] {
+        let archive_name = toolchain_archive_name(binary);
+        let archive_url = format!("{RELEASE_BASE_URL}/v{version}/{archive_name}");
+        if let Some(archive) = download_optional(&client, &archive_url)? {
+            return Ok((archive_name, archive_url, archive));
+        }
+    }
+
+    anyhow::bail!(
+        "no pcbc or legacy pcb archive found for v{} on {}",
+        version,
+        target_triple()
+    )
 }
 
 fn download_optional(client: &reqwest::blocking::Client, url: &str) -> Result<Option<Vec<u8>>> {

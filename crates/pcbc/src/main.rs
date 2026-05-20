@@ -39,9 +39,10 @@ mod pcb_mod;
 mod preview;
 mod publish;
 mod release;
+mod remote_sandbox;
 #[cfg(feature = "api")]
 mod route;
-mod self_update;
+mod sandbox_uri;
 mod sim;
 mod test;
 mod update;
@@ -101,10 +102,6 @@ enum Commands {
 
     /// Update dependencies to latest compatible versions
     Update(update::UpdateArgs),
-
-    /// Update the pcb tool itself
-    #[command(name = "self")]
-    SelfUpdate(self_update::SelfUpdateArgs),
 
     /// Generate Bill of Materials (BOM)
     Bom(bom::BomArgs),
@@ -215,11 +212,6 @@ fn run() -> anyhow::Result<()> {
     // Initialize profiling if --profile is passed (guard must be held until end of run)
     let _profile_guard = profiling::init(cli.profile);
 
-    // Skip auto-update check in CI environments or when running the update command
-    if std::env::var("CI").is_err() && !is_update_command(&cli.command) {
-        check_and_update();
-    }
-
     match cli.command {
         #[cfg(feature = "api")]
         Commands::Auth(args) => api::execute_auth(args),
@@ -231,7 +223,6 @@ fn run() -> anyhow::Result<()> {
         Commands::Sync(args) => pcb_mod::execute_sync(args),
         Commands::New(args) => new::execute(args),
         Commands::Update(args) => update::execute(args),
-        Commands::SelfUpdate(args) => self_update::execute(args),
         Commands::Bom(args) => bom::execute(args),
         Commands::Info(args) => info::execute(args),
         Commands::Import(args) => import::execute(args),
@@ -300,21 +291,5 @@ fn run() -> anyhow::Result<()> {
                 }
             }
         }
-    }
-}
-
-fn is_update_command(command: &Commands) -> bool {
-    matches!(command, Commands::Update(_) | Commands::SelfUpdate(_))
-}
-
-fn check_and_update() {
-    if !self_update::update_check_due() {
-        return;
-    }
-    self_update::mark_update_checked();
-
-    if let Ok(true) = self_update::is_update_available() {
-        eprintln!("{}", "A new version of pcb is available!".blue().bold());
-        eprintln!("Run {} to update.", "pcb self update".yellow().bold());
     }
 }
