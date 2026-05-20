@@ -49,7 +49,6 @@ mod resolve;
 mod tty;
 
 #[derive(Parser)]
-#[command(name = env!("CARGO_BIN_NAME"))]
 #[command(about = "PCB tool with build and layout capabilities", long_about = None)]
 #[command(version)]
 struct Cli {

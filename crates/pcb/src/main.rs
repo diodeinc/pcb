@@ -161,14 +161,6 @@ fn main() {
 fn run() -> Result<()> {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
-    if args.is_empty()
-        || args.first().and_then(|arg| arg.to_str()) == Some("--help")
-        || args.first().and_then(|arg| arg.to_str()) == Some("-h")
-    {
-        ShimCli::parse_from(["pcb", "--help"]);
-        return Ok(());
-    }
-
     if args.first().and_then(|arg| arg.to_str()) == Some("--version")
         || args.first().and_then(|arg| arg.to_str()) == Some("-V")
     {
@@ -182,8 +174,15 @@ fn run() -> Result<()> {
     }
 
     let override_request = take_cli_override(&mut args)?;
-    let selection = select_toolchain(override_request)?;
+    let selection = select_toolchain(override_request, is_help_request(&args))?;
     exec_toolchain(&selection.binary, &args)
+}
+
+fn is_help_request(args: &[OsString]) -> bool {
+    matches!(
+        args.first().and_then(|arg| arg.to_str()),
+        None | Some("--help" | "-h" | "help")
+    )
 }
 
 fn is_shim_command(args: &[OsString]) -> bool {
@@ -252,7 +251,10 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
     }
 }
 
-fn select_toolchain(override_request: Option<ToolchainRequest>) -> Result<ResolvedToolchain> {
+fn select_toolchain(
+    override_request: Option<ToolchainRequest>,
+    prefer_local: bool,
+) -> Result<ResolvedToolchain> {
     let (request, reason) = if let Some(request) = override_request {
         (request, "command-line override".to_string())
     } else if let Some((path, lane)) = find_workspace_pcb_version()? {
@@ -267,15 +269,27 @@ fn select_toolchain(override_request: Option<ToolchainRequest>) -> Result<Resolv
         )
     };
 
-    resolve_request(&request, reason)
+    resolve_request(&request, reason, prefer_local)
 }
 
-fn resolve_request(request: &ToolchainRequest, reason: String) -> Result<ResolvedToolchain> {
+fn resolve_request(
+    request: &ToolchainRequest,
+    reason: String,
+    prefer_local: bool,
+) -> Result<ResolvedToolchain> {
     if matches!(request, ToolchainRequest::Nightly) {
         return resolve_nightly(reason);
     }
 
     if matches!(request, ToolchainRequest::Latest) {
+        if prefer_local && let Some(local) = best_local_toolchain(request)? {
+            return Ok(ResolvedToolchain {
+                label: local.0.to_string(),
+                binary: local.1,
+                reason,
+            });
+        }
+
         match resolve_remote_version(request, false).and_then(|version| {
             let binary = ensure_installed(&version)?;
             Ok((version, binary))
@@ -860,7 +874,7 @@ fn toolchain_list() -> Result<()> {
 }
 
 fn toolchain_show() -> Result<()> {
-    let selection = select_toolchain(None)?;
+    let selection = select_toolchain(None, false)?;
     println!("active: {}", selection.label);
     println!("reason: {}", selection.reason);
     println!("binary: {}", selection.binary.display());
@@ -1038,7 +1052,7 @@ fn exec_toolchain(binary: &Path, args: &[OsString]) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        let err = Command::new(binary).args(args).exec();
+        let err = Command::new(binary).arg0("pcb").args(args).exec();
         Err(err).with_context(|| format!("failed to exec {}", binary.display()))
     }
 
