@@ -103,8 +103,10 @@ struct SyncStats {
     removed: usize,
 }
 
-fn sandbox_client(_uri: &SandboxFileUri) -> Result<SandboxClient> {
-    SandboxClient::new(pcb_diode_api::WorkspaceContext::from_cwd()?)
+fn sandbox_client(uri: &SandboxFileUri) -> Result<SandboxClient> {
+    SandboxClient::new(pcb_diode_api::WorkspaceContext::from_api_base_url(
+        uri.api_base_url(),
+    ))
 }
 
 fn lock_options(holder: &str, message: &str) -> SandboxLockOptions {

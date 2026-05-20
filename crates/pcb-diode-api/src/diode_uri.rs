@@ -15,6 +15,12 @@ pub struct SandboxFileUri {
     pub sandbox_path: String,
 }
 
+impl SandboxFileUri {
+    pub fn api_base_url(&self) -> String {
+        host_api_base_url(&self.host)
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DiodeUriParseError {
     #[error("expected a diode:// URI")]
@@ -147,6 +153,15 @@ fn decode_segment(segment: &str) -> Result<String, DiodeUriParseError> {
     Ok(decoded)
 }
 
+fn host_api_base_url(host: &str) -> String {
+    let scheme = if host.starts_with("localhost") || host.starts_with("127.") {
+        "http"
+    } else {
+        "https"
+    };
+    format!("{scheme}://{host}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +174,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(uri.host, "registry.diode.computer");
+        assert_eq!(uri.api_base_url(), "https://registry.diode.computer");
         assert_eq!(uri.sandbox_id, "sbx_123");
         assert_eq!(
             uri.sandbox_path,
@@ -174,6 +190,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(uri.host, "localhost:3001");
+        assert_eq!(uri.api_base_url(), "http://localhost:3001");
         assert_eq!(
             uri.sandbox_path,
             "/home/sandbox/registry/boards/My Board/main.zen"

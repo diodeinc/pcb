@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added remote sandbox URI support for `pcb open` and `pcb layout`.
+- Added `pcb open` support for local and remote `.kicad_pcb` files.
+
 ## [0.3.83] - 2026-05-19
 
 ### Changed
@@ -24,8 +29,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Added initial `gerberx2` crate and `pcb gerber render` SVG/PNG/terminal previews.
 - Added `pcb build --diagnostics <path>` to write structured JSON diagnostics for all evaluated root files.
 - Added `pcb layout -f json` and `pcb layout --no-sync` for machine-readable layout output and existing-layout discovery.
-- Added remote sandbox URI support for `pcb open` and `pcb layout`.
-- Added `pcb open` support for local and remote `.kicad_pcb` files.
 
 ### Changed
 
