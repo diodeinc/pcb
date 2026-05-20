@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '17 7 * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build artifacts without publishing to S3'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,10 +27,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ inputs.dry_run && github.ref_name || 'main' }}
           submodules: recursive
 
       - name: Configure AWS credentials
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
@@ -39,7 +46,7 @@ jobs:
           base_url="https://pcb.api.diode.computer/pcb/$tag"
 
           latest_sha=""
-          if aws s3 cp s3://diode-pcb-releases/pcb/nightly/latest.json latest.json 2>/dev/null; then
+          if [ "${{ inputs.dry_run }}" != "true" ] && aws s3 cp s3://diode-pcb-releases/pcb/nightly/latest.json latest.json 2>/dev/null; then
             latest_sha=$(jq -r '.sha // ""' latest.json)
           fi
 
@@ -133,17 +140,20 @@ jobs:
           merge-multiple: true
 
       - name: Configure AWS credentials
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
           aws-region: us-east-1
 
       - name: Upload nightly artifacts to S3
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         run: |
           aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ needs.prepare.outputs.tag }}/" \
             --cache-control "public, max-age=31536000, immutable"
 
       - name: Publish nightly pointer
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         run: |
           jq -n \
             --arg channel "nightly" \

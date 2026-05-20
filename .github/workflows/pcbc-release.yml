@@ -10,6 +10,11 @@ on:
         description: 'pcbc release tag, such as v0.3.83'
         required: true
         type: string
+      dry_run:
+        description: 'Build artifacts without publishing to S3 or GitHub Releases'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -25,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: ${{ inputs.dry_run && github.ref_name || inputs.tag || github.ref_name }}
           submodules: recursive
 
       - name: Setup Rust
@@ -84,7 +89,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ inputs.dry_run && github.ref_name || needs.prepare.outputs.tag }}
           submodules: recursive
 
       - name: Setup Rust
@@ -136,17 +141,20 @@ jobs:
           merge-multiple: true
 
       - name: Configure AWS credentials
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
           aws-region: us-east-1
 
       - name: Upload artifacts to S3
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         run: |
           aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ needs.prepare.outputs.tag }}/" \
             --cache-control "public, max-age=31536000, immutable"
 
       - name: Create GitHub release
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
