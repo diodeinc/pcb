@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/interface_templates_snapshot.rs
-expression: netlist
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -15,6 +15,8 @@ expression: netlist
       (sheetpath (names "CPU") (tstamps "5e0c7041-4196-5aa4-8e84-bc97699f0f38"))
       (tstamps "5e0c7041-4196-5aa4-8e84-bc97699f0f38")
       (property (name "Reference") (value "U1"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"processor\",\"qualifications\":[]}"))
     )
     (comp (ref "U2")
       (value "memory")
@@ -23,10 +25,23 @@ expression: netlist
       (sheetpath (names "MEM") (tstamps "55dd74bc-6fd0-5d18-9878-1dd593abf8dd"))
       (tstamps "55dd74bc-6fd0-5d18-9878-1dd593abf8dd")
       (property (name "Reference") (value "U2"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"memory\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "memory")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "CLK") (type "stereo"))
+        (pin (num "2") (name "DATA") (type "stereo"))
+        (pin (num "3") (name "VALID") (type "stereo"))
+      )
+    )
+    (libpart (lib "lib") (part "processor")
       (description "")
       (docs "~")
       (footprints

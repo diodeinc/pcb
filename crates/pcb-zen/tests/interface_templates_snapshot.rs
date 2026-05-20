@@ -50,6 +50,7 @@ Component(
     type = "mcu",
     pin_defs = {"VCC": "1", "GND": "2", "EN": "3"},
     footprint = "QFN:32",
+    part = Part(mpn = "mcu", manufacturer = "TEST"),
     pins = {
         "VCC": pwr1.vcc,
         "GND": pwr1.gnd,
@@ -62,6 +63,7 @@ Component(
     type = "sensor",
     pin_defs = {"VDD": "1", "VSS": "2", "ENABLE": "3"},
     footprint = "SOT:23-6",
+    part = Part(mpn = "sensor", manufacturer = "TEST"),
     pins = {
         "VDD": pwr2.vcc,
         "VSS": pwr2.gnd,
@@ -106,6 +108,7 @@ Component(
     type = "usb_connector",
     pin_defs = {"VBUS": "1", "D+": "2", "D-": "3", "GND": "4"},
     footprint = "USB:TYPE-C",
+    part = Part(mpn = "usb_connector", manufacturer = "TEST"),
     pins = {
         "VBUS": dev.power.vcc,
         "D+": dev.data_p,
@@ -143,6 +146,7 @@ Component(
     type = "processor",
     pin_defs = {"CLK": "1", "DATA": "2", "VALID": "3"},
     footprint = "BGA:256",
+    part = Part(mpn = "processor", manufacturer = "TEST"),
     pins = {
         "CLK": bus1.clk,
         "DATA": bus1.data,
@@ -155,6 +159,7 @@ Component(
     type = "memory",
     pin_defs = {"CLK": "1", "DATA": "2", "VALID": "3"},
     footprint = "TSOP:48",
+    part = Part(mpn = "memory", manufacturer = "TEST"),
     pins = {
         "CLK": bus2.clk,
         "DATA": bus2.data,
@@ -203,6 +208,7 @@ Component(
         "RST": "5"
     },
     footprint = "QFN:48",
+    part = Part(mpn = "asic", manufacturer = "TEST"),
     pins = {
         "VDD": mixed.power,
         "VSS": mixed.ground,

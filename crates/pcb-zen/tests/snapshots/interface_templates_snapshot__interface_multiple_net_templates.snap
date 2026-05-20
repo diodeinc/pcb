@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/interface_templates_snapshot.rs
-expression: netlist
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -15,6 +15,8 @@ expression: netlist
       (sheetpath (names "U1") (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db"))
       (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db")
       (property (name "Reference") (value "U1"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"mcu\",\"qualifications\":[]}"))
     )
     (comp (ref "U2")
       (value "sensor")
@@ -23,20 +25,30 @@ expression: netlist
       (sheetpath (names "U2") (tstamps "36c85f89-8191-5cff-96a2-01503cd7115a"))
       (tstamps "36c85f89-8191-5cff-96a2-01503cd7115a")
       (property (name "Reference") (value "U2"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"sensor\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "mcu")
       (description "")
       (docs "~")
       (footprints
         (fp "*"))
       (pins
         (pin (num "1") (name "VCC") (type "stereo"))
-        (pin (num "1") (name "VDD") (type "stereo"))
         (pin (num "2") (name "GND") (type "stereo"))
-        (pin (num "2") (name "VSS") (type "stereo"))
         (pin (num "3") (name "EN") (type "stereo"))
+      )
+    )
+    (libpart (lib "lib") (part "sensor")
+      (description "")
+      (docs "~")
+      (footprints
+        (fp "*"))
+      (pins
+        (pin (num "1") (name "VDD") (type "stereo"))
+        (pin (num "2") (name "VSS") (type "stereo"))
         (pin (num "3") (name "ENABLE") (type "stereo"))
       )
     )

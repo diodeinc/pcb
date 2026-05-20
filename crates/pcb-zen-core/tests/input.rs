@@ -6,6 +6,7 @@ use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::lang::io_direction::IoDirection;
 use pcb_zen_core::lang::net::FrozenNetValue;
 use pcb_zen_core::{DiagnosticsPass, SortPass};
+use starlark::errors::EvalSeverity;
 use starlark::values::ValueLike;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -906,6 +907,7 @@ fn unused_io_warns_only_for_unconnected_ports() {
                     name = "LOAD",
                     footprint = "TEST:0402",
                     pin_defs = {"P": "1"},
+                    skip_bom = True,
                     pins = {"P": VIN},
                 )
             "#
@@ -927,6 +929,7 @@ fn unused_io_warns_only_for_unconnected_ports() {
                     name = "TAP",
                     footprint = "TEST:0402",
                     pin_defs = {"P": "1"},
+                    skip_bom = True,
                     pins = {"P": BUS.DATA},
                 )
 
@@ -1026,7 +1029,7 @@ fn unused_io_warns_only_for_unconnected_ports() {
 }
 
 #[test]
-fn warns_for_underspecified_non_generic_bom_component() {
+fn errors_for_unspecified_non_generic_bom_component() {
     let eval_result = eval_zen(vec![(
         "test.zen".to_string(),
         r#"
@@ -1077,13 +1080,194 @@ fn warns_for_underspecified_non_generic_bom_component() {
         .iter()
         .filter(|diag| {
             diag.downcast_error_ref::<CategorizedDiagnostic>()
-                .is_some_and(|c| c.kind == "bom.underspecified")
+                .is_some_and(|c| c.kind == "bom.unspecified")
         })
-        .map(|diag| format!("{}: {}", diag.path, diag.body))
+        .map(|diag| format!("{:?}: {}: {}", diag.severity, diag.path, diag.body))
         .collect::<Vec<_>>()
         .join("\n");
 
     insta::assert_snapshot!(output);
+}
+
+#[test]
+fn errors_for_typed_components_without_house_bom_matching() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            vcc = Net("VCC")
+            gnd = Net("GND")
+
+            Component(
+                name = "TH1",
+                prefix = "TH",
+                footprint = "TEST:0402",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": vcc, "2": gnd},
+                type = "thermistor",
+            )
+
+            Component(
+                name = "J1",
+                prefix = "J",
+                footprint = "TEST:HDR",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": vcc, "2": gnd},
+                type = "connector",
+                properties = {"connector_type": "pin header"},
+            )
+
+            Component(
+                name = "J2",
+                prefix = "J",
+                footprint = "TEST:TBLOCK",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": vcc, "2": gnd},
+                type = "connector",
+                properties = {"connector_type": "terminal block"},
+            )
+
+            Component(
+                name = "X1",
+                prefix = "X",
+                footprint = "TEST:OTHER",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": vcc, "2": gnd},
+                type = "connector",
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let eval_output = eval_result.output.expect("expected eval output");
+    let mut diagnostics = eval_output.to_schematic_with_diagnostics().diagnostics;
+    SortPass.apply(&mut diagnostics);
+
+    let unspecified = diagnostics
+        .iter()
+        .filter(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .is_some_and(|c| c.kind == "bom.unspecified")
+        })
+        .map(|diag| (diag.severity, diag.body.as_str()))
+        .collect::<Vec<_>>();
+
+    assert!(
+        unspecified
+            .iter()
+            .any(|(severity, body)| matches!(severity, EvalSeverity::Error)
+                && body.contains("Component 'TH1'")),
+        "expected thermistor to error, got: {unspecified:?}"
+    );
+    assert!(
+        unspecified
+            .iter()
+            .any(|(severity, body)| matches!(severity, EvalSeverity::Error)
+                && body.contains("Component 'X1'")),
+        "expected unmatched connector to error, got: {unspecified:?}"
+    );
+    assert!(
+        unspecified
+            .iter()
+            .all(|(_, body)| !body.contains("Component 'J1'")),
+        "expected pin header connector to be house-match eligible, got: {unspecified:?}"
+    );
+    assert!(
+        unspecified
+            .iter()
+            .all(|(_, body)| !body.contains("Component 'J2'")),
+        "expected terminal block connector to be house-match eligible, got: {unspecified:?}"
+    );
+}
+
+#[test]
+fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
+    let eval_result = eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+            vcc = Net("VCC")
+            gnd = Net("GND")
+
+            Component(
+                name = "R1",
+                prefix = "R",
+                footprint = "TEST:0402",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": vcc, "2": gnd},
+                mpn = "RC0603FR-071KL",
+            )
+
+            Component(
+                name = "R2",
+                prefix = "R",
+                footprint = "TEST:0402",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": vcc, "2": gnd},
+                manufacturer = "Yageo",
+            )
+
+            Component(
+                name = "R3",
+                prefix = "R",
+                footprint = "TEST:0402",
+                pin_defs = {"1": "1", "2": "2"},
+                pins = {"1": vcc, "2": gnd},
+                type = "resistor",
+                mpn = "RC0603FR-071KL",
+            )
+        "#
+        .to_string(),
+    )]);
+
+    assert!(
+        !eval_result.diagnostics.has_errors(),
+        "eval produced unexpected errors: {:?}",
+        eval_result.diagnostics
+    );
+
+    let eval_output = eval_result.output.expect("expected eval output");
+    let mut diagnostics = eval_output.to_schematic_with_diagnostics().diagnostics;
+    SortPass.apply(&mut diagnostics);
+
+    let categorized = diagnostics
+        .iter()
+        .filter_map(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .map(|c| (diag.severity, c.kind.as_str(), diag.body.as_str()))
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        categorized.iter().any(|(severity, kind, body)| {
+            matches!(severity, EvalSeverity::Error)
+                && *kind == "bom.underspecified"
+                && body.contains("Component 'R1'")
+                && body.contains("missing manufacturer")
+        }),
+        "expected mpn-only component to error as bom.underspecified, got: {categorized:?}"
+    );
+    assert!(
+        categorized.iter().any(|(severity, kind, body)| {
+            matches!(severity, EvalSeverity::Error)
+                && *kind == "bom.underspecified"
+                && body.contains("Component 'R3'")
+                && body.contains("missing manufacturer")
+        }),
+        "expected mpn-only house-matchable generic to error as bom.underspecified, got: {categorized:?}"
+    );
+    assert!(
+        categorized.iter().any(|(severity, kind, body)| {
+            matches!(severity, EvalSeverity::Error)
+                && *kind == "bom.unspecified"
+                && body.contains("Component 'R2'")
+        }),
+        "expected manufacturer-only component to error as bom.unspecified, got: {categorized:?}"
+    );
 }
 
 snapshot_eval!(io_interface_incompatible, {

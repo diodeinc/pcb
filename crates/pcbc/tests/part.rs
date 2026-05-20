@@ -209,6 +209,7 @@ Component(
     footprint = "TEST:0402",
     pin_defs = {"IN": "1", "OUT": "2", "IO": "3"},
     pins = {"IN": VIN, "OUT": VOUT, "IO": BIDIR},
+    skip_bom = True,
 )
 "#;
 
@@ -270,6 +271,7 @@ P2 = io(Net)
 Component(
     name = "U",
     symbol = Symbol(library = "TestPart.kicad_sym"),
+    part = Part(mpn = "TestPart", manufacturer = "Test"),
     pins = {"P1": P1, "P2": P2},
 )
 "#;
@@ -576,6 +578,7 @@ P2 = io(Net)
 Component(
     name = "U",
     symbol = Symbol(library = "TestPart.kicad_sym"),
+    part = Part(mpn = "TestPart", manufacturer = "Test"),
     pins = {"P1": P1, "P2": P2},
 )
 "#,
@@ -616,6 +619,7 @@ P2 = io(Net)
 Component(
     name = "U",
     symbol = Symbol(library = "TestPart.kicad_sym"),
+    part = Part(mpn = "TestPart", manufacturer = "Test"),
     pins = {"P1": P1, "P2": P2},
 )
 "#,

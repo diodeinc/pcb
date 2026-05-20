@@ -1732,10 +1732,12 @@ Component(
 
     assert!(
         diagnostics.iter().any(|diag| {
-            diag.downcast_error_ref::<CategorizedDiagnostic>()
-                .is_some_and(|c| c.kind == "bom.underspecified")
+            matches!(diag.severity, EvalSeverity::Error)
+                && diag
+                    .downcast_error_ref::<CategorizedDiagnostic>()
+                    .is_some_and(|c| c.kind == "bom.unspecified")
         }),
-        "expected empty legacy mpn to leave part info underspecified, got: {:?}",
+        "expected empty legacy mpn to leave part info unspecified, got: {:?}",
         diagnostics
     );
 }
