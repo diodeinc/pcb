@@ -126,7 +126,6 @@ pub fn execute(args: BomArgs) -> Result<()> {
     // Filter out components marked as skip_bom
     bom = bom.filter_excluded();
 
-    #[cfg(feature = "api")]
     if !args.offline {
         let ctx = pcb_diode_api::WorkspaceContext::from_path(&args.file);
         match ctx.token() {
