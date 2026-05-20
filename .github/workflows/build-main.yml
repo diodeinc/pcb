@@ -27,13 +27,15 @@ jobs:
           cache-bin: false
       
       - name: Build PCB CLI
-        run: cargo build --release --bin pcb
+        run: cargo build --release --bins
       
       - name: Upload PCB CLI artifact
         uses: actions/upload-artifact@v4
         with:
           name: pcb-cli-linux-${{ github.sha }}
-          path: target/release/pcb
+          path: |
+            target/release/pcb
+            target/release/pcbc
           retention-days: 30
 
       - name: Configure AWS credentials
@@ -46,7 +48,9 @@ jobs:
         run: |
           mkdir -p dist-main
           cp target/release/pcb dist-main/pcb
+          cp target/release/pcbc dist-main/pcbc
           shasum -a 256 dist-main/pcb | awk '{print $1}' > dist-main/pcb.sha256
+          shasum -a 256 dist-main/pcbc | awk '{print $1}' > dist-main/pcbc.sha256
           cat > dist-main/main.json <<EOF
           {
             "sha": "${{ github.sha }}",
