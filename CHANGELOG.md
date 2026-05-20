@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added remote sandbox URI support for `pcb open` and `pcb layout`.
+- Added `pcb open` support for local and remote `.kicad_pcb` files.
+
 ## [0.3.83] - 2026-05-19
 
 ### Changed

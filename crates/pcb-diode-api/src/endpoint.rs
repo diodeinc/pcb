@@ -37,6 +37,19 @@ impl WorkspaceContext {
         }
     }
 
+    pub fn from_api_base_url(api_base_url: impl Into<String>) -> Self {
+        let api_base_url = api_base_url.into();
+        let web_base_url = default_web_base_url();
+        Self {
+            workspace_root: None,
+            endpoint: EndpointConfig {
+                use_legacy_auth_file: should_use_legacy_auth_file(&api_base_url, &web_base_url),
+                api_base_url,
+                web_base_url,
+            },
+        }
+    }
+
     pub fn from_path(path: &Path) -> Self {
         match workspace_root_for(path) {
             Some(workspace_root) => Self::from_workspace_root(workspace_root),
@@ -199,5 +212,13 @@ mod tests {
         let scope = WorkspaceContext::default();
         assert_eq!(scope.api_base_url(), default_api_base_url());
         assert_eq!(scope.web_base_url(), default_web_base_url());
+    }
+
+    #[test]
+    fn context_from_api_base_url_uses_scoped_auth() {
+        let scope = WorkspaceContext::from_api_base_url("https://registry.diode.computer");
+        assert_eq!(scope.api_base_url(), "https://registry.diode.computer");
+        assert_eq!(scope.web_base_url(), default_web_base_url());
+        assert!(!scope.use_legacy_auth_file());
     }
 }

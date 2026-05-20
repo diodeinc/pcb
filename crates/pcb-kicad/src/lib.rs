@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use tempfile::NamedTempFile;
 
 fn expand_home(path: &str) -> String {
@@ -363,7 +363,33 @@ pub fn ensure_board_compatible_with_installed_kicad(pcb_path: &Path) -> Result<(
 
 /// Open a KiCad board in the GUI that matches this toolchain's discovered install.
 pub fn open_pcbnew(pcb_path: impl AsRef<Path>) -> Result<()> {
-    let pcb_path = pcb_path.as_ref();
+    let _child = spawn_pcbnew(pcb_path.as_ref(), false)?;
+    Ok(())
+}
+
+pub struct PcbnewSession {
+    child: Child,
+}
+
+impl PcbnewSession {
+    pub fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>> {
+        self.child
+            .try_wait()
+            .context("Failed while checking KiCad PCB Editor status")
+    }
+}
+
+/// Open a KiCad board in a process that can be waited on.
+pub fn open_pcbnew_session(pcb_path: impl AsRef<Path>) -> Result<PcbnewSession> {
+    Ok(PcbnewSession {
+        child: spawn_pcbnew(pcb_path.as_ref(), true)?,
+    })
+}
+
+fn spawn_pcbnew(pcb_path: &Path, wait_for_exit: bool) -> Result<Child> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = wait_for_exit;
+
     if !pcb_path.exists() {
         anyhow::bail!("PCB file not found: {}", pcb_path.display());
     }
@@ -379,6 +405,9 @@ pub fn open_pcbnew(pcb_path: impl AsRef<Path>) -> Result<()> {
     let mut cmd = {
         let pcbnew_app = pcbnew_app_bundle_path(&pcbnew_path)?;
         let mut cmd = Command::new("open");
+        if wait_for_exit {
+            cmd.arg("-n").arg("-W");
+        }
         cmd.arg("-a").arg(pcbnew_app).arg(pcb_path);
         cmd
     };
@@ -400,9 +429,7 @@ pub fn open_pcbnew(pcb_path: impl AsRef<Path>) -> Result<()> {
                 pcbnew_path,
                 pcb_path.display()
             )
-        })?;
-
-    Ok(())
+        })
 }
 
 /// Builder for KiCad CLI commands

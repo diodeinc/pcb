@@ -28,23 +28,17 @@ impl Spinner {
 
     /// Finish the spinner with a success message
     pub fn success(self, message: impl Into<String>) {
-        let msg = message.into();
-        self.progress_bar
-            .finish_with_message(format!("{} {}", "✓".green(), msg));
+        self.finish_with_icon("✓".green().to_string(), message);
     }
 
     /// Finish the spinner with an error message
     pub fn error(self, message: impl Into<String>) {
-        let msg = message.into();
-        self.progress_bar
-            .finish_with_message(format!("{} {}", "✗".red(), msg));
+        self.finish_with_icon("✗".red().to_string(), message);
     }
 
     /// Finish the spinner with a warning message
     pub fn warning(self, message: impl Into<String>) {
-        let msg = message.into();
-        self.progress_bar
-            .finish_with_message(format!("{} {}", "!".yellow(), msg));
+        self.finish_with_icon("!".yellow().to_string(), message);
     }
 
     /// Finish and clear the spinner
@@ -54,7 +48,24 @@ impl Spinner {
 
     /// Finish with a custom message (no icon)
     pub fn finish_with_message(self, message: impl Into<String>) {
+        self.replace_with_static_template();
         self.progress_bar.finish_with_message(message.into());
+    }
+
+    fn finish_with_icon(self, icon: String, message: impl Into<String>) {
+        self.replace_with_static_template();
+        self.progress_bar
+            .finish_with_message(format!("{} {}", icon, message.into()));
+    }
+
+    /// Swap the template to one without the spinner glyph so the final
+    /// message renders cleanly without a stale tick character beside it.
+    fn replace_with_static_template(&self) {
+        self.progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .template("{msg}")
+                .expect("valid spinner template"),
+        );
     }
 
     /// Temporarily hide the spinner (useful when prompting for input)
