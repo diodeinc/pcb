@@ -186,6 +186,10 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
         return Ok(ToolchainRequest::Latest);
     }
 
+    if let Ok(version) = Version::parse(raw) {
+        return Ok(ToolchainRequest::Exact(version));
+    }
+
     let parts: Vec<&str> = raw.split('.').collect();
     match parts.as_slice() {
         [major, minor] => Ok(ToolchainRequest::Lane {
@@ -196,10 +200,6 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
                 .parse()
                 .with_context(|| format!("invalid pcb toolchain request `{raw}`"))?,
         }),
-        [_, _, _] => Ok(ToolchainRequest::Exact(
-            Version::parse(raw)
-                .with_context(|| format!("invalid pcb toolchain request `{raw}`"))?,
-        )),
         _ => {
             anyhow::bail!("invalid pcb toolchain request `{raw}`; expected 0.3, 0.3.83, or latest")
         }
@@ -734,14 +734,6 @@ fn install_shim_update(latest: &LatestRelease) -> Result<()> {
     extract_archive(&archive_path, &extract_dir)?;
     let binary = find_file_named(&extract_dir, legacy_pcb_binary_name())
         .ok_or_else(|| anyhow::anyhow!("archive did not contain {}", legacy_pcb_binary_name()))?;
-    if let Some(pcbc) = find_file_named(&extract_dir, pcbc_binary_name()) {
-        let sibling = std::env::current_exe()?
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("failed to find current executable directory"))?
-            .join(pcbc_binary_name());
-        fs::copy(&pcbc, &sibling)?;
-        copy_executable_permissions(&pcbc, &sibling)?;
-    }
     self_replace::self_replace(binary)?;
     Ok(())
 }
@@ -924,6 +916,10 @@ mod tests {
         assert!(matches!(
             parse_request("0.3.83").unwrap(),
             ToolchainRequest::Exact(version) if version == Version::new(0, 3, 83)
+        ));
+        assert!(matches!(
+            parse_request("0.4.0-beta.1").unwrap(),
+            ToolchainRequest::Exact(version) if version == Version::parse("0.4.0-beta.1").unwrap()
         ));
         assert!(matches!(
             parse_request("latest").unwrap(),

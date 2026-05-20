@@ -8,7 +8,7 @@ Exit Code: 0
 --- STDOUT ---
 PCB tool with build and layout capabilities
 
-Usage: pcb <COMMAND>
+Usage: pcbc <COMMAND>
 
 Commands:
   auth        Manage authentication
@@ -20,7 +20,6 @@ Commands:
   sync        Reconcile source imports and hydrate package dependency manifests
   new         Create a new board, package, or component
   update      Update dependencies to latest compatible versions
-  self        Update the pcb tool itself
   bom         Generate Bill of Materials (BOM)
   info        Display workspace and board information
   import      Import KiCad projects into a Zener board repository
