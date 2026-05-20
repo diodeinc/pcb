@@ -27,7 +27,7 @@ jobs:
           cache-bin: false
       
       - name: Build PCB CLI
-        run: cargo build --release --bins
+        run: cargo build --release -p pcb -p pcbc --bins
       
       - name: Upload PCB CLI artifact
         uses: actions/upload-artifact@v4
