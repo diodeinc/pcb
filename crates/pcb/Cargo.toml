@@ -83,6 +83,8 @@ syntect = { workspace = true }
 gltfpack-sys = { workspace = true }
 thiserror = { workspace = true }
 minijinja = { workspace = true }
+fslock = { workspace = true }
+sha2 = { workspace = true }
 canon-json = "0.2"
 tracing = { workspace = true }
 tracing-chrome = { workspace = true }
