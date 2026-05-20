@@ -364,8 +364,7 @@ fn best_local_toolchain(request: &ToolchainRequest) -> Result<Option<(Version, P
 
     Ok(candidates
         .into_iter()
-        .filter(|(version, _)| request_matches(request, version))
-        .next_back())
+        .rfind(|(version, _)| request_matches(request, version)))
 }
 
 fn installed_toolchains() -> Result<BTreeMap<Version, PathBuf>> {
