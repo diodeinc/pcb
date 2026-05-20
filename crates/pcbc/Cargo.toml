@@ -9,8 +9,7 @@ authors = { workspace = true }
 default-run = "pcbc"
 
 [features]
-default = ["api", "mimalloc"]
-api = ["dep:pcb-diode-api"]
+default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
 
 [[bin]]
@@ -27,9 +26,9 @@ pcb-canonical = { workspace = true }
 pcb-sch = { workspace = true, features = ["table"] }
 pcb-layout = { workspace = true }
 pcb-sim = { workspace = true }
-pcb-diode-api = { workspace = true, optional = true }
+pcb-diode-api = { workspace = true }
 pcb-docgen = { workspace = true }
-pcb-ipc2581-tools = { workspace = true, features = ["api"] }
+pcb-ipc2581-tools = { workspace = true }
 pcb-eda = { workspace = true }
 pcb-sexpr = { workspace = true }
 pcb-component-gen = { workspace = true }

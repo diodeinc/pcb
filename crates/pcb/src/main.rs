@@ -161,6 +161,14 @@ fn main() {
 fn run() -> Result<()> {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
+    if args.is_empty()
+        || args.first().and_then(|arg| arg.to_str()) == Some("--help")
+        || args.first().and_then(|arg| arg.to_str()) == Some("-h")
+    {
+        ShimCli::parse_from(["pcb", "--help"]);
+        return Ok(());
+    }
+
     if args.first().and_then(|arg| arg.to_str()) == Some("--version")
         || args.first().and_then(|arg| arg.to_str()) == Some("-V")
     {
@@ -315,28 +323,21 @@ fn resolve_request(request: &ToolchainRequest, reason: String) -> Result<Resolve
 }
 
 fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
+    if let Some((receipt, binary)) = installed_nightly_toolchain()? {
+        return Ok(ResolvedToolchain {
+            label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
+            binary,
+            reason,
+        });
+    }
+
     match fetch_nightly_release().and_then(|release| ensure_nightly_installed(&release)) {
         Ok((receipt, binary)) => Ok(ResolvedToolchain {
             label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
             binary,
             reason,
         }),
-        Err(remote_error) => {
-            if let Some((receipt, binary)) = installed_nightly_toolchain()? {
-                eprintln!(
-                    "{} failed to check nightly release ({remote_error}); using installed pcbc nightly {} ({})",
-                    "Warning:".yellow(),
-                    receipt.date,
-                    short_sha(&receipt.sha)
-                );
-                return Ok(ResolvedToolchain {
-                    label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
-                    binary,
-                    reason,
-                });
-            }
-            Err(remote_error)
-        }
+        Err(remote_error) => Err(remote_error),
     }
 }
 
@@ -928,16 +929,25 @@ fn self_update() -> Result<()> {
     }
 
     let mut requests = BTreeSet::new();
-    let latest_toolchain = resolve_remote_version(&ToolchainRequest::Latest, true)?;
-    requests.insert((latest_toolchain.major, latest_toolchain.minor));
-    for version in installed_toolchains()?.keys() {
-        requests.insert((version.major, version.minor));
-    }
+    let stable_result: Result<()> = (|| {
+        let latest_toolchain = resolve_remote_version(&ToolchainRequest::Latest, true)?;
+        requests.insert((latest_toolchain.major, latest_toolchain.minor));
+        for version in installed_toolchains()?.keys() {
+            requests.insert((version.major, version.minor));
+        }
 
-    for (major, minor) in requests {
-        let request = ToolchainRequest::Lane { major, minor };
-        let version = resolve_remote_version(&request, true)?;
-        let _ = ensure_installed(&version)?;
+        for (major, minor) in requests {
+            let request = ToolchainRequest::Lane { major, minor };
+            let version = resolve_remote_version(&request, true)?;
+            let _ = ensure_installed(&version)?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = stable_result {
+        eprintln!(
+            "{} failed to update managed pcbc toolchains ({err})",
+            "Warning:".yellow()
+        );
     }
 
     if installed_nightly_toolchain()?.is_some()
@@ -957,7 +967,7 @@ fn self_update() -> Result<()> {
             latest.version.to_string().green()
         );
     } else {
-        println!("pcb is already up to date.");
+        println!("pcb is already up to date; pcbc toolchains checked.");
     }
     Ok(())
 }

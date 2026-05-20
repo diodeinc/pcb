@@ -4840,6 +4840,7 @@ dependencies = [
  "log",
  "mimalloc",
  "minijinja",
+ "notify",
  "open",
  "pathdiff",
  "pcb-canonical",

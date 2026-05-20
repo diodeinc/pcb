@@ -2,10 +2,10 @@
 
 ## PCB CLI Subcommands
 
-- `cargo run -p pcb -- build [PATHS...]` — build and validate Zener designs.
-- `cargo run -p pcb -- test [PATHS...]` — run tests declared in `.zen` files.
-- `cargo run -p pcb -- fmt [PATHS...]` — format `.zen` files.
-- `cargo run -p pcb -- layout --no-open [PATHS...]` — generate/update KiCad layout files without opening KiCad.
+- `cargo run -p pcbc -- build [PATHS...]` — build and validate Zener designs.
+- `cargo run -p pcbc -- test [PATHS...]` — run tests declared in `.zen` files.
+- `cargo run -p pcbc -- fmt [PATHS...]` — format `.zen` files.
+- `cargo run -p pcbc -- layout --no-open [PATHS...]` — generate/update KiCad layout files without opening KiCad.
 
 ## Development Workflow
 
@@ -18,13 +18,13 @@ Never run `cargo insta accept` without explicit user approval.
 ## Where to Look
 
 - Start with `README.md` for product context and user-facing CLI behavior.
-- `crates/pcb/src/main.rs` declares CLI subcommands; each subcommand usually has a matching file in `crates/pcb/src/` (`build.rs`, `layout.rs`, `fmt.rs`, `test.rs`, etc.).
+- `crates/pcb/src/main.rs` is the shim/version manager; `crates/pcbc/src/main.rs` declares compiler CLI subcommands, with matching files in `crates/pcbc/src/` (`build.rs`, `layout.rs`, `fmt.rs`, `test.rs`, etc.).
 - `crates/pcb-zen-core/src/lang/` contains Zener built-ins, core values, type conversion, validation, and evaluation semantics. Check `docs/pages/spec.mdx` when changing user-visible language behavior.
 - `crates/pcb-zen/src/` provides higher-level workspace/dependency resolution, package cache, diagnostics plumbing, and LSP integration around `pcb-zen-core`.
 - `crates/pcb-sch/src/` is the schematic/netlist data model, BOM helpers, KiCad netlist export, and `# pcb:sch` comment handling.
 - `crates/pcb-layout/src/` generates and synchronizes KiCad layouts. The Python lens implementation is in `crates/pcb-layout/src/scripts/lens/`; read `crates/pcb-layout/README.md` before changing sync behavior.
 - `crates/pcb-kicad/src/` wraps KiCad tooling and KiCad-specific checks; `crates/pcb-sexpr/src/` handles low-level S-expression parsing/rewriting for KiCad files.
-- `crates/pcb/src/import/` implements `pcb import`; start with `crates/pcb/src/import/README.md` and `flow.rs` before changing the import pipeline.
+- `crates/pcbc/src/import/` implements `pcb import`; start with `crates/pcbc/src/import/README.md` and `flow.rs` before changing the import pipeline.
 - `crates/pcb-eda/` and `crates/pcb-component-gen/` handle external EDA artifacts and generated Zener component modules.
 - `crates/pcb-diode-api/` contains API/auth/search/BOM-matching client logic.
 - `stdlib/` contains the Zener standard library; `examples/` and `test-workspaces/` are useful runnable designs.
@@ -46,6 +46,6 @@ Never run `cargo insta accept` without explicit user approval.
 
 ## Verification
 
-- Run the narrowest relevant check first: usually `cargo test -p <crate>`, a focused `cargo run -p pcb -- ...` command, or the layout-lens pytest command above.
+- Run the narrowest relevant check first: usually `cargo test -p <crate>`, a focused `cargo run -p pcbc -- ...` command, or the layout-lens pytest command above.
 - Do not run full-workspace checks after every small edit.
 - If snapshot tests change, call that out and leave snapshot acceptance to the user.

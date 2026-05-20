@@ -8,8 +8,6 @@ use env_logger::Env;
 use std::ffi::OsString;
 use std::process::Command;
 
-#[cfg(feature = "api")]
-mod api;
 mod bom;
 mod build;
 mod bundle;
@@ -35,12 +33,10 @@ mod open;
 mod package;
 #[path = "mod/mod.rs"]
 mod pcb_mod;
-#[cfg(feature = "api")]
 mod preview;
 mod publish;
 mod release;
 mod remote_sandbox;
-#[cfg(feature = "api")]
 mod route;
 mod sandbox_uri;
 mod sim;
@@ -73,8 +69,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Manage authentication
-    #[cfg(feature = "api")]
-    Auth(api::AuthArgs),
+    Auth(pcb_diode_api::AuthArgs),
 
     /// Build PCB projects
     #[command(alias = "b")]
@@ -139,7 +134,6 @@ enum Commands {
     Publish(publish::PublishArgs),
 
     /// Build and upload a preview release for a board
-    #[cfg(feature = "api")]
     Preview(preview::PreviewArgs),
 
     /// Vendor external dependencies
@@ -152,15 +146,12 @@ enum Commands {
     EmbedStep(embed_step::EmbedStepArgs),
 
     /// Scan datasheets from local PDFs or URLs
-    #[cfg(feature = "api")]
-    Scan(api::ScanArgs),
+    Scan(pcb_diode_api::ScanArgs),
 
     /// Search for electronic components
-    #[cfg(feature = "api")]
-    Search(api::SearchArgs),
+    Search(pcb_diode_api::SearchArgs),
 
     /// Auto-route PCB using DeepPCB cloud service
-    #[cfg(feature = "api")]
     #[command(hide = true)]
     Route(route::RouteArgs),
 
@@ -213,8 +204,10 @@ fn run() -> anyhow::Result<()> {
     let _profile_guard = profiling::init(cli.profile);
 
     match cli.command {
-        #[cfg(feature = "api")]
-        Commands::Auth(args) => api::execute_auth(args),
+        Commands::Auth(args) => {
+            let ctx = pcb_diode_api::WorkspaceContext::from_cwd()?;
+            pcb_diode_api::execute_auth(args, &ctx)
+        }
         Commands::Build(args) => build::execute(args),
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
@@ -233,19 +226,15 @@ fn run() -> anyhow::Result<()> {
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
         Commands::Publish(args) => publish::execute(args),
-        #[cfg(feature = "api")]
         Commands::Preview(args) => preview::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
         Commands::Fork => {
             println!("`pcb fork` is a reserved subcommand for future use.");
             Ok(())
         }
-        #[cfg(feature = "api")]
-        Commands::Scan(args) => api::execute_scan(args),
-        #[cfg(feature = "api")]
-        Commands::Search(args) => api::execute_search(args),
+        Commands::Scan(args) => pcb_diode_api::execute_scan(args),
+        Commands::Search(args) => pcb_diode_api::execute_search(args),
         Commands::EmbedStep(args) => embed_step::execute(args),
-        #[cfg(feature = "api")]
         Commands::Route(args) => route::execute(args),
         Commands::Simulate(args) => sim::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
