@@ -53,20 +53,6 @@ use std::path::{Path, PathBuf};
 
 pub use assert_cmd::cargo_bin;
 
-fn cargo_bin_for_tests(program: &str) -> PathBuf {
-    // The compiler CLI moved from the `pcb` crate to the `pcbc` crate, but many
-    // existing compiler snapshots intentionally say `Command: pcb ...`. When
-    // those tests are running in the `pcbc` package, execute `pcbc` while
-    // preserving the displayed command name.
-    if program == "pcb"
-        && let Some(path) = std::env::var_os("CARGO_BIN_EXE_pcbc")
-    {
-        return path.into();
-    }
-
-    assert_cmd::cargo::cargo_bin(program)
-}
-
 fn default_kicad_http_mirror(module_path: &str) -> Option<String> {
     let kicad_entries = WorkspaceConfig::default().kicad_library;
     let version = STDLIB_PINNED_KICAD_VERSION;
@@ -393,7 +379,9 @@ impl Sandbox {
         I: IntoIterator,
         I::Item: AsRef<OsStr>,
     {
-        let cargo_bin_path = cargo_bin_for_tests(program).to_string_lossy().to_string();
+        let cargo_bin_path = assert_cmd::cargo::cargo_bin(program)
+            .to_string_lossy()
+            .to_string();
         let args: Vec<_> = args
             .into_iter()
             .map(|arg| arg.as_ref().to_string_lossy().to_string())
@@ -437,7 +425,9 @@ impl Sandbox {
         I: IntoIterator,
         I::Item: AsRef<OsStr>,
     {
-        let cargo_bin_path = cargo_bin_for_tests(program).to_string_lossy().to_string();
+        let cargo_bin_path = assert_cmd::cargo::cargo_bin(program)
+            .to_string_lossy()
+            .to_string();
         let args: Vec<_> = args
             .into_iter()
             .map(|arg| arg.as_ref().to_string_lossy().to_string())

@@ -3,7 +3,7 @@ source: crates/pcb/tests/simple.rs
 assertion_line: 225
 expression: output
 ---
-Command: pcb build foo.zen
+Command: pcbc build foo.zen
 Exit Code: 0
 
 --- STDOUT ---

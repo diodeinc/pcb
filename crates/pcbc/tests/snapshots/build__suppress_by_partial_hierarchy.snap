@@ -2,7 +2,7 @@
 source: crates/pcb/tests/build.rs
 expression: output
 ---
-Command: pcb build test.zen -S electrical.voltage
+Command: pcbc build test.zen -S electrical.voltage
 Exit Code: 0
 
 --- STDOUT ---

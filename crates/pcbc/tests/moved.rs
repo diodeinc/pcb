@@ -43,7 +43,7 @@ moved("OLD_RESISTOR", "NEW_RESISTOR")
 "#,
         )
         .write("dummy.kicad_mod", "(footprint \"dummy\" )")
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("old_component_still_exists_warning", output);
 }
 
@@ -72,7 +72,7 @@ moved("OLD_COMPONENT", "NEW_COMPONENT")
 "#,
         )
         .write("dummy.kicad_mod", "(footprint \"dummy\" )")
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("new_component_missing_warning", output);
 }
 
@@ -104,7 +104,7 @@ moved("NONEXISTENT_OLD", "NONEXISTENT_NEW")
 "#,
         )
         .write("dummy.kicad_mod", "(footprint \"dummy\" )")
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("both_issues_warnings", output);
 }
 
@@ -133,6 +133,6 @@ moved("OLD_COMPONENT", "NEW_COMPONENT")
 "#,
         )
         .write("dummy.kicad_mod", "(footprint \"dummy\" )")
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("valid_directive_no_warnings", output);
 }

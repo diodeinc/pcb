@@ -77,7 +77,7 @@ x = kOhm(10)
     let _output = sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
 
     // Verify pcb.toml was updated with the dependency
     let pcb_toml_content =
@@ -97,7 +97,7 @@ symbol_path = "@kicad-symbols/Device.kicad_sym:R"
     let _output = sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
@@ -116,7 +116,7 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
     let _output = sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
@@ -140,7 +140,7 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
     let _output = sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
@@ -159,7 +159,7 @@ fn test_auto_deps_kicad_dynamic_path() {
     let _output = sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
@@ -189,7 +189,7 @@ pcb-version = "0.3"
     let output = sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
 
     let pinned_toml =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
@@ -256,7 +256,7 @@ vcc = Net("VCC")
 gnd = Net("GND")
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected build to succeed:\n{output}"
@@ -287,7 +287,7 @@ vcc = Net("VCC")
 gnd = Net("GND")
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen", "--locked"]);
+        .snapshot_run("pcbc", ["build", "board.zen", "--locked"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected locked build to succeed without pcb.sum:\n{output}"
@@ -335,7 +335,7 @@ gnd = Net("GND")
         .write("modules/Lib/Lib.zen", lib_zen)
         .write("boards/Main/pcb.toml", board_toml)
         .write("boards/Main/Main.zen", board_zen)
-        .snapshot_run("pcb", ["build", "boards/Main/Main.zen"]);
+        .snapshot_run("pcbc", ["build", "boards/Main/Main.zen"]);
 
     // The board's pcb.toml should now contain a dependency on the Lib member
     let board_pcb_toml =
@@ -389,7 +389,7 @@ Child(name = "X", P1 = Net("P1"))
 P1 = io(Net)
 "#,
             )
-            .run("pcb", cmd)
+            .run("pcbc", cmd)
             .stderr_capture()
             .stdout_capture()
             .unchecked()
@@ -453,7 +453,7 @@ P1 = io(Net)
         )
         .write("libs/Helper/pcb.toml", "[dependencies]\n")
         .write("libs/Helper/Helper.zen", "P1 = io(\"P1\", Net)\n")
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected root package build to succeed:\n{output}"
@@ -493,7 +493,7 @@ Helper(name = "X", P1 = Net("P1"))
         )
         .write("libs/Helper/pcb.toml", "[dependencies]\n")
         .write("libs/Helper/Helper.zen", "P1 = io(\"P1\", Net)\n")
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected root package build to succeed:\n{output}"
@@ -538,7 +538,7 @@ Child(name = "X", P1 = Net("P1"))
 P1 = io(Net)
 "#,
         )
-        .run("pcb", ["build", "board.zen", "--locked"])
+        .run("pcbc", ["build", "board.zen", "--locked"])
         .stderr_capture()
         .stdout_capture()
         .unchecked()
@@ -570,7 +570,7 @@ pcb-version = "0.3"
     let locked_result = sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", "x = 1\n")
-        .run("pcb", ["build", "board.zen", "--locked"])
+        .run("pcbc", ["build", "board.zen", "--locked"])
         .stderr_capture()
         .stdout_capture()
         .unchecked()
@@ -588,7 +588,7 @@ pcb-version = "0.3"
     assert!(locked_output.contains("without rev, which is not reproducible in --locked mode."));
 
     let offline_result = sandbox
-        .run("pcb", ["build", "board.zen", "--offline"])
+        .run("pcbc", ["build", "board.zen", "--offline"])
         .stderr_capture()
         .stdout_capture()
         .unchecked()
@@ -617,7 +617,7 @@ fn test_locked_ignores_kicad_entries_in_lockfile() {
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", "x = 1\n")
         .write("pcb.sum", pcb_sum)
-        .run("pcb", ["build", "board.zen", "--locked"])
+        .run("pcbc", ["build", "board.zen", "--locked"])
         .stderr_capture()
         .stdout_capture()
         .unchecked()
@@ -671,7 +671,7 @@ pcb-version = "0.3"
     let output = sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected build to succeed:\n{output}"
@@ -721,7 +721,7 @@ pcb-version = "0.3"
     let first_output = sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         first_output.contains("Exit Code: 0"),
         "expected first build to succeed:\n{first_output}"
@@ -732,7 +732,7 @@ pcb-version = "0.3"
     let first_sum =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
 
-    let second_output = sandbox.snapshot_run("pcb", ["build", "board.zen"]);
+    let second_output = sandbox.snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         second_output.contains("Exit Code: 0"),
         "expected second build to succeed:\n{second_output}"
@@ -774,7 +774,7 @@ pcb-version = "0.3"
     let build_output = sandbox
         .write("pcb.toml", pcb_toml.clone())
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         build_output.contains("Exit Code: 0"),
         "expected initial build to succeed:\n{build_output}"
@@ -790,7 +790,7 @@ pcb-version = "0.3"
     let rev2 = fixture.rev_parse_head();
     assert_ne!(rev1, rev2);
 
-    let output = sandbox.snapshot_run("pcb", ["update"]);
+    let output = sandbox.snapshot_run("pcbc", ["update"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected update to succeed:\n{output}"
@@ -868,7 +868,7 @@ pcb-version = "0.3"
 
     let output = sandbox
         .write("pcb.toml", pcb_toml)
-        .snapshot_run("pcb", ["update", "-p", "components-a"]);
+        .snapshot_run("pcbc", ["update", "-p", "components-a"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected update -p to succeed:\n{output}"
@@ -924,7 +924,7 @@ pcb-version = "0.3"
     let output = sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected build to succeed:\n{output}"
@@ -973,7 +973,7 @@ pcb-version = "0.3"
 
     let output = sandbox
         .write("pcb.toml", pcb_toml)
-        .snapshot_run("pcb", ["update"]);
+        .snapshot_run("pcbc", ["update"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected update to succeed despite one refresh failure:\n{output}"

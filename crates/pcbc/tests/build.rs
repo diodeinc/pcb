@@ -329,7 +329,7 @@ fn test_warning_and_error_mixed() {
     // Create a board that has both a warning (unstable ref) and an error (missing param)
     let output = sandbox
         .write("board.zen", WARNING_AND_ERROR_ZEN)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("warning_and_error_mixed", output);
 }
 
@@ -340,7 +340,7 @@ fn test_pin_no_connect_reports_at_net_site() {
         .write("board.zen", PIN_NO_CONNECT_REPORTS_AT_NET_ZEN)
         .write("test.kicad_mod", TEST_KICAD_MOD)
         .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("pin_no_connect_reports_at_net_site", output);
 }
 
@@ -351,7 +351,7 @@ fn test_pin_no_connect_suppresses_at_net_site() {
         .write("board.zen", PIN_NO_CONNECT_SUPPRESSES_AT_NET_ZEN)
         .write("test.kicad_mod", TEST_KICAD_MOD)
         .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("pin_no_connect_suppresses_at_net_site", output);
 }
 
@@ -363,7 +363,7 @@ fn test_pin_no_connect_dedups_in_nested_modules() {
         .write("child.zen", PIN_NO_CONNECT_NESTED_CHILD_ZEN)
         .write("test.kicad_mod", TEST_KICAD_MOD)
         .write("nc_pin.kicad_sym", TEST_NO_CONNECT_SYMBOL)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
 
     assert_eq!(output.matches("Warning:").count(), 1, "{output}");
     assert!(output.contains("net 'SIG'"), "{output}");
@@ -374,7 +374,7 @@ fn test_build_with_config_overrides() {
     let output = Sandbox::new()
         .write("board.zen", CONFIGURABLE_BUILD_ZEN)
         .snapshot_run(
-            "pcb",
+            "pcbc",
             [
                 "build",
                 "--config",
@@ -397,7 +397,7 @@ fn test_build_with_config_overrides() {
 fn test_diodes_build() {
     let output = Sandbox::new()
         .write("diodes.zen", DIODES_ZEN)
-        .snapshot_run("pcb", ["build", "diodes.zen"]);
+        .snapshot_run("pcbc", ["build", "diodes.zen"]);
 
     assert!(output.contains("Exit Code: 0"), "{output}");
 }
@@ -427,7 +427,7 @@ fn test_invalid_inherited_symbol_datasheet_is_silent() {
             INVALID_INHERITED_SYMBOL_DATASHEET_COMPONENT_ZEN,
         )
         .write("board.zen", INVALID_INHERITED_SYMBOL_DATASHEET_BOARD_ZEN)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
 
     assert!(output.contains("Exit Code: 0"), "{output}");
     assert!(!output.contains("Warning:"), "{output}");
@@ -438,7 +438,7 @@ fn test_invalid_inherited_symbol_datasheet_is_silent() {
 fn test_suppressed_warnings() {
     let output = Sandbox::new()
         .write("test.zen", SUPPRESSED_WARNINGS_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("suppressed_warnings", output);
 }
 
@@ -446,7 +446,7 @@ fn test_suppressed_warnings() {
 fn test_suppressed_errors() {
     let output = Sandbox::new()
         .write("test.zen", SUPPRESSED_ERRORS_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("suppressed_errors", output);
 }
 
@@ -454,7 +454,7 @@ fn test_suppressed_errors() {
 fn test_mixed_suppressed_diagnostics() {
     let output = Sandbox::new()
         .write("test.zen", MIXED_SUPPRESSED_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("mixed_suppressed_diagnostics", output);
 }
 
@@ -463,7 +463,7 @@ fn test_suppressed_warnings_with_deny_flag() {
     // Suppressed warnings should not cause build failure even with -Dwarnings
     let output = Sandbox::new()
         .write("test.zen", SUPPRESSED_ERRORS_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen", "-Dwarnings"]);
+        .snapshot_run("pcbc", ["build", "test.zen", "-Dwarnings"]);
     assert_snapshot!("suppressed_with_deny_flag", output);
 }
 
@@ -472,7 +472,7 @@ fn test_mixed_suppressed_with_deny_flag() {
     // Regular warnings should still fail with -Dwarnings, but suppressed should not
     let output = Sandbox::new()
         .write("test.zen", MIXED_SUPPRESSED_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen", "-Dwarnings"]);
+        .snapshot_run("pcbc", ["build", "test.zen", "-Dwarnings"]);
     assert_snapshot!("mixed_suppressed_with_deny_flag", output);
 }
 
@@ -521,7 +521,7 @@ SimpleResistor3(name = "R3", value = "3kOhm", P1 = vcc, P2 = gnd)
     let output = sandbox
         .write("pcb.toml", pcb_toml_content)
         .write("board.zen", board_zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("aggregated_warnings", output);
 }
 
@@ -587,7 +587,7 @@ Comp2(name = "R3", value = "3kOhm", P1 = vcc, P2 = gnd)
     let output = sandbox
         .write("pcb.toml", pcb_toml_content)
         .write("board.zen", board_zen_content)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("mixed_aggregated_and_unique_warnings", output);
 }
 
@@ -627,7 +627,7 @@ SimpleResistor = Module("github.com/mycompany/components/SimpleResistor.zen")
 
     let output = sandbox
         .write("board.zen", unstable_default_zen)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("commit_stable_ref", output);
 }
 
@@ -646,7 +646,7 @@ x = 1 + 2
 
     let output = Sandbox::new()
         .write("standalone.zen", inline_manifest_zen)
-        .snapshot_run("pcb", ["build", "standalone.zen"]);
+        .snapshot_run("pcbc", ["build", "standalone.zen"]);
     assert_snapshot!("inline_manifest", output);
 }
 
@@ -693,7 +693,7 @@ Component(
     let output = Sandbox::new()
         .write("IoModule.zen", io_module)
         .write("standalone.zen", inline_manifest_zen)
-        .snapshot_run("pcb", ["build", "standalone.zen"]);
+        .snapshot_run("pcbc", ["build", "standalone.zen"]);
     // The auto-assigned net name (e.g. N492) depends on the global counter,
     // which shifts when stdlib/prelude allocates nets. Sanitize it here.
     let output = regex::Regex::new(r"'N\d+'")
@@ -741,7 +741,7 @@ Wrapper(
         .write("Wrapper.zen", wrapper_module)
         .write("board.zen", board)
         .write("test.kicad_mod", TEST_KICAD_MOD)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("unused_module_io_warning", output);
 }
 
@@ -753,7 +753,7 @@ fn test_suppress_by_exact_kind() {
     let output = Sandbox::new()
         .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
         .snapshot_run(
-            "pcb",
+            "pcbc",
             ["build", "test.zen", "-S", "electrical.voltage_mismatch"],
         );
     assert_snapshot!("suppress_by_exact_kind", output);
@@ -766,7 +766,7 @@ fn test_build_writes_diagnostics_json() {
 
     sandbox
         .run(
-            "pcb",
+            "pcbc",
             ["build", "test.zen", "--diagnostics", "diagnostics.json"],
         )
         .run()
@@ -797,7 +797,7 @@ fn test_build_writes_diagnostics_json_on_failure() {
 
     let output = sandbox
         .run(
-            "pcb",
+            "pcbc",
             ["build", "test.zen", "--diagnostics", "diagnostics.json"],
         )
         .unchecked()
@@ -825,7 +825,7 @@ fn test_suppress_by_hierarchical_kind() {
     // -S electrical should suppress all electrical.* warnings
     let output = Sandbox::new()
         .write("test.zen", MULTIPLE_ELECTRICAL_WARNINGS_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
+        .snapshot_run("pcbc", ["build", "test.zen", "-S", "electrical"]);
     assert_snapshot!("suppress_by_hierarchical_kind", output);
 }
 
@@ -834,7 +834,7 @@ fn test_suppress_by_partial_hierarchy() {
     // -S electrical.voltage should suppress electrical.voltage.* but not electrical.current.*
     let output = Sandbox::new()
         .write("test.zen", MULTIPLE_ELECTRICAL_WARNINGS_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical.voltage"]);
+        .snapshot_run("pcbc", ["build", "test.zen", "-S", "electrical.voltage"]);
     assert_snapshot!("suppress_by_partial_hierarchy", output);
 }
 
@@ -844,7 +844,7 @@ fn test_suppress_multiple_kinds() {
     let output = Sandbox::new()
         .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
         .snapshot_run(
-            "pcb",
+            "pcbc",
             [
                 "build",
                 "test.zen",
@@ -862,7 +862,7 @@ fn test_suppress_all_warnings_by_severity() {
     // -S warnings should suppress all warnings regardless of kind
     let output = Sandbox::new()
         .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen", "-S", "warnings"]);
+        .snapshot_run("pcbc", ["build", "test.zen", "-S", "warnings"]);
     assert_snapshot!("suppress_all_warnings_by_severity", output);
 }
 
@@ -876,7 +876,7 @@ error("Error 2", suppress=True, kind="validation.error2")
     // -S errors should suppress all errors
     let output = Sandbox::new()
         .write("test.zen", errors_zen)
-        .snapshot_run("pcb", ["build", "test.zen", "-S", "errors"]);
+        .snapshot_run("pcbc", ["build", "test.zen", "-S", "errors"]);
     assert_snapshot!("suppress_all_errors_by_severity", output);
 }
 
@@ -886,7 +886,7 @@ fn test_suppress_kind_with_deny_warnings() {
     let output = Sandbox::new()
         .write("test.zen", CATEGORIZED_DIAGNOSTICS_ZEN)
         .snapshot_run(
-            "pcb",
+            "pcbc",
             [
                 "build",
                 "test.zen",
@@ -908,7 +908,7 @@ fn test_suppress_kind_with_deny_warnings() {
 fn test_inline_suppress_basic() {
     let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_BASIC_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_basic", output);
 }
 
@@ -916,7 +916,7 @@ fn test_inline_suppress_basic() {
 fn test_inline_suppress_hierarchical() {
     let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_HIERARCHICAL_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_hierarchical", output);
 }
 
@@ -924,7 +924,7 @@ fn test_inline_suppress_hierarchical() {
 fn test_inline_suppress_severity() {
     let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_SEVERITY_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_severity", output);
 }
 
@@ -932,7 +932,7 @@ fn test_inline_suppress_severity() {
 fn test_inline_suppress_multiple_patterns() {
     let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_MULTIPLE_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_multiple_patterns", output);
 }
 
@@ -940,7 +940,7 @@ fn test_inline_suppress_multiple_patterns() {
 fn test_inline_suppress_all() {
     let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_ALL_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_all", output);
 }
 
@@ -948,7 +948,7 @@ fn test_inline_suppress_all() {
 fn test_inline_suppress_case_insensitive() {
     let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_CASE_INSENSITIVE_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_case_insensitive", output);
 }
 
@@ -956,7 +956,7 @@ fn test_inline_suppress_case_insensitive() {
 fn test_inline_suppress_no_space_after_hash() {
     let output = Sandbox::new()
         .write("test.zen", INLINE_SUPPRESS_NO_SPACE_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_suppress_no_space_after_hash", output);
 }
 
@@ -971,7 +971,7 @@ warn("Not suppressed", kind="layout.spacing")
 
     let output = Sandbox::new()
         .write("test.zen", combined_zen)
-        .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
+        .snapshot_run("pcbc", ["build", "test.zen", "-S", "electrical"]);
     assert_snapshot!("inline_suppress_combined_with_cli", output);
 }
 
@@ -981,7 +981,7 @@ warn("Not suppressed", kind="layout.spacing")
 fn test_previous_line_suppress_basic() {
     let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_SUPPRESS_BASIC_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("previous_line_suppress_basic", output);
 }
 
@@ -989,7 +989,7 @@ fn test_previous_line_suppress_basic() {
 fn test_previous_line_suppress_hierarchical() {
     let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_SUPPRESS_HIERARCHICAL_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("previous_line_suppress_hierarchical", output);
 }
 
@@ -997,7 +997,7 @@ fn test_previous_line_suppress_hierarchical() {
 fn test_previous_line_suppress_multiple_patterns() {
     let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_SUPPRESS_MULTIPLE_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("previous_line_suppress_multiple_patterns", output);
 }
 
@@ -1005,7 +1005,7 @@ fn test_previous_line_suppress_multiple_patterns() {
 fn test_previous_line_mixed_with_inline() {
     let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_MIXED_WITH_INLINE_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("previous_line_mixed_with_inline", output);
 }
 
@@ -1013,7 +1013,7 @@ fn test_previous_line_mixed_with_inline() {
 fn test_previous_line_with_regular_comment() {
     let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_WITH_COMMENT_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("previous_line_with_regular_comment", output);
 }
 
@@ -1021,7 +1021,7 @@ fn test_previous_line_with_regular_comment() {
 fn test_previous_line_multiline_statement() {
     let output = Sandbox::new()
         .write("test.zen", PREVIOUS_LINE_MULTILINE_STATEMENT_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("previous_line_multiline_statement", output);
 }
 
@@ -1030,7 +1030,7 @@ fn test_inline_no_cross_line_contamination() {
     // End-of-line comments should NOT affect the next line
     let output = Sandbox::new()
         .write("test.zen", INLINE_NO_CROSS_LINE_CONTAMINATION_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen"]);
+        .snapshot_run("pcbc", ["build", "test.zen"]);
     assert_snapshot!("inline_no_cross_line_contamination", output);
 }
 
@@ -1039,6 +1039,6 @@ fn test_mixed_suppress_and_regular_diagnostics() {
     // Mix of suppressed (by -S) and regular warnings
     let output = Sandbox::new()
         .write("test.zen", MIXED_CATEGORIZED_ZEN)
-        .snapshot_run("pcb", ["build", "test.zen", "-S", "electrical"]);
+        .snapshot_run("pcbc", ["build", "test.zen", "-S", "electrical"]);
     assert_snapshot!("mixed_suppress_and_regular", output);
 }

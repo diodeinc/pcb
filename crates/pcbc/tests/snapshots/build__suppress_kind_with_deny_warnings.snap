@@ -2,7 +2,7 @@
 source: crates/pcb/tests/build.rs
 expression: output
 ---
-Command: pcb build test.zen -S electrical.voltage_mismatch -S layout.spacing -S bom.missing_part -Dwarnings
+Command: pcbc build test.zen -S electrical.voltage_mismatch -S layout.spacing -S bom.missing_part -Dwarnings
 Exit Code: 1
 
 --- STDOUT ---

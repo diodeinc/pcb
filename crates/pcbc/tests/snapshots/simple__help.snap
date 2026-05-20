@@ -2,7 +2,7 @@
 source: crates/pcb/tests/simple.rs
 expression: output
 ---
-Command: pcb help
+Command: pcbc help
 Exit Code: 0
 
 --- STDOUT ---

@@ -3,7 +3,7 @@ source: crates/pcb/tests/simple.rs
 expression: snapshot
 ---
 --- online ---
-Command: pcb build boards/B/B.zen
+Command: pcbc build boards/B/B.zen
 Exit Code: 0
 
 --- STDOUT ---
@@ -11,7 +11,7 @@ Exit Code: 0
 --- STDERR ---
 ✓ B.zen (2 components)
 --- offline ---
-Command: pcb build boards/B/B.zen --offline
+Command: pcbc build boards/B/B.zen --offline
 Exit Code: 0
 
 --- STDOUT ---

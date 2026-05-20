@@ -2,7 +2,7 @@
 source: crates/pcb/tests/auto_deps.rs
 expression: snapshot
 ---
-Command: pcb build board.zen
+Command: pcbc build board.zen
 Exit Code: 0
 
 --- STDOUT ---

@@ -2,7 +2,7 @@
 source: crates/pcb/tests/test_bench.rs
 expression: output
 ---
-Command: pcb test simple_testbench.zen -f tap
+Command: pcbc test simple_testbench.zen -f tap
 Exit Code: 0
 
 --- STDOUT ---

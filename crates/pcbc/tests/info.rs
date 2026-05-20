@@ -55,7 +55,7 @@ internal_net = Net("INTERNAL")
 fn test_pcb_info_empty_workspace() {
     let output = Sandbox::new()
         .write("pcb.toml", WORKSPACE_PCB_TOML)
-        .snapshot_run("pcb", ["info"]);
+        .snapshot_run("pcbc", ["info"]);
     assert_snapshot!("empty_workspace", output);
 }
 
@@ -65,7 +65,7 @@ fn test_pcb_info_single_board() {
         .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("boards/TestBoard/pcb.toml", TEST_BOARD_PCB_TOML)
         .write("boards/TestBoard/test_board.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["info"]);
+        .snapshot_run("pcbc", ["info"]);
     assert_snapshot!("single_board", output);
 }
 
@@ -80,7 +80,7 @@ fn test_pcb_info_multiple_boards() {
         .write("boards/broken-board/pcb.toml", BROKEN_BOARD_PCB_TOML)
         .write("special/custom-board/pcb.toml", CUSTOM_BOARD_PCB_TOML)
         .write("special/custom-board/custom.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["info"]);
+        .snapshot_run("pcbc", ["info"]);
     assert_snapshot!("multiple_boards", output);
 }
 
@@ -92,7 +92,7 @@ fn test_pcb_info_json_format() {
         .write("boards/test-board/test_board.zen", TEST_BOARD_ZEN)
         .write("boards/main-board/pcb.toml", MAIN_BOARD_PCB_TOML)
         .write("boards/main-board/main_board.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["info", "-f", "json"]);
+        .snapshot_run("pcbc", ["info", "-f", "json"]);
     assert_snapshot!("json_format", output);
 }
 
@@ -104,7 +104,7 @@ fn test_pcb_info_json_includes_preferred() {
         .write("boards/test-board/test_board.zen", TEST_BOARD_ZEN)
         .write("boards/main-board/pcb.toml", MAIN_BOARD_PCB_TOML)
         .write("boards/main-board/main_board.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["info", "-f", "json"]);
+        .snapshot_run("pcbc", ["info", "-f", "json"]);
     assert_snapshot!("json_format_with_preferred", output);
 }
 
@@ -140,10 +140,10 @@ pcb-version = "0.3"
 "#,
     );
 
-    let json_output = sandbox.snapshot_run("pcb", ["info", "-f", "json"]);
+    let json_output = sandbox.snapshot_run("pcbc", ["info", "-f", "json"]);
     assert_snapshot!("json_with_external_dependencies", json_output);
 
-    let human_output = sandbox.snapshot_run("pcb", ["info"]);
+    let human_output = sandbox.snapshot_run("pcbc", ["info"]);
     assert_snapshot!("human_with_external_dependencies", human_output);
 }
 
@@ -192,7 +192,7 @@ path = "Board.zen"
 "#,
         )
         .write("boards/Board/Board.zen", "p1 = Net(\"P1\")\n")
-        .run("pcb", ["info", "-f", "json", "boards/Board"])
+        .run("pcbc", ["info", "-f", "json", "boards/Board"])
         .stdout_capture()
         .stderr_capture()
         .run()
@@ -268,7 +268,7 @@ fn test_pcb_info_json_includes_published_at() {
         .trim()
         .to_string();
 
-    let output = sandbox.snapshot_run("pcb", ["info", "-f", "json"]);
+    let output = sandbox.snapshot_run("pcbc", ["info", "-f", "json"]);
     let json = output
         .split("--- STDOUT ---\n")
         .nth(1)
@@ -290,7 +290,7 @@ fn test_pcb_info_with_path() {
         .write("subdir/pcb.toml", WORKSPACE_PCB_TOML)
         .write("subdir/boards/test-board/pcb.toml", TEST_BOARD_PCB_TOML)
         .write("subdir/boards/test-board/test_board.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["info", "subdir"]);
+        .snapshot_run("pcbc", ["info", "subdir"]);
     assert_snapshot!("with_path", output);
 }
 
@@ -308,7 +308,7 @@ fn test_pcb_info_zen_discovery() {
         .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("boards/discovered/pcb.toml", BOARD_NO_PATH_PCB_TOML)
         .write("boards/discovered/discovered.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["info"]);
+        .snapshot_run("pcbc", ["info"]);
     assert_snapshot!("zen_discovery", output);
 }
 
@@ -319,7 +319,7 @@ fn test_pcb_info_zen_discovery_json() {
         .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("boards/discovered/pcb.toml", BOARD_NO_PATH_PCB_TOML)
         .write("boards/discovered/discovered.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["info", "-f", "json"]);
+        .snapshot_run("pcbc", ["info", "-f", "json"]);
     assert_snapshot!("zen_discovery_json", output);
 }
 
@@ -338,6 +338,6 @@ fn test_pcb_info_multiple_zen_files() {
         .write("boards/ambiguous/pcb.toml", BOARD_MULTI_ZEN_PCB_TOML)
         .write("boards/ambiguous/board1.zen", TEST_BOARD_ZEN)
         .write("boards/ambiguous/board2.zen", TEST_BOARD_ZEN)
-        .snapshot_run("pcb", ["info"]);
+        .snapshot_run("pcbc", ["info"]);
     assert_snapshot!("multiple_zen_files", output);
 }

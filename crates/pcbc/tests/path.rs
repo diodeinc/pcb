@@ -49,7 +49,7 @@ gnd = Net("GND")
     // Build should succeed with mixed existing/non-existing paths
     assert_snapshot!(
         "path_local_mixed_build",
-        sb.snapshot_run("pcb", ["build", "boards/LocalPathTest.zen"])
+        sb.snapshot_run("pcbc", ["build", "boards/LocalPathTest.zen"])
     );
 }
 
@@ -77,6 +77,6 @@ Component(
     // Build should fail because file doesn't exist and allow_not_exist=false (default)
     assert_snapshot!(
         "path_missing_no_allow_build",
-        sb.snapshot_run("pcb", ["build", "boards/FailingTest.zen"])
+        sb.snapshot_run("pcbc", ["build", "boards/FailingTest.zen"])
     );
 }

@@ -152,7 +152,7 @@ P2 = io(Net)
 fn test_pcb_build_should_fail_without_fixture() {
     let output = Sandbox::new()
         .write("boards/TestBoard.zen", NONEXISTENT_REPO_BOARD_ZEN)
-        .snapshot_run("pcb", ["build", "boards/TestBoard.zen"]);
+        .snapshot_run("pcbc", ["build", "boards/TestBoard.zen"]);
     assert_snapshot!("no_fixture", output);
 }
 
@@ -162,7 +162,7 @@ fn test_pcb_build_simple_board() {
     let output = Sandbox::new()
         .write("pcb.toml", PCB_TOML_MIN)
         .write("boards/SimpleBoard.zen", SIMPLE_BOARD_ZEN)
-        .snapshot_run("pcb", ["build", "boards/SimpleBoard.zen"]);
+        .snapshot_run("pcbc", ["build", "boards/SimpleBoard.zen"]);
     assert_snapshot!("simple_board", output);
 }
 
@@ -175,7 +175,7 @@ fn test_pcb_build_simple_workspace() {
         .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
-        .snapshot_run("pcb", ["build", "boards/TestBoard.zen"]);
+        .snapshot_run("pcbc", ["build", "boards/TestBoard.zen"]);
     assert_snapshot!("simple_workspace_build", output);
 }
 
@@ -212,7 +212,7 @@ pcb-version = "0.3"
 "#,
         )
         .write("board.zen", GIT_FIXTURE_BOARD_ZEN)
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("git_fixture", output);
 }
 
@@ -291,9 +291,9 @@ path = "B.zen"
             ),
         )
         .write("boards/B/B.zen", GIT_FIXTURE_BOARD_ZEN)
-        .snapshot_run("pcb", ["build", "boards/B/B.zen"]);
+        .snapshot_run("pcbc", ["build", "boards/B/B.zen"]);
 
-    let offline_output = sandbox.snapshot_run("pcb", ["build", "boards/B/B.zen", "--offline"]);
+    let offline_output = sandbox.snapshot_run("pcbc", ["build", "boards/B/B.zen", "--offline"]);
 
     let pcb_sum =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
@@ -323,7 +323,7 @@ path = "B.zen"
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn test_pcb_help() {
-    let output = Sandbox::new().snapshot_run("pcb", ["help"]);
+    let output = Sandbox::new().snapshot_run("pcbc", ["help"]);
     assert_snapshot!("help", output);
 }
 
@@ -366,7 +366,7 @@ p2 = Net("P2")
 Missing(name="U1", P1=p1, P2=p2)
 "#,
         )
-        .run("pcb", ["build", "modules/Board/Board.zen"])
+        .run("pcbc", ["build", "modules/Board/Board.zen"])
         .stderr_capture()
         .stdout_capture()
         .unchecked()
@@ -422,7 +422,7 @@ path = "Board.zen"
 Layout(name="Board", path="build/Board", bom_profile=None)
 "#,
         )
-        .run("pcb", ["build", "modules/Board/Board.zen"])
+        .run("pcbc", ["build", "modules/Board/Board.zen"])
         .stderr_capture()
         .stdout_capture()
         .unchecked()
@@ -498,7 +498,7 @@ p2 = Net("P2")
 Thing(name="U1", P1=p1, P2=p2)
 "#,
         )
-        .run("pcb", ["build", "modules/Board/Board.zen"])
+        .run("pcbc", ["build", "modules/Board/Board.zen"])
         .stderr_capture()
         .stdout_capture()
         .unchecked()

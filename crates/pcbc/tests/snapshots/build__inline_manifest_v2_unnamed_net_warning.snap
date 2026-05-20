@@ -3,7 +3,7 @@ source: crates/pcb/tests/build.rs
 assertion_line: 502
 expression: output
 ---
-Command: pcb build standalone.zen
+Command: pcbc build standalone.zen
 Exit Code: 0
 
 --- STDOUT ---

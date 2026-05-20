@@ -2,7 +2,7 @@
 source: crates/pcb/tests/build.rs
 expression: output
 ---
-Command: pcb build test.zen -S electrical.voltage_mismatch
+Command: pcbc build test.zen -S electrical.voltage_mismatch
 Exit Code: 0
 
 --- STDOUT ---

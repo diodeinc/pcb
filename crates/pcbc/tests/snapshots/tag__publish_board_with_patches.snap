@@ -2,7 +2,7 @@
 source: crates/pcb/tests/tag.rs
 expression: output
 ---
-Command: pcb publish boards/Test/TB0001.zen --bump=minor --no-push --force
+Command: pcbc publish boards/Test/TB0001.zen --bump=minor --no-push --force
 Exit Code: 1
 
 --- STDOUT ---

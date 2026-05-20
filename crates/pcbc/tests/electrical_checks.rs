@@ -18,7 +18,7 @@ builtin.add_electrical_check(
 )
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("error_severity", output);
 }
 
@@ -40,7 +40,7 @@ builtin.add_electrical_check(
 )
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("warning_severity", output);
 }
 
@@ -60,7 +60,7 @@ builtin.add_electrical_check(
 )
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("passing_check", output);
 }
 
@@ -80,7 +80,7 @@ builtin.add_electrical_check(
 )
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("invalid_severity", output);
 }
 
@@ -103,6 +103,6 @@ builtin.add_electrical_check(
 )
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("with_inputs", output);
 }

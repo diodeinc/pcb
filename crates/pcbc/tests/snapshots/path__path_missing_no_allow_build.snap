@@ -1,8 +1,8 @@
 ---
 source: crates/pcb/tests/path.rs
-expression: "sb.snapshot_run(\"pcb\", [\"build\", \"boards/FailingTest.zen\"])"
+expression: "sb.snapshot_run(\"pcbc\", [\"build\", \"boards/FailingTest.zen\"])"
 ---
-Command: pcb build boards/FailingTest.zen
+Command: pcbc build boards/FailingTest.zen
 Exit Code: 1
 
 --- STDOUT ---

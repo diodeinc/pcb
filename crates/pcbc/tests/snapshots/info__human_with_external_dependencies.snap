@@ -2,7 +2,7 @@
 source: crates/pcb/tests/info.rs
 expression: human_output
 ---
-Command: pcb info
+Command: pcbc info
 Exit Code: 0
 
 --- STDOUT ---

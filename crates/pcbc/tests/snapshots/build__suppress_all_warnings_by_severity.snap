@@ -2,7 +2,7 @@
 source: crates/pcb/tests/build.rs
 expression: output
 ---
-Command: pcb build test.zen -S warnings
+Command: pcbc build test.zen -S warnings
 Exit Code: 0
 
 --- STDOUT ---

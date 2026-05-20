@@ -71,7 +71,7 @@ fn test_package_module_bundle() {
 
     let result = sb
         .run(
-            "pcb",
+            "pcbc",
             ["package", "-o", "out/package.tar.zst", "modules/Parent"],
         )
         .stderr_capture()
@@ -137,7 +137,7 @@ fn test_package_module_bundle_json_output() {
 
     let result = sb
         .run(
-            "pcb",
+            "pcbc",
             [
                 "package",
                 "-f",
@@ -177,7 +177,7 @@ fn test_package_hash_only_json_output() {
 
     let result = sb
         .run(
-            "pcb",
+            "pcbc",
             ["package", "--hash-only", "-f", "json", "modules/Parent"],
         )
         .stderr_capture()
@@ -219,7 +219,7 @@ fn test_package_hash_only_manifest_only_package() {
 
     let result = sb
         .run(
-            "pcb",
+            "pcbc",
             ["package", "--hash-only", "-f", "json", "modules/Utility"],
         )
         .stderr_capture()

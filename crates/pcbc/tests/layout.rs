@@ -55,7 +55,7 @@ fn layout_json_output_is_parseable() {
         .write("no-layout.zen", NO_LAYOUT_ZEN);
 
     let output = sandbox
-        .run("pcb", ["layout", "--no-open", "-f", "json", "board.zen"])
+        .run("pcbc", ["layout", "--no-open", "-f", "json", "board.zen"])
         .stderr_capture()
         .stdout_capture()
         .run()
@@ -70,7 +70,7 @@ fn layout_json_output_is_parseable() {
 
     let no_sync_output = sandbox
         .run(
-            "pcb",
+            "pcbc",
             [
                 "layout",
                 "--no-sync",

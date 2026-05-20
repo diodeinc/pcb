@@ -192,12 +192,12 @@ fn test_publish_board_source_only() {
         .commit("Initial commit");
 
     // Build first to generate lockfile (required for release)
-    sb.run("pcb", ["build", "boards/TestBoard.zen"])
+    sb.run("pcbc", ["build", "boards/TestBoard.zen"])
         .run()
         .expect("build failed");
 
     // Run source-only publish (no layout needed)
-    sb.run("pcb", source_only_args("boards/TestBoard.zen"))
+    sb.run("pcbc", source_only_args("boards/TestBoard.zen"))
         .run()
         .expect("Failed to run pcb publish command");
 
@@ -220,7 +220,7 @@ fn test_publish_board_with_version() {
         .commit("Initial commit");
 
     // Build first to generate lockfile (required for release)
-    sb.run("pcb", ["build", "boards/TB0001.zen"])
+    sb.run("pcbc", ["build", "boards/TB0001.zen"])
         .run()
         .expect("build failed");
 
@@ -230,7 +230,7 @@ fn test_publish_board_with_version() {
     // Run source-only publish with bump (creates v1.3.0)
     let mut args = source_only_args("boards/TB0001.zen");
     args.push("--bump=minor");
-    sb.run("pcb", &args)
+    sb.run("pcbc", &args)
         .run()
         .expect("Failed to run pcb publish command");
 
@@ -274,13 +274,13 @@ fn test_publish_board_full() {
         .commit("Initial commit");
 
     // Generate layout files first (full releases require layout and lockfile)
-    sb.run("pcb", ["layout", "--no-open", "boards/TestBoard.zen"])
+    sb.run("pcbc", ["layout", "--no-open", "boards/TestBoard.zen"])
         .run()
         .expect("layout generation failed");
 
     // Run full publish (with all artifacts, suppress test board DRC issues)
     sb.run(
-        "pcb",
+        "pcbc",
         [
             "publish",
             "boards/TestBoard.zen",
@@ -314,12 +314,12 @@ fn test_publish_board_with_file() {
         .commit("Initial commit");
 
     // Build first to generate lockfile (required for release)
-    sb.run("pcb", ["build", "boards/TB0002.zen"])
+    sb.run("pcbc", ["build", "boards/TB0002.zen"])
         .run()
         .expect("build failed");
 
     // Run source-only publish
-    sb.run("pcb", source_only_args("boards/TB0002.zen"))
+    sb.run("pcbc", source_only_args("boards/TB0002.zen"))
         .run()
         .expect("Failed to run pcb publish command");
 
@@ -350,12 +350,12 @@ fn test_publish_board_with_description() {
         .commit("Initial commit");
 
     // Build first to generate lockfile (required for release)
-    sb.run("pcb", ["build", "boards/DescBoard.zen"])
+    sb.run("pcbc", ["build", "boards/DescBoard.zen"])
         .run()
         .expect("build failed");
 
     // Run source-only publish
-    sb.run("pcb", source_only_args("boards/DescBoard.zen"))
+    sb.run("pcbc", source_only_args("boards/DescBoard.zen"))
         .run()
         .expect("Failed to run pcb publish command");
 
@@ -387,11 +387,11 @@ fn test_publish_board_vendors_workspace_remote_deps_for_validation() {
         .init_git()
         .commit("Initial commit");
 
-    sb.run("pcb", ["build", "boards/TestBoard.zen"])
+    sb.run("pcbc", ["build", "boards/TestBoard.zen"])
         .run()
         .expect("build failed");
 
-    sb.run("pcb", source_only_args("boards/TestBoard.zen"))
+    sb.run("pcbc", source_only_args("boards/TestBoard.zen"))
         .run()
         .expect("publish should succeed with unrelated locked remote dependencies");
 
@@ -425,13 +425,13 @@ fn test_publish_board_from_board_dir() {
         .commit("Initial commit");
 
     // Build first to generate lockfile
-    sb.run("pcb", ["build", "boards/TestBoard.zen"])
+    sb.run("pcbc", ["build", "boards/TestBoard.zen"])
         .run()
         .expect("build failed");
 
     // Run publish from the board directory with a relative path
     sb.cwd("src/boards")
-        .run("pcb", source_only_args("TestBoard.zen"))
+        .run("pcbc", source_only_args("TestBoard.zen"))
         .run()
         .expect("publish from board dir with relative path should work");
 }

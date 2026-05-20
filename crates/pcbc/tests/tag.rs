@@ -79,12 +79,12 @@ fn test_publish_board_simple_workspace() {
         .commit("Initial commit");
 
     // Generate layout files before release (full releases require layout)
-    sb.run("pcb", ["layout", "--no-open", "boards/Test/TB0001.zen"])
+    sb.run("pcbc", ["layout", "--no-open", "boards/Test/TB0001.zen"])
         .run()
         .expect("layout generation failed");
 
     sb.run(
-        "pcb",
+        "pcbc",
         [
             "publish",
             "boards/Test/TB0001.zen",
@@ -115,7 +115,7 @@ fn test_publish_board_invalid_path() {
         .init_git()
         .commit("Initial commit")
         .snapshot_run(
-            "pcb",
+            "pcbc",
             [
                 "publish",
                 "boards/NonExistent.zen",
@@ -135,7 +135,7 @@ fn test_publish_board_with_patches() {
         .write("boards/Test/pcb.toml", BOARD_TB0001_PCB_TOML)
         .write("boards/Test/TB0001.zen", SIMPLE_BOARD_ZEN)
         .snapshot_run(
-            "pcb",
+            "pcbc",
             [
                 "publish",
                 "boards/Test/TB0001.zen",

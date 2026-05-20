@@ -85,7 +85,7 @@ Component(
 
     let output = Sandbox::new()
         .write("boards/PartBoard.zen", board)
-        .snapshot_run("pcb", ["build", "boards/PartBoard.zen", "--netlist"]);
+        .snapshot_run("pcbc", ["build", "boards/PartBoard.zen", "--netlist"]);
 
     let netlist = parse_netlist_json(&output);
     let attrs = component_attrs(&netlist);
@@ -163,7 +163,7 @@ Component(
     let output = Sandbox::new()
         .write("boards/PartModifierBoard.zen", board)
         .snapshot_run(
-            "pcb",
+            "pcbc",
             ["build", "boards/PartModifierBoard.zen", "--netlist"],
         );
 
@@ -215,7 +215,7 @@ Component(
     let output = Sandbox::new()
         .write("board.zen", board)
         .write("Child.zen", child)
-        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+        .snapshot_run("pcbc", ["build", "board.zen", "--netlist"]);
 
     let netlist = parse_netlist_json(&output);
     let params = module_signature_params(&netlist);
@@ -316,7 +316,7 @@ fn build_datasheet_test_output(datasheet: &str, extra_files: &[(&str, &str)]) ->
         sandbox.write(path, *contents);
     }
 
-    sandbox.snapshot_run("pcb", ["build", "board.zen", "--netlist"])
+    sandbox.snapshot_run("pcbc", ["build", "board.zen", "--netlist"])
 }
 
 fn manifest_component_attrs(parts_toml: &str, component_args: &str) -> Map<String, Value> {
@@ -365,7 +365,7 @@ MyPart = Module("github.com/testorg/components/MyPart/MyPart.zen")
 MyPart(name = "U1", P1 = Net("A"), P2 = Net("B"))
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+        .snapshot_run("pcbc", ["build", "board.zen", "--netlist"]);
 
     let netlist = parse_netlist_json(&output);
     component_attrs(&netlist).clone()
@@ -593,7 +593,7 @@ TestPart = Module("components/TestPart/TestPart.zen")
 TestPart(name = "U1", P1 = Net("A"), P2 = Net("B"))
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+        .snapshot_run("pcbc", ["build", "board.zen", "--netlist"]);
 
     let netlist = parse_netlist_json(&output);
     let attrs = component_attrs(&netlist);
@@ -633,7 +633,7 @@ TestPart = Module("components/TestPart/TestPart.zen")
 TestPart(name = "U1", P1 = Net("A"), P2 = Net("B"))
 "#,
         )
-        .snapshot_run("pcb", ["build", "board.zen", "--netlist"]);
+        .snapshot_run("pcbc", ["build", "board.zen", "--netlist"]);
 
     let netlist2 = parse_netlist_json(&output2);
     let attrs2 = component_attrs(&netlist2);

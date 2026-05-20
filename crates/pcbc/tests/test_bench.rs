@@ -28,7 +28,7 @@ fn test_simple_testbench() {
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN)
-        .snapshot_run("pcb", ["test", "simple_testbench.zen"]);
+        .snapshot_run("pcbc", ["test", "simple_testbench.zen"]);
 
     assert_snapshot!("simple_testbench", output);
 }
@@ -40,7 +40,7 @@ fn test_factory_pattern_checks() {
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("factory_checks_testbench.zen", FACTORY_CHECKS_TESTBENCH_ZEN)
-        .snapshot_run("pcb", ["test", "factory_checks_testbench.zen"]);
+        .snapshot_run("pcbc", ["test", "factory_checks_testbench.zen"]);
 
     assert_snapshot!("factory_pattern_checks", output);
 }
@@ -52,7 +52,7 @@ fn test_failing_checks() {
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("failing_checks_testbench.zen", FAILING_CHECKS_TESTBENCH_ZEN)
-        .snapshot_run("pcb", ["test", "failing_checks_testbench.zen"]);
+        .snapshot_run("pcbc", ["test", "failing_checks_testbench.zen"]);
 
     assert_snapshot!("failing_checks", output);
 }
@@ -64,7 +64,7 @@ fn test_json_output() {
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN)
-        .snapshot_run("pcb", ["test", "simple_testbench.zen", "-f", "json"]);
+        .snapshot_run("pcbc", ["test", "simple_testbench.zen", "-f", "json"]);
 
     assert_snapshot!("json_output", output);
 }
@@ -76,7 +76,7 @@ fn test_tap_output() {
         .write("matchers.zen", MATCHERS_ZEN)
         .write("simple_module.zen", SIMPLE_MODULE_ZEN)
         .write("simple_testbench.zen", SIMPLE_TESTBENCH_ZEN)
-        .snapshot_run("pcb", ["test", "simple_testbench.zen", "-f", "tap"]);
+        .snapshot_run("pcbc", ["test", "simple_testbench.zen", "-f", "tap"]);
 
     assert_snapshot!("tap_output", output);
 }

@@ -2,7 +2,7 @@
 source: crates/pcb/tests/simple.rs
 expression: output
 ---
-Command: pcb build boards/TestBoard.zen
+Command: pcbc build boards/TestBoard.zen
 Exit Code: 1
 
 --- STDOUT ---

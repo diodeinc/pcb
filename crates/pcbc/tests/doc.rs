@@ -39,7 +39,7 @@ fn seed_remote_package(sb: &mut Sandbox) {
 }
 
 fn run_doc(sb: &mut Sandbox, package: &str) -> Output {
-    sb.run("pcb", ["doc", "--package", package])
+    sb.run("pcbc", ["doc", "--package", package])
         .stderr_capture()
         .stdout_capture()
         .unchecked()

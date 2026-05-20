@@ -2,7 +2,7 @@
 source: crates/pcb/tests/test_bench.rs
 expression: output
 ---
-Command: pcb test factory_checks_testbench.zen
+Command: pcbc test factory_checks_testbench.zen
 Exit Code: 0
 
 --- STDOUT ---

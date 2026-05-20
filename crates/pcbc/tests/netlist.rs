@@ -180,7 +180,7 @@ fn test_netlist_simple_board_with_positions() {
     sandbox.write("boards/SimpleBoard.zen", SIMPLE_BOARD_WITH_POSITIONS_ZEN);
     let output = snapshot_netlist_positions(
         &mut sandbox,
-        "pcb",
+        "pcbc",
         &["build", "boards/SimpleBoard.zen", "--netlist"],
     );
     assert_snapshot!("netlist_simple_board_with_positions", output);
@@ -198,7 +198,7 @@ fn test_netlist_hierarchical_board_with_positions() {
         );
     let output = snapshot_netlist_positions(
         &mut sandbox,
-        "pcb",
+        "pcbc",
         &["build", "boards/HierarchicalBoard.zen", "--netlist"],
     );
     assert_snapshot!("netlist_hierarchical_board_with_positions", output);
@@ -242,7 +242,7 @@ fn test_netlist_interface_field_positions() {
         .write("boards/I2cBoard.zen", I2C_HIERARCHICAL_BOARD_ZEN);
     let output = snapshot_netlist_positions(
         &mut sandbox,
-        "pcb",
+        "pcbc",
         &["build", "boards/I2cBoard.zen", "--netlist"],
     );
     assert_snapshot!("netlist_interface_field_positions", output);
@@ -272,7 +272,7 @@ Resistor(name="R1", value="1kOhm", package="0603", P1=vcc, P2=gnd)
     sandbox.write("boards/NoPositions.zen", board_zen);
     let output = snapshot_netlist_positions(
         &mut sandbox,
-        "pcb",
+        "pcbc",
         &["build", "boards/NoPositions.zen", "--netlist"],
     );
     assert_snapshot!("netlist_no_positions", output);
@@ -310,7 +310,7 @@ Led(name="D1", color="red", package="0603", A=sig, K=gnd)
     sandbox.write("boards/MixedPositions.zen", board_zen);
     let output = snapshot_netlist_positions(
         &mut sandbox,
-        "pcb",
+        "pcbc",
         &["build", "boards/MixedPositions.zen", "--netlist"],
     );
     assert_snapshot!("netlist_mixed_position_formats", output);
@@ -325,7 +325,7 @@ fn test_netlist_positions_with_mirror() {
     );
     let output = snapshot_netlist_positions(
         &mut sandbox,
-        "pcb",
+        "pcbc",
         &["build", "boards/SimpleBoardWithMirror.zen", "--netlist"],
     );
     assert_snapshot!("netlist_positions_with_mirror", output);
@@ -390,7 +390,7 @@ fn test_netlist_not_connected_promotion() {
         .write("boards/NCBoard.zen", NOT_CONNECTED_BOARD_ZEN);
     let output = snapshot_netlist_nets(
         &mut sandbox,
-        "pcb",
+        "pcbc",
         &["build", "boards/NCBoard.zen", "--netlist"],
     );
     assert_snapshot!("netlist_not_connected_promotion", output);

@@ -2,7 +2,7 @@
 source: crates/pcb/tests/info.rs
 expression: output
 ---
-Command: pcb info subdir
+Command: pcbc info subdir
 Exit Code: 0
 
 --- STDOUT ---

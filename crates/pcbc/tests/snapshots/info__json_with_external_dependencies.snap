@@ -2,7 +2,7 @@
 source: crates/pcb/tests/info.rs
 expression: json_output
 ---
-Command: pcb info -f json
+Command: pcbc info -f json
 Exit Code: 0
 
 --- STDOUT ---
