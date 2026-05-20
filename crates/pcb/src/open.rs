@@ -20,13 +20,10 @@ pub struct OpenArgs {
 }
 
 pub fn execute(args: OpenArgs) -> Result<()> {
-    #[cfg(feature = "api")]
     if let Some(uri) = crate::sandbox_uri::parse_sandbox_file_arg(&args.file)? {
         crate::sandbox_uri::require_remote_openable_file(&uri)?;
         return crate::remote_sandbox::execute_open(uri, args);
     }
-    #[cfg(not(feature = "api"))]
-    crate::sandbox_uri::reject_if_diode_uri(&args.file)?;
 
     if crate::sandbox_uri::is_kicad_pcb_path(&args.file) {
         return open_pcb_file(&args.file);

@@ -212,7 +212,6 @@ fn require_workspace() -> Result<(std::path::PathBuf, PcbToml)> {
     get_workspace().ok_or_else(|| anyhow::anyhow!("Not inside a pcb workspace"))
 }
 
-#[cfg(feature = "api")]
 fn execute_new_component(args: NewComponentArgs) -> Result<()> {
     if let Some(dir) = args.dir.as_deref() {
         return pcb_diode_api::execute_component_from_local_dir(dir);
@@ -230,17 +229,9 @@ fn execute_new_component(args: NewComponentArgs) -> Result<()> {
     pcb_diode_api::execute_web_components_tui(&workspace_root)
 }
 
-#[cfg(not(feature = "api"))]
-fn execute_new_component(_args: NewComponentArgs) -> Result<()> {
-    bail!("Component creation requires the 'api' feature")
-}
-
 fn execute_interactive() -> Result<()> {
     if get_workspace().is_some() {
-        #[cfg(feature = "api")]
         let options = vec!["package", "component"];
-        #[cfg(not(feature = "api"))]
-        let options = vec!["package"];
 
         let selection = Select::new("What would you like to create?", options)
             .prompt()
@@ -248,7 +239,6 @@ fn execute_interactive() -> Result<()> {
 
         match selection {
             "package" => prompt_new_package(),
-            #[cfg(feature = "api")]
             "component" => execute_new_component(NewComponentArgs::default()),
             _ => unreachable!(),
         }

@@ -74,13 +74,10 @@ struct LayoutCommandResult {
 }
 
 pub fn execute(mut args: LayoutArgs) -> Result<()> {
-    #[cfg(feature = "api")]
     if let Some(uri) = crate::sandbox_uri::parse_sandbox_file_arg(&args.file)? {
         crate::sandbox_uri::require_remote_zen_file(&uri)?;
         return crate::remote_sandbox::execute_layout(uri, args);
     }
-    #[cfg(not(feature = "api"))]
-    crate::sandbox_uri::reject_if_diode_uri(&args.file)?;
 
     crate::file_walker::require_zen_file(&args.file)?;
     let config_inputs = parse_config_overrides(&args.config)?;
