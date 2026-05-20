@@ -3,23 +3,12 @@ use clap::Args;
 #[derive(Args)]
 pub struct LspArgs {}
 
-#[cfg(feature = "api")]
 const RESOLVE_DATASHEET_METHOD: &str = "pcb/resolveDatasheet";
 
 pub fn execute(_args: LspArgs) -> anyhow::Result<()> {
-    #[cfg(feature = "api")]
-    {
-        pcb_zen::lsp_with_custom_request_handler(false, handle_custom_request)
-    }
-
-    #[cfg(not(feature = "api"))]
-    {
-        pcb_zen::lsp_with_eager(false)?;
-        Ok(())
-    }
+    pcb_zen::lsp_with_custom_request_handler(false, handle_custom_request)
 }
 
-#[cfg(feature = "api")]
 fn handle_custom_request(
     method: &str,
     params: &serde_json::Value,
@@ -34,7 +23,7 @@ fn handle_custom_request(
     Ok(Some(serde_json::to_value(response)?))
 }
 
-#[cfg(all(test, feature = "api"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;

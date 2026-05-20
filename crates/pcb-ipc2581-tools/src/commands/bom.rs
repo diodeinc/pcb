@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::Path;
 
-#[cfg(feature = "api")]
 use anyhow::Context;
 use anyhow::Result;
 use pcb_sch::bom::{Bom, BomEntry, Capacitor, GenericComponent, Resistor};
@@ -61,17 +60,14 @@ fn to_sch_alternative(alt: &Alternative) -> Alternative {
     }
 }
 
-pub fn execute(file: &Path, format: OutputFormat, _offline: bool) -> Result<()> {
+pub fn execute(file: &Path, format: OutputFormat, offline: bool) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let accessor = IpcAccessor::new(&ipc);
 
-    // Extract BOM from IPC-2581
-    #[cfg_attr(not(feature = "api"), allow(unused_mut))]
     let mut bom = extract_bom_from_ipc(&accessor)?;
 
-    #[cfg(feature = "api")]
-    if !_offline {
+    if !offline {
         use pcb_ui::prelude::*;
         let file_name = file.file_name().unwrap_or_default().to_string_lossy();
         let spinner = Spinner::builder(format!("{file_name}: Fetching availability")).start();

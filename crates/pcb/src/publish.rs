@@ -554,7 +554,6 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     )?;
 
     // Upload to API (must succeed before creating tag)
-    #[cfg(feature = "api")]
     if remote.is_some() {
         let ws_name = release_workspace_name(&workspace)?;
         let ctx = pcb_diode_api::WorkspaceContext::from_workspace_root(&workspace.root);

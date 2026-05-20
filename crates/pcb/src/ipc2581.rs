@@ -31,7 +31,6 @@ enum Commands {
         #[arg(short, long, default_value = "text")]
         format: OutputFormat,
         /// Run in offline mode without fetching part availability
-        #[cfg(feature = "api")]
         #[arg(long)]
         offline: bool,
     },
@@ -128,18 +127,8 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
         Commands::Bom {
             file,
             format,
-            #[cfg(feature = "api")]
             offline,
-        } => commands::bom::execute(&file, format, {
-            #[cfg(feature = "api")]
-            {
-                offline
-            }
-            #[cfg(not(feature = "api"))]
-            {
-                true
-            }
-        }),
+        } => commands::bom::execute(&file, format, offline),
         Commands::Edit { command } => match command {
             EditCommands::Bom {
                 file,
