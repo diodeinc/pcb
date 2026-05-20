@@ -1,0 +1,173 @@
+name: Release pcb shim
+
+on:
+  push:
+    tags:
+      - 'pcb/v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'pcb shim release tag, such as pcb/v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  prepare:
+    runs-on: ubicloud-standard-30-ubuntu-2204
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-bin: false
+
+      - id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          case "$tag" in
+            pcb/v*) version="${tag#pcb/v}" ;;
+            *) echo "Unsupported pcb shim release tag: $tag" >&2; exit 1 ;;
+          esac
+
+          actual=$(cargo metadata --no-deps --format-version=1 \
+            | jq -r '.packages[] | select(.name == "pcb") | .version')
+          if [ "$actual" != "$version" ]; then
+            echo "pcb version is $actual, but tag requests $version" >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    name: build pcb (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15-xlarge
+          - target: x86_64-apple-darwin
+            runner: macos-15-large
+          - target: aarch64-unknown-linux-gnu
+            runner: ubicloud-standard-30-arm-ubuntu-2204
+          - target: x86_64-unknown-linux-gnu
+            runner: ubicloud-standard-30-ubuntu-2204
+          - target: x86_64-pc-windows-msvc
+            runner: diode-windows
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-bin: false
+          target: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --profile dist -p pcb --bin pcb --target ${{ matrix.target }}
+
+      - name: Prepare artifacts
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          exe=pcb
+          artifact="pcb-$TARGET"
+          if [[ "$TARGET" == *windows* ]]; then
+            exe=pcb.exe
+            artifact="$artifact.exe"
+          fi
+          cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
+          if command -v shasum >/dev/null; then
+            shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
+          else
+            sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcb-${{ matrix.target }}
+          path: artifacts/*
+
+  publish:
+    needs:
+      - prepare
+      - build
+    runs-on: ubicloud-standard-30-ubuntu-2204
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pcb-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Upload artifacts to S3
+        run: |
+          aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ needs.prepare.outputs.tag }}/" \
+            --cache-control "public, max-age=31536000, immutable"
+
+      - name: Publish latest shim metadata
+        if: needs.prepare.outputs.prerelease == 'false'
+        run: |
+          jq -n \
+            --arg version "${{ needs.prepare.outputs.version }}" \
+            --arg tag "${{ needs.prepare.outputs.tag }}" \
+            --arg published_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg base_url "https://pcb.api.diode.computer/pcb/${{ needs.prepare.outputs.tag }}" \
+            '{ version: $version, tag: $tag, published_at: $published_at, base_url: $base_url }' > pcb-latest.json
+          aws s3 cp pcb-latest.json "s3://diode-pcb-releases/pcb/pcb-latest.json" \
+            --cache-control "public, max-age=60" \
+            --content-type "application/json"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prerelease_flag=""
+          if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
+            prerelease_flag="--prerelease"
+          fi
+          gh release create "${{ needs.prepare.outputs.tag }}" \
+            --target "${{ github.sha }}" \
+            $prerelease_flag \
+            --title "${{ needs.prepare.outputs.tag }}" \
+            --notes "Release ${{ needs.prepare.outputs.tag }}" \
+            artifacts/*

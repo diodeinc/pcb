@@ -1,6 +1,6 @@
 [package]
 name = "pcb"
-version = { workspace = true }
+version = "0.1.0"
 edition = { workspace = true }
 repository = { workspace = true }
 description = "PCB toolchain shim and version manager"

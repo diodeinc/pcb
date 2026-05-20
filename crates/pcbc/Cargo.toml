@@ -17,12 +17,6 @@ mimalloc = ["dep:mimalloc"]
 name = "pcbc"
 path = "src/main.rs"
 
-[package.metadata.dist]
-# `pcbc` is installed by the `pcb` shim as a versioned toolchain. Publish
-# archives/checksums for the shim to consume, but don't publish user-facing
-# installers for `pcbc` itself.
-installers = []
-
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }

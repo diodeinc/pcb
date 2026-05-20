@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const RELEASE_LIST_URL: &str = "https://pcb.api.diode.computer/";
 const RELEASE_BASE_URL: &str = "https://pcb.api.diode.computer/pcb";
+const SHIM_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/pcb-latest.json";
 const USER_AGENT: &str = "pcb";
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -113,6 +114,18 @@ struct LatestRelease {
 #[derive(Debug, Deserialize)]
 struct StandaloneInstallReceipt {
     install_prefix: PathBuf,
+}
+
+enum DownloadKind {
+    Binary,
+    Archive,
+}
+
+struct Download {
+    name: String,
+    url: String,
+    bytes: Vec<u8>,
+    kind: DownloadKind,
 }
 
 fn main() {
@@ -369,12 +382,10 @@ fn parse_release_versions(xml: &str) -> Vec<Version> {
         let prefix = &rest[..end];
         rest = &rest[end + "</Prefix>".len()..];
 
-        let Some(raw) = prefix
+        let raw = prefix
             .strip_prefix("pcb/v")
-            .and_then(|value| value.strip_suffix('/'))
-        else {
-            continue;
-        };
+            .and_then(|value| value.strip_suffix('/'));
+        let Some(raw) = raw else { continue };
         if let Ok(version) = Version::parse(raw) {
             versions.push(version);
         }
@@ -462,22 +473,29 @@ fn ensure_installed(version: &Version) -> Result<PathBuf> {
 fn install_toolchain(version: &Version) -> Result<PathBuf> {
     eprintln!("Installing pcbc {version} ({})...", target_triple());
 
-    let (archive_name, archive_url, archive) = download_toolchain_archive(version)?;
-    let actual_sha256 = verify_archive_checksum(&archive_url, &archive)?;
+    let download = download_toolchain(version)?;
+    let actual_sha256 = verify_checksum(&download.url, &download.bytes)?;
 
     fs::create_dir_all(downloads_dir())?;
-    let download_path = downloads_dir().join(format!("{}-v{}", archive_name, version));
-    fs::write(&download_path, &archive)?;
+    let download_path = downloads_dir().join(format!("{}-v{}", download.name, version));
+    fs::write(&download_path, &download.bytes)?;
 
     let temp = tempfile::tempdir()?;
-    let archive_path = temp.path().join(&archive_name);
-    fs::write(&archive_path, &archive)?;
-
-    let extract_dir = temp.path().join("extract");
-    fs::create_dir_all(&extract_dir)?;
-    extract_archive(&archive_path, &extract_dir)?;
-
-    let src_binary = find_extracted_binary(&extract_dir)?;
+    let src_binary = match download.kind {
+        DownloadKind::Binary => {
+            let path = temp.path().join(pcbc_binary_name());
+            fs::write(&path, &download.bytes)?;
+            path
+        }
+        DownloadKind::Archive => {
+            let archive_path = temp.path().join(&download.name);
+            fs::write(&archive_path, &download.bytes)?;
+            let extract_dir = temp.path().join("extract");
+            fs::create_dir_all(&extract_dir)?;
+            extract_archive(&archive_path, &extract_dir)?;
+            find_extracted_binary(&extract_dir)?
+        }
+    };
     let install_dir = installed_dir(version);
     let staging_dir = install_dir.with_extension("tmp");
     if staging_dir.exists() {
@@ -491,7 +509,7 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
     let receipt = InstallReceipt {
         version: version.clone(),
         target: target_triple().to_string(),
-        url: archive_url,
+        url: download.url,
         sha256: actual_sha256,
         installed_at: isoish_timestamp(),
     };
@@ -511,18 +529,37 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
     Ok(install_dir.join(pcbc_binary_name()))
 }
 
-fn download_toolchain_archive(version: &Version) -> Result<(String, String, Vec<u8>)> {
+fn download_toolchain(version: &Version) -> Result<Download> {
     let client = http_client(ARCHIVE_TIMEOUT)?;
+
     for binary in ["pcbc", "pcb"] {
-        let archive_name = toolchain_archive_name(binary);
-        let archive_url = format!("{RELEASE_BASE_URL}/v{version}/{archive_name}");
-        if let Some(archive) = download_optional(&client, &archive_url)? {
-            return Ok((archive_name, archive_url, archive));
+        let name = binary_artifact_name(binary);
+        let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
+        if let Some(bytes) = download_optional(&client, &url)? {
+            return Ok(Download {
+                name,
+                url,
+                bytes,
+                kind: DownloadKind::Binary,
+            });
+        }
+    }
+
+    for binary in ["pcbc", "pcb"] {
+        let name = toolchain_archive_name(binary);
+        let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
+        if let Some(bytes) = download_optional(&client, &url)? {
+            return Ok(Download {
+                name,
+                url,
+                bytes,
+                kind: DownloadKind::Archive,
+            });
         }
     }
 
     anyhow::bail!(
-        "no pcbc or legacy pcb archive found for v{} on {}",
+        "no pcbc or legacy pcb binary found for v{} on {}",
         version,
         target_triple()
     )
@@ -545,10 +582,10 @@ fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client> {
         .build()?)
 }
 
-fn verify_archive_checksum(url: &str, archive: &[u8]) -> Result<String> {
+fn verify_checksum(url: &str, bytes: &[u8]) -> Result<String> {
     let checksum = download_text(&http_client(METADATA_TIMEOUT)?, &format!("{url}.sha256"))?;
     let expected_sha256 = parse_sha256(&checksum)?;
-    let actual_sha256 = sha256_hex(archive);
+    let actual_sha256 = sha256_hex(bytes);
     anyhow::ensure!(
         actual_sha256 == expected_sha256,
         "checksum mismatch for {url}: expected {expected_sha256}, got {actual_sha256}"
@@ -700,7 +737,8 @@ fn self_update() -> Result<()> {
     }
 
     let mut requests = BTreeSet::new();
-    requests.insert((latest.version.major, latest.version.minor));
+    let latest_toolchain = resolve_remote_version(&ToolchainRequest::Latest, true)?;
+    requests.insert((latest_toolchain.major, latest_toolchain.minor));
     for version in installed_toolchains()?.keys() {
         requests.insert((version.major, version.minor));
     }
@@ -727,7 +765,7 @@ fn fetch_latest_release() -> Result<LatestRelease> {
     Ok(reqwest::blocking::Client::builder()
         .timeout(METADATA_TIMEOUT)
         .build()?
-        .get(format!("{RELEASE_BASE_URL}/latest.json"))
+        .get(SHIM_LATEST_RELEASE_URL)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .send()?
         .error_for_status()?
@@ -737,24 +775,21 @@ fn fetch_latest_release() -> Result<LatestRelease> {
 fn install_shim_update(latest: &LatestRelease) -> Result<()> {
     ensure_supported_target()?;
 
-    let archive_name = toolchain_archive_name("pcb");
-    let archive_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, archive_name);
-    let archive = http_client(ARCHIVE_TIMEOUT)?
-        .get(&archive_url)
+    let client = http_client(ARCHIVE_TIMEOUT)?;
+    let temp = tempfile::tempdir()?;
+    let binary_name = binary_artifact_name("pcb");
+    let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
+    let bytes = client
+        .get(&binary_url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .send()?
         .error_for_status()?
-        .bytes()?;
-    verify_archive_checksum(&archive_url, &archive)?;
-
-    let temp = tempfile::tempdir()?;
-    let archive_path = temp.path().join(archive_name);
-    fs::write(&archive_path, archive)?;
-    let extract_dir = temp.path().join("extract");
-    fs::create_dir_all(&extract_dir)?;
-    extract_archive(&archive_path, &extract_dir)?;
-    let binary = find_file_named(&extract_dir, legacy_pcb_binary_name())
-        .ok_or_else(|| anyhow::anyhow!("archive did not contain {}", legacy_pcb_binary_name()))?;
+        .bytes()?
+        .to_vec();
+    verify_checksum(&binary_url, &bytes)?;
+    let binary = temp.path().join(legacy_pcb_binary_name());
+    fs::write(&binary, bytes)?;
+    copy_executable_permissions(&binary, &binary)?;
     self_replace::self_replace(binary)?;
     Ok(())
 }
@@ -877,6 +912,11 @@ fn standalone_receipt_path() -> PathBuf {
     };
 
     config_dir.join("pcb").join("pcb-receipt.json")
+}
+
+fn binary_artifact_name(binary: &str) -> String {
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    format!("{}-{}{}", binary, target_triple(), ext)
 }
 
 fn toolchain_archive_name(binary: &str) -> String {

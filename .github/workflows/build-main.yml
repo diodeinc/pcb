@@ -25,32 +25,19 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-bin: false
+          target: x86_64-unknown-linux-gnu
       
       - name: Build PCB CLI
-        run: cargo build --release -p pcb -p pcbc --bins
+        run: cargo build --profile dist -p pcb -p pcbc --bins --target x86_64-unknown-linux-gnu
       
-      - name: Upload PCB CLI artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pcb-cli-linux-${{ github.sha }}
-          path: |
-            target/release/pcb
-            target/release/pcbc
-          retention-days: 30
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Prepare main build
+      - name: Prepare artifacts
         run: |
+          set -euo pipefail
           mkdir -p dist-main
-          cp target/release/pcb dist-main/pcb
-          cp target/release/pcbc dist-main/pcbc
-          shasum -a 256 dist-main/pcb | awk '{print $1}' > dist-main/pcb.sha256
-          shasum -a 256 dist-main/pcbc | awk '{print $1}' > dist-main/pcbc.sha256
+          cp target/x86_64-unknown-linux-gnu/dist/pcb dist-main/pcb-x86_64-unknown-linux-gnu
+          cp target/x86_64-unknown-linux-gnu/dist/pcbc dist-main/pcbc-x86_64-unknown-linux-gnu
+          shasum -a 256 dist-main/pcb-x86_64-unknown-linux-gnu > dist-main/pcb-x86_64-unknown-linux-gnu.sha256
+          shasum -a 256 dist-main/pcbc-x86_64-unknown-linux-gnu > dist-main/pcbc-x86_64-unknown-linux-gnu.sha256
           cat > dist-main/main.json <<EOF
           {
             "sha": "${{ github.sha }}",
@@ -59,6 +46,19 @@ jobs:
             "run_attempt": "${{ github.run_attempt }}"
           }
           EOF
+
+      - name: Upload PCB CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcb-cli-linux-${{ github.sha }}
+          path: dist-main/*
+          retention-days: 30
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
+          aws-region: us-east-1
 
       - name: Upload main build to S3
         run: |

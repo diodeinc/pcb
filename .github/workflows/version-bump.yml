@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., v1.2.3)'
+        description: 'Version to release, such as v0.3.84 for pcbc or pcb/v0.1.1 for the shim'
         required: true
         type: string
 
@@ -22,8 +22,8 @@ jobs:
 
       - name: Validate version format
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'; then
-            echo "Invalid version format. Use v1.2.3"
+          if ! echo "${{ inputs.version }}" | grep -qE '^(v|pcb/v)[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'; then
+            echo "Invalid version format. Use v0.3.84 for pcbc or pcb/v0.1.1 for the shim"
             exit 1
           fi
 
@@ -52,12 +52,19 @@ jobs:
       - name: Update Cargo.toml
         run: |
           VERSION="${{ inputs.version }}"
-          CARGO_VERSION="${VERSION#v}"
-          sed -i "0,/^version = /{s/^version = \".*\"/version = \"${CARGO_VERSION}\"/}" Cargo.toml
+          if [[ "$VERSION" == pcb/v* ]]; then
+            CARGO_VERSION="${VERSION#pcb/v}"
+            MANIFEST="crates/pcb/Cargo.toml"
+          else
+            CARGO_VERSION="${VERSION#v}"
+            MANIFEST="Cargo.toml"
+          fi
+
+          sed -i "0,/^version = /{s/^version = \".*\"/version = \"${CARGO_VERSION}\"/}" "$MANIFEST"
 
           # Verify the update worked
-          if ! grep -q "^version = \"${CARGO_VERSION}\"" Cargo.toml; then
-            echo "Failed to update version in Cargo.toml"
+          if ! grep -q "^version = \"${CARGO_VERSION}\"" "$MANIFEST"; then
+            echo "Failed to update version in $MANIFEST"
             exit 1
           fi
 
@@ -66,7 +73,7 @@ jobs:
 
       - name: Commit and push
         run: |
-          git add Cargo.toml Cargo.lock CHANGELOG.md
+          git add Cargo.toml crates/pcb/Cargo.toml Cargo.lock CHANGELOG.md
           if git diff --cached --quiet; then
             echo "No changes to commit (version already set)"
           else
