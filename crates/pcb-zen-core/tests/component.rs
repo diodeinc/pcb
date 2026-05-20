@@ -1701,6 +1701,46 @@ Component(
 }
 
 #[test]
+fn empty_legacy_mpn_kwarg_counts_as_missing_part_info() {
+    let eval_result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+P1 = Net()
+P2 = Net()
+
+Component(
+    name = "R1",
+    footprint = "Resistor_SMD:R_0603_1005Metric",
+    pin_defs = {"1": "1", "2": "2"},
+    pins = {"1": P1, "2": P2},
+    mpn = "",
+    manufacturer = "Yageo",
+)
+"#
+        .to_string(),
+    )]);
+
+    assert!(
+        eval_result.is_success(),
+        "eval failed: {:?}",
+        eval_result.diagnostics
+    );
+
+    let eval_output = eval_result.output.expect("expected eval output");
+    let mut diagnostics = eval_output.to_schematic_with_diagnostics().diagnostics;
+    SortPass.apply(&mut diagnostics);
+
+    assert!(
+        diagnostics.iter().any(|diag| {
+            diag.downcast_error_ref::<CategorizedDiagnostic>()
+                .is_some_and(|c| c.kind == "bom.underspecified")
+        }),
+        "expected empty legacy mpn to leave part info underspecified, got: {:?}",
+        diagnostics
+    );
+}
+
+#[test]
 fn part_kwarg_does_not_warn() {
     let diagnostics = eval_component_diagnostics(vec![(
         "test.zen".to_string(),

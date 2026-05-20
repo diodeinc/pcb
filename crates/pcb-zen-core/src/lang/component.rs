@@ -312,7 +312,15 @@ fn consolidate_bool_property<'v>(
 fn property_string<'v>(properties_map: &SmallMap<String, Value<'v>>, key: &str) -> Option<String> {
     properties_map
         .get(key)
-        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+        .and_then(|v| v.unpack_str().and_then(non_empty_string))
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
+    }
 }
 
 /// Legacy `properties[...]` keys on `Component()` and the typed kwarg that
@@ -2068,9 +2076,9 @@ where
 
             let part_from_kwarg = parse_optional_part(part_val)?;
 
-            let explicit_mpn = mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
+            let explicit_mpn = mpn.and_then(|v| v.unpack_str().and_then(non_empty_string));
             let explicit_manufacturer =
-                manufacturer.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
+                manufacturer.and_then(|v| v.unpack_str().and_then(non_empty_string));
             let matching_manifest_parts = final_symbol
                 .source_uri()
                 .and_then(|path| ctx.resolution().symbol_parts.get(path))
