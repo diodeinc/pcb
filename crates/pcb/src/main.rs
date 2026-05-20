@@ -141,7 +141,7 @@ fn run() -> Result<()> {
     }
 
     let override_request = take_cli_override(&mut args)?;
-    let selection = select_toolchain(override_request, false)?;
+    let selection = select_toolchain(override_request)?;
     exec_toolchain(&selection.binary, &args)
 }
 
@@ -206,10 +206,7 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
     }
 }
 
-fn select_toolchain(
-    override_request: Option<ToolchainRequest>,
-    force_remote: bool,
-) -> Result<ResolvedToolchain> {
+fn select_toolchain(override_request: Option<ToolchainRequest>) -> Result<ResolvedToolchain> {
     let (request, reason) = if let Some(request) = override_request {
         (request, "command-line override".to_string())
     } else if let Some((path, lane)) = find_workspace_pcb_version()? {
@@ -224,15 +221,11 @@ fn select_toolchain(
         )
     };
 
-    resolve_request(&request, reason, force_remote)
+    resolve_request(&request, reason)
 }
 
-fn resolve_request(
-    request: &ToolchainRequest,
-    reason: String,
-    force_remote: bool,
-) -> Result<ResolvedToolchain> {
-    if !force_remote && let Some(local) = best_local_toolchain(request)? {
+fn resolve_request(request: &ToolchainRequest, reason: String) -> Result<ResolvedToolchain> {
+    if let Some(local) = best_local_toolchain(request)? {
         return Ok(ResolvedToolchain {
             version: local.0,
             binary: local.1,
@@ -423,6 +416,8 @@ fn read_workspace_pcb_version(path: &Path) -> Result<Option<String>> {
 }
 
 fn ensure_installed(version: &Version) -> Result<PathBuf> {
+    ensure_supported_target()?;
+
     let binary = installed_binary_path(version);
     if binary.is_file() {
         return Ok(binary);
@@ -446,28 +441,18 @@ fn ensure_installed(version: &Version) -> Result<PathBuf> {
 fn install_toolchain(version: &Version) -> Result<PathBuf> {
     let archive_name = toolchain_archive_name("pcb");
     let archive_url = format!("{RELEASE_BASE_URL}/v{version}/{archive_name}");
-    let checksum_url = format!("{archive_url}.sha256");
 
     eprintln!("Installing pcbc {version} ({})...", target_triple());
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(ARCHIVE_TIMEOUT)
-        .build()?;
-    let archive = download_optional(&client, &archive_url)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "no pcb archive found for v{} on {}",
-            version,
-            target_triple()
-        )
-    })?;
-    let checksum = download_text(&client, &checksum_url)?;
-
-    let expected_sha256 = parse_sha256(&checksum)?;
-    let actual_sha256 = sha256_hex(&archive);
-    anyhow::ensure!(
-        actual_sha256 == expected_sha256,
-        "checksum mismatch for {archive_url}: expected {expected_sha256}, got {actual_sha256}"
-    );
+    let archive =
+        download_optional(&http_client(ARCHIVE_TIMEOUT)?, &archive_url)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "no pcb archive found for v{} on {}",
+                version,
+                target_triple()
+            )
+        })?;
+    let actual_sha256 = verify_archive_checksum(&archive_url, &archive)?;
 
     fs::create_dir_all(downloads_dir())?;
     let download_path = downloads_dir().join(format!("{}-v{}", archive_name, version));
@@ -524,6 +509,23 @@ fn download_optional(client: &reqwest::blocking::Client, url: &str) -> Result<Op
         return Ok(None);
     }
     Ok(Some(response.error_for_status()?.bytes()?.to_vec()))
+}
+
+fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .build()?)
+}
+
+fn verify_archive_checksum(url: &str, archive: &[u8]) -> Result<String> {
+    let checksum = download_text(&http_client(METADATA_TIMEOUT)?, &format!("{url}.sha256"))?;
+    let expected_sha256 = parse_sha256(&checksum)?;
+    let actual_sha256 = sha256_hex(archive);
+    anyhow::ensure!(
+        actual_sha256 == expected_sha256,
+        "checksum mismatch for {url}: expected {expected_sha256}, got {actual_sha256}"
+    );
+    Ok(actual_sha256)
 }
 
 fn download_text(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
@@ -623,7 +625,7 @@ fn toolchain_list() -> Result<()> {
 }
 
 fn toolchain_show() -> Result<()> {
-    let selection = select_toolchain(None, false)?;
+    let selection = select_toolchain(None)?;
     println!("active: {}", selection.version);
     println!("reason: {}", selection.reason);
     println!("binary: {}", selection.binary.display());
@@ -705,16 +707,17 @@ fn fetch_latest_release() -> Result<LatestRelease> {
 }
 
 fn install_shim_update(latest: &LatestRelease) -> Result<()> {
+    ensure_supported_target()?;
+
     let archive_name = toolchain_archive_name("pcb");
     let archive_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, archive_name);
-    let archive = reqwest::blocking::Client::builder()
-        .timeout(ARCHIVE_TIMEOUT)
-        .build()?
-        .get(archive_url)
+    let archive = http_client(ARCHIVE_TIMEOUT)?
+        .get(&archive_url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .send()?
         .error_for_status()?
         .bytes()?;
+    verify_archive_checksum(&archive_url, &archive)?;
 
     let temp = tempfile::tempdir()?;
     let archive_path = temp.path().join(archive_name);
@@ -880,6 +883,16 @@ fn target_triple() -> &'static str {
     }
 }
 
+fn ensure_supported_target() -> Result<()> {
+    anyhow::ensure!(
+        target_triple() != "unsupported",
+        "unsupported platform: {}-{}",
+        std::env::consts::ARCH,
+        std::env::consts::OS
+    );
+    Ok(())
+}
+
 fn unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -889,4 +902,65 @@ fn unix_timestamp() -> u64 {
 
 fn isoish_timestamp() -> String {
     unix_timestamp().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_request_supports_mvp_forms() {
+        assert!(matches!(
+            parse_request("0.3").unwrap(),
+            ToolchainRequest::Lane { major: 0, minor: 3 }
+        ));
+        assert!(matches!(
+            parse_request("0.3.83").unwrap(),
+            ToolchainRequest::Exact(version) if version == Version::new(0, 3, 83)
+        ));
+        assert!(matches!(
+            parse_request("latest").unwrap(),
+            ToolchainRequest::Latest
+        ));
+    }
+
+    #[test]
+    fn release_listing_parser_extracts_only_version_prefixes() {
+        let xml = r#"
+            <ListBucketResult>
+              <CommonPrefixes><Prefix>pcb/latest/</Prefix></CommonPrefixes>
+              <CommonPrefixes><Prefix>pcb/main/</Prefix></CommonPrefixes>
+              <CommonPrefixes><Prefix>pcb/v0.3.82/</Prefix></CommonPrefixes>
+              <CommonPrefixes><Prefix>pcb/v0.3.83/</Prefix></CommonPrefixes>
+              <CommonPrefixes><Prefix>pcb/v0.4.0-beta.1/</Prefix></CommonPrefixes>
+            </ListBucketResult>
+        "#;
+
+        assert_eq!(
+            parse_release_versions(xml),
+            vec![
+                Version::parse("0.3.82").unwrap(),
+                Version::parse("0.3.83").unwrap(),
+                Version::parse("0.4.0-beta.1").unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn lane_requests_do_not_match_other_lanes_or_prereleases() {
+        let request = ToolchainRequest::Lane { major: 0, minor: 3 };
+
+        assert!(request_matches(
+            &request,
+            &Version::parse("0.3.83").unwrap()
+        ));
+        assert!(!request_matches(
+            &request,
+            &Version::parse("0.4.0").unwrap()
+        ));
+        assert!(!request_matches(
+            &request,
+            &Version::parse("0.3.84-beta.1").unwrap()
+        ));
+    }
 }
