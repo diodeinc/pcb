@@ -337,21 +337,28 @@ fn resolve_request(
 }
 
 fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
-    if let Some((receipt, binary)) = installed_nightly_toolchain()? {
-        return Ok(ResolvedToolchain {
-            label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
-            binary,
-            reason,
-        });
-    }
-
     match fetch_nightly_release().and_then(|release| ensure_nightly_installed(&release)) {
         Ok((receipt, binary)) => Ok(ResolvedToolchain {
             label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
             binary,
             reason,
         }),
-        Err(remote_error) => Err(remote_error),
+        Err(remote_error) => {
+            if let Some((receipt, binary)) = installed_nightly_toolchain()? {
+                eprintln!(
+                    "{} failed to check nightly release ({remote_error}); using installed pcbc nightly {} ({})",
+                    "Warning:".yellow(),
+                    receipt.date,
+                    short_sha(&receipt.sha)
+                );
+                return Ok(ResolvedToolchain {
+                    label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
+                    binary,
+                    reason,
+                });
+            }
+            Err(remote_error)
+        }
     }
 }
 

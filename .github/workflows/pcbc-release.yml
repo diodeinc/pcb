@@ -155,7 +155,7 @@ jobs:
             prerelease_flag="--prerelease"
           fi
           gh release create "${{ needs.prepare.outputs.tag }}" \
-            --target "${{ github.sha }}" \
+            --verify-tag \
             $prerelease_flag \
             --title "${{ needs.prepare.outputs.tag }}" \
             --notes "Release ${{ needs.prepare.outputs.tag }}" \

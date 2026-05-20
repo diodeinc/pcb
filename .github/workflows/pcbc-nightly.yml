@@ -80,13 +80,8 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
-
-      - name: Verify expected main HEAD
-        shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = "${{ needs.prepare.outputs.sha }}"
 
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
