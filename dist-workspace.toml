@@ -17,8 +17,8 @@ installers = ["shell", "powershell"]
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
-# Whether to install an updater program
-install-updater = true
+# `pcb self update` owns updates; do not install cargo-dist's separate updater.
+install-updater = false
 # A prefix git tags must include for dist to care about them
 tag-namespace = "v"
 # Which actions to run on pull requests

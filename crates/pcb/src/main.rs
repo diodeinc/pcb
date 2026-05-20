@@ -225,6 +225,36 @@ fn select_toolchain(override_request: Option<ToolchainRequest>) -> Result<Resolv
 }
 
 fn resolve_request(request: &ToolchainRequest, reason: String) -> Result<ResolvedToolchain> {
+    if matches!(request, ToolchainRequest::Latest) {
+        match resolve_remote_version(request).and_then(|version| {
+            let binary = ensure_installed(&version)?;
+            Ok((version, binary))
+        }) {
+            Ok((version, binary)) => {
+                return Ok(ResolvedToolchain {
+                    version,
+                    binary,
+                    reason,
+                });
+            }
+            Err(remote_error) => {
+                if let Some(local) = best_local_toolchain(request)? {
+                    eprintln!(
+                        "{} failed to check latest release ({remote_error}); using installed pcbc {}",
+                        "Warning:".yellow(),
+                        local.0
+                    );
+                    return Ok(ResolvedToolchain {
+                        version: local.0,
+                        binary: local.1,
+                        reason,
+                    });
+                }
+                return Err(remote_error);
+            }
+        }
+    }
+
     if let Some(local) = best_local_toolchain(request)? {
         return Ok(ResolvedToolchain {
             version: local.0,
