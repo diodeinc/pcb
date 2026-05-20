@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Added `pcb open` support for local and remote `.kicad_pcb` files.
 - Added a `pcbc` compiler/toolchain binary alongside `pcb` so releases can publish versioned toolchain artifacts.
 - Added a rustup-style `pcb` shim crate that selects, installs, and executes the separate versioned `pcbc` toolchain crate from the workspace `pcb-version` lane or a `+<toolchain>` CLI override.
+- Added `pcb +nightly ...` and scheduled `pcbc` nightly publishing from the head of `main`.
 
 ## [0.3.83] - 2026-05-19
 

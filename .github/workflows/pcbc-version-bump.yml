@@ -1,10 +1,10 @@
-name: Version Bump
+name: Release pcbc version bump
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release, such as v0.3.84 for pcbc or pcb/v0.1.1 for the shim'
+        description: 'pcbc version tag to release, such as v0.3.84'
         required: true
         type: string
 
@@ -22,12 +22,11 @@ jobs:
 
       - name: Validate version format
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^(v|pcb/v)[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'; then
-            echo "Invalid version format. Use v0.3.84 for pcbc or pcb/v0.1.1 for the shim"
+          if ! echo "${{ inputs.version }}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'; then
+            echo "Invalid pcbc version format. Use v0.3.84"
             exit 1
           fi
 
-          # Check if tag already exists
           if git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
             echo "Tag ${{ inputs.version }} already exists"
             exit 1
@@ -49,22 +48,14 @@ jobs:
       - name: Update changelog
         run: ./bin/changelog.py release ${{ inputs.version }}
 
-      - name: Update Cargo.toml
+      - name: Update workspace version
         run: |
           VERSION="${{ inputs.version }}"
-          if [[ "$VERSION" == pcb/v* ]]; then
-            CARGO_VERSION="${VERSION#pcb/v}"
-            MANIFEST="crates/pcb/Cargo.toml"
-          else
-            CARGO_VERSION="${VERSION#v}"
-            MANIFEST="Cargo.toml"
-          fi
+          CARGO_VERSION="${VERSION#v}"
+          sed -i "0,/^version = /{s/^version = \".*\"/version = \"${CARGO_VERSION}\"/}" Cargo.toml
 
-          sed -i "0,/^version = /{s/^version = \".*\"/version = \"${CARGO_VERSION}\"/}" "$MANIFEST"
-
-          # Verify the update worked
-          if ! grep -q "^version = \"${CARGO_VERSION}\"" "$MANIFEST"; then
-            echo "Failed to update version in $MANIFEST"
+          if ! grep -q "^version = \"${CARGO_VERSION}\"" Cargo.toml; then
+            echo "Failed to update version in Cargo.toml"
             exit 1
           fi
 
@@ -73,7 +64,7 @@ jobs:
 
       - name: Commit and push
         run: |
-          git add Cargo.toml crates/pcb/Cargo.toml Cargo.lock CHANGELOG.md
+          git add Cargo.toml Cargo.lock CHANGELOG.md
           if git diff --cached --quiet; then
             echo "No changes to commit (version already set)"
           else

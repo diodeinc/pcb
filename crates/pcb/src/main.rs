@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const RELEASE_LIST_URL: &str = "https://pcb.api.diode.computer/";
 const RELEASE_BASE_URL: &str = "https://pcb.api.diode.computer/pcb";
 const SHIM_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/pcb-latest.json";
+const NIGHTLY_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/nightly/latest.json";
 const USER_AGENT: &str = "pcb";
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -69,10 +70,10 @@ enum ToolchainCommands {
     /// Show the active pcbc toolchain for the current directory
     Show,
 
-    /// Install a pcbc toolchain request such as 0.3, 0.3.83, or latest
+    /// Install a pcbc toolchain request such as 0.3, 0.3.83, latest, or nightly
     Install { request: String },
 
-    /// Uninstall an exact pcbc toolchain version such as 0.3.83
+    /// Uninstall an exact pcbc toolchain version such as 0.3.83, or nightly
     Uninstall { version: String },
 }
 
@@ -81,11 +82,12 @@ enum ToolchainRequest {
     Lane { major: u64, minor: u64 },
     Exact(Version),
     Latest,
+    Nightly,
 }
 
 #[derive(Debug, Clone)]
 struct ResolvedToolchain {
-    version: Version,
+    label: String,
     binary: PathBuf,
     reason: String,
 }
@@ -114,6 +116,24 @@ struct LatestRelease {
 #[derive(Debug, Deserialize)]
 struct StandaloneInstallReceipt {
     install_prefix: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct NightlyRelease {
+    date: String,
+    sha: String,
+    base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NightlyReceipt {
+    channel: String,
+    date: String,
+    sha: String,
+    target: String,
+    url: String,
+    sha256: String,
+    installed_at: String,
 }
 
 enum DownloadKind {
@@ -187,7 +207,7 @@ fn take_cli_override(args: &mut Vec<OsString>) -> Result<Option<ToolchainRequest
         return Ok(None);
     };
     if raw.is_empty() {
-        anyhow::bail!("empty toolchain override; expected +0.3, +0.3.83, or +latest");
+        anyhow::bail!("empty toolchain override; expected +0.3, +0.3.83, +latest, or +nightly");
     }
     let request = parse_request(raw)?;
     args.remove(0);
@@ -197,6 +217,9 @@ fn take_cli_override(args: &mut Vec<OsString>) -> Result<Option<ToolchainRequest
 fn parse_request(raw: &str) -> Result<ToolchainRequest> {
     if raw == "latest" {
         return Ok(ToolchainRequest::Latest);
+    }
+    if raw == "nightly" {
+        return Ok(ToolchainRequest::Nightly);
     }
 
     if let Ok(version) = Version::parse(raw) {
@@ -214,7 +237,9 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
                 .with_context(|| format!("invalid pcb toolchain request `{raw}`"))?,
         }),
         _ => {
-            anyhow::bail!("invalid pcb toolchain request `{raw}`; expected 0.3, 0.3.83, or latest")
+            anyhow::bail!(
+                "invalid pcb toolchain request `{raw}`; expected 0.3, 0.3.83, latest, or nightly"
+            )
         }
     }
 }
@@ -238,6 +263,10 @@ fn select_toolchain(override_request: Option<ToolchainRequest>) -> Result<Resolv
 }
 
 fn resolve_request(request: &ToolchainRequest, reason: String) -> Result<ResolvedToolchain> {
+    if matches!(request, ToolchainRequest::Nightly) {
+        return resolve_nightly(reason);
+    }
+
     if matches!(request, ToolchainRequest::Latest) {
         match resolve_remote_version(request, false).and_then(|version| {
             let binary = ensure_installed(&version)?;
@@ -245,7 +274,7 @@ fn resolve_request(request: &ToolchainRequest, reason: String) -> Result<Resolve
         }) {
             Ok((version, binary)) => {
                 return Ok(ResolvedToolchain {
-                    version,
+                    label: version.to_string(),
                     binary,
                     reason,
                 });
@@ -258,7 +287,7 @@ fn resolve_request(request: &ToolchainRequest, reason: String) -> Result<Resolve
                         local.0
                     );
                     return Ok(ResolvedToolchain {
-                        version: local.0,
+                        label: local.0.to_string(),
                         binary: local.1,
                         reason,
                     });
@@ -270,7 +299,7 @@ fn resolve_request(request: &ToolchainRequest, reason: String) -> Result<Resolve
 
     if let Some(local) = best_local_toolchain(request)? {
         return Ok(ResolvedToolchain {
-            version: local.0,
+            label: local.0.to_string(),
             binary: local.1,
             reason,
         });
@@ -279,10 +308,36 @@ fn resolve_request(request: &ToolchainRequest, reason: String) -> Result<Resolve
     let version = resolve_remote_version(request, false)?;
     let binary = ensure_installed(&version)?;
     Ok(ResolvedToolchain {
-        version,
+        label: version.to_string(),
         binary,
         reason,
     })
+}
+
+fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
+    match fetch_nightly_release().and_then(|release| ensure_nightly_installed(&release)) {
+        Ok((receipt, binary)) => Ok(ResolvedToolchain {
+            label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
+            binary,
+            reason,
+        }),
+        Err(remote_error) => {
+            if let Some((receipt, binary)) = installed_nightly_toolchain()? {
+                eprintln!(
+                    "{} failed to check nightly release ({remote_error}); using installed pcbc nightly {} ({})",
+                    "Warning:".yellow(),
+                    receipt.date,
+                    short_sha(&receipt.sha)
+                );
+                return Ok(ResolvedToolchain {
+                    label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
+                    binary,
+                    reason,
+                });
+            }
+            Err(remote_error)
+        }
+    }
 }
 
 fn best_local_toolchain(request: &ToolchainRequest) -> Result<Option<(Version, PathBuf)>> {
@@ -334,6 +389,7 @@ fn request_matches(request: &ToolchainRequest, version: &Version) -> bool {
         }
         ToolchainRequest::Exact(exact) => version == exact,
         ToolchainRequest::Latest => version.pre.is_empty(),
+        ToolchainRequest::Nightly => false,
     }
 }
 
@@ -342,6 +398,7 @@ fn format_request(request: &ToolchainRequest) -> String {
         ToolchainRequest::Lane { major, minor } => format!("{major}.{minor}"),
         ToolchainRequest::Exact(version) => version.to_string(),
         ToolchainRequest::Latest => "latest".to_string(),
+        ToolchainRequest::Nightly => "nightly".to_string(),
     }
 }
 
@@ -470,6 +527,99 @@ fn ensure_installed(version: &Version) -> Result<PathBuf> {
     result
 }
 
+fn ensure_nightly_installed(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)> {
+    ensure_supported_target()?;
+
+    if let Some((receipt, binary)) = installed_nightly_toolchain()?
+        && receipt.sha == release.sha
+    {
+        return Ok((receipt, binary));
+    }
+
+    let lock_path = locks_dir().join(format!("install-nightly-{}.lock", target_triple()));
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut lock = fslock::LockFile::open(&lock_path)?;
+    lock.lock()?;
+    let result = if let Some((receipt, binary)) = installed_nightly_toolchain()?
+        && receipt.sha == release.sha
+    {
+        Ok((receipt, binary))
+    } else {
+        install_nightly(release)
+    };
+    lock.unlock()?;
+    result
+}
+
+fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)> {
+    eprintln!(
+        "Installing pcbc nightly {} ({}, {})...",
+        release.date,
+        short_sha(&release.sha),
+        target_triple()
+    );
+
+    let name = binary_artifact_name("pcbc");
+    let url = format!("{}/{}", release.base_url.trim_end_matches('/'), name);
+    let bytes = download_text_bytes(&http_client(ARCHIVE_TIMEOUT)?, &url)?;
+    let actual_sha256 = verify_checksum(&url, &bytes)?;
+
+    fs::create_dir_all(downloads_dir())?;
+    fs::write(
+        downloads_dir().join(format!("{}-nightly-{}", name, release.sha)),
+        &bytes,
+    )?;
+
+    let install_dir = nightly_dir();
+    let staging_dir = install_dir.with_extension("tmp");
+    if staging_dir.exists() {
+        fs::remove_dir_all(&staging_dir)?;
+    }
+    fs::create_dir_all(&staging_dir)?;
+    let binary = staging_dir.join(pcbc_binary_name());
+    fs::write(&binary, bytes)?;
+    copy_executable_permissions(&binary, &binary)?;
+
+    let receipt = NightlyReceipt {
+        channel: "nightly".to_string(),
+        date: release.date.clone(),
+        sha: release.sha.clone(),
+        target: target_triple().to_string(),
+        url,
+        sha256: actual_sha256,
+        installed_at: isoish_timestamp(),
+    };
+    fs::write(
+        staging_dir.join("receipt.json"),
+        serde_json::to_vec_pretty(&receipt)?,
+    )?;
+
+    if install_dir.exists() {
+        fs::remove_dir_all(&install_dir)?;
+    }
+    if let Some(parent) = install_dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(&staging_dir, &install_dir)?;
+
+    Ok((receipt, install_dir.join(pcbc_binary_name())))
+}
+
+fn installed_nightly_toolchain() -> Result<Option<(NightlyReceipt, PathBuf)>> {
+    let binary = nightly_dir().join(pcbc_binary_name());
+    if !binary.is_file() {
+        return Ok(None);
+    }
+    let receipt_path = nightly_dir().join("receipt.json");
+    let Ok(content) = fs::read_to_string(receipt_path) else {
+        return Ok(None);
+    };
+    let receipt: NightlyReceipt = serde_json::from_str(&content)?;
+    Ok(Some((receipt, binary)))
+}
+
 fn install_toolchain(version: &Version) -> Result<PathBuf> {
     eprintln!("Installing pcbc {version} ({})...", target_triple());
 
@@ -576,6 +726,16 @@ fn download_optional(client: &reqwest::blocking::Client, url: &str) -> Result<Op
     Ok(Some(response.error_for_status()?.bytes()?.to_vec()))
 }
 
+fn download_text_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
+    Ok(client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .send()?
+        .error_for_status()?
+        .bytes()?
+        .to_vec())
+}
+
 fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
         .timeout(timeout)
@@ -678,7 +838,8 @@ fn copy_executable_permissions(_src: &Path, _dst: &Path) -> Result<()> {
 
 fn toolchain_list() -> Result<()> {
     let installed = installed_toolchains()?;
-    if installed.is_empty() {
+    let nightly = installed_nightly_toolchain()?;
+    if installed.is_empty() && nightly.is_none() {
         println!("No pcbc toolchains installed.");
         return Ok(());
     }
@@ -686,12 +847,20 @@ fn toolchain_list() -> Result<()> {
     for (version, binary) in installed {
         println!("{version}\t{}", binary.display());
     }
+    if let Some((receipt, binary)) = nightly {
+        println!(
+            "nightly\t{} ({})\t{}",
+            receipt.date,
+            short_sha(&receipt.sha),
+            binary.display()
+        );
+    }
     Ok(())
 }
 
 fn toolchain_show() -> Result<()> {
     let selection = select_toolchain(None)?;
-    println!("active: {}", selection.version);
+    println!("active: {}", selection.label);
     println!("reason: {}", selection.reason);
     println!("binary: {}", selection.binary.display());
     Ok(())
@@ -699,6 +868,17 @@ fn toolchain_show() -> Result<()> {
 
 fn toolchain_install(raw: &str) -> Result<()> {
     let request = parse_request(raw)?;
+    if matches!(request, ToolchainRequest::Nightly) {
+        let release = fetch_nightly_release()?;
+        let (receipt, binary) = ensure_nightly_installed(&release)?;
+        println!(
+            "installed pcbc nightly {} ({}): {}",
+            receipt.date,
+            short_sha(&receipt.sha),
+            binary.display()
+        );
+        return Ok(());
+    }
     let version = resolve_remote_version(&request, true)?;
     let binary = ensure_installed(&version)?;
     println!("installed pcbc {version}: {}", binary.display());
@@ -715,6 +895,17 @@ fn resolve_remote_version(request: &ToolchainRequest, force_refresh: bool) -> Re
 }
 
 fn toolchain_uninstall(raw: &str) -> Result<()> {
+    if raw == "nightly" {
+        let dir = toolchains_dir().join("nightly");
+        if dir.exists() {
+            fs::remove_dir_all(&dir)?;
+            println!("uninstalled pcbc nightly");
+        } else {
+            println!("pcbc nightly is not installed");
+        }
+        return Ok(());
+    }
+
     let version = Version::parse(raw).with_context(|| format!("invalid exact version `{raw}`"))?;
     let dir = toolchains_dir().join(version.to_string());
     if dir.exists() {
@@ -749,6 +940,16 @@ fn self_update() -> Result<()> {
         let _ = ensure_installed(&version)?;
     }
 
+    if installed_nightly_toolchain()?.is_some()
+        && let Err(err) =
+            fetch_nightly_release().and_then(|nightly| ensure_nightly_installed(&nightly))
+    {
+        eprintln!(
+            "{} failed to update installed nightly toolchain ({err})",
+            "Warning:".yellow()
+        );
+    }
+
     if latest.version > current_version {
         println!(
             "Updated pcb {} → {}",
@@ -766,6 +967,17 @@ fn fetch_latest_release() -> Result<LatestRelease> {
         .timeout(METADATA_TIMEOUT)
         .build()?
         .get(SHIM_LATEST_RELEASE_URL)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .send()?
+        .error_for_status()?
+        .json()?)
+}
+
+fn fetch_nightly_release() -> Result<NightlyRelease> {
+    Ok(reqwest::blocking::Client::builder()
+        .timeout(METADATA_TIMEOUT)
+        .build()?
+        .get(NIGHTLY_LATEST_RELEASE_URL)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .send()?
         .error_for_status()?
@@ -861,6 +1073,14 @@ fn installed_dir(version: &Version) -> PathBuf {
     toolchains_dir()
         .join(version.to_string())
         .join(target_triple())
+}
+
+fn nightly_dir() -> PathBuf {
+    toolchains_dir().join("nightly").join(target_triple())
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
 }
 
 fn data_dir() -> PathBuf {
@@ -973,7 +1193,7 @@ mod tests {
         let xml = r#"
             <ListBucketResult>
               <CommonPrefixes><Prefix>pcb/latest/</Prefix></CommonPrefixes>
-              <CommonPrefixes><Prefix>pcb/main/</Prefix></CommonPrefixes>
+              <CommonPrefixes><Prefix>pcb/nightly/</Prefix></CommonPrefixes>
               <CommonPrefixes><Prefix>pcb/v0.3.82/</Prefix></CommonPrefixes>
               <CommonPrefixes><Prefix>pcb/v0.3.83/</Prefix></CommonPrefixes>
               <CommonPrefixes><Prefix>pcb/v0.4.0-beta.1/</Prefix></CommonPrefixes>

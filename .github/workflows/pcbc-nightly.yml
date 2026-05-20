@@ -1,0 +1,163 @@
+name: Release pcbc nightly
+
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prepare:
+    runs-on: ubicloud-standard-30-ubuntu-2204
+    outputs:
+      should_build: ${{ steps.nightly.outputs.should_build }}
+      sha: ${{ steps.nightly.outputs.sha }}
+      date: ${{ steps.nightly.outputs.date }}
+      tag: ${{ steps.nightly.outputs.tag }}
+      base_url: ${{ steps.nightly.outputs.base_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          submodules: recursive
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - id: nightly
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          date=$(date -u +%F)
+          tag="nightly/$date/$sha"
+          base_url="https://pcb.api.diode.computer/pcb/$tag"
+
+          latest_sha=""
+          if aws s3 cp s3://diode-pcb-releases/pcb/nightly/latest.json latest.json 2>/dev/null; then
+            latest_sha=$(jq -r '.sha // ""' latest.json)
+          fi
+
+          should_build=true
+          if [ "$latest_sha" = "$sha" ]; then
+            should_build=false
+          fi
+
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    name: build pcbc nightly (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15-xlarge
+          - target: x86_64-apple-darwin
+            runner: macos-15-large
+          - target: aarch64-unknown-linux-gnu
+            runner: ubicloud-standard-30-arm-ubuntu-2204
+          - target: x86_64-unknown-linux-gnu
+            runner: ubicloud-standard-30-ubuntu-2204
+          - target: x86_64-pc-windows-msvc
+            runner: diode-windows
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          submodules: recursive
+
+      - name: Verify expected main HEAD
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ needs.prepare.outputs.sha }}"
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-bin: false
+          target: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --profile dist -p pcbc --bin pcbc --target ${{ matrix.target }}
+
+      - name: Prepare artifacts
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          exe=pcbc
+          artifact="pcbc-$TARGET"
+          if [[ "$TARGET" == *windows* ]]; then
+            exe=pcbc.exe
+            artifact="$artifact.exe"
+          fi
+          cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
+          if command -v shasum >/dev/null; then
+            shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
+          else
+            sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcbc-nightly-${{ matrix.target }}
+          path: artifacts/*
+
+  publish:
+    needs:
+      - prepare
+      - build
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: ubicloud-standard-30-ubuntu-2204
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pcbc-nightly-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Upload nightly artifacts to S3
+        run: |
+          aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ needs.prepare.outputs.tag }}/" \
+            --cache-control "public, max-age=31536000, immutable"
+
+      - name: Publish nightly pointer
+        run: |
+          jq -n \
+            --arg channel "nightly" \
+            --arg date "${{ needs.prepare.outputs.date }}" \
+            --arg sha "${{ needs.prepare.outputs.sha }}" \
+            --arg tag "${{ needs.prepare.outputs.tag }}" \
+            --arg base_url "${{ needs.prepare.outputs.base_url }}" \
+            --arg published_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{ channel: $channel, date: $date, sha: $sha, tag: $tag, base_url: $base_url, published_at: $published_at }' > latest.json
+          aws s3 cp latest.json "s3://diode-pcb-releases/pcb/nightly/latest.json" \
+            --cache-control "public, max-age=60" \
+            --content-type "application/json"
