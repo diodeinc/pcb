@@ -161,13 +161,6 @@ fn main() {
 fn run() -> Result<()> {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
-    if args.first().and_then(|arg| arg.to_str()) == Some("--version")
-        || args.first().and_then(|arg| arg.to_str()) == Some("-V")
-    {
-        println!("pcb {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-
     if is_shim_command(&args) {
         let cli = ShimCli::parse_from(std::iter::once(OsString::from("pcb")).chain(args));
         return execute_shim(cli);
@@ -942,10 +935,18 @@ fn self_update() -> Result<()> {
     ensure_standalone_install()?;
 
     let current_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
-    let latest = fetch_latest_release()?;
-
-    if latest.version > current_version {
-        install_shim_update(&latest)?;
+    let mut updated_shim = None;
+    match fetch_latest_release() {
+        Ok(latest) if latest.version > current_version => {
+            let version = latest.version.clone();
+            install_shim_update(&latest)?;
+            updated_shim = Some(version);
+        }
+        Ok(_) => {}
+        Err(err) => eprintln!(
+            "{} failed to check latest pcb shim release ({err}); continuing with pcbc updates",
+            "Warning:".yellow()
+        ),
     }
 
     let mut requests = BTreeSet::new();
@@ -980,11 +981,11 @@ fn self_update() -> Result<()> {
         );
     }
 
-    if latest.version > current_version {
+    if let Some(version) = updated_shim {
         println!(
             "Updated pcb {} → {}",
             current_version.to_string().dimmed(),
-            latest.version.to_string().green()
+            version.to_string().green()
         );
     } else {
         println!("pcb is already up to date; pcbc toolchains checked.");
