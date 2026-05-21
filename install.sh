@@ -47,7 +47,6 @@ EOF
 
 json="$(curl -fsSL "$base_url/pcb-latest.json")"
 tag="$(printf '%s' "$json" | sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-version="$(printf '%s' "$json" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [ -n "$tag" ] || { echo "could not read latest pcb release" >&2; exit 1; }
 
 artifact="pcb-$target"
@@ -78,4 +77,4 @@ printf '{"install_prefix":"%s"}\n' "$json_install_dir" > "$config_dir/pcb-receip
 
 add_install_dir_to_path
 
-echo "Installed pcb ${version:-$tag} to $install_dir/pcb"
+echo "Installed pcb to $install_dir/pcb"

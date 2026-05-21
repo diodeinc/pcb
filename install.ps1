@@ -59,7 +59,7 @@ try {
 
     Add-InstallDirToPath $installDir
 
-    Write-Host "Installed pcb $($latest.version) to $(Join-Path $installDir "pcb.exe")"
+    Write-Host "Installed pcb to $(Join-Path $installDir "pcb.exe")"
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
