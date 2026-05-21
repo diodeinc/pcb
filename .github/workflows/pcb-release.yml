@@ -11,13 +11,13 @@ on:
         required: true
         type: string
       dry_run:
-        description: 'Build artifacts without publishing to S3 or GitHub Releases'
+        description: 'Build artifacts without publishing to S3'
         required: false
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 jobs:
@@ -171,19 +171,3 @@ jobs:
           aws s3 cp pcb-latest.json "s3://diode-pcb-releases/pcb/pcb-latest.json" \
             --cache-control "public, max-age=60" \
             --content-type "application/json"
-
-      - name: Create GitHub release
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          prerelease_flag=""
-          if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
-            prerelease_flag="--prerelease"
-          fi
-          gh release create "${{ needs.prepare.outputs.tag }}" \
-            --verify-tag \
-            $prerelease_flag \
-            --title "${{ needs.prepare.outputs.tag }}" \
-            --notes "Release ${{ needs.prepare.outputs.tag }}" \
-            artifacts/*

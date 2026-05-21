@@ -12,10 +12,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added Würth Elektronik WE-PMFI 1210 power inductors to stdlib house BOM matching.
 
-### Changed
-
-- Removed the shim version from installer success messages.
-
 ## [0.3.84] - 2026-05-21
 
 ### Added
