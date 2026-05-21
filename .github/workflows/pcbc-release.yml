@@ -135,6 +135,10 @@ jobs:
       - build
     runs-on: ubicloud-standard-30-ubuntu-2204
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.ref_name || needs.prepare.outputs.tag }}
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:

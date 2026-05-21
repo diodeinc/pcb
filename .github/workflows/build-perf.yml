@@ -27,39 +27,36 @@ jobs:
         with:
           cache-bin: false
 
-      - name: Build pcb (head)
-        run: cargo build -p pcb --release
+      - name: Build pcbc (head)
+        run: cargo build -p pcbc --release
 
       - name: Stash head binary
         run: |
-          mkdir -p "$RUNNER_TEMP/pcb-head"
-          cp "target/release/pcb" "$RUNNER_TEMP/pcb-head/pcb"
+          mkdir -p "$RUNNER_TEMP/pcbc-head"
+          cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-head/pcbc"
 
       - name: Create base worktree
         run: |
           git worktree add "$RUNNER_TEMP/pcb-base" "${{ github.event.pull_request.base.sha }}"
 
-      - name: Build pcb (base)
-        run: cargo build -p pcb --release --manifest-path "$RUNNER_TEMP/pcb-base/Cargo.toml"
+      - name: Build pcbc (base)
+        run: cargo build -p pcbc --release --manifest-path "$RUNNER_TEMP/pcb-base/Cargo.toml"
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
 
       - name: Stash base binary
         run: |
-          mkdir -p "$RUNNER_TEMP/pcb-base-bin"
-          cp "target/release/pcb" "$RUNNER_TEMP/pcb-base-bin/pcb"
+          mkdir -p "$RUNNER_TEMP/pcbc-base"
+          cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-base/pcbc"
 
-      - name: Checkout demo workspace
-        uses: actions/checkout@v5
-        with:
-          repository: dioderobot/demo
-          path: workspaces/demo
-
-      - name: Checkout arduino workspace
-        uses: actions/checkout@v5
-        with:
-          repository: dioderobot/arduino
-          path: workspaces/arduino
+      - name: Checkout benchmark workspace
+        run: |
+          key="$RUNNER_TEMP/code-diode-key"
+          ssh-keygen -q -t ed25519 -N '' -f "$key"
+          export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityFile=$key -o IdentityAgent=none -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@code.diode.computer:demo/b/DM0001 workspaces/DM0001
+          git clone --depth 1 git@code.diode.computer:arduino/b/Nano workspaces/Nano
+          git clone --depth 1 git@code.diode.computer:arduino/b/unoQ workspaces/unoQ
 
       - name: Install hyperfine
         run: |
@@ -69,22 +66,18 @@ jobs:
       - name: Run performance benchmarks
         run: |
           mkdir -p perf
-          python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
-            --workspace workspaces/demo \
-            --output perf/demo-base.json
-          python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
-            --workspace workspaces/arduino \
-            --output perf/arduino-base.json
-          python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-head/pcb" \
-            --workspace workspaces/demo \
-            --output perf/demo-head.json
-          python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-head/pcb" \
-            --workspace workspaces/arduino \
-            --output perf/arduino-head.json
+          for workspace in DM0001 Nano unoQ; do
+            python3 bin/pcb-build-perf \
+              --pcb "$RUNNER_TEMP/pcbc-base/pcbc" \
+              --workspace "workspaces/$workspace" \
+              --suppress bom \
+              --output "perf/$workspace-base.json"
+            python3 bin/pcb-build-perf \
+              --pcb "$RUNNER_TEMP/pcbc-head/pcbc" \
+              --workspace "workspaces/$workspace" \
+              --suppress bom \
+              --output "perf/$workspace-head.json"
+          done
 
       - name: Create PR comment body
         id: perf_comment
@@ -153,7 +146,7 @@ jobs:
           rows = []
           has_significant = False
 
-          for name in ["demo", "arduino"]:
+          for name in ["DM0001", "Nano", "unoQ"]:
             base = load(Path("perf") / f"{name}-base.json")
             head = load(Path("perf") / f"{name}-head.json")
             base_boards = {b["zen_path"]: b for b in base.get("boards", [])}
@@ -171,7 +164,7 @@ jobs:
               label = f"{name}/{board_name}"
 
               if not base_board or not head_board:
-                rows.append((label, "—", "—", "—", "missing"))
+                rows.append((label, "—", "—", "missing"))
                 continue
 
               delta, pct, significant = analyze_change(base_board, head_board)

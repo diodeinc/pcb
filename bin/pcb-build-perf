@@ -114,6 +114,12 @@ def main() -> int:
         help="Pass --offline to pcb build.",
     )
     parser.add_argument(
+        "--suppress",
+        action="append",
+        default=[],
+        help="Pass -S/--suppress to pcb build (repeatable).",
+    )
+    parser.add_argument(
         "--warmup",
         type=int,
         default=3,
@@ -137,6 +143,8 @@ def main() -> int:
         build_flags.append("--locked")
     if args.offline:
         build_flags.append("--offline")
+    for kind in args.suppress:
+        build_flags.extend(["-S", kind])
 
     if args.warmup < 0:
         raise SystemExit("--warmup must be >= 0")

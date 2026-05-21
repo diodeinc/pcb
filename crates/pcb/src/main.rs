@@ -950,21 +950,20 @@ fn self_update() -> Result<()> {
     }
 
     let mut requests = BTreeSet::new();
-    let stable_result: Result<()> = (|| {
+    let stable_result: Result<Vec<(Version, Version, PathBuf)>> = (|| {
         let releases = fetch_release_versions(true)?;
+        let installed = installed_toolchains()?;
         let latest_toolchain = releases
             .iter()
             .filter(|version| version.pre.is_empty())
             .max()
             .ok_or_else(|| anyhow::anyhow!("no pcbc releases found"))?;
         requests.insert((latest_toolchain.major, latest_toolchain.minor));
-        for version in installed_toolchains()?
-            .keys()
-            .filter(|version| version.pre.is_empty())
-        {
+        for version in installed.keys().filter(|version| version.pre.is_empty()) {
             requests.insert((version.major, version.minor));
         }
 
+        let mut changelogs = Vec::new();
         for (major, minor) in requests {
             let request = ToolchainRequest::Lane { major, minor };
             let version = releases
@@ -974,15 +973,47 @@ fn self_update() -> Result<()> {
                 .ok_or_else(|| {
                     anyhow::anyhow!("no pcbc release found for `{}`", format_request(&request))
                 })?;
-            let _ = ensure_installed(version)?;
+            let previous = installed
+                .keys()
+                .filter(|installed| request_matches(&request, installed))
+                .max()
+                .cloned();
+            let binary = ensure_installed(version)?;
+            if let Some(previous) = previous
+                && previous < *version
+            {
+                changelogs.push((previous, version.clone(), binary));
+            }
         }
-        Ok(())
+        Ok(changelogs)
     })();
-    if let Err(err) = stable_result {
-        eprintln!(
+    match stable_result {
+        Ok(changelogs) => {
+            for (from, to, binary) in changelogs {
+                println!();
+                println!(
+                    "pcbc {} → {}",
+                    from.to_string().dimmed(),
+                    to.to_string().green()
+                );
+                let selector = format!("{from}..{to}");
+                match Command::new(binary).args(["changelog", &selector]).status() {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => eprintln!(
+                        "{} failed to print pcbc changelog ({status})",
+                        "Warning:".yellow()
+                    ),
+                    Err(err) => eprintln!(
+                        "{} failed to print pcbc changelog ({err})",
+                        "Warning:".yellow()
+                    ),
+                }
+            }
+        }
+        Err(err) => eprintln!(
             "{} failed to update managed pcbc toolchains ({err})",
             "Warning:".yellow()
-        );
+        ),
     }
 
     if installed_nightly_toolchain()?.is_some()
