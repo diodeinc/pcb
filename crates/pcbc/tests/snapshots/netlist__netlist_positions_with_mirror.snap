@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/netlist.rs
+source: crates/pcbc/tests/netlist.rs
 assertion_line: 276
 expression: output
 ---

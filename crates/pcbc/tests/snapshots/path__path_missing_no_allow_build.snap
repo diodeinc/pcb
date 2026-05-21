@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/path.rs
+source: crates/pcbc/tests/path.rs
 expression: "sb.snapshot_run(\"pcbc\", [\"build\", \"boards/FailingTest.zen\"])"
 ---
 Command: pcbc build boards/FailingTest.zen

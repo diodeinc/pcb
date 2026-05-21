@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/bom.rs
+source: crates/pcbc/tests/bom.rs
 expression: output
 ---
 Command: pcbc bom boards/Capacitors.zen -f table

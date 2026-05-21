@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/test_bench.rs
+source: crates/pcbc/tests/test_bench.rs
 expression: output
 ---
 Command: pcbc test simple_testbench.zen -f tap

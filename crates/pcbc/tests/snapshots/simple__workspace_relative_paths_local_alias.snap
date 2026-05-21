@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/simple.rs
+source: crates/pcbc/tests/simple.rs
 assertion_line: 225
 expression: output
 ---

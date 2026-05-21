@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/electrical_checks.rs
+source: crates/pcbc/tests/electrical_checks.rs
 expression: output
 ---
 Command: pcbc build board.zen

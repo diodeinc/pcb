@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/moved.rs
+source: crates/pcbc/tests/moved.rs
 expression: output
 ---
 Command: pcbc build board.zen

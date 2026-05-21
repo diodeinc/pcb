@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/path.rs
+source: crates/pcbc/tests/path.rs
 expression: "sb.snapshot_dir(\"vendor\")"
 ---
 === github.com/testcompany/pathtest/v1.0.0/PathModule.zen

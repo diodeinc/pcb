@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/bom.rs
+source: crates/pcbc/tests/bom.rs
 assertion_line: 270
 expression: output
 ---

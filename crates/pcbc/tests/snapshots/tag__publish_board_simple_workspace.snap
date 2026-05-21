@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/tag.rs
+source: crates/pcbc/tests/tag.rs
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json

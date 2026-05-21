@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/info.rs
+source: crates/pcbc/tests/info.rs
 expression: output
 ---
 Command: pcbc info

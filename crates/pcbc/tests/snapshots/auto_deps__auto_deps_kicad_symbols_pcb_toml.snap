@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/auto_deps.rs
+source: crates/pcbc/tests/auto_deps.rs
 expression: pcb_toml_content
 ---
 [workspace]

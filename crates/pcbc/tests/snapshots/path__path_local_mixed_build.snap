@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/path.rs
+source: crates/pcbc/tests/path.rs
 assertion_line: 51
 expression: "sb.snapshot_run(\"pcbc\", [\"build\", \"boards/LocalPathTest.zen\"])"
 ---

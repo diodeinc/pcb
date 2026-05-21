@@ -25,7 +25,7 @@ function Add-InstallDirToPath($dir) {
     $newPath = (@($dir) + $entries) -join ";"
     Set-ItemProperty -Type ExpandString -LiteralPath $registry Path $newPath
 
-    $name = "pcb-installer-" + [guid]::NewGuid().ToString()
+    $name = "pcb-path-update-" + [guid]::NewGuid().ToString()
     [Environment]::SetEnvironmentVariable($name, "1", "User")
     [Environment]::SetEnvironmentVariable($name, $null, "User")
 

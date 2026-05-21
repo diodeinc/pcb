@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/release.rs
+source: crates/pcbc/tests/release.rs
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === bom/design_bom.json

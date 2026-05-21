@@ -1,5 +1,5 @@
 ---
-source: crates/pcb/tests/build.rs
+source: crates/pcbc/tests/build.rs
 expression: output
 ---
 Command: pcbc build standalone.zen
