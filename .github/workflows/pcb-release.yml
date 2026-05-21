@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: ubicloud-standard-30-ubuntu-2204
+    runs-on: ubicloud-standard-16
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
@@ -76,9 +76,9 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-15-large
           - target: aarch64-unknown-linux-gnu
-            runner: ubicloud-standard-30-arm-ubuntu-2204
+            runner: ubicloud-standard-16-arm
           - target: x86_64-unknown-linux-gnu
-            runner: ubicloud-standard-30-ubuntu-2204
+            runner: ubicloud-standard-16
           - target: x86_64-pc-windows-msvc
             runner: diode-windows
     runs-on: ${{ matrix.runner }}
@@ -133,7 +133,7 @@ jobs:
     needs:
       - prepare
       - build
-    runs-on: ubicloud-standard-30-ubuntu-2204
+    runs-on: ubicloud-standard-16
     steps:
       - uses: actions/checkout@v4
         with:

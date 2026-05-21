@@ -27,7 +27,7 @@ jobs:
           - name: macOS
             runs-on: macos-15-xlarge
           - name: Ubuntu
-            runs-on: ubicloud-standard-30-ubuntu-2204
+            runs-on: ubicloud-standard-16
             container:
               image: ghcr.io/diodeinc/kicad:10.0.0
               options: --user root

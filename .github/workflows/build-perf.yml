@@ -15,7 +15,7 @@ permissions:
 jobs:
   build_perf:
     name: pcb build performance
-    runs-on: ubicloud-standard-16-ubuntu-2404
+    runs-on: ubicloud-standard-16
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5

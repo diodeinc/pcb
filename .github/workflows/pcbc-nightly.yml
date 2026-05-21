@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: ubicloud-standard-30-ubuntu-2204
+    runs-on: ubicloud-standard-16
     outputs:
       should_build: ${{ steps.nightly.outputs.should_build }}
       sha: ${{ steps.nightly.outputs.sha }}
@@ -74,9 +74,9 @@ jobs:
           - target: x86_64-apple-darwin
             runner: macos-15-large
           - target: aarch64-unknown-linux-gnu
-            runner: ubicloud-standard-30-arm-ubuntu-2204
+            runner: ubicloud-standard-16-arm
           - target: x86_64-unknown-linux-gnu
-            runner: ubicloud-standard-30-ubuntu-2204
+            runner: ubicloud-standard-16
           - target: x86_64-pc-windows-msvc
             runner: diode-windows
     runs-on: ${{ matrix.runner }}
@@ -132,7 +132,7 @@ jobs:
       - prepare
       - build
     if: needs.prepare.outputs.should_build == 'true'
-    runs-on: ubicloud-standard-30-ubuntu-2204
+    runs-on: ubicloud-standard-16
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4

@@ -19,7 +19,7 @@ concurrency:
 jobs:
   lint:
     name: Lint and Check
-    runs-on: ubicloud-standard-16-ubuntu-2404
+    runs-on: ubicloud-standard-16
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -62,7 +62,7 @@ jobs:
           - name: macOS
             runs-on: macos-15-xlarge
           - name: Ubuntu
-            runs-on: ubicloud-standard-30-ubuntu-2204
+            runs-on: ubicloud-standard-16
             container:
               image: ghcr.io/diodeinc/kicad:10.0.0  # Keep in sync with KICAD_VERSION
               options: --user root
