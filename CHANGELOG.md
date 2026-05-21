@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Gerber writer emitting invalid `"-0"` integer coordinates for small negative values that round to zero.
+
 ## [0.3.84] - 2026-05-21
 
 ### Added
