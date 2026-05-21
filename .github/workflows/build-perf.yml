@@ -27,27 +27,27 @@ jobs:
         with:
           cache-bin: false
 
-      - name: Build pcb (head)
-        run: cargo build -p pcb --release
+      - name: Build pcbc (head)
+        run: cargo build -p pcbc --release
 
       - name: Stash head binary
         run: |
-          mkdir -p "$RUNNER_TEMP/pcb-head"
-          cp "target/release/pcb" "$RUNNER_TEMP/pcb-head/pcb"
+          mkdir -p "$RUNNER_TEMP/pcbc-head"
+          cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-head/pcbc"
 
       - name: Create base worktree
         run: |
           git worktree add "$RUNNER_TEMP/pcb-base" "${{ github.event.pull_request.base.sha }}"
 
-      - name: Build pcb (base)
-        run: cargo build -p pcb --release --manifest-path "$RUNNER_TEMP/pcb-base/Cargo.toml"
+      - name: Build pcbc (base)
+        run: cargo build -p pcbc --release --manifest-path "$RUNNER_TEMP/pcb-base/Cargo.toml"
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
 
       - name: Stash base binary
         run: |
-          mkdir -p "$RUNNER_TEMP/pcb-base-bin"
-          cp "target/release/pcb" "$RUNNER_TEMP/pcb-base-bin/pcb"
+          mkdir -p "$RUNNER_TEMP/pcbc-base"
+          cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-base/pcbc"
 
       - name: Checkout demo workspace
         uses: actions/checkout@v5
@@ -70,20 +70,24 @@ jobs:
         run: |
           mkdir -p perf
           python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
+            --pcb "$RUNNER_TEMP/pcbc-base/pcbc" \
             --workspace workspaces/demo \
+            --suppress bom \
             --output perf/demo-base.json
           python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-base-bin/pcb" \
+            --pcb "$RUNNER_TEMP/pcbc-base/pcbc" \
             --workspace workspaces/arduino \
+            --suppress bom \
             --output perf/arduino-base.json
           python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-head/pcb" \
+            --pcb "$RUNNER_TEMP/pcbc-head/pcbc" \
             --workspace workspaces/demo \
+            --suppress bom \
             --output perf/demo-head.json
           python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcb-head/pcb" \
+            --pcb "$RUNNER_TEMP/pcbc-head/pcbc" \
             --workspace workspaces/arduino \
+            --suppress bom \
             --output perf/arduino-head.json
 
       - name: Create PR comment body

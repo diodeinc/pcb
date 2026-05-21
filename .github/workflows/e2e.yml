@@ -63,31 +63,33 @@ jobs:
 
       - name: Build and install pcb CLI
         run: |
-          cargo build --release -p pcb
+          cargo build --release -p pcb -p pcbc
           cp target/release/pcb ~/.cargo/bin/pcb
+          cp target/release/pcbc ~/.cargo/bin/pcbc
           pcb --help
+          pcbc --help
 
       - name: Build examples
-        run: pcb build examples
+        run: pcbc build examples
 
       - name: Test workspace with pcb.toml
         env:
           RUST_LOG: info,pcb::release=debug,pcb::bom=debug
         run: |
-          pcb bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
-          pcb layout test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen --no-open
-          pcb publish test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen -S layout.drc.invalid_outline
+          pcbc bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
+          pcbc layout test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen --no-open
+          pcbc publish test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen -S layout.drc.invalid_outline
 
       - name: Test pcb new
         run: |
           cd /tmp
-          pcb new board TB0001 github.com/test/TB0001
+          pcbc new board TB0001 github.com/test/TB0001
           cd TB0001
-          pcb new package modules/mod_a
-          pcb build .
+          pcbc new package modules/mod_a
+          pcbc build .
 
       - name: Test stdlib builds
-        run: pcb build stdlib/
+        run: pcbc build stdlib/ -S bom
 
       - name: Checkout kicad-test-fixtures
         uses: actions/checkout@v5
@@ -101,11 +103,11 @@ jobs:
           find kicad-test-fixtures -name '*.kicad_pro' | while IFS= read -r pro; do
             echo "=== Importing $pro ==="
             out="./test-import/$(basename "${pro%.kicad_pro}")"
-            pcb import "$pro" "$out"
+            pcbc import "$pro" "$out"
           done
           for board_zen in ./test-import/*/*.zen; do
             echo "=== Build $board_zen ==="
-            pcb build "$board_zen"
+            pcbc build "$board_zen" -S bom
             echo "=== Layout $board_zen ==="
-            pcb layout "$board_zen" --no-open
+            pcbc layout "$board_zen" --no-open -S bom
           done
