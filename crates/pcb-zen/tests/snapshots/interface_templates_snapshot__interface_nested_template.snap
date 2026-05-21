@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen/tests/interface_templates_snapshot.rs
-expression: netlist
+expression: snapshot_output
 ---
 (export (version "E")
   (design
@@ -15,10 +15,12 @@ expression: netlist
       (sheetpath (names "J1") (tstamps "b41f0e40-6e2d-5762-aae6-ebde6de0375a"))
       (tstamps "b41f0e40-6e2d-5762-aae6-ebde6de0375a")
       (property (name "Reference") (value "U1"))
+      (property (name "manufacturer") (value "TEST"))
+      (property (name "part") (value "{\"manufacturer\":\"TEST\",\"mpn\":\"usb_connector\",\"qualifications\":[]}"))
     )
   )
   (libparts
-    (libpart (lib "lib") (part "?")
+    (libpart (lib "lib") (part "usb_connector")
       (description "")
       (docs "~")
       (footprints

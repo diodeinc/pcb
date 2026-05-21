@@ -92,7 +92,7 @@ Component(
     footprint = File("dummy.kicad_mod"),
     pin_defs = {"VIN": "1", "VOUT": "2"},
     pins = {"VIN": R1_P1, "VOUT": R1_P2},
-    type = "power_supply",
+    type = "power_supply", part = Part(mpn = "power_supply", manufacturer = "TEST"),
     properties = {"value": "1kOhm"}
 )
 

@@ -364,9 +364,9 @@ impl ModuleConverter {
         let (mut diagnostics, mut filtered_moved_paths) =
             self.validate_and_filter_moved_directives();
 
-        // These warnings are purely schematic/netlist semantics (not layout-specific),
+        // These diagnostics are purely schematic/netlist semantics (not layout-specific),
         // so emit them during schematic conversion rather than in layout sync.
-        self.diagnose_underspecified_bom_components(&mut diagnostics);
+        self.diagnose_missing_bom_part_components(&mut diagnostics);
         self.diagnose_unused_module_io(&module_tree, &mut diagnostics);
         self.diagnose_not_connected_multi_port(root_module.source_path(), &mut diagnostics);
 
@@ -446,12 +446,11 @@ impl ModuleConverter {
         }
     }
 
-    fn diagnose_underspecified_bom_components(&self, diagnostics: &mut Diagnostics) {
+    fn diagnose_missing_bom_part_components(&self, diagnostics: &mut Diagnostics) {
         for instance in self.schematic.instances.values() {
             if instance.kind != InstanceKind::Component
                 || instance.dnp()
                 || instance.skip_bom()
-                || instance.component_type().is_some()
                 || instance.part().is_some()
             {
                 continue;
@@ -461,15 +460,43 @@ impl ModuleConverter {
                 .reference_designator
                 .as_deref()
                 .unwrap_or(instance.type_ref.module_name.as_ref());
-            let body = format!(
-                "Component '{name}' is included in the BOM but is missing part information. Specify `part=Part(...)`."
-            );
+            let (kind, body) = match instance.string_attr(&[crate::attrs::BOM_MPN]) {
+                Some(_) => (
+                    "bom.underspecified",
+                    format!(
+                        "Component '{name}' is included in the BOM but is missing manufacturer information. Specify `part=Part(...)`."
+                    ),
+                ),
+                None if Self::is_house_bom_match_eligible(instance) => continue,
+                None => (
+                    "bom.unspecified",
+                    format!(
+                        "Component '{name}' is included in the BOM but is missing part information. Specify `part=Part(...)`."
+                    ),
+                ),
+            };
             diagnostics.push(Diagnostic::categorized(
                 &instance.type_ref.source_path.to_string_lossy(),
                 &body,
-                "bom.underspecified",
-                EvalSeverity::Warning,
+                kind,
+                EvalSeverity::Error,
             ));
+        }
+    }
+
+    fn is_house_bom_match_eligible(instance: &Instance) -> bool {
+        match instance.component_type().as_deref() {
+            Some(
+                "resistor" | "capacitor" | "led" | "ferrite_bead" | "inductor" | "rectifier"
+                | "zener" | "tvs" | "crystal",
+            ) => true,
+            Some("connector") => instance
+                .string_attr(&["connector_type", "Connector_type"])
+                .is_some_and(|connector_type| {
+                    connector_type.eq_ignore_ascii_case("pin header")
+                        || connector_type.eq_ignore_ascii_case("terminal block")
+                }),
+            _ => false,
         }
     }
 
@@ -742,6 +769,15 @@ impl ModuleConverter {
             comp_inst.add_attribute(
                 crate::attrs::MANUFACTURER,
                 AttributeValue::String(manufacturer.to_owned()),
+            );
+        }
+
+        if component.part().is_none()
+            && let Some(mpn) = component.bom_mpn()
+        {
+            comp_inst.add_attribute(
+                crate::attrs::BOM_MPN,
+                AttributeValue::String(mpn.to_owned()),
             );
         }
 

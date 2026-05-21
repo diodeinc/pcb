@@ -18,6 +18,7 @@ Component(
     type = "test_component",
     pin_defs = {"P1": "1"},
     footprint = "TEST:FOOTPRINT",
+    skip_bom = True,
     pins = {"P1": instance.test},
 )
 "#,
@@ -61,6 +62,7 @@ Component(
     type = "resistor",
     pin_defs = {"P1": "1", "P2": "2"},
     footprint = "SMD:0805",
+    skip_bom = True,
     pins = {
         "P1": pwr.vcc,
         "P2": pwr.gnd,
@@ -72,6 +74,7 @@ Component(
     type = "transistor",
     pin_defs = {"G": "1", "D": "2", "S": "3"},
     footprint = "SOT:23",
+    skip_bom = True,
     pins = {
         "G": pwr.enable,
         "D": pwr.vcc,
@@ -129,6 +132,7 @@ Component(
     type = "ic",
     pin_defs = {"VCC": "1", "GND": "2", "DATA": "3"},
     footprint = "QFN:16",
+    skip_bom = True,
     pins = {
         "VCC": sys.power.vcc,
         "GND": sys.power.gnd,
@@ -182,6 +186,7 @@ Component(
     type = "test",
     pin_defs = {"P1": "1"},
     footprint = "TEST:FP",
+    skip_bom = True,
     pins = {"P1": instance.test},
 )
 "#,
@@ -217,6 +222,7 @@ Component(
     type = "test",
     pin_defs = {"P1": "1"},
     footprint = "TEST:FP",
+    skip_bom = True,
     pins = {"P1": inst1.test},
 )
 
@@ -225,6 +231,7 @@ Component(
     type = "test",
     pin_defs = {"P1": "1"},
     footprint = "TEST:FP",
+    skip_bom = True,
     pins = {"P1": inst2.test},
 )
 "#,

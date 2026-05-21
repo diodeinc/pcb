@@ -360,6 +360,7 @@ Component(
     name = "R1",
     footprint = "TEST:0402",
     pin_defs = {"1": "1"},
+    skip_bom = True,
     pins = {"1": vcc},
 )
 "#;

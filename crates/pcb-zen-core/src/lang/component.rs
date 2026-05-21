@@ -83,6 +83,7 @@ impl From<ComponentError> for starlark::Error {
 #[derive(Clone, Debug, Trace, ProvidesStaticType, Allocative)]
 pub struct ComponentData<'v> {
     pub(crate) part: Option<PartValue>,
+    pub(crate) bom_mpn: Option<String>,
     pub(crate) spice_model: Option<Value<'v>>,
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
@@ -97,6 +98,7 @@ pub struct ComponentData<'v> {
 #[derive(Clone, Debug, ProvidesStaticType, Allocative)]
 pub struct FrozenComponentData {
     pub(crate) part: Option<PartValue>,
+    pub(crate) bom_mpn: Option<String>,
     pub(crate) spice_model: Option<FrozenValue>,
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
@@ -150,6 +152,7 @@ impl<'v> Freeze for ComponentValue<'v> {
             connections: self.connections.freeze(freezer)?,
             data: FrozenComponentData {
                 part: data.part,
+                bom_mpn: data.bom_mpn,
                 spice_model: match data.spice_model {
                     Some(s) => Some(s.freeze(freezer)?),
                     None => None,
@@ -312,7 +315,15 @@ fn consolidate_bool_property<'v>(
 fn property_string<'v>(properties_map: &SmallMap<String, Value<'v>>, key: &str) -> Option<String> {
     properties_map
         .get(key)
-        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
+        .and_then(|v| v.unpack_str().and_then(non_empty_string))
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
+    }
 }
 
 /// Legacy `properties[...]` keys on `Component()` and the typed kwarg that
@@ -448,13 +459,17 @@ fn resolve_component_sourcing<'v>(
     properties_map: &SmallMap<String, Value<'v>>,
     symbol: &SymbolValue,
     manifest_parts: Option<&[ManifestPart]>,
-) -> (Option<PartValue>, Vec<PartValue>) {
+) -> (Option<PartValue>, Vec<PartValue>, Option<String>) {
     let manifest_alternatives: Vec<PartValue> = manifest_parts
         .map(|parts| parts.iter().cloned().map(PartValue::from).collect())
         .unwrap_or_default();
 
     if let Some(part) = part_from_kwarg {
-        return (Some(part.clone()), manifest_alternatives);
+        return (
+            Some(part.clone()),
+            manifest_alternatives,
+            Some(part.mpn().to_owned()),
+        );
     }
 
     let mpn = explicit_mpn
@@ -486,13 +501,22 @@ fn resolve_component_sourcing<'v>(
         return (
             Some(PartValue::from(primary.clone())),
             alternatives.iter().cloned().map(PartValue::from).collect(),
+            Some(primary.mpn.clone()),
         );
     }
 
     // Only create a Part if both mpn and manufacturer are present
-    let part = mpn.and_then(|m| manufacturer.map(|mfr| PartValue::new(m, mfr, vec![], None)));
+    let part = match (&mpn, &manufacturer) {
+        (Some(mpn), Some(manufacturer)) => Some(PartValue::new(
+            mpn.clone(),
+            manufacturer.clone(),
+            vec![],
+            None,
+        )),
+        _ => None,
+    };
 
-    (part, vec![])
+    (part, vec![], mpn)
 }
 
 fn resolve_symbol_datasheet(
@@ -1653,6 +1677,10 @@ impl<'v> ComponentValue<'v> {
             .map(|p| p.manufacturer().to_owned())
     }
 
+    pub fn bom_mpn(&self) -> Option<String> {
+        self.data.borrow().bom_mpn.clone()
+    }
+
     pub fn part(&self) -> Option<PartValue> {
         self.data.borrow().part.clone()
     }
@@ -1725,6 +1753,10 @@ impl FrozenComponentValue {
 
     pub fn manufacturer(&self) -> Option<&str> {
         self.data.part.as_ref().map(|p| p.manufacturer())
+    }
+
+    pub fn bom_mpn(&self) -> Option<&str> {
+        self.data.bom_mpn.as_deref()
     }
 
     pub fn part(&self) -> Option<&PartValue> {
@@ -2068,9 +2100,9 @@ where
 
             let part_from_kwarg = parse_optional_part(part_val)?;
 
-            let explicit_mpn = mpn.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
+            let explicit_mpn = mpn.and_then(|v| v.unpack_str().and_then(non_empty_string));
             let explicit_manufacturer =
-                manufacturer.and_then(|v| v.unpack_str().map(|s| s.to_owned()));
+                manufacturer.and_then(|v| v.unpack_str().and_then(non_empty_string));
             let matching_manifest_parts = final_symbol
                 .source_uri()
                 .and_then(|path| ctx.resolution().symbol_parts.get(path))
@@ -2083,7 +2115,7 @@ where
                 });
             let manifest_parts = matching_manifest_parts.as_deref();
 
-            let (final_part, alternatives) = resolve_component_sourcing(
+            let (final_part, alternatives, bom_mpn) = resolve_component_sourcing(
                 part_from_kwarg.as_ref(),
                 explicit_mpn,
                 explicit_manufacturer,
@@ -2213,6 +2245,7 @@ where
                 connections,
                 data: RefCell::new(ComponentData {
                     part: final_part,
+                    bom_mpn,
                     spice_model: final_spice_model,
                     dnp: final_dnp.unwrap_or(false),
                     skip_bom: final_skip_bom,
@@ -2361,7 +2394,7 @@ mod tests {
             None,
         );
 
-        let (part, alternatives) = resolved;
+        let (part, alternatives, _) = resolved;
         let part = part.expect("expected Some(PartValue)");
         assert_eq!(part.mpn(), "PART-MPN");
         assert_eq!(part.manufacturer(), "PART-MFR");
@@ -2408,7 +2441,7 @@ mod tests {
             Some(&manifest_parts),
         );
 
-        let (part, alternatives) = resolved;
+        let (part, alternatives, _) = resolved;
         let part = part.expect("expected Some(PartValue)");
         assert_eq!(part.mpn(), "PART-MPN");
         assert_eq!(part.manufacturer(), "PART-MFR");
@@ -2448,7 +2481,7 @@ mod tests {
             None,
         );
 
-        let (part, alternatives) = resolved;
+        let (part, alternatives, _) = resolved;
         let part = part.expect("expected Some(PartValue)");
         assert_eq!(part.mpn(), "KW-MPN");
         assert_eq!(part.manufacturer(), "KW-MFR");
@@ -2464,7 +2497,7 @@ mod tests {
 
         let resolved_from_props =
             resolve_component_sourcing(None, None, None, &properties, &symbol, None);
-        let (part, alternatives) = resolved_from_props;
+        let (part, alternatives, _) = resolved_from_props;
         let part = part.expect("expected Some(PartValue)");
         assert_eq!(part.mpn(), "PROP-MPN");
         assert_eq!(part.manufacturer(), "PROP-MFR");
@@ -2473,7 +2506,7 @@ mod tests {
         let empty_props = make_string_properties(&heap, &[]);
         let resolved_from_symbol =
             resolve_component_sourcing(None, None, None, &empty_props, &symbol, None);
-        let (part, alternatives) = resolved_from_symbol;
+        let (part, alternatives, _) = resolved_from_symbol;
         let part = part.expect("expected Some(PartValue)");
         assert_eq!(part.mpn(), "SYM-MPN");
         assert_eq!(part.manufacturer(), "SYM-MFR");
@@ -2513,7 +2546,7 @@ mod tests {
             Some(&manifest_parts),
         );
 
-        let (part, alternatives) = resolved;
+        let (part, alternatives, _) = resolved;
         let part = part.expect("expected Some(PartValue)");
         assert_eq!(part.mpn(), "MANIFEST-PRIMARY");
         assert_eq!(part.manufacturer(), "ManifestCorp");

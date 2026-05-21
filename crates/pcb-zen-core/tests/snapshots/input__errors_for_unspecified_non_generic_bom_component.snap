@@ -1,0 +1,5 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+expression: output
+---
+Error: test.zen: Component 'U1' is included in the BOM but is missing part information. Specify `part=Part(...)`.
