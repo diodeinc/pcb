@@ -113,7 +113,7 @@ pathdiff = "0.2"
 petgraph = "0.8"
 rayon = "1.10"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "charset", "http2", "json", "multipart", "rustls", "system-proxy"] }
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
 rand = "0.8"
 serde-wasm-bindgen = "0.6"
 serde_yaml = "0.9"
@@ -163,3 +163,4 @@ inherits = "release"
 lto = "fat"           # Maximum link-time optimization
 codegen-units = 1     # Better optimization
 strip = "symbols"     # Strip symbols from published binaries
+panic = "abort"       # Published binaries should not carry unwinding machinery.

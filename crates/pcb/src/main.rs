@@ -730,6 +730,11 @@ fn read_download_bytes(body: &mut ureq::Body) -> Result<Vec<u8>> {
 
 fn http_client(timeout: Duration) -> Result<ureq::Agent> {
     Ok(ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::NativeTls)
+                .build(),
+        )
         .timeout_global(Some(timeout))
         .build()
         .into())
