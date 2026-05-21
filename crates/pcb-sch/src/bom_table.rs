@@ -11,6 +11,8 @@ use crate::bom::availability::{
 };
 use crate::bom::{Bom, GenericComponent};
 
+const NO_MATCH_LABEL: &str = "No match (unknown part)";
+
 /// Create a cell with quantity and percentage (percentage in grey)
 fn qty_with_percentage_cell(qty: usize, percentage: f64) -> Cell {
     Cell::new(format!(
@@ -108,6 +110,17 @@ fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool, tier: Optio
         (false, true, _) => cell.fg(Color::Blue),
         (false, false, Some(t)) => cell.fg(color_for_tier(t)),
         (false, false, None) => cell,
+    }
+}
+
+/// Apply styling to a sourcing-status cell, including states outside stock tiers.
+fn styled_status_cell(content: impl ToString, is_dnp: bool, no_match: bool, tier: Tier) -> Cell {
+    if is_dnp {
+        Cell::new(content).fg(Color::DarkGrey)
+    } else if no_match {
+        Cell::new(content).fg(Color::Magenta)
+    } else {
+        Cell::new(content).fg(color_for_tier(tier))
     }
 }
 
@@ -267,9 +280,9 @@ impl Bom {
         legend_table.add_row(vec![
             Cell::new("■").fg(Color::Red),
             Cell::new("Insufficient stock / hard to source"),
-            Cell::new(""),
-            Cell::new(""),
-            Cell::new(""),
+            Cell::new("  "),
+            Cell::new("■").fg(Color::Magenta),
+            Cell::new(NO_MATCH_LABEL),
         ]);
 
         writeln!(writer, "{legend_table}")?;
@@ -281,6 +294,8 @@ impl Bom {
         let mut limited_qty = 0;
         let mut hard_count = 0;
         let mut hard_qty = 0;
+        let mut no_match_count = 0;
+        let mut no_match_qty = 0;
         let mut dnp_count = 0;
         let mut dnp_qty = 0;
         let mut house_count = 0;
@@ -394,6 +409,7 @@ impl Bom {
 
             // Get per-region availability from first matching path
             let avail = paths.iter().find_map(|path| self.availability.get(*path));
+            let no_match = avail.is_some_and(|a| a.no_match);
 
             let us_data = RegionDisplayData::from_region_avail(
                 avail.and_then(|a| a.us.as_ref()),
@@ -441,6 +457,9 @@ impl Bom {
                 if is_dnp {
                     dnp_count += 1;
                     dnp_qty += qty;
+                } else if no_match {
+                    no_match_count += 1;
+                    no_match_qty += qty;
                 } else {
                     match designator_tier {
                         Tier::Plenty => {
@@ -513,17 +532,17 @@ impl Bom {
 
             // Add stock columns (US and Global)
             if has_availability {
-                row.push(styled_cell(
+                row.push(styled_status_cell(
                     us_data.format_stock(),
                     is_dnp,
-                    false,
-                    Some(us_data.tier),
+                    no_match,
+                    us_data.tier,
                 ));
-                row.push(styled_cell(
+                row.push(styled_status_cell(
                     global_data.format_stock(),
                     is_dnp,
-                    false,
-                    Some(global_data.tier),
+                    no_match,
+                    global_data.tier,
                 ));
             }
 
@@ -640,8 +659,9 @@ impl Bom {
             let mut summary_table = Table::new();
             configure_summary_table(&mut summary_table);
 
-            let total_count = plenty_count + limited_count + hard_count + dnp_count;
-            let total_with_dnp = plenty_qty + limited_qty + hard_qty + dnp_qty;
+            let total_count =
+                plenty_count + limited_count + hard_count + no_match_count + dnp_count;
+            let total_with_dnp = plenty_qty + limited_qty + hard_qty + no_match_qty + dnp_qty;
 
             summary_table.add_row(summary_row(
                 Color::Green,
@@ -665,6 +685,14 @@ impl Bom {
                 hard_count,
                 total_count,
                 hard_qty,
+                total_with_dnp,
+            ));
+            summary_table.add_row(summary_row(
+                Color::Magenta,
+                NO_MATCH_LABEL,
+                no_match_count,
+                total_count,
+                no_match_qty,
                 total_with_dnp,
             ));
             summary_table.add_row(summary_row(
@@ -712,7 +740,10 @@ impl Bom {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::bom::{Availability, BomEntry};
 
     #[test]
     fn hard_to_source_availability_forces_red_tier() {
@@ -732,5 +763,46 @@ mod tests {
         );
         assert_eq!(region.stock, 78_000);
         assert_eq!(region.price_single, Some(0.124));
+    }
+
+    #[test]
+    fn bom_table_legend_includes_no_match() {
+        let mut bom = Bom {
+            entries: HashMap::new(),
+            designators: HashMap::new(),
+            availability: HashMap::new(),
+        };
+        bom.entries.insert(
+            "root.U1".to_string(),
+            BomEntry {
+                mpn: Some("MISSING-MPN".to_string()),
+                alternatives: vec![],
+                manufacturer: Some("Acme".to_string()),
+                package: Some("QFN".to_string()),
+                value: None,
+                description: Some("Missing part".to_string()),
+                generic_data: None,
+                dnp: false,
+                skip_bom: false,
+                matcher: None,
+                properties: Default::default(),
+            },
+        );
+        bom.designators
+            .insert("root.U1".to_string(), "U1".to_string());
+        bom.availability.insert(
+            "root.U1".to_string(),
+            Availability {
+                no_match: true,
+                ..Default::default()
+            },
+        );
+
+        let mut out = Vec::new();
+        bom.write_table(&mut out).unwrap();
+        let rendered = String::from_utf8(out).unwrap();
+
+        assert!(rendered.contains("Legend:"));
+        assert!(rendered.contains(NO_MATCH_LABEL));
     }
 }

@@ -290,6 +290,7 @@ pub fn fetch_and_populate_availability_with_context(
         let Some(bom_entry) = bom.entries.get(path) else {
             continue;
         };
+        let requested_mpn = bom_entry.mpn.as_deref().filter(|mpn| !mpn.is_empty());
 
         let qty = bom
             .designators
@@ -355,6 +356,7 @@ pub fn fetch_and_populate_availability_with_context(
                         global_hard_to_source_reason,
                     )
                 }),
+                no_match: resolved_offers.is_empty() && requested_mpn.is_some(),
                 offers: all_offers,
             },
         );
@@ -586,6 +588,7 @@ fn build_search_availability(offers: &[&ComponentOffer]) -> Availability {
     Availability {
         us: summary_for(Geography::Us),
         global: summary_for(Geography::Global),
+        no_match: false,
         offers: offers.iter().map(|offer| offer.to_offer(1)).collect(),
     }
 }

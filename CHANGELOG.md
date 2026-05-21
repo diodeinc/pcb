@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Added a `No match (unknown part)` type to the `pcb bom` availability legend and summary.
+
 ## [0.3.84] - 2026-05-21
 
 ### Added

@@ -81,6 +81,9 @@ pub struct Availability {
     /// Best Global availability summary (price @ stock)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global: Option<AvailabilitySummary>,
+    /// The matching service found no component for the specified MPN.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub no_match: bool,
     /// All raw offers for detailed display
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub offers: Vec<Offer>,
