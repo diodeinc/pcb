@@ -192,6 +192,6 @@ jobs:
           gh release create "${{ needs.prepare.outputs.tag }}" \
             --verify-tag \
             $prerelease_flag \
-            --title "${{ needs.prepare.outputs.tag }}" \
+            --title "${{ needs.prepare.outputs.version }} - $(date -u +%Y-%m-%d)" \
             --notes "Release ${{ needs.prepare.outputs.tag }}" \
             artifacts/*
