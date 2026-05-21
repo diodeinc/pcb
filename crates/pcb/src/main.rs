@@ -1,7 +1,3 @@
-#[cfg(all(feature = "mimalloc", not(target_family = "wasm")))]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 use anyhow::{Context, Result};
 use semver::Version;
 use serde::{Deserialize, Serialize};
