@@ -579,3 +579,32 @@ fn writes_polygon_hole_with_explicit_zero_rotation() {
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9
 }
+
+#[test]
+fn coordinate_negative_zero_is_normalized_to_zero() {
+    let layer = GerberLayer {
+        apertures: vec![WriterAperture {
+            code: 10,
+            template: WriterApertureTemplate::Circle {
+                diameter: 0.1,
+                hole_diameter: None,
+            },
+            attributes: vec![],
+        }],
+        objects: vec![WriterObject::dark(ObjectKind::Flash {
+            at: Point { x: 0.0, y: -1e-8 },
+            aperture: 10,
+        })],
+        ..GerberLayer::default()
+    };
+
+    let output = gerberx2::write_layer(&layer).unwrap();
+    assert!(
+        !output.contains("Y-0"),
+        "writer emitted \"-0\" coordinate which is not a valid Gerber integer:\n{output}"
+    );
+    assert!(
+        output.contains("Y0"),
+        "writer did not emit a Y0 coordinate:\n{output}"
+    );
+}
