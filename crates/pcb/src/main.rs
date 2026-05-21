@@ -954,10 +954,14 @@ fn self_update() -> Result<()> {
         let releases = fetch_release_versions(true)?;
         let latest_toolchain = releases
             .iter()
+            .filter(|version| version.pre.is_empty())
             .max()
             .ok_or_else(|| anyhow::anyhow!("no pcbc releases found"))?;
         requests.insert((latest_toolchain.major, latest_toolchain.minor));
-        for version in installed_toolchains()?.keys() {
+        for version in installed_toolchains()?
+            .keys()
+            .filter(|version| version.pre.is_empty())
+        {
             requests.insert((version.major, version.minor));
         }
 
