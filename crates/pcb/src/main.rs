@@ -1065,7 +1065,10 @@ fn exec_toolchain(binary: &Path, args: &[OsString]) -> Result<()> {
 
     #[cfg(not(unix))]
     {
-        let status = Command::new(binary).args(args).status()?;
+        let status = Command::new(binary)
+            .env("PCB_SHIM_ARG0", "pcb")
+            .args(args)
+            .status()?;
         if !status.success() {
             match status.code() {
                 Some(code) => std::process::exit(code),

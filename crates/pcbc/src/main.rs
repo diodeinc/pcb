@@ -188,7 +188,11 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let cli = if let Some(arg0) = std::env::var_os("PCB_SHIM_ARG0") {
+        Cli::parse_from(std::iter::once(arg0).chain(std::env::args_os().skip(1)))
+    } else {
+        Cli::parse()
+    };
 
     // Initialize logger with default level depending on --debug (overridden by RUST_LOG)
     // Must happen before tracing subscriber to avoid conflicts
