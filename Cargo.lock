@@ -4394,7 +4394,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-canonical"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "base64",
@@ -4406,7 +4406,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-command-runner"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "log",
@@ -4417,7 +4417,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-component-gen"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "deunicode",
@@ -4428,7 +4428,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-diode-api"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4499,7 +4499,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-eda"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -4513,7 +4513,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-fmt"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "ruff_formatter",
@@ -4523,7 +4523,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-ipc2581-tools"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4558,7 +4558,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-kicad"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "atomicwrites",
@@ -4578,7 +4578,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-layout"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "assert_fs",
@@ -4609,7 +4609,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sch"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "allocative",
  "anyhow",
@@ -4636,7 +4636,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sexpr"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "base64",
  "hex",
@@ -4648,7 +4648,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-sim"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "dirs",
@@ -4660,7 +4660,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-starlark-lsp"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "derivative",
@@ -4681,7 +4681,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-test-utils"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "assert_cmd",
  "assert_fs",
@@ -4700,7 +4700,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-ui"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "colored",
@@ -4711,7 +4711,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -4758,7 +4758,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-core"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "allocative",
  "anyhow",
@@ -4798,7 +4798,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-zen-wasm"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "console_error_panic_hook",
  "console_log",
@@ -4817,7 +4817,7 @@ dependencies = [
 
 [[package]]
 name = "pcbc"
-version = "0.3.83"
+version = "0.3.84"
 dependencies = [
  "anyhow",
  "canon-json",
