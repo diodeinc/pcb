@@ -605,7 +605,11 @@ impl<'a> Writer<'a> {
         };
         let scale = 10_f64.powi(decimals as i32);
         let encoded = format!("{:.0}", value * scale);
-        if encoded == "-0" { "0".to_string() } else { encoded }
+        if encoded == "-0" {
+            "0".to_string()
+        } else {
+            encoded
+        }
     }
 
     fn write_decimal(&mut self, value: f64) {
