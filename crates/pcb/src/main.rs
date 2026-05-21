@@ -19,7 +19,6 @@ const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const RELEASE_LIST_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
-const STANDALONE_INSTALL_REQUIRED: &str = "Self-update is only available for pcb installed via the standalone installer.\nIf you installed pcb via a package manager, please update using that tool.";
 
 enum ShimCommand {
     SelfUpdate,
@@ -63,11 +62,6 @@ struct InstallReceipt {
 struct LatestRelease {
     version: Version,
     tag: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct StandaloneInstallReceipt {
-    install_prefix: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -870,6 +864,7 @@ fn toolchain_list() -> Result<()> {
 }
 
 fn toolchain_show() -> Result<()> {
+    println!("shim: {}", env!("CARGO_PKG_VERSION"));
     let selection = select_toolchain(None, false)?;
     println!("active: {}", selection.label);
     println!("reason: {}", selection.reason);
@@ -929,8 +924,6 @@ fn toolchain_uninstall(raw: &str) -> Result<()> {
 }
 
 fn self_update() -> Result<()> {
-    ensure_standalone_install()?;
-
     let current_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
     let mut updated_shim = None;
     match fetch_latest_release() {
@@ -986,8 +979,6 @@ fn self_update() -> Result<()> {
     match stable_result {
         Ok(changelogs) => {
             for (from, to, binary) in changelogs {
-                println!();
-                println!("pcbc {from} → {to}");
                 let selector = format!("{from}..{to}");
                 match Command::new(binary).args(["changelog", &selector]).status() {
                     Ok(status) if status.success() => {}
@@ -1008,8 +999,6 @@ fn self_update() -> Result<()> {
 
     if let Some(version) = updated_shim {
         println!("Updated pcb {current_version} → {version}");
-    } else {
-        println!("pcb is already up to date; pcbc toolchains checked.");
     }
     Ok(())
 }
@@ -1037,24 +1026,6 @@ fn install_shim_update(latest: &LatestRelease) -> Result<()> {
     fs::write(&binary, bytes)?;
     copy_executable_permissions(&binary, &binary)?;
     self_replace::self_replace(binary)?;
-    Ok(())
-}
-
-fn ensure_standalone_install() -> Result<()> {
-    let receipt = fs::read_to_string(standalone_receipt_path())
-        .ok()
-        .and_then(|content| serde_json::from_str::<StandaloneInstallReceipt>(&content).ok())
-        .ok_or_else(|| anyhow::anyhow!(STANDALONE_INSTALL_REQUIRED))?;
-    let install_prefix = receipt
-        .install_prefix
-        .canonicalize()
-        .map_err(|_| anyhow::anyhow!(STANDALONE_INSTALL_REQUIRED))?;
-    let current_exe = std::env::current_exe()?.canonicalize()?;
-    anyhow::ensure!(
-        current_exe.starts_with(&install_prefix),
-        STANDALONE_INSTALL_REQUIRED
-    );
-
     Ok(())
 }
 
@@ -1157,18 +1128,6 @@ fn locks_dir() -> PathBuf {
 
 fn release_list_cache_path() -> PathBuf {
     data_dir().join("release-list-cache.json")
-}
-
-fn standalone_receipt_path() -> PathBuf {
-    let config_dir = if cfg!(windows) {
-        PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default())
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"))
-    };
-
-    config_dir.join("pcb").join("pcb-receipt.json")
 }
 
 fn binary_artifact_name(binary: &str) -> String {

@@ -76,11 +76,6 @@ mkdir -p "$install_dir"
 chmod +x "$tmp/pcb"
 mv "$tmp/pcb" "$install_dir/pcb"
 
-config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pcb"
-mkdir -p "$config_dir"
-json_install_dir="$(printf '%s' "$install_dir" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-printf '{"install_prefix":"%s"}\n' "$json_install_dir" > "$config_dir/pcb-receipt.json"
-
 add_install_dir_to_path
 
 echo "Installed pcb to $install_dir/pcb"
