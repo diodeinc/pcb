@@ -39,9 +39,24 @@ $tmp = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) 
 try {
     $binary = Join-Path $tmp "pcb.exe"
     $sum = Join-Path $tmp "pcb.exe.sha256"
-
-    Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact" -OutFile $binary
     Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact.sha256" -OutFile $sum
+    $zstd = Get-Command zstd -ErrorAction SilentlyContinue
+    $downloadedCompressed = $false
+    if ($zstd) {
+        $compressedPath = Join-Path $tmp "pcb.exe.zst"
+        try {
+            Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact.zst" -OutFile $compressedPath
+            $downloadedCompressed = $true
+        } catch {
+            $downloadedCompressed = $false
+        }
+    }
+
+    if ($downloadedCompressed) {
+        & $zstd.Source -q -d -f $compressedPath -o $binary
+    } else {
+        Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact" -OutFile $binary
+    }
 
     $expected = ((Get-Content $sum -Raw) -split "\s+")[0].ToLowerInvariant()
     $actual = (Get-FileHash -Algorithm SHA256 $binary).Hash.ToLowerInvariant()

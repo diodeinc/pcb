@@ -100,6 +100,26 @@ jobs:
           toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
           target: ${{ matrix.target }}
 
+      - name: Install zstd
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v zstd >/dev/null; then
+            exit 0
+          fi
+          case "${{ runner.os }}" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y zstd
+              ;;
+            macOS)
+              brew install zstd
+              ;;
+            Windows)
+              choco install zstandard -y
+              ;;
+          esac
+
       - name: Build
         run: cargo build --profile dist -p pcbc --bin pcbc --target ${{ matrix.target }}
 
@@ -117,6 +137,7 @@ jobs:
             artifact="$artifact.exe"
           fi
           cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
+          zstd -q -f -3 "artifacts/$artifact" -o "artifacts/$artifact.zst"
           if command -v shasum >/dev/null; then
             shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
           else
