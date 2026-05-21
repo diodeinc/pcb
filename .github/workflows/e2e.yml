@@ -74,7 +74,7 @@ jobs:
 
       - name: Test workspace with pcb.toml
         env:
-          RUST_LOG: info,pcb::release=debug,pcb::bom=debug
+          RUST_LOG: info,pcbc::release=debug,pcbc::bom=debug
         run: |
           pcbc bom test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen
           pcbc layout test-workspaces/with-pcb-toml/boards/WorkspaceTestBoard.zen --no-open
