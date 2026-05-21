@@ -470,6 +470,49 @@ HOUSE_POWER_INDUCTORS_BY_PKG = {
             "https://www.we-online.com/components/products/datasheet/74479777310.pdf",
         ),
     ],
+    "1210": [
+        # Würth Elektronik WE-PMFI, 1210 (3225 Metric), shielded molded power inductors.
+        power_inductor(
+            "100nH 30%",
+            "11.4A",
+            "9mOhm",
+            "74479332257110",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257110.pdf",
+        ),
+        power_inductor(
+            "470nH 20%",
+            "7.9A",
+            "19mOhm",
+            "74479332257147",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257147.pdf",
+        ),
+        power_inductor(
+            "1uH 20%",
+            "5.8A",
+            "30mOhm",
+            "74479332257210",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257210.pdf",
+        ),
+        power_inductor(
+            "2.2uH 20%",
+            "4.1A",
+            "67mOhm",
+            "74479332257222",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257222.pdf",
+        ),
+        power_inductor(
+            "4.7uH 20%",
+            "2.7A",
+            "130mOhm",
+            "74479332257247",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257247.pdf",
+        ),
+    ],
 }
 
 # House crystal catalog by package
