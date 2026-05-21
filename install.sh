@@ -47,15 +47,20 @@ EOF
 
 json="$(curl -fsSL "$base_url/pcb-latest.json")"
 tag="$(printf '%s' "$json" | sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-version="$(printf '%s' "$json" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [ -n "$tag" ] || { echo "could not read latest pcb release" >&2; exit 1; }
 
 artifact="pcb-$target"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-curl -fsSL "$base_url/$tag/$artifact" -o "$tmp/pcb"
 curl -fsSL "$base_url/$tag/$artifact.sha256" -o "$tmp/pcb.sha256"
+if command -v zstd >/dev/null \
+  && curl -fsSL "$base_url/$tag/$artifact.zst" -o "$tmp/pcb.zst" 2>/dev/null; then
+  zstd -q -d -f "$tmp/pcb.zst" -o "$tmp/pcb"
+else
+  curl -fsSL "$base_url/$tag/$artifact" -o "$tmp/pcb"
+fi
+
 expected="$(sed 's/[[:space:]].*//' "$tmp/pcb.sha256")"
 if command -v shasum >/dev/null; then
   actual="$(shasum -a 256 "$tmp/pcb" | sed 's/[[:space:]].*//')"
@@ -78,4 +83,4 @@ printf '{"install_prefix":"%s"}\n' "$json_install_dir" > "$config_dir/pcb-receip
 
 add_install_dir_to_path
 
-echo "Installed pcb ${version:-$tag} to $install_dir/pcb"
+echo "Installed pcb to $install_dir/pcb"

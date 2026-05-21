@@ -11,13 +11,13 @@ on:
         required: true
         type: string
       dry_run:
-        description: 'Build artifacts without publishing to S3 or GitHub Releases'
+        description: 'Build artifacts without publishing to S3'
         required: false
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
 
 jobs:
@@ -100,6 +100,26 @@ jobs:
           toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
           target: ${{ matrix.target }}
 
+      - name: Install zstd
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v zstd >/dev/null; then
+            exit 0
+          fi
+          case "${{ runner.os }}" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y zstd
+              ;;
+            macOS)
+              brew install zstd
+              ;;
+            Windows)
+              choco install zstandard -y
+              ;;
+          esac
+
       - name: Build
         run: cargo build --profile dist -p pcb --bin pcb --target ${{ matrix.target }}
 
@@ -117,6 +137,7 @@ jobs:
             artifact="$artifact.exe"
           fi
           cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
+          zstd -q -f -3 "artifacts/$artifact" -o "artifacts/$artifact.zst"
           if command -v shasum >/dev/null; then
             shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
           else
@@ -171,19 +192,3 @@ jobs:
           aws s3 cp pcb-latest.json "s3://diode-pcb-releases/pcb/pcb-latest.json" \
             --cache-control "public, max-age=60" \
             --content-type "application/json"
-
-      - name: Create GitHub release
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          prerelease_flag=""
-          if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
-            prerelease_flag="--prerelease"
-          fi
-          gh release create "${{ needs.prepare.outputs.tag }}" \
-            --verify-tag \
-            $prerelease_flag \
-            --title "${{ needs.prepare.outputs.tag }}" \
-            --notes "Release ${{ needs.prepare.outputs.tag }}" \
-            artifacts/*

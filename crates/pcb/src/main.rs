@@ -1,16 +1,11 @@
-#[cfg(all(feature = "mimalloc", not(target_family = "wasm")))]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use colored::Colorize;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -22,59 +17,16 @@ const NIGHTLY_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/nig
 const USER_AGENT: &str = "pcb";
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const RELEASE_LIST_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const STANDALONE_INSTALL_REQUIRED: &str = "Self-update is only available for pcb installed via the standalone installer.\nIf you installed pcb via a package manager, please update using that tool.";
 
-#[derive(Parser)]
-#[command(name = "pcb")]
-#[command(about = "PCB toolchain shim and version manager", long_about = None)]
-#[command(version)]
-struct ShimCli {
-    #[command(subcommand)]
-    command: ShimCommands,
-}
-
-#[derive(Subcommand)]
-enum ShimCommands {
-    /// Update the pcb shim and managed pcbc toolchains
-    #[command(name = "self")]
-    SelfUpdate(SelfUpdateArgs),
-
-    /// Manage installed pcbc toolchains
-    Toolchain(ToolchainArgs),
-}
-
-#[derive(Parser)]
-struct SelfUpdateArgs {
-    #[command(subcommand)]
-    command: SelfUpdateCommands,
-}
-
-#[derive(Subcommand)]
-enum SelfUpdateCommands {
-    /// Update the pcb shim and managed pcbc toolchains
-    Update,
-}
-
-#[derive(Parser)]
-struct ToolchainArgs {
-    #[command(subcommand)]
-    command: ToolchainCommands,
-}
-
-#[derive(Subcommand)]
-enum ToolchainCommands {
-    /// List installed pcbc toolchains
-    List,
-
-    /// Show the active pcbc toolchain for the current directory
-    Show,
-
-    /// Install a pcbc toolchain request such as 0.3, 0.3.83, latest, or nightly
-    Install { request: String },
-
-    /// Uninstall an exact pcbc toolchain version such as 0.3.83, or nightly
-    Uninstall { version: String },
+enum ShimCommand {
+    SelfUpdate,
+    ToolchainList,
+    ToolchainShow,
+    ToolchainInstall(String),
+    ToolchainUninstall(String),
 }
 
 #[derive(Debug, Clone)]
@@ -150,7 +102,7 @@ struct Download {
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("{} {e}", "Error:".red());
+        eprintln!("Error: {e}");
         for cause in e.chain().skip(1) {
             eprintln!("  {cause}");
         }
@@ -162,8 +114,7 @@ fn run() -> Result<()> {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     if is_shim_command(&args) {
-        let cli = ShimCli::parse_from(std::iter::once(OsString::from("pcb")).chain(args));
-        return execute_shim(cli);
+        return execute_shim(parse_shim_command(&args)?);
     }
 
     let override_request = take_cli_override(&mut args)?;
@@ -185,17 +136,48 @@ fn is_shim_command(args: &[OsString]) -> bool {
     )
 }
 
-fn execute_shim(cli: ShimCli) -> Result<()> {
-    match cli.command {
-        ShimCommands::SelfUpdate(args) => match args.command {
-            SelfUpdateCommands::Update => self_update(),
-        },
-        ShimCommands::Toolchain(args) => match args.command {
-            ToolchainCommands::List => toolchain_list(),
-            ToolchainCommands::Show => toolchain_show(),
-            ToolchainCommands::Install { request } => toolchain_install(&request),
-            ToolchainCommands::Uninstall { version } => toolchain_uninstall(&version),
-        },
+fn parse_shim_command(args: &[OsString]) -> Result<ShimCommand> {
+    let strings: Vec<&str> = args
+        .iter()
+        .map(|arg| {
+            arg.to_str()
+                .ok_or_else(|| anyhow::anyhow!("shim commands must be valid UTF-8"))
+        })
+        .collect::<Result<_>>()?;
+
+    match strings.as_slice() {
+        ["self", "update"] => Ok(ShimCommand::SelfUpdate),
+        ["toolchain", "list"] => Ok(ShimCommand::ToolchainList),
+        ["toolchain", "show"] => Ok(ShimCommand::ToolchainShow),
+        ["toolchain", "install", request] => Ok(ShimCommand::ToolchainInstall((*request).into())),
+        ["toolchain", "uninstall", version] => {
+            Ok(ShimCommand::ToolchainUninstall((*version).into()))
+        }
+        ["self", "--help" | "-h" | "help"] => {
+            println!("Usage: pcb self update");
+            std::process::exit(0);
+        }
+        ["toolchain", "--help" | "-h" | "help"] => {
+            println!(
+                "Usage:\n  pcb toolchain list\n  pcb toolchain show\n  pcb toolchain install <request>\n  pcb toolchain uninstall <version>"
+            );
+            std::process::exit(0);
+        }
+        ["self", ..] => anyhow::bail!("usage: pcb self update"),
+        ["toolchain", ..] => {
+            anyhow::bail!("usage: pcb toolchain <list|show|install|uninstall> [request|version]")
+        }
+        _ => anyhow::bail!("unknown shim command"),
+    }
+}
+
+fn execute_shim(command: ShimCommand) -> Result<()> {
+    match command {
+        ShimCommand::SelfUpdate => self_update(),
+        ShimCommand::ToolchainList => toolchain_list(),
+        ShimCommand::ToolchainShow => toolchain_show(),
+        ShimCommand::ToolchainInstall(request) => toolchain_install(&request),
+        ShimCommand::ToolchainUninstall(version) => toolchain_uninstall(&version),
     }
 }
 
@@ -297,8 +279,7 @@ fn resolve_request(
             Err(remote_error) => {
                 if let Some(local) = best_local_toolchain(request)? {
                     eprintln!(
-                        "{} failed to check latest release ({remote_error}); using installed pcbc {}",
-                        "Warning:".yellow(),
+                        "Warning: failed to check latest release ({remote_error}); using installed pcbc {}",
                         local.0
                     );
                     return Ok(ResolvedToolchain {
@@ -339,8 +320,7 @@ fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
         Err(remote_error) => {
             if let Some((receipt, binary)) = installed_nightly_toolchain()? {
                 eprintln!(
-                    "{} failed to check nightly release ({remote_error}); using installed pcbc nightly {} ({})",
-                    "Warning:".yellow(),
+                    "Warning: failed to check nightly release ({remote_error}); using installed pcbc nightly {} ({})",
                     receipt.date,
                     short_sha(&receipt.sha)
                 );
@@ -428,14 +408,7 @@ fn fetch_release_versions(force_refresh: bool) -> Result<Vec<Version>> {
         "{RELEASE_LIST_URL}?list-type=2&prefix=pcb/&delimiter=/&_pcb_cache_bust={}",
         unix_timestamp()
     );
-    let body = reqwest::blocking::Client::builder()
-        .timeout(METADATA_TIMEOUT)
-        .build()?
-        .get(url)
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .send()?
-        .error_for_status()?
-        .text()?;
+    let body = download_text(&http_client(METADATA_TIMEOUT)?, &url)?;
 
     let versions = parse_release_versions(&body);
     write_release_cache(&versions)?;
@@ -577,7 +550,7 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
 
     let name = binary_artifact_name("pcbc");
     let url = format!("{}/{}", release.base_url.trim_end_matches('/'), name);
-    let bytes = download_text_bytes(&http_client(ARCHIVE_TIMEOUT)?, &url)?;
+    let bytes = download_artifact_bytes(&http_client(ARCHIVE_TIMEOUT)?, &url)?;
     let actual_sha256 = verify_checksum(&url, &bytes)?;
 
     fs::create_dir_all(downloads_dir())?;
@@ -699,7 +672,7 @@ fn download_toolchain(version: &Version) -> Result<Download> {
     for binary in ["pcbc", "pcb"] {
         let name = binary_artifact_name(binary);
         let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
-        if let Some(bytes) = download_optional(&client, &url)? {
+        if let Some(bytes) = download_optional_artifact(&client, &url)? {
             return Ok(Download {
                 name,
                 url,
@@ -729,31 +702,55 @@ fn download_toolchain(version: &Version) -> Result<Download> {
     )
 }
 
-fn download_optional(client: &reqwest::blocking::Client, url: &str) -> Result<Option<Vec<u8>>> {
-    let response = client
-        .get(url)
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .send()?;
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
+fn download_optional(client: &ureq::Agent, url: &str) -> Result<Option<Vec<u8>>> {
+    match client.get(url).header("User-Agent", USER_AGENT).call() {
+        Ok(mut response) => Ok(Some(read_download_bytes(response.body_mut())?)),
+        Err(ureq::Error::StatusCode(404)) => Ok(None),
+        Err(err) => Err(err.into()),
     }
-    Ok(Some(response.error_for_status()?.bytes()?.to_vec()))
 }
 
-fn download_text_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
-    Ok(client
-        .get(url)
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .send()?
-        .error_for_status()?
-        .bytes()?
-        .to_vec())
+fn download_optional_artifact(client: &ureq::Agent, url: &str) -> Result<Option<Vec<u8>>> {
+    let compressed_url = format!("{url}.zst");
+    if let Some(compressed) = download_optional(client, &compressed_url)? {
+        return Ok(Some(decompress_zstd(&compressed_url, compressed)?));
+    }
+    download_optional(client, url)
 }
 
-fn http_client(timeout: Duration) -> Result<reqwest::blocking::Client> {
-    Ok(reqwest::blocking::Client::builder()
-        .timeout(timeout)
-        .build()?)
+fn download_artifact_bytes(client: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
+    download_optional_artifact(client, url)?.ok_or_else(|| anyhow::anyhow!("not found: {url}"))
+}
+
+fn read_download_bytes(body: &mut ureq::Body) -> Result<Vec<u8>> {
+    Ok(body.with_config().limit(MAX_DOWNLOAD_BYTES).read_to_vec()?)
+}
+
+fn decompress_zstd(url: &str, bytes: Vec<u8>) -> Result<Vec<u8>> {
+    let decoder = zstd::stream::read::Decoder::new(Cursor::new(bytes))
+        .with_context(|| format!("failed to decompress {url}"))?;
+    let mut limited = decoder.take(MAX_DOWNLOAD_BYTES + 1);
+    let mut decompressed = Vec::new();
+    limited
+        .read_to_end(&mut decompressed)
+        .with_context(|| format!("failed to decompress {url}"))?;
+    anyhow::ensure!(
+        decompressed.len() <= MAX_DOWNLOAD_BYTES as usize,
+        "decompressed artifact exceeds maximum size: {url}"
+    );
+    Ok(decompressed)
+}
+
+fn http_client(timeout: Duration) -> Result<ureq::Agent> {
+    Ok(ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .provider(ureq::tls::TlsProvider::NativeTls)
+                .build(),
+        )
+        .timeout_global(Some(timeout))
+        .build()
+        .into())
 }
 
 fn verify_checksum(url: &str, bytes: &[u8]) -> Result<String> {
@@ -767,13 +764,13 @@ fn verify_checksum(url: &str, bytes: &[u8]) -> Result<String> {
     Ok(actual_sha256)
 }
 
-fn download_text(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
+fn download_text(client: &ureq::Agent, url: &str) -> Result<String> {
     Ok(client
         .get(url)
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .send()?
-        .error_for_status()?
-        .text()?)
+        .header("User-Agent", USER_AGENT)
+        .call()?
+        .body_mut()
+        .read_to_string()?)
 }
 
 fn parse_sha256(content: &str) -> Result<String> {
@@ -944,8 +941,7 @@ fn self_update() -> Result<()> {
         }
         Ok(_) => {}
         Err(err) => eprintln!(
-            "{} failed to check latest pcb shim release ({err}); continuing with pcbc updates",
-            "Warning:".yellow()
+            "Warning: failed to check latest pcb shim release ({err}); continuing with pcbc updates"
         ),
     }
 
@@ -991,47 +987,27 @@ fn self_update() -> Result<()> {
         Ok(changelogs) => {
             for (from, to, binary) in changelogs {
                 println!();
-                println!(
-                    "pcbc {} → {}",
-                    from.to_string().dimmed(),
-                    to.to_string().green()
-                );
+                println!("pcbc {from} → {to}");
                 let selector = format!("{from}..{to}");
                 match Command::new(binary).args(["changelog", &selector]).status() {
                     Ok(status) if status.success() => {}
-                    Ok(status) => eprintln!(
-                        "{} failed to print pcbc changelog ({status})",
-                        "Warning:".yellow()
-                    ),
-                    Err(err) => eprintln!(
-                        "{} failed to print pcbc changelog ({err})",
-                        "Warning:".yellow()
-                    ),
+                    Ok(status) => eprintln!("Warning: failed to print pcbc changelog ({status})"),
+                    Err(err) => eprintln!("Warning: failed to print pcbc changelog ({err})"),
                 }
             }
         }
-        Err(err) => eprintln!(
-            "{} failed to update managed pcbc toolchains ({err})",
-            "Warning:".yellow()
-        ),
+        Err(err) => eprintln!("Warning: failed to update managed pcbc toolchains ({err})"),
     }
 
     if installed_nightly_toolchain()?.is_some()
         && let Err(err) =
             fetch_nightly_release().and_then(|nightly| ensure_nightly_installed(&nightly))
     {
-        eprintln!(
-            "{} failed to update installed nightly toolchain ({err})",
-            "Warning:".yellow()
-        );
+        eprintln!("Warning: failed to update installed nightly toolchain ({err})");
     }
 
     if let Some(version) = updated_shim {
-        println!(
-            "Updated pcb {} → {}",
-            current_version.to_string().dimmed(),
-            version.to_string().green()
-        );
+        println!("Updated pcb {current_version} → {version}");
     } else {
         println!("pcb is already up to date; pcbc toolchains checked.");
     }
@@ -1039,25 +1015,13 @@ fn self_update() -> Result<()> {
 }
 
 fn fetch_latest_release() -> Result<LatestRelease> {
-    Ok(reqwest::blocking::Client::builder()
-        .timeout(METADATA_TIMEOUT)
-        .build()?
-        .get(SHIM_LATEST_RELEASE_URL)
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .send()?
-        .error_for_status()?
-        .json()?)
+    let content = download_text(&http_client(METADATA_TIMEOUT)?, SHIM_LATEST_RELEASE_URL)?;
+    Ok(serde_json::from_str(&content)?)
 }
 
 fn fetch_nightly_release() -> Result<NightlyRelease> {
-    Ok(reqwest::blocking::Client::builder()
-        .timeout(METADATA_TIMEOUT)
-        .build()?
-        .get(NIGHTLY_LATEST_RELEASE_URL)
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .send()?
-        .error_for_status()?
-        .json()?)
+    let content = download_text(&http_client(METADATA_TIMEOUT)?, NIGHTLY_LATEST_RELEASE_URL)?;
+    Ok(serde_json::from_str(&content)?)
 }
 
 fn install_shim_update(latest: &LatestRelease) -> Result<()> {
@@ -1067,13 +1031,7 @@ fn install_shim_update(latest: &LatestRelease) -> Result<()> {
     let temp = tempfile::tempdir()?;
     let binary_name = binary_artifact_name("pcb");
     let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
-    let bytes = client
-        .get(&binary_url)
-        .header(reqwest::header::USER_AGENT, USER_AGENT)
-        .send()?
-        .error_for_status()?
-        .bytes()?
-        .to_vec();
+    let bytes = download_artifact_bytes(&client, &binary_url)?;
     verify_checksum(&binary_url, &bytes)?;
     let binary = temp.path().join(legacy_pcb_binary_name());
     fs::write(&binary, bytes)?;
