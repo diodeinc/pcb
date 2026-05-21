@@ -9,7 +9,7 @@ authors = { workspace = true }
 default-run = "pcb"
 
 [features]
-default = ["mimalloc"]
+default = []
 mimalloc = ["dep:mimalloc"]
 
 [package.metadata.wix]
@@ -24,12 +24,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true }
-colored = { workspace = true }
 dirs = { workspace = true }
 fslock = { workspace = true }
 mimalloc = { workspace = true, optional = true }
-reqwest = { workspace = true }
 self-replace = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
@@ -37,4 +34,5 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
+ureq = { workspace = true }
 zip = { workspace = true }
