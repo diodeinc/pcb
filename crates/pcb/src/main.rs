@@ -864,8 +864,8 @@ fn toolchain_list() -> Result<()> {
 }
 
 fn toolchain_show() -> Result<()> {
-    let selection = select_toolchain(None, false)?;
     println!("shim: {}", env!("CARGO_PKG_VERSION"));
+    let selection = select_toolchain(None, false)?;
     println!("active: {}", selection.label);
     println!("reason: {}", selection.reason);
     println!("binary: {}", selection.binary.display());
