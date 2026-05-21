@@ -1,0 +1,7 @@
+---
+source: crates/pcbc/tests/auto_deps.rs
+assertion_line: 40
+expression: pcb_toml_content
+---
+[workspace]
+pcb-version = "0.3"

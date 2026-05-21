@@ -9,23 +9,25 @@ _Package manager installation coming soon._
 
 ## Install from script
 
-Download latest relese from github, instructions available [here](https://github.com/diodeinc/pcb/releases)
+Install the `pcb` shim. It downloads and runs the right `pcbc` toolchain for each project.
 
 <CodeGroup>
 
 ```bash bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/diodeinc/pcb/releases/latest/download/pcb-installer.sh | sh
+curl -fsSL https://raw.githubusercontent.com/diodeinc/pcb/main/install.sh | bash
 ```
 
-```sh powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/diodeinc/pcb/releases/latest/download/pcb-installer.ps1 | iex"
+```powershell powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/diodeinc/pcb/main/install.ps1 | iex"
 ```
 
 </CodeGroup>
 
+The installer adds `pcb` to your user `PATH` when needed.
+
 <Accordion title="Install from source.">
 
-Clone the [repo](https://github.com/diodeinc/pcb) and run the install script
+Clone the [repo](https://github.com/diodeinc/pcb) and build locally.
 
 ```bash
 # Clone the repo
@@ -34,8 +36,8 @@ git clone https://github.com/diodeinc/pcb
 # Move into source folder
 cd pcb
 
-# Run the install script
-./install.sh
+# Build locally
+cargo build -p pcb -p pcbc
 ```
 
 </Accordion>

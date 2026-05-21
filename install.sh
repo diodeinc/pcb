@@ -1,37 +1,81 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-# Get the directory where this script is located
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+base_url="https://pcb.api.diode.computer/pcb"
+install_dir="${PCB_INSTALL_DIR:-$HOME/.local/bin}"
 
-# Colors for output
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) target="aarch64-apple-darwin" ;;
+  Darwin-x86_64) target="x86_64-apple-darwin" ;;
+  Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu" ;;
+  Linux-x86_64) target="x86_64-unknown-linux-gnu" ;;
+  *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+esac
 
-echo "Installing..."
-echo ""
+command -v curl >/dev/null || { echo "missing required command: curl" >&2; exit 1; }
 
-# Check if cargo is installed
-if ! command -v cargo &> /dev/null; then
-    echo -e "${RED}Error: Cargo is not installed.${NC}"
-    echo "Please install Rust and Cargo from https://rustup.rs/"
-    exit 1
-fi
+add_install_dir_to_path() {
+  case ":$PATH:" in *":$install_dir:"*) return 0 ;; esac
 
-# Run cargo install from the script directory
-echo "Building and installing pcb binary..."
-if cargo install --path "$SCRIPT_DIR/crates/pcb"; then
-    echo ""
-    echo -e "${GREEN}✓ Zener successfully installed!${NC}"
-    echo ""
-    echo "You can now use the 'pcb' command from anywhere."
-    echo "Try running: pcb --help"
+  if [ -n "${GITHUB_PATH:-}" ]; then
+    echo "$install_dir" >> "$GITHUB_PATH"
+  fi
+
+  env_script="$install_dir/env"
+  cat > "$env_script" <<EOF
+case ":\${PATH}:" in
+  *:"$install_dir":*) ;;
+  *) export PATH="$install_dir:\$PATH" ;;
+esac
+EOF
+
+  source_line=". \"$env_script\""
+  for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
+    [ -e "$rc" ] || [ "$rc" = "$HOME/.profile" ] || continue
+    touch "$rc"
+    grep -Fqx "$source_line" "$rc" || printf '\n%s\n' "$source_line" >> "$rc"
+  done
+
+  fish_dir="$HOME/.config/fish/conf.d"
+  if [ -d "$HOME/.config/fish" ]; then
+    mkdir -p "$fish_dir"
+    printf 'fish_add_path "%s"\n' "$install_dir" > "$fish_dir/pcb.env.fish"
+  fi
+
+  echo "Added $install_dir to PATH. Restart your shell or run: $source_line"
+}
+
+json="$(curl -fsSL "$base_url/pcb-latest.json")"
+tag="$(printf '%s' "$json" | sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+version="$(printf '%s' "$json" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+[ -n "$tag" ] || { echo "could not read latest pcb release" >&2; exit 1; }
+
+artifact="pcb-$target"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+curl -fsSL "$base_url/$tag/$artifact" -o "$tmp/pcb"
+curl -fsSL "$base_url/$tag/$artifact.sha256" -o "$tmp/pcb.sha256"
+expected="$(sed 's/[[:space:]].*//' "$tmp/pcb.sha256")"
+if command -v shasum >/dev/null; then
+  actual="$(shasum -a 256 "$tmp/pcb" | sed 's/[[:space:]].*//')"
+elif command -v sha256sum >/dev/null; then
+  actual="$(sha256sum "$tmp/pcb" | sed 's/[[:space:]].*//')"
 else
-    echo ""
-    echo -e "${RED}✗ Installation failed.${NC}"
-    echo "Please check the error messages above."
-    exit 1
+  echo "missing shasum or sha256sum" >&2
+  exit 1
 fi
+[ "$actual" = "$expected" ] || { echo "checksum mismatch" >&2; exit 1; }
 
- 
+mkdir -p "$install_dir"
+chmod +x "$tmp/pcb"
+mv "$tmp/pcb" "$install_dir/pcb"
+
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pcb"
+mkdir -p "$config_dir"
+json_install_dir="$(printf '%s' "$install_dir" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+printf '{"install_prefix":"%s"}\n' "$json_install_dir" > "$config_dir/pcb-receipt.json"
+
+add_install_dir_to_path
+
+echo "Installed pcb ${version:-$tag} to $install_dir/pcb"

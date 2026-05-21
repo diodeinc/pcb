@@ -1,0 +1,170 @@
+name: Release pcbc
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'pcbc release tag, such as v0.3.83'
+        required: true
+        type: string
+      dry_run:
+        description: 'Build artifacts without publishing to S3 or GitHub Releases'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  prepare:
+    runs-on: ubicloud-standard-30-ubuntu-2204
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.ref_name || inputs.tag || github.ref_name }}
+          submodules: recursive
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-bin: false
+
+      - id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          case "$tag" in
+            v*) version="${tag#v}" ;;
+            *) echo "Unsupported pcbc release tag: $tag" >&2; exit 1 ;;
+          esac
+
+          actual=$(cargo metadata --no-deps --format-version=1 \
+            | jq -r '.packages[] | select(.name == "pcbc") | .version')
+          if [ "$actual" != "$version" ]; then
+            echo "pcbc version is $actual, but tag requests $version" >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    name: build pcbc (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15-xlarge
+          - target: x86_64-apple-darwin
+            runner: macos-15-large
+          - target: aarch64-unknown-linux-gnu
+            runner: ubicloud-standard-30-arm-ubuntu-2204
+          - target: x86_64-unknown-linux-gnu
+            runner: ubicloud-standard-30-ubuntu-2204
+          - target: x86_64-pc-windows-msvc
+            runner: diode-windows
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.ref_name || needs.prepare.outputs.tag }}
+          submodules: recursive
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-bin: false
+          target: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --profile dist -p pcbc --bin pcbc --target ${{ matrix.target }}
+
+      - name: Prepare artifacts
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          exe=pcbc
+          artifact="pcbc-$TARGET"
+          if [[ "$TARGET" == *windows* ]]; then
+            exe=pcbc.exe
+            artifact="$artifact.exe"
+          fi
+          cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
+          if command -v shasum >/dev/null; then
+            shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
+          else
+            sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcbc-${{ matrix.target }}
+          path: artifacts/*
+
+  publish:
+    needs:
+      - prepare
+      - build
+    runs-on: ubicloud-standard-30-ubuntu-2204
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pcbc-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Configure AWS credentials
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Upload artifacts to S3
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        run: |
+          aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ needs.prepare.outputs.tag }}/" \
+            --cache-control "public, max-age=31536000, immutable"
+
+      - name: Create GitHub release
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prerelease_flag=""
+          if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
+            prerelease_flag="--prerelease"
+          fi
+          gh release create "${{ needs.prepare.outputs.tag }}" \
+            --verify-tag \
+            $prerelease_flag \
+            --title "${{ needs.prepare.outputs.tag }}" \
+            --notes "Release ${{ needs.prepare.outputs.tag }}" \
+            artifacts/*

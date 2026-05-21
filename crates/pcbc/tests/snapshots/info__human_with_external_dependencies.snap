@@ -1,0 +1,22 @@
+---
+source: crates/pcbc/tests/info.rs
+expression: human_output
+---
+Command: pcbc info
+Exit Code: 0
+
+--- STDOUT ---
+Workspace
+Root: <TEMP_DIR>
+Toolchain: pcb >= 0.3
+Members: components/*, reference/*, modules/*, boards/*, graphics/*
+
+No boards discovered
+
+Packages (1)
+  root (unpublished) (workspace root) (1 deps)
+
+External dependencies (2)
+  github.com/vendor/components/Leaf (v1.0.0) [cache] .pcb/cache/github.com/vendor/components/Leaf/1.0.0
+  github.com/vendor/components/Thing (v1.0.0) [cache] .pcb/cache/github.com/vendor/components/Thing/1.0.0
+--- STDERR ---

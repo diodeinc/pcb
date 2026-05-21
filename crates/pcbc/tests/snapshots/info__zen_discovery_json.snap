@@ -1,0 +1,38 @@
+---
+source: crates/pcbc/tests/info.rs
+expression: output
+---
+Command: pcbc info -f json
+Exit Code: 0
+
+--- STDOUT ---
+{
+  "root": "<TEMP_DIR>",
+  "config": {
+    "workspace": {
+      "pcb-version": "0.3",
+      "members": [
+        "boards/*",
+        "special/custom-board"
+      ]
+    }
+  },
+  "packages": {
+    "boards/discovered": {
+      "rel_path": "boards/discovered",
+      "config": {
+        "board": {
+          "name": "DiscoveredBoard",
+          "path": "discovered.zen",
+          "description": "Board with auto-discovered zen file"
+        }
+      },
+      "preferred": false,
+      "dirty": true,
+      "entrypoints": [
+        "discovered.zen"
+      ]
+    }
+  }
+}
+--- STDERR ---

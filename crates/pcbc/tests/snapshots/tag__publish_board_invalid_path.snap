@@ -1,0 +1,11 @@
+---
+source: crates/pcbc/tests/tag.rs
+expression: output
+---
+Command: pcbc publish boards/NonExistent.zen --bump=minor --no-push --force
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: File not found: boards/NonExistent.zen

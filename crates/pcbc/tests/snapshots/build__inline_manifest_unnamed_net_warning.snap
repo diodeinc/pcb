@@ -1,0 +1,12 @@
+---
+source: crates/pcbc/tests/build.rs
+assertion_line: 508
+expression: output
+---
+Command: pcbc build standalone.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ standalone.zen (2 components)

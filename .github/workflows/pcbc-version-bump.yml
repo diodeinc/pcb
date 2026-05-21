@@ -1,0 +1,78 @@
+name: Release pcbc version bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'pcbc version tag to release, such as v0.3.84'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubicloud-standard-16
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.DIODE_ROBOT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'; then
+            echo "Invalid pcbc version format. Use v0.3.84"
+            exit 1
+          fi
+
+          if git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "Tag ${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Configure git
+        run: |
+          git config user.name "Diode Robot"
+          git config user.email "info@diode.run"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-bin: false
+
+      - name: Update changelog
+        run: ./bin/changelog.py release ${{ inputs.version }}
+
+      - name: Update workspace version
+        run: |
+          VERSION="${{ inputs.version }}"
+          CARGO_VERSION="${VERSION#v}"
+          sed -i "0,/^version = /{s/^version = \".*\"/version = \"${CARGO_VERSION}\"/}" Cargo.toml
+
+          if ! grep -q "^version = \"${CARGO_VERSION}\"" Cargo.toml; then
+            echo "Failed to update version in Cargo.toml"
+            exit 1
+          fi
+
+      - name: Update Cargo.lock
+        run: cargo check
+
+      - name: Commit and push
+        run: |
+          git add Cargo.toml Cargo.lock CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No changes to commit (version already set)"
+          else
+            git commit -m "Release ${{ inputs.version }}"
+            git push origin main
+          fi
+
+      - name: Create and push tag
+        run: |
+          git tag ${{ inputs.version }}
+          git push origin ${{ inputs.version }}

@@ -1,0 +1,12 @@
+---
+source: crates/pcbc/tests/simple.rs
+assertion_line: 225
+expression: output
+---
+Command: pcbc build foo.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ foo.zen (1 components)

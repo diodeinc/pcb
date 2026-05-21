@@ -1,0 +1,21 @@
+---
+source: crates/pcbc/tests/netlist.rs
+assertion_line: 248
+expression: output
+---
+{
+  "<TEMP_DIR>/boards/I2cBoard.zen:<root>.PU1": {
+    "symbol_positions": {
+      "sym:I2C_BUS_SCL#0": {
+        "rotation": 0,
+        "x": 10,
+        "y": 20
+      },
+      "sym:I2C_BUS_SDA#0": {
+        "rotation": 0,
+        "x": 10,
+        "y": 30
+      }
+    }
+  }
+}

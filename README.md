@@ -26,7 +26,21 @@ PCB schematics and provides automations on top of KiCad to build PCBs fast.
 
 ### From Installer
 
-See the [latest release](https://github.com/diodeinc/pcb/releases/latest) for installation instructions.
+Install the `pcb` shim, which will download and run the right `pcbc` toolchain for each project:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/diodeinc/pcb/main/install.sh | bash
+```
+
+On Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/diodeinc/pcb/main/install.ps1 | iex"
+```
+
+The Unix installer writes `pcb` to `$HOME/.local/bin` by default. The Windows installer writes
+`pcb.exe` to `%USERPROFILE%\.pcb\bin` by default. Set `PCB_INSTALL_DIR` to choose a different
+directory. The installers add that directory to your user `PATH` when needed.
 
 ### From Source
 
@@ -35,8 +49,8 @@ See the [latest release](https://github.com/diodeinc/pcb/releases/latest) for in
 git clone https://github.com/diodeinc/pcb.git
 cd pcb
 
-# Install using the provided script
-./install.sh
+# Build locally
+cargo build -p pcb -p pcbc
 ```
 
 ### Requirements

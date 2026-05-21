@@ -1,0 +1,102 @@
+---
+source: crates/pcbc/tests/release.rs
+expression: sb.snapshot_dir(&staging_dir)
+---
+=== diagnostics.json
+{
+  "boards/DescBoard.zen": [
+    {
+      "location": "<TEMP_DIR>/src/.pcb/releases/DescBoard-<GIT_HASH>/src/boards/modules/LedModule.zen:12:7-17",
+      "kind": "module.io.unused",
+      "severity": "warning",
+      "body": "io() 'GND' in module 'LED1' is not connected to any ports",
+      "suppressed": false,
+      "occurrences": 1,
+      "stack": []
+    }
+  ]
+}
+=== metadata.json
+{
+  "git": {
+    "branch": "main",
+    "describe": "<GIT_HASH>",
+    "hash": "<GIT_HASH>",
+    "remotes": {
+      "origin": "file://<TEMP_DIR>/origin.git"
+    },
+    "workspace": "<TEMP_DIR>/src"
+  },
+  "release": {
+    "board_name": "DescBoard",
+    "created_at": "<TIMESTAMP>",
+    "description": "A test board with a description",
+    "git_version": "<GIT_HASH>",
+    "schema_version": "1",
+    "staging_directory": "<TEMP_DIR>/src/.pcb/releases/DescBoard-<GIT_HASH>",
+    "workspace_root": "<TEMP_DIR>/src",
+    "zen_file": "boards/DescBoard.zen"
+  },
+  "system": {
+    "arch": "<ARCH>",
+    "cli_version": "<CLI_VERSION>",
+    "kicad_version": "<KICAD_VERSION>",
+    "platform": "<PLATFORM>",
+    "user": "<USER>"
+  }
+}
+=== netlist.json <71281 bytes, sha256: 7be9ddd>
+=== src/boards/DescBoard.zen
+
+load("@stdlib/interfaces.zen", "Gpio")
+
+Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+
+LedModule = Module("modules/LedModule.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+vcc_3v3 = Power("VCC_3V3")
+gnd = Ground("GND")
+led_ctrl = Gpio("LED_CTRL")
+
+Capacitor(name = "C1", value = "100nF", package = "0402", P1 = vcc_3v3, P2 = gnd)
+Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc_3v3, P2 = gnd)
+
+LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = led_ctrl)
+
+Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3, P2 = led_ctrl)
+=== src/boards/modules/LedModule.zen
+
+load("@stdlib/interfaces.zen", "Gpio")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
+
+led_color = config(str, default = "red")
+r_value = config(str, default = "330Ohm")
+package = config(str, default = "0603")
+
+VCC = io(Power)
+GND = io(Ground)
+CTRL = io(Gpio)
+
+led_anode = Net("LED_ANODE")
+
+Resistor(name = "R1", value = r_value, package = package, P1 = VCC, P2 = led_anode)
+Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL)
+=== src/boards/pcb.toml
+
+[board]
+name = "DescBoard"
+path = "DescBoard.zen"
+description = "A test board with a description"
+=== src/pcb.toml
+
+[workspace]
+pcb-version = "0.3"
+name = "test_workspace"
+
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"

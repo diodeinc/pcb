@@ -156,7 +156,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-chrome = "0.7"
 
-# The profile that 'dist' will build with
+# The profile that release CI uses for published binaries.
 [profile.dist]
 inherits = "release"
 lto = "fat"           # Maximum link-time optimization

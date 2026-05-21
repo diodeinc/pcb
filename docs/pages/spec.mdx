@@ -141,7 +141,7 @@ description = "Replace with concise board description."
 
 - `name`: Optional Diode workspace name override for board release uploads. When omitted, publish uses the first path segment of `repository`, such as `myorg` from `github.com/myorg/MainBoard`.
 - `repository`: Git remote URL (used to derive package URLs for publishing)
-- `pcb-version`: Minimum compatible `pcb` toolchain release series (e.g., `"0.3"`). Required for workspaces.
+- `pcb-version`: Compatible `pcbc` toolchain release lane (e.g., `"0.3"`) or the explicit moving `"nightly"` channel. For semver lanes, `pcb` selects the newest installed toolchain in that lane, installing the newest available patch release for the lane when none is installed. It never auto-upgrades a workspace across lanes such as `"0.3"` to `"0.4"`; run `pcb migrate` to make breaking-version upgrades explicit. Required for workspaces.
 - `endpoint`: Optional Diode host suffix used for workspace-scoped app/API URLs. `"diode.computer"` resolves to `app.diode.computer` and `api.diode.computer`.
 - `members`: Glob patterns matching subdirectories that contain local packages
 - `[board]`: Defines the repository's buildable board with `name`, entry `path`, and a short `description`

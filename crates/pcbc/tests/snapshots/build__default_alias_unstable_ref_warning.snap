@@ -1,0 +1,11 @@
+---
+source: crates/pcbc/tests/build.rs
+expression: output
+---
+Command: pcbc build board.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ board.zen (1 components)

@@ -1,0 +1,16 @@
+---
+source: crates/pcbc/tests/path.rs
+assertion_line: 51
+expression: "sb.snapshot_run(\"pcbc\", [\"build\", \"boards/LocalPathTest.zen\"])"
+---
+Command: pcbc build boards/LocalPathTest.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+Existing file: package://boards/existing.toml
+Nonexistent file: package://boards/missing.toml
+Existing directory: package://boards/config
+Nonexistent directory: package://boards/missing_dir
+✓ LocalPathTest.zen (0 components)

@@ -1,0 +1,13 @@
+---
+source: crates/pcbc/tests/auto_deps.rs
+expression: pcb_toml_content
+---
+[workspace]
+pcb-version = "0.3"
+members = [
+    "components/*",
+    "reference/*",
+    "modules/*",
+    "boards/*",
+    "graphics/*",
+]

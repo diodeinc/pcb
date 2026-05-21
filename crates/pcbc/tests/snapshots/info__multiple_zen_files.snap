@@ -1,0 +1,17 @@
+---
+source: crates/pcbc/tests/info.rs
+expression: output
+---
+Command: pcbc info
+Exit Code: 0
+
+--- STDOUT ---
+Workspace
+Root: <TEMP_DIR>
+Toolchain: pcb >= 0.3
+Members: boards/*, special/custom-board
+
+Boards (1)
+  AmbiguousBoard (unpublished) - (no .zen file found)
+    Board with multiple zen files
+--- STDERR ---

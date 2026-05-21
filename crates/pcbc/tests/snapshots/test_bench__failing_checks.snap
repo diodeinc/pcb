@@ -1,0 +1,39 @@
+---
+source: crates/pcbc/tests/test_bench.rs
+expression: output
+---
+Command: pcbc test failing_checks_testbench.zen
+Exit Code: 1
+
+--- STDOUT ---
+┌────────┬─────────────┬───────────────┬───────────────────────┐
+│ Status ┆ TestBench   ┆ Case          ┆ Check                 │
+╞════════╪═════════════╪═══════════════╪═══════════════════════╡
+│ ✓ PASS ┆ FailingTest ┆ test_failures ┆ passing_check         │
+│ ✗ FAIL ┆ FailingTest ┆ test_failures ┆ failing_check         │
+│ ✓ PASS ┆ FailingTest ┆ test_failures ┆ another_passing_check │
+└────────┴─────────────┴───────────────┴───────────────────────┘
+
+✗ 2 passed, 1 failed
+--- STDERR ---
+Error: Expected more than 100 components (intentional failure)
+    ╭─[ <TEMP_DIR>/failing_checks_testbench.zen:13:5 ]
+    │
+ 13 │         check(len(components) > 100, "Expected more than 100 components (intentional failure)")
+    │         ───────────────────────────────────────────┬───────────────────────────────────────────  
+    │                                                    ╰───────────────────────────────────────────── Expected more than 100 components (intentional failure)
+    │ 
+ 22 │ ╭─▶ TestBench(
+    ┆ ┆   
+ 36 │ ├─▶ )
+    │ │       
+    │ ╰─────── TestBench 'FailingTest' case 'test_failures' check 'failing_check' failed
+────╯
+
+Stack trace (most recent call last):
+    <TEMP_DIR>/failing_checks_testbench.zen:22:1 (TestBench 'FailingTest' case 'test_failures' check 'failing_check' failed)
+    <TEMP_DIR>/failing_checks_testbench.zen:13:5 (Expected more than 100 components (intentional failure))
+      ├─ failing_check
+      ╰─ check (called from <TEMP_DIR>/failing_checks_testbench.zen:13:5-92)
+
+Error: Test run failed

@@ -1,0 +1,17 @@
+---
+source: crates/pcbc/tests/info.rs
+expression: output
+---
+Command: pcbc info subdir
+Exit Code: 0
+
+--- STDOUT ---
+Workspace
+Root: <TEMP_DIR>/subdir
+Toolchain: pcb >= 0.3
+Members: boards/*, special/custom-board
+
+Boards (1)
+  TestBoard (unpublished) - boards/test-board/test_board.zen
+    Main test board for validation
+--- STDERR ---

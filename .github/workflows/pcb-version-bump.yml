@@ -1,0 +1,72 @@
+name: Release pcb shim version bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'pcb shim version tag to release, such as pcb/v0.1.1'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubicloud-standard-16
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.DIODE_ROBOT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^pcb/v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'; then
+            echo "Invalid pcb shim version format. Use pcb/v0.1.1"
+            exit 1
+          fi
+
+          if git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "Tag ${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Configure git
+        run: |
+          git config user.name "Diode Robot"
+          git config user.email "info@diode.run"
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-bin: false
+
+      - name: Update pcb shim version
+        run: |
+          VERSION="${{ inputs.version }}"
+          CARGO_VERSION="${VERSION#pcb/v}"
+          sed -i "0,/^version = /{s/^version = \".*\"/version = \"${CARGO_VERSION}\"/}" crates/pcb/Cargo.toml
+
+          if ! grep -q "^version = \"${CARGO_VERSION}\"" crates/pcb/Cargo.toml; then
+            echo "Failed to update version in crates/pcb/Cargo.toml"
+            exit 1
+          fi
+
+      - name: Update Cargo.lock
+        run: cargo check
+
+      - name: Commit and push
+        run: |
+          git add crates/pcb/Cargo.toml Cargo.lock
+          if git diff --cached --quiet; then
+            echo "No changes to commit (version already set)"
+          else
+            git commit -m "Release ${{ inputs.version }}"
+            git push origin main
+          fi
+
+      - name: Create and push tag
+        run: |
+          git tag ${{ inputs.version }}
+          git push origin ${{ inputs.version }}
