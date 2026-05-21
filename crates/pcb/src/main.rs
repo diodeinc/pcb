@@ -979,8 +979,6 @@ fn self_update() -> Result<()> {
     match stable_result {
         Ok(changelogs) => {
             for (from, to, binary) in changelogs {
-                println!();
-                println!("pcbc {from} → {to}");
                 let selector = format!("{from}..{to}");
                 match Command::new(binary).args(["changelog", &selector]).status() {
                     Ok(status) if status.success() => {}
@@ -1001,8 +999,6 @@ fn self_update() -> Result<()> {
 
     if let Some(version) = updated_shim {
         println!("Updated pcb {current_version} → {version}");
-    } else {
-        println!("pcb is already up to date; pcbc toolchains checked.");
     }
     Ok(())
 }
