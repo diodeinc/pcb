@@ -164,7 +164,7 @@ jobs:
               label = f"{name}/{board_name}"
 
               if not base_board or not head_board:
-                rows.append((label, "—", "—", "—", "missing"))
+                rows.append((label, "—", "—", "missing"))
                 continue
 
               delta, pct, significant = analyze_change(base_board, head_board)
