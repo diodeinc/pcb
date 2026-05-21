@@ -67,11 +67,6 @@ try {
     New-Item -ItemType Directory -Force $installDir | Out-Null
     Move-Item -Force $binary (Join-Path $installDir "pcb.exe")
 
-    $configDir = Join-Path $env:LOCALAPPDATA "pcb"
-    New-Item -ItemType Directory -Force $configDir | Out-Null
-    $receipt = @{ install_prefix = $installDir } | ConvertTo-Json -Compress
-    [IO.File]::WriteAllText((Join-Path $configDir "pcb-receipt.json"), $receipt, (New-Object Text.UTF8Encoding $false))
-
     Add-InstallDirToPath $installDir
 
     Write-Host "Installed pcb to $(Join-Path $installDir "pcb.exe")"
