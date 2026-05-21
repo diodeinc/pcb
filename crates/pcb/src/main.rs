@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -553,7 +554,7 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
 
     let name = binary_artifact_name("pcbc");
     let url = format!("{}/{}", release.base_url.trim_end_matches('/'), name);
-    let bytes = download_text_bytes(&http_client(ARCHIVE_TIMEOUT)?, &url)?;
+    let bytes = download_artifact_bytes(&http_client(ARCHIVE_TIMEOUT)?, &url)?;
     let actual_sha256 = verify_checksum(&url, &bytes)?;
 
     fs::create_dir_all(downloads_dir())?;
@@ -675,7 +676,7 @@ fn download_toolchain(version: &Version) -> Result<Download> {
     for binary in ["pcbc", "pcb"] {
         let name = binary_artifact_name(binary);
         let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
-        if let Some(bytes) = download_optional(&client, &url)? {
+        if let Some(bytes) = download_optional_artifact(&client, &url)? {
             return Ok(Download {
                 name,
                 url,
@@ -713,19 +714,35 @@ fn download_optional(client: &ureq::Agent, url: &str) -> Result<Option<Vec<u8>>>
     }
 }
 
-fn download_text_bytes(client: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
-    Ok(client
-        .get(url)
-        .header("User-Agent", USER_AGENT)
-        .call()?
-        .body_mut()
-        .with_config()
-        .limit(MAX_DOWNLOAD_BYTES)
-        .read_to_vec()?)
+fn download_optional_artifact(client: &ureq::Agent, url: &str) -> Result<Option<Vec<u8>>> {
+    let compressed_url = format!("{url}.zst");
+    if let Some(compressed) = download_optional(client, &compressed_url)? {
+        return Ok(Some(decompress_zstd(&compressed_url, compressed)?));
+    }
+    download_optional(client, url)
+}
+
+fn download_artifact_bytes(client: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
+    download_optional_artifact(client, url)?.ok_or_else(|| anyhow::anyhow!("not found: {url}"))
 }
 
 fn read_download_bytes(body: &mut ureq::Body) -> Result<Vec<u8>> {
     Ok(body.with_config().limit(MAX_DOWNLOAD_BYTES).read_to_vec()?)
+}
+
+fn decompress_zstd(url: &str, bytes: Vec<u8>) -> Result<Vec<u8>> {
+    let decoder = zstd::stream::read::Decoder::new(Cursor::new(bytes))
+        .with_context(|| format!("failed to decompress {url}"))?;
+    let mut limited = decoder.take(MAX_DOWNLOAD_BYTES + 1);
+    let mut decompressed = Vec::new();
+    limited
+        .read_to_end(&mut decompressed)
+        .with_context(|| format!("failed to decompress {url}"))?;
+    anyhow::ensure!(
+        decompressed.len() <= MAX_DOWNLOAD_BYTES as usize,
+        "decompressed artifact exceeds maximum size: {url}"
+    );
+    Ok(decompressed)
 }
 
 fn http_client(timeout: Duration) -> Result<ureq::Agent> {
@@ -1018,7 +1035,7 @@ fn install_shim_update(latest: &LatestRelease) -> Result<()> {
     let temp = tempfile::tempdir()?;
     let binary_name = binary_artifact_name("pcb");
     let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
-    let bytes = download_text_bytes(&client, &binary_url)?;
+    let bytes = download_artifact_bytes(&client, &binary_url)?;
     verify_checksum(&binary_url, &bytes)?;
     let binary = temp.path().join(legacy_pcb_binary_name());
     fs::write(&binary, bytes)?;

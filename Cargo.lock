@@ -4473,6 +4473,7 @@ dependencies = [
  "toml",
  "ureq",
  "zip 8.5.1",
+ "zstd",
 ]
 
 [[package]]
