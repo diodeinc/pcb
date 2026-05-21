@@ -49,17 +49,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pcbc-base"
           cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-base/pcbc"
 
-      - name: Checkout demo workspace
-        uses: actions/checkout@v5
-        with:
-          repository: dioderobot/demo
-          path: workspaces/demo
-
-      - name: Checkout arduino workspace
-        uses: actions/checkout@v5
-        with:
-          repository: dioderobot/arduino
-          path: workspaces/arduino
+      - name: Checkout benchmark workspace
+        run: |
+          key="$RUNNER_TEMP/code-diode-key"
+          ssh-keygen -q -t ed25519 -N '' -f "$key"
+          export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityFile=$key -o IdentityAgent=none -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@code.diode.computer:demo/b/DM0001 workspaces/DM0001
+          git clone --depth 1 git@code.diode.computer:arduino/b/Nano workspaces/Nano
+          git clone --depth 1 git@code.diode.computer:arduino/b/unoQ workspaces/unoQ
 
       - name: Install hyperfine
         run: |
@@ -69,26 +66,18 @@ jobs:
       - name: Run performance benchmarks
         run: |
           mkdir -p perf
-          python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcbc-base/pcbc" \
-            --workspace workspaces/demo \
-            --suppress bom \
-            --output perf/demo-base.json
-          python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcbc-base/pcbc" \
-            --workspace workspaces/arduino \
-            --suppress bom \
-            --output perf/arduino-base.json
-          python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcbc-head/pcbc" \
-            --workspace workspaces/demo \
-            --suppress bom \
-            --output perf/demo-head.json
-          python3 bin/pcb-build-perf \
-            --pcb "$RUNNER_TEMP/pcbc-head/pcbc" \
-            --workspace workspaces/arduino \
-            --suppress bom \
-            --output perf/arduino-head.json
+          for workspace in DM0001 Nano unoQ; do
+            python3 bin/pcb-build-perf \
+              --pcb "$RUNNER_TEMP/pcbc-base/pcbc" \
+              --workspace "workspaces/$workspace" \
+              --suppress bom \
+              --output "perf/$workspace-base.json"
+            python3 bin/pcb-build-perf \
+              --pcb "$RUNNER_TEMP/pcbc-head/pcbc" \
+              --workspace "workspaces/$workspace" \
+              --suppress bom \
+              --output "perf/$workspace-head.json"
+          done
 
       - name: Create PR comment body
         id: perf_comment
@@ -157,7 +146,7 @@ jobs:
           rows = []
           has_significant = False
 
-          for name in ["demo", "arduino"]:
+          for name in ["DM0001", "Nano", "unoQ"]:
             base = load(Path("perf") / f"{name}-base.json")
             head = load(Path("perf") / f"{name}-head.json")
             base_boards = {b["zen_path"]: b for b in base.get("boards", [])}
