@@ -951,7 +951,11 @@ fn self_update() -> Result<()> {
 
     let mut requests = BTreeSet::new();
     let stable_result: Result<()> = (|| {
-        let latest_toolchain = resolve_remote_version(&ToolchainRequest::Latest, true)?;
+        let releases = fetch_release_versions(true)?;
+        let latest_toolchain = releases
+            .iter()
+            .max()
+            .ok_or_else(|| anyhow::anyhow!("no pcbc releases found"))?;
         requests.insert((latest_toolchain.major, latest_toolchain.minor));
         for version in installed_toolchains()?.keys() {
             requests.insert((version.major, version.minor));
@@ -959,8 +963,14 @@ fn self_update() -> Result<()> {
 
         for (major, minor) in requests {
             let request = ToolchainRequest::Lane { major, minor };
-            let version = resolve_remote_version(&request, true)?;
-            let _ = ensure_installed(&version)?;
+            let version = releases
+                .iter()
+                .filter(|version| request_matches(&request, version))
+                .max()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no pcbc release found for `{}`", format_request(&request))
+                })?;
+            let _ = ensure_installed(version)?;
         }
         Ok(())
     })();
