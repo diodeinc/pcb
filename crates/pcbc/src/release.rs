@@ -6,7 +6,7 @@ use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
-use crate::bundle::{self, MetadataInput, RemoteVendoring, SourceBundlePlan};
+use crate::bundle::{self, MetadataInput, SourceBundlePlan};
 use pcb_zen::WorkspaceInfo;
 use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen_core::EvalOutput;
@@ -563,7 +563,6 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         resolution: &info.resolution,
         root_package_url: info.root_package_url.as_deref(),
         closure: info.closure.as_ref(),
-        remote_vendoring: RemoteVendoring::AllResolved,
         staged_src: &info.staging_dir.join("src"),
         resolved_paths: &info.schematic.resolved_paths,
     })

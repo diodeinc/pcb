@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `config()` now rejects Starlark `record()` types as module input types.
+- Removed the hidden `pcb package` subcommand.
 
 ### Fixed
 
