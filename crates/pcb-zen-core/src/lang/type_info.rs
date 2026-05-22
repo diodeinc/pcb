@@ -4,10 +4,8 @@ use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
 use crate::lang::io_direction::IoDirection;
 use crate::lang::net::{FrozenNetType, NetType, NetValue};
 use serde::{Deserialize, Serialize};
-use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::TypeType;
 use starlark::values::{UnpackValue, Value, ValueLike};
-use std::collections::HashMap;
 
 /// Structured representation of Starlark types for introspection
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -32,11 +30,6 @@ pub enum TypeInfo {
     Net,
     /// Enum type with possible variants
     Enum { name: String, variants: Vec<String> },
-    /// Record type with named fields
-    Record {
-        name: String,
-        fields: HashMap<String, TypeInfo>,
-    },
     /// Interface type - a special record that contains nets and sub-interfaces
     Interface {
         name: String,
@@ -68,18 +61,6 @@ impl TypeInfo {
             return TypeInfo::Enum {
                 name: type_name.to_string(),
                 variants: enum_type.variants().to_vec(),
-            };
-        }
-
-        // Check for record types
-        if value.downcast_ref::<RecordType>().is_some()
-            || value.downcast_ref::<FrozenRecordType>().is_some()
-        {
-            let fields = HashMap::new();
-            // TODO: Extract field information when starlark provides an API for it
-            return TypeInfo::Record {
-                name: type_name.to_string(),
-                fields,
             };
         }
 

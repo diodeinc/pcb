@@ -15,7 +15,6 @@ use allocative::Allocative;
 use pcb_sch::physical::PhysicalValueType;
 use serde::Serialize;
 use starlark::environment::FrozenModule;
-use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::{TypeCompiled, TypeType};
 use starlark::values::{Heap, UnpackValue, ValueLifetimeless};
 use starlark::{
@@ -41,8 +40,6 @@ use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
 use starlark::codemap::{CodeMap, Pos, ResolvedSpan, Span};
 use starlark::values::dict::{AllocDict, DictRef};
-
-use starlark::values::record::{FrozenRecord, Record};
 use std::fs;
 
 /// Helper macro for frozen module downcasting to reduce repetition
@@ -1227,14 +1224,6 @@ pub(crate) fn default_for_type<'v>(
     // Our EnumType is a simple value (no separate Frozen version)
     // It's already handled above, so this block is no longer needed
 
-    if typ.downcast_ref::<RecordType>().is_some()
-        || typ.downcast_ref::<FrozenRecordType>().is_some()
-    {
-        return Err(anyhow::anyhow!(
-            "Record dependencies require a default value"
-        ));
-    }
-
     // Check if it's a TypeType (like str, int, float constructors)
     if TypeType::unpack_value_opt(typ).is_some() {
         // Use the string representation to determine the type
@@ -1281,7 +1270,7 @@ pub(crate) fn default_for_type<'v>(
             .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         other => {
             return Err(anyhow::anyhow!(
-                "config/io() only accepts Net, Interface, Enum, Record, str, int, or float types, got {other}"
+                "config/io() only accepts Net, Interface, Enum, str, int, or float types, got {other}"
             ));
         }
     };
@@ -1332,14 +1321,6 @@ fn validate_type<'v>(
     typ: Value<'v>,
     heap: &'v Heap,
 ) -> anyhow::Result<()> {
-    if (typ.downcast_ref::<RecordType>().is_some()
-        || typ.downcast_ref::<FrozenRecordType>().is_some())
-        && (value.downcast_ref::<Record>().is_some()
-            || value.downcast_ref::<FrozenRecord>().is_some())
-    {
-        return Ok(());
-    }
-
     if typ.downcast_ref::<EnumType>().is_some() && value.downcast_ref::<EnumValue>().is_some() {
         return Ok(());
     }

@@ -9,6 +9,7 @@ use starlark::{
     collections::SmallMap,
     errors::EvalSeverity,
     eval::{Arguments, Evaluator},
+    values::record::{FrozenRecordType, RecordType},
     values::{Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike, starlark_value},
 };
 
@@ -399,6 +400,15 @@ fn resolve_config<'v>(
     declaration_site: &DeclarationSite,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
+    if args.typ.downcast_ref::<RecordType>().is_some()
+        || args.typ.downcast_ref::<FrozenRecordType>().is_some()
+    {
+        return Err(anyhow::anyhow!(
+            "config() does not support record types; use primitive, enum, or physical-value config parameters"
+        )
+        .into());
+    }
+
     let convert_value = |eval: &mut Evaluator<'v, '_, '_>, value| {
         validate_or_convert(name, value, args.typ, args.convert, eval)
             .map_err(starlark::Error::from)
