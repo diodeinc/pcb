@@ -238,17 +238,19 @@ fn call_bom_match_api(
     auth_token: &str,
     bom_entries: &[serde_json::Value],
     timeout_secs: u64,
+    strict: bool,
 ) -> Result<MatchBomResponse> {
     let url = format!("{}/api/boms/match", ctx.api_base_url());
 
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()?;
+    let request_body = bom_match_request_body(bom_entries, strict);
 
     let response = client
         .post(&url)
         .bearer_auth(auth_token)
-        .json(&serde_json::json!({ "designBom": bom_entries, "format": "normalized" }))
+        .json(&request_body)
         .send()
         .context("Failed to send BOM match request")?;
 
@@ -263,25 +265,37 @@ fn call_bom_match_api(
         .context("Failed to parse BOM match response")
 }
 
+fn bom_match_request_body(bom_entries: &[serde_json::Value], strict: bool) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "designBom": bom_entries,
+        "format": "normalized",
+    });
+    if strict {
+        body["strict"] = serde_json::json!(true);
+    }
+    body
+}
+
 /// Fetch BOM matching results from the API and populate availability data
 pub fn fetch_and_populate_availability(
     auth_token: &str,
     bom: &mut pcb_sch::bom::Bom,
 ) -> Result<()> {
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    fetch_and_populate_availability_with_context(&ctx, auth_token, bom)
+    fetch_and_populate_availability_with_context(&ctx, auth_token, bom, false)
 }
 
 pub fn fetch_and_populate_availability_with_context(
     ctx: &WorkspaceContext,
     auth_token: &str,
     bom: &mut pcb_sch::bom::Bom,
+    strict: bool,
 ) -> Result<()> {
     let bom_json = bom.ungrouped_json();
     let bom_entries: Vec<serde_json::Value> =
         serde_json::from_str(&bom_json).context("Failed to parse BOM JSON")?;
 
-    let match_response = call_bom_match_api(ctx, auth_token, &bom_entries, 120)?;
+    let match_response = call_bom_match_api(ctx, auth_token, &bom_entries, 120, strict)?;
 
     for bom_line in match_response.results {
         let Some(path) = bom_line.design_entry.path.as_deref() else {
@@ -290,7 +304,6 @@ pub fn fetch_and_populate_availability_with_context(
         let Some(bom_entry) = bom.entries.get(path) else {
             continue;
         };
-        let requested_mpn = bom_entry.mpn.as_deref().filter(|mpn| !mpn.is_empty());
 
         let qty = bom
             .designators
@@ -356,7 +369,6 @@ pub fn fetch_and_populate_availability_with_context(
                         global_hard_to_source_reason,
                     )
                 }),
-                no_match: resolved_offers.is_empty() && requested_mpn.is_some(),
                 offers: all_offers,
             },
         );
@@ -486,7 +498,7 @@ fn fetch_pricing_grouped_batch_once(
         .collect();
 
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    let match_response = call_bom_match_api(&ctx, auth_token, &bom_entries, 30)?;
+    let match_response = call_bom_match_api(&ctx, auth_token, &bom_entries, 30, false)?;
     let mut grouped_offers: Vec<Vec<&ComponentOffer>> = vec![Vec::new(); groups.len()];
 
     for bom_line in &match_response.results {
@@ -543,7 +555,7 @@ fn fetch_pricing_batch_once(
         .collect();
 
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    let match_response = call_bom_match_api(&ctx, auth_token, &bom_entries, 30)?;
+    let match_response = call_bom_match_api(&ctx, auth_token, &bom_entries, 30, false)?;
 
     let mut results = vec![Availability::default(); components.len()];
 
@@ -588,7 +600,6 @@ fn build_search_availability(offers: &[&ComponentOffer]) -> Availability {
     Availability {
         us: summary_for(Geography::Us),
         global: summary_for(Geography::Global),
-        no_match: false,
         offers: offers.iter().map(|offer| offer.to_offer(1)).collect(),
     }
 }
@@ -653,5 +664,33 @@ mod tests {
             hard_to_source_reason_for_offers(&offers, 20),
             Some(HardToSourceReason::UnaffordableMoq)
         );
+    }
+
+    #[test]
+    fn bom_match_request_body_omits_strict_by_default() {
+        let entries = vec![serde_json::json!({
+            "path": "root.U1",
+            "designator": "U1",
+            "mpn": "ABC123",
+        })];
+
+        let body = bom_match_request_body(&entries, false);
+
+        assert_eq!(body["format"], "normalized");
+        assert_eq!(body["designBom"], serde_json::Value::Array(entries));
+        assert!(body.get("strict").is_none());
+    }
+
+    #[test]
+    fn bom_match_request_body_sends_strict_when_enabled() {
+        let entries = vec![serde_json::json!({
+            "path": "root.U1",
+            "designator": "U1",
+            "mpn": "ABC123",
+        })];
+
+        let body = bom_match_request_body(&entries, true);
+
+        assert_eq!(body["strict"], true);
     }
 }

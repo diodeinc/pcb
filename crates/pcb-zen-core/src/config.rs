@@ -386,6 +386,10 @@ pub struct WorkspaceConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
 
+    /// BOM command and sourcing configuration.
+    #[serde(default, skip_serializing_if = "BomConfig::is_default")]
+    pub bom: BomConfig,
+
     /// Kicad-style library linkage configuration.
     #[serde(
         default = "default_kicad_library",
@@ -429,6 +433,7 @@ impl Default for WorkspaceConfig {
             resolver: None,
             pcb_version: None,
             endpoint: None,
+            bom: BomConfig::default(),
             kicad_library: default_kicad_library(),
             default_board: None,
             members: default_members(),
@@ -436,6 +441,19 @@ impl Default for WorkspaceConfig {
             preferred: Vec::new(),
             exclude: Vec::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BomConfig {
+    /// Require exact MPN matching when fetching availability from the BOM service.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strict: bool,
+}
+
+impl BomConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
     }
 }
 
@@ -1196,6 +1214,22 @@ path = "test.zen"
 
         let patch = config.patch.get("github.com/diodeinc/stdlib").unwrap();
         assert_eq!(patch.path.as_deref(), Some("../stdlib"));
+    }
+
+    #[test]
+    fn test_parse_workspace_bom_config() {
+        let content = r#"
+[workspace]
+pcb-version = "0.3"
+
+[workspace.bom]
+strict = true
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        let workspace = config.workspace.unwrap();
+
+        assert!(workspace.bom.strict);
     }
 
     #[test]

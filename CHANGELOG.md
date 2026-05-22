@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Added a `No match (unknown part)` type to the `pcb bom` availability legend and summary.
+- Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
 
 ## [0.3.84] - 2026-05-21
 

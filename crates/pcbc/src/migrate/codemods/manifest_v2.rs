@@ -204,6 +204,7 @@ fn convert_pcb_toml_to_v2(
             resolver: None,
             pcb_version: Some(pcb_version_from_cargo()),
             endpoint: None,
+            bom: Default::default(),
             kicad_library: WorkspaceConfig::default().kicad_library,
             members: members.to_vec(),
             default_board,

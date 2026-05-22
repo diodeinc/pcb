@@ -5,10 +5,10 @@ use comfy_table::{Cell, Color, Table};
 use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
-use crate::bom::AvailabilitySummary;
 use crate::bom::availability::{
     HardToSourceReason, NUM_BOARDS, Tier, is_small_generic_passive, tier_for_stock,
 };
+use crate::bom::{Availability, AvailabilitySummary};
 use crate::bom::{Bom, GenericComponent};
 
 const NO_MATCH_LABEL: &str = "No match (unknown part)";
@@ -103,30 +103,32 @@ fn color_for_tier(tier: Tier) -> Color {
 }
 
 /// Apply styling to a cell based on component flags
-fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool, tier: Option<Tier>) -> Cell {
+fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool, color: Option<Color>) -> Cell {
     let cell = Cell::new(content);
-    match (is_dnp, is_house, tier) {
+    match (is_dnp, is_house, color) {
         (true, _, _) => cell.fg(Color::DarkGrey),
         (false, true, _) => cell.fg(Color::Blue),
-        (false, false, Some(t)) => cell.fg(color_for_tier(t)),
+        (false, false, Some(color)) => cell.fg(color),
         (false, false, None) => cell,
     }
 }
 
-/// Apply styling to a sourcing-status cell, including states outside stock tiers.
-fn styled_status_cell(content: impl ToString, is_dnp: bool, no_match: bool, tier: Tier) -> Cell {
-    if is_dnp {
-        Cell::new(content).fg(Color::DarkGrey)
-    } else if no_match {
-        Cell::new(content).fg(Color::Magenta)
+fn color_for_status(no_match: bool, tier: Tier) -> Color {
+    if no_match {
+        Color::Magenta
     } else {
-        Cell::new(content).fg(color_for_tier(tier))
+        color_for_tier(tier)
     }
 }
 
 /// Check if MPN and manufacturer are both present
 fn has_complete_part_info(mpn: &str, manufacturer: &str) -> bool {
     !mpn.is_empty() && !manufacturer.is_empty()
+}
+
+fn is_no_match_availability(avail: Option<&Availability>, mpn: &str) -> bool {
+    !mpn.is_empty()
+        && avail.is_some_and(|a| a.us.is_none() && a.global.is_none() && a.offers.is_empty())
 }
 
 /// Calculate unit price at a given quantity using price breaks
@@ -409,7 +411,6 @@ impl Bom {
 
             // Get per-region availability from first matching path
             let avail = paths.iter().find_map(|path| self.availability.get(*path));
-            let no_match = avail.is_some_and(|a| a.no_match);
 
             let us_data = RegionDisplayData::from_region_avail(
                 avail.and_then(|a| a.us.as_ref()),
@@ -430,6 +431,7 @@ impl Bom {
             let (mpn, is_mpn_autofilled) = autofill_from_availability(original_mpn, &avail_mpn);
             let (manufacturer, is_manufacturer_autofilled) =
                 autofill_from_availability(original_manufacturer, &avail_manufacturer);
+            let no_match = is_no_match_availability(avail, original_mpn);
 
             // Designator tier:
             // - Red: any region is explicitly hard to source due to MOQ affordability
@@ -457,22 +459,24 @@ impl Bom {
                 if is_dnp {
                     dnp_count += 1;
                     dnp_qty += qty;
-                } else if no_match {
-                    no_match_count += 1;
-                    no_match_qty += qty;
                 } else {
-                    match designator_tier {
-                        Tier::Plenty => {
-                            plenty_count += 1;
-                            plenty_qty += qty;
-                        }
-                        Tier::Limited => {
-                            limited_count += 1;
-                            limited_qty += qty;
-                        }
-                        Tier::Insufficient => {
-                            hard_count += 1;
-                            hard_qty += qty;
+                    if no_match {
+                        no_match_count += 1;
+                        no_match_qty += qty;
+                    } else {
+                        match designator_tier {
+                            Tier::Plenty => {
+                                plenty_count += 1;
+                                plenty_qty += qty;
+                            }
+                            Tier::Limited => {
+                                limited_count += 1;
+                                limited_qty += qty;
+                            }
+                            Tier::Insufficient => {
+                                hard_count += 1;
+                                hard_qty += qty;
+                            }
                         }
                     }
 
@@ -493,7 +497,7 @@ impl Bom {
                 designators.as_str(),
                 is_dnp,
                 false,
-                has_availability.then_some(designator_tier),
+                has_availability.then_some(color_for_status(no_match, designator_tier)),
             )
             .set_delimiter(',');
 
@@ -532,17 +536,17 @@ impl Bom {
 
             // Add stock columns (US and Global)
             if has_availability {
-                row.push(styled_status_cell(
+                row.push(styled_cell(
                     us_data.format_stock(),
                     is_dnp,
-                    no_match,
-                    us_data.tier,
+                    false,
+                    Some(color_for_status(no_match, us_data.tier)),
                 ));
-                row.push(styled_status_cell(
+                row.push(styled_cell(
                     global_data.format_stock(),
                     is_dnp,
-                    no_match,
-                    global_data.tier,
+                    false,
+                    Some(color_for_status(no_match, global_data.tier)),
                 ));
             }
 
@@ -743,7 +747,23 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::bom::{Availability, BomEntry};
+    use crate::bom::BomEntry;
+
+    fn bom_entry_with_mpn(mpn: &str) -> BomEntry {
+        BomEntry {
+            mpn: Some(mpn.to_string()),
+            alternatives: vec![],
+            manufacturer: Some("Acme".to_string()),
+            package: Some("QFN".to_string()),
+            value: None,
+            description: Some("Missing part".to_string()),
+            generic_data: None,
+            dnp: false,
+            skip_bom: false,
+            matcher: None,
+            properties: Default::default(),
+        }
+    }
 
     #[test]
     fn hard_to_source_availability_forces_red_tier() {
@@ -766,43 +786,19 @@ mod tests {
     }
 
     #[test]
-    fn bom_table_legend_includes_no_match() {
-        let mut bom = Bom {
-            entries: HashMap::new(),
-            designators: HashMap::new(),
-            availability: HashMap::new(),
+    fn bom_table_summary_categorizes_no_offer_availability_as_no_match() {
+        let path = "root.U1".to_string();
+        let bom = Bom {
+            entries: HashMap::from([(path.clone(), bom_entry_with_mpn("MISSING-MPN"))]),
+            designators: HashMap::from([(path.clone(), "U1".to_string())]),
+            availability: HashMap::from([(path, Availability::default())]),
         };
-        bom.entries.insert(
-            "root.U1".to_string(),
-            BomEntry {
-                mpn: Some("MISSING-MPN".to_string()),
-                alternatives: vec![],
-                manufacturer: Some("Acme".to_string()),
-                package: Some("QFN".to_string()),
-                value: None,
-                description: Some("Missing part".to_string()),
-                generic_data: None,
-                dnp: false,
-                skip_bom: false,
-                matcher: None,
-                properties: Default::default(),
-            },
-        );
-        bom.designators
-            .insert("root.U1".to_string(), "U1".to_string());
-        bom.availability.insert(
-            "root.U1".to_string(),
-            Availability {
-                no_match: true,
-                ..Default::default()
-            },
-        );
 
         let mut out = Vec::new();
         bom.write_table(&mut out).unwrap();
         let rendered = String::from_utf8(out).unwrap();
 
-        assert!(rendered.contains("Legend:"));
-        assert!(rendered.contains(NO_MATCH_LABEL));
+        assert_eq!(rendered.matches(NO_MATCH_LABEL).count(), 2);
+        assert!(!rendered.contains("NaN"));
     }
 }
