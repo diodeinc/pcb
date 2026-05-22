@@ -14,16 +14,16 @@ Exit Code: 0
     "manufacturer": "Yageo"
   },
   {
-    "path": "dnp_kwarg",
+    "path": "dnp_kwarg_1",
     "designator": "U2",
-    "mpn": "RC0603FR-074K7L",
+    "mpn": "RC0603FR-0710KL",
     "manufacturer": "Yageo",
     "dnp": true
   },
   {
-    "path": "dnp_legacy",
+    "path": "dnp_kwarg_2",
     "designator": "U3",
-    "mpn": "RC0603FR-0710KL",
+    "mpn": "RC0603FR-074K7L",
     "manufacturer": "Yageo",
     "dnp": true
   }

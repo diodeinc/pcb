@@ -357,9 +357,9 @@ fn warn_legacy_component_inputs<'v>(
         if properties_map.contains_key(*legacy_key) {
             diagnostics.push((
                 format!(
-                    "Component '{component_name}': `properties[\"{legacy_key}\"]` is deprecated; pass `{typed_kwarg}=...` to Component() instead",
+                    "Component '{component_name}': `properties[\"{legacy_key}\"]` is no longer supported; pass `{typed_kwarg}=...` to Component() instead",
                 ),
-                EvalSeverity::Warning,
+                EvalSeverity::Error,
             ));
         }
     }
@@ -369,9 +369,9 @@ fn warn_legacy_component_inputs<'v>(
         if properties_map.contains_key(*key) {
             diagnostics.push((
                 format!(
-                    "Component '{component_name}': `properties[\"{key}\"]` is deprecated; {part_suggestion}",
+                    "Component '{component_name}': `properties[\"{key}\"]` is no longer supported; {part_suggestion}",
                 ),
-                EvalSeverity::Advice,
+                EvalSeverity::Error,
             ));
         }
     }
