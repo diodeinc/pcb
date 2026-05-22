@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Removed stale KiCad board items that reference layers deleted by layout stackup sync.
+
 ## [0.3.85] - 2026-05-21
 
 ### Added

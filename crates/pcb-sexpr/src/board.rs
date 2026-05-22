@@ -4,9 +4,10 @@
 
 use crate::Sexpr;
 use crate::WalkCtx;
+use crate::find_named_list_index;
 use crate::number_as_f64;
-use crate::{Span, kicad as sexpr_kicad};
-use std::collections::BTreeMap;
+use crate::{PatchSet, Span, formatter, kicad as sexpr_kicad};
+use std::collections::{BTreeMap, HashSet};
 
 fn net_name_index(items: &[Sexpr]) -> Option<usize> {
     if items.first().and_then(Sexpr::as_sym) != Some("net") {
@@ -774,6 +775,242 @@ pub fn extract_footprint_refdes_to_kiid_path(
     Ok(out)
 }
 
+/// Build patches that remove top-level board items referencing layers absent from `layers`.
+///
+/// This is intended for stackup/layer-count sync: when the generated `(layers ...)` section
+/// removes layers, any top-level segment, via, graphic, or other board item with a direct
+/// `(layer "...")` or `(layers "...")` child for a removed layer is pruned. Multi-layer zones are
+/// kept when at least one listed layer is still valid; their layer list and cached filled polygons
+/// are pruned to the remaining layers. If a pruned item was listed in a KiCad group `(members ...)`
+/// list, the stale UUID reference is removed as well.
+pub fn build_prune_items_not_in_layers_patchset(
+    board: &Sexpr,
+    layers: &Sexpr,
+) -> Result<PatchSet, String> {
+    let valid_layers = layer_names_from_layers_expr(layers)?;
+    build_removed_layer_item_patchset(board, &valid_layers)
+}
+
+fn kicad_pcb_items(board: &Sexpr) -> Result<&[Sexpr], String> {
+    let items = board
+        .as_list()
+        .ok_or_else(|| "PCB root is not an S-expression list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("kicad_pcb") {
+        return Err("PCB root must start with (kicad_pcb ...)".to_string());
+    }
+    Ok(items)
+}
+
+fn layer_names_from_layers_expr(layers: &Sexpr) -> Result<HashSet<String>, String> {
+    let items = layers
+        .as_list()
+        .ok_or_else(|| "Generated layers section is not a list".to_string())?;
+    if items.first().and_then(Sexpr::as_sym) != Some("layers") {
+        return Err("Generated layers section must start with (layers ...)".to_string());
+    }
+
+    let layer_names = items
+        .iter()
+        .skip(1)
+        .filter_map(Sexpr::as_list)
+        .filter_map(|item| item.get(1).and_then(Sexpr::as_str))
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    if layer_names.is_empty() {
+        return Err("Generated layers section does not declare any layers".to_string());
+    }
+
+    Ok(layer_names)
+}
+
+fn build_removed_layer_item_patchset(
+    board: &Sexpr,
+    valid_layers: &HashSet<String>,
+) -> Result<PatchSet, String> {
+    let root_items = kicad_pcb_items(board)?;
+    let mut patches = PatchSet::new();
+    let mut removed_uuids = HashSet::new();
+
+    for item in root_items.iter().skip(1) {
+        let Some(item_list) = item.as_list() else {
+            continue;
+        };
+        let should_remove = if item_list.first().and_then(Sexpr::as_sym) == Some("zone") {
+            prune_zone_removed_layers(item_list, valid_layers, &mut patches)
+        } else {
+            top_level_item_references_removed_layer(item_list, valid_layers)
+        };
+        if should_remove {
+            if let Some(uuid) = direct_child_string(item_list, "uuid") {
+                removed_uuids.insert(uuid.to_string());
+            }
+            patches.replace_raw(item.span, String::new());
+        }
+    }
+
+    if !removed_uuids.is_empty() {
+        patches.extend(build_group_member_prune_patchset(
+            root_items,
+            &removed_uuids,
+        ));
+    }
+
+    Ok(patches)
+}
+
+fn direct_child<'a>(item: &'a [Sexpr], name: &str) -> Option<&'a Sexpr> {
+    item.iter().skip(1).find(|child| {
+        child
+            .as_list()
+            .and_then(|child_items| child_items.first())
+            .and_then(Sexpr::as_sym)
+            == Some(name)
+    })
+}
+
+fn direct_child_string<'a>(item: &'a [Sexpr], name: &str) -> Option<&'a str> {
+    direct_child(item, name)?
+        .as_list()?
+        .get(1)
+        .and_then(Sexpr::as_str)
+}
+
+fn build_group_member_prune_patchset(
+    root_items: &[Sexpr],
+    removed_uuids: &HashSet<String>,
+) -> PatchSet {
+    let mut patches = PatchSet::new();
+
+    for item in root_items.iter().skip(1) {
+        let Some(item_list) = item.as_list() else {
+            continue;
+        };
+        if item_list.first().and_then(Sexpr::as_sym) != Some("group") {
+            continue;
+        }
+
+        let mut updated = item.clone();
+        let Some(updated_items) = updated.as_list_mut() else {
+            continue;
+        };
+        let Some(members_idx) = find_named_list_index(updated_items, "members") else {
+            continue;
+        };
+        let Some(members) = updated_items[members_idx].as_list_mut() else {
+            continue;
+        };
+
+        let before = members.len();
+        members.retain(|member| {
+            member
+                .as_str()
+                .is_none_or(|uuid| !removed_uuids.contains(uuid))
+        });
+
+        if members.len() != before {
+            patches.replace_raw(item.span, updated.to_string());
+        }
+    }
+
+    patches
+}
+
+fn top_level_item_references_removed_layer(item: &[Sexpr], valid_layers: &HashSet<String>) -> bool {
+    item.iter().skip(1).any(|child| {
+        let Some(child_items) = child.as_list() else {
+            return false;
+        };
+        match child_items.first().and_then(Sexpr::as_sym) {
+            Some("layer") => child_items
+                .get(1)
+                .and_then(Sexpr::as_str)
+                .is_some_and(|layer| !valid_layers.contains(layer)),
+            Some("layers") => child_items
+                .iter()
+                .skip(1)
+                .filter_map(Sexpr::as_str)
+                .any(|layer| !valid_layers.contains(layer)),
+            _ => false,
+        }
+    })
+}
+
+fn prune_zone_removed_layers(
+    zone: &[Sexpr],
+    valid_layers: &HashSet<String>,
+    patches: &mut PatchSet,
+) -> bool {
+    if let Some(layer) = direct_child_string(zone, "layer") {
+        if !valid_layers.contains(layer) {
+            return true;
+        }
+        prune_zone_cached_fill_layers(zone, valid_layers, patches);
+        return false;
+    }
+
+    let Some(layers_child) = direct_child(zone, "layers") else {
+        return false;
+    };
+    let Some(layers_items) = layers_child.as_list() else {
+        return false;
+    };
+
+    let layers = layers_items
+        .iter()
+        .skip(1)
+        .filter_map(Sexpr::as_str)
+        .collect::<Vec<_>>();
+    let kept_layers = layers
+        .iter()
+        .copied()
+        .filter(|layer| valid_layers.contains(*layer))
+        .collect::<Vec<_>>();
+
+    if kept_layers.is_empty() {
+        return true;
+    }
+
+    if kept_layers.len() != layers.len() {
+        patches.replace_raw(layers_child.span, format_layers_list(&kept_layers));
+    }
+    prune_zone_cached_fill_layers(zone, valid_layers, patches);
+
+    false
+}
+
+fn prune_zone_cached_fill_layers(
+    zone: &[Sexpr],
+    valid_layers: &HashSet<String>,
+    patches: &mut PatchSet,
+) {
+    for child in zone.iter().skip(1) {
+        let Some(child_items) = child.as_list() else {
+            continue;
+        };
+        if !matches!(
+            child_items.first().and_then(Sexpr::as_sym),
+            Some("filled_polygon") | Some("fill_segments")
+        ) {
+            continue;
+        }
+        if direct_child_string(child_items, "layer")
+            .is_some_and(|layer| !valid_layers.contains(layer))
+        {
+            patches.replace_raw(child.span, String::new());
+        }
+    }
+}
+
+fn format_layers_list(layers: &[&str]) -> String {
+    let mut text = String::from("(layers");
+    for layer in layers {
+        text.push(' ');
+        text.push_str(&formatter::quote_string(layer));
+    }
+    text.push(')');
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -845,6 +1082,108 @@ mod tests {
 
         assert!(result.contains("\"NEW\""));
         assert!(!result.contains("\"OLD\""));
+    }
+
+    #[test]
+    fn prune_items_not_in_layers_deletes_items_and_group_members() {
+        let input = r#"(kicad_pcb
+            (layers
+                (0 "F.Cu" signal)
+                (1 "In1.Cu" signal)
+                (2 "In2.Cu" signal)
+                (31 "B.Cu" signal)
+                (39 "User.1" user)
+                (41 "User.2" user)
+            )
+            (segment
+                (start 0 0) (end 1 1) (width 0.2) (layer "In1.Cu") (net 1)
+                (uuid "removed-inner-segment")
+            )
+            (segment
+                (start 0 0) (end 1 1) (width 0.2) (layer "F.Cu") (net 1)
+                (uuid "keep-front-segment")
+            )
+            (via
+                (at 1 1) (size 0.6) (drill 0.3) (layers "F.Cu" "In2.Cu") (net 1)
+                (uuid "removed-inner-via")
+            )
+            (via
+                (at 2 2) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1)
+                (uuid "keep-through-via")
+            )
+            (zone
+                (net 1) (net_name "VCC") (layer "In2.Cu") (uuid "removed-inner-zone")
+            )
+            (zone
+                (net 1)
+                (net_name "GND")
+                (layers "F.Cu" "In2.Cu" "B.Cu")
+                (uuid "keep-pruned-zone")
+                (filled_polygon
+                    (layer "F.Cu")
+                    (pts (xy 1 1))
+                )
+                (filled_polygon
+                    (layer "In2.Cu")
+                    (pts (xy 9 9))
+                )
+                (fill_segments
+                    (layer "In2.Cu")
+                    (pts (xy 8 8))
+                )
+            )
+            (gr_line
+                (start 0 0) (end 1 1) (stroke (width 0.1) (type solid)) (layer "User.2")
+                (uuid "removed-user-graphic")
+            )
+            (gr_line
+                (start 0 0) (end 1 1) (stroke (width 0.1) (type solid)) (layer "User.1")
+                (uuid "keep-user-graphic")
+            )
+            (group "routing"
+                (uuid "keep-group")
+                (members "removed-inner-segment" "keep-front-segment")
+            )
+            (footprint "Test:Keep"
+                (layer "F.Cu")
+                (uuid "keep-footprint")
+                (pad "1" thru_hole circle
+                    (at 0 0) (size 1 1) (drill 0.5)
+                    (layers "*.Cu" "*.Mask")
+                )
+            )
+        )"#;
+        let layers = parse(
+            r#"(layers
+                (0 "F.Cu" signal)
+                (2 "B.Cu" signal)
+                (39 "User.1" user)
+            )"#,
+        )
+        .unwrap();
+        let board = parse(input).unwrap();
+
+        let patches = build_prune_items_not_in_layers_patchset(&board, &layers).unwrap();
+        let mut result = Vec::new();
+        patches.write_to(input, &mut result).unwrap();
+        let result = String::from_utf8(result).unwrap();
+
+        assert!(!result.contains(r#"(uuid "removed-inner-segment")"#));
+        assert!(!result.contains(r#"(uuid "removed-inner-via")"#));
+        assert!(!result.contains(r#"(uuid "removed-inner-zone")"#));
+        assert!(!result.contains(r#"(uuid "removed-user-graphic")"#));
+        assert!(result.contains(r#"(uuid "keep-pruned-zone")"#));
+        assert!(result.contains(r#"(layers "F.Cu" "B.Cu")"#));
+        assert!(!result.contains(r#"(layers "F.Cu" "In2.Cu" "B.Cu")"#));
+        assert!(result.contains("(xy 1 1)"));
+        assert!(!result.contains("(xy 9 9)"));
+        assert!(!result.contains("(xy 8 8)"));
+        assert!(result.contains(r#"(uuid "keep-front-segment")"#));
+        assert!(result.contains(r#"(uuid "keep-through-via")"#));
+        assert!(result.contains(r#"(uuid "keep-user-graphic")"#));
+        assert!(result.contains(r#"(members "keep-front-segment")"#));
+        assert!(result.contains(r#"(uuid "keep-footprint")"#));
+        assert!(result.contains(r#"(layers "*.Cu" "*.Mask")"#));
     }
 
     #[test]
