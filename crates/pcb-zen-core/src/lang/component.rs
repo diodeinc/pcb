@@ -706,7 +706,7 @@ fn resolve_symbol_spice_model<'v>(
     final_symbol: &SymbolValue,
     connections: &SmallMap<String, Value<'v>>,
     eval_ctx: &crate::EvalContext,
-    heap: &'v Heap,
+    heap: Heap<'v>,
 ) -> starlark::Result<Option<Value<'v>>> {
     let properties = final_symbol.properties();
     let sim_device = properties
@@ -881,7 +881,7 @@ fn pin_type_accepts_net_kind(pin_type: &str, net_kind: &str) -> bool {
 }
 
 fn alloc_not_connected<'v>(
-    heap: &'v Heap,
+    heap: Heap<'v>,
     declaration_path: String,
     declaration_span: Option<starlark::codemap::ResolvedSpan>,
 ) -> Value<'v> {
@@ -961,7 +961,7 @@ fn manifest_part_matches_symbol(part: &ManifestPart, symbol: &SymbolValue) -> bo
 fn append_alternatives_property<'v>(
     properties_map: &mut SmallMap<String, Value<'v>>,
     alternatives: Vec<PartValue>,
-    heap: &'v Heap,
+    heap: Heap<'v>,
 ) -> starlark::Result<()> {
     if alternatives.is_empty() {
         return Ok(());
@@ -1206,7 +1206,7 @@ fn validate_spice_model_value<'v>(value: Value<'v>) -> starlark::Result<()> {
 // StarlarkValue implementation for mutable ComponentValue
 #[starlark_value(type = "Component")]
 impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
-    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         let data = self.data.borrow();
         match attr {
             "name" => Some(heap.alloc_str(&self.name).to_value()),
@@ -1413,7 +1413,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
         }
     }
 
-    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
         if matches!(
             attr,
             "name"
@@ -1467,7 +1467,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
 impl<'v> StarlarkValue<'v> for FrozenComponentValue {
     type Canonical = FrozenComponentValue;
 
-    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "name" => Some(heap.alloc_str(&self.name).to_value()),
             "prefix" => Some(heap.alloc_str(&self.prefix).to_value()),
@@ -1571,7 +1571,7 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
         }
     }
 
-    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
         if matches!(
             attr,
             "name"
@@ -2329,7 +2329,7 @@ mod tests {
     }
 
     fn make_string_properties<'v>(
-        heap: &'v Heap,
+        heap: Heap<'v>,
         entries: &[(&str, &str)],
     ) -> SmallMap<String, Value<'v>> {
         let mut props = SmallMap::new();
@@ -2374,9 +2374,6 @@ mod tests {
 
     #[test]
     fn resolve_component_sourcing_prefers_part_when_present() {
-        let heap = Heap::new();
-        let properties =
-            make_string_properties(&heap, &[("mpn", "PROP-MPN"), ("manufacturer", "PROP-MFR")]);
         let symbol = test_symbol(Some("SYM-MPN"), Some("SYM-MFR"));
         let part = PartValue::new(
             "PART-MPN".to_string(),
@@ -2385,14 +2382,18 @@ mod tests {
             None,
         );
 
-        let resolved = resolve_component_sourcing(
-            Some(&part),
-            Some("KW-MPN".to_string()),
-            Some("KW-MFR".to_string()),
-            &properties,
-            &symbol,
-            None,
-        );
+        let resolved = Heap::temp(|heap| {
+            let properties =
+                make_string_properties(heap, &[("mpn", "PROP-MPN"), ("manufacturer", "PROP-MFR")]);
+            resolve_component_sourcing(
+                Some(&part),
+                Some("KW-MPN".to_string()),
+                Some("KW-MFR".to_string()),
+                &properties,
+                &symbol,
+                None,
+            )
+        });
 
         let (part, alternatives, _) = resolved;
         let part = part.expect("expected Some(PartValue)");
@@ -2404,8 +2405,6 @@ mod tests {
 
     #[test]
     fn resolve_component_sourcing_appends_manifest_parts_when_part_present() {
-        let heap = Heap::new();
-        let properties = make_string_properties(&heap, &[]);
         let symbol = test_symbol(None, None);
         let part = PartValue::new(
             "PART-MPN".to_string(),
@@ -2432,14 +2431,17 @@ mod tests {
             },
         ];
 
-        let resolved = resolve_component_sourcing(
-            Some(&part),
-            None,
-            None,
-            &properties,
-            &symbol,
-            Some(&manifest_parts),
-        );
+        let resolved = Heap::temp(|heap| {
+            let properties = make_string_properties(heap, &[]);
+            resolve_component_sourcing(
+                Some(&part),
+                None,
+                None,
+                &properties,
+                &symbol,
+                Some(&manifest_parts),
+            )
+        });
 
         let (part, alternatives, _) = resolved;
         let part = part.expect("expected Some(PartValue)");
@@ -2467,19 +2469,20 @@ mod tests {
 
     #[test]
     fn resolve_component_sourcing_prefers_explicit_without_part() {
-        let heap = Heap::new();
-        let properties =
-            make_string_properties(&heap, &[("mpn", "PROP-MPN"), ("manufacturer", "PROP-MFR")]);
         let symbol = test_symbol(Some("SYM-MPN"), Some("SYM-MFR"));
 
-        let resolved = resolve_component_sourcing(
-            None,
-            Some("KW-MPN".to_string()),
-            Some("KW-MFR".to_string()),
-            &properties,
-            &symbol,
-            None,
-        );
+        let resolved = Heap::temp(|heap| {
+            let properties =
+                make_string_properties(heap, &[("mpn", "PROP-MPN"), ("manufacturer", "PROP-MFR")]);
+            resolve_component_sourcing(
+                None,
+                Some("KW-MPN".to_string()),
+                Some("KW-MFR".to_string()),
+                &properties,
+                &symbol,
+                None,
+            )
+        });
 
         let (part, alternatives, _) = resolved;
         let part = part.expect("expected Some(PartValue)");
@@ -2490,22 +2493,25 @@ mod tests {
 
     #[test]
     fn resolve_component_sourcing_prefers_properties_then_symbol_without_part() {
-        let heap = Heap::new();
-        let properties =
-            make_string_properties(&heap, &[("mpn", "PROP-MPN"), ("manufacturer", "PROP-MFR")]);
         let symbol = test_symbol(Some("SYM-MPN"), Some("SYM-MFR"));
 
-        let resolved_from_props =
-            resolve_component_sourcing(None, None, None, &properties, &symbol, None);
+        let (resolved_from_props, resolved_from_symbol) = Heap::temp(|heap| {
+            let properties =
+                make_string_properties(heap, &[("mpn", "PROP-MPN"), ("manufacturer", "PROP-MFR")]);
+            let resolved_from_props =
+                resolve_component_sourcing(None, None, None, &properties, &symbol, None);
+
+            let empty_props = make_string_properties(heap, &[]);
+            let resolved_from_symbol =
+                resolve_component_sourcing(None, None, None, &empty_props, &symbol, None);
+            (resolved_from_props, resolved_from_symbol)
+        });
         let (part, alternatives, _) = resolved_from_props;
         let part = part.expect("expected Some(PartValue)");
         assert_eq!(part.mpn(), "PROP-MPN");
         assert_eq!(part.manufacturer(), "PROP-MFR");
         assert!(alternatives.is_empty());
 
-        let empty_props = make_string_properties(&heap, &[]);
-        let resolved_from_symbol =
-            resolve_component_sourcing(None, None, None, &empty_props, &symbol, None);
         let (part, alternatives, _) = resolved_from_symbol;
         let part = part.expect("expected Some(PartValue)");
         assert_eq!(part.mpn(), "SYM-MPN");
@@ -2515,8 +2521,6 @@ mod tests {
 
     #[test]
     fn resolve_component_sourcing_falls_back_to_manifest_parts() {
-        let heap = Heap::new();
-        let empty_props = make_string_properties(&heap, &[]);
         let symbol = test_symbol(None, None);
         let manifest_parts = vec![
             ManifestPart {
@@ -2537,14 +2541,17 @@ mod tests {
             },
         ];
 
-        let resolved = resolve_component_sourcing(
-            None,
-            None,
-            None,
-            &empty_props,
-            &symbol,
-            Some(&manifest_parts),
-        );
+        let resolved = Heap::temp(|heap| {
+            let empty_props = make_string_properties(heap, &[]);
+            resolve_component_sourcing(
+                None,
+                None,
+                None,
+                &empty_props,
+                &symbol,
+                Some(&manifest_parts),
+            )
+        });
 
         let (part, alternatives, _) = resolved;
         let part = part.expect("expected Some(PartValue)");

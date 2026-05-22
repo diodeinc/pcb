@@ -489,8 +489,9 @@ starlark_complex_value!(pub ModuleValue);
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ModuleValueGen<V>
 where
     Self: ProvidesStaticType<'v>,
+    <Self as ProvidesStaticType<'v>>::StaticType: Send,
 {
-    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         let module_value = heap.alloc_complex(self.clone()).to_value();
 
         match attr {
@@ -516,7 +517,7 @@ where
         }
     }
 
-    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
         matches!(attr, "nets" | "components" | "graph")
     }
 
@@ -963,7 +964,7 @@ pub struct ModuleLoader {
     pub param_types: SmallMap<String, String>,
 
     #[freeze(identity)]
-    pub frozen_module: Option<FrozenModule>,
+    pub frozen_module: FrozenModule,
 }
 starlark_simple_value!(ModuleLoader);
 
@@ -1184,23 +1185,19 @@ where
     // Expose exports from the target module as attributes on the loader so users can refer to
     // them via the familiar dot-notation (e.g. `Sub.Component`).  We lazily evaluate the target
     // file with an *empty* input map – mirroring the lightweight introspection pass in
-    // `Module()` – and then deep-copy the requested symbol into the current heap so that it
-    // lives alongside the callerʼs values.
-    fn get_attr(&self, attr: &str, _heap: &'v Heap) -> Option<Value<'v>> {
+    // `Module()` – and then access the owned frozen value through the current heap so the
+    // heap records the upstream frozen-module dependency.
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         // Fast-path: ignore private/internal names.
         if attr.starts_with("__") {
             return None;
         }
 
-        if let Some(frozen_module) = &self.frozen_module {
-            return frozen_module.get_option(attr).ok().flatten().map(|owned| {
-                // SAFETY: we know the frozen module is alive because we added a reference to it
-                let fv = unsafe { owned.unchecked_frozen_value() };
-                fv.to_value()
-            });
-        }
-
-        None
+        self.frozen_module
+            .get_option(attr)
+            .ok()
+            .flatten()
+            .map(|owned| heap.access_owned_frozen_value(&owned))
     }
 }
 
@@ -1319,7 +1316,7 @@ fn validate_type<'v>(
     name: &str,
     value: Value<'v>,
     typ: Value<'v>,
-    heap: &'v Heap,
+    heap: Heap<'v>,
 ) -> anyhow::Result<()> {
     if typ.downcast_ref::<EnumType>().is_some() && value.downcast_ref::<EnumValue>().is_some() {
         return Ok(());
@@ -1858,14 +1855,8 @@ where
             source_path: output.sch_module.source_path.clone(),
             params,
             param_types,
-            frozen_module: Some(output.star_module),
+            frozen_module: output.star_module,
         };
-
-        // Retain the child heap so the cached values remain valid for the lifetime of the
-        // parent module.
-        if let Some(frozen_mod) = &loader.frozen_module {
-            eval.frozen_heap().add_reference(frozen_mod.frozen_heap());
-        }
 
         Ok(eval.heap().alloc(loader))
     }

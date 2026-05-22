@@ -115,7 +115,7 @@ impl<'v> StarlarkValue<'v> for SymbolValue
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "properties" => {
                 let props_vec: Vec<(Value<'v>, Value<'v>)> = self
@@ -134,7 +134,7 @@ where
         }
     }
 
-    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
         matches!(attr, "properties")
     }
 

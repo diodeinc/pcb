@@ -7,7 +7,9 @@ use pcb_zen_core::ModulePath;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use starlark::collections::SmallMap;
+use starlark::errors::EvalSeverity;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::build::create_diagnostics_passes;
 use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
@@ -144,7 +146,7 @@ fn execute_testbench_checks(
     use pcb_zen_core::lang::test_bench::execute_deferred_check;
     use starlark::environment::Module;
     use starlark::eval::Evaluator;
-    use starlark::values::{Heap, ValueLike, dict::AllocDict};
+    use starlark::values::{ValueLike, dict::AllocDict};
 
     let mut all_diagnostics = Vec::new();
     let mut total_checks = 0;
@@ -157,20 +159,46 @@ fn execute_testbench_checks(
     )
     .set_source_path(std::path::PathBuf::from(testbench.source_path()));
 
-    // Create a ContextValue and attach it to the module
-    let heap = Heap::new();
-    let module = Module::new();
-    let ctx_value = pcb_zen_core::lang::context::ContextValue::from_context(&eval_ctx);
-    module.set_extra_value(heap.alloc_complex(ctx_value));
-    let mut eval = Evaluator::new(&module);
+    Module::with_temp_heap(|module| {
+        // Create a ContextValue and attach it to the module
+        let heap = module.heap();
+        let ctx_value = pcb_zen_core::lang::context::ContextValue::from_context(&eval_ctx);
+        module.set_extra_value(heap.alloc_complex(ctx_value));
+        let mut eval = Evaluator::new(&module);
 
-    let module_tree = eval_output.module_tree();
-    for deferred_case in testbench.deferred_cases().iter() {
-        // Look up evaluated module from tree by full path
-        let module_path = ModulePath::from(deferred_case.case_final_name.clone());
-        let case_module = module_tree.get(&module_path).cloned();
+        let module_tree = eval_output.module_tree();
+        for deferred_case in testbench.deferred_cases().iter() {
+            // Look up evaluated module from tree by full path
+            let module_path = ModulePath::from(deferred_case.case_final_name.clone());
+            let Some(module_value) = module_tree.get(&module_path).cloned() else {
+                all_diagnostics.push(pcb_zen_core::Diagnostic {
+                    path: testbench.source_path().to_string(),
+                    span: testbench.call_span().cloned(),
+                    severity: EvalSeverity::Error,
+                    body: format!(
+                        "TestBench '{}' case '{}' module '{}' was not evaluated",
+                        testbench.name(),
+                        deferred_case.case_name,
+                        deferred_case.case_final_name
+                    ),
+                    call_stack: None,
+                    child: None,
+                    source_error: Some(Arc::new(
+                        pcb_zen_core::lang::error::BenchTestResult {
+                            test_bench_name: testbench.name().to_string(),
+                            case_name: Some(deferred_case.case_name.clone()),
+                            check_name: "<module evaluation>".to_string(),
+                            file_path: testbench.source_path().to_string(),
+                            passed: false,
+                        }
+                        .into(),
+                    )),
+                    related: Vec::new(),
+                    suppressed: false,
+                });
+                continue;
+            };
 
-        if let Some(module_value) = case_module {
             // Reconstruct inputs dict from deferred case params
             let inputs_dict = heap
                 .alloc(AllocDict(
@@ -205,28 +233,28 @@ fn execute_testbench_checks(
                 all_diagnostics.append(&mut diagnostics);
             }
         }
-    }
 
-    // Print summary for successful test benches
-    if total_checks > 0 && passed_checks == total_checks {
-        let case_word = if testbench.case_count() == 1 {
-            "case"
-        } else {
-            "cases"
-        };
-        let check_word = if total_checks == 1 { "check" } else { "checks" };
-        eprintln!(
-            "{} {}: {} {} passed across {} {}",
-            pcb_ui::icons::success().with_style(pcb_ui::Style::Green),
-            testbench.name(),
-            total_checks,
-            check_word,
-            testbench.case_count(),
-            case_word
-        );
-    }
+        // Print summary for successful test benches
+        if total_checks > 0 && passed_checks == total_checks {
+            let case_word = if testbench.case_count() == 1 {
+                "case"
+            } else {
+                "cases"
+            };
+            let check_word = if total_checks == 1 { "check" } else { "checks" };
+            eprintln!(
+                "{} {}: {} {} passed across {} {}",
+                pcb_ui::icons::success().with_style(pcb_ui::Style::Green),
+                testbench.name(),
+                total_checks,
+                check_word,
+                testbench.case_count(),
+                case_word
+            );
+        }
 
-    all_diagnostics
+        all_diagnostics
+    })
 }
 
 pub fn execute(args: TestArgs) -> Result<()> {

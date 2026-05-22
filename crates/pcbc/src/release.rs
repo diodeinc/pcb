@@ -24,15 +24,6 @@ use zip::{ZipWriter, write::FileOptions};
 
 use pcb_zen::git;
 
-/// Serialize a value to RFC 8785 canonical JSON (sorted keys, consistent formatting).
-fn to_canonical_json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    let mut ser =
-        serde_json::Serializer::with_formatter(&mut buf, canon_json::CanonicalFormatter::new());
-    serde::Serialize::serialize(value, &mut ser)?;
-    Ok(buf)
-}
-
 #[derive(ValueEnum, Debug, Clone, PartialEq)]
 #[value(rename_all = "lowercase")]
 pub enum ArtifactType {
@@ -789,8 +780,8 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
                 .context("Failed to write fp-lib-table for staged layout")?;
         }
 
-        // Write netlist JSON to staging directory (RFC 8785 canonical for deterministic output)
-        let netlist_json = to_canonical_json(sch).context("Failed to serialize netlist")?;
+        // Write RFC 8785 canonical netlist JSON to staging directory.
+        let netlist_json = sch.to_json().context("Failed to serialize netlist")?;
         fs::write(info.staging_dir.join("netlist.json"), &netlist_json)
             .context("Failed to write netlist.json")?;
     }

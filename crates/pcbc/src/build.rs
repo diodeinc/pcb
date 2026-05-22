@@ -154,14 +154,17 @@ fn execute_electrical_check(
 ) -> pcb_zen_core::Diagnostic {
     use starlark::environment::Module;
     use starlark::eval::Evaluator;
-    use starlark::values::Heap;
 
-    let heap = Heap::new();
-    let module = Module::new();
-    let mut eval = Evaluator::new(&module);
-    let module_value = heap.alloc_simple(defining_module.clone());
+    Module::with_temp_heap(|module| {
+        let mut eval = Evaluator::new(&module);
+        let module_value = module.heap().alloc_simple(defining_module.clone());
 
-    pcb_zen_core::lang::electrical_check::execute_electrical_check(&mut eval, check, module_value)
+        pcb_zen_core::lang::electrical_check::execute_electrical_check(
+            &mut eval,
+            check,
+            module_value,
+        )
+    })
 }
 
 pub fn create_diagnostics_passes(

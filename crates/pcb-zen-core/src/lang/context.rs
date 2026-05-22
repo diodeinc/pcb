@@ -86,6 +86,11 @@ pub struct ContextValue<'v> {
     pending_children: RefCell<Vec<PendingChild<'v>>>,
 }
 
+// SAFETY: `ContextValue` is allocated on the Starlark heap and is only used
+// while the owning evaluation context is active. Heap branding keeps contained
+// Starlark values tied to that heap; the raw pointer is not shared independently.
+unsafe impl<'v> Send for ContextValue<'v> {}
+
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
 #[repr(C)]
 pub struct FrozenContextValue {

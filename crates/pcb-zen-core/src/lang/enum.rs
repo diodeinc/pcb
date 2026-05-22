@@ -10,7 +10,7 @@ use starlark::{
         Freeze, FreezeResult, Heap, StarlarkValue, Value, ValueLike,
         function::FUNCTION_TYPE,
         starlark_value,
-        typing::{TypeInstanceId, TypeMatcher, TypeMatcherFactory},
+        typing::{TypeInstanceId, TypeMatcher, TypeMatcherDyn, TypeMatcherFactory},
     },
 };
 use starlark_map::StarlarkHasher;
@@ -28,11 +28,13 @@ enum EnumError {
     InvalidIndex(i32, usize),
 }
 
-#[derive(Debug, Clone, Allocative)]
+#[derive(Debug, Clone, Allocative, pagable::Pagable)]
+#[pagable::pagable_typetag(TypeMatcherDyn)]
 struct EnumTypeMatcher {
     enum_type: EnumType,
 }
 
+#[starlark::type_matcher]
 impl TypeMatcher for EnumTypeMatcher {
     fn matches(&self, value: Value) -> bool {
         value
@@ -42,7 +44,16 @@ impl TypeMatcher for EnumTypeMatcher {
 }
 
 #[derive(
-    Clone, Hash, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Serialize, Deserialize,
+    Clone,
+    Hash,
+    Debug,
+    PartialEq,
+    Eq,
+    ProvidesStaticType,
+    Allocative,
+    Serialize,
+    Deserialize,
+    pagable::Pagable,
 )]
 pub struct EnumType {
     variants: Vec<String>,
@@ -150,14 +161,14 @@ impl<'v> StarlarkValue<'v> for EnumType {
         Ok(self.variants.len() as i32)
     }
 
-    fn at(&self, index: Value, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+    fn at(&self, index: Value, heap: Heap<'v>) -> starlark::Result<Value<'v>> {
         let i = index.unpack_i32().ok_or_else(|| {
             starlark::Error::new_other(anyhow::anyhow!("Index must be an integer"))
         })?;
         Ok(heap.alloc(self.get_by_index(i)?))
     }
 
-    unsafe fn iterate(&self, me: Value<'v>, _heap: &'v Heap) -> starlark::Result<Value<'v>> {
+    unsafe fn iterate(&self, me: Value<'v>, _heap: Heap<'v>) -> starlark::Result<Value<'v>> {
         Ok(me)
     }
 
@@ -166,7 +177,7 @@ impl<'v> StarlarkValue<'v> for EnumType {
         (rem, Some(rem))
     }
 
-    unsafe fn iter_next(&self, index: usize, heap: &'v Heap) -> Option<Value<'v>> {
+    unsafe fn iter_next(&self, index: usize, heap: Heap<'v>) -> Option<Value<'v>> {
         (index < self.variants.len()).then(|| {
             heap.alloc(EnumValue {
                 r#type: self.clone(),
@@ -178,8 +189,8 @@ impl<'v> StarlarkValue<'v> for EnumType {
     unsafe fn iter_stop(&self) {}
 
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new();
-        RES.methods(enum_type_methods)
+        static RES: MethodsStatic = MethodsStatic::new("EnumType", enum_type_methods);
+        Some(RES.methods())
     }
 
     fn eval_type(&self) -> Option<Ty> {
@@ -218,12 +229,12 @@ impl<'v> StarlarkValue<'v> for EnumType {
 #[starlark_module]
 fn enum_type_methods(builder: &mut MethodsBuilder) {
     #[starlark(attribute)]
-    fn r#type<'v>(this: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+    fn r#type(this: Value) -> starlark::Result<&'static str> {
         // Return the string "enum" as the type name
-        Ok(heap.alloc("enum"))
+        Ok("enum")
     }
 
-    fn values<'v>(this: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+    fn values<'v>(this: Value<'v>, heap: Heap<'v>) -> starlark::Result<Value<'v>> {
         let enum_type = this
             .downcast_ref::<EnumType>()
             .ok_or_else(|| starlark::Error::new_other(anyhow::anyhow!("Expected EnumType")))?;
@@ -242,7 +253,16 @@ fn enum_type_methods(builder: &mut MethodsBuilder) {
 }
 
 #[derive(
-    Clone, Hash, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Serialize, Deserialize,
+    Clone,
+    Hash,
+    Debug,
+    PartialEq,
+    Eq,
+    ProvidesStaticType,
+    Allocative,
+    Serialize,
+    Deserialize,
+    pagable::Pagable,
 )]
 pub struct EnumValue {
     r#type: EnumType,
@@ -301,7 +321,7 @@ impl<'v> StarlarkValue<'v> for EnumValue {
         Ok(self.value().len() as i32)
     }
 
-    fn at(&self, index: Value<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
+    fn at(&self, index: Value<'v>, heap: Heap<'v>) -> starlark::Result<Value<'v>> {
         let s = self.value();
         let i = index.unpack_i32().ok_or_else(|| {
             starlark::Error::new_other(anyhow::anyhow!("Index must be an integer"))
@@ -324,21 +344,21 @@ impl<'v> StarlarkValue<'v> for EnumValue {
         Ok(heap.alloc(ch.to_string()))
     }
 
-    fn add(&self, other: Value<'v>, heap: &'v Heap) -> Option<starlark::Result<Value<'v>>> {
+    fn add(&self, other: Value<'v>, heap: Heap<'v>) -> Option<starlark::Result<Value<'v>>> {
         other
             .unpack_str()
             .map(|s| Ok(heap.alloc(format!("{}{}", self.value(), s))))
     }
 
-    fn radd(&self, other: Value<'v>, heap: &'v Heap) -> Option<starlark::Result<Value<'v>>> {
+    fn radd(&self, other: Value<'v>, heap: Heap<'v>) -> Option<starlark::Result<Value<'v>>> {
         other
             .unpack_str()
             .map(|s| Ok(heap.alloc(format!("{}{}", s, self.value()))))
     }
 
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new();
-        RES.methods(enum_value_methods)
+        static RES: MethodsStatic = MethodsStatic::new("EnumValue", enum_value_methods);
+        Some(RES.methods())
     }
 }
 
@@ -350,7 +370,7 @@ fn enum_value_methods(builder: &mut MethodsBuilder) {
     }
 
     #[starlark(attribute)]
-    fn value<'v>(this: &EnumValue, heap: &'v Heap) -> starlark::Result<Value<'v>> {
-        Ok(heap.alloc(this.value()))
+    fn value(this: &EnumValue) -> starlark::Result<String> {
+        Ok(this.value().to_owned())
     }
 }
