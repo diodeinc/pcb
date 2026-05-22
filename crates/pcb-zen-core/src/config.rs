@@ -24,13 +24,6 @@ pub struct PcbToml {
     #[serde(default, skip_serializing_if = "DependencyTable::is_empty")]
     pub dependencies: DependencyTable,
 
-    /// Legacy assets section (V2).
-    ///
-    /// Parsed for backwards compatibility with old manifests.
-    /// Runtime behavior is limited to using matching KiCad asset paths as version hints.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub assets: BTreeMap<String, AssetDependencySpec>,
-
     /// Patches for local development (V2 only)
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub patch: BTreeMap<String, PatchSpec>,
@@ -73,20 +66,6 @@ impl DependencyTable {
     }
 }
 
-fn asset_targets_repo(asset_key: &str, repo: &str) -> bool {
-    asset_key == repo
-        || (asset_key.starts_with(repo) && asset_key.as_bytes().get(repo.len()) == Some(&b'/'))
-}
-
-fn parse_asset_semver(spec: &AssetDependencySpec) -> Option<Version> {
-    let raw = match spec {
-        AssetDependencySpec::Ref(v) => Some(v.as_str()),
-        AssetDependencySpec::Detailed(d) => d.version.as_deref(),
-    }?;
-    let raw = raw.strip_prefix('v').unwrap_or(raw);
-    Version::parse(raw).ok()
-}
-
 /// Parse a `pcb-version` string into its `(major, minor)` pair.
 ///
 /// `pcb-version` is always written and compared as `major.minor`.
@@ -126,9 +105,8 @@ pub fn pcb_version_is_older(current: &str, required: &str) -> Option<bool> {
 }
 
 impl PcbToml {
-    fn finish_parse(mut self) -> Result<Self> {
+    fn finish_parse(self) -> Result<Self> {
         self.validate_pcb_version()?;
-        self.add_implicit_legacy_asset_dependencies();
         Ok(self)
     }
 
@@ -146,53 +124,6 @@ impl PcbToml {
         }
 
         Ok(())
-    }
-
-    fn add_implicit_legacy_asset_dependencies(&mut self) {
-        if self.assets.is_empty() {
-            return;
-        }
-
-        let entries = self
-            .workspace
-            .as_ref()
-            .map(|w| w.kicad_library.clone())
-            .unwrap_or_else(default_kicad_library);
-        let repos: Vec<&String> = entries
-            .iter()
-            .flat_map(|entry| {
-                std::iter::once(&entry.symbols)
-                    .chain(std::iter::once(&entry.footprints))
-                    .chain(entry.models.values())
-            })
-            .collect();
-
-        let mut selected = BTreeMap::<String, Version>::new();
-        for (asset_key, spec) in &self.assets {
-            let Some(version) = parse_asset_semver(spec) else {
-                continue;
-            };
-
-            for repo in &repos {
-                if !asset_targets_repo(asset_key, repo) {
-                    continue;
-                }
-                let should_update = match selected.get(repo.as_str()) {
-                    Some(cur) => version > *cur,
-                    None => true,
-                };
-                if should_update {
-                    selected.insert((*repo).clone(), version.clone());
-                }
-            }
-        }
-
-        for (repo, version) in selected {
-            self.dependencies
-                .direct
-                .entry(repo)
-                .or_insert_with(|| DependencySpec::Version(version.to_string()));
-        }
     }
 
     /// Parse from TOML string
@@ -577,37 +508,6 @@ pub struct ManifestPart {
     pub datasheet: Option<String>,
 }
 
-/// Legacy V2 asset dependency specification.
-///
-/// Parsed only for backwards compatibility with older manifests.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum AssetDependencySpec {
-    /// Simple ref string - used literally as git tag/branch (no v-prefix logic)
-    /// Examples: "v7.0.0", "2024-09-release", "kicad-7.0.0"
-    Ref(String),
-
-    /// Detailed specification with branch/rev support
-    Detailed(AssetDependencyDetail),
-}
-
-/// Legacy detailed asset dependency specification.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AssetDependencyDetail {
-    /// Git ref (tag/branch) - used literally, no semver parsing or v-prefix fallback
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-
-    /// Git branch - resolved to commit hash in lockfile
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-
-    /// Git revision (commit hash)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rev: Option<String>,
-    // Kept for old manifests only.
-}
-
 /// V2 Lockfile entry
 ///
 /// Stores resolved version and cryptographic hashes for a dependency.
@@ -927,6 +827,19 @@ registry = "github.com/diodeinc/registry"
         .expect_err("legacy [packages] should not parse");
 
         assert!(err.to_string().contains("unknown field `packages`"));
+    }
+
+    #[test]
+    fn test_parse_rejects_legacy_assets_section() {
+        let err = PcbToml::parse(
+            r#"
+[assets]
+"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.0"
+"#,
+        )
+        .expect_err("legacy [assets] should not parse");
+
+        assert!(err.to_string().contains("unknown field `assets`"));
     }
 
     #[test]

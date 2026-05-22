@@ -364,7 +364,7 @@ fn resolve_dep<R: PackagePathResolver>(
     resolver.resolve_package(url, &version)
 }
 
-/// Build resolution map for a single package's [dependencies] and promoted [assets].
+/// Build resolution map for a single package's [dependencies].
 fn resolve_package_deps<R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
