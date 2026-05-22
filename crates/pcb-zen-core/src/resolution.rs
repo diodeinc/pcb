@@ -409,7 +409,7 @@ fn resolve_package_deps<R: PackagePathResolver>(
 /// Used by WASM where all dependencies must be pre-vendored in the zip.
 pub struct VendoredPathResolver {
     vendor_dir: PathBuf,
-    /// Pre-computed closure from lockfile: ModuleLine -> Version
+    /// Pre-computed closure: ModuleLine -> Version
     closure: HashMap<ModuleLine, Version>,
 }
 
@@ -417,6 +417,16 @@ impl VendoredPathResolver {
     /// Get the closure (ModuleLine -> Version mapping).
     pub fn closure(&self) -> &HashMap<ModuleLine, Version> {
         &self.closure
+    }
+
+    pub fn from_selected_versions(
+        vendor_dir: PathBuf,
+        closure: HashMap<ModuleLine, Version>,
+    ) -> Self {
+        Self {
+            vendor_dir,
+            closure,
+        }
     }
 
     /// Create a new vendored path resolver from a lockfile.

@@ -2,7 +2,7 @@ use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::resolution::{
     FrozenDepId, FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
-    VendoredPathResolver, build_resolution_map,
+    ModuleLine, VendoredPathResolver, build_resolution_map,
 };
 use pcb_zen_core::workspace::get_workspace_info;
 use pcb_zen_core::workspace::{WorkspaceInfo, package_url_covers};
@@ -597,19 +597,23 @@ fn resolve_packages<F: FileProvider + Clone>(
     workspace_root: &Path,
     main_path: &Path,
 ) -> Result<pcb_zen_core::resolution::ResolutionResult, String> {
-    let lockfile_path = workspace_root.join("pcb.sum");
-
-    let lockfile_content = file_provider
-        .read_file(&lockfile_path)
-        .map_err(|e| format!("Failed to read {}: {}", lockfile_path.display(), e))?;
-    let lockfile = Lockfile::parse(&lockfile_content)
-        .map_err(|e| format!("Failed to parse {}: {}", lockfile_path.display(), e))?;
-
     let vendor_dir = workspace_root.join("vendor");
     let workspace = get_workspace_info(&file_provider, workspace_root)
         .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
-    let resolver =
-        VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile);
+    let resolver = if let Some(package_url) = hydrated_package_url(&workspace, main_path) {
+        VendoredPathResolver::from_selected_versions(
+            vendor_dir,
+            selected_versions_from_manifest(&workspace, &package_url)?,
+        )
+    } else {
+        let lockfile_path = workspace_root.join("pcb.sum");
+        let lockfile_content = file_provider
+            .read_file(&lockfile_path)
+            .map_err(|e| format!("Failed to read {}: {}", lockfile_path.display(), e))?;
+        let lockfile = Lockfile::parse(&lockfile_content)
+            .map_err(|e| format!("Failed to parse {}: {}", lockfile_path.display(), e))?;
+        VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile)
+    };
 
     let package_resolutions =
         build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
@@ -622,6 +626,25 @@ fn resolve_packages<F: FileProvider + Clone>(
     );
     attach_frozen_resolution_if_hydrated(&mut resolution, &file_provider, main_path)?;
     Ok(resolution)
+}
+
+fn hydrated_package_url(workspace: &WorkspaceInfo, main_path: &Path) -> Option<String> {
+    let package_url = package_url_for_zen(workspace, main_path)?;
+    workspace
+        .packages
+        .get(&package_url)
+        .is_some_and(|package| !package.config.dependencies.indirect.is_empty())
+        .then_some(package_url)
+}
+
+fn selected_versions_from_manifest(
+    workspace: &WorkspaceInfo,
+    package_url: &str,
+) -> Result<HashMap<ModuleLine, Version>, String> {
+    Ok(selected_remote_from_manifest(workspace, package_url)?
+        .into_iter()
+        .map(|(dep_id, version)| (ModuleLine::new(dep_id.path, &version), version))
+        .collect())
 }
 
 fn attach_frozen_resolution_if_hydrated<F: FileProvider>(
