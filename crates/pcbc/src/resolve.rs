@@ -5,7 +5,6 @@ use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::resolution::ResolutionResult;
 use tracing::instrument;
 
-use pcb_zen::package_resolver::target_package_urls_for_path;
 use pcb_zen::{get_workspace_info, resolve_workspace_dependencies};
 
 /// Resolve dependencies for a workspace/board.
@@ -41,14 +40,9 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         );
     }
 
-    let package_urls = target_package_urls_for_path(&workspace_info, path).unwrap_or_default();
     let mut res = resolve_workspace_dependencies(workspace_info, path, offline, locked)?;
 
-    if !package_urls.is_empty()
-        && package_urls
-            .iter()
-            .all(|package_url| res.mvs_v2_root(package_url).is_some())
-    {
+    if res.package_resolutions.is_empty() {
         return Ok(res);
     }
 

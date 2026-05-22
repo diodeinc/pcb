@@ -687,11 +687,10 @@ fn build_wasm_frozen_resolution<F: FileProvider>(
     let workspace = &resolution.workspace_info;
     let selected_remote = selected_remote_from_hydrated_manifest(workspace, package_url)
         .map_err(|e| e.to_string())?;
-    let package_roots = resolution.package_roots();
     let mut packages = BTreeMap::new();
 
     for (root, deps) in &resolution.package_resolutions {
-        let Some(identity) = frozen_identity_for_root(workspace, &package_roots, root) else {
+        let Some(identity) = frozen_identity_for_root(workspace, &selected_remote, root) else {
             continue;
         };
         let parts = match &identity {
@@ -721,7 +720,7 @@ fn build_wasm_frozen_resolution<F: FileProvider>(
 
 fn frozen_identity_for_root(
     workspace: &WorkspaceInfo,
-    package_roots: &BTreeMap<String, PathBuf>,
+    selected_remote: &BTreeMap<FrozenDepId, Version>,
     root: &Path,
 ) -> Option<FrozenPackageIdentity> {
     if root == workspace.workspace_stdlib_dir() {
@@ -734,18 +733,17 @@ fn frozen_identity_for_root(
         .find(|(_, package)| package.dir(&workspace.root) == root)
         .map(|(url, _)| FrozenPackageIdentity::Workspace(url.clone()))
         .or_else(|| {
-            package_roots.iter().find_map(|(coord, package_root)| {
-                (package_root == root).then(|| {
-                    let (path, version) = coord.rsplit_once('@')?;
-                    Some(FrozenPackageIdentity::Remote {
-                        dep_id: FrozenDepId::for_version(
-                            path.to_string(),
-                            &Version::parse(version).ok()?,
-                        ),
-                        version: Version::parse(version).ok()?,
-                    })
+            selected_remote.iter().find_map(|(dep_id, version)| {
+                let package_root = workspace
+                    .root
+                    .join("vendor")
+                    .join(&dep_id.path)
+                    .join(version.to_string());
+                (package_root == root).then(|| FrozenPackageIdentity::Remote {
+                    dep_id: dep_id.clone(),
+                    version: version.clone(),
                 })
-            })?
+            })
         })
 }
 
