@@ -1,22 +1,22 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::git;
+use crate::tags;
 use anyhow::{Result, bail};
-use pcb_zen::git;
-use pcb_zen::tags;
 use pcb_zen_core::config::{DependencyDetail, DependencySpec, split_repo_and_subpath};
 use pcb_zen_core::initial_package_version;
 use semver::Version;
 
 #[derive(Default)]
-pub(crate) struct SpecVersionResolver {
+pub struct SpecVersionResolver {
     offline: bool,
     bare_repos: BTreeMap<String, PathBuf>,
     base_versions: BTreeMap<String, BTreeMap<String, Version>>,
 }
 
 impl SpecVersionResolver {
-    pub(crate) fn new(offline: bool) -> Self {
+    pub fn new(offline: bool) -> Self {
         Self {
             offline,
             ..Self::default()
@@ -38,11 +38,7 @@ impl SpecVersionResolver {
         }
     }
 
-    pub(crate) fn resolve_ref_or_branch(
-        &mut self,
-        module_path: &str,
-        selector: &str,
-    ) -> Result<Version> {
+    pub fn resolve_ref_or_branch(&mut self, module_path: &str, selector: &str) -> Result<Version> {
         if self.offline {
             bail!(
                 "Cannot resolve {}@{} in offline mode",
@@ -123,7 +119,7 @@ impl SpecVersionResolver {
         if let Some(path) = self.bare_repos.get(repo_url) {
             return Ok(path.clone());
         }
-        let path = pcb_zen::cache_index::ensure_bare_repo(repo_url)?;
+        let path = crate::cache_index::ensure_bare_repo(repo_url)?;
         self.bare_repos.insert(repo_url.to_string(), path.clone());
         Ok(path)
     }

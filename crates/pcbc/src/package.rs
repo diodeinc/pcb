@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use pcb_layout::utils as layout_utils;
 use pcb_zen::workspace::WorkspaceInfoExt;
-use pcb_zen::{get_workspace_info, git, resolve_dependencies};
+use pcb_zen::{get_workspace_info, git, resolve_workspace_dependencies};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
 use serde::Serialize;
@@ -164,17 +164,12 @@ fn package_workspace_target(target: WorkspaceTarget, args: &PackageArgs) -> Resu
     }
     fs::create_dir_all(&staging_dir)?;
 
-    let mut workspace = target.workspace;
+    let workspace = target.workspace;
     let locked = workspace.lockfile.is_some();
-    let mut resolution = {
+    let resolution = {
         let _span = info_span!("resolve_package_bundle_dependencies").entered();
-        resolve_dependencies(&mut workspace, false, locked)?
+        resolve_workspace_dependencies(workspace, &target.package_dir, false, locked)?
     };
-    crate::resolve::attach_mvs_v2_resolution_for_packages(
-        &mut resolution,
-        [target.package_url.clone()],
-        false,
-    );
     let layout_path = target
         .primary_zen
         .as_ref()

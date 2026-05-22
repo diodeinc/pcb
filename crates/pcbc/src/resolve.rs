@@ -1,12 +1,12 @@
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::resolution::{FrozenResolutionSet, ResolutionResult};
-use pcb_zen_core::workspace::WorkspaceInfo;
+use pcb_zen_core::resolution::ResolutionResult;
 use tracing::instrument;
 
-use pcb_zen::{get_workspace_info, resolve_dependencies};
+use pcb_zen::package_resolver::target_package_urls_for_path;
+use pcb_zen::{get_workspace_info, resolve_workspace_dependencies};
 
 /// Resolve dependencies for a workspace/board.
 /// This is a shared helper used by build, bom, layout, open, etc.
@@ -28,7 +28,7 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
             &cwd
         }
     };
-    let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), path)?;
+    let workspace_info = get_workspace_info(&DefaultFileProvider::new(), path)?;
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace_info.errors.is_empty() {
@@ -41,19 +41,16 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         );
     }
 
-    let package_urls = crate::pcb_mod::target_package_urls_for_path(&workspace_info, path)
-        .inspect_err(|err| {
-            log::debug!(
-                "Skipping MVS v2 target discovery for {}: {err:#}",
-                path.display()
-            );
-        })
-        .unwrap_or_default();
-    if all_packages_have_indirect(&workspace_info, &package_urls) {
-        return resolve_mvs_v2(workspace_info, package_urls, offline);
-    }
+    let package_urls = target_package_urls_for_path(&workspace_info, path).unwrap_or_default();
+    let mut res = resolve_workspace_dependencies(workspace_info, path, offline, locked)?;
 
-    let mut res = resolve_dependencies(&mut workspace_info, offline, locked)?;
+    if !package_urls.is_empty()
+        && package_urls
+            .iter()
+            .all(|package_url| res.mvs_v2_root(package_url).is_some())
+    {
+        return Ok(res);
+    }
 
     // Sync vendor dir: add missing, prune stale (only prune when not offline and not locked)
     let prune = !offline && !locked;
@@ -65,70 +62,9 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
             "Pruned {} stale vendor entries, re-running resolution",
             vendor_result.pruned_count
         );
-        res = resolve_dependencies(&mut workspace_info, offline, locked)?;
+        let workspace_info = get_workspace_info(&DefaultFileProvider::new(), path)?;
+        res = resolve_workspace_dependencies(workspace_info, path, offline, locked)?;
     }
 
     Ok(res)
-}
-
-fn resolve_mvs_v2(
-    workspace_info: WorkspaceInfo,
-    package_urls: Vec<String>,
-    offline: bool,
-) -> Result<ResolutionResult> {
-    if workspace_info.stdlib_patch_path().is_none() {
-        pcb_zen::cache_index::ensure_stdlib_materialized(&workspace_info.root)?;
-    }
-
-    let mut resolution_set = FrozenResolutionSet::default();
-    let mut symbol_parts = HashMap::new();
-
-    for (package_url, resolution) in
-        crate::pcb_mod::build_frozen_resolution_maps(&workspace_info, package_urls, offline)?
-    {
-        symbol_parts.extend(pcb_zen::resolve::build_frozen_symbol_parts(
-            &workspace_info,
-            &resolution,
-        )?);
-        resolution_set.insert(package_url, resolution);
-    }
-
-    Ok(ResolutionResult::frozen(
-        workspace_info,
-        resolution_set,
-        symbol_parts,
-    ))
-}
-
-pub(crate) fn attach_mvs_v2_resolution_for_packages(
-    res: &mut ResolutionResult,
-    package_urls: impl IntoIterator<Item = String>,
-    offline: bool,
-) {
-    let package_urls: Vec<_> = package_urls
-        .into_iter()
-        .filter(|package_url| package_has_indirect(&res.workspace_info, package_url))
-        .collect();
-    if package_urls.is_empty() {
-        return;
-    }
-
-    match crate::pcb_mod::build_frozen_resolution_maps(&res.workspace_info, package_urls, offline) {
-        Ok(resolution) => res.set_mvs_v2_resolution(resolution),
-        Err(err) => log::debug!("Skipping shadow MVS v2 resolution: {err:#}"),
-    }
-}
-
-fn all_packages_have_indirect(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
-    !package_urls.is_empty()
-        && package_urls
-            .iter()
-            .all(|package_url| package_has_indirect(workspace_info, package_url))
-}
-
-fn package_has_indirect(workspace_info: &WorkspaceInfo, package_url: &str) -> bool {
-    workspace_info
-        .packages
-        .get(package_url)
-        .is_some_and(|package| !package.config.dependencies.indirect.is_empty())
 }

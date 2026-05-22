@@ -33,20 +33,21 @@ pub fn generate_docs(
         .unwrap_or_else(|_| package_root.to_path_buf());
     let zen_files = collect_zen_files(&package_root, filter)?;
     let file_provider = DefaultFileProvider::new();
-    let mut workspace_info = pcb_zen::get_workspace_info(&file_provider, &package_root)
-        .with_context(|| {
+    let workspace_info =
+        pcb_zen::get_workspace_info(&file_provider, &package_root).with_context(|| {
             format!(
                 "Failed to load workspace info for {}",
                 package_root.display()
             )
         })?;
     let resolution =
-        pcb_zen::resolve_dependencies(&mut workspace_info, false, true).with_context(|| {
-            format!(
-                "Failed to resolve dependencies for {}",
-                package_root.display()
-            )
-        })?;
+        pcb_zen::resolve_workspace_dependencies(workspace_info, &package_root, false, true)
+            .with_context(|| {
+                format!(
+                    "Failed to resolve dependencies for {}",
+                    package_root.display()
+                )
+            })?;
 
     let mut files = Vec::new();
 

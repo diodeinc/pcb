@@ -1,23 +1,24 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
+use crate::WorkspaceInfo;
+use crate::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
+use crate::resolve::ensure_package_manifest_in_cache;
+use crate::tags;
+use crate::workspace::WorkspaceInfoExt;
 use anyhow::{Context, Result, bail};
-use pcb_zen::WorkspaceInfo;
-use pcb_zen::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
-use pcb_zen::resolve::ensure_package_manifest_in_cache;
-use pcb_zen::tags;
-use pcb_zen::workspace::WorkspaceInfoExt;
+use ignore::WalkBuilder;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
+use pcb_zen_core::file_extensions;
 use pcb_zen_core::is_stdlib_module_path;
 use pcb_zen_core::kicad_library::{
     KicadRepoMatch, effective_kicad_library_for_repo, match_kicad_managed_repo,
 };
 use pcb_zen_core::resolution::{
-    FrozenDepId, FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap,
+    FrozenDepId, FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
+    ResolutionResult,
 };
 use semver::Version;
-
-use crate::file_walker;
 
 use super::dep_id::{ResolvedDepId, compatibility_lane, parse_lane_qualified_key};
 use super::manifest::{ManifestLoader, package_version_root};
@@ -32,10 +33,7 @@ enum PackageNode {
     },
 }
 
-pub(crate) fn target_package_urls_for_path(
-    workspace: &WorkspaceInfo,
-    path: &Path,
-) -> Result<Vec<String>> {
+pub fn target_package_urls_for_path(workspace: &WorkspaceInfo, path: &Path) -> Result<Vec<String>> {
     let path = path.canonicalize()?;
     if path.is_file() {
         return package_url_for_zen(workspace, &path).map(|url| vec![url]);
@@ -46,13 +44,13 @@ pub(crate) fn target_package_urls_for_path(
     }
 
     let mut package_urls = BTreeSet::new();
-    for zen_file in file_walker::collect_workspace_zen_files(Some(&path), workspace)? {
+    for zen_file in collect_workspace_zen_files(&path, workspace)? {
         package_urls.insert(package_url_for_zen(workspace, &zen_file)?);
     }
     Ok(package_urls.into_iter().collect())
 }
 
-pub(crate) fn build_frozen_resolution_maps(
+pub fn build_frozen_resolution_maps(
     workspace: &WorkspaceInfo,
     package_urls: impl IntoIterator<Item = String>,
     offline: bool,
@@ -66,6 +64,126 @@ pub(crate) fn build_frozen_resolution_maps(
         resolutions.insert(package_url, resolution);
     }
     Ok(resolutions)
+}
+
+pub fn resolve_workspace_dependencies(
+    mut workspace_info: WorkspaceInfo,
+    path: &Path,
+    offline: bool,
+    locked: bool,
+) -> Result<ResolutionResult> {
+    let package_urls = target_package_urls_for_path(&workspace_info, path)
+        .inspect_err(|err| {
+            log::debug!(
+                "Skipping MVS v2 target discovery for {}: {err:#}",
+                path.display()
+            );
+        })
+        .unwrap_or_default();
+    if all_packages_have_indirect(&workspace_info, &package_urls) {
+        return resolve_frozen(workspace_info, package_urls, offline);
+    }
+
+    let mut res = crate::resolve_dependencies(&mut workspace_info, offline, locked)?;
+    attach_mvs_v2_resolution_for_packages(&mut res, package_urls, offline);
+    Ok(res)
+}
+
+fn resolve_frozen(
+    workspace_info: WorkspaceInfo,
+    package_urls: Vec<String>,
+    offline: bool,
+) -> Result<ResolutionResult> {
+    if workspace_info.stdlib_patch_path().is_none() {
+        crate::cache_index::ensure_stdlib_materialized(&workspace_info.root)?;
+    }
+
+    let mut resolution_set = FrozenResolutionSet::default();
+    let mut symbol_parts = HashMap::new();
+
+    for (package_url, resolution) in
+        build_frozen_resolution_maps(&workspace_info, package_urls, offline)?
+    {
+        symbol_parts.extend(crate::resolve::build_frozen_symbol_parts(
+            &workspace_info,
+            &resolution,
+        )?);
+        resolution_set.insert(package_url, resolution);
+    }
+
+    Ok(ResolutionResult::frozen(
+        workspace_info,
+        resolution_set,
+        symbol_parts,
+    ))
+}
+
+pub fn attach_mvs_v2_resolution_for_packages(
+    res: &mut ResolutionResult,
+    package_urls: impl IntoIterator<Item = String>,
+    offline: bool,
+) {
+    let package_urls: Vec<_> = package_urls
+        .into_iter()
+        .filter(|package_url| package_has_indirect(&res.workspace_info, package_url))
+        .collect();
+    if package_urls.is_empty() {
+        return;
+    }
+
+    match build_frozen_resolution_maps(&res.workspace_info, package_urls, offline) {
+        Ok(resolution) => res.set_mvs_v2_resolution(resolution),
+        Err(err) => log::debug!("Skipping shadow MVS v2 resolution: {err:#}"),
+    }
+}
+
+fn all_packages_have_indirect(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
+    !package_urls.is_empty()
+        && package_urls
+            .iter()
+            .all(|package_url| package_has_indirect(workspace_info, package_url))
+}
+
+fn package_has_indirect(workspace_info: &WorkspaceInfo, package_url: &str) -> bool {
+    workspace_info
+        .packages
+        .get(package_url)
+        .is_some_and(|package| !package.config.dependencies.indirect.is_empty())
+}
+
+fn collect_workspace_zen_files(
+    path: &Path,
+    workspace_info: &WorkspaceInfo,
+) -> Result<Vec<PathBuf>> {
+    let mut builder = WalkBuilder::new(path);
+    builder
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .filter_entry(crate::ast_utils::skip_vendor);
+
+    let mut zen_files = Vec::new();
+    for result in builder.build() {
+        let entry = result?;
+        let path = entry.path();
+        if path.is_file() && file_extensions::is_starlark_file(path.extension()) {
+            zen_files.push(path.to_path_buf());
+        }
+    }
+    if !workspace_info.packages.is_empty() {
+        zen_files.retain(|p| {
+            workspace_info
+                .packages
+                .values()
+                .any(|pkg| p.starts_with(pkg.dir(&workspace_info.root)))
+        });
+    }
+    if zen_files.is_empty() {
+        bail!("No .zen source files found in {}", path.display());
+    }
+    zen_files.sort();
+    Ok(zen_files)
 }
 
 struct FrozenResolutionBuilder {

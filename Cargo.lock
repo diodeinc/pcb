@@ -4888,6 +4888,7 @@ dependencies = [
  "log",
  "pcb-zen-core",
  "ruzstd",
+ "semver",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

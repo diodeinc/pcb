@@ -1,18 +1,15 @@
-mod dep_id;
-mod manifest;
-mod materialize;
-mod mvs;
 mod request;
-mod resolve;
-mod scan;
 mod target;
-mod versions;
 mod writeback;
 
 use anyhow::{Result, bail};
 use clap::Args;
 use pcb_zen::WorkspaceInfo;
 use pcb_zen::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
+use pcb_zen::package_resolver::{
+    DepGraph, DepGraphNode, PackageResolver, build_frozen_resolution_maps, materialize_selected,
+    target_package_urls_for_path, vendor_selected,
+};
 use pcb_zen::resolve::ensure_package_manifest_in_cache;
 use pcb_zen::tags;
 use pcb_zen::workspace::get_workspace_info;
@@ -23,10 +20,7 @@ use pcb_zen_core::resolution::FrozenResolutionMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use self::materialize::{materialize_selected, vendor_selected};
-use self::mvs::{DepGraph, DepGraphNode, PackageResolver};
 use self::request::resolve_direct_dependency_request;
-pub(crate) use self::resolve::{build_frozen_resolution_maps, target_package_urls_for_path};
 use self::target::{AddTarget, discover_add_targets};
 use self::writeback::write_package_manifest;
 

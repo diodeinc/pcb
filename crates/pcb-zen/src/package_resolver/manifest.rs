@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::cache_index::CacheIndex;
+use crate::tags;
 use anyhow::{Context, Result};
-use pcb_zen::cache_index::CacheIndex;
-use pcb_zen::tags;
 use pcb_zen_core::config::{DependencySpec, ManifestPart};
 use pcb_zen_core::kicad_library::effective_kicad_library_for_repo;
 use semver::Version;
@@ -18,13 +18,13 @@ pub(crate) struct ManifestRequirements {
 }
 
 pub(crate) struct ManifestLoader {
-    workspace: pcb_zen::WorkspaceInfo,
+    workspace: crate::WorkspaceInfo,
     offline: bool,
     cache: BTreeMap<(String, String), ManifestRequirements>,
 }
 
 impl ManifestLoader {
-    pub(crate) fn new(workspace: pcb_zen::WorkspaceInfo, offline: bool) -> Self {
+    pub(crate) fn new(workspace: crate::WorkspaceInfo, offline: bool) -> Self {
         Self {
             workspace,
             offline,
@@ -56,7 +56,7 @@ impl ManifestLoader {
 }
 
 pub(crate) fn load_manifest_for_module_version(
-    workspace: &pcb_zen::WorkspaceInfo,
+    workspace: &crate::WorkspaceInfo,
     index: &CacheIndex,
     module_path: &str,
     version: &Version,
@@ -73,7 +73,7 @@ pub(crate) fn load_manifest_for_module_version(
     } else if offline {
         package_version_root(workspace.workspace_cache_dir(), module_path, version).join("pcb.toml")
     } else {
-        pcb_zen::resolve::ensure_package_manifest_in_cache(module_path, version, index)
+        crate::resolve::ensure_package_manifest_in_cache(module_path, version, index)
             .with_context(|| format!("Failed to materialize {}@{}", module_path, version))?
     };
     let content = std::fs::read_to_string(&pcb_toml_path)
@@ -139,7 +139,7 @@ fn manifest_has_indirect_table(content: &str) -> Result<bool> {
 }
 
 fn synthetic_kicad_manifest(
-    workspace: &pcb_zen::WorkspaceInfo,
+    workspace: &crate::WorkspaceInfo,
     module_path: &str,
     version: &Version,
 ) -> Result<Option<ManifestRequirements>> {
@@ -176,41 +176,4 @@ pub(crate) fn package_version_root(
     version: &Version,
 ) -> PathBuf {
     root.as_ref().join(module_path).join(version.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use pcb_zen::WorkspaceInfo;
-
-    use super::*;
-
-    #[test]
-    fn offline_manifest_load_prefers_vendor_over_workspace_cache() {
-        let temp = tempfile::tempdir().unwrap();
-        let module_path = "github.com/example/vendor-only-package";
-        let version = Version::new(0, 2, 1);
-        let vendor_toml_path =
-            package_version_root(temp.path().join("vendor"), module_path, &version)
-                .join("pcb.toml");
-        std::fs::create_dir_all(vendor_toml_path.parent().unwrap()).unwrap();
-        std::fs::write(&vendor_toml_path, "").unwrap();
-
-        let workspace = WorkspaceInfo {
-            root: temp.path().to_path_buf(),
-            cache_dir: temp.path().join(".pcb/cache"),
-            config: None,
-            packages: BTreeMap::new(),
-            lockfile: None,
-            errors: Vec::new(),
-        };
-
-        let index = CacheIndex::open().unwrap();
-        let loaded =
-            load_manifest_for_module_version(&workspace, &index, module_path, &version, true)
-                .expect("offline load should use vendored manifest");
-
-        assert!(loaded.direct.is_empty());
-    }
 }

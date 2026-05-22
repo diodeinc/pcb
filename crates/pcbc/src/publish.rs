@@ -977,14 +977,18 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
         return Ok(());
     }
 
-    let mut ws = workspace.clone();
-    let mut resolution = pcb_zen::resolve_dependencies(&mut ws, false, false)?;
-    pcb_zen::vendor_deps(&resolution, &[], None, true)?;
     let package_urls = zen_files
         .iter()
         .filter_map(|zen_path| workspace.package_url_for_zen(zen_path))
         .collect::<BTreeSet<_>>();
-    crate::resolve::attach_mvs_v2_resolution_for_packages(&mut resolution, package_urls, false);
+    let resolution =
+        pcb_zen::resolve_workspace_dependencies(workspace.clone(), &workspace.root, false, false)?;
+    if !package_urls
+        .iter()
+        .all(|package_url| resolution.mvs_v2_root(package_url).is_some())
+    {
+        pcb_zen::vendor_deps(&resolution, &[], None, true)?;
+    }
 
     let mut has_errors = false;
     let mut has_warnings = false;
