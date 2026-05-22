@@ -9,13 +9,13 @@ Exit Code: 0
 [
   {
     "path": "normal",
-    "designator": "U2",
+    "designator": "U1",
     "mpn": "RC0603FR-071KL",
     "manufacturer": "Yageo"
   },
   {
     "path": "normal2",
-    "designator": "U3",
+    "designator": "U2",
     "mpn": "RC0603FR-0710KL",
     "manufacturer": "Yageo"
   }

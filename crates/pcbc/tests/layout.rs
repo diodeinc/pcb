@@ -29,7 +29,8 @@ Component(
     footprint = File("test.kicad_mod"),
     pin_defs = {"P1": "1", "P2": "2"},
     pins = {"P1": P1, "P2": P2},
-    properties = {"value": "10kOhm", "type": "resistor"},
+    type = "resistor",
+    properties = {"value": "10kOhm"},
 )
 "#;
 

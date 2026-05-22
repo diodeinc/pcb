@@ -111,13 +111,13 @@ Component(
     skip_bom = True,
 )
 
-# Component with legacy Exclude_from_bom property - should NOT appear in BOM
+# Component with skip_bom kwarg - should NOT appear in BOM
 Component(
-    name = "exclude_from_bom_legacy",
+    name = "skip_bom_kwarg_2",
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
-    properties = {"Exclude_from_bom": True},
+    skip_bom = True,
 )
 
 # Normal resistor - should appear in BOM
@@ -148,19 +148,19 @@ Component(
     part = Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
 )
 
-# DNP component (via legacy property) - should appear in BOM with dnp=true
+# DNP component (via dnp kwarg) - should appear in BOM with dnp=true
 Component(
-    name = "dnp_legacy",
+    name = "dnp_kwarg_1",
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = Part(mpn = "RC0603FR-0710KL", manufacturer = "Yageo"),
-    properties = {"do_not_populate": True},
+    dnp = True,
 )
 
 # DNP component (via dnp kwarg) - should appear in BOM with dnp=true
 Component(
-    name = "dnp_kwarg",
+    name = "dnp_kwarg_2",
     footprint = "Resistor_SMD:R_0603_1005Metric",
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
