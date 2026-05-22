@@ -33,23 +33,23 @@ Nets and interfaces:
 Components and sourcing:
 
 - `Component(...)` is the primitive physical-part constructor. Required fields are effectively `name`, `symbol`, and `pins`.
-- The symbol is the source of truth for footprint and part metadata. Make the symbol properties correct; do not repeat `footprint=` or `part=` in `Component()` when they are already provided by the symbol.
+- The symbol is the source of truth for footprint, part metadata, and datasheet metadata. Make the symbol properties correct; do not repeat `footprint=`, `part=`, or `datasheet=` in `Component()` when they are already provided by the symbol.
 - Prefer `part=Part(mpn=..., manufacturer=...)` over legacy scalar `mpn` and `manufacturer` when part metadata is not already in the symbol.
 - `Symbol(library, name=None)` points at a `.kicad_sym`; `name` is required for multi-symbol libraries.
 - Omit `no_connect` pins from `pins`; `Component()` wires `NotConnected()` automatically.
 
 `io()`:
 
-- Preferred form: `NAME = io(template, ...)` where `template` is a net/interface type or instance, e.g. `Power(voltage="3.3V")`.
-- Name is inferred from the assignment target or struct field. `optional=True` means omitted inputs get auto-generated nets or interfaces.
+- Preferred form: flat top-level `NAME = io(template, ...)` where `template` is a net/interface type or instance, e.g. `Power(voltage="3.3V")`.
+- Do not introduce `Pins = struct(...)` wrappers for component pins; that older style is deprecated. Existing packages may still use it, but new and touched `.zen` should expose pins as top-level `io()`s.
+- Name is inferred from the assignment target. `optional=True` means omitted inputs get auto-generated nets or interfaces.
 
 `config()`:
 
 - Preferred form: `name = config(typ, default=..., ...)`; name is inferred from the assignment target.
-- `typ` can be primitive types, enums, records, or physical values such as `Voltage` or `Resistance`.
-- `allowed=` constrains accepted values to a discrete set. Strings auto-convert when possible, e.g. `"10k"` to `Resistance("10k")`.
-- For discrete physical values, prefer a physical type with `allowed=[...]` over an ad hoc enum.
-- Use physical types from `@stdlib/units.zen` for physical-value configs. Use `enum()` only for non-physical design choices.
+- `typ` can be primitive types, enums, records, or physical values such as `Voltage`, `Current`, or `Resistance`.
+- Use physical types from `@stdlib/units.zen` for every physical-value config, even when only a few choices are valid. Constrain discrete choices with `allowed=[...]`; strings auto-convert, e.g. `config(Current, default="3A", allowed=["1A", "2A", "3A"])`.
+- Use `enum()` only for non-physical design choices such as operating mode, protocol variant, polarity, or enablement strategy.
 
 Utilities:
 
@@ -61,7 +61,7 @@ Utilities:
 ### Power, Interfaces, And Checks
 
 - Keep rails explicit with prelude `Power(voltage=...)` and `Ground`; each public `Power` `io()` declares its voltage range unless the local API intentionally keeps it generic.
-- Use `@stdlib/interfaces.zen` interfaces for buses and grouped signals that are not in the prelude.
+- Use `@stdlib/interfaces.zen` interfaces for buses and grouped signals that are not in the prelude; prefer public bus interfaces such as `I2c`, `Spi`, `Qspi`, `Uart`, `Usb2`, or `DiffPair` over separate loose top-level nets when the grouped signal semantics are clear.
 - Use typed values and validation primitives (`check(...)`, `warn(...)`, `error(...)`, `@stdlib/checks.zen`) for electrical constraints instead of comments when possible.
 - Connect `Power` and `Ground` ios directly to pins and passives.
 

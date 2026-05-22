@@ -11,13 +11,19 @@ Use this for new registry components, package fixes, family selectors, symbol/fo
 
 If you are already operating inside a registry checkout or remote librarian session, continue authoring in that registry unless the user explicitly asks you to dispatch another librarian. Remote librarian dispatch is for agents working outside the registry, such as board or spec work that discovers missing reusable content.
 
+## Guardrails
+
+- Do not invent datasheet facts, pin mappings, footprints, passive values, limits, sourceability, or application topology. Find evidence or ask.
+- Do not build reusable circuitry on untrusted symbols, footprints, or pin maps. Curate artifacts against the manufacturer datasheet first.
+- Do not add new packages under `reference/`; that tree is deprecated. A component's reference design belongs directly in the component package `.zen`. Use `modules/` for higher-level reusable functional blocks and subsystem schematics that are not simply one component's reference design.
+
 ## Intake And Scope
 
 Start by clarifying the deliverable:
 
 - primitive component package only
 - component package with built-in required support circuitry
-- separate `.zen` reference-design modules for one or more application circuits
+- component package with reusable reference-design circuitry
 - connector/module wrapper around existing components
 - family selector covering multiple orderable MPNs
 
@@ -34,7 +40,7 @@ Patch or extend an existing package when it is the right home. Create a new pack
 
 When a request names one MPN, first look for the related part family before authoring. A good component package usually covers all parts with the same physical package/footprint, pinout, feature set, and fundamental schematic topology.
 
-Curate symbols before writing reference-design `.zen`. The symbol library defines the functional variants and primitive interface that the `.zen` package will select and wire; an untrusted symbol makes the rest of the package untrustworthy.
+Curate symbols before writing reference-design `.zen`. The symbol library defines the functional variants and primitive interface that the `.zen` package will select and wire.
 
 A typical flow:
 
@@ -44,9 +50,10 @@ A typical flow:
 4. Clean the symbols against the datasheet.
 5. Represent each functional variant symbol without duplicating order-code variants.
 6. Clean the footprint and embedded STEP against the datasheet.
-7. Write the reference circuitry or selector logic.
+7. Ensure the footprint has an embedded STEP: find and embed any referenced local model, otherwise download a matching model and embed it with `pcb embed-step`.
+8. Write the reference circuitry or selector logic.
 
-Treat this as the default direction, not a rigid script. Focused patches may only touch one stage, but do not write reusable circuitry on top of untrusted symbols.
+Treat this as the default direction, not a rigid script. Focused patches may only touch one stage.
 
 Functional variants need symbols; order-code variants do not. For example, fixed-output LDO voltages get separate symbols because the selected silicon changes electrical behavior, but tape/reel, temperature grade, RoHS, and packing suffixes do not.
 
@@ -70,15 +77,13 @@ pcb new component --component-id <ID> --part-number <MPN> --manufacturer <MFR>
 
 Use `pcb new component <DIR>` when importing a downloaded local ECAD directory.
 
-Fetched artifacts are starting points, not authority. Check every symbol, pin, footprint, datasheet link, sourcing field, and 3D model against the manufacturer datasheet. If a symbol, footprint, or pin map is unsafe, fix it before writing reusable circuitry.
+Fetched artifacts are starting points, not authority. Check every symbol, pin, footprint, datasheet link, sourcing field, and 3D model against the manufacturer datasheet. Footprints need an embedded STEP; imported or KiCad-copied footprints often only reference external models, which you must locate or download and embed. If no matching STEP can be found, do not generate a 3D model yourself.
 
-If a footprint and STEP model were fetched separately, embed the STEP into the footprint:
+Embed STEP models with `pcb embed-step`; do not hand-edit model blocks:
 
 ```bash
 pcb embed-step <footprint.kicad_mod> <model.step>
 ```
-
-`pcb search` plus `pcb new component` often handles this, but separately fetched models should always be embedded in the `.kicad_mod`.
 
 ## Package Shape
 
@@ -99,19 +104,17 @@ Include checked-in datasheet PDFs under `docs/`. Include a real `.kicad_mod`; no
 
 The README is for realistic usage examples and concise integration notes only. Put rationale and design evidence in the `.zen` docstring.
 
-Place new reusable circuitry in the relevant component package, not in a separate top-level package category.
-
 ## Reference Circuit Quality
 
-A good reference design is one coherent schematic circuit around the curated symbols. It exposes application-level IO, keeps implementation-detail nodes internal unless access is necessary, and exposes only integrator-tunable choices.
+A good reference design is one coherent schematic circuit around the curated symbols. It exposes application-level IO and keeps implementation-detail nodes internal unless access is necessary.
 
 Start from the primitive component: symbols, footprint, pins, and sourcing. Add surrounding schematic circuitry only when it is part of the reusable way to use the IC: required decoupling, compensation, feedback, bootstrap, bias, reset, straps, or a datasheet-recommended application circuit with clear defaults.
 
-For decoupling, do not cargo-cult 100 nF or 100 nF + bulk pairs. Prefer one compact low-ESL MLCC, often 1 uF 0402, at each power pin when valid; check inrush and regulator stability.
+For decoupling, do not cargo-cult 100 nF or 100 nF + bulk pairs. Prefer one compact low-ESL MLCC, often 1 uF 0402, at each power pin when valid; check inrush and regulator stability. Motivation: modern MLCCs provide much higher capacitance density than the historical parts that made 100 nF a useful default, and a larger capacitor in the same small package generally has lower impedance across the relevant range. Package and placement often matter more than folklore value-splitting: smaller packages and shorter power/ground loops reduce ESL, move self-resonance higher, and keep high-frequency currents local. Parallel 100 nF + bulk capacitors can waste BOM/placement area and may introduce undamped impedance peaks, especially when the farther capacitor's trace inductance dominates. Caveats still apply: account for DC-bias derating, total rail capacitance/inrush, and regulator stability or phase margin. See Graham Sutherland, [Proper decoupling practices, and why you should leave 100nF behind](https://codeinsecurity.wordpress.com/2025/01/25/proper-decoupling-practices-and-why-you-should-leave-100nf-behind/).
 
 Keep the package primitive if the surrounding circuit is board-specific, underspecified, already handled by another package, or blocked by untrusted symbol/footprint/pin data.
 
-If one IC has fundamentally different schematic topologies for different modes, keep them in the same Zener package but use separate `.zen` reference-design modules.
+If one IC has fundamentally different schematic topologies for different modes, keep them in the same component Zener package and select or expose the topology there when practical. Split only when the public API or schematic topology is too different to keep coherent.
 
 The `.zen` docstring is the design document. It should explain:
 
@@ -129,8 +132,6 @@ Capture the facts that drive the circuit:
 - equations and datasheet-recommended example points
 - oscillator/crystal requirements and sensitive nets
 - physical-package caveats that affect the public API
-
-Do not guess ambiguous passives, straps, sequencing, oscillators, or topology choices. Find evidence or ask.
 
 ## Family Scope And Naming
 
