@@ -1699,7 +1699,7 @@ mod tests {
             }
         }
 
-        let version = Version::new(10, 0, 0);
+        let version = Version::new(10, 0, 3);
         let version_str = version.to_string();
         let symbols = "gitlab.com/kicad/libraries/kicad-symbols".to_string();
         let footprints = "gitlab.com/kicad/libraries/kicad-footprints".to_string();
@@ -1776,7 +1776,7 @@ mod tests {
 
     #[test]
     fn test_kicad_model_dirs_use_selected_builtin_family() {
-        let version = "10.0.0";
+        let version = "10.0.3";
         let models = "gitlab.com/kicad/libraries/kicad-packages3D".to_string();
         let result = ResolutionResult::native(
             WorkspaceInfo {

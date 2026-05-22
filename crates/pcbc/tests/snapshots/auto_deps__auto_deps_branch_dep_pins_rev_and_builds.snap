@@ -1,5 +1,6 @@
 ---
 source: crates/pcbc/tests/auto_deps.rs
+assertion_line: 217
 expression: snapshot
 ---
 --- pcb.toml ---
@@ -10,6 +11,6 @@ pcb-version = "0.3"
 "github.com/mycompany/components/SimpleResistor" = "<PSEUDO_VERSION>"
 
 [dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.3"

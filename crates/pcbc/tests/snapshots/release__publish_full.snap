@@ -1,5 +1,6 @@
 ---
 source: crates/pcbc/tests/release.rs
+assertion_line: 286
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === bom/design_bom.json
@@ -118,7 +119,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
     "user": "<USER>"
   }
 }
-=== netlist.json <71133 bytes, sha256: 085fc63>
+=== netlist.json <75991 bytes, sha256: f69b44f>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -164,15 +165,15 @@ name = "TestBoard"
 path = "TestBoard.zen"
 
 [dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-footprints@9" = "10.0.0"
-"gitlab.com/kicad/libraries/kicad-packages3D@9" = "10.0.0"
-"gitlab.com/kicad/libraries/kicad-symbols@9" = "10.0.0"
+"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.3"
 === src/pcb.toml
 [workspace]
 name = "test_workspace"
 pcb-version = "0.3"
 
 [dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-footprints@9" = "10.0.0"
-"gitlab.com/kicad/libraries/kicad-packages3D@9" = "10.0.0"
-"gitlab.com/kicad/libraries/kicad-symbols@9" = "10.0.0"
+"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.3"

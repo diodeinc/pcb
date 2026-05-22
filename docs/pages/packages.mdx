@@ -328,10 +328,10 @@ Do not edit `[dependencies.indirect]` by hand. Commit hydrated `pcb.toml` files.
 
 KiCad symbol/footprint/3D relationships are configured at workspace root with
 `[[workspace.kicad_library]]` entries. If omitted, the workspace defaults to two
-entries: KiCad `9.0.3` and KiCad `10.0.0`.
+entries: KiCad `9.0.3` and KiCad `10.0.3`.
 
 The toolchain-managed `@stdlib` package separately pins its implicit KiCad asset
-dependencies to KiCad `10.0.0`.
+dependencies to KiCad `10.0.3`.
 
 ```toml
 [[workspace.kicad_library]]
@@ -347,7 +347,7 @@ The default KiCad 10 entry uses the same shape, but with:
 
 ```toml
 [[workspace.kicad_library]]
-version = "10.0.0"
+version = "10.0.3"
 symbols = "gitlab.com/kicad/libraries/kicad-symbols"
 footprints = "gitlab.com/kicad/libraries/kicad-footprints"
 models = { KICAD10_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
@@ -364,9 +364,9 @@ assets are written to `[dependencies.indirect]` using lane-qualified keys:
 
 ```toml
 [dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.0"
-"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.0"
-"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.0"
+"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.3"
 ```
 
 Then regular dependency aliases apply (for example `@kicad-symbols`, `@kicad-footprints`).
