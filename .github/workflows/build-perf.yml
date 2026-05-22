@@ -54,7 +54,13 @@ jobs:
           key="$RUNNER_TEMP/code-diode-key"
           ssh-keygen -q -t ed25519 -N '' -f "$key"
           export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityFile=$key -o IdentityAgent=none -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@code.diode.computer:demo/b/Demeter workspaces/Demeter
           git clone --depth 1 git@code.diode.computer:demo/b/DM0001 workspaces/DM0001
+          git clone --depth 1 git@code.diode.computer:demo/b/DM0002 workspaces/DM0002
+          git clone --depth 1 git@code.diode.computer:demo/b/DM0003 workspaces/DM0003
+          git clone --depth 1 git@code.diode.computer:demo/b/Feign workspaces/Feign
+          git clone --depth 1 git@code.diode.computer:demo/b/Renfield workspaces/Renfield
+          git clone --depth 1 git@code.diode.computer:demo/b/Seward workspaces/Seward
           git clone --depth 1 git@code.diode.computer:arduino/b/Nano workspaces/Nano
           git clone --depth 1 git@code.diode.computer:arduino/b/unoQ workspaces/unoQ
 
@@ -66,7 +72,7 @@ jobs:
       - name: Run performance benchmarks
         run: |
           mkdir -p perf
-          for workspace in DM0001 Nano unoQ; do
+          for workspace in Demeter DM0001 DM0002 DM0003 Feign Renfield Seward Nano unoQ; do
             python3 bin/pcb-build-perf \
               --pcb "$RUNNER_TEMP/pcbc-base/pcbc" \
               --workspace "workspaces/$workspace" \
@@ -145,8 +151,19 @@ jobs:
 
           rows = []
           has_significant = False
+          workspace_labels = {
+            "Demeter": "demo/b/Demeter",
+            "DM0001": "demo/b/DM0001",
+            "DM0002": "demo/b/DM0002",
+            "DM0003": "demo/b/DM0003",
+            "Feign": "demo/b/Feign",
+            "Renfield": "demo/b/Renfield",
+            "Seward": "demo/b/Seward",
+            "Nano": "arduino/b/Nano",
+            "unoQ": "arduino/b/unoQ",
+          }
 
-          for name in ["DM0001", "Nano", "unoQ"]:
+          for name in ["Demeter", "DM0001", "DM0002", "DM0003", "Feign", "Renfield", "Seward", "Nano", "unoQ"]:
             base = load(Path("perf") / f"{name}-base.json")
             head = load(Path("perf") / f"{name}-head.json")
             base_boards = {b["zen_path"]: b for b in base.get("boards", [])}
@@ -161,7 +178,11 @@ jobs:
                 board_name = head_board["name"]
               elif base_board and base_board.get("name"):
                 board_name = base_board["name"]
-              label = f"{name}/{board_name}"
+              workspace_label = workspace_labels[name]
+              if board_name.lower() == name.lower():
+                label = workspace_label
+              else:
+                label = f"{workspace_label}/{board_name}"
 
               if not base_board or not head_board:
                 rows.append((label, "—", "—", "missing"))
@@ -217,7 +238,7 @@ jobs:
 
       - name: Find existing comment
         id: find_comment
-        uses: peter-evans/find-comment@v3
+        uses: peter-evans/find-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: "github-actions[bot]"
@@ -225,7 +246,7 @@ jobs:
 
       - name: Create or update comment
         if: steps.perf_comment.outputs.has_changes == 'true'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-id: ${{ steps.find_comment.outputs.comment-id }}
@@ -234,7 +255,7 @@ jobs:
 
       - name: Delete stale comment
         if: steps.perf_comment.outputs.has_changes == 'false' && steps.find_comment.outputs.comment-id != ''
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             await github.rest.issues.deleteComment({

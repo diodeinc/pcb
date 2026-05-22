@@ -25,14 +25,14 @@ jobs:
       tag: ${{ steps.nightly.outputs.tag }}
       base_url: ${{ steps.nightly.outputs.base_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.dry_run && github.ref_name || 'main' }}
           submodules: recursive
 
       - name: Configure AWS credentials
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
           aws-region: us-east-1
@@ -85,7 +85,7 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
@@ -122,7 +122,7 @@ jobs:
           fi
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pcbc-nightly-${{ matrix.target }}
           path: artifacts/*
@@ -135,7 +135,7 @@ jobs:
     runs-on: ubicloud-standard-16
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pcbc-nightly-*
           path: artifacts
@@ -143,7 +143,7 @@ jobs:
 
       - name: Configure AWS credentials
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_PCB_RELEASE_S3_ROLE_ARN }}
           aws-region: us-east-1
