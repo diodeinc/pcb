@@ -71,7 +71,7 @@ dependencies = [
 [[package]]
 name = "allocative"
 version = "0.3.4"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
  "allocative_derive",
  "bumpalo",
@@ -83,7 +83,7 @@ dependencies = [
 [[package]]
 name = "allocative_derive"
 version = "0.3.3"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1193,7 +1193,7 @@ checksum = "3f88a43d011fc4a6876cb7344703e297c71dda42494fee094d5f7c76bf13f746"
 [[package]]
 name = "cmp_any"
 version = "0.8.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 
 [[package]]
 name = "collection_literals"
@@ -1867,7 +1867,7 @@ dependencies = [
 [[package]]
 name = "display_container"
 version = "0.9.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
  "either",
  "indenter",
@@ -1935,9 +1935,9 @@ dependencies = [
 [[package]]
 name = "dupe"
 version = "0.9.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
- "dupe_derive 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94)",
+ "dupe_derive 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e8962e20)",
 ]
 
 [[package]]
@@ -1954,7 +1954,7 @@ dependencies = [
 [[package]]
 name = "dupe_derive"
 version = "0.9.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6969,7 +6969,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "starlark"
 version = "0.13.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
  "allocative",
  "anyhow",
@@ -6979,7 +6979,7 @@ dependencies = [
  "derivative",
  "derive_more 1.0.0",
  "display_container",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e8962e20)",
  "either",
  "erased-serde",
  "hashbrown 0.14.5",
@@ -7009,9 +7009,9 @@ dependencies = [
 [[package]]
 name = "starlark_derive"
 version = "0.13.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e8962e20)",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -7020,10 +7020,10 @@ dependencies = [
 [[package]]
 name = "starlark_map"
 version = "0.13.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
  "allocative",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e8962e20)",
  "equivalent",
  "fxhash",
  "hashbrown 0.14.5",
@@ -7034,14 +7034,14 @@ dependencies = [
 [[package]]
 name = "starlark_syntax"
 version = "0.13.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
  "allocative",
  "annotate-snippets",
  "anyhow",
  "derivative",
  "derive_more 1.0.0",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=e8962e20)",
  "lalrpop",
  "lalrpop-util",
  "logos",
@@ -7099,7 +7099,7 @@ dependencies = [
 [[package]]
 name = "strong_hash"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
  "ref-cast",
  "strong_hash_derive",
@@ -7108,7 +7108,7 @@ dependencies = [
 [[package]]
 name = "strong_hash_derive"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=78a00c907de1f31ec4edee929447459612da9c94#78a00c907de1f31ec4edee929447459612da9c94"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=e8962e20#e8962e20b7eeee77410d03bd5470c95703418937"
 dependencies = [
  "quote",
  "syn 2.0.117",
