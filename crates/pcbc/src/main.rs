@@ -30,7 +30,6 @@ mod migrate;
 mod mod_cmd;
 mod new;
 mod open;
-mod package;
 #[path = "mod/mod.rs"]
 mod pcb_mod;
 mod preview;
@@ -168,10 +167,6 @@ enum Commands {
     #[command(hide = true)]
     Kq(kq::KqArgs),
 
-    /// Create canonical tar package and compute hash (debug tool)
-    #[command(hide = true)]
-    Package(package::PackageArgs),
-
     /// External subcommands are forwarded to pcb-<command>
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -243,7 +238,6 @@ fn run() -> anyhow::Result<()> {
         Commands::Ipc2581(args) => ipc2581::execute(args),
         Commands::Gerber(args) => gerber::execute(args),
         Commands::Kq(args) => kq::execute(args),
-        Commands::Package(args) => package::execute(args),
         Commands::External(args) => {
             if args.is_empty() {
                 anyhow::bail!("No external command specified");
