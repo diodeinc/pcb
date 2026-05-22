@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::cache_index::CacheIndex;
-use crate::tags;
 use anyhow::{Context, Result};
 use pcb_zen_core::config::{DependencySpec, ManifestPart};
 use pcb_zen_core::kicad_library::effective_kicad_library_for_repo;
@@ -111,7 +110,7 @@ fn parse_indirect_dependency(
             dep_id.indirect_key()
         );
     };
-    let version = tags::parse_relaxed_version(&raw_version).ok_or_else(|| {
+    let version = pcb_zen_core::parse_relaxed_version(&raw_version).ok_or_else(|| {
         anyhow::anyhow!(
             "Indirect dependency {} has invalid version '{}'",
             dep_id.indirect_key(),

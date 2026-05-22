@@ -157,6 +157,6 @@ impl SpecVersionResolver {
 }
 
 pub(crate) fn parse_version_string(raw: &str) -> Result<Version> {
-    tags::parse_relaxed_version(raw)
+    pcb_zen_core::parse_relaxed_version(raw)
         .ok_or_else(|| anyhow::anyhow!("Invalid version string '{}'", raw))
 }

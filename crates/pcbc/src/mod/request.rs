@@ -75,7 +75,7 @@ fn dependency_lane(spec: &DependencySpec) -> Option<String> {
         DependencySpec::Version(version) => Some(version.as_str()),
         DependencySpec::Detailed(detail) => detail.version.as_deref(),
     }?;
-    let version = tags::parse_relaxed_version(raw_version)?;
+    let version = pcb_zen_core::parse_relaxed_version(raw_version)?;
     Some(compatibility_lane(&version))
 }
 

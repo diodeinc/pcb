@@ -983,9 +983,10 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
         .collect::<BTreeSet<_>>();
     let resolution =
         pcb_zen::resolve_workspace_dependencies(workspace.clone(), &workspace.root, false, false)?;
-    if !package_urls
-        .iter()
-        .all(|package_url| resolution.mvs_v2_root(package_url).is_some())
+    if package_urls.is_empty()
+        || !package_urls
+            .iter()
+            .all(|package_url| resolution.mvs_v2_root(package_url).is_some())
     {
         pcb_zen::vendor_deps(&resolution, &[], None, true)?;
     }

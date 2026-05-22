@@ -141,7 +141,7 @@ fn can_materialize_dep(
     index: &CacheIndex,
     dep: &ResolvedDep,
 ) -> bool {
-    let Some(parsed_version) = crate::tags::parse_relaxed_version(&dep.version) else {
+    let Some(parsed_version) = pcb_zen_core::parse_relaxed_version(&dep.version) else {
         log::debug!(
             "Skipping auto-dep package {}@{} (invalid version)",
             dep.module_path,
@@ -414,8 +414,8 @@ fn plain_version(spec: &DependencySpec) -> Option<&str> {
 
 fn is_upgrade_version(current: &str, target: &str) -> bool {
     match (
-        crate::tags::parse_relaxed_version(current),
-        crate::tags::parse_relaxed_version(target),
+        pcb_zen_core::parse_relaxed_version(current),
+        pcb_zen_core::parse_relaxed_version(target),
     ) {
         (Some(current), Some(target)) => target > current,
         _ => false,

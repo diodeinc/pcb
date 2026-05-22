@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use crate::WorkspaceInfo;
 use crate::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
 use crate::resolve::ensure_package_manifest_in_cache;
-use crate::tags;
 use crate::workspace::WorkspaceInfoExt;
 use anyhow::{Context, Result, bail};
 use ignore::WalkBuilder;
@@ -572,7 +571,7 @@ fn exact_spec_version(dep_url: &str, spec: &DependencySpec) -> Result<Version> {
             );
         }
     };
-    tags::parse_relaxed_version(raw)
+    pcb_zen_core::parse_relaxed_version(raw)
         .ok_or_else(|| anyhow::anyhow!("Dependency {} has invalid version '{}'", dep_url, raw))
 }
 

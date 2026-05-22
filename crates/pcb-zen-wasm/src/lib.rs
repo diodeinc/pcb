@@ -810,8 +810,8 @@ fn exact_spec_version(dep_url: &str, spec: &DependencySpec) -> Result<Version, S
             ));
         }
     };
-    Version::parse(raw.trim_start_matches('v'))
-        .map_err(|e| format!("Dependency {dep_url} has invalid version '{raw}': {e}"))
+    pcb_zen_core::parse_relaxed_version(raw)
+        .ok_or_else(|| format!("Dependency {dep_url} has invalid version '{raw}'"))
 }
 
 fn compatibility_lane(version: &Version) -> String {
