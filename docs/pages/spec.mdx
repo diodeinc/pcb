@@ -518,7 +518,7 @@ Declare a typed configuration input for a module. This defines parameters that c
 **Signature:** `config(name, typ, checks=None, default=None, allowed=None, optional=None, help=None)` or `config(typ, checks=None, default=None, allowed=None, optional=None, help=None)`
 
 - `name`: Optional explicit input name (conventionally lowercase). If omitted, `config()` must be assigned to a top-level variable and that variable name is used.
-- `typ`: Expected type — primitives (`str`, `int`, `float`, `bool`), `enum`, `record`, or physical quantity constructors.
+- `typ`: Expected type — primitives (`str`, `int`, `float`, `bool`), `enum`, or physical quantity constructors. `record()` types are not supported as module `config()` inputs.
 - `checks`: Optional check function or list of checks.
 - `default`: Default value. When provided, `optional` defaults to `True`.
 - `allowed`: Optional finite set of allowed values. Accepts a `list`, `tuple`, or `dict` (using only the keys). Supported for `str`, `int`, `float`, `bool`, `enum`, and physical quantity types.

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `config()` now rejects Starlark `record()` types as module input types.
+
 ### Fixed
 
 - Removed stale KiCad board items that reference layers deleted by layout stackup sync.

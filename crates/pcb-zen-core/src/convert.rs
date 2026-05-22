@@ -19,7 +19,6 @@ use pcb_sch::{AttributeValue, Instance, InstanceKind, InstanceRef, ModuleRef, Ne
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use starlark::values::list::ListRef;
-use starlark::values::record::FrozenRecord;
 use starlark::values::{FrozenValue, Value, ValueLike, dict::DictRef};
 use starlark::{codemap::ResolvedSpan, errors::EvalSeverity};
 use std::collections::{BTreeMap, HashMap};
@@ -1279,16 +1278,6 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
         return Ok(AttributeValue::String(enum_val.value().to_string()));
     } else if let Some(part) = v.downcast_ref::<PartValue>() {
         return Ok(AttributeValue::Json(part.to_json_value()));
-    }
-
-    if v.downcast_ref::<FrozenRecord>().is_some() {
-        match v.to_value().to_json_value() {
-            Ok(json) => return Ok(AttributeValue::Json(json)),
-            Err(_) => {
-                // If JSON conversion fails, fall back to string
-                return Ok(AttributeValue::String(v.to_string()));
-            }
-        }
     }
 
     // Handle lists (no nested list support)
