@@ -826,18 +826,18 @@ mod tests {
     fn test_format_footprint_for_kicad_pretty_package_root_uri() {
         let mut package_roots = BTreeMap::new();
         package_roots.insert(
-            "gitlab.com/example/libs/footprints@10.0.0".to_string(),
-            PathBuf::from("/tmp/vendor/gitlab.com/example/libs/footprints/10.0.0"),
+            "gitlab.com/example/libs/footprints@10.0.3".to_string(),
+            PathBuf::from("/tmp/vendor/gitlab.com/example/libs/footprints/10.0.3"),
         );
 
         assert_formatted_footprint(
             format_footprint_with_package_roots(
-                "package://gitlab.com/example/libs/footprints@10.0.0/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
+                "package://gitlab.com/example/libs/footprints@10.0.3/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
                 &package_roots,
             ),
-            "example_libs_footprints_Capacitor_SMD@10.0.0:C_0402_1005Metric",
-            "example_libs_footprints_Capacitor_SMD@10.0.0",
-            "/tmp/vendor/gitlab.com/example/libs/footprints/10.0.0/Capacitor_SMD.pretty",
+            "example_libs_footprints_Capacitor_SMD@10.0.3:C_0402_1005Metric",
+            "example_libs_footprints_Capacitor_SMD@10.0.3",
+            "/tmp/vendor/gitlab.com/example/libs/footprints/10.0.3/Capacitor_SMD.pretty",
         );
     }
 

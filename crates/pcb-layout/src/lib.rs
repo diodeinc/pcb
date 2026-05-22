@@ -848,8 +848,8 @@ mod diff_tests {
     fn layout_json_netlist_adds_derived_footprint_fpid() -> anyhow::Result<()> {
         let mut schematic = Schematic::new();
         schematic.package_roots.insert(
-            "gitlab.com/kicad/libraries/kicad-footprints@10.0.0".to_string(),
-            PathBuf::from("/tmp/vendor/gitlab.com/kicad/libraries/kicad-footprints/10.0.0"),
+            "gitlab.com/kicad/libraries/kicad-footprints@10.0.3".to_string(),
+            PathBuf::from("/tmp/vendor/gitlab.com/kicad/libraries/kicad-footprints/10.0.3"),
         );
 
         let module_ref = ModuleRef::new("/tmp/demo.zen", "<root>");
@@ -860,7 +860,7 @@ mod diff_tests {
         component.attributes.insert(
             "footprint".into(),
             AttributeValue::String(
-                "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.0/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
+                "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.3/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
                     .to_string(),
             ),
         );
@@ -872,11 +872,11 @@ mod diff_tests {
 
         assert_eq!(
             instance["attributes"]["footprint"]["String"],
-            "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.0/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
+            "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.3/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
         );
         assert_eq!(
             instance["footprint_fpid"],
-            "kicad_libraries_kicad-footprints_Resistor_SMD@10.0.0:R_0603_1608Metric"
+            "kicad_libraries_kicad-footprints_Resistor_SMD@10.0.3:R_0603_1608Metric"
         );
 
         Ok(())

@@ -294,8 +294,8 @@ Component(
 fn component_infers_kicad_lib_fp_footprint_with_builtin_kicad10() {
     let mut files = HashMap::new();
 
-    let symbols_root = "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.0";
-    let footprints_root = "/.pcb/cache/gitlab.com/kicad/libraries/kicad-footprints/10.0.0";
+    let symbols_root = "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.3";
+    let footprints_root = "/.pcb/cache/gitlab.com/kicad/libraries/kicad-footprints/10.0.3";
     let footprint_name = "TSSOP-8_4.4x3mm_P0.65mm";
 
     files.insert(
@@ -354,6 +354,6 @@ Component(
 
     insta::assert_snapshot!(
         component.footprint(),
-        @"package://gitlab.com/kicad/libraries/kicad-footprints@10.0.0/Package_SO.pretty/TSSOP-8_4.4x3mm_P0.65mm.kicad_mod"
+        @"package://gitlab.com/kicad/libraries/kicad-footprints@10.0.3/Package_SO.pretty/TSSOP-8_4.4x3mm_P0.65mm.kicad_mod"
     );
 }

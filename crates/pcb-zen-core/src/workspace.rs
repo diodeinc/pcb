@@ -663,11 +663,11 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
             entries[0].http_mirror.as_deref(),
             Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
         );
-        assert_eq!(entries[1].version, Version::new(10, 0, 0));
+        assert_eq!(entries[1].version, Version::new(10, 0, 3));
         assert_eq!(
             info.stdlib_asset_dep_versions()
                 .get("gitlab.com/kicad/libraries/kicad-symbols"),
-            Some(&Version::new(10, 0, 0))
+            Some(&Version::new(10, 0, 3))
         );
     }
 

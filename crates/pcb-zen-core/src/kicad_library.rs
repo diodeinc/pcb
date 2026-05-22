@@ -315,12 +315,12 @@ mod tests {
         let symbol_repo = "gitlab.com/kicad/libraries/kicad-symbols";
 
         let matched =
-            match_kicad_library_for_symbol_repo(&entries, symbol_repo, &Version::new(10, 0, 0));
+            match_kicad_library_for_symbol_repo(&entries, symbol_repo, &Version::new(10, 0, 3));
 
         let KicadSymbolLibraryMatch::Matched(entry) = matched else {
             panic!("expected default KiCad 10 match");
         };
-        assert_eq!(entry.version, Version::new(10, 0, 0));
+        assert_eq!(entry.version, Version::new(10, 0, 3));
         assert_eq!(
             entry.models.get("KICAD10_3DMODEL_DIR").map(String::as_str),
             Some("gitlab.com/kicad/libraries/kicad-packages3D")
@@ -334,7 +334,7 @@ mod tests {
         let template = kicad_http_mirror_template_for_repo(
             &entries,
             "gitlab.com/kicad/libraries/kicad-symbols",
-            &Version::new(10, 0, 0),
+            &Version::new(10, 0, 3),
         )
         .unwrap();
 

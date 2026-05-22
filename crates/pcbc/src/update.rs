@@ -396,11 +396,11 @@ mod tests {
     fn test_select_update_candidates_ignores_prereleases() {
         let current = Version::parse("9.0.7").unwrap();
         let rc_only = vec![
-            Version::parse("10.0.0-rc1").unwrap(),
+            Version::parse("10.0.3-rc1").unwrap(),
             Version::parse("9.0.8-rc1").unwrap(),
         ];
         let with_stable = vec![
-            Version::parse("10.0.0-rc1").unwrap(),
+            Version::parse("10.0.3-rc1").unwrap(),
             Version::parse("9.0.8").unwrap(),
             Version::parse("9.0.8-rc1").unwrap(),
         ];

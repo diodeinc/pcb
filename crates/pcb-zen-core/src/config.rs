@@ -352,9 +352,11 @@ impl KicadLibraryConfig {
 
 pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
     "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst";
+// The KiCad parts index is generated independently of the symbols/footprints/model archives.
+// Keep using the latest published index until a 10.0.3-specific one exists.
 pub const DEFAULT_KICAD_PARTS_URL: &str =
-    "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml";
-pub const STDLIB_PINNED_KICAD_VERSION: Version = Version::new(10, 0, 0);
+    "https://kicad-mirror.api.diode.computer/kicad-parts-10.0.0.toml";
+pub const STDLIB_PINNED_KICAD_VERSION: Version = Version::new(10, 0, 3);
 
 fn default_kicad_library_entry(version: Version, model_var: &str) -> KicadLibraryConfig {
     KicadLibraryConfig {
@@ -373,7 +375,7 @@ fn default_kicad_library_entry(version: Version, model_var: &str) -> KicadLibrar
 fn default_kicad_library() -> Vec<KicadLibraryConfig> {
     vec![
         default_kicad_library_entry(Version::new(9, 0, 3), "KICAD9_3DMODEL_DIR"),
-        default_kicad_library_entry(Version::new(10, 0, 0), "KICAD10_3DMODEL_DIR"),
+        default_kicad_library_entry(Version::new(10, 0, 3), "KICAD10_3DMODEL_DIR"),
     ]
 }
 
@@ -831,7 +833,7 @@ registry = "github.com/diodeinc/registry"
         let err = PcbToml::parse(
             r#"
 [assets]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.0"
+"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
 "#,
         )
         .expect_err("legacy [assets] should not parse");
@@ -906,7 +908,7 @@ pcb-version = "0.3"
             workspace.kicad_library[0].http_mirror.as_deref(),
             Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
         );
-        assert_eq!(workspace.kicad_library[1].version, Version::new(10, 0, 0));
+        assert_eq!(workspace.kicad_library[1].version, Version::new(10, 0, 3));
         assert_eq!(
             workspace.kicad_library[1].models.get("KICAD10_3DMODEL_DIR"),
             Some(&"gitlab.com/kicad/libraries/kicad-packages3D".to_string())
