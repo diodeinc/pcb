@@ -573,10 +573,9 @@ impl ModuleConverter {
             inst.add_attribute(key.clone(), to_attribute_value(*val)?);
         }
 
-        // Consolidate DNP handling for modules: check legacy properties
-        // (modules don't have dnp field, they set it via properties)
-        let legacy_keys = ["do_not_populate", "Do_not_populate", "DNP", "dnp"];
-        let is_dnp = legacy_keys.iter().any(|&key| {
+        // Consolidate DNP handling for modules. `Module(..., dnp=True)` is stored
+        // as a module property by the loader.
+        let is_dnp = ["dnp"].iter().any(|&key| {
             module
                 .properties()
                 .get(key)

@@ -1000,9 +1000,6 @@ where
         let mut override_name: Option<String> = None;
         // Optional map of properties passed via `properties = {...}`.
         let mut properties_override: Option<SmallMap<String, Value<'v>>> = None;
-        // Legacy DNP keys found in the user-authored `properties = {...}` dict.
-        // Collected here so we can emit warnings once `final_name` is known.
-        let mut legacy_dnp_keys_in_properties: Vec<String> = Vec::new();
 
         for (arg_name, value) in args.names_map()? {
             if arg_name.as_str() == "name" {
@@ -1037,9 +1034,6 @@ where
                     let key_str = k.unpack_str().ok_or_else(|| {
                         starlark::Error::new_other(anyhow::anyhow!("property keys must be strings"))
                     })?;
-                    if LEGACY_MODULE_DNP_KEYS.contains(&key_str) {
-                        legacy_dnp_keys_in_properties.push(key_str.to_string());
-                    }
                     map.insert(key_str.to_string(), v);
                 }
 
@@ -1112,10 +1106,6 @@ where
             // Use the file-stem derived name from the loader as a fallback.
             self.name.clone()
         };
-
-        for key in &legacy_dnp_keys_in_properties {
-            warn_legacy_module_dnp_properties_dict(eval, &final_name, key);
-        }
 
         let context = eval
             .module()
@@ -1904,19 +1894,6 @@ pub(crate) fn warn_legacy_module_dnp_add_property(eval: &Evaluator<'_, '_, '_>, 
     );
 }
 
-fn warn_legacy_module_dnp_properties_dict(
-    eval: &Evaluator<'_, '_, '_>,
-    module_name: &str,
-    key: &str,
-) {
-    warn_deprecated_module_property(
-        eval,
-        format!(
-            "Module '{module_name}': `properties[\"{key}\"]` is deprecated; pass `dnp=True` to Module() instead"
-        ),
-    );
-}
-
 #[starlark_module]
 pub fn module_globals(builder: &mut GlobalsBuilder) {
     const Module: ModuleType = ModuleType;
@@ -1928,33 +1905,6 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         invoke_config(args, eval)
-    }
-
-    fn add_property<'v>(
-        #[starlark(require = pos)] name: String,
-        #[starlark(require = pos)] value: Value<'v>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<Value<'v>> {
-        let (path, span) = eval
-            .call_stack_top_location()
-            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-        eval.add_diagnostic(
-            crate::Diagnostic::categorized(
-                &path,
-                "`add_property(...)` is deprecated",
-                "deprecated.add_property",
-                starlark::errors::EvalSeverity::Warning,
-            )
-            .with_span(span)
-            .with_call_stack(Some(eval.call_stack())),
-        );
-
-        warn_legacy_module_dnp_add_property(eval, &name);
-
-        eval.add_property(&name, value);
-
-        Ok(Value::new_none())
     }
 
     /// Record a path movement directive for refactoring support.
