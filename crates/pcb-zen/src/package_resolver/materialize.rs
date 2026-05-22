@@ -1,16 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
-use pcb_zen::WorkspaceInfo;
-use pcb_zen::resolve::{materialize_asset_deps, vendor_package_roots};
 use pcb_zen_core::kicad_library::{KicadRepoMatch, match_kicad_managed_repo};
 use pcb_zen_core::resolution::ModuleLine;
 use semver::Version;
 
-use super::dep_id::ResolvedDepId;
+use super::ResolvedDepId;
 
-pub(crate) fn materialize_selected(
-    workspace: &WorkspaceInfo,
+pub fn materialize_selected(
+    workspace: &crate::WorkspaceInfo,
     selected_remote: &BTreeMap<ResolvedDepId, Version>,
     offline: bool,
 ) -> Result<BTreeSet<(String, String)>> {
@@ -28,15 +26,15 @@ pub(crate) fn materialize_selected(
         }
     }
 
-    materialize_asset_deps(workspace, &kicad_assets, offline)?;
+    crate::resolve::materialize_asset_deps(workspace, &kicad_assets, offline)?;
     Ok(package_roots)
 }
 
-pub(crate) fn vendor_selected(
-    workspace: &WorkspaceInfo,
+pub fn vendor_selected(
+    workspace: &crate::WorkspaceInfo,
     package_roots: &BTreeSet<(String, String)>,
     prune: bool,
 ) -> Result<()> {
-    vendor_package_roots(workspace, package_roots, &[], None, prune)?;
+    crate::resolve::vendor_package_roots(workspace, package_roots, &[], None, prune)?;
     Ok(())
 }

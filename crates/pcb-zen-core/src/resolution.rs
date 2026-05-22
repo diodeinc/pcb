@@ -13,13 +13,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::{Result, bail};
 use semver::Version;
 
 use crate::FileProvider;
-use crate::STDLIB_MODULE_PATH;
 use crate::config::{DependencyDetail, DependencySpec, Lockfile, ManifestPart, PcbToml};
 use crate::kicad_library::effective_kicad_library_for_repo;
 use crate::workspace::{LOCAL_WORKSPACE_ROOT_URL, WorkspaceInfo, package_url_covers};
+use crate::{STDLIB_MODULE_PATH, is_stdlib_module_path, parse_relaxed_version};
 
 /// Stable identity for package-local evaluation state.
 ///
@@ -409,7 +410,7 @@ fn resolve_package_deps<R: PackagePathResolver>(
 /// Used by WASM where all dependencies must be pre-vendored in the zip.
 pub struct VendoredPathResolver {
     vendor_dir: PathBuf,
-    /// Pre-computed closure from lockfile: ModuleLine -> Version
+    /// Pre-computed closure: ModuleLine -> Version
     closure: HashMap<ModuleLine, Version>,
 }
 
@@ -417,6 +418,16 @@ impl VendoredPathResolver {
     /// Get the closure (ModuleLine -> Version mapping).
     pub fn closure(&self) -> &HashMap<ModuleLine, Version> {
         &self.closure
+    }
+
+    pub fn from_selected_versions(
+        vendor_dir: PathBuf,
+        closure: HashMap<ModuleLine, Version>,
+    ) -> Self {
+        Self {
+            vendor_dir,
+            closure,
+        }
     }
 
     /// Create a new vendored path resolver from a lockfile.
@@ -650,6 +661,119 @@ impl FrozenResolutionMap {
 pub struct FrozenDepId {
     pub path: String,
     pub lane: String,
+}
+
+impl FrozenDepId {
+    pub fn new(path: impl Into<String>, lane: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            lane: lane.into(),
+        }
+    }
+
+    pub fn for_version(path: impl Into<String>, version: &Version) -> Self {
+        Self::new(path, compatibility_lane(version))
+    }
+
+    pub fn indirect_key(&self) -> String {
+        format!("{}@{}", self.path, self.lane)
+    }
+}
+
+pub fn compatibility_lane(version: &Version) -> String {
+    if version.major == 0 {
+        format!("0.{}", version.minor)
+    } else {
+        version.major.to_string()
+    }
+}
+
+pub fn parse_lane_qualified_key(raw: &str) -> Result<FrozenDepId> {
+    let Some((path, lane)) = raw.rsplit_once('@') else {
+        bail!(
+            "Expected lane-qualified dependency key '<module>@<lane>', got '{}'",
+            raw
+        );
+    };
+    if path.is_empty() || lane.is_empty() {
+        bail!(
+            "Expected lane-qualified dependency key '<module>@<lane>', got '{}'",
+            raw
+        );
+    }
+    Ok(FrozenDepId::new(path, lane))
+}
+
+pub fn selected_remote_from_hydrated_manifest(
+    workspace: &WorkspaceInfo,
+    package_url: &str,
+) -> Result<BTreeMap<FrozenDepId, Version>> {
+    let package = workspace
+        .packages
+        .get(package_url)
+        .ok_or_else(|| anyhow::anyhow!("Unknown workspace package {package_url}"))?;
+    if package.config.dependencies.indirect.is_empty() {
+        bail!(
+            "{} is missing resolved dependency entries; run `pcb sync` first",
+            package_url
+        );
+    }
+
+    let mut selected = BTreeMap::new();
+    for (dep_url, spec) in &package.config.dependencies.direct {
+        if is_remote_manifest_dependency(workspace, dep_url, spec) {
+            let version = exact_manifest_version(dep_url, spec)?;
+            selected.insert(FrozenDepId::for_version(dep_url.clone(), &version), version);
+        }
+    }
+
+    for (raw_key, spec) in &package.config.dependencies.indirect {
+        let dep_id = parse_lane_qualified_key(raw_key)?;
+        let version = exact_manifest_version(raw_key, spec)?;
+        let expected_lane = compatibility_lane(&version);
+        if dep_id.lane != expected_lane {
+            bail!(
+                "Indirect dependency {} resolves to lane {}, not {}",
+                raw_key,
+                expected_lane,
+                dep_id.lane
+            );
+        }
+        selected.insert(dep_id, version);
+    }
+
+    Ok(selected)
+}
+
+fn is_remote_manifest_dependency(
+    workspace: &WorkspaceInfo,
+    dep_url: &str,
+    spec: &DependencySpec,
+) -> bool {
+    !is_stdlib_module_path(dep_url)
+        && !workspace
+            .packages
+            .keys()
+            .any(|package_url| package_url_covers(package_url, dep_url))
+        && workspace.workspace_base_url().as_deref() != Some(dep_url)
+        && !matches!(spec, DependencySpec::Detailed(detail) if detail.path.is_some())
+}
+
+fn exact_manifest_version(dep_url: &str, spec: &DependencySpec) -> Result<Version> {
+    let raw = match spec {
+        DependencySpec::Version(version) => version,
+        DependencySpec::Detailed(detail) if detail.version.is_some() => {
+            detail.version.as_ref().expect("checked above")
+        }
+        DependencySpec::Detailed(_) => {
+            bail!(
+                "Dependency {} must specify an exact version; run `pcb sync` to update dependency versions",
+                dep_url
+            );
+        }
+    };
+    parse_relaxed_version(raw)
+        .ok_or_else(|| anyhow::anyhow!("Dependency {} has invalid version '{}'", dep_url, raw))
 }
 
 #[derive(Debug, Clone)]

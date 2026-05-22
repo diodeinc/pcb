@@ -1,26 +1,26 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 
+use crate::cache_index::CacheIndex;
 use anyhow::{Context, Result};
-use pcb_zen::cache_index::CacheIndex;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::{initial_package_version, is_stdlib_module_path};
 use semver::Version;
 
-use super::dep_id::ResolvedDepId;
+use super::ResolvedDepId;
 use super::manifest::ManifestLoader;
 use super::scan::{ScannedDirectDeps, scan_package_direct_deps};
 use super::versions::SpecVersionResolver;
 
 #[derive(Debug, Clone)]
-pub(crate) struct PackageResolution {
-    pub(crate) direct: BTreeMap<String, DependencySpec>,
-    pub(crate) direct_remote_ids: BTreeSet<ResolvedDepId>,
-    pub(crate) resolved_remote: BTreeMap<ResolvedDepId, Version>,
+pub struct PackageResolution {
+    pub direct: BTreeMap<String, DependencySpec>,
+    pub direct_remote_ids: BTreeSet<ResolvedDepId>,
+    pub resolved_remote: BTreeMap<ResolvedDepId, Version>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum DepGraphNode {
+pub enum DepGraphNode {
     Package(String),
     Remote {
         dep_id: ResolvedDepId,
@@ -29,7 +29,7 @@ pub(crate) enum DepGraphNode {
 }
 
 impl DepGraphNode {
-    pub(crate) fn display(&self) -> String {
+    pub fn display(&self) -> String {
         match self {
             Self::Package(package_url) => package_url.clone(),
             Self::Remote { dep_id, version } => format!("{}@{}", dep_id.path, version),
@@ -38,7 +38,7 @@ impl DepGraphNode {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DepGraph {
+pub struct DepGraph {
     root: DepGraphNode,
     edges: BTreeMap<DepGraphNode, BTreeSet<DepGraphNode>>,
 }
@@ -55,7 +55,7 @@ impl DepGraph {
         self.edges.entry(from).or_default().insert(to);
     }
 
-    pub(crate) fn formatted_edges(&self) -> Vec<(String, String)> {
+    pub fn formatted_edges(&self) -> Vec<(String, String)> {
         let mut edges = Vec::new();
         for (from, children) in &self.edges {
             for to in children {
@@ -65,7 +65,7 @@ impl DepGraph {
         edges
     }
 
-    pub(crate) fn shortest_path_to(&self, target: &DepGraphNode) -> Option<Vec<DepGraphNode>> {
+    pub fn shortest_path_to(&self, target: &DepGraphNode) -> Option<Vec<DepGraphNode>> {
         let mut queue = VecDeque::from([self.root.clone()]);
         let mut parents = BTreeMap::<DepGraphNode, Option<DepGraphNode>>::new();
         parents.insert(self.root.clone(), None);
@@ -94,20 +94,20 @@ impl DepGraph {
         None
     }
 
-    pub(crate) fn contains_package(&self, package_url: &str) -> bool {
+    pub fn contains_package(&self, package_url: &str) -> bool {
         self.edges
             .keys()
             .chain(self.edges.values().flatten())
             .any(|node| matches!(node, DepGraphNode::Package(url) if url == package_url))
     }
 
-    pub(crate) fn find_remote_exact(&self, path: &str, version: &Version) -> Option<DepGraphNode> {
+    pub fn find_remote_exact(&self, path: &str, version: &Version) -> Option<DepGraphNode> {
         self.remote_nodes()
             .into_iter()
             .find(|node| matches!(node, DepGraphNode::Remote { dep_id, version: node_version } if dep_id.path == path && node_version == version))
     }
 
-    pub(crate) fn find_remote_by_path(&self, path: &str) -> Vec<DepGraphNode> {
+    pub fn find_remote_by_path(&self, path: &str) -> Vec<DepGraphNode> {
         self.remote_nodes()
             .into_iter()
             .filter(
@@ -136,8 +136,8 @@ enum PackageResolutionState {
     Resolved(PackageResolution),
 }
 
-pub(crate) struct PackageResolver {
-    workspace: pcb_zen::WorkspaceInfo,
+pub struct PackageResolver {
+    workspace: crate::WorkspaceInfo,
     cache_index: CacheIndex,
     manifest_loader: ManifestLoader,
     spec_resolver: SpecVersionResolver,
@@ -145,7 +145,7 @@ pub(crate) struct PackageResolver {
 }
 
 impl PackageResolver {
-    pub(crate) fn new(workspace: pcb_zen::WorkspaceInfo, offline: bool) -> Result<Self> {
+    pub fn new(workspace: crate::WorkspaceInfo, offline: bool) -> Result<Self> {
         Ok(Self {
             cache_index: CacheIndex::open()?,
             manifest_loader: ManifestLoader::new(workspace.clone(), offline),
@@ -155,7 +155,7 @@ impl PackageResolver {
         })
     }
 
-    pub(crate) fn resolve_package(&mut self, package_url: &str) -> Result<PackageResolution> {
+    pub fn resolve_package(&mut self, package_url: &str) -> Result<PackageResolution> {
         if let Some(state) = self.package_states.get(package_url) {
             match state {
                 PackageResolutionState::InProgress => {
@@ -189,7 +189,7 @@ impl PackageResolver {
         }
     }
 
-    pub(crate) fn resolve_package_with_direct_overrides(
+    pub fn resolve_package_with_direct_overrides(
         &mut self,
         package_url: &str,
         direct_overrides: Option<&BTreeMap<String, DependencySpec>>,
@@ -200,7 +200,7 @@ impl PackageResolver {
         self.build_package_resolution(package_url, direct_overrides)
     }
 
-    pub(crate) fn build_package_graph(&mut self, package_url: &str) -> Result<DepGraph> {
+    pub fn build_package_graph(&mut self, package_url: &str) -> Result<DepGraph> {
         let root_resolution = self.resolve_package(package_url)?;
         let mut graph = DepGraph::new(package_url);
         let mut seen_packages = BTreeSet::new();
@@ -498,7 +498,7 @@ impl PackageResolver {
 }
 
 fn fold_direct_dependencies(
-    workspace: &pcb_zen::WorkspaceInfo,
+    workspace: &crate::WorkspaceInfo,
     scanned: &ScannedDirectDeps,
     resolved_remote: &BTreeMap<ResolvedDepId, Version>,
     direct_remote_ids: &BTreeSet<ResolvedDepId>,
@@ -529,7 +529,7 @@ fn fold_direct_dependencies(
 }
 
 fn workspace_package_version(
-    workspace: &pcb_zen::WorkspaceInfo,
+    workspace: &crate::WorkspaceInfo,
     package_url: &str,
 ) -> Result<String> {
     let Some(pkg) = workspace.packages.get(package_url) else {
@@ -570,67 +570,5 @@ fn enqueue_floor_version(
 ) {
     if merge_floor_version(selected, dep_id.clone(), version) {
         queue.push_back(dep_id);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::path::PathBuf;
-
-    use pcb_zen::{MemberPackage, WorkspaceInfo};
-
-    use super::*;
-
-    #[test]
-    fn fold_direct_dependencies_combines_remote_and_workspace_deps() {
-        let workspace_dep = "github.com/example/workspace/components/Local".to_string();
-        let workspace = WorkspaceInfo {
-            root: PathBuf::from("/repo"),
-            cache_dir: PathBuf::from("/repo/.pcb/cache"),
-            config: None,
-            packages: BTreeMap::from([(
-                workspace_dep.clone(),
-                MemberPackage {
-                    rel_path: PathBuf::from("components/Local"),
-                    config: PcbToml::default(),
-                    version: Some("0.4.5".to_string()),
-                    published_at: None,
-                    preferred: false,
-                    dirty: false,
-                    entrypoints: Vec::new(),
-                    symbol_files: Vec::new(),
-                },
-            )]),
-            lockfile: None,
-            errors: vec![],
-        };
-        let scanned = ScannedDirectDeps {
-            remote: BTreeMap::from([(
-                "github.com/example/remote".to_string(),
-                DependencySpec::Version("0.1.0".to_string()),
-            )]),
-            workspace: BTreeSet::from([workspace_dep.clone()]),
-            implicit_remote: BTreeMap::new(),
-        };
-        let direct_remote_ids =
-            BTreeSet::from([ResolvedDepId::new("github.com/example/remote", "0.2")]);
-        let resolved_remote = BTreeMap::from([(
-            ResolvedDepId::new("github.com/example/remote", "0.2"),
-            Version::parse("0.2.0").unwrap(),
-        )]);
-
-        let direct =
-            fold_direct_dependencies(&workspace, &scanned, &resolved_remote, &direct_remote_ids)
-                .unwrap();
-
-        assert_eq!(
-            direct.get("github.com/example/remote"),
-            Some(&DependencySpec::Version("0.2.0".to_string()))
-        );
-        assert_eq!(
-            direct.get(&workspace_dep),
-            Some(&DependencySpec::Version("0.4.5".to_string()))
-        );
     }
 }

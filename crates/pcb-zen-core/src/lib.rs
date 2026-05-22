@@ -36,6 +36,41 @@ pub fn initial_package_version() -> Version {
     Version::new(0, 1, 0)
 }
 
+/// Parse a dependency version string with optional `^` / `v` and shorthand components.
+pub fn parse_relaxed_version(s: &str) -> Option<Version> {
+    let s = s.trim_start_matches('^').trim_start_matches('v');
+
+    if let Ok(v) = Version::parse(s) {
+        return Some(v);
+    }
+
+    let parts: Vec<_> = s.split('.').collect();
+    match parts.as_slice() {
+        [major] => Some(Version::new(major.parse().ok()?, 0, 0)),
+        [major, minor] => Some(Version::new(major.parse().ok()?, minor.parse().ok()?, 0)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn parses_relaxed_dependency_versions() {
+        for (raw, version) in [
+            ("^v1.2.3", Version::new(1, 2, 3)),
+            ("1.2.3-beta.1", Version::parse("1.2.3-beta.1").unwrap()),
+            ("2", Version::new(2, 0, 0)),
+            ("2.5", Version::new(2, 5, 0)),
+        ] {
+            assert_eq!(parse_relaxed_version(raw), Some(version));
+        }
+        assert_eq!(parse_relaxed_version("abc"), None);
+        assert_eq!(parse_relaxed_version("1.2.3.4"), None);
+    }
+}
+
 pub fn is_stdlib_module_path(path: &str) -> bool {
     path == STDLIB_MODULE_PATH || path == LEGACY_STDLIB_MODULE_PATH
 }

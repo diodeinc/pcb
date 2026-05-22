@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::ast_utils::skip_vendor;
+use crate::cache_index::CacheIndex;
+use crate::import_scanner::extract_imports;
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
-use pcb_zen::ast_utils::skip_vendor;
-use pcb_zen::cache_index::CacheIndex;
-use pcb_zen::import_scanner::extract_imports;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
@@ -20,7 +20,7 @@ pub(crate) struct ScannedDirectDeps {
 }
 
 pub(crate) fn scan_package_direct_deps(
-    workspace_info: &pcb_zen::WorkspaceInfo,
+    workspace_info: &crate::WorkspaceInfo,
     package_url: &str,
     package_dir: &Path,
     current_config: &PcbToml,
@@ -108,7 +108,7 @@ struct WorkspacePackageIndex {
 }
 
 impl WorkspacePackageIndex {
-    fn new(workspace_info: &pcb_zen::WorkspaceInfo) -> Self {
+    fn new(workspace_info: &crate::WorkspaceInfo) -> Self {
         let package_dirs = workspace_info
             .packages
             .iter()
@@ -200,7 +200,7 @@ fn existing_manifest_dep(url: &str, config: &PcbToml) -> Option<(String, Depende
 }
 
 fn workspace_member_for_url<'a>(
-    workspace_info: &'a pcb_zen::WorkspaceInfo,
+    workspace_info: &'a crate::WorkspaceInfo,
     url: &str,
 ) -> Option<&'a str> {
     workspace_info

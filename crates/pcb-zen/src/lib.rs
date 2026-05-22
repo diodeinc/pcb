@@ -6,6 +6,7 @@ pub mod diagnostics;
 pub mod git;
 pub mod import_scanner;
 pub mod lsp;
+pub mod package_resolver;
 pub mod resolve;
 pub mod suppression;
 pub mod tags;
@@ -21,6 +22,7 @@ use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalOutput};
 use serde_json::Value as JsonValue;
 use starlark::collections::SmallMap;
 
+pub use package_resolver::resolve_workspace_dependencies;
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve::{

@@ -1360,7 +1360,8 @@ fn is_non_version_dep(spec: &DependencySpec) -> bool {
 /// For branches/revs, returns a placeholder - the actual version comes from the selected map.
 /// Parse version string, handling different formats
 fn parse_version_string(s: &str) -> Result<Version> {
-    tags::parse_relaxed_version(s).ok_or_else(|| anyhow::anyhow!("Invalid version string: {}", s))
+    pcb_zen_core::parse_relaxed_version(s)
+        .ok_or_else(|| anyhow::anyhow!("Invalid version string: {}", s))
 }
 
 /// Materialize asset dependencies selected by dependency resolution.

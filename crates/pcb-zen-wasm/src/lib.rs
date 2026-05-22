@@ -1,10 +1,16 @@
+use pcb_zen_core::config::PcbToml;
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::resolution::{VendoredPathResolver, build_resolution_map};
+use pcb_zen_core::resolution::{
+    FrozenDepId, FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
+    ModuleLine, VendoredPathResolver, build_resolution_map, selected_remote_from_hydrated_manifest,
+};
+use pcb_zen_core::workspace::WorkspaceInfo;
 use pcb_zen_core::workspace::get_workspace_info;
 use pcb_zen_core::{EvalContext, FileProvider, FileProviderError, Lockfile};
 use ruzstd::decoding::StreamingDecoder;
+use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -589,30 +595,164 @@ mod tests {
 fn resolve_packages<F: FileProvider + Clone>(
     file_provider: F,
     workspace_root: &Path,
+    main_path: &Path,
 ) -> Result<pcb_zen_core::resolution::ResolutionResult, String> {
-    let lockfile_path = workspace_root.join("pcb.sum");
-
-    let lockfile_content = file_provider
-        .read_file(&lockfile_path)
-        .map_err(|e| format!("Failed to read {}: {}", lockfile_path.display(), e))?;
-    let lockfile = Lockfile::parse(&lockfile_content)
-        .map_err(|e| format!("Failed to parse {}: {}", lockfile_path.display(), e))?;
-
     let vendor_dir = workspace_root.join("vendor");
     let workspace = get_workspace_info(&file_provider, workspace_root)
         .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
-    let resolver =
-        VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile);
+    let resolver = if let Some(package_url) = hydrated_package_url(&workspace, main_path) {
+        VendoredPathResolver::from_selected_versions(
+            vendor_dir,
+            selected_versions_from_manifest(&workspace, &package_url)?,
+        )
+    } else {
+        let lockfile_path = workspace_root.join("pcb.sum");
+        let lockfile_content = file_provider
+            .read_file(&lockfile_path)
+            .map_err(|e| format!("Failed to read {}: {}", lockfile_path.display(), e))?;
+        let lockfile = Lockfile::parse(&lockfile_content)
+            .map_err(|e| format!("Failed to parse {}: {}", lockfile_path.display(), e))?;
+        VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile)
+    };
 
     let package_resolutions =
         build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
-    Ok(pcb_zen_core::resolution::ResolutionResult::native(
+    let mut resolution = pcb_zen_core::resolution::ResolutionResult::native(
         workspace,
         package_resolutions,
         HashMap::new(),
         false,
         HashMap::new(),
-    ))
+    );
+    attach_frozen_resolution_if_hydrated(&mut resolution, &file_provider, main_path)?;
+    Ok(resolution)
+}
+
+fn hydrated_package_url(workspace: &WorkspaceInfo, main_path: &Path) -> Option<String> {
+    let package_url = package_url_for_zen(workspace, main_path)?;
+    workspace
+        .packages
+        .get(&package_url)
+        .is_some_and(|package| !package.config.dependencies.indirect.is_empty())
+        .then_some(package_url)
+}
+
+fn selected_versions_from_manifest(
+    workspace: &WorkspaceInfo,
+    package_url: &str,
+) -> Result<HashMap<ModuleLine, Version>, String> {
+    Ok(
+        selected_remote_from_hydrated_manifest(workspace, package_url)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|(dep_id, version)| (ModuleLine::new(dep_id.path, &version), version))
+            .collect(),
+    )
+}
+
+fn attach_frozen_resolution_if_hydrated<F: FileProvider>(
+    resolution: &mut pcb_zen_core::resolution::ResolutionResult,
+    file_provider: &F,
+    main_path: &Path,
+) -> Result<(), String> {
+    let Some(package_url) = package_url_for_zen(&resolution.workspace_info, main_path) else {
+        return Ok(());
+    };
+    let Some(package) = resolution.workspace_info.packages.get(&package_url) else {
+        return Ok(());
+    };
+    if package.config.dependencies.indirect.is_empty() {
+        return Ok(());
+    }
+
+    let frozen = build_wasm_frozen_resolution(resolution, file_provider, &package_url)?;
+    resolution.set_mvs_v2_resolution(FrozenResolutionSet::from([(package_url, frozen)]));
+    Ok(())
+}
+
+fn package_url_for_zen(workspace: &WorkspaceInfo, path: &Path) -> Option<String> {
+    workspace
+        .packages
+        .iter()
+        .filter(|(_, package)| path.starts_with(package.dir(&workspace.root)))
+        .max_by_key(|(_, package)| package.dir(&workspace.root).as_os_str().len())
+        .map(|(url, _)| url.clone())
+}
+
+fn build_wasm_frozen_resolution<F: FileProvider>(
+    resolution: &pcb_zen_core::resolution::ResolutionResult,
+    file_provider: &F,
+    package_url: &str,
+) -> Result<FrozenResolutionMap, String> {
+    let workspace = &resolution.workspace_info;
+    let selected_remote = selected_remote_from_hydrated_manifest(workspace, package_url)
+        .map_err(|e| e.to_string())?;
+    let mut packages = BTreeMap::new();
+
+    for (root, deps) in &resolution.package_resolutions {
+        let Some(identity) = frozen_identity_for_root(workspace, &selected_remote, root) else {
+            continue;
+        };
+        let parts = match &identity {
+            FrozenPackageIdentity::Workspace(url) => workspace
+                .packages
+                .get(url)
+                .map(|package| package.config.parts.clone())
+                .unwrap_or_default(),
+            FrozenPackageIdentity::Remote { .. } => read_manifest(file_provider, root)?.parts,
+            FrozenPackageIdentity::Stdlib => Vec::new(),
+        };
+        packages.insert(
+            root.clone(),
+            FrozenPackage {
+                identity,
+                deps: deps.clone(),
+                parts,
+            },
+        );
+    }
+
+    Ok(FrozenResolutionMap {
+        selected_remote,
+        packages,
+    })
+}
+
+fn frozen_identity_for_root(
+    workspace: &WorkspaceInfo,
+    selected_remote: &BTreeMap<FrozenDepId, Version>,
+    root: &Path,
+) -> Option<FrozenPackageIdentity> {
+    if root == workspace.workspace_stdlib_dir() {
+        return Some(FrozenPackageIdentity::Stdlib);
+    }
+
+    workspace
+        .packages
+        .iter()
+        .find(|(_, package)| package.dir(&workspace.root) == root)
+        .map(|(url, _)| FrozenPackageIdentity::Workspace(url.clone()))
+        .or_else(|| {
+            selected_remote.iter().find_map(|(dep_id, version)| {
+                let package_root = workspace
+                    .root
+                    .join("vendor")
+                    .join(&dep_id.path)
+                    .join(version.to_string());
+                (package_root == root).then(|| FrozenPackageIdentity::Remote {
+                    dep_id: dep_id.clone(),
+                    version: version.clone(),
+                })
+            })
+        })
+}
+
+fn read_manifest<F: FileProvider>(file_provider: &F, root: &Path) -> Result<PcbToml, String> {
+    let path = root.join("pcb.toml");
+    let content = file_provider
+        .read_file(&path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    PcbToml::parse(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
 }
 
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
@@ -661,7 +801,7 @@ pub fn evaluate_impl(
         .map_err(|e| format!("Failed to canonicalize main file path: {e}"))?;
     let workspace_root = find_workspace_root(file_provider.as_ref(), &main_path)
         .map_err(|e| format!("Failed to find workspace root: {e}"))?;
-    let resolution = resolve_packages(file_provider.clone(), &workspace_root)
+    let resolution = resolve_packages(file_provider.clone(), &workspace_root, &main_path)
         .map_err(|e| format!("Failed to resolve dependencies: {e}"))?;
 
     let inputs: HashMap<String, serde_json::Value> =
