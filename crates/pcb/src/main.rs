@@ -663,34 +663,30 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
 fn download_toolchain(version: &Version) -> Result<Download> {
     let client = http_client(ARCHIVE_TIMEOUT)?;
 
-    for binary in ["pcbc", "pcb"] {
-        let name = binary_artifact_name(binary);
-        let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
-        if let Some(bytes) = download_optional_artifact(&client, &url)? {
-            return Ok(Download {
-                name,
-                url,
-                bytes,
-                kind: DownloadKind::Binary,
-            });
-        }
+    let name = binary_artifact_name("pcbc");
+    let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
+    if let Some(bytes) = download_optional_artifact(&client, &url)? {
+        return Ok(Download {
+            name,
+            url,
+            bytes,
+            kind: DownloadKind::Binary,
+        });
     }
 
-    for binary in ["pcbc", "pcb"] {
-        let name = toolchain_archive_name(binary);
-        let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
-        if let Some(bytes) = download_optional(&client, &url)? {
-            return Ok(Download {
-                name,
-                url,
-                bytes,
-                kind: DownloadKind::Archive,
-            });
-        }
+    let name = toolchain_archive_name("pcbc");
+    let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
+    if let Some(bytes) = download_optional(&client, &url)? {
+        return Ok(Download {
+            name,
+            url,
+            bytes,
+            kind: DownloadKind::Archive,
+        });
     }
 
     anyhow::bail!(
-        "no pcbc or legacy pcb binary found for v{} on {}",
+        "no pcbc binary found for v{} on {}",
         version,
         target_triple()
     )
@@ -808,7 +804,6 @@ fn extract_archive(archive_path: &Path, extract_dir: &Path) -> Result<()> {
 
 fn find_extracted_binary(extract_dir: &Path) -> Result<PathBuf> {
     find_file_named(extract_dir, pcbc_binary_name())
-        .or_else(|| find_file_named(extract_dir, legacy_pcb_binary_name()))
         .ok_or_else(|| anyhow::anyhow!("archive did not contain {}", pcbc_binary_name()))
 }
 
