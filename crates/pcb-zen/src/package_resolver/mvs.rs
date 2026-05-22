@@ -7,7 +7,7 @@ use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::{initial_package_version, is_stdlib_module_path};
 use semver::Version;
 
-use super::dep_id::ResolvedDepId;
+use super::ResolvedDepId;
 use super::manifest::ManifestLoader;
 use super::scan::{ScannedDirectDeps, scan_package_direct_deps};
 use super::versions::SpecVersionResolver;

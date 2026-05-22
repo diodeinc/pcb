@@ -5,7 +5,7 @@ use pcb_zen_core::kicad_library::{KicadRepoMatch, match_kicad_managed_repo};
 use pcb_zen_core::resolution::ModuleLine;
 use semver::Version;
 
-use super::dep_id::ResolvedDepId;
+use super::ResolvedDepId;
 
 pub fn materialize_selected(
     workspace: &crate::WorkspaceInfo,

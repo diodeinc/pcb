@@ -7,7 +7,7 @@ use pcb_zen_core::config::{DependencySpec, ManifestPart};
 use pcb_zen_core::kicad_library::effective_kicad_library_for_repo;
 use semver::Version;
 
-use super::dep_id::{ResolvedDepId, parse_lane_qualified_key};
+use super::{ResolvedDepId, compatibility_lane, parse_lane_qualified_key};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ManifestRequirements {
@@ -117,7 +117,7 @@ fn parse_indirect_dependency(
             raw_version
         )
     })?;
-    let expected_lane = super::dep_id::compatibility_lane(&version);
+    let expected_lane = compatibility_lane(&version);
     if dep_id.lane != expected_lane {
         anyhow::bail!(
             "Indirect dependency {} resolved to lane {}, not {}",

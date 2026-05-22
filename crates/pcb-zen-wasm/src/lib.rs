@@ -2,7 +2,8 @@ use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::resolution::{
     FrozenDepId, FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
-    ModuleLine, VendoredPathResolver, build_resolution_map,
+    ModuleLine, VendoredPathResolver, build_resolution_map, compatibility_lane,
+    parse_lane_qualified_key,
 };
 use pcb_zen_core::workspace::get_workspace_info;
 use pcb_zen_core::workspace::{WorkspaceInfo, package_url_covers};
@@ -734,10 +735,10 @@ fn frozen_identity_for_root(
                 (package_root == root).then(|| {
                     let (path, version) = coord.rsplit_once('@')?;
                     Some(FrozenPackageIdentity::Remote {
-                        dep_id: FrozenDepId {
-                            path: path.to_string(),
-                            lane: compatibility_lane(&Version::parse(version).ok()?),
-                        },
+                        dep_id: FrozenDepId::for_version(
+                            path.to_string(),
+                            &Version::parse(version).ok()?,
+                        ),
                         version: Version::parse(version).ok()?,
                     })
                 })
@@ -761,26 +762,22 @@ fn selected_remote_from_manifest(
         }
     }
     for (raw_key, spec) in &package.config.dependencies.indirect {
-        let (path, lane) = raw_key
-            .rsplit_once('@')
-            .ok_or_else(|| format!("Expected lane-qualified dependency key: {raw_key}"))?;
+        let dep_id = parse_lane_qualified_key(raw_key).map_err(|e| e.to_string())?;
         let version = exact_spec_version(raw_key, spec)?;
-        selected.insert(
-            FrozenDepId {
-                path: path.to_string(),
-                lane: lane.to_string(),
-            },
-            version,
-        );
+        let expected_lane = compatibility_lane(&version);
+        if dep_id.lane != expected_lane {
+            return Err(format!(
+                "Indirect dependency {} resolves to lane {}, not {}",
+                raw_key, expected_lane, dep_id.lane
+            ));
+        }
+        selected.insert(dep_id, version);
     }
     Ok(selected)
 }
 
 fn frozen_dep_id(path: impl Into<String>, version: &Version) -> FrozenDepId {
-    FrozenDepId {
-        path: path.into(),
-        lane: compatibility_lane(version),
-    }
+    FrozenDepId::for_version(path, version)
 }
 
 fn is_workspace_dep(workspace: &WorkspaceInfo, dep_url: &str) -> bool {
@@ -812,14 +809,6 @@ fn exact_spec_version(dep_url: &str, spec: &DependencySpec) -> Result<Version, S
     };
     pcb_zen_core::parse_relaxed_version(raw)
         .ok_or_else(|| format!("Dependency {dep_url} has invalid version '{raw}'"))
-}
-
-fn compatibility_lane(version: &Version) -> String {
-    if version.major == 0 {
-        format!("0.{}", version.minor)
-    } else {
-        version.major.to_string()
-    }
 }
 
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {

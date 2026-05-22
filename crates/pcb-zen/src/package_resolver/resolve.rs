@@ -14,14 +14,14 @@ use pcb_zen_core::kicad_library::{
     KicadRepoMatch, effective_kicad_library_for_repo, match_kicad_managed_repo,
 };
 use pcb_zen_core::resolution::{
-    FrozenDepId, FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
+    FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
     ResolutionResult,
 };
 use semver::Version;
 
-use super::dep_id::{ResolvedDepId, compatibility_lane, parse_lane_qualified_key};
 use super::manifest::{ManifestLoader, package_version_root};
 use super::materialize::materialize_selected;
+use super::{ResolvedDepId, compatibility_lane, parse_lane_qualified_key};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum PackageNode {
@@ -230,12 +230,7 @@ impl FrozenResolutionBuilder {
         self.add_stdlib_package()?;
 
         Ok(FrozenResolutionMap {
-            selected_remote: self
-                .selected_remote
-                .clone()
-                .into_iter()
-                .map(|(dep_id, version)| (frozen_dep_id(dep_id), version))
-                .collect(),
+            selected_remote: self.selected_remote.clone().into_iter().collect(),
             packages: std::mem::take(&mut self.packages),
         })
     }
@@ -283,10 +278,7 @@ impl FrozenResolutionBuilder {
                     .load(&self.cache_index, &dep_id.path, &version)
                     .with_context(|| format!("Failed to load {}@{}", dep_id.path, version))?;
                 (
-                    FrozenPackageIdentity::Remote {
-                        dep_id: frozen_dep_id(dep_id),
-                        version,
-                    },
+                    FrozenPackageIdentity::Remote { dep_id, version },
                     package_root,
                     manifest.direct,
                     manifest.parts,
@@ -526,13 +518,6 @@ impl FrozenResolutionBuilder {
             && !self.workspace.packages.contains_key(dep_url)
             && self.workspace.workspace_base_url().as_deref() != Some(dep_url)
             && local_path_dependency_root(Path::new("."), spec).is_none()
-    }
-}
-
-fn frozen_dep_id(dep_id: ResolvedDepId) -> FrozenDepId {
-    FrozenDepId {
-        path: dep_id.path,
-        lane: dep_id.lane,
     }
 }
 

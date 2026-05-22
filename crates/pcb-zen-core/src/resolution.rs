@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::{Result, bail};
 use semver::Version;
 
 use crate::FileProvider;
@@ -660,6 +661,47 @@ impl FrozenResolutionMap {
 pub struct FrozenDepId {
     pub path: String,
     pub lane: String,
+}
+
+impl FrozenDepId {
+    pub fn new(path: impl Into<String>, lane: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            lane: lane.into(),
+        }
+    }
+
+    pub fn for_version(path: impl Into<String>, version: &Version) -> Self {
+        Self::new(path, compatibility_lane(version))
+    }
+
+    pub fn indirect_key(&self) -> String {
+        format!("{}@{}", self.path, self.lane)
+    }
+}
+
+pub fn compatibility_lane(version: &Version) -> String {
+    if version.major == 0 {
+        format!("0.{}", version.minor)
+    } else {
+        version.major.to_string()
+    }
+}
+
+pub fn parse_lane_qualified_key(raw: &str) -> Result<FrozenDepId> {
+    let Some((path, lane)) = raw.rsplit_once('@') else {
+        bail!(
+            "Expected lane-qualified dependency key '<module>@<lane>', got '{}'",
+            raw
+        );
+    };
+    if path.is_empty() || lane.is_empty() {
+        bail!(
+            "Expected lane-qualified dependency key '<module>@<lane>', got '{}'",
+            raw
+        );
+    }
+    Ok(FrozenDepId::new(path, lane))
 }
 
 #[derive(Debug, Clone)]
