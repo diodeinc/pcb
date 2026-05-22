@@ -119,7 +119,6 @@ fn format_type_info(type_info: &TypeInfo) -> String {
             )
         }
         TypeInfo::Enum { variants, .. } => variants.join(" | "),
-        TypeInfo::Record { name, .. } => name.clone(),
         TypeInfo::Interface { name, .. } => name.clone(),
         TypeInfo::Unknown { type_name } => type_name.clone(),
     }
