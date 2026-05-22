@@ -15,13 +15,13 @@ use pcb_zen_core::kicad_library::{
 };
 use pcb_zen_core::resolution::{
     FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
-    ResolutionResult,
+    ResolutionResult, selected_remote_from_hydrated_manifest,
 };
 use semver::Version;
 
+use super::ResolvedDepId;
 use super::manifest::{ManifestLoader, package_version_root};
 use super::materialize::materialize_selected;
-use super::{ResolvedDepId, compatibility_lane, parse_lane_qualified_key};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum PackageNode {
@@ -476,48 +476,7 @@ impl FrozenResolutionBuilder {
         &self,
         package_url: &str,
     ) -> Result<BTreeMap<ResolvedDepId, Version>> {
-        let (_, config) = self.workspace_manifest(package_url)?;
-        if config.dependencies.indirect.is_empty() {
-            bail!(
-                "{} is missing resolved dependency entries; run `pcb sync` first",
-                package_url
-            );
-        }
-
-        let mut selected = BTreeMap::new();
-        for (dep_url, spec) in &config.dependencies.direct {
-            if self.is_remote_dependency(dep_url, spec) {
-                let version = exact_spec_version(dep_url, spec)?;
-                selected.insert(
-                    ResolvedDepId::for_version(dep_url.clone(), &version),
-                    version,
-                );
-            }
-        }
-
-        for (raw_key, spec) in &config.dependencies.indirect {
-            let dep_id = parse_lane_qualified_key(raw_key)?;
-            let version = exact_spec_version(raw_key, spec)?;
-            let expected_lane = compatibility_lane(&version);
-            if dep_id.lane != expected_lane {
-                bail!(
-                    "Indirect dependency {} resolves to lane {}, not {}",
-                    raw_key,
-                    expected_lane,
-                    dep_id.lane
-                );
-            }
-            selected.insert(dep_id, version);
-        }
-
-        Ok(selected)
-    }
-
-    fn is_remote_dependency(&self, dep_url: &str, spec: &DependencySpec) -> bool {
-        !is_stdlib_module_path(dep_url)
-            && !self.workspace.packages.contains_key(dep_url)
-            && self.workspace.workspace_base_url().as_deref() != Some(dep_url)
-            && local_path_dependency_root(Path::new("."), spec).is_none()
+        selected_remote_from_hydrated_manifest(&self.workspace, package_url)
     }
 }
 

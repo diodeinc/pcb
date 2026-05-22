@@ -1,12 +1,11 @@
+use pcb_zen_core::config::PcbToml;
 use pcb_zen_core::config::find_workspace_root;
-use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::resolution::{
     FrozenDepId, FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
-    ModuleLine, VendoredPathResolver, build_resolution_map, compatibility_lane,
-    parse_lane_qualified_key,
+    ModuleLine, VendoredPathResolver, build_resolution_map, selected_remote_from_hydrated_manifest,
 };
+use pcb_zen_core::workspace::WorkspaceInfo;
 use pcb_zen_core::workspace::get_workspace_info;
-use pcb_zen_core::workspace::{WorkspaceInfo, package_url_covers};
 use pcb_zen_core::{EvalContext, FileProvider, FileProviderError, Lockfile};
 use ruzstd::decoding::StreamingDecoder;
 use semver::Version;
@@ -642,10 +641,13 @@ fn selected_versions_from_manifest(
     workspace: &WorkspaceInfo,
     package_url: &str,
 ) -> Result<HashMap<ModuleLine, Version>, String> {
-    Ok(selected_remote_from_manifest(workspace, package_url)?
-        .into_iter()
-        .map(|(dep_id, version)| (ModuleLine::new(dep_id.path, &version), version))
-        .collect())
+    Ok(
+        selected_remote_from_hydrated_manifest(workspace, package_url)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|(dep_id, version)| (ModuleLine::new(dep_id.path, &version), version))
+            .collect(),
+    )
 }
 
 fn attach_frozen_resolution_if_hydrated<F: FileProvider>(
@@ -683,7 +685,8 @@ fn build_wasm_frozen_resolution<F: FileProvider>(
     package_url: &str,
 ) -> Result<FrozenResolutionMap, String> {
     let workspace = &resolution.workspace_info;
-    let selected_remote = selected_remote_from_manifest(workspace, package_url)?;
+    let selected_remote = selected_remote_from_hydrated_manifest(workspace, package_url)
+        .map_err(|e| e.to_string())?;
     let package_roots = resolution.package_roots();
     let mut packages = BTreeMap::new();
 
@@ -746,69 +749,12 @@ fn frozen_identity_for_root(
         })
 }
 
-fn selected_remote_from_manifest(
-    workspace: &WorkspaceInfo,
-    package_url: &str,
-) -> Result<BTreeMap<FrozenDepId, Version>, String> {
-    let package = workspace
-        .packages
-        .get(package_url)
-        .ok_or_else(|| format!("Unknown workspace package {package_url}"))?;
-    let mut selected = BTreeMap::new();
-    for (dep_url, spec) in &package.config.dependencies.direct {
-        if !is_workspace_dep(workspace, dep_url) && !pcb_zen_core::is_stdlib_module_path(dep_url) {
-            let version = exact_spec_version(dep_url, spec)?;
-            selected.insert(frozen_dep_id(dep_url, &version), version);
-        }
-    }
-    for (raw_key, spec) in &package.config.dependencies.indirect {
-        let dep_id = parse_lane_qualified_key(raw_key).map_err(|e| e.to_string())?;
-        let version = exact_spec_version(raw_key, spec)?;
-        let expected_lane = compatibility_lane(&version);
-        if dep_id.lane != expected_lane {
-            return Err(format!(
-                "Indirect dependency {} resolves to lane {}, not {}",
-                raw_key, expected_lane, dep_id.lane
-            ));
-        }
-        selected.insert(dep_id, version);
-    }
-    Ok(selected)
-}
-
-fn frozen_dep_id(path: impl Into<String>, version: &Version) -> FrozenDepId {
-    FrozenDepId::for_version(path, version)
-}
-
-fn is_workspace_dep(workspace: &WorkspaceInfo, dep_url: &str) -> bool {
-    workspace
-        .packages
-        .keys()
-        .any(|package_url| package_url_covers(package_url, dep_url))
-}
-
 fn read_manifest<F: FileProvider>(file_provider: &F, root: &Path) -> Result<PcbToml, String> {
     let path = root.join("pcb.toml");
     let content = file_provider
         .read_file(&path)
         .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
     PcbToml::parse(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
-}
-
-fn exact_spec_version(dep_url: &str, spec: &DependencySpec) -> Result<Version, String> {
-    let raw = match spec {
-        DependencySpec::Version(version) => version,
-        DependencySpec::Detailed(detail) if detail.version.is_some() => {
-            detail.version.as_ref().expect("checked above")
-        }
-        DependencySpec::Detailed(_) => {
-            return Err(format!(
-                "Dependency {dep_url} must specify an exact version"
-            ));
-        }
-    };
-    pcb_zen_core::parse_relaxed_version(raw)
-        .ok_or_else(|| format!("Dependency {dep_url} has invalid version '{raw}'"))
 }
 
 fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
