@@ -43,7 +43,7 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Type check Python with ty
         run: uv sync && uvx ty check
@@ -78,7 +78,7 @@ jobs:
       - name: Cache KiCad (macOS)
         if: contains(matrix.config.name, 'macOS')
         id: cache-kicad-mac
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /Applications/KiCad
           key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
@@ -153,7 +153,7 @@ jobs:
         working-directory: crates/pcb-layout/src/scripts
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v8.1.0
       - run: uv sync
         working-directory: .
       - run: uv run ruff check .

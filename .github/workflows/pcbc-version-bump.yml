@@ -15,7 +15,7 @@ jobs:
   bump:
     runs-on: ubicloud-standard-16
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.DIODE_ROBOT_TOKEN }}
           fetch-depth: 0
@@ -38,7 +38,7 @@ jobs:
           git config user.email "info@diode.run"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1

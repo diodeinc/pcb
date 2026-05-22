@@ -43,7 +43,7 @@ jobs:
       - name: Cache KiCad (macOS)
         if: matrix.config.name == 'macOS'
         id: cache-kicad-mac
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /Applications/KiCad
           key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
