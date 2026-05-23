@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `config()` now rejects Starlark `record()` types as module input types.
+- Lowered the default board-config minimum silkscreen text height from 0.8 mm to 0.6 mm.
 - Removed the hidden `pcb package` subcommand.
 
 ### Fixed

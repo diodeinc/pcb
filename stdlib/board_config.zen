@@ -947,7 +947,7 @@ BASE_CONSTRAINTS = Constraints(
     ),
     silkscreen=Silkscreen(
         minimum_item_clearance=0.1,  # Reasonable silkscreen clearance
-        minimum_text_height=0.8,  # Reasonable minimum text height
+        minimum_text_height=0.6,  # Pragmatic minimum text height for dense boards
     ),
     solder_mask=SolderMask(
         clearance=0.0,
@@ -978,7 +978,7 @@ BASE_CONSTRAINTS_2OZ = Constraints(
     ),
     silkscreen=Silkscreen(
         minimum_item_clearance=0.1,
-        minimum_text_height=0.8,
+        minimum_text_height=0.6,
     ),
     solder_mask=SolderMask(
         clearance=0.0,
