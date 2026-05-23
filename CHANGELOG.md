@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added a 48 V Vishay SMBJ DO-214AA unidirectional TVS house part.
+
 ### Changed
 
 - `config()` now rejects Starlark `record()` types as module input types.
