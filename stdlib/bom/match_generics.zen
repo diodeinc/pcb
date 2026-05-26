@@ -775,6 +775,7 @@ HOUSE_TVS_BY_PKG = {
         vishay_tvs("24V", "38.9V", "3000W", "SMBJ24A-E3", "88392/smbj.pdf"),
         vishay_tvs("28V", "45.5V", "3000W", "SMBJ28A-E3", "88392/smbj.pdf"),
         vishay_tvs("33V", "53.3V", "3000W", "SMBJ33A-E3", "88392/smbj.pdf"),
+        vishay_tvs("48V", "77.4V", "3000W", "SMBJ48A-E3", "88392/smbj.pdf"),
         vishay_tvs("78V", "126V", "3000W", "SMBJ78A-E3", "88392/smbj.pdf"),
     ],
     ("Unidirectional", "DO-214AB"): [
