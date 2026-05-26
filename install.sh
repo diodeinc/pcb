@@ -24,14 +24,6 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) target="aarch64-apple-darwin" ;;
-  Darwin-x86_64) target="x86_64-apple-darwin" ;;
-  Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu" ;;
-  Linux-x86_64) target="x86_64-unknown-linux-gnu" ;;
-  *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-esac
-
 add_install_dir_to_path() {
   case ":$PATH:" in *":$install_dir:"*) return 0 ;; esac
 
@@ -76,9 +68,8 @@ install_local() {
     exit 1
   fi
 
-  cargo build --release -p pcb -p pcbc --manifest-path "$source_dir/Cargo.toml"
-
-  target_dir="${CARGO_TARGET_DIR:-$source_dir/target}"
+  target_dir="$source_dir/target"
+  cargo build --release -p pcb -p pcbc --manifest-path "$source_dir/Cargo.toml" --target-dir "$target_dir"
 
   mkdir -p "$install_dir"
   install -m 755 "$target_dir/release/pcb" "$install_dir/pcb"
@@ -94,6 +85,14 @@ if [ "$mode" = "local" ]; then
   install_local
   exit 0
 fi
+
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) target="aarch64-apple-darwin" ;;
+  Darwin-x86_64) target="x86_64-apple-darwin" ;;
+  Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu" ;;
+  Linux-x86_64) target="x86_64-unknown-linux-gnu" ;;
+  *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+esac
 
 command -v curl >/dev/null || { echo "missing required command: curl" >&2; exit 1; }
 
