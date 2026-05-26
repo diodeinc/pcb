@@ -324,14 +324,12 @@ impl<'v> ContextValue<'v> {
         local_name: &str,
         assignment_inferable: bool,
         net_type: &str,
-        call_stack: starlark::eval::CallStack,
     ) -> anyhow::Result<String> {
         self.module.borrow_mut().register_net(
             id,
             local_name.to_string(),
             assignment_inferable,
             net_type.to_string(),
-            call_stack,
         )
     }
 

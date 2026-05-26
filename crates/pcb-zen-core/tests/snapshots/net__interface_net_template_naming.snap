@@ -1,9 +1,9 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
-assertion_line: 263
+assertion_line: 287
 expression: output
 ---
-regular net: VCC
+regular net: REGULAR_VCC
 interface net: POWER_VCC
 {
     <root>: Module {

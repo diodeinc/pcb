@@ -243,12 +243,14 @@ VDD = Power()     # equivalent to Power("VDD")
 
 If you do spell out the same name that assignment inference would choose, Zener raises a style advice because the explicit name is redundant.
 
-Explicit constructor names still win, and unassigned constructor calls keep the existing generated-name behavior:
+Explicit constructor names still win, and unassigned constructor calls are rejected:
 
 ```python
 alias = Net("CLK")  # name is "CLK", not "alias"
-Net()               # uses an auto-generated name
+Net()               # error: Net is unnamed
 ```
+
+Regular net names must be unique. Duplicate regular net names are rejected; `NotConnected` nets are exempt.
 
 Typed net fields validate against their declared field type and use the same string coercions as module inputs, so `Power("VCC", voltage="3.3V")` is equivalent to `Power("VCC", voltage=Voltage("3.3V"))`.
 

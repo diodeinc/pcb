@@ -651,56 +651,25 @@ x = 1 + 2
 }
 
 #[test]
-fn test_inline_manifest_unnamed_net_warning() {
-    let io_module = r#"
-P1 = io(Net, optional = True)
-
-Component(
-    name = "R1",
-    footprint = "TEST:0402",
-    pin_defs = {"P1": "1"},
-    pins = {"P1": P1},
-    part = Part(mpn = "TEST", manufacturer = "TEST"),
-)
-"#;
-
+fn test_inline_manifest_unnamed_net_error() {
     let inline_manifest_zen = r#"# ```pcb
 # [workspace]
 # pcb-version = "0.3"
 # ```
 
-I2s = interface(
-    BCLK = Net(),
-    LRCLK = Net(),
-    SDATA = Net(),
-    MCLK = Net(),
-)
-
-IoModule = Module("IoModule.zen")
-IoModule(name = "IO")
-
-unnamed = Net()
-
 Component(
     name = "U1",
     footprint = "TEST:0402",
     pin_defs = {"P1": "1"},
-    pins = {"P1": unnamed},
+    pins = {"P1": Net()},
     part = Part(mpn = "TEST", manufacturer = "TEST"),
 )
 "#;
 
     let output = Sandbox::new()
-        .write("IoModule.zen", io_module)
         .write("standalone.zen", inline_manifest_zen)
         .snapshot_run("pcbc", ["build", "standalone.zen"]);
-    // The auto-assigned net name (e.g. N492) depends on the global counter,
-    // which shifts when stdlib/prelude allocates nets. Sanitize it here.
-    let output = regex::Regex::new(r"'N\d+'")
-        .unwrap()
-        .replace_all(&output, "'N<AUTO>'")
-        .to_string();
-    assert_snapshot!("inline_manifest_unnamed_net_warning", output);
+    assert_snapshot!("inline_manifest_unnamed_net_error", output);
 }
 
 #[test]

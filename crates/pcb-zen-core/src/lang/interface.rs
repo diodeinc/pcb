@@ -132,7 +132,6 @@ fn clone_net_template<'v>(
 
     let net_name = compute_net_name(prefix, template_name_opt.as_deref(), field_name_opt, eval);
     let cloned_net = cloned_value.downcast_ref::<NetValue<'v>>().unwrap();
-    let call_stack = eval.call_stack();
 
     let final_name = if should_register {
         eval.module()
@@ -144,7 +143,6 @@ fn clone_net_template<'v>(
                     &net_name,
                     prefix.assignment_inferable,
                     &cloned_net.type_name,
-                    call_stack.clone(),
                 )
             })
             .transpose()?

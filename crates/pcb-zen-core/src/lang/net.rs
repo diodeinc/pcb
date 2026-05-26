@@ -627,7 +627,6 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
         }
 
         let net_name = runtime_name.unwrap_or_default();
-        let call_stack = eval.call_stack();
         let final_name = if options.should_register {
             eval.module()
                 .extra_value()
@@ -638,7 +637,6 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
                         &net_name,
                         options.assignment_inferable,
                         &self.type_name,
-                        call_stack.clone(),
                     )
                 })
                 .transpose()

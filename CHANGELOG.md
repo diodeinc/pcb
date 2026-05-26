@@ -11,6 +11,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `config()` now rejects Starlark `record()` types as module input types.
+- Duplicate regular net names now fail evaluation instead of receiving generated suffixes.
+- Unnamed regular nets now fail evaluation instead of receiving generated `N...` names.
 - Removed the hidden `pcb package` subcommand.
 
 ### Fixed
