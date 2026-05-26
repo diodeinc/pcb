@@ -22,6 +22,7 @@ use semver::Version;
 use super::ResolvedDepId;
 use super::manifest::{ManifestLoader, package_version_root};
 use super::materialize::materialize_selected;
+use super::mvs::PackageResolver;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum PackageNode {
@@ -79,7 +80,7 @@ pub fn resolve_workspace_dependencies(
             );
         })
         .unwrap_or_default();
-    if all_packages_have_indirect(&workspace_info, &package_urls) {
+    if use_frozen_resolution(&workspace_info, &package_urls) {
         return resolve_frozen(workspace_info, package_urls, offline);
     }
 
@@ -136,11 +137,12 @@ pub fn attach_mvs_v2_resolution_for_packages(
     }
 }
 
-fn all_packages_have_indirect(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
+fn use_frozen_resolution(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
     !package_urls.is_empty()
-        && package_urls
-            .iter()
-            .all(|package_url| package_has_indirect(workspace_info, package_url))
+        && (workspace_info.requires_mvs_v2()
+            || package_urls
+                .iter()
+                .all(|package_url| package_has_indirect(workspace_info, package_url)))
 }
 
 fn package_has_indirect(workspace_info: &WorkspaceInfo, package_url: &str) -> bool {
@@ -476,6 +478,12 @@ impl FrozenResolutionBuilder {
         &self,
         package_url: &str,
     ) -> Result<BTreeMap<ResolvedDepId, Version>> {
+        if self.workspace.requires_mvs_v2() && !package_has_indirect(&self.workspace, package_url) {
+            return Ok(PackageResolver::new(self.workspace.clone(), self.offline)?
+                .resolve_package(package_url)?
+                .resolved_remote);
+        }
+
         selected_remote_from_hydrated_manifest(&self.workspace, package_url)
     }
 }
@@ -524,4 +532,61 @@ fn local_path_dependency_root(package_root: &Path, spec: &DependencySpec) -> Opt
         return None;
     };
     detail.path.as_ref().map(|path| package_root.join(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use pcb_zen_core::config::{DependencySpec, PcbToml, WorkspaceConfig};
+
+    use super::*;
+
+    fn workspace(pcb_version: &str, indirect: bool) -> WorkspaceInfo {
+        let package_url = "github.com/example/project/boards/Board".to_string();
+        let mut package_config = PcbToml::default();
+        if indirect {
+            package_config.dependencies.indirect.insert(
+                "github.com/vendor/components/Leaf@1".to_string(),
+                DependencySpec::Version("1.0.0".to_string()),
+            );
+        }
+
+        WorkspaceInfo {
+            root: PathBuf::from("/workspace"),
+            cache_dir: PathBuf::from("/workspace/.pcb/cache"),
+            config: Some(PcbToml {
+                workspace: Some(WorkspaceConfig {
+                    pcb_version: Some(pcb_version.to_string()),
+                    ..WorkspaceConfig::default()
+                }),
+                ..PcbToml::default()
+            }),
+            packages: BTreeMap::from([(
+                package_url,
+                crate::MemberPackage {
+                    rel_path: PathBuf::from("boards/Board"),
+                    config: package_config,
+                    version: None,
+                    published_at: None,
+                    preferred: false,
+                    dirty: false,
+                    entrypoints: Vec::new(),
+                    symbol_files: Vec::new(),
+                },
+            )]),
+            lockfile: None,
+            errors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn mvs_v2_detection_accepts_pcb_version_0_4_without_indirect_dependencies() {
+        let workspace = workspace("0.4", false);
+        assert!(use_frozen_resolution(
+            &workspace,
+            &["github.com/example/project/boards/Board".to_string()]
+        ));
+    }
 }

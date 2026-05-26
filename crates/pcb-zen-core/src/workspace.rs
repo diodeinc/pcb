@@ -12,7 +12,7 @@ use semver::Version;
 
 use crate::FileProvider;
 use crate::config::{
-    KicadLibraryConfig, Lockfile, PcbToml, WorkspaceConfig, find_workspace_root,
+    KicadLibraryConfig, Lockfile, PcbToml, WorkspaceConfig, find_workspace_root, parse_pcb_version,
     pcb_version_from_cargo, pcb_version_is_older, stdlib_pinned_kicad_library,
 };
 use crate::kicad_library::validate_kicad_library_config;
@@ -257,6 +257,12 @@ impl WorkspaceInfo {
             .as_ref()
             .and_then(|c| c.workspace.as_ref())
             .and_then(|w| w.pcb_version.as_deref())
+    }
+
+    pub fn requires_mvs_v2(&self) -> bool {
+        self.pcb_version()
+            .and_then(parse_pcb_version)
+            .is_some_and(|version| version >= (0, 4))
     }
 
     /// Get member glob patterns

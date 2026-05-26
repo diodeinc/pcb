@@ -183,12 +183,14 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
 }
 
 fn reject_mvs_v2_update(workspace: &WorkspaceInfo, scope: &UpdateScope) -> Result<()> {
+    let workspace_v2_only = workspace.requires_mvs_v2();
     let v2_packages: Vec<_> = match scope {
         UpdateScope::Workspace => workspace
             .packages
             .iter()
             .filter_map(|(url, pkg)| {
-                (!pkg.config.dependencies.indirect.is_empty()).then_some(url.as_str())
+                (workspace_v2_only || !pkg.config.dependencies.indirect.is_empty())
+                    .then_some(url.as_str())
             })
             .collect(),
         UpdateScope::Package { pcb_toml_path } => workspace
@@ -200,8 +202,9 @@ fn reject_mvs_v2_update(workspace: &WorkspaceInfo, scope: &UpdateScope) -> Resul
                     .canonicalize()
                     .unwrap_or_else(|_| pkg.dir(&workspace.root));
                 let package_toml = package_dir.join("pcb.toml");
-                (package_toml == *pcb_toml_path && !pkg.config.dependencies.indirect.is_empty())
-                    .then_some(url.as_str())
+                (package_toml == *pcb_toml_path
+                    && (workspace_v2_only || !pkg.config.dependencies.indirect.is_empty()))
+                .then_some(url.as_str())
             })
             .collect(),
     };

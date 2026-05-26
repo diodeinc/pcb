@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Lowered the default board-config minimum silkscreen text height from 0.8 mm to 0.6 mm.
 - Removed the hidden `pcb package` subcommand.
 - `pcb update` now rejects hydrated V2 dependency manifests and points users to `pcb add -u`.
+- Workspaces with `pcb-version = "0.4"` or newer now always use MVS v2 dependency resolution.
 
 ### Fixed
 

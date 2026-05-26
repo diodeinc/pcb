@@ -287,10 +287,11 @@ pub fn build_board_release(
         let info_spinner = Spinner::builder("Gathering release information").start();
 
         let package_url = workspace.package_url_for_zen(&zen_path);
-        let is_mvs_v2_board = package_url
-            .as_deref()
-            .and_then(|url| workspace.packages.get(url))
-            .is_some_and(|pkg| !pkg.config.dependencies.indirect.is_empty());
+        let is_mvs_v2_board = workspace.requires_mvs_v2()
+            || package_url
+                .as_deref()
+                .and_then(|url| workspace.packages.get(url))
+                .is_some_and(|pkg| !pkg.config.dependencies.indirect.is_empty());
 
         // Legacy release still requires pcb.sum for reproducible old-style
         // resolution. Hydrated MVS v2 boards are complete from pcb.toml.
