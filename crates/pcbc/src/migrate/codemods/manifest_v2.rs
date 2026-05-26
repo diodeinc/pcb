@@ -29,13 +29,14 @@ pub fn convert_workspace_to_v2(
     let root_pcb_toml = workspace_root.join("pcb.toml");
     if root_pcb_toml.exists() {
         let repo_subpath_str = repo_subpath.map(|p| p.to_string_lossy().into_owned());
-        convert_pcb_toml_to_v2(
+        if convert_pcb_toml_to_v2(
             &root_pcb_toml,
             Some(repository),
             repo_subpath_str.as_deref(),
             &members,
-        )?;
-        eprintln!("  ✓ Converted {}", root_pcb_toml.display());
+        )? {
+            eprintln!("  ✓ Converted {}", root_pcb_toml.display());
+        }
     }
 
     // Build glob set for member patterns
@@ -76,8 +77,9 @@ pub fn convert_workspace_to_v2(
             }
         }
 
-        convert_pcb_toml_to_v2(path, None, None, &[])?;
-        eprintln!("  ✓ Converted {}", path.display());
+        if convert_pcb_toml_to_v2(path, None, None, &[])? {
+            eprintln!("  ✓ Converted {}", path.display());
+        }
     }
 
     Ok(())
@@ -173,7 +175,7 @@ fn convert_pcb_toml_to_v2(
     repository: Option<&str>,
     repo_subpath: Option<&str>,
     members: &[String],
-) -> Result<()> {
+) -> Result<bool> {
     let file_provider = DefaultFileProvider::new();
 
     // Read existing config
@@ -181,8 +183,7 @@ fn convert_pcb_toml_to_v2(
 
     // Check if already V2
     if config.is_v2() {
-        eprintln!("  ⊙ Already V2: {}", path.display());
-        return Ok(());
+        return Ok(false);
     }
 
     // Clone default_board before conversion
@@ -222,5 +223,5 @@ fn convert_pcb_toml_to_v2(
 
     std::fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
 
-    Ok(())
+    Ok(true)
 }

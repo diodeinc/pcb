@@ -102,16 +102,20 @@ pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
 
 pub fn execute_sync(args: SyncArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
+    execute_sync_from(&cwd, args)
+}
+
+pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), cwd)?;
     validate_workspace(&workspace)?;
 
-    let targets = discover_add_targets(&workspace, &cwd)?;
+    let targets = discover_add_targets(&workspace, cwd)?;
     run_resolution(
         &workspace,
         &targets,
         args.verbose,
         None,
-        is_workspace_root(&workspace, &cwd),
+        is_workspace_root(&workspace, cwd),
         args.offline,
     )
 }
