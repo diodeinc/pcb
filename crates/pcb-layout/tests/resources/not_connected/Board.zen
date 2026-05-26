@@ -5,7 +5,7 @@ vcc = Power("VCC")
 gnd = Ground("GND")
 
 # NotConnected net - treated as a regular net in layout sync
-nc = NotConnected("NC_PIN")
+nc = NotConnected()
 
 # R1: one pin to VCC, one pin to NotConnected
 Resistor(

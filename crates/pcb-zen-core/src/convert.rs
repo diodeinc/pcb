@@ -264,6 +264,10 @@ impl ModuleConverter {
 
         // Create Net objects directly using the accumulated NetInfo.
         for (net_id, net_info) in &self.net_to_info {
+            if net_info.original_type_name == "NotConnected" && net_info.ports.is_empty() {
+                continue;
+            }
+
             if net_info.original_type_name != "NotConnected" && net_info.name.is_none() {
                 let mut diagnostics = Diagnostics::default();
                 diagnostics.push(Diagnostic::new(
@@ -613,27 +617,27 @@ impl ModuleConverter {
 
         for (net_id, introduced_net) in module.introduced_nets().iter() {
             let local_name = introduced_net.name.as_str();
-            let scoped_name = if local_name.is_empty() {
-                String::new()
-            } else if module_path.is_empty() {
-                local_name.to_string()
-            } else {
-                format!("{module_path}.{local_name}")
-            };
+            if !local_name.is_empty() {
+                let scoped_name = if module_path.is_empty() {
+                    local_name.to_string()
+                } else {
+                    format!("{module_path}.{local_name}")
+                };
 
-            // If this net already has a name (from a parent module), don't overwrite.
-            // Instead, record the scoped name as an alias pointing to the canonical name.
-            if let Some(canonical_name) = self
-                .net_to_info
-                .get(net_id)
-                .and_then(|info| info.name.clone())
-            {
-                if scoped_name != canonical_name {
-                    self.net_name_aliases.insert(scoped_name, canonical_name);
+                // If this net already has a name (from a parent module), don't overwrite.
+                // Instead, record the scoped name as an alias pointing to the canonical name.
+                if let Some(canonical_name) = self
+                    .net_to_info
+                    .get(net_id)
+                    .and_then(|info| info.name.clone())
+                {
+                    if scoped_name != canonical_name {
+                        self.net_name_aliases.insert(scoped_name, canonical_name);
+                    }
+                } else {
+                    let info = self.net_info_mut(*net_id);
+                    info.name = Some(scoped_name);
                 }
-            } else {
-                let info = self.net_info_mut(*net_id);
-                info.name = Some(scoped_name);
             }
 
             // Set original_type_name from introduced_nets if not already set.

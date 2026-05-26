@@ -43,6 +43,18 @@ Component(
         .to_string(),
     );
 
+    let eval_result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        files.get("test.zen").expect("test file exists").clone(),
+    )]);
+    assert!(
+        eval_result.diagnostics.warnings().iter().any(|w| {
+            w.body == "NotConnected does not support names; name ignored" && w.span.is_some()
+        }),
+        "expected spanned NotConnected name warning, got: {:?}",
+        eval_result.diagnostics
+    );
+
     let mut result = eval_to_schematic(files, "test.zen");
     SortPass.apply(&mut result.diagnostics);
     let warnings = result.diagnostics.warnings();
@@ -70,7 +82,7 @@ fn not_connected_does_not_warn_on_single_port_multiple_pads() {
         "test.zen".to_string(),
         r#"
 NotConnected = builtin.net_type("NotConnected")
-nc = NotConnected("NC_PIN")
+nc = NotConnected()
 
 Component(
     name = "U1",
@@ -180,4 +192,13 @@ _dummy2 = NotConnected()
 
     assert_eq!(name_a, "NC_R1_P2");
     assert_eq!(name_b, "NC_R1_P2");
+    assert_eq!(
+        sch_a
+            .nets
+            .values()
+            .filter(|net| net.kind == "NotConnected")
+            .count(),
+        1
+    );
+    assert!(!sch_a.nets.contains_key(""));
 }

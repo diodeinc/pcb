@@ -378,7 +378,7 @@ const NOT_CONNECTED_BOARD_ZEN: &str = r#"
 PowerConsumer = Module("PowerConsumer.zen")
 
 # NotConnected promotes to Power - the net should retain its NotConnected kind
-nc = NotConnected("NC_PIN")
+nc = NotConnected()
 
 PowerConsumer(name = "U1", vcc = nc)
 "#;

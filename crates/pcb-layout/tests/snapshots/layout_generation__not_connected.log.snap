@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
+assertion_line: 108
 expression: content
 ---
 INFO: Creating new board file at <TEMP_DIR>
@@ -25,7 +26,7 @@ INFO: Added footprint: R2.R
 INFO: HierPlace: placed 2 items
 INFO: OPLOG FP_ADD path=R1.R ref=R1 fpid=kicad_libraries_kicad-footprints_Resistor_SMD@10.0.3:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
 INFO: OPLOG FP_ADD path=R2.R ref=R2 fpid=kicad_libraries_kicad-footprints_Resistor_SMD@10.0.3:R_0603_1608Metric value=10k x=0 y=0 layer=F.Cu pads=2
-INFO: OPLOG NET_ADD name=NC_PIN
+INFO: OPLOG NET_ADD name=R1.NC_R_2
 INFO: OPLOG NET_ADD name=VCC
 INFO: OPLOG NET_ADD name=GND
 INFO: OPLOG PLACE_FP path=R1.R x=146995000 y=104245000 w=3010000 h=1510000

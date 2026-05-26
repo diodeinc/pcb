@@ -433,7 +433,7 @@ snapshot_eval!(not_connected_promotes_to_power, {
         Child = Module("child.zen")
 
         # NotConnected should promote to Power
-        nc = NotConnected("NC")
+        nc = NotConnected()
         Child(name = "child", vcc = nc)
 
         print("NotConnected promotes to Power: success")
@@ -463,7 +463,7 @@ snapshot_eval!(not_connected_promotes_to_ground, {
         Child = Module("child.zen")
 
         # NotConnected should promote to Ground
-        nc = NotConnected("NC")
+        nc = NotConnected()
         Child(name = "child", gnd = nc)
 
         print("NotConnected promotes to Ground: success")
@@ -490,7 +490,7 @@ snapshot_eval!(not_connected_promotes_to_net, {
         Child = Module("child.zen")
 
         # NotConnected should promote to Net
-        nc = NotConnected("NC")
+        nc = NotConnected()
         Child(name = "child", sig = nc)
 
         print("NotConnected promotes to Net: success")
@@ -520,7 +520,7 @@ snapshot_eval!(not_connected_promotes_to_custom_type, {
         Child = Module("child.zen")
 
         # NotConnected should promote to any custom net type
-        nc = NotConnected("NC")
+        nc = NotConnected()
         Child(name = "child", gpio = nc)
 
         print("NotConnected promotes to Gpio: success")
@@ -616,7 +616,7 @@ snapshot_eval!(io_default_not_connected_promotes_to_net, {
         load("interfaces.zen", "NotConnected")
 
         # io() with optional=True and default=NotConnected() should promote to Net
-        MH = io(Net, optional = True, default = NotConnected("MH_NC"))
+        MH = io(Net, optional = True, default = NotConnected())
 
         Component(
             name = "R1",

@@ -251,6 +251,7 @@ Net()               # error: Net is unnamed
 ```
 
 Regular net names must be unique. Duplicate regular net names are rejected; `NotConnected` nets are exempt.
+`NotConnected` nets are source-unnamed; explicit names are ignored with a warning, and downstream tools assign connection-derived names where needed.
 
 Typed net fields validate against their declared field type and use the same string coercions as module inputs, so `Power("VCC", voltage="3.3V")` is equivalent to `Power("VCC", voltage=Voltage("3.3V"))`.
 

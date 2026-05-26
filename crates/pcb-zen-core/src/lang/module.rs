@@ -784,8 +784,9 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         }
 
         let base_name = local_name;
+        let regular_net = net_type != "NotConnected";
 
-        if !assignment_inferable && net_type != "NotConnected" && base_name.trim().is_empty() {
+        if regular_net && !assignment_inferable && base_name.trim().is_empty() {
             anyhow::bail!("Net is unnamed");
         }
 
@@ -798,14 +799,14 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         };
 
         if !assignment_inferable
-            && net_type != "NotConnected"
+            && regular_net
             && let Some(existing_id) = self.net_name_to_id.get(&base_name)
             && *existing_id != id
         {
             anyhow::bail!("Duplicate net name: {base_name}");
         }
 
-        if !assignment_inferable && !base_name.trim().is_empty() {
+        if regular_net && !assignment_inferable && !base_name.trim().is_empty() {
             self.net_name_to_id.insert(base_name.clone(), id);
         }
         self.introduced_nets
@@ -815,31 +816,31 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
 
     /// Rename a net that was provisionally created before its assigned variable
     /// name was known.
-    pub fn infer_net_name(
-        &mut self,
-        id: NetId,
-        inferred_name: String,
-    ) -> anyhow::Result<(String, Option<String>)> {
+    pub fn infer_net_name(&mut self, id: NetId, inferred_name: String) -> anyhow::Result<String> {
         let Some(existing) = self.introduced_nets.get(&id).cloned() else {
-            return Ok((inferred_name, None));
+            return Ok(inferred_name);
         };
 
         if !existing.name.is_pending_inference() {
-            return Ok((existing.name.as_str().to_string(), None));
+            return Ok(existing.name.as_str().to_string());
         }
 
-        if inferred_name.trim().is_empty() && existing.net_type != "NotConnected" {
+        let regular_net = existing.net_type != "NotConnected";
+
+        if regular_net && inferred_name.trim().is_empty() {
             anyhow::bail!("Net is unnamed");
         }
 
-        if existing.net_type != "NotConnected"
+        if regular_net
             && let Some(existing_id) = self.net_name_to_id.get(&inferred_name)
             && *existing_id != id
         {
             anyhow::bail!("Duplicate net name: {inferred_name}");
         }
 
-        self.net_name_to_id.insert(inferred_name.clone(), id);
+        if regular_net && !inferred_name.trim().is_empty() {
+            self.net_name_to_id.insert(inferred_name.clone(), id);
+        }
         self.introduced_nets.insert(
             id,
             IntroducedNet {
@@ -848,7 +849,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             },
         );
 
-        Ok((inferred_name, None))
+        Ok(inferred_name)
     }
 
     /// Return the map of nets introduced by this module.

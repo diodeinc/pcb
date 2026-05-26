@@ -335,11 +335,7 @@ impl<'v> ContextValue<'v> {
 
     /// Promote a provisional net name to an inferred variable name once the
     /// assignment target is known.
-    pub(crate) fn infer_net_name(
-        &self,
-        id: NetId,
-        inferred_name: &str,
-    ) -> anyhow::Result<(String, Option<String>)> {
+    pub(crate) fn infer_net_name(&self, id: NetId, inferred_name: &str) -> anyhow::Result<String> {
         self.module
             .borrow_mut()
             .infer_net_name(id, inferred_name.to_string())

@@ -886,7 +886,6 @@ fn alloc_not_connected<'v>(
         derived_from_base_net: false,
         was_bound: std::sync::OnceLock::new(),
         inferred_name: std::sync::OnceLock::new(),
-        inferred_original_name: std::sync::OnceLock::new(),
         declaration_path,
         declaration_span,
         type_name: "NotConnected".to_string(),

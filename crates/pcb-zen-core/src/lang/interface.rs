@@ -160,7 +160,6 @@ fn clone_net_template<'v>(
         derived_from_base_net: cloned_net.derived_from_base_net(),
         was_bound: cloned_net.cloned_bound_marker(),
         inferred_name: OnceLock::new(),
-        inferred_original_name: OnceLock::new(),
         declaration_path: cloned_net
             .declaration_path()
             .unwrap_or_default()
