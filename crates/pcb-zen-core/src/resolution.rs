@@ -265,7 +265,7 @@ pub fn select_version_for_detail(
 
 /// Build the package coordinate → absolute root directory mapping.
 ///
-/// Workspace members come from `workspace_info.packages`. External deps
+/// Workspace packages come from `workspace_info.packages`. External deps
 /// are discovered from `package_resolutions` values (already resolved by the
 /// resolver through patches → vendor → cache).
 pub fn build_package_roots(
@@ -478,7 +478,7 @@ impl PackagePathResolver for VendoredPathResolver {
     }
 }
 
-/// Build the per-package resolution map for workspace members and all packages in the closure.
+/// Build the per-package resolution map for workspace packages and all packages in the closure.
 ///
 /// Returns a map from package root path to (dependency URL -> resolved path).
 pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
@@ -489,11 +489,11 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
 ) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
     let mut results = HashMap::new();
 
-    // Build map for each workspace member (already have their configs loaded).
-    for member in workspace.packages.values() {
-        let member_dir = member.dir(&workspace.root);
-        let resolved = resolve_package_deps(resolver, workspace, &member_dir, &member.config);
-        results.insert(member_dir, resolved);
+    // Build map for each workspace package (already have their configs loaded).
+    for package in workspace.packages.values() {
+        let package_dir = package.dir(&workspace.root);
+        let resolved = resolve_package_deps(resolver, workspace, &package_dir, &package.config);
+        results.insert(package_dir, resolved);
     }
 
     // Build map for workspace root if not already included as a package.
@@ -543,7 +543,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
 ///
 /// Resolution order: patches → vendor → cache.
 ///
-/// Note: Workspace members are handled directly in `build_resolution_map` before
+/// Note: Workspace packages are handled directly in `build_resolution_map` before
 /// calling the resolver, so they don't need to be tracked here.
 pub struct NativePathResolver {
     pub vendor_dir: PathBuf,
@@ -1088,7 +1088,7 @@ impl ResolutionResult {
 
     /// Build the package coordinate → absolute root directory mapping.
     ///
-    /// Workspace members come from `workspace_info.packages`. External deps
+    /// Workspace packages come from `workspace_info.packages`. External deps
     /// are discovered from `package_resolutions` values (already resolved by the
     /// resolver through patches → vendor → cache).
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
@@ -1639,7 +1639,7 @@ mod tests {
             config: None,
             packages: BTreeMap::from([(
                 "github.com/dioderobot/diode/boards/IP0003".to_string(),
-                crate::workspace::MemberPackage {
+                crate::workspace::WorkspacePackage {
                     rel_path: PathBuf::from("boards/IP0003"),
                     config: PcbToml {
                         dependencies: crate::config::DependencyTable {
@@ -1751,7 +1751,7 @@ mod tests {
             config: None,
             packages: BTreeMap::from([(
                 "github.com/example/demo".to_string(),
-                crate::workspace::MemberPackage {
+                crate::workspace::WorkspacePackage {
                     rel_path: PathBuf::from("boards/demo"),
                     config: PcbToml {
                         dependencies: crate::config::DependencyTable {

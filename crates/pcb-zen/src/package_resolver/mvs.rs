@@ -534,7 +534,7 @@ fn workspace_package_version(
 ) -> Result<String> {
     let Some(pkg) = workspace.packages.get(package_url) else {
         anyhow::bail!(
-            "Workspace dependency {} is not a workspace member",
+            "Workspace dependency {} is not a workspace package",
             package_url
         );
     };

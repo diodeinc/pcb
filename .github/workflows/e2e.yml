@@ -89,7 +89,7 @@ jobs:
           pcbc build .
 
       - name: Test stdlib builds
-        run: pcbc build stdlib/ -S bom
+        run: pcbc build lib/std/ -S bom
 
       - name: Checkout kicad-test-fixtures
         uses: actions/checkout@v5

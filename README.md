@@ -142,7 +142,6 @@ pcb new board MyBoard https://github.com/myorg/MyBoard
 [workspace]
 repository = "github.com/myorg/MyBoard"
 pcb-version = "0.3"
-members = ["components/**", "modules/*"]
 
 [board]
 name = "MyBoard"
@@ -175,7 +174,6 @@ registry/
 [workspace]
 repository = "github.com/myorg/registry"
 pcb-version = "0.3"
-members = ["components/**", "modules/*"]
 ```
 
 ## Core Concepts

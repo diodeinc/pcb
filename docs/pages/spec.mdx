@@ -131,7 +131,6 @@ Use `pcb new package <path>` to add modules or components inside the board repos
 repository = "github.com/myorg/MainBoard"
 pcb-version = "0.3"
 endpoint = "diode.computer"
-members = ["components/**", "modules/*"]
 
 [board]
 name = "MainBoard"
@@ -143,7 +142,6 @@ description = "Replace with concise board description."
 - `repository`: Git remote URL (used to derive package URLs for publishing)
 - `pcb-version`: Compatible `pcbc` toolchain release lane (e.g., `"0.3"`) or the explicit moving `"nightly"` channel. For semver lanes, `pcb` selects the newest installed toolchain in that lane, installing the newest available patch release for the lane when none is installed. It never auto-upgrades a workspace across lanes such as `"0.3"` to `"0.4"`; run `pcb migrate` to make breaking-version upgrades explicit. Required for workspaces.
 - `endpoint`: Optional Diode host suffix used for workspace-scoped app/API URLs. `"diode.computer"` resolves to `app.diode.computer` and `api.diode.computer`.
-- `members`: Glob patterns matching subdirectories that contain local packages
 - `[board]`: Defines the repository's buildable board with `name`, entry `path`, and a short `description`
 
 V1 workspaces are no longer supported. If you have an older project, run `pcb migrate` to upgrade manifests and import paths.
@@ -176,7 +174,6 @@ Registry manifests include `[workspace]` but do not include `[board]`:
 [workspace]
 repository = "github.com/myorg/registry"
 pcb-version = "0.3"
-members = ["components/**", "modules/*"]
 ```
 
 **Package manifest** (e.g., `modules/PowerSupply/pcb.toml`):

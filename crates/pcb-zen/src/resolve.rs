@@ -91,7 +91,7 @@ struct UnresolvedDep {
     spec: DependencySpec,
 }
 
-fn missing_workspace_member_error(workspace_info: &WorkspaceInfo, url: &str) -> anyhow::Error {
+fn missing_workspace_package_error(workspace_info: &WorkspaceInfo, url: &str) -> anyhow::Error {
     let missing_manifest_hint = workspace_info
         .workspace_base_url()
         .as_deref()
@@ -107,7 +107,7 @@ fn missing_workspace_member_error(workspace_info: &WorkspaceInfo, url: &str) -> 
 
     if let Some((rel, _)) = missing_manifest_hint {
         anyhow::anyhow!(
-            "Dependency '{}' is in this workspace, but no workspace member provides it.\n  \
+            "Dependency '{}' is in this workspace, but no workspace package provides it.\n  \
             Found directory '{}' with no pcb.toml.\n  \
             Add pcb.toml there so the workspace can discover it.",
             url,
@@ -115,17 +115,17 @@ fn missing_workspace_member_error(workspace_info: &WorkspaceInfo, url: &str) -> 
         )
     } else {
         anyhow::anyhow!(
-            "Dependency '{}' is in this workspace, but no workspace member provides it.\n  \
+            "Dependency '{}' is in this workspace, but no workspace package provides it.\n  \
             Fix the dependency URL or remove it.",
             url
         )
     }
 }
 
-fn ensure_workspace_member_dependency(workspace_info: &WorkspaceInfo, url: &str) -> Result<()> {
+fn ensure_workspace_package_dependency(workspace_info: &WorkspaceInfo, url: &str) -> Result<()> {
     if workspace_info.is_workspace_namespace_url(url) && !workspace_info.packages.contains_key(url)
     {
-        return Err(missing_workspace_member_error(workspace_info, url));
+        return Err(missing_workspace_package_error(workspace_info, url));
     }
     Ok(())
 }
@@ -205,7 +205,7 @@ fn run_auto_deps(workspace_info: &mut WorkspaceInfo) -> Result<()> {
     }
     if auto_deps.versions_corrected > 0 {
         log::debug!(
-            "Corrected {} workspace member version(s)",
+            "Corrected {} workspace package version(s)",
             auto_deps.versions_corrected
         );
     }
@@ -505,7 +505,7 @@ pub fn resolve_dependencies(
     }
 
     log::debug!(
-        "Workspace members: {} (for local resolution)",
+        "Workspace packages: {} (for local resolution)",
         workspace_info.packages.len()
     );
 
@@ -529,7 +529,7 @@ pub fn resolve_dependencies(
                 continue;
             }
 
-            // Skip workspace members (resolved locally)
+            // Skip workspace packages (resolved locally).
             if workspace_info.packages.contains_key(&entry.module_path) {
                 continue;
             }
@@ -568,7 +568,7 @@ pub fn resolve_dependencies(
             .unwrap_or_else(|| "root".into());
         let pcb_toml_path = pkg_dir.join("pcb.toml");
 
-        // Validate no patches in member packages (except root)
+        // Validate no patches in workspace packages (except root).
         if !pkg.config.patch.is_empty() && !pkg.rel_path.as_os_str().is_empty() {
             anyhow::bail!(
                 "[patch] section is only allowed at workspace root\n  \
@@ -725,7 +725,7 @@ pub fn resolve_dependencies(
             manifest_cache.insert((line.clone(), version.clone()), manifest.clone());
 
             for (dep_path, dep_spec) in &manifest.dependencies.direct {
-                ensure_workspace_member_dependency(workspace_info, dep_path).with_context(
+                ensure_workspace_package_dependency(workspace_info, dep_path).with_context(
                     || format!("Dependency '{}' in {}@v{}", dep_path, line.path, version),
                 )?;
 
@@ -796,7 +796,7 @@ pub fn resolve_dependencies(
         .collect();
 
     // Phase 2: Build the final dependency set using only selected versions
-    // Path-patched forks are now workspace members, so their deps are included automatically
+    // Path-patched forks are workspace packages, so their deps are included automatically.
     let closure = build_closure(&workspace_info.packages, &selected, &manifest_cache);
 
     log::debug!("Build set: {} dependencies", closure.len());
@@ -1046,7 +1046,7 @@ pub fn copy_remote_package_to_vendor(
 /// Recursively copy a directory, excluding hidden directories/files and symlinks.
 ///
 /// Optionally excludes specified directory roots (used when copying workspace
-/// packages to exclude nested packages that are separate workspace members).
+/// packages to exclude nested packages that are separate workspace packages).
 pub fn copy_dir_all(src: &Path, dst: &Path, excluded_roots: &HashSet<PathBuf>) -> Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
@@ -1182,7 +1182,7 @@ fn build_native_resolution_map(
     let patches = path_patches;
 
     // Create base resolver for package path lookups
-    // Note: workspace members are handled directly in build_resolution_map
+    // Note: workspace packages are handled directly in build_resolution_map.
     let base_resolver = NativePathResolver {
         vendor_dir: vendor.clone(),
         cache_dir: cache.clone(),
@@ -1248,7 +1248,7 @@ fn collect_deps_recursive(
     workspace_info: &WorkspaceInfo,
 ) -> Result<()> {
     for (url, spec) in current_deps {
-        ensure_workspace_member_dependency(workspace_info, url)?;
+        ensure_workspace_package_dependency(workspace_info, url)?;
 
         // Skip if already seen
         if deps.contains_key(url) {
@@ -1292,16 +1292,16 @@ fn collect_deps_recursive(
             );
         }
 
-        // Check if this path dependency points to a workspace member
-        // This is not allowed - workspace members are resolved automatically by URL
+        // Workspace packages are resolved automatically by URL, so local path
+        // dependencies must not point at one.
         if let Ok(canonical_path) = resolved_path.canonicalize() {
-            for member_pkg in workspace_info.packages.values() {
-                let member_dir = member_pkg.dir(&workspace_info.root);
-                if let Ok(canonical_member) = member_dir.canonicalize()
-                    && canonical_path == canonical_member
+            for package in workspace_info.packages.values() {
+                let package_dir = package.dir(&workspace_info.root);
+                if let Ok(canonical_package) = package_dir.canonicalize()
+                    && canonical_path == canonical_package
                 {
                     anyhow::bail!(
-                        "dependency '{}' uses path to workspace member; remove the 'path' field",
+                        "dependency '{}' uses path to workspace package; remove the 'path' field",
                         url
                     );
                 }
@@ -1533,7 +1533,7 @@ fn normalize_kicad_parts_index(
 /// Returns the package manifest for dependency resolution.
 ///
 /// Resolution order:
-/// 1. Workspace members (always)
+/// 1. Workspace packages (always)
 /// 2. Patches (always)
 /// 3. Vendor directory (always)
 /// 4. Cache (only if !offline)
@@ -1546,10 +1546,10 @@ pub(crate) fn fetch_package(
     index: &CacheIndex,
     offline: bool,
 ) -> Result<PcbToml> {
-    // 1. Workspace member override (highest priority)
-    if let Some(member_pkg) = workspace_info.packages.get(module_path) {
-        let member_toml = member_pkg.dir(&workspace_info.root).join("pcb.toml");
-        return PcbToml::from_path(&member_toml);
+    // 1. Workspace package override (highest priority)
+    if let Some(package) = workspace_info.packages.get(module_path) {
+        let package_toml = package.dir(&workspace_info.root).join("pcb.toml");
+        return PcbToml::from_path(&package_toml);
     }
 
     // 2. Check if this module is patched with a local path
@@ -1601,7 +1601,7 @@ pub(crate) fn fetch_package(
 
 /// Returns a dependency manifest using the shared cache-backed materialization path.
 ///
-/// This intentionally skips workspace-member, patch, vendor, and lockfile handling.
+/// This intentionally skips workspace-package, patch, vendor, and lockfile handling.
 /// Callers that need full build-time resolution semantics should use `fetch_package`.
 pub fn ensure_package_manifest_in_cache(
     module_path: &str,
@@ -1745,7 +1745,7 @@ impl SymbolNameResolution {
 
 /// Build the symbol → parts mapping from all manifests in scope.
 ///
-/// Iterates workspace members plus any resolved dependency roots that have a
+/// Iterates workspace packages plus any resolved dependency roots that have a
 /// parts-bearing manifest, resolving each `ManifestPart.symbol` into a
 /// `package://` URI.
 pub fn build_symbol_parts(
@@ -1885,19 +1885,19 @@ fn add_kicad_parts_indexes(
 ///
 /// IMPORTANT: Only includes ModuleLines that are actually reachable from workspace
 /// dependencies. Stale entries preseeded from the lockfile are excluded if they
-/// don't match any dependency's resolved family. Workspace members are excluded.
+/// don't match any dependency's resolved family. Workspace packages are excluded.
 #[instrument(name = "build_closure", skip_all)]
 fn build_closure(
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    packages: &BTreeMap<String, crate::workspace::WorkspacePackage>,
     selected: &HashMap<ModuleLine, Version>,
     manifest_cache: &HashMap<(ModuleLine, Version), PcbToml>,
 ) -> HashMap<ModuleLine, Version> {
     let mut closure = HashMap::new();
     let mut stack = Vec::new();
 
-    // Seed DFS from all package dependencies (includes path-patched forks since they're workspace members)
+    // Seed DFS from all package dependencies, including path-patched forks.
     // Use get_line_for_dep to find the specific ModuleLine matching each dependency's family
-    // Skip workspace members (resolved locally, not part of closure)
+    // Skip workspace packages (resolved locally, not part of closure).
     for pkg in packages.values() {
         for (url, spec) in &pkg.config.dependencies.direct {
             if is_non_version_dep(spec) || packages.contains_key(url) {
@@ -1911,7 +1911,7 @@ fn build_closure(
 
     // DFS using final selected versions
     while let Some(line) = stack.pop() {
-        // Skip workspace members
+        // Skip workspace packages.
         if packages.contains_key(&line.path) {
             continue;
         }
@@ -2639,14 +2639,14 @@ fn update_lockfile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::MemberPackage;
+    use crate::workspace::WorkspacePackage;
     use tempfile::TempDir;
 
     fn workspace_with_root_config(config: PcbToml) -> WorkspaceInfo {
         let mut packages = BTreeMap::new();
         packages.insert(
             "workspace".to_string(),
-            MemberPackage {
+            WorkspacePackage {
                 rel_path: PathBuf::new(),
                 config: config.clone(),
                 version: None,

@@ -30,7 +30,7 @@ pub use resolve::{
     resolve_dependencies_for_update, vendor_deps,
 };
 pub use starlark::errors::EvalSeverity;
-pub use workspace::{MemberPackage, WorkspaceInfo, get_workspace_info};
+pub use workspace::{WorkspaceInfo, WorkspacePackage, get_workspace_info};
 
 /// Evaluate a .zen file and return EvalOutput (module + signature + prints) with diagnostics.
 pub fn eval(

@@ -120,7 +120,6 @@ SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
 const WORKSPACE_WITH_UNUSED_REMOTE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
-members = ["boards", "modules/*"]
 "#;
 
 const UNUSED_REMOTE_DEP_PCB_TOML: &str = r#"

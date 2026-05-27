@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb update` now rejects hydrated V2 dependency manifests and points users to `pcb add -u`.
 - Workspaces with `pcb-version = "0.4"` or newer now always use MVS v2 dependency resolution.
 - `pcb migrate` now hydrates V2 dependency manifests and removes obsolete `pcb.sum` lockfiles.
+- Workspace package discovery is now implicit; use `[workspace].exclude` to prune paths.
 
 ### Fixed
 

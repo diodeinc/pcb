@@ -317,9 +317,13 @@ impl Sandbox {
         // Prepare a work repo to compose commits, independent of rewrite rules
         let work = self
             .root_path()
+            .join(".pcb/fixtures")
             .join(format!("work_{}", sanitize_name(&rel)));
         if work.exists() {
             fs::remove_dir_all(&work).expect("remove work dir");
+        }
+        if let Some(parent) = work.parent() {
+            fs::create_dir_all(parent).expect("create fixture work parent");
         }
         run_git(&["init", work.to_str().unwrap()]);
         run_git(&[

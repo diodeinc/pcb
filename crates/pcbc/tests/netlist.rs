@@ -117,7 +117,6 @@ LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Gpio("LED_CTR
 const WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
-members = ["boards/*", "modules/*"]
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
