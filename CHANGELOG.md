@@ -25,6 +25,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Removed stale KiCad board items that reference layers deleted by layout stackup sync.
+- `pcb add -u` now works when the workspace root is also a package directory.
 - Use hydrated MVS v2 dependency resolution consistently across CLI, LSP, docs, and WASM evaluation.
 
 ## [0.3.85] - 2026-05-21

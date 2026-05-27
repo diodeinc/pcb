@@ -13,18 +13,8 @@ pub(crate) fn discover_add_targets(
     workspace: &WorkspaceInfo,
     start_path: &Path,
 ) -> Result<Vec<AddTarget>> {
-    let candidate_dir = if start_path.is_file() {
-        start_path.parent().unwrap_or(start_path)
-    } else {
-        start_path
-    };
-    let candidate_dir = candidate_dir
-        .canonicalize()
-        .unwrap_or_else(|_| candidate_dir.to_path_buf());
-    let workspace_root = workspace
-        .root
-        .canonicalize()
-        .unwrap_or_else(|_| workspace.root.clone());
+    let candidate_dir = candidate_dir(start_path);
+    let workspace_root = canonicalize(&workspace.root);
 
     if candidate_dir == workspace_root {
         let mut targets: Vec<_> = workspace
@@ -47,26 +37,7 @@ pub(crate) fn discover_add_targets(
         }
     }
 
-    let mut best_match: Option<(usize, AddTarget)> = None;
-    for (package_url, pkg) in &workspace.packages {
-        let pkg_dir = pkg
-            .dir(&workspace.root)
-            .canonicalize()
-            .unwrap_or_else(|_| pkg.dir(&workspace.root));
-        if candidate_dir == pkg_dir || candidate_dir.starts_with(&pkg_dir) {
-            let score = pkg_dir.as_os_str().len();
-            let target = add_target_for_member(&workspace.root, package_url, pkg);
-            if best_match
-                .as_ref()
-                .map(|(best_score, _)| score > *best_score)
-                .unwrap_or(true)
-            {
-                best_match = Some((score, target));
-            }
-        }
-    }
-
-    if let Some((_, target)) = best_match {
+    if let Some(target) = package_target_for_dir(workspace, &candidate_dir) {
         return Ok(vec![target]);
     }
 
@@ -77,6 +48,43 @@ pub(crate) fn discover_add_targets(
         candidate_dir.display(),
         workspace_root.display()
     );
+}
+
+pub(crate) fn discover_package_target(
+    workspace: &WorkspaceInfo,
+    start_path: &Path,
+) -> Option<AddTarget> {
+    package_target_for_dir(workspace, &candidate_dir(start_path))
+}
+
+fn candidate_dir(start_path: &Path) -> PathBuf {
+    let dir = if start_path.is_file() {
+        start_path.parent().unwrap_or(start_path)
+    } else {
+        start_path
+    };
+    canonicalize(dir)
+}
+
+fn canonicalize(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn package_target_for_dir(workspace: &WorkspaceInfo, candidate_dir: &Path) -> Option<AddTarget> {
+    workspace
+        .packages
+        .iter()
+        .filter_map(|(package_url, pkg)| {
+            let pkg_dir = canonicalize(&pkg.dir(&workspace.root));
+            (candidate_dir == pkg_dir || candidate_dir.starts_with(&pkg_dir)).then(|| {
+                (
+                    pkg_dir.as_os_str().len(),
+                    add_target_for_member(&workspace.root, package_url, pkg),
+                )
+            })
+        })
+        .max_by_key(|(score, _)| *score)
+        .map(|(_, target)| target)
 }
 
 fn add_target_for_member(

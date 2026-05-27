@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use self::request::resolve_direct_dependency_request;
-use self::target::{AddTarget, discover_add_targets};
+use self::target::{AddTarget, discover_add_targets, discover_package_target};
 use self::writeback::write_package_manifest;
 
 type DirectOverrides = BTreeMap<String, DependencySpec>;
@@ -84,15 +84,14 @@ pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
     let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
     validate_workspace(&workspace)?;
 
-    let targets = discover_add_targets(&workspace, &cwd)?;
-    let [target] = targets.as_slice() else {
-        bail!("`pcb mod add` must be run from a package directory, not the workspace root.");
+    let Some(target) = discover_package_target(&workspace, &cwd) else {
+        bail!("must be run from a package directory.");
     };
-    let overrides = add_overrides(&workspace, target, &args)?;
+    let overrides = add_overrides(&workspace, &target, &args)?;
 
     run_resolution(
         &workspace,
-        std::slice::from_ref(target),
+        std::slice::from_ref(&target),
         false,
         Some((&target.package_url, &overrides)),
         false,
@@ -198,11 +197,10 @@ fn load_single_target_workspace(command_name: &str) -> Result<(WorkspaceInfo, Ad
     let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
     validate_workspace(&workspace)?;
 
-    let targets = discover_add_targets(&workspace, &cwd)?;
-    let [target] = targets.as_slice() else {
+    let Some(target) = discover_package_target(&workspace, &cwd) else {
         bail!("`{command_name}` must be run from a package directory, not the workspace root.");
     };
-    Ok((workspace, target.clone()))
+    Ok((workspace, target))
 }
 
 fn build_target_graph(workspace: &WorkspaceInfo, target: &AddTarget) -> Result<DepGraph> {
@@ -222,7 +220,7 @@ fn add_overrides(
     }
 
     let Some(dependency) = args.dependency.as_deref() else {
-        bail!("`pcb mod add` requires a dependency unless -u/--upgrade is used.");
+        bail!("requires a dependency unless -u/--upgrade is used.");
     };
     let (module_path, spec) = resolve_direct_dependency_request(dependency, &current_config)?;
     validate_mod_add_target(workspace, &module_path)?;
@@ -238,18 +236,18 @@ fn upgrade_overrides(
 
     if let Some(dependency) = dependency {
         if dependency.contains('@') {
-            bail!("`pcb mod add -u <url>` expects a bare dependency URL, not a version selector.");
+            bail!("-u/--upgrade expects a bare dependency URL, not a version selector.");
         }
         let Some((module_path, spec)) =
             current_config.dependencies.direct.get_key_value(dependency)
         else {
             bail!(
-                "`pcb mod add -u {}` can only update an existing direct dependency",
+                "can only update an existing direct dependency: {}",
                 dependency
             );
         };
         if !is_remote_dependency(workspace, module_path, spec) {
-            bail!("`pcb mod add -u {}` is not a remote dependency", dependency);
+            bail!("not a remote dependency: {}", dependency);
         }
         validate_mod_add_target(workspace, module_path)?;
         let (_, spec) = resolve_direct_dependency_request(module_path, current_config)?;
@@ -274,16 +272,13 @@ fn upgrade_overrides(
 
 fn validate_mod_add_target(workspace: &WorkspaceInfo, module_path: &str) -> Result<()> {
     if is_stdlib_module_path(module_path) {
-        bail!(
-            "`pcb mod add` does not support stdlib module paths: {}",
-            module_path
-        );
+        bail!("does not support stdlib module paths: {}", module_path);
     }
     if workspace.packages.contains_key(module_path)
         || workspace.workspace_base_url().as_deref() == Some(module_path)
     {
         bail!(
-            "`pcb mod add` does not support workspace-local package URLs: {}",
+            "does not support workspace-local package URLs: {}",
             module_path
         );
     }
