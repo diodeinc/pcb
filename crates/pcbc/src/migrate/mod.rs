@@ -12,9 +12,12 @@ pub mod codemods;
 use crate::file_walker;
 pub use codemods::MigrateContext;
 use codemods::{
-    Codemod, alias_expansion::AliasExpansion, escape_paths::EscapePaths, manifest_v2,
-    path_correction::PathCorrection, workspace_paths::WorkspacePaths,
+    Codemod, alias_expansion::AliasExpansion, escape_paths::EscapePaths,
+    local_url_paths::LocalUrlPaths, manifest_v2, path_correction::PathCorrection,
+    workspace_paths::WorkspacePaths,
 };
+
+mod resolver_v2;
 
 /// Arguments for the `migrate` command
 #[derive(Args, Debug, Default, Clone)]
@@ -72,9 +75,13 @@ pub fn execute(args: MigrateArgs) -> Result<()> {
             Box::new(EscapePaths),
             Box::new(AliasExpansion),
             Box::new(PathCorrection),
+            Box::new(LocalUrlPaths),
         ];
         run_codemods(&ctx, &zen_files, &codemods)?;
     }
+
+    eprintln!("\nStep 6: Hydrating V2 dependency manifests");
+    resolver_v2::hydrate_workspace(&workspace_root)?;
 
     eprintln!("\n✓ Migration complete");
     eprintln!("  Review changes with: git diff");

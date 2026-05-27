@@ -135,6 +135,8 @@ fn matches_filter(url: &str, filter: &[String]) -> bool {
 pub fn execute(args: UpdateArgs) -> Result<()> {
     let start_path = args.path.canonicalize().unwrap_or(args.path.clone());
     let workspace = get_workspace_info(&DefaultFileProvider::new(), &start_path)?;
+    let scope = detect_update_scope(&workspace, &start_path);
+    reject_mvs_v2_update(&workspace, &scope)?;
 
     println!("{}", "Checking for updates...".cyan());
 
@@ -142,7 +144,6 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
     let index = CacheIndex::open()?;
     index.clear_branch_commits()?;
 
-    let scope = detect_update_scope(&workspace, &start_path);
     if let UpdateScope::Package { pcb_toml_path } = &scope {
         println!(
             "{} {}",
@@ -179,6 +180,52 @@ pub fn execute(args: UpdateArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn reject_mvs_v2_update(workspace: &WorkspaceInfo, scope: &UpdateScope) -> Result<()> {
+    let workspace_v2_only = workspace.requires_mvs_v2();
+    let v2_packages: Vec<_> = match scope {
+        UpdateScope::Workspace => workspace
+            .packages
+            .iter()
+            .filter_map(|(url, pkg)| {
+                (workspace_v2_only || !pkg.config.dependencies.indirect.is_empty())
+                    .then_some(url.as_str())
+            })
+            .collect(),
+        UpdateScope::Package { pcb_toml_path } => workspace
+            .packages
+            .iter()
+            .filter_map(|(url, pkg)| {
+                let package_dir = pkg
+                    .dir(&workspace.root)
+                    .canonicalize()
+                    .unwrap_or_else(|_| pkg.dir(&workspace.root));
+                let package_toml = package_dir.join("pcb.toml");
+                (package_toml == *pcb_toml_path
+                    && (workspace_v2_only || !pkg.config.dependencies.indirect.is_empty()))
+                .then_some(url.as_str())
+            })
+            .collect(),
+    };
+
+    if v2_packages.is_empty() {
+        return Ok(());
+    }
+
+    let target = if v2_packages.len() == 1 {
+        format!("package {}", v2_packages[0])
+    } else {
+        format!(
+            "{} V2 packages, including {}",
+            v2_packages.len(),
+            v2_packages[0]
+        )
+    };
+    anyhow::bail!(
+        "`pcb update` is for legacy dependency manifests and cannot update {target}.\n\
+         Use `pcb add -u` from the package directory instead."
+    );
 }
 
 /// Display version updates and apply selected ones. Returns count of applied updates.

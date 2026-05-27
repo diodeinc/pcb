@@ -44,7 +44,7 @@ fn parse_dependency_request(raw: &str) -> Result<(&str, RequestedVersion)> {
     };
     if module_path.is_empty() {
         bail!(
-            "Invalid dependency '{}'. Use `pcb mod add <url>@latest` or `pcb mod add <url>@1.2.3`.",
+            "Invalid dependency '{}'. Use `<url>@latest` or `<url>@1.2.3`.",
             raw
         );
     }
@@ -52,7 +52,7 @@ fn parse_dependency_request(raw: &str) -> Result<(&str, RequestedVersion)> {
     let selector = selector.trim();
     if selector.is_empty() {
         bail!(
-            "Missing version after '@' in '{}'. Use `pcb mod add <url>@latest` or `pcb mod add <url>@1.2.3`.",
+            "Missing version after '@' in '{}'. Use `<url>@latest` or `<url>@1.2.3`.",
             raw
         );
     }

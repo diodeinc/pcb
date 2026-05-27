@@ -18,10 +18,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `config()` now rejects Starlark `record()` types as module input types.
 - Lowered the default board-config minimum silkscreen text height from 0.8 mm to 0.6 mm.
 - Removed the hidden `pcb package` subcommand.
+- `pcb update` now rejects hydrated V2 dependency manifests and points users to `pcb add -u`.
+- Workspaces with `pcb-version = "0.4"` or newer now always use MVS v2 dependency resolution.
+- `pcb migrate` now hydrates V2 dependency manifests and removes obsolete `pcb.sum` lockfiles.
 
 ### Fixed
 
 - Removed stale KiCad board items that reference layers deleted by layout stackup sync.
+- `pcb add -u` now works when the workspace root is also a package directory.
 - Use hydrated MVS v2 dependency resolution consistently across CLI, LSP, docs, and WASM evaluation.
 
 ## [0.3.85] - 2026-05-21

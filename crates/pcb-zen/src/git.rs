@@ -723,6 +723,9 @@ pub fn parse_remote_url(url: &str) -> anyhow::Result<String> {
     if let Some(rest) = url.strip_prefix("https://") {
         return Ok(rest.strip_suffix(".git").unwrap_or(rest).to_string());
     }
+    if let Some(rest) = url.strip_prefix("ssh://git@") {
+        return Ok(rest.strip_suffix(".git").unwrap_or(rest).to_string());
+    }
     if let Some(rest) = url.strip_prefix("git@") {
         let normalized = rest.replace(':', "/");
         return Ok(normalized
@@ -855,6 +858,10 @@ mod tests {
         assert_eq!(
             parse_remote_url("git@github.com:diodeinc/stdlib").unwrap(),
             "github.com/diodeinc/stdlib"
+        );
+        assert_eq!(
+            parse_remote_url("ssh://git@code.diode.computer/demo/b/DM0001").unwrap(),
+            "code.diode.computer/demo/b/DM0001"
         );
     }
 
