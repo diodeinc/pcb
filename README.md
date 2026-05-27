@@ -51,6 +51,9 @@ cd pcb
 
 # Build locally
 cargo build -p pcb -p pcbc
+
+# Install local release builds for development
+./install.sh --local
 ```
 
 ### Requirements

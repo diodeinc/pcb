@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added a 48 V Vishay SMBJ DO-214AA unidirectional TVS house part.
+- Added `install.sh --local` to build and install local `pcb` and `pcbc` binaries side-by-side for development.
 
 ### Changed
 
