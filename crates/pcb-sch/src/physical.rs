@@ -1879,53 +1879,6 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
                     }
                 };
 
-                let parse_bound = |value: Value, label: &str| -> starlark::Result<Decimal> {
-                    if let Some(pv) = value.downcast_ref::<PhysicalValue>() {
-                        if !pv.is_point() {
-                            return Err(PhysicalValueError::InvalidArguments {
-                                args: vec![label.to_string()],
-                            }
-                            .into());
-                        }
-                        return Ok(pv.nominal);
-                    }
-
-                    if let Some(s) = value.unpack_str() {
-                        let s = s.trim();
-                        if s.is_empty() {
-                            return Err(PhysicalValueError::InvalidNumberType.into());
-                        }
-                        if let Ok((number, unit_str)) = split_number_and_unit(s)
-                            && unit_str.is_empty()
-                        {
-                            return Ok(number);
-                        }
-                        let pv = PhysicalValue::from_str(s).map_err(|err| {
-                            PhysicalValueError::ParseError {
-                                unit: self.unit.quantity(),
-                                input: s.to_string(),
-                                source: err,
-                            }
-                        })?;
-                        if pv.unit != self.unit {
-                            return Err(PhysicalValueError::UnitMismatch {
-                                expected: self.unit.quantity(),
-                                actual: pv.unit.quantity(),
-                            }
-                            .into());
-                        }
-                        if !pv.is_point() {
-                            return Err(PhysicalValueError::InvalidArguments {
-                                args: vec![label.to_string()],
-                            }
-                            .into());
-                        }
-                        return Ok(pv.nominal);
-                    }
-
-                    starlark_value_to_decimal(&value).map_err(Into::into)
-                };
-
                 let parse_value = |value: Value| -> starlark::Result<PhysicalValue> {
                     if let Some(existing) = value.downcast_ref::<PhysicalValue>() {
                         // Casting semantics: constructors can re-tag other physical values.
@@ -1956,18 +1909,22 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
                                 source: err,
                             }
                         })?;
-                        if pv.unit != self.unit {
-                            return Err(PhysicalValueError::UnitMismatch {
-                                expected: self.unit.quantity(),
-                                actual: pv.unit.quantity(),
-                            }
-                            .into());
-                        }
-                        return Ok(pv);
+                        return Ok(pv.check_unit(self.unit)?);
                     }
 
                     let v = starlark_value_to_decimal(&value)?;
                     Ok(PhysicalValue::point(v, self.unit))
+                };
+
+                let parse_bound = |value: Value, label: &str| -> starlark::Result<Decimal> {
+                    let pv = parse_value(value)?;
+                    if !pv.is_point() {
+                        return Err(PhysicalValueError::InvalidArguments {
+                            args: vec![label.to_string()],
+                        }
+                        .into());
+                    }
+                    Ok(pv.nominal)
                 };
 
                 let resolve_nominal = |nominal_kw: Option<Value>,
