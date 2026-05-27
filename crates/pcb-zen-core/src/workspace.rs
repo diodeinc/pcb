@@ -1,4 +1,4 @@
-//! Workspace discovery and member package types.
+//! Workspace discovery and package metadata types.
 //!
 //! Provides cross-platform workspace discovery using FileProvider abstraction.
 //! Native code can enrich with git tag versions after discovery.
@@ -24,7 +24,7 @@ fn is_default<T: Default + PartialEq>(value: &T) -> bool {
 pub(crate) const LOCAL_WORKSPACE_ROOT_URL: &str = "workspace";
 pub const WORKSPACE_DISCOVERY_MAX_DEPTH: usize = 8;
 
-const BUILTIN_DISCOVERY_EXCLUDE_DIRS: &[&str] =
+pub const WORKSPACE_DISCOVERY_EXCLUDE_DIRS: &[&str] =
     &[".git", ".pcb", "fork", "node_modules", "target", "vendor"];
 
 pub fn package_url_covers(prefix: &str, url: &str) -> bool {
@@ -66,9 +66,9 @@ fn validate_workspace_pcb_version(config: &PcbToml, source: &Path) -> anyhow::Re
     Ok(())
 }
 
-/// A discovered member package in the workspace
+/// A discovered package in the workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemberPackage {
+pub struct WorkspacePackage {
     /// Package directory relative to workspace root
     pub rel_path: PathBuf,
     /// Parsed pcb.toml config
@@ -94,7 +94,7 @@ pub struct MemberPackage {
     pub symbol_files: Vec<SymbolFileInfo>,
 }
 
-impl MemberPackage {
+impl WorkspacePackage {
     /// Get absolute package directory
     pub fn dir(&self, workspace_root: &Path) -> PathBuf {
         workspace_root.join(&self.rel_path)
@@ -152,8 +152,8 @@ pub struct WorkspaceInfo {
     /// Root pcb.toml config (if present)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<PcbToml>,
-    /// Discovered member packages keyed by URL
-    pub packages: BTreeMap<String, MemberPackage>,
+    /// Discovered packages keyed by URL
+    pub packages: BTreeMap<String, WorkspacePackage>,
     /// Optional lockfile
     #[serde(skip)]
     pub lockfile: Option<Lockfile>,
@@ -216,7 +216,7 @@ impl WorkspaceInfo {
             .unwrap_or_else(|| WorkspaceConfig::default().kicad_library)
     }
 
-    /// Iterate all manifest configs in the workspace (root first, then members).
+    /// Iterate all manifest configs in the workspace (root first, then packages).
     pub fn manifests(&self) -> impl Iterator<Item = &PcbToml> {
         self.config
             .iter()
@@ -234,7 +234,7 @@ impl WorkspaceInfo {
     /// The workspace package namespace derived from `[workspace].repository` and
     /// optional `[workspace].path`.
     ///
-    /// Member package URLs are constructed under this base URL during workspace
+    /// Package URLs are constructed under this base URL during workspace
     /// discovery. When absent, the workspace has no explicit package namespace.
     pub fn workspace_base_url(&self) -> Option<String> {
         build_workspace_base_url(self.repository(), self.path())
@@ -270,12 +270,12 @@ impl WorkspaceInfo {
     }
 
     /// Get all packages as a vector
-    pub fn all_packages(&self) -> Vec<&MemberPackage> {
+    pub fn all_packages(&self) -> Vec<&WorkspacePackage> {
         self.packages.values().collect()
     }
 
     /// Get publishable packages (excludes packages with board sections)
-    pub fn publishable_packages(&self) -> Vec<&MemberPackage> {
+    pub fn publishable_packages(&self) -> Vec<&WorkspacePackage> {
         self.packages
             .values()
             .filter(|p| p.config.board.is_none())
@@ -365,7 +365,7 @@ fn build_glob_set(patterns: &[String]) -> Result<GlobSet, globset::Error> {
 fn is_builtin_excluded_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| BUILTIN_DISCOVERY_EXCLUDE_DIRS.contains(&name))
+        .is_some_and(|name| WORKSPACE_DISCOVERY_EXCLUDE_DIRS.contains(&name))
 }
 
 /// Walk workspace directories and collect package roots.
@@ -375,7 +375,7 @@ fn is_builtin_excluded_dir(path: &Path) -> bool {
 fn discover_package_dirs<F: FileProvider>(
     file_provider: &F,
     root: &Path,
-    exclude_set: Option<&GlobSet>,
+    exclude_set: &GlobSet,
     errors: &mut Vec<DiscoveryError>,
 ) -> Vec<(PathBuf, PathBuf)> {
     let mut result = Vec::new();
@@ -420,7 +420,7 @@ fn discover_package_dirs<F: FileProvider>(
 
             let rel_str = rel_path_string(rel_path);
 
-            if exclude_set.is_some_and(|ex| ex.is_match(&rel_str)) {
+            if exclude_set.is_match(&rel_str) {
                 continue;
             }
 
@@ -542,18 +542,9 @@ pub fn get_workspace_info<F: FileProvider>(
             .is_some_and(|cfg| cfg.workspace.as_ref().is_some());
 
     if discover_descendants {
-        let exclude_set = if workspace_config.exclude.is_empty() {
-            None
-        } else {
-            Some(build_glob_set(&workspace_config.exclude)?)
-        };
+        let exclude_set = build_glob_set(&workspace_config.exclude)?;
 
-        let dirs = discover_package_dirs(
-            file_provider,
-            &workspace_root,
-            exclude_set.as_ref(),
-            &mut errors,
-        );
+        let dirs = discover_package_dirs(file_provider, &workspace_root, &exclude_set, &mut errors);
 
         for (dir, rel_path) in dirs {
             let pkg_toml_path = dir.join("pcb.toml");
@@ -580,7 +571,7 @@ pub fn get_workspace_info<F: FileProvider>(
             if pkg_config.is_workspace() {
                 errors.push(DiscoveryError {
                     path: pkg_toml_path,
-                    error: "member package cannot have a [workspace] section".to_string(),
+                    error: "workspace package cannot have a [workspace] section".to_string(),
                 });
                 continue;
             }
@@ -593,7 +584,7 @@ pub fn get_workspace_info<F: FileProvider>(
 
             packages.insert(
                 url,
-                MemberPackage {
+                WorkspacePackage {
                     rel_path,
                     config: pkg_config,
                     version: None,
@@ -618,7 +609,7 @@ pub fn get_workspace_info<F: FileProvider>(
             .unwrap_or_else(|| LOCAL_WORKSPACE_ROOT_URL.to_string());
         packages.insert(
             url,
-            MemberPackage {
+            WorkspacePackage {
                 rel_path: PathBuf::new(),
                 config: root_config,
                 version: None,
@@ -720,7 +711,7 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
     }
 
     #[test]
-    fn test_member_level_workspace_section_is_discovery_error() {
+    fn test_package_level_workspace_section_is_discovery_error() {
         let files = HashMap::from([
             (
                 "/repo/pcb.toml".to_string(),
@@ -751,12 +742,12 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
         assert!(
             info.errors[0]
                 .error
-                .contains("member package cannot have a [workspace] section")
+                .contains("workspace package cannot have a [workspace] section")
         );
     }
 
     #[test]
-    fn test_member_discovery_ignores_dot_pcb_directories() {
+    fn test_package_discovery_ignores_dot_pcb_directories() {
         let files = HashMap::from([
             (
                 "/repo/pcb.toml".to_string(),

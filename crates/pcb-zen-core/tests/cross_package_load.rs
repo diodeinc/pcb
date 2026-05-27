@@ -9,7 +9,7 @@ mod common;
 use common::InMemoryFileProvider;
 use pcb_zen_core::config::DependencyTable;
 use pcb_zen_core::resolution::ResolutionResult;
-use pcb_zen_core::workspace::{MemberPackage, WorkspaceInfo};
+use pcb_zen_core::workspace::{WorkspaceInfo, WorkspacePackage};
 use pcb_zen_core::{EvalContext, FileProvider};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -70,7 +70,7 @@ check(LedValue == "hello from Led", "should load from Led")
     let mut packages = BTreeMap::new();
     packages.insert(
         board_url.clone(),
-        MemberPackage {
+        WorkspacePackage {
             rel_path: PathBuf::from("boards/Main"),
             config: pcb_zen_core::config::PcbToml {
                 dependencies: DependencyTable {
@@ -89,7 +89,7 @@ check(LedValue == "hello from Led", "should load from Led")
     );
     packages.insert(
         led_url.clone(),
-        MemberPackage {
+        WorkspacePackage {
             rel_path: PathBuf::from("modules/Led"),
             config: pcb_zen_core::config::PcbToml::default(),
             version: None,

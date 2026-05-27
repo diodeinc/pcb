@@ -121,27 +121,20 @@ pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
 }
 
 fn cleanup_deprecated_workspace_members(workspace: &WorkspaceInfo, verbose: bool) -> Result<()> {
-    let Some(config) = &workspace.config else {
+    let Some(config) = workspace.config.as_ref().filter(|config| {
+        config
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| !workspace.members.is_empty())
+    }) else {
         return Ok(());
     };
-    if config
-        .workspace
-        .as_ref()
-        .is_none_or(|workspace| workspace.members.is_empty())
-    {
-        return Ok(());
-    }
 
     let pcb_toml_path = workspace.root.join("pcb.toml");
-    let mut config = PcbToml::from_path(&pcb_toml_path)?;
-    let Some(workspace_config) = config.workspace.as_mut() else {
-        return Ok(());
-    };
-    if workspace_config.members.is_empty() {
+    if !pcb_toml_path.exists() {
         return Ok(());
     }
 
-    workspace_config.members.clear();
     let mut rendered = toml::to_string_pretty(&config)?;
     if !rendered.ends_with('\n') {
         rendered.push('\n');

@@ -377,12 +377,12 @@ Missing(name="U1", P1=p1, P2=p2)
 
     let stderr = sandbox.sanitize_output(&String::from_utf8_lossy(&result.stderr));
     assert!(
-        stderr.contains("is in this workspace, but no workspace member provides it."),
-        "stderr should explain missing workspace member:\n{stderr}"
+        stderr.contains("is in this workspace, but no workspace package provides it."),
+        "stderr should explain missing workspace package:\n{stderr}"
     );
     assert!(
         stderr.contains("Fix the dependency URL or remove it."),
-        "stderr should explain how to fix the missing workspace member:\n{stderr}"
+        "stderr should explain how to fix the missing workspace package:\n{stderr}"
     );
     assert!(
         !stderr.contains("Failed to fetch github.com/acme/workspace/modules/Missing"),
@@ -513,8 +513,8 @@ Thing(name="U1", P1=p1, P2=p2)
         "stderr should identify the external package that introduced the bad dep:\n{stderr}"
     );
     assert!(
-        stderr.contains("is in this workspace, but no workspace member provides it."),
-        "stderr should explain missing workspace member:\n{stderr}"
+        stderr.contains("is in this workspace, but no workspace package provides it."),
+        "stderr should explain missing workspace package:\n{stderr}"
     );
     assert!(
         !stderr.contains("Failed to fetch github.com/acme/workspace/modules/Missing"),

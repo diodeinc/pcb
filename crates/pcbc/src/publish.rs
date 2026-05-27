@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
-use pcb_zen::workspace::{MemberPackage, WorkspaceInfo, WorkspaceInfoExt, get_workspace_info};
+use pcb_zen::workspace::{WorkspaceInfo, WorkspaceInfoExt, WorkspacePackage, get_workspace_info};
 use pcb_zen::{git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml, find_workspace_root};
 use pcb_zen_core::{DefaultFileProvider, initial_package_version};
@@ -174,7 +174,7 @@ pub struct PublishArgs {
 
 /// Info about a package that will be published
 struct PublishCandidate {
-    pkg: MemberPackage,
+    pkg: WorkspacePackage,
     next_version: Version,
     tag_name: String,
     content_hash: String,
@@ -871,7 +871,7 @@ fn publish_wave(
     let all_tags = git::list_all_tags_vec(&workspace.root);
 
     // Bump pcb.toml for packages that depend on previously published packages
-    let mut changed_pkgs: Vec<&MemberPackage> = Vec::new();
+    let mut changed_pkgs: Vec<&WorkspacePackage> = Vec::new();
     for url in package_urls {
         if let Some(pkg) = workspace.packages.get(url) {
             let has_published_dep = pkg.dependencies().any(|d| published.contains_key(d));
@@ -958,7 +958,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
         return Ok(());
     }
 
-    // Filter to workspace member packages only (consistent with pcb build)
+    // Filter to workspace packages only (consistent with pcb build).
     let zen_files: Vec<_> = if workspace.packages.is_empty() {
         all_zen_files
     } else {
@@ -1068,7 +1068,11 @@ fn compute_next_version(current: Option<&Version>, bump: ReleaseBump) -> Version
     }
 }
 
-fn compute_tag_name(pkg: &MemberPackage, version: &Version, workspace: &WorkspaceInfo) -> String {
+fn compute_tag_name(
+    pkg: &WorkspacePackage,
+    version: &Version,
+    workspace: &WorkspaceInfo,
+) -> String {
     let prefix = tags::compute_tag_prefix(Some(&pkg.rel_path), workspace.path());
     tags::build_tag_name(&prefix, version)
 }
@@ -1081,7 +1085,7 @@ fn format_tag_message(url: &str, c: &PublishCandidate) -> String {
 }
 
 fn format_dependency_bump_commit(
-    dependants: &[&MemberPackage],
+    dependants: &[&WorkspacePackage],
     candidates: &BTreeMap<String, PublishCandidate>,
 ) -> String {
     let mut pkg_names: Vec<_> = dependants
@@ -1130,7 +1134,7 @@ fn format_dependency_bump_title(pkg_names: &[String]) -> String {
 
 fn infer_self_bump(
     workspace: &WorkspaceInfo,
-    pkg: &MemberPackage,
+    pkg: &WorkspacePackage,
     current: Option<&Version>,
     latest_tag: Option<&str>,
 ) -> Option<ReleaseBump> {
@@ -1147,7 +1151,7 @@ fn infer_self_bump(
 }
 
 fn current_package_version(
-    pkg: &MemberPackage,
+    pkg: &WorkspacePackage,
     ws_path: Option<&str>,
     all_tags: &[String],
 ) -> Option<Version> {
@@ -1281,7 +1285,7 @@ fn print_publish_tree(
     title: &str,
     workspace: &WorkspaceInfo,
     package_urls: &HashSet<String>,
-    mut format_label: impl FnMut(&str, &MemberPackage) -> String,
+    mut format_label: impl FnMut(&str, &WorkspacePackage) -> String,
 ) {
     let (workspace_url, roots, children) = collect_publish_tree(workspace, package_urls);
 

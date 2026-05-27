@@ -62,8 +62,8 @@ pub(crate) fn scan_package_direct_deps(
         }
 
         for url in extracted.urls {
-            if let Some(member_url) = workspace_member_for_url(workspace_info, &url) {
-                if member_url == package_url {
+            if let Some(workspace_package_url) = workspace_package_for_url(workspace_info, &url) {
+                if workspace_package_url == package_url {
                     anyhow::bail!(
                         "{} uses package URL '{}' that points into its own package '{}'; use a relative path instead",
                         zen_path.display(),
@@ -71,7 +71,7 @@ pub(crate) fn scan_package_direct_deps(
                         package_url
                     );
                 }
-                scanned.workspace.insert(member_url.to_string());
+                scanned.workspace.insert(workspace_package_url.to_string());
                 continue;
             }
 
@@ -90,10 +90,10 @@ pub(crate) fn scan_package_direct_deps(
             let Ok(resolved) = file_dir.join(&rel_path).canonicalize() else {
                 continue;
             };
-            if let Some(member_url) = package_index.owner_for_path(&resolved)
-                && member_url != package_url
+            if let Some(workspace_package_url) = package_index.owner_for_path(&resolved)
+                && workspace_package_url != package_url
             {
-                scanned.workspace.insert(member_url.to_string());
+                scanned.workspace.insert(workspace_package_url.to_string());
             }
         }
     }
@@ -199,7 +199,7 @@ fn existing_manifest_dep(url: &str, config: &PcbToml) -> Option<(String, Depende
         .map(|(module_path, spec)| (module_path.clone(), spec.clone()))
 }
 
-fn workspace_member_for_url<'a>(
+fn workspace_package_for_url<'a>(
     workspace_info: &'a crate::WorkspaceInfo,
     url: &str,
 ) -> Option<&'a str> {

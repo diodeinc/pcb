@@ -339,7 +339,7 @@ fn find_version_updates(
     scope: &UpdateScope,
     policy: AutoUpdatePolicy,
 ) -> Result<Vec<PendingUpdate>> {
-    let workspace_members: HashSet<&String> = workspace.packages.keys().collect();
+    let workspace_package_urls: HashSet<&String> = workspace.packages.keys().collect();
     let kicad_entries = workspace.kicad_library_entries();
     let kicad_lib_repos: HashSet<&str> = kicad_entries.iter().flat_map(|e| e.repo_urls()).collect();
     let mut version_cache: BTreeMap<String, BTreeMap<String, Vec<Version>>> = BTreeMap::new();
@@ -358,11 +358,11 @@ fn find_version_updates(
         let config = PcbToml::from_file(&DefaultFileProvider::new(), &pcb_toml_path)?;
 
         for (url, spec) in &config.dependencies.direct {
-            // Skip workspace members, filtered packages, and KiCad asset libraries.
+            // Skip workspace packages, filtered packages, and KiCad asset libraries.
             // TODO: Re-enable updates for KiCad asset libraries once we handle
             // their non-semver versioning properly (they publish breaking changes
             // in patch releases).
-            if workspace_members.contains(url)
+            if workspace_package_urls.contains(url)
                 || !matches_filter(url, filter)
                 || kicad_lib_repos.contains(url.as_str())
             {
@@ -422,7 +422,7 @@ fn find_version_updates(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcb_zen::MemberPackage;
+    use pcb_zen::WorkspacePackage;
     use pcb_zen_core::config::PcbToml;
     use std::collections::BTreeMap;
 
@@ -467,20 +467,20 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_update_scope_member_package_dir() {
+    fn test_detect_update_scope_package_dir() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_path_buf();
 
-        let member_rel = PathBuf::from("packages/foo");
-        let member_abs = root.join(&member_rel);
-        std::fs::create_dir_all(&member_abs).unwrap();
-        std::fs::write(member_abs.join("pcb.toml"), "").unwrap();
+        let package_rel = PathBuf::from("packages/foo");
+        let package_abs = root.join(&package_rel);
+        std::fs::create_dir_all(&package_abs).unwrap();
+        std::fs::write(package_abs.join("pcb.toml"), "").unwrap();
 
         let mut packages = BTreeMap::new();
         packages.insert(
             "github.com/example/foo".to_string(),
-            MemberPackage {
-                rel_path: member_rel,
+            WorkspacePackage {
+                rel_path: package_rel,
                 config: PcbToml::default(),
                 version: None,
                 published_at: None,
@@ -500,10 +500,10 @@ mod tests {
             errors: vec![],
         };
 
-        let scope = detect_update_scope(&ws, &member_abs);
+        let scope = detect_update_scope(&ws, &package_abs);
         match scope {
             UpdateScope::Package { pcb_toml_path } => {
-                let expected = member_abs.join("pcb.toml").canonicalize().unwrap();
+                let expected = package_abs.join("pcb.toml").canonicalize().unwrap();
                 assert_eq!(pcb_toml_path, expected);
             }
             UpdateScope::Workspace => panic!("expected package scope"),
@@ -511,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_update_scope_non_member_dir_with_pcb_toml() {
+    fn test_detect_update_scope_non_package_dir_with_pcb_toml() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_path_buf();
 
@@ -537,16 +537,16 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().to_path_buf();
 
-        let member_rel = PathBuf::from("packages/foo");
-        let member_abs = root.join(&member_rel);
-        std::fs::create_dir_all(&member_abs).unwrap();
+        let package_rel = PathBuf::from("packages/foo");
+        let package_abs = root.join(&package_rel);
+        std::fs::create_dir_all(&package_abs).unwrap();
         std::fs::write(root.join("pcb.toml"), "").unwrap();
-        std::fs::write(member_abs.join("pcb.toml"), "").unwrap();
+        std::fs::write(package_abs.join("pcb.toml"), "").unwrap();
 
         let mut packages = BTreeMap::new();
         packages.insert(
             "github.com/example/root".to_string(),
-            MemberPackage {
+            WorkspacePackage {
                 rel_path: PathBuf::new(),
                 config: PcbToml::default(),
                 version: None,
@@ -559,8 +559,8 @@ mod tests {
         );
         packages.insert(
             "github.com/example/foo".to_string(),
-            MemberPackage {
-                rel_path: member_rel,
+            WorkspacePackage {
+                rel_path: package_rel,
                 config: PcbToml::default(),
                 version: None,
                 published_at: None,

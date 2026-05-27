@@ -3,7 +3,7 @@ use clap::Args;
 use colored::Colorize as ColoredExt;
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
 use pcb_ui::{Style, StyledText};
-use pcb_zen::workspace::{MemberPackage, SymbolFileInfo, WorkspaceInfo};
+use pcb_zen::workspace::{SymbolFileInfo, WorkspaceInfo, WorkspacePackage};
 use pcb_zen_core::config::PcbToml;
 use pcb_zen_core::resolution::ResolutionResult;
 use serde::Serialize;
@@ -120,7 +120,7 @@ fn info_json(ws: &WorkspaceInfo, resolution: &ResolutionResult) -> Result<InfoJs
     })
 }
 
-fn metadata_for_workspace_package(pkg: &MemberPackage) -> PackageMetadata {
+fn metadata_for_workspace_package(pkg: &WorkspacePackage) -> PackageMetadata {
     PackageMetadata {
         version: pkg.version.clone(),
         rel_path: pkg.rel_path.clone(),
@@ -375,7 +375,7 @@ fn print_human_readable(
     }
 }
 
-fn print_package_line(pkg: &MemberPackage) {
+fn print_package_line(pkg: &WorkspacePackage) {
     let is_root = pkg.rel_path.as_os_str().is_empty();
 
     // Package name (last segment of relative path, or "root")

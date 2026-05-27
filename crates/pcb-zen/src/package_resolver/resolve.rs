@@ -569,7 +569,7 @@ mod tests {
             }),
             packages: BTreeMap::from([(
                 package_url,
-                crate::MemberPackage {
+                crate::WorkspacePackage {
                     rel_path: PathBuf::from("boards/Board"),
                     config: package_config,
                     version: None,

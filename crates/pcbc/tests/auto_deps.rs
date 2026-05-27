@@ -301,9 +301,9 @@ gnd = Net("GND")
 }
 
 /// Test that a relative path load("../../modules/Lib/Lib.zen") that escapes a board's
-/// package boundary into another workspace member triggers auto-dep for that member.
+/// package boundary into another workspace package triggers auto-dep for that package.
 #[test]
-fn test_auto_deps_relative_path_cross_member() {
+fn test_auto_deps_relative_path_cross_package() {
     let mut sandbox = Sandbox::new();
 
     let workspace_toml = r#"[workspace]
@@ -336,13 +336,13 @@ gnd = Net("GND")
         .write("boards/Main/Main.zen", board_zen)
         .snapshot_run("pcbc", ["build", "boards/Main/Main.zen"]);
 
-    // The board's pcb.toml should now contain a dependency on the Lib member
+    // The board's pcb.toml should now contain a dependency on the Lib package.
     let board_pcb_toml =
         std::fs::read_to_string(sandbox.default_cwd().join("boards/Main/pcb.toml"))
             .unwrap_or_default();
     assert!(
         board_pcb_toml.contains("modules/Lib"),
-        "expected board pcb.toml to contain auto-dep on modules/Lib member, got:\n{}",
+        "expected board pcb.toml to contain auto-dep on modules/Lib package, got:\n{}",
         board_pcb_toml
     );
 }
@@ -420,7 +420,7 @@ P1 = io(Net)
 }
 
 #[test]
-fn test_root_package_url_to_member_auto_dep() {
+fn test_root_package_url_to_package_auto_dep() {
     let mut sandbox = Sandbox::new();
 
     let output = sandbox
@@ -460,13 +460,13 @@ P1 = io(Net)
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
     assert!(
         root_pcb_toml.contains("\"github.com/example/demo/boards/Child\""),
-        "expected root pcb.toml to gain member dependency, got:\n{}",
+        "expected root pcb.toml to gain package dependency, got:\n{}",
         root_pcb_toml
     );
 }
 
 #[test]
-fn test_workspace_member_sync_does_not_downgrade_existing_version() {
+fn test_workspace_package_sync_does_not_downgrade_existing_version() {
     let mut sandbox = Sandbox::new();
 
     let output = sandbox
@@ -505,7 +505,7 @@ Helper(name = "X", P1 = Net("P1"))
 }
 
 #[test]
-fn test_root_package_url_to_member_locked() {
+fn test_root_package_url_to_package_locked() {
     let mut sandbox = Sandbox::new();
 
     let result = sandbox

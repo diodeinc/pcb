@@ -480,7 +480,7 @@ pcb migrate ./path/to/workspace
 
 The command:
 1. Detects the workspace root and git repository
-2. Converts `pcb.toml` files to V2 format (adds root `[workspace].pcb-version`, removes member `[workspace]` sections, converts `[packages]` to `[dependencies]`)
+2. Converts `pcb.toml` files to V2 format (adds root `[workspace].pcb-version`, removes package-level `[workspace]` sections, converts `[packages]` to `[dependencies]`)
 3. Rewrites `.zen` files (expands aliases to full URLs, fixes paths)
 
 Review changes with `git diff` before committing.

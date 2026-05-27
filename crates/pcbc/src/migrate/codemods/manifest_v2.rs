@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use ignore::WalkBuilder;
+use ignore::{Walk, WalkBuilder};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{PcbToml, WorkspaceConfig, pcb_version_from_cargo};
-use pcb_zen_core::workspace::WORKSPACE_DISCOVERY_MAX_DEPTH;
+use pcb_zen_core::workspace::{WORKSPACE_DISCOVERY_EXCLUDE_DIRS, WORKSPACE_DISCOVERY_MAX_DEPTH};
 use std::path::{Path, PathBuf};
 
 /// Convert all pcb.toml files in workspace to V2
@@ -16,8 +16,7 @@ pub fn convert_workspace_to_v2(
         eprintln!("  Repo subpath: {}", p.display());
     }
 
-    // Generate member package pcb.toml files
-    generate_member_packages(workspace_root)?;
+    generate_package_manifests(workspace_root)?;
 
     // Convert root pcb.toml
     let root_pcb_toml = workspace_root.join("pcb.toml");
@@ -32,16 +31,8 @@ pub fn convert_workspace_to_v2(
         }
     }
 
-    // Find and convert all member pcb.toml files (including newly created ones)
-    let walker = WalkBuilder::new(workspace_root)
-        .max_depth(Some(WORKSPACE_DISCOVERY_MAX_DEPTH + 1))
-        .hidden(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .filter_entry(skip_generated_dirs)
-        .build();
-
-    for entry in walker.filter_map(|e| e.ok()) {
+    // Convert all package manifests, including newly created ones.
+    for entry in workspace_walker(workspace_root).filter_map(|e| e.ok()) {
         let path = entry.path();
         if path.file_name() != Some(std::ffi::OsStr::new("pcb.toml")) || path == root_pcb_toml {
             continue;
@@ -55,8 +46,8 @@ pub fn convert_workspace_to_v2(
     Ok(())
 }
 
-/// Generate empty pcb.toml files for member packages
-fn generate_member_packages(workspace_root: &Path) -> Result<()> {
+/// Generate empty pcb.toml files for discovered package roots.
+fn generate_package_manifests(workspace_root: &Path) -> Result<()> {
     use std::collections::BTreeSet;
 
     let package_extensions = ["zen", "kicad_mod", "kicad_sym"];
@@ -64,15 +55,7 @@ fn generate_member_packages(workspace_root: &Path) -> Result<()> {
     // Collect all directories that contain package files or already have pcb.toml
     let mut candidate_dirs: BTreeSet<PathBuf> = BTreeSet::new();
 
-    let walker = WalkBuilder::new(workspace_root)
-        .max_depth(Some(WORKSPACE_DISCOVERY_MAX_DEPTH + 1))
-        .hidden(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .filter_entry(skip_generated_dirs)
-        .build();
-
-    for entry in walker.filter_map(|e| e.ok()) {
+    for entry in workspace_walker(workspace_root).filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -144,21 +127,15 @@ fn convert_pcb_toml_to_v2(
     // Update workspace section if this is the root
     if let Some(repo) = repository {
         config.workspace = Some(WorkspaceConfig {
-            name: None,
             repository: Some(repo.to_string()),
             path: repo_subpath.map(|s| s.to_string()),
-            resolver: None,
             pcb_version: Some(pcb_version_from_cargo()),
-            endpoint: None,
-            kicad_library: WorkspaceConfig::default().kicad_library,
-            members: Vec::new(),
             default_board,
             vendor: vec!["github.com/diodeinc/registry/**".to_string()],
-            preferred: Vec::new(),
-            exclude: Vec::new(),
+            ..WorkspaceConfig::default()
         });
     } else {
-        // In V2, only the workspace root has a [workspace] section. Member packages/boards
+        // In V2, only the workspace root has a [workspace] section. Packages and boards
         // must not have workspace metadata.
         config.workspace = None;
     }
@@ -171,14 +148,21 @@ fn convert_pcb_toml_to_v2(
     Ok(true)
 }
 
+fn workspace_walker(root: &Path) -> Walk {
+    WalkBuilder::new(root)
+        .max_depth(Some(WORKSPACE_DISCOVERY_MAX_DEPTH + 1))
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .filter_entry(skip_generated_dirs)
+        .build()
+}
+
 fn skip_generated_dirs(entry: &ignore::DirEntry) -> bool {
     if entry.file_type().is_some_and(|ft| ft.is_dir())
         && let Some(name) = entry.file_name().to_str()
     {
-        return !matches!(
-            name,
-            ".git" | ".pcb" | "fork" | "node_modules" | "target" | "vendor"
-        );
+        return !WORKSPACE_DISCOVERY_EXCLUDE_DIRS.contains(&name);
     }
     true
 }
