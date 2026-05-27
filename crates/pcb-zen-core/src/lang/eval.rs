@@ -53,6 +53,8 @@ use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 use crate::{FileProvider, ResolveContext};
 use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
 
+pub use super::evaluator_ext::EvalContextRef;
+
 use super::{
     context::{ContextValue, FrozenContextValue},
     interface::interface_globals,
@@ -1537,11 +1539,13 @@ impl EvalContext {
                 PhysicalValueWarningHandler(emit_physical_value_deprecation);
 
             let eval_result = {
+                let mut eval_context_ref = EvalContextRef::new(&self);
                 let mut eval = Evaluator::new(&module);
                 eval.enable_static_typechecking(true);
                 eval.set_loader(&self);
                 eval.set_print_handler(&print_handler);
                 eval.extra = Some(&physical_value_warning_handler);
+                eval.extra_mut = Some(&mut eval_context_ref);
 
                 let globals = Self::build_globals();
 

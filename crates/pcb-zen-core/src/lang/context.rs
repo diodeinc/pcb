@@ -77,19 +77,10 @@ pub struct ContextValue<'v> {
     missing_inputs: RefCell<Vec<String>>,
     #[allocative(skip)]
     diagnostics: RefCell<Vec<crate::Diagnostic>>,
-    /// The eval::Context that the current evaluator is running in.
-    #[allocative(skip)]
-    #[serde(skip)]
-    context: *const EvalContext,
     #[allocative(skip)]
     #[serde(skip)]
     pending_children: RefCell<Vec<PendingChild<'v>>>,
 }
-
-// SAFETY: `ContextValue` is allocated on the Starlark heap and is only used
-// while the owning evaluation context is active. Heap branding keeps contained
-// Starlark values tied to that heap; the raw pointer is not shared independently.
-unsafe impl<'v> Send for ContextValue<'v> {}
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
 #[repr(C)]
@@ -148,7 +139,7 @@ impl FrozenContextValue {
 }
 
 impl<'v> ContextValue<'v> {
-    /// Create a new `ContextValue` with a parent eval::Context for sharing caches
+    /// Create a new `ContextValue` from the current evaluation context.
     pub fn from_context(context: &EvalContext) -> Self {
         let source_path = context
             .source_path()
@@ -173,15 +164,8 @@ impl<'v> ContextValue<'v> {
             strict_io_config: context.strict_io_config(),
             missing_inputs: RefCell::new(Vec::new()),
             diagnostics: RefCell::new(Vec::new()),
-            context: context as *const _,
             pending_children: RefCell::new(Vec::new()),
         }
-    }
-
-    /// Get the parent eval::Context
-    pub(crate) fn parent_context(&self) -> &EvalContext {
-        // SAFETY: We ensure the parent Context outlives this ContextValue
-        unsafe { &*self.context }
     }
 
     /// Return whether missing required io()/config() placeholders should be treated as
