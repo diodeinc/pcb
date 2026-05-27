@@ -146,7 +146,7 @@ fn use_frozen_resolution(workspace_info: &WorkspaceInfo, package_urls: &[String]
         && (workspace_info.requires_mvs_v2()
             || package_urls
                 .iter()
-                .any(|package_url| package_has_indirect(workspace_info, package_url)))
+                .all(|package_url| package_has_indirect(workspace_info, package_url)))
 }
 
 fn package_has_indirect(workspace_info: &WorkspaceInfo, package_url: &str) -> bool {
