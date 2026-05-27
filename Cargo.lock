@@ -59,7 +59,7 @@ dependencies = [
 [[package]]
 name = "allocative"
 version = "0.3.6"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "allocative_derive",
  "bumpalo",
@@ -71,7 +71,7 @@ dependencies = [
 [[package]]
 name = "allocative_derive"
 version = "0.3.6"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -194,7 +194,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "parking_lot 0.12.5",
+ "parking_lot",
  "percent-encoding",
  "windows-sys 0.60.2",
  "x11rb",
@@ -1223,7 +1223,7 @@ checksum = "3f88a43d011fc4a6876cb7344703e297c71dda42494fee094d5f7c76bf13f746"
 [[package]]
 name = "cmp_any"
 version = "0.8.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 
 [[package]]
 name = "cobs"
@@ -1572,7 +1572,7 @@ dependencies = [
  "derive_more 2.1.1",
  "document-features",
  "mio",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rustix 1.1.4",
  "signal-hook",
  "signal-hook-mio",
@@ -1719,7 +1719,7 @@ dependencies = [
  "hashbrown 0.14.5",
  "lock_api",
  "once_cell",
- "parking_lot_core 0.9.12",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -1928,7 +1928,7 @@ dependencies = [
 [[package]]
 name = "display_container"
 version = "0.9.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "either",
  "indenter",
@@ -1996,9 +1996,9 @@ dependencies = [
 [[package]]
 name = "dupe"
 version = "0.9.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
- "dupe_derive 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d)",
+ "dupe_derive 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662)",
 ]
 
 [[package]]
@@ -2015,7 +2015,7 @@ dependencies = [
 [[package]]
 name = "dupe_derive"
 version = "0.9.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2396,16 +2396,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "fs2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
-dependencies = [
- "libc",
- "winapi",
 ]
 
 [[package]]
@@ -3330,15 +3320,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "instant"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
-dependencies = [
- "cfg-if",
-]
-
-[[package]]
 name = "interpolate_name"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3816,7 +3797,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebf3631712f5b790675292ff827af269f5d9f920c920b77dc41d0485e3719612"
 dependencies = [
  "atomic 0.5.3",
- "parking_lot 0.12.5",
+ "parking_lot",
 ]
 
 [[package]]
@@ -4535,7 +4516,7 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 [[package]]
 name = "pagable"
 version = "0.3.3"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "allocative",
  "anyhow",
@@ -4543,7 +4524,7 @@ dependencies = [
  "blake3",
  "bytemuck",
  "dashmap",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662)",
  "either",
  "erased-serde 0.4.10",
  "fancy-regex 0.16.2",
@@ -4552,28 +4533,24 @@ dependencies = [
  "num-bigint",
  "once_cell",
  "pagable_derive",
- "parking_lot 0.12.5",
+ "parking_lot",
  "postcard",
  "regex",
- "rusqlite",
  "sequence_trie",
  "serde",
  "serde_json",
- "sled",
  "smallvec",
- "sorted_vector_map",
  "static_assertions",
  "static_interner",
  "strong_hash",
  "take_mut",
- "tokio",
  "triomphe",
 ]
 
 [[package]]
 name = "pagable_derive"
 version = "0.3.3"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4606,37 +4583,12 @@ dependencies = [
 
 [[package]]
 name = "parking_lot"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
-dependencies = [
- "instant",
- "lock_api",
- "parking_lot_core 0.8.6",
-]
-
-[[package]]
-name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
  "lock_api",
- "parking_lot_core 0.9.12",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60a2cfe6f0ad2bfc16aefa463b497d5c7a5ecd44a23efa72aa342d90177356dc"
-dependencies = [
- "cfg-if",
- "instant",
- "libc",
- "redox_syscall 0.2.16",
- "smallvec",
- "winapi",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -5580,17 +5532,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "quickcheck"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95c589f335db0f6aaa168a7cd27b1fc6920f5e1470c804f814d9cd6e62a0f70b"
-dependencies = [
- "env_logger",
- "log",
- "rand 0.10.1",
-]
-
-[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5696,7 +5637,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51de85fb3fb6524929c8a2eb85e6b6d363de4e8c48f9e2c2eac4944abc181c93"
 dependencies = [
  "log",
- "parking_lot 0.12.5",
+ "parking_lot",
  "scheduled-thread-pool",
 ]
 
@@ -5981,15 +5922,6 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
-]
-
-[[package]]
-name = "redox_syscall"
-version = "0.2.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb5a58c1855b4b6819d59012155603f0b22ad30cad752600aadfcb695265519a"
-dependencies = [
- "bitflags 1.3.2",
 ]
 
 [[package]]
@@ -6705,7 +6637,7 @@ dependencies = [
  "indexmap",
  "intrusive-collections",
  "inventory",
- "parking_lot 0.12.5",
+ "parking_lot",
  "portable-atomic",
  "rustc-hash",
  "salsa-macro-rules",
@@ -6764,7 +6696,7 @@ version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3cbc66816425a074528352f5789333ecff06ca41b36b0b0efdfbb29edc391a19"
 dependencies = [
- "parking_lot 0.12.5",
+ "parking_lot",
 ]
 
 [[package]]
@@ -6983,7 +6915,7 @@ dependencies = [
  "futures-util",
  "log",
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot",
  "scc",
  "serial_test_derive",
 ]
@@ -7170,22 +7102,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
-name = "sled"
-version = "0.34.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f96b4737c2ce5987354855aed3797279def4ebf734436c6aa4552cf8e169935"
-dependencies = [
- "crc32fast",
- "crossbeam-epoch",
- "crossbeam-utils",
- "fs2",
- "fxhash",
- "libc",
- "log",
- "parking_lot 0.11.2",
-]
-
-[[package]]
 name = "slotmap"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7214,15 +7130,6 @@ checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "sorted_vector_map"
-version = "0.2.1"
-source = "git+https://github.com/facebookexperimental/rust-shed#b244bffe9c3be94d3776ccdb35c215104c04ca9c"
-dependencies = [
- "itertools 0.14.0",
- "quickcheck",
 ]
 
 [[package]]
@@ -7264,7 +7171,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "starlark"
 version = "0.14.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "allocative",
  "anyhow",
@@ -7276,7 +7183,7 @@ dependencies = [
  "derivative",
  "derive_more 1.0.0",
  "display_container",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662)",
  "either",
  "erased-serde 0.3.31",
  "hashbrown 0.16.1",
@@ -7296,7 +7203,6 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
- "sled",
  "starlark_derive",
  "starlark_map",
  "starlark_syntax",
@@ -7310,9 +7216,9 @@ dependencies = [
 [[package]]
 name = "starlark_derive"
 version = "0.14.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662)",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -7321,10 +7227,10 @@ dependencies = [
 [[package]]
 name = "starlark_map"
 version = "0.14.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "allocative",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662)",
  "equivalent",
  "fxhash",
  "hashbrown 0.16.1",
@@ -7336,14 +7242,14 @@ dependencies = [
 [[package]]
 name = "starlark_syntax"
 version = "0.14.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "allocative",
  "annotate-snippets",
  "anyhow",
  "derivative",
  "derive_more 1.0.0",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d)",
+ "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662)",
  "lalrpop",
  "lalrpop-util",
  "logos",
@@ -7395,7 +7301,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf776ba3fa74f83bf4b63c3dcbbf82173db2632ed8452cb2d891d33f459de70f"
 dependencies = [
  "new_debug_unreachable",
- "parking_lot 0.12.5",
+ "parking_lot",
  "phf_shared",
  "precomputed-hash",
 ]
@@ -7412,7 +7318,7 @@ dependencies = [
 [[package]]
 name = "strong_hash"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "ref-cast",
  "strong_hash_derive",
@@ -7421,7 +7327,7 @@ dependencies = [
 [[package]]
 name = "strong_hash_derive"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d#5dda9bc94ae49b4560edb7b6e62dcfcfa4c7152d"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=0a73b696d5f72085d85b04fc065d35e56eb32662#0a73b696d5f72085d85b04fc065d35e56eb32662"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -7906,24 +7812,10 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot 0.12.5",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
- "tokio-macros",
- "tracing",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "tokio-macros"
-version = "2.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
