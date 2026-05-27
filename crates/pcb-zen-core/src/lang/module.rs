@@ -255,7 +255,7 @@ impl From<MissingInputError> for starlark::Error {
 }
 
 /// Metadata for a module parameter (from io() or config() calls)
-#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
 pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     /// Parameter name
@@ -284,12 +284,6 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     #[freeze(identity)]
     #[allocative(skip)]
     pub declaration_call_stack: starlark::eval::CallStack,
-}
-
-// Manual because no instance for Option<V>
-unsafe impl<From: Coerce<To> + ValueLifetimeless, To: ValueLifetimeless>
-    Coerce<ParameterMetadataGen<To>> for ParameterMetadataGen<From>
-{
 }
 
 starlark_complex_value!(pub ParameterMetadata);

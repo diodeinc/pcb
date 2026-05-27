@@ -12,7 +12,8 @@ use starlark::{
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_module, starlark_simple_value,
     values::{
-        Coerce, Freeze, FrozenValue, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
+        Coerce, Freeze, FrozenValue, Heap, NoSerialize, StarlarkValue, Trace, Value,
+        ValueLifetimeless, ValueLike,
         dict::{AllocDict, DictRef},
         list::ListRef,
         starlark_value,
@@ -79,37 +80,23 @@ impl From<ComponentError> for starlark::Error {
     }
 }
 
-// Mutable data stored in ComponentValue (wrapped in RefCell)
-#[derive(Clone, Debug, Trace, ProvidesStaticType, Allocative)]
-pub struct ComponentData<'v> {
+#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, Allocative, Freeze)]
+#[repr(C)]
+pub struct ComponentDataGen<V: ValueLifetimeless> {
     pub(crate) part: Option<PartValue>,
     pub(crate) bom_mpn: Option<String>,
-    pub(crate) spice_model: Option<Value<'v>>,
+    pub(crate) spice_model: Option<V>,
     pub(crate) dnp: bool,
     pub(crate) skip_bom: bool,
     pub(crate) skip_pos: bool,
     pub(crate) datasheet: Option<String>,
     pub(crate) component_datasheet: Option<String>,
     pub(crate) symbol_datasheet: Option<String>,
-    pub(crate) properties: SmallMap<String, Value<'v>>,
+    pub(crate) properties: SmallMap<String, V>,
 }
 
-// Frozen data stored in FrozenComponentValue (no RefCell needed)
-#[derive(Clone, Debug, ProvidesStaticType, Allocative)]
-pub struct FrozenComponentData {
-    pub(crate) part: Option<PartValue>,
-    pub(crate) bom_mpn: Option<String>,
-    pub(crate) spice_model: Option<FrozenValue>,
-    pub(crate) dnp: bool,
-    pub(crate) skip_bom: bool,
-    pub(crate) skip_pos: bool,
-    pub(crate) datasheet: Option<String>,
-    pub(crate) component_datasheet: Option<String>,
-    pub(crate) symbol_datasheet: Option<String>,
-    pub(crate) properties: SmallMap<String, FrozenValue>,
-}
-
-unsafe impl<'v> Coerce<ComponentData<'v>> for FrozenComponentData {}
+pub type ComponentData<'v> = ComponentDataGen<Value<'v>>;
+pub type FrozenComponentData = ComponentDataGen<FrozenValue>;
 
 // Generic component wrapper - T is either RefCell<ComponentData<'v>> or FrozenComponentData
 #[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative)]
@@ -150,27 +137,7 @@ impl<'v> Freeze for ComponentValue<'v> {
             footprint: self.footprint,
             prefix: self.prefix,
             connections: self.connections.freeze(freezer)?,
-            data: FrozenComponentData {
-                part: data.part,
-                bom_mpn: data.bom_mpn,
-                spice_model: match data.spice_model {
-                    Some(s) => Some(s.freeze(freezer)?),
-                    None => None,
-                },
-                dnp: data.dnp,
-                skip_bom: data.skip_bom,
-                skip_pos: data.skip_pos,
-                datasheet: data.datasheet,
-                component_datasheet: data.component_datasheet,
-                symbol_datasheet: data.symbol_datasheet,
-                properties: {
-                    let mut frozen_props = SmallMap::new();
-                    for (k, v) in data.properties.into_iter() {
-                        frozen_props.insert(k, v.freeze(freezer)?);
-                    }
-                    frozen_props
-                },
-            },
+            data: data.freeze(freezer)?,
             source_path: self.source_path,
             declaration_span: self.declaration_span,
             symbol: self.symbol.freeze(freezer)?,

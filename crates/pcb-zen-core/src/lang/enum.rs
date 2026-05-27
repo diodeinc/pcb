@@ -7,7 +7,7 @@ use starlark::{
     starlark_module, starlark_simple_value,
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
     values::{
-        Freeze, FreezeResult, Heap, StarlarkValue, Value, ValueLike,
+        Freeze, Heap, StarlarkValue, Value, ValueLike,
         function::FUNCTION_TYPE,
         starlark_value,
         typing::{TypeInstanceId, TypeMatcher, TypeMatcherDyn, TypeMatcherFactory},
@@ -51,19 +51,13 @@ impl TypeMatcher for EnumTypeMatcher {
     Eq,
     ProvidesStaticType,
     Allocative,
+    Freeze,
     Serialize,
     Deserialize,
     pagable::Pagable,
 )]
 pub struct EnumType {
     variants: Vec<String>,
-}
-
-impl Freeze for EnumType {
-    type Frozen = Self;
-    fn freeze(self, _freezer: &starlark::values::Freezer) -> FreezeResult<Self::Frozen> {
-        Ok(self)
-    }
 }
 
 starlark_simple_value!(EnumType);
@@ -260,6 +254,7 @@ fn enum_type_methods(builder: &mut MethodsBuilder) {
     Eq,
     ProvidesStaticType,
     Allocative,
+    Freeze,
     Serialize,
     Deserialize,
     pagable::Pagable,
@@ -267,13 +262,6 @@ fn enum_type_methods(builder: &mut MethodsBuilder) {
 pub struct EnumValue {
     r#type: EnumType,
     index: i32,
-}
-
-impl Freeze for EnumValue {
-    type Frozen = Self;
-    fn freeze(self, _freezer: &starlark::values::Freezer) -> FreezeResult<Self::Frozen> {
-        Ok(self)
-    }
 }
 
 starlark_simple_value!(EnumValue);
