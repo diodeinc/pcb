@@ -6,13 +6,11 @@ use pcb_test_utils::sandbox::Sandbox;
 const WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
-members = ["boards/*", "special/custom-board"]
 "#;
 
 const WORKSPACE_PCB_TOML_WITH_PREFERRED: &str = r#"
 [workspace]
 pcb-version = "0.3"
-members = ["boards/*", "special/custom-board"]
 preferred = ["boards/test-board"]
 "#;
 
@@ -174,7 +172,6 @@ fn test_pcb_info_json_includes_sum_free_external_dependency_closure() {
             r#"
 [workspace]
 pcb-version = "0.3"
-members = ["boards/*"]
 "#,
         )
         .write(

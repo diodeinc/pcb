@@ -1,5 +1,6 @@
 ---
 source: crates/pcbc/tests/info.rs
+assertion_line: 284
 expression: normalized
 ---
 Command: pcbc info -f json
@@ -10,11 +11,7 @@ Exit Code: 0
   "root": "<TEMP_DIR>",
   "config": {
     "workspace": {
-      "pcb-version": "0.3",
-      "members": [
-        "boards/*",
-        "special/custom-board"
-      ]
+      "pcb-version": "0.3"
     }
   },
   "packages": {

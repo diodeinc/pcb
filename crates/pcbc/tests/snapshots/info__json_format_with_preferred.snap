@@ -1,5 +1,6 @@
 ---
 source: crates/pcbc/tests/info.rs
+assertion_line: 108
 expression: output
 ---
 Command: pcbc info -f json
@@ -11,10 +12,6 @@ Exit Code: 0
   "config": {
     "workspace": {
       "pcb-version": "0.3",
-      "members": [
-        "boards/*",
-        "special/custom-board"
-      ],
       "preferred": [
         "boards/test-board"
       ]

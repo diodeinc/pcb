@@ -1,10 +1,6 @@
 [workspace]
-name = "pcb"
+name = "lib"
 pcb-version = "0.3"
-members = [
-    "stdlib/*",
-    "examples/*",
-]
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"

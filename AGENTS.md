@@ -27,7 +27,7 @@ Never run `cargo insta accept` without explicit user approval.
 - `crates/pcbc/src/import/` implements `pcb import`; start with `crates/pcbc/src/import/README.md` and `flow.rs` before changing the import pipeline.
 - `crates/pcb-eda/` and `crates/pcb-component-gen/` handle external EDA artifacts and generated Zener component modules.
 - `crates/pcb-diode-api/` contains API/auth/search/BOM-matching client logic.
-- `stdlib/` contains the Zener standard library; `examples/` and `test-workspaces/` are useful runnable designs.
+- `lib/std/` contains the Zener standard library; `examples/` and `test-workspaces/` are useful runnable designs.
 - Use `docs/pages/packages.mdx` for workspace, dependency, and package behavior.
 
 ## Working Rules

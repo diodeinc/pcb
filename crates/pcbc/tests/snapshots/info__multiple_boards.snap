@@ -1,5 +1,6 @@
 ---
 source: crates/pcbc/tests/info.rs
+assertion_line: 84
 expression: output
 ---
 Command: pcbc info
@@ -9,7 +10,6 @@ Exit Code: 0
 Workspace
 Root: <TEMP_DIR>
 Toolchain: pcb >= 0.3
-Members: boards/*, special/custom-board
 
 Boards (4)
   BrokenBoard (unpublished) - boards/broken-board/broken.zen

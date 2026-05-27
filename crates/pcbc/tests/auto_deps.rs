@@ -308,7 +308,6 @@ fn test_auto_deps_relative_path_cross_member() {
 
     let workspace_toml = r#"[workspace]
 pcb-version = "0.3"
-members = ["boards/*", "modules/*"]
 "#;
 
     let lib_toml = "[dependencies]\n";
@@ -365,7 +364,6 @@ fn test_same_package_url_rejected() {
                 r#"[workspace]
 pcb-version = "0.3"
 repository = "github.com/example/demo"
-members = ["boards/*"]
 "#,
             )
             .write(
@@ -431,7 +429,6 @@ fn test_root_package_url_to_member_auto_dep() {
             r#"[workspace]
 pcb-version = "0.3"
 repository = "github.com/example/demo"
-members = ["boards/*", "libs/*"]
 
 [dependencies]
 "github.com/example/demo/libs/Helper" = "0.1.0"
@@ -478,7 +475,6 @@ fn test_workspace_member_sync_does_not_downgrade_existing_version() {
             r#"[workspace]
 pcb-version = "0.3"
 repository = "github.com/example/demo"
-members = ["boards/*", "libs/*"]
 
 [dependencies]
 "github.com/example/demo/libs/Helper" = "1.2.3"
@@ -518,7 +514,6 @@ fn test_root_package_url_to_member_locked() {
             r#"[workspace]
 pcb-version = "0.3"
 repository = "github.com/example/demo"
-members = ["boards/*"]
 
 [dependencies]
 "github.com/example/demo/boards/Child" = "0.1.0"

@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use globset::{Glob, GlobSetBuilder};
 use ignore::WalkBuilder;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{PcbToml, WorkspaceConfig, pcb_version_from_cargo};
+use pcb_zen_core::workspace::WORKSPACE_DISCOVERY_MAX_DEPTH;
 use std::path::{Path, PathBuf};
 
 /// Convert all pcb.toml files in workspace to V2
@@ -16,14 +16,8 @@ pub fn convert_workspace_to_v2(
         eprintln!("  Repo subpath: {}", p.display());
     }
 
-    // Detect and filter member patterns
-    let members = detect_member_patterns(workspace_root)?;
-    if !members.is_empty() {
-        eprintln!("  Members: {:?}", members);
-    }
-
     // Generate member package pcb.toml files
-    generate_member_packages(workspace_root, &members)?;
+    generate_member_packages(workspace_root)?;
 
     // Convert root pcb.toml
     let root_pcb_toml = workspace_root.join("pcb.toml");
@@ -33,32 +27,18 @@ pub fn convert_workspace_to_v2(
             &root_pcb_toml,
             Some(repository),
             repo_subpath_str.as_deref(),
-            &members,
         )? {
             eprintln!("  ✓ Converted {}", root_pcb_toml.display());
         }
     }
 
-    // Build glob set for member patterns
-    let glob_set = if !members.is_empty() {
-        let mut builder = GlobSetBuilder::new();
-        for pattern in &members {
-            builder.add(Glob::new(pattern)?);
-            if let Some(exact) = pattern.strip_suffix("/*") {
-                builder.add(Glob::new(exact)?);
-            }
-        }
-        Some(builder.build()?)
-    } else {
-        None
-    };
-
     // Find and convert all member pcb.toml files (including newly created ones)
     let walker = WalkBuilder::new(workspace_root)
+        .max_depth(Some(WORKSPACE_DISCOVERY_MAX_DEPTH + 1))
         .hidden(true)
         .git_ignore(true)
         .git_exclude(true)
-        .filter_entry(pcb_zen::ast_utils::skip_vendor)
+        .filter_entry(skip_generated_dirs)
         .build();
 
     for entry in walker.filter_map(|e| e.ok()) {
@@ -67,17 +47,7 @@ pub fn convert_workspace_to_v2(
             continue;
         }
 
-        // Check if path matches member patterns
-        if let Some(ref glob_set) = glob_set {
-            let Ok(rel_path) = path.parent().unwrap_or(path).strip_prefix(workspace_root) else {
-                continue;
-            };
-            if !glob_set.is_match(rel_path) {
-                continue;
-            }
-        }
-
-        if convert_pcb_toml_to_v2(path, None, None, &[])? {
+        if convert_pcb_toml_to_v2(path, None, None)? {
             eprintln!("  ✓ Converted {}", path.display());
         }
     }
@@ -85,25 +55,8 @@ pub fn convert_workspace_to_v2(
     Ok(())
 }
 
-/// Detect member patterns based on existing directories
-fn detect_member_patterns(workspace_root: &Path) -> Result<Vec<String>> {
-    let base_patterns = pcb_zen_core::config::default_members();
-    let mut filtered = Vec::new();
-
-    for pattern in &base_patterns {
-        let dir_name = pattern.trim_end_matches("/*");
-        let dir_path = workspace_root.join(dir_name);
-
-        if dir_path.exists() && dir_path.is_dir() {
-            filtered.push(pattern.to_string());
-        }
-    }
-
-    Ok(filtered)
-}
-
 /// Generate empty pcb.toml files for member packages
-fn generate_member_packages(workspace_root: &Path, members: &[String]) -> Result<()> {
+fn generate_member_packages(workspace_root: &Path) -> Result<()> {
     use std::collections::BTreeSet;
 
     let package_extensions = ["zen", "kicad_mod", "kicad_sym"];
@@ -111,38 +64,31 @@ fn generate_member_packages(workspace_root: &Path, members: &[String]) -> Result
     // Collect all directories that contain package files or already have pcb.toml
     let mut candidate_dirs: BTreeSet<PathBuf> = BTreeSet::new();
 
-    for pattern in members {
-        let dir_name = pattern.trim_end_matches("/*");
-        let base_dir = workspace_root.join(dir_name);
-        if !base_dir.exists() {
+    let walker = WalkBuilder::new(workspace_root)
+        .max_depth(Some(WORKSPACE_DISCOVERY_MAX_DEPTH + 1))
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .filter_entry(skip_generated_dirs)
+        .build();
+
+    for entry in walker.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() {
             continue;
         }
 
-        let walker = WalkBuilder::new(&base_dir)
-            .max_depth(Some(3))
-            .hidden(true)
-            .git_ignore(true)
-            .git_exclude(true)
-            .filter_entry(pcb_zen::ast_utils::skip_vendor)
-            .build();
+        let dominated_file = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| package_extensions.contains(&ext));
+        let is_manifest = path.file_name() == Some(std::ffi::OsStr::new("pcb.toml"));
 
-        for entry in walker.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-
-            let dominated_file = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|ext| package_extensions.contains(&ext));
-            let is_manifest = path.file_name() == Some(std::ffi::OsStr::new("pcb.toml"));
-
-            if (dominated_file || is_manifest)
-                && let Some(dir) = path.parent()
-            {
-                candidate_dirs.insert(dir.to_path_buf());
-            }
+        if (dominated_file || is_manifest)
+            && let Some(dir) = path.parent()
+            && dir != workspace_root
+        {
+            candidate_dirs.insert(dir.to_path_buf());
         }
     }
 
@@ -174,7 +120,6 @@ fn convert_pcb_toml_to_v2(
     path: &Path,
     repository: Option<&str>,
     repo_subpath: Option<&str>,
-    members: &[String],
 ) -> Result<bool> {
     let file_provider = DefaultFileProvider::new();
 
@@ -206,7 +151,7 @@ fn convert_pcb_toml_to_v2(
             pcb_version: Some(pcb_version_from_cargo()),
             endpoint: None,
             kicad_library: WorkspaceConfig::default().kicad_library,
-            members: members.to_vec(),
+            members: Vec::new(),
             default_board,
             vendor: vec!["github.com/diodeinc/registry/**".to_string()],
             preferred: Vec::new(),
@@ -224,4 +169,16 @@ fn convert_pcb_toml_to_v2(
     std::fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
 
     Ok(true)
+}
+
+fn skip_generated_dirs(entry: &ignore::DirEntry) -> bool {
+    if entry.file_type().is_some_and(|ft| ft.is_dir())
+        && let Some(name) = entry.file_name().to_str()
+    {
+        return !matches!(
+            name,
+            ".git" | ".pcb" | "fork" | "node_modules" | "target" | "vendor"
+        );
+    }
+    true
 }

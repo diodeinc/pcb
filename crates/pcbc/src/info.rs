@@ -296,12 +296,6 @@ fn print_human_readable(
         println!("Toolchain: pcb >= {}", pcb_version);
     }
 
-    // Member patterns (if not default)
-    let member_patterns = ws.member_patterns();
-    if !member_patterns.is_empty() && member_patterns != vec!["boards/*".to_string()] {
-        println!("Members: {}", member_patterns.join(", "));
-    }
-
     println!();
 
     // Separate boards from other packages

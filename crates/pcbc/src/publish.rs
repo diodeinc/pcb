@@ -1455,7 +1455,6 @@ mod tests {
     const TEST_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
-members = ["modules/*"]
 "#;
 
     const TEST_MODULE_ZEN: &str = r#"

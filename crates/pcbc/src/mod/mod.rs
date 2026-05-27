@@ -106,6 +106,7 @@ pub fn execute_sync(args: SyncArgs) -> Result<()> {
 
 pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
     let workspace = get_workspace_info(&DefaultFileProvider::new(), cwd)?;
+    cleanup_deprecated_workspace_members(&workspace, args.verbose)?;
     validate_workspace(&workspace)?;
 
     let targets = discover_add_targets(&workspace, cwd)?;
@@ -117,6 +118,44 @@ pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
         is_workspace_root(&workspace, cwd),
         args.offline,
     )
+}
+
+fn cleanup_deprecated_workspace_members(workspace: &WorkspaceInfo, verbose: bool) -> Result<()> {
+    let Some(config) = &workspace.config else {
+        return Ok(());
+    };
+    if config
+        .workspace
+        .as_ref()
+        .is_none_or(|workspace| workspace.members.is_empty())
+    {
+        return Ok(());
+    }
+
+    let pcb_toml_path = workspace.root.join("pcb.toml");
+    let mut config = PcbToml::from_path(&pcb_toml_path)?;
+    let Some(workspace_config) = config.workspace.as_mut() else {
+        return Ok(());
+    };
+    if workspace_config.members.is_empty() {
+        return Ok(());
+    }
+
+    workspace_config.members.clear();
+    let mut rendered = toml::to_string_pretty(&config)?;
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    std::fs::write(&pcb_toml_path, rendered)?;
+
+    if verbose {
+        println!(
+            "pcb: updated {}",
+            workspace_relative_path(&workspace.root, &pcb_toml_path).display()
+        );
+    }
+
+    Ok(())
 }
 
 pub fn execute_mod_download(args: ModDownloadArgs) -> Result<()> {

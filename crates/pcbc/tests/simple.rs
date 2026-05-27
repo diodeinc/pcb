@@ -112,7 +112,6 @@ const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
 name = "simple_workspace"
-members = ["boards"]
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
@@ -139,7 +138,6 @@ const WORKSPACE_NAMESPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
 repository = "github.com/acme/workspace"
-members = ["modules/*"]
 "#;
 
 const REMOTE_IO_MODULE_ZEN: &str = r#"
@@ -261,7 +259,6 @@ Component(
             "pcb.toml",
             r#"[workspace]
 pcb-version = "0.3"
-members = ["boards/*"]
 vendor = ["github.com/mycompany/components/**"]
 "#,
         )
@@ -522,5 +519,35 @@ Thing(name="U1", P1=p1, P2=p2)
     assert!(
         !stderr.contains("Failed to fetch github.com/acme/workspace/modules/Missing"),
         "stderr should not contain remote fetch failure:\n{stderr}"
+    );
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_pcb_sync_removes_deprecated_members() {
+    let mut sandbox = Sandbox::new();
+
+    let result = sandbox
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.3"
+members = ["modules/*"]
+"#,
+        )
+        .run("pcbc", ["sync"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("sync command failed");
+
+    assert!(result.status.success(), "sync should succeed: {result:?}");
+
+    let pcb_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).expect("read pcb.toml");
+    assert!(
+        !pcb_toml.contains("members"),
+        "sync should remove deprecated workspace.members:\n{pcb_toml}"
     );
 }
