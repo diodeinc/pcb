@@ -1,0 +1,7 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+assertion_line: 136
+expression: output
+---
+Error: test.zen:5:9-28 Error loading module `child.zen`
+Error: /child.zen:6:8-18 Duplicate net name: SIG

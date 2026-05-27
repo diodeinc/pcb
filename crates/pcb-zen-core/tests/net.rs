@@ -89,9 +89,8 @@ snapshot_eval!(net_name_property_access, {
     "#
 });
 
-snapshot_eval!(net_duplicate_names_uniq, {
+snapshot_eval!(net_duplicate_names_error, {
     "test.zen" => r#"
-        # Two same-named nets at the same level should uniquify to EN and EN_2
         en1 = Net("EN")
         en2 = Net("EN")
 
@@ -109,23 +108,15 @@ snapshot_eval!(net_duplicate_names_uniq, {
             pins = {"EN": en2},
         )
 
-        print("en1:", en1.name)
-        print("en2:", en2.name)
     "#,
 });
 
-snapshot_eval!(net_multiple_collisions, {
+snapshot_eval!(net_multiple_collisions_error, {
     "test.zen" => r#"
-        # Multiple nets with the same name should all get unique suffixes
         a1 = Net("CLK")
         a2 = Net("CLK")
         a3 = Net("CLK")
         a4 = Net("CLK")
-
-        print("a1:", a1.name)
-        print("a2:", a2.name)
-        print("a3:", a3.name)
-        print("a4:", a4.name)
     "#,
 });
 
@@ -142,14 +133,10 @@ snapshot_eval!(net_no_collision_different_names, {
     "#,
 });
 
-snapshot_eval!(net_collision_in_child_module, {
+snapshot_eval!(net_collision_in_child_module_error, {
     "child.zen" => r#"
-        # Child module with duplicate nets
         sig1 = Net("SIG")
         sig2 = Net("SIG")
-
-        print("child sig1:", sig1.name)
-        print("child sig2:", sig2.name)
     "#,
     "test.zen" => r#"
         Child = Module("child.zen")
@@ -302,7 +289,7 @@ snapshot_eval!(interface_net_template_naming, {
         # Test interface net naming - always includes field name with prefix
         
         # Create a regular net
-        net = Net("VCC")
+        net = Net("REGULAR_VCC")
         
         # Define single-net interface
         Power = interface(
@@ -467,7 +454,7 @@ snapshot_eval!(not_connected_promotes_to_power, {
         Child = Module("child.zen")
 
         # NotConnected should promote to Power
-        nc = NotConnected("NC")
+        nc = NotConnected()
         Child(name = "child", vcc = nc)
 
         print("NotConnected promotes to Power: success")
@@ -497,7 +484,7 @@ snapshot_eval!(not_connected_promotes_to_ground, {
         Child = Module("child.zen")
 
         # NotConnected should promote to Ground
-        nc = NotConnected("NC")
+        nc = NotConnected()
         Child(name = "child", gnd = nc)
 
         print("NotConnected promotes to Ground: success")
@@ -524,7 +511,7 @@ snapshot_eval!(not_connected_promotes_to_net, {
         Child = Module("child.zen")
 
         # NotConnected should promote to Net
-        nc = NotConnected("NC")
+        nc = NotConnected()
         Child(name = "child", sig = nc)
 
         print("NotConnected promotes to Net: success")
@@ -554,7 +541,7 @@ snapshot_eval!(not_connected_promotes_to_custom_type, {
         Child = Module("child.zen")
 
         # NotConnected should promote to any custom net type
-        nc = NotConnected("NC")
+        nc = NotConnected()
         Child(name = "child", gpio = nc)
 
         print("NotConnected promotes to Gpio: success")
@@ -650,7 +637,7 @@ snapshot_eval!(io_default_not_connected_promotes_to_net, {
         load("interfaces.zen", "NotConnected")
 
         # io() with optional=True and default=NotConnected() should promote to Net
-        MH = io(Net, optional = True, default = NotConnected("MH_NC"))
+        MH = io(Net, optional = True, default = NotConnected())
 
         Component(
             name = "R1",

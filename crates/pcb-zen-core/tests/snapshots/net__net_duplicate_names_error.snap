@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen-core/tests/net.rs
+assertion_line: 92
+expression: output
+---
+Error: test.zen:6:7-16 Duplicate net name: EN

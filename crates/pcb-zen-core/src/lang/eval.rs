@@ -1556,6 +1556,19 @@ impl EvalContext {
                         .expect("extra value should be set before freezing")
                         .downcast_ref::<FrozenContextValue>()
                         .expect("extra value should be a FrozenContextValue");
+
+                    for (_id, net_info) in extra.module.introduced_nets() {
+                        if net_info.net_type != "NotConnected"
+                            && net_info.name.is_pending_inference()
+                        {
+                            diagnostics.push(anyhow!("Net is unnamed").into());
+                            return WithDiagnostics {
+                                output: None,
+                                diagnostics: Diagnostics::from(diagnostics),
+                            };
+                        }
+                    }
+
                     let signature = extra
                         .module
                         .signature()
@@ -1645,61 +1658,6 @@ impl EvalContext {
 
                     if !diagnostics.iter().any(Diagnostic::is_error) {
                         diagnostics.extend(ast_style_lints(&ast));
-                    }
-
-                    // Emit warnings for nets renamed due to collisions or unnamed nets
-                    // Skip warnings for NotConnected nets (they're expected to have no name or duplicate names)
-                    for (_id, net_info) in extra.module.introduced_nets() {
-                        // Skip all warnings for NotConnected nets
-                        if net_info.net_type == "NotConnected" {
-                            continue;
-                        }
-
-                        let location = net_info
-                            .call_stack
-                            .frames
-                            .iter()
-                            .rev()
-                            .find_map(|f| f.location.as_ref());
-                        let span = location.map(|loc| loc.resolve_span());
-                        let path = location
-                            .map(|loc| loc.file.filename().to_string())
-                            .unwrap_or_else(|| extra.module.source_path().to_string());
-
-                        if let Some(original) = &net_info.original_name {
-                            if original == "NC" {
-                                continue;
-                            }
-                            let body = format!(
-                                "Net '{}' was renamed to '{}' due to name collision",
-                                original, net_info.final_name
-                            );
-                            diagnostics.push(
-                                crate::Diagnostic::categorized(
-                                    &path,
-                                    &body,
-                                    "net.name_collision",
-                                    EvalSeverity::Warning,
-                                )
-                                .with_span(span)
-                                .with_call_stack(Some(net_info.call_stack.clone())),
-                            );
-                        } else if net_info.auto_named {
-                            let body = format!(
-                                "Net had no explicit name; assigned '{}'",
-                                net_info.final_name
-                            );
-                            diagnostics.push(
-                                crate::Diagnostic::categorized(
-                                    &path,
-                                    &body,
-                                    "net.unnamed",
-                                    EvalSeverity::Warning,
-                                )
-                                .with_span(span)
-                                .with_call_stack(Some(net_info.call_stack.clone())),
-                            );
-                        }
                     }
 
                     let output = EvalOutput {
