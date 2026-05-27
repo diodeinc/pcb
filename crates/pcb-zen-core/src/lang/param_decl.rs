@@ -136,7 +136,7 @@ struct DeferredParam<'v> {
 }
 
 impl<'v> starlark::values::AllocValue<'v> for DeferredParam<'v> {
-    fn alloc_value(self, heap: &'v Heap) -> Value<'v> {
+    fn alloc_value(self, heap: Heap<'v>) -> Value<'v> {
         heap.alloc_complex(self)
     }
 }
@@ -219,7 +219,7 @@ fn none_if_none(value: Value<'_>) -> Option<Value<'_>> {
 fn parse_decl_args<'v>(
     kind: ParamKind,
     args: &Arguments<'v, '_>,
-    heap: &'v Heap,
+    heap: Heap<'v>,
 ) -> starlark::Result<(Option<String>, DeclArgs<'v>)> {
     let function = kind.kind_name();
     let positional_values: Vec<Value<'v>> = args.positions(heap)?.collect();
@@ -738,7 +738,7 @@ fn net_skips_implicit_checks<'v>(value: Value<'v>) -> bool {
 
 fn materialize_net_template<'v>(
     template: Value<'v>,
-    heap: &'v Heap,
+    heap: Heap<'v>,
 ) -> starlark::Result<Value<'v>> {
     if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
         Ok(net.with_declaration_site(

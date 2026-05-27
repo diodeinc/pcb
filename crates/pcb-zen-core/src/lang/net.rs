@@ -17,7 +17,7 @@ use starlark::{
         Trace, Value, ValueLike,
         record::field::FieldGen,
         starlark_value,
-        typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherFactory},
+        typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherDyn, TypeMatcherFactory},
     },
 };
 use starlark_map::sorted_map::SortedMap;
@@ -163,26 +163,35 @@ where
     Self: ProvidesStaticType<'v>,
 {
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new();
-        RES.methods(builtin_net_methods)
+        static RES: MethodsStatic = MethodsStatic::new("Net", builtin_net_methods);
+        Some(RES.methods())
     }
 
-    fn get_attr(&self, attribute: &str, heap: &'v Heap) -> Option<Value<'v>> {
-        self.properties
-            .get(attribute)
-            .map(|v| v.to_value())
-            .or_else(|| {
-                self.is_builtin_optional_attr(attribute)
-                    .then(|| heap.alloc(starlark::values::none::NoneType))
-            })
+    fn get_attr(&self, attribute: &str, heap: Heap<'v>) -> Option<Value<'v>> {
+        match attribute {
+            "NET" => Some(self.with_net_type("Net", heap)),
+            _ => self
+                .properties
+                .get(attribute)
+                .map(|v| v.to_value())
+                .or_else(|| {
+                    self.is_builtin_optional_attr(attribute)
+                        .then(|| heap.alloc(starlark::values::none::NoneType))
+                }),
+        }
     }
 
-    fn has_attr(&self, attribute: &str, _heap: &'v Heap) -> bool {
-        self.properties.contains_key(attribute) || self.is_builtin_optional_attr(attribute)
+    fn has_attr(&self, attribute: &str, _heap: Heap<'v>) -> bool {
+        attribute == "NET"
+            || self.properties.contains_key(attribute)
+            || self.is_builtin_optional_attr(attribute)
     }
 
     fn dir_attr(&self) -> Vec<String> {
         let mut attrs: Vec<String> = self.properties.keys().cloned().collect();
+        if !attrs.iter().any(|existing| existing == "NET") {
+            attrs.push("NET".to_string());
+        }
         for attr in self.builtin_optional_attrs() {
             if !attrs.iter().any(|existing| existing == attr) {
                 attrs.push(attr.to_string());
@@ -244,7 +253,7 @@ impl<V> NetValueGen<V> {
 }
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
-    fn alloc_clone(&self, heap: &'v Heap, net_id: NetId, type_name: String) -> Value<'v> {
+    fn alloc_clone(&self, heap: Heap<'v>, net_id: NetId, type_name: String) -> Value<'v> {
         let properties: SmallMap<String, Value<'v>> = self
             .properties
             .iter()
@@ -378,13 +387,13 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
 
     /// Create a new net with the same fields but a fresh net ID.
     /// This avoids deep copying - properties are shared via Value references.
-    pub fn with_new_id(&self, heap: &'v Heap) -> Value<'v> {
+    pub fn with_new_id(&self, heap: Heap<'v>) -> Value<'v> {
         self.alloc_clone(heap, generate_net_id(), self.type_name.clone())
     }
 
     /// Create a new net with the same ID/name/properties but a different type name.
     /// Used for casting between net types (e.g., Power -> Net).
-    pub fn with_net_type(&self, new_type_name: &str, heap: &'v Heap) -> Value<'v> {
+    pub fn with_net_type(&self, new_type_name: &str, heap: Heap<'v>) -> Value<'v> {
         self.alloc_clone(heap, self.net_id, new_type_name.to_string())
     }
 
@@ -393,7 +402,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         &self,
         declaration_path: impl Into<String>,
         declaration_span: Option<starlark::codemap::ResolvedSpan>,
-        heap: &'v Heap,
+        heap: Heap<'v>,
     ) -> Value<'v> {
         let properties: SmallMap<String, Value<'v>> = self
             .properties
@@ -439,12 +448,6 @@ fn builtin_net_methods(methods: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn r#type<'v>(this: &NetValue<'v>) -> starlark::Result<String> {
         Ok(this.net_type_name().to_string())
-    }
-
-    /// Convert this net to base Net type, preserving all properties
-    #[starlark(attribute)]
-    fn NET<'v>(this: &NetValue<'v>, heap: &'v Heap) -> starlark::Result<Value<'v>> {
-        Ok(this.with_net_type("Net", heap))
     }
 }
 
@@ -756,7 +759,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
 
 fn compile_field_type<'v>(
     field_spec: Value<'v>,
-    heap: &'v Heap,
+    heap: Heap<'v>,
 ) -> anyhow::Result<TypeCompiled<Value<'v>>> {
     if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
         Ok(TypeCompiled::from_ty(field_gen.typ().as_ty(), heap))
@@ -1058,8 +1061,8 @@ where
     }
 
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new();
-        RES.methods(net_type_methods)
+        static RES: MethodsStatic = MethodsStatic::new("NetType", net_type_methods);
+        Some(RES.methods())
     }
 }
 
@@ -1079,11 +1082,13 @@ fn net_type_methods(methods: &mut MethodsBuilder) {
 /// Runtime type matcher for typed nets
 ///
 /// Validates that a NetValue instance has the expected type_name
-#[derive(Hash, Debug, PartialEq, Clone, Allocative)]
+#[derive(Hash, Debug, PartialEq, Clone, Allocative, pagable::Pagable)]
+#[pagable::pagable_typetag(TypeMatcherDyn)]
 struct NetTypeMatcher {
     type_name: String,
 }
 
+#[starlark::type_matcher]
 impl TypeMatcher for NetTypeMatcher {
     fn matches(&self, value: Value) -> bool {
         match NetValue::from_value(value) {

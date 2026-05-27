@@ -582,9 +582,8 @@ impl ModuleConverter {
                 .get(key)
                 .map(|val| {
                     // Try to interpret the value as a boolean
-                    if let Some(s) = val.downcast_frozen_str() {
-                        let s_str = s.to_string();
-                        s_str.to_lowercase() == "true" || s_str == "1"
+                    if let Some(s) = val.to_value().unpack_str() {
+                        s.eq_ignore_ascii_case("true") || s == "1"
                     } else {
                         val.unpack_bool().unwrap_or_default()
                     }
@@ -1266,7 +1265,7 @@ fn add_bool_attribute_if_true(instance: &mut Instance, attr_name: &str, value: b
 
 fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<AttributeValue> {
     // Handle scalars first
-    if let Some(s) = v.downcast_frozen_str() {
+    if let Some(s) = v.to_value().unpack_str() {
         return Ok(AttributeValue::String(s.to_string()));
     } else if let Some(n) = v.unpack_i32() {
         return Ok(AttributeValue::Number(n as f64));

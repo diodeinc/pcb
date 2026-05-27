@@ -132,8 +132,9 @@ impl<V: ValueLifetimeless> std::fmt::Display for ModuleGraphValueGen<V> {
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ModuleGraphValueGen<V>
 where
     Self: ProvidesStaticType<'v>,
+    <Self as ProvidesStaticType<'v>>::StaticType: Send,
 {
-    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "paths" => {
                 let callable = PathsCallableGen {
@@ -225,8 +226,9 @@ impl<V: ValueLifetimeless> std::fmt::Display for PathValueGen<V> {
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for PathValueGen<V>
 where
     Self: ProvidesStaticType<'v>,
+    <Self as ProvidesStaticType<'v>>::StaticType: Send,
 {
-    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "ports" => {
                 Some(heap.alloc(self.ports.iter().map(|v| v.to_value()).collect::<Vec<_>>()))
@@ -253,8 +255,9 @@ where
 impl<'v, V: ValueLike<'v>> PathValueGen<V>
 where
     Self: ProvidesStaticType<'v>,
+    <Self as ProvidesStaticType<'v>>::StaticType: Send,
 {
-    fn create_validation_callable(&self, heap: &'v Heap, operation: PathValidationOp) -> Value<'v> {
+    fn create_validation_callable(&self, heap: Heap<'v>, operation: PathValidationOp) -> Value<'v> {
         let callable = PathValidationCallableGen {
             path_value: heap.alloc_complex(self.clone()).to_value(),
             operation,
@@ -262,7 +265,7 @@ where
         heap.alloc_complex(callable)
     }
 
-    fn create_matches_callable(&self, heap: &'v Heap) -> Value<'v> {
+    fn create_matches_callable(&self, heap: Heap<'v>) -> Value<'v> {
         let callable = PathMatchesCallableGen {
             path_value: heap.alloc_complex(self.clone()).to_value(),
         };

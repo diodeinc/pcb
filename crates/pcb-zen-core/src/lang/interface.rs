@@ -102,7 +102,7 @@ fn clone_net_template<'v>(
     field_name_opt: Option<&str>,
     should_register: bool,
     cloned_nets: &mut HashMap<NetId, Value<'v>>,
-    heap: &'v Heap,
+    heap: Heap<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
     let (source_id, template_name_opt) = if let Some(net_val) =
@@ -200,7 +200,7 @@ fn clone_interface_template<'v>(
     instance: Value<'v>,
     prefix: &InstancePrefix,
     should_register: bool,
-    heap: &'v Heap,
+    heap: Heap<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
     fn clone_inner<'v>(
@@ -208,7 +208,7 @@ fn clone_interface_template<'v>(
         prefix: &InstancePrefix,
         should_register: bool,
         cloned_nets: &mut HashMap<NetId, Value<'v>>,
-        heap: &'v Heap,
+        heap: Heap<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         // Helper to clone a field value based on its type
@@ -218,7 +218,7 @@ fn clone_interface_template<'v>(
             prefix: &InstancePrefix,
             should_register: bool,
             cloned_nets: &mut HashMap<NetId, Value<'v>>,
-            heap: &'v Heap,
+            heap: Heap<'v>,
             eval: &mut Evaluator<'v, '_, '_>,
         ) -> starlark::Result<Value<'v>> {
             match val.get_type() {
@@ -322,7 +322,7 @@ fn create_field_value<'v>(
     provided_value: Option<Value<'v>>,
     prefix: &InstancePrefix,
     should_register: bool,
-    heap: &'v Heap,
+    heap: Heap<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
     if let Some(value) = validate_field(field_name, field_spec, provided_value, eval)? {
@@ -369,7 +369,7 @@ fn create_interface_instance<'v, V>(
     provided_values: SmallMap<String, Value<'v>>,
     prefix: &InstancePrefix,
     should_register: bool,
-    heap: &'v Heap,
+    heap: Heap<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>>
 where
@@ -652,7 +652,7 @@ where
 {
     type Canonical = FrozenInterfaceValue;
 
-    fn get_attr(&self, attr: &str, _heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attr: &str, _heap: Heap<'v>) -> Option<Value<'v>> {
         self.fields.get(attr).map(|v| v.to_value())
     }
 
@@ -840,7 +840,7 @@ pub(crate) fn instantiate_interface<'v>(
     spec: Value<'v>,
     prefix: &InstancePrefix,
     should_register: bool,
-    heap: &'v Heap,
+    heap: Heap<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
     // Handle interface factories first

@@ -55,8 +55,8 @@ starlark_simple_value!(Builtin);
 #[starlark_value(type = "builtin")]
 impl<'v> StarlarkValue<'v> for Builtin {
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new();
-        RES.methods(builtin_methods)
+        static RES: MethodsStatic = MethodsStatic::new("Builtin", builtin_methods);
+        Some(RES.methods())
     }
 }
 
