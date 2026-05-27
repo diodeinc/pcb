@@ -27,8 +27,8 @@ repos:
 
       - id: pcb-fmt-stdlib
         name: pcb fmt stdlib
-        entry: cargo run -p pcb -- fmt stdlib
+        entry: cargo run -p pcb -- fmt lib/std
         language: system
-        files: ^stdlib/.*\.zen$
+        files: ^lib/std/.*\.zen$
         pass_filenames: false
         priority: 1
