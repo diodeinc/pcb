@@ -189,6 +189,9 @@ where
 
     fn dir_attr(&self) -> Vec<String> {
         let mut attrs: Vec<String> = self.properties.keys().cloned().collect();
+        if !attrs.iter().any(|existing| existing == "NET") {
+            attrs.push("NET".to_string());
+        }
         for attr in self.builtin_optional_attrs() {
             if !attrs.iter().any(|existing| existing == attr) {
                 attrs.push(attr.to_string());
