@@ -31,7 +31,7 @@ pub fn execute(args: OpenArgs) -> Result<()> {
 
     crate::file_walker::require_zen_file(&args.file)?;
 
-    // Resolve dependencies before building
+    // Resolve dependencies before evaluating
     let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline, args.locked)?;
 
     let zen_path = &args.file;
@@ -40,11 +40,13 @@ pub fn execute(args: OpenArgs) -> Result<()> {
     // Evaluate the zen file
     let eval_result = pcb_zen::eval(zen_path, resolution_result, Default::default());
 
-    let output = eval_result
-        .output_result()
-        .map_err(|_| anyhow::anyhow!("Build failed for {}", file_name))?;
+    let Some(output) = eval_result.output else {
+        anyhow::bail!("Build failed for {}", file_name);
+    };
 
-    let schematic = output.to_schematic()?;
+    let Some(schematic) = output.to_schematic_with_diagnostics().output else {
+        anyhow::bail!("Build failed for {}", file_name);
+    };
     let layout_dir = utils::resolve_layout_dir(&schematic)?
         .ok_or_else(|| anyhow::anyhow!("No layout path defined in {}", file_name))?;
 
