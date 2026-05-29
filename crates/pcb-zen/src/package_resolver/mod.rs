@@ -14,6 +14,6 @@ pub use pcb_zen_core::resolution::{
 };
 pub use resolve::{
     attach_mvs_v2_resolution_for_packages, build_frozen_resolution_maps,
-    resolve_workspace_dependencies, target_package_urls_for_path,
+    resolve_workspace_dependencies, sync_workspace_vendor, target_package_urls_for_path,
 };
 pub use versions::SpecVersionResolver;
