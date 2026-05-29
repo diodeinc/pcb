@@ -158,6 +158,10 @@ pub fn sync_workspace_vendor(
     path: &Path,
     offline: bool,
 ) -> Result<()> {
+    if offline {
+        return Ok(());
+    }
+
     let package_urls = target_package_urls_or_empty(workspace_info, path);
     if !use_frozen_resolution(workspace_info, &package_urls)
         || !workspace_vendor_enabled(workspace_info)
