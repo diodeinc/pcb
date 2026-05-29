@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb open` now ignores diagnostics when evaluation still produces usable output.
 - `pcb build` now syncs workspace-vendored dependencies before evaluating hydrated MVS v2 projects.
+- V2 workspaces now derive KiCad footprint library names from resolved stdlib dependencies.
 
 ## [0.3.86] - 2026-05-28
 
