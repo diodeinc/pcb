@@ -76,14 +76,7 @@ pub fn resolve_workspace_dependencies(
     offline: bool,
     locked: bool,
 ) -> Result<ResolutionResult> {
-    let package_urls = target_package_urls_for_path(&workspace_info, path)
-        .inspect_err(|err| {
-            log::debug!(
-                "Skipping MVS v2 target discovery for {}: {err:#}",
-                path.display()
-            );
-        })
-        .unwrap_or_default();
+    let package_urls = target_package_urls_or_empty(&workspace_info, path);
     if use_frozen_resolution(&workspace_info, &package_urls) {
         return resolve_frozen(workspace_info, package_urls, offline);
     }
@@ -91,6 +84,17 @@ pub fn resolve_workspace_dependencies(
     let mut res = crate::resolve_dependencies(&mut workspace_info, offline, locked)?;
     attach_mvs_v2_resolution_for_packages(&mut res, package_urls, offline);
     Ok(res)
+}
+
+fn target_package_urls_or_empty(workspace_info: &WorkspaceInfo, path: &Path) -> Vec<String> {
+    target_package_urls_for_path(workspace_info, path)
+        .inspect_err(|err| {
+            log::debug!(
+                "Skipping MVS v2 target discovery for {}: {err:#}",
+                path.display()
+            );
+        })
+        .unwrap_or_default()
 }
 
 fn resolve_frozen(
@@ -120,6 +124,59 @@ fn resolve_frozen(
         resolution_set,
         symbol_parts,
     ))
+}
+
+fn workspace_vendor_enabled(workspace_info: &WorkspaceInfo) -> bool {
+    workspace_info
+        .config
+        .as_ref()
+        .and_then(|config| config.workspace.as_ref())
+        .is_some_and(|workspace| !workspace.vendor.is_empty())
+}
+
+fn workspace_selected_remote(
+    workspace_info: &WorkspaceInfo,
+    offline: bool,
+) -> Result<BTreeSet<(ResolvedDepId, Version)>> {
+    let mut selected = BTreeSet::new();
+    let mut resolver = PackageResolver::new(workspace_info.clone(), offline)?;
+
+    for package_url in workspace_info.packages.keys() {
+        let package_selected = if package_has_indirect(workspace_info, package_url) {
+            selected_remote_from_hydrated_manifest(workspace_info, package_url)?
+        } else {
+            resolver.resolve_package(package_url)?.resolved_remote
+        };
+        selected.extend(package_selected);
+    }
+
+    Ok(selected)
+}
+
+pub fn sync_workspace_vendor(
+    workspace_info: &WorkspaceInfo,
+    path: &Path,
+    offline: bool,
+) -> Result<()> {
+    if offline {
+        return Ok(());
+    }
+
+    let package_urls = target_package_urls_or_empty(workspace_info, path);
+    if !use_frozen_resolution(workspace_info, &package_urls)
+        || !workspace_vendor_enabled(workspace_info)
+    {
+        return Ok(());
+    }
+
+    let selected = workspace_selected_remote(workspace_info, offline)?;
+    let package_roots = materialize_selected(
+        workspace_info,
+        selected.iter().map(|(dep_id, version)| (dep_id, version)),
+        offline,
+    )?;
+    crate::resolve::vendor_package_roots(workspace_info, &package_roots, &[], None, true)?;
+    Ok(())
 }
 
 pub fn attach_mvs_v2_resolution_for_packages(
@@ -257,7 +314,7 @@ impl FrozenResolutionBuilder {
             return Ok(());
         }
 
-        materialize_selected(&self.workspace, &pending, self.offline)?;
+        materialize_selected(&self.workspace, pending.iter(), self.offline)?;
         self.materialized_remote.extend(pending);
         Ok(())
     }

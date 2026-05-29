@@ -1755,7 +1755,7 @@ pub fn build_symbol_parts(
     package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
 ) -> Result<HashMap<String, Vec<ManifestPart>>> {
     let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
-    let package_roots = build_package_roots(workspace_info, package_resolutions);
+    let package_roots = build_package_roots(workspace_info, package_resolutions.values());
     let kicad_entries = workspace_info.kicad_library_entries();
     let mut seen_roots = HashSet::new();
 
@@ -1818,7 +1818,10 @@ pub fn build_frozen_symbol_parts(
     resolution: &FrozenResolutionMap,
 ) -> Result<HashMap<String, Vec<ManifestPart>>> {
     let mut result: HashMap<String, Vec<ManifestPart>> = HashMap::new();
-    let package_roots = resolution.package_roots();
+    let package_roots = build_package_roots(
+        workspace_info,
+        resolution.packages.values().map(|package| &package.deps),
+    );
     let kicad_entries = workspace_info.kicad_library_entries();
     let mut seen_roots = HashSet::new();
 

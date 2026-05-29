@@ -265,12 +265,11 @@ pub fn select_version_for_detail(
 
 /// Build the package coordinate → absolute root directory mapping.
 ///
-/// Workspace packages come from `workspace_info.packages`. External deps
-/// are discovered from `package_resolutions` values (already resolved by the
-/// resolver through patches → vendor → cache).
-pub fn build_package_roots(
+/// Workspace packages come from `workspace_info.packages`. External deps are
+/// discovered from resolved package-local dependency maps.
+pub fn build_package_roots<'a>(
     workspace_info: &WorkspaceInfo,
-    package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
+    dependency_maps: impl IntoIterator<Item = &'a BTreeMap<String, PathBuf>>,
 ) -> BTreeMap<String, PathBuf> {
     let mut roots = BTreeMap::new();
     roots.insert(
@@ -294,7 +293,7 @@ pub fn build_package_roots(
         );
     }
 
-    for deps in package_resolutions.values() {
+    for deps in dependency_maps {
         for (module_path, dep_root) in deps {
             let version = dep_root.file_name().and_then(|f| f.to_str());
             let parent_matches = dep_root
@@ -318,15 +317,22 @@ fn resolution_package_roots(
     package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     mvs_v2_resolution: Option<&FrozenResolutionSet>,
 ) -> BTreeMap<String, PathBuf> {
-    let mut roots = build_package_roots(workspace_info, package_resolutions);
-    if let Some(resolution) = mvs_v2_resolution {
-        roots.extend(
-            resolution
-                .values()
-                .flat_map(FrozenResolutionMap::package_roots),
-        );
-    }
-    roots
+    build_package_roots(
+        workspace_info,
+        package_resolutions
+            .values()
+            .chain(frozen_dependency_maps(mvs_v2_resolution)),
+    )
+}
+
+fn frozen_dependency_maps(
+    resolution: Option<&FrozenResolutionSet>,
+) -> impl Iterator<Item = &BTreeMap<String, PathBuf>> {
+    resolution
+        .into_iter()
+        .flat_map(|resolution_set| resolution_set.values())
+        .flat_map(|resolution| resolution.packages.values())
+        .map(|package| &package.deps)
 }
 
 /// Resolve a single dependency to its path.
@@ -587,38 +593,6 @@ pub struct FrozenResolutionMap {
 }
 
 impl FrozenResolutionMap {
-    pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
-        self.packages
-            .iter()
-            .map(|(root, package)| (package.identity.package_coord(), root.clone()))
-            .collect()
-    }
-
-    pub fn kicad_model_dirs(&self, workspace_info: &WorkspaceInfo) -> BTreeMap<String, PathBuf> {
-        let workspace_cfg = workspace_info.workspace_config();
-        let mut model_dirs = BTreeMap::new();
-
-        for (root, package) in &self.packages {
-            let FrozenPackageIdentity::Remote { dep_id, version } = &package.identity else {
-                continue;
-            };
-            let Some(entry) = effective_kicad_library_for_repo(
-                &workspace_cfg.kicad_library,
-                &dep_id.path,
-                version,
-            ) else {
-                continue;
-            };
-            for (var, model_repo) in &entry.models {
-                if model_repo == &dep_id.path {
-                    model_dirs.insert(var.clone(), root.clone());
-                }
-            }
-        }
-
-        model_dirs
-    }
-
     pub fn package_for_file(&self, file: &Path) -> Option<(&PathBuf, &FrozenPackage)> {
         self.packages
             .iter()
@@ -800,14 +774,6 @@ impl FrozenPackageIdentity {
             Self::Remote { dep_id, version } => {
                 format!("{}@{} = {}", dep_id.path, dep_id.lane, version)
             }
-            Self::Stdlib => STDLIB_MODULE_PATH.to_string(),
-        }
-    }
-
-    pub fn package_coord(&self) -> String {
-        match self {
-            Self::Workspace(url) => url.clone(),
-            Self::Remote { dep_id, version } => format!("{}@{}", dep_id.path, version),
             Self::Stdlib => STDLIB_MODULE_PATH.to_string(),
         }
     }
@@ -1126,7 +1092,12 @@ impl ResolutionResult {
     pub fn kicad_model_dirs(&self) -> BTreeMap<String, PathBuf> {
         let mut model_dirs = BTreeMap::new();
         let workspace_cfg = self.workspace_info.workspace_config();
-        for deps in self.package_resolutions.values() {
+
+        for deps in self
+            .package_resolutions
+            .values()
+            .chain(frozen_dependency_maps(self.mvs_v2_resolution.as_ref()))
+        {
             for (repo, path) in deps {
                 let Some(version_str) = path.file_name().and_then(|name| name.to_str()) else {
                     continue;
@@ -1144,11 +1115,6 @@ impl ResolutionResult {
                         model_dirs.insert(var.clone(), path.clone());
                     }
                 }
-            }
-        }
-        if let Some(resolution_set) = &self.mvs_v2_resolution {
-            for resolution in resolution_set.values() {
-                model_dirs.extend(resolution.kicad_model_dirs(&self.workspace_info));
             }
         }
         model_dirs
@@ -1262,7 +1228,7 @@ mod tests {
     }
 
     #[test]
-    fn package_roots_reflect_attached_mvs_v2_resolution() {
+    fn package_roots_reflect_mvs_v2_dependency_roots() {
         let mut result = ResolutionResult::native(
             WorkspaceInfo {
                 root: PathBuf::from("/workspace"),
@@ -1287,16 +1253,10 @@ mod tests {
             FrozenResolutionMap {
                 selected_remote: BTreeMap::new(),
                 packages: BTreeMap::from([(
-                    dep_root.clone(),
+                    PathBuf::from("/workspace"),
                     FrozenPackage {
-                        identity: FrozenPackageIdentity::Remote {
-                            dep_id: FrozenDepId {
-                                path: "github.com/acme/dep".into(),
-                                lane: "v1".into(),
-                            },
-                            version: Version::parse("1.2.3").unwrap(),
-                        },
-                        deps: BTreeMap::new(),
+                        identity: FrozenPackageIdentity::Workspace("github.com/acme/root".into()),
+                        deps: BTreeMap::from([("github.com/acme/dep".into(), dep_root.clone())]),
                         parts: Vec::new(),
                     },
                 )]),

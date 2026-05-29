@@ -466,7 +466,7 @@ fn run_resolution(
         }
         package_roots.extend(materialize_selected(
             workspace,
-            &resolution.resolved_remote,
+            resolution.resolved_remote.iter(),
             offline,
         )?);
     }
