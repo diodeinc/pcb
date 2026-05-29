@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Batched IPC/Gerber polygon boolean operations for much faster real-board geometry processing.
+
 ### Fixed
 
 - `pcb open` now ignores diagnostics when evaluation still produces usable output.
