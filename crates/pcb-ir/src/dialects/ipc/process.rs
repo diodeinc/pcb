@@ -427,7 +427,7 @@ pub fn resolve_negative_polarity<S: Clone, L: Clone>(doc: &mut GeometryDocument<
 pub fn subtract_layer_cutouts<S: Clone, L: Clone>(doc: &mut GeometryDocument<S, L>) {
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
-        let cutouts = layer_cutout_contours(doc, &layer);
+        let cutouts = layer_cutout_images(doc, &layer);
         if cutouts.is_empty() {
             continue;
         }
@@ -438,7 +438,21 @@ pub fn subtract_layer_cutouts<S: Clone, L: Clone>(doc: &mut GeometryDocument<S, 
                 continue;
             }
 
-            subtract_contours_from_feature(doc, feature_index as usize, &cutouts);
+            let feature_bbox = paths_bbox(doc, feature.path_start, feature.path_count);
+            if feature_bbox.is_empty() {
+                continue;
+            }
+
+            let cutters = cutouts
+                .iter()
+                .filter(|cutout| feature_bbox.intersects(cutout.bbox))
+                .flat_map(|cutout| cutout.contours.iter().cloned())
+                .collect::<Vec<_>>();
+            if cutters.is_empty() {
+                continue;
+            }
+
+            subtract_contours_from_feature(doc, feature_index as usize, &cutters);
         }
     }
 }
@@ -530,14 +544,21 @@ fn path_payloads<S, L>(
         .collect()
 }
 
-fn layer_cutout_contours<S, L>(
+fn layer_cutout_images<S, L>(
     doc: &GeometryDocument<S, L>,
     layer: &GeometryLayer<S, L>,
-) -> Vec<PolygonContour> {
+) -> Vec<common_path::ContourImage> {
     doc.features[layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
         .iter()
         .filter(|feature| feature.bucket == FeatureBucket::Cutout)
-        .flat_map(|feature| feature_filled_contours(doc, feature))
+        .filter_map(|feature| {
+            let contours = feature_filled_contours(doc, feature);
+            if contours.is_empty() {
+                None
+            } else {
+                Some(common_path::ContourImage::new(contours))
+            }
+        })
         .collect()
 }
 
