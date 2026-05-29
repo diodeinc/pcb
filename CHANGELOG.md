@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.87] - 2026-05-29
+
 ### Changed
 
 - Batched IPC/Gerber polygon boolean operations for much faster real-board geometry processing.
@@ -1126,7 +1128,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.86...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.87...HEAD
+[0.3.87]: https://github.com/diodeinc/pcb/compare/v0.3.86...v0.3.87
 [0.3.86]: https://github.com/diodeinc/pcb/compare/v0.3.85...v0.3.86
 [0.3.85]: https://github.com/diodeinc/pcb/compare/v0.3.84...v0.3.85
 [0.3.84]: https://github.com/diodeinc/pcb/compare/v0.3.83...v0.3.84
