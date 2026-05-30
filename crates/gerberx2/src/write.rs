@@ -604,7 +604,8 @@ impl<'a> Writer<'a> {
             self.layer.coordinate_format.y_decimal_digits
         };
         let scale = 10_f64.powi(decimals as i32);
-        format!("{:.0}", value * scale)
+        let formatted = format!("{:.0}", value * scale);
+        if formatted == "-0" { "0".to_string() } else { formatted }
     }
 
     fn write_decimal(&mut self, value: f64) {
@@ -739,5 +740,36 @@ mod tests {
 
         let err = write_layer(&layer).unwrap_err().to_string();
         assert!(err.contains("field separators"), "{err}");
+    }
+
+    #[test]
+    fn coordinate_near_zero_negative_does_not_emit_minus_zero() {
+        // A coordinate whose absolute value is less than 0.5e-6 mm rounds to zero
+        // after scaling by 10^6 (the default decimal count).  Without the "-0"
+        // guard the writer would emit "X-0" or "Y-0", which is invalid Gerber.
+        use pcb_ir::dialects::gerber::Polarity;
+        let layer = GerberLayer {
+            apertures: vec![WriterAperture {
+                code: 10,
+                template: WriterApertureTemplate::Circle {
+                    diameter: 0.1,
+                    hole_diameter: None,
+                },
+                attributes: Vec::new(),
+            }],
+            objects: vec![WriterObject {
+                kind: ObjectKind::Flash {
+                    at: Point { x: -0.0000001, y: 0.0 },
+                    aperture: 10,
+                },
+                polarity: Polarity::Dark,
+                attributes: Vec::new(),
+            }],
+            ..GerberLayer::default()
+        };
+
+        let output = write_layer(&layer).unwrap();
+        assert!(!output.contains("-0"), "output must not contain \"-0\", got:\n{output}");
+        assert!(output.contains("X0"), "near-zero negative X must be serialized as 0, got:\n{output}");
     }
 }
