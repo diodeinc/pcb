@@ -501,6 +501,19 @@ Subsequent builds verify against the lockfile when one is present. `--locked` do
 not create or update `pcb.sum`; if the lockfile is missing, resolution still proceeds
 without writing one.
 
+### pcb list
+
+Lists read-only package dependency information.
+
+```bash
+pcb list -m -u                              # Show compatible updates for direct dependencies
+pcb list -m -versions github.com/acme/foo   # Show published versions for a dependency
+```
+
+`pcb list -m -u` must be run from a package directory. It reports direct remote
+dependencies only and shows the latest stable version in the same compatibility
+lane when one is available. It does not update manifests.
+
 ### pcb update
 
 Updates dependencies to newer versions.
