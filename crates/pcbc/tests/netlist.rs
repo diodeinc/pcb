@@ -194,7 +194,8 @@ fn test_netlist_hierarchical_board_with_positions() {
         .write(
             "boards/HierarchicalBoard.zen",
             HIERARCHICAL_BOARD_WITH_POSITIONS_ZEN,
-        );
+        )
+        .sync();
     let output = snapshot_netlist_positions(
         &mut sandbox,
         "pcbc",
@@ -238,7 +239,8 @@ fn test_netlist_interface_field_positions() {
     sandbox
         .write("pcb.toml", WORKSPACE_PCB_TOML)
         .write("modules/I2cPullups.zen", I2C_MODULE_ZEN)
-        .write("boards/I2cBoard.zen", I2C_HIERARCHICAL_BOARD_ZEN);
+        .write("boards/I2cBoard.zen", I2C_HIERARCHICAL_BOARD_ZEN)
+        .sync();
     let output = snapshot_netlist_positions(
         &mut sandbox,
         "pcbc",

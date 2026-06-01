@@ -76,7 +76,8 @@ fn test_publish_board_simple_workspace() {
             "**/drc.json",
         ])
         .init_git()
-        .commit("Initial commit");
+        .commit("Initial commit")
+        .sync();
 
     // Generate layout files before release (full releases require layout)
     sb.run("pcbc", ["layout", "--no-open", "boards/Test/TB0001.zen"])

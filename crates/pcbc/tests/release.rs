@@ -117,20 +117,6 @@ gnd = Net("GND")
 SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
 "#;
 
-const WORKSPACE_WITH_UNUSED_REMOTE_PCB_TOML: &str = r#"
-[workspace]
-pcb-version = "0.3"
-"#;
-
-const UNUSED_REMOTE_DEP_PCB_TOML: &str = r#"
-[dependencies]
-"github.com/mycompany/components/UnusedRemote" = "1.0.0"
-"#;
-
-const UNUSED_REMOTE_ZEN: &str = r#"
-P1 = io(Net)
-"#;
-
 /// Helper to build args for source-only publish (excludes all manufacturing artifacts)
 fn source_only_args(board_zen: &str) -> Vec<&str> {
     vec![
@@ -188,9 +174,10 @@ fn test_publish_board_source_only() {
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
         .init_git()
-        .commit("Initial commit");
+        .commit("Initial commit")
+        .sync();
 
-    // Build first to generate lockfile (required for release)
+    // Build after hydrating dependency manifests (required for release)
     sb.run("pcbc", ["build", "boards/TestBoard.zen"])
         .run()
         .expect("build failed");
@@ -216,15 +203,16 @@ fn test_publish_board_with_version() {
         .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TB0001.zen", TEST_BOARD_ZEN)
         .init_git()
-        .commit("Initial commit");
+        .commit("Initial commit")
+        .sync();
 
-    // Build first to generate lockfile (required for release)
+    // Build after hydrating dependency manifests (required for release)
     sb.run("pcbc", ["build", "boards/TB0001.zen"])
         .run()
         .expect("build failed");
 
-    // Commit lockfile and tag an existing version
-    sb.commit("Add lockfile").tag("boards/v1.2.3");
+    // Commit the hydrated manifests and tag an existing version
+    sb.commit("Hydrate manifests").tag("boards/v1.2.3");
 
     // Run source-only publish with bump (creates v1.3.0)
     let mut args = source_only_args("boards/TB0001.zen");
@@ -270,9 +258,10 @@ fn test_publish_board_full() {
             "**/drc.json",
         ])
         .init_git()
-        .commit("Initial commit");
+        .commit("Initial commit")
+        .sync();
 
-    // Generate layout files first (full releases require layout and lockfile)
+    // Generate layout files first (full releases require layout)
     sb.run("pcbc", ["layout", "--no-open", "boards/TestBoard.zen"])
         .run()
         .expect("layout generation failed");
@@ -310,9 +299,10 @@ fn test_publish_board_with_file() {
         .write("boards/TB0002.zen", SIMPLE_BOARD_ZEN)
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
         .init_git()
-        .commit("Initial commit");
+        .commit("Initial commit")
+        .sync();
 
-    // Build first to generate lockfile (required for release)
+    // Build after hydrating dependency manifests (required for release)
     sb.run("pcbc", ["build", "boards/TB0002.zen"])
         .run()
         .expect("build failed");
@@ -346,9 +336,10 @@ fn test_publish_board_with_description() {
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
         .init_git()
-        .commit("Initial commit");
+        .commit("Initial commit")
+        .sync();
 
-    // Build first to generate lockfile (required for release)
+    // Build after hydrating dependency manifests (required for release)
     sb.run("pcbc", ["build", "boards/DescBoard.zen"])
         .run()
         .expect("build failed");
@@ -363,47 +354,58 @@ fn test_publish_board_with_description() {
 }
 
 #[test]
-fn test_publish_board_vendors_workspace_remote_deps_for_validation() {
+fn test_publish_board_vendors_remote_deps_for_validation() {
     let mut sb = Sandbox::new();
-    const DATASHEET_CONTENTS: &str = "Simple component datasheet.";
 
+    // A remote component that the published board depends on.
     sb.git_fixture("https://github.com/mycompany/components.git")
-        .write("UnusedRemote/pcb.toml", "[dependencies]\n")
-        .write("UnusedRemote/UnusedRemote.zen", UNUSED_REMOTE_ZEN)
-        .commit("Add unused remote package")
-        .tag("UnusedRemote/v1.0.0", false)
+        .write("Resistor/pcb.toml", "[dependencies]\n")
+        .write("Resistor/Resistor.zen", SIMPLE_COMPONENT)
+        .write("Resistor/test.kicad_mod", TEST_KICAD_MOD)
+        .write("Resistor/datasheet.txt", "Simple component datasheet.")
+        .commit("Add remote component")
+        .tag("Resistor/v1.0.0", false)
         .push_mirror();
 
     sb.cwd("src")
-        .write("pcb.toml", WORKSPACE_WITH_UNUSED_REMOTE_PCB_TOML)
-        .write("boards/pcb.toml", BOARD_PCB_TOML)
-        .write("boards/modules/component.zen", SIMPLE_COMPONENT)
-        .write("boards/modules/test.kicad_mod", TEST_KICAD_MOD)
-        .write("boards/modules/datasheet.txt", DATASHEET_CONTENTS)
-        .write("boards/TestBoard.zen", SIMPLE_BOARD_ZEN)
-        .write("modules/Unused/pcb.toml", UNUSED_REMOTE_DEP_PCB_TOML)
-        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
-        .init_git()
-        .commit("Initial commit");
+        .write("pcb.toml", "[workspace]\npcb-version = \"0.3\"\n")
+        .write(
+            "boards/pcb.toml",
+            r#"[board]
+name = "TestBoard"
 
-    sb.run("pcbc", ["build", "boards/TestBoard.zen"])
-        .run()
-        .expect("build failed");
+[dependencies]
+"github.com/mycompany/components/Resistor" = "1.0.0"
+"#,
+        )
+        .write(
+            "boards/TestBoard.zen",
+            r#"
+Resistor = Module("github.com/mycompany/components/Resistor/Resistor.zen")
+Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Resistor(name = "foo", P1 = Net("VCC_3V3"), P2 = Net("GND"))
+"#,
+        )
+        .init_git()
+        .commit("Initial commit")
+        .sync();
 
     sb.run("pcbc", source_only_args("boards/TestBoard.zen"))
         .run()
-        .expect("publish should succeed with unrelated locked remote dependencies");
+        .expect("publish should succeed");
 
+    // The hydrated remote dependency is vendored into the source bundle so it
+    // validates offline without network or a populated package cache.
     let staging_dir = find_staging_dir(&sb, "TestBoard");
     let vendored_remote = sb
         .root_path()
         .join("src")
         .join(&staging_dir)
-        .join("src/vendor/github.com/mycompany/components/UnusedRemote/1.0.0/pcb.toml");
+        .join("src/vendor/github.com/mycompany/components/Resistor/1.0.0/pcb.toml");
 
     assert!(
         vendored_remote.exists(),
-        "expected unrelated locked remote package to be staged for offline validation"
+        "publish should stage the board's remote dependency for offline validation"
     );
 }
 
@@ -421,9 +423,10 @@ fn test_publish_board_from_board_dir() {
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
         .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
         .init_git()
-        .commit("Initial commit");
+        .commit("Initial commit")
+        .sync();
 
-    // Build first to generate lockfile
+    // Build after hydrating dependency manifests
     sb.run("pcbc", ["build", "boards/TestBoard.zen"])
         .run()
         .expect("build failed");

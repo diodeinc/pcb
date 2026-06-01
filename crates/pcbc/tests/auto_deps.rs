@@ -1,12 +1,11 @@
-//! Snapshot tests for auto dependency detection
+//! Tests for `pcb sync` dependency hydration (the v2 reconcile/auto-dep flow).
 //!
-//! These tests verify that auto-dependency detection properly modifies pcb.toml to add:
-//! - regular package dependencies from URL imports
+//! These tests verify that `pcb sync` reconciles a workspace's source imports and
+//! hydrates its `pcb.toml` manifests with both direct `[dependencies]` and the
+//! lane-qualified `[dependencies.indirect]` closure. Branch dependencies are pinned
+//! to a pseudo-version in the manifest; no `pcb.sum` lockfile is produced.
 //!
 //! Note: @stdlib remains implicit; other aliases require explicit dependencies.
-//!
-//! Most tests verify pcb.toml modification only.
-//! Some tests also cover branch/rev pinning behavior in resolver Phase 1.
 
 #![cfg(not(target_os = "windows"))]
 
@@ -49,14 +48,6 @@ gnd = Net("GND")
 SimpleResistor(name = "R1", value = "1kOhm", P1 = vcc, P2 = gnd)
 "#;
 
-fn lock_dep_lines<'a>(pcb_sum: &'a str, module_path: &str) -> Vec<&'a str> {
-    let prefix = format!("{module_path} ");
-    pcb_sum
-        .lines()
-        .filter(|line| line.starts_with(&prefix))
-        .collect()
-}
-
 fn write_simple_resistor_package(repo: &mut FixtureRepo, module_source: &str) {
     repo.write("SimpleResistor/pcb.toml", "[dependencies]\n")
         .write("SimpleResistor/SimpleResistor.zen", module_source)
@@ -74,10 +65,10 @@ x = kOhm(10)
 "#;
 
     // Run build (will fail due to missing dep, but pcb.toml should be modified)
-    let _output = sandbox
+    sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcbc", ["build", "board.zen"]);
+        .sync();
 
     // Verify pcb.toml was updated with the dependency
     let pcb_toml_content =
@@ -94,10 +85,10 @@ fn test_auto_deps_kicad_symbols() {
 symbol_path = "@kicad-symbols/Device.kicad_sym:R"
 "#;
 
-    let _output = sandbox
+    sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcbc", ["build", "board.zen"]);
+        .sync();
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
@@ -113,10 +104,10 @@ fn test_auto_deps_kicad_footprints() {
 footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
 "#;
 
-    let _output = sandbox
+    sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcbc", ["build", "board.zen"]);
+        .sync();
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
@@ -137,10 +128,10 @@ symbol_path = "@kicad-symbols/Device.kicad_sym:R"
 footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
 "#;
 
-    let _output = sandbox
+    sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcbc", ["build", "board.zen"]);
+        .sync();
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
@@ -156,10 +147,10 @@ fn test_auto_deps_kicad_dynamic_path() {
     let zen_content = r#"footprint_template = "@kicad-footprints/Resistor_SMD.pretty/R_{size}.kicad_mod"
 "#;
 
-    let _output = sandbox
+    sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
-        .snapshot_run("pcbc", ["build", "board.zen"]);
+        .sync();
 
     let pcb_toml_content =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
@@ -186,63 +177,48 @@ pcb-version = "0.3"
 "github.com/mycompany/components/SimpleResistor" = { branch = "main" }
 "#;
 
-    let output = sandbox
+    sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcbc", ["build", "board.zen"]);
+        .sync();
 
+    // `pcb sync` resolves the branch to its HEAD commit and pins the dependency to a
+    // pseudo-version in the hydrated manifest — the v2 replacement for pcb.sum.
     let pinned_toml =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    let pseudo_version = pinned_toml
+        .split_once("SimpleResistor\" = \"")
+        .and_then(|(_, rest)| rest.split('"').next())
+        .expect("hydrated manifest should pin SimpleResistor")
+        .to_string();
     assert!(
-        pinned_toml.contains("branch = \"main\""),
-        "expected branch to remain in pcb.toml"
+        pseudo_version.ends_with(&head_rev),
+        "expected pseudo-version {pseudo_version} to embed the branch HEAD rev {head_rev}"
     );
     assert!(
-        pinned_toml.contains(&format!("rev = \"{}\"", head_rev)),
-        "expected rev to be pinned to fixture HEAD"
+        pseudo_version.starts_with("0.1.1-0."),
+        "expected unpublished branch dep in the 0.1.1 pseudo-version family, got {pseudo_version}"
     );
-
-    let pcb_sum =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
-    assert!(!pcb_sum.is_empty(), "expected pcb.sum to be written");
-
-    let dep_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components/SimpleResistor");
-    assert_eq!(
-        dep_lines.len(),
-        2,
-        "expected content and pcb.toml hashes for the pinned dependency"
+    assert!(
+        !sandbox.default_cwd().join("pcb.sum").exists(),
+        "v2 hydration must not create a pcb.sum lockfile"
     );
 
-    let dep_version = dep_lines[0]
-        .split_whitespace()
-        .nth(1)
-        .expect("dependency content line must include version");
+    let output = sandbox.snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
-        dep_version.ends_with(&head_rev),
-        "expected pseudo-version to be derived from pinned rev"
-    );
-    assert!(
-        dep_version.starts_with("0.1.1-0."),
-        "expected unpublished branch deps to resolve in the 0.1.1 pseudo-version family, got {dep_version}"
-    );
-    assert!(
-        dep_lines[1].contains(&format!("{}/pcb.toml", dep_version)),
-        "expected second lockfile line to be the dependency manifest hash"
+        output.contains("Exit Code: 0"),
+        "expected build to succeed:\n{output}"
     );
 
     let snapshot = sandbox.sanitize_output(&format!(
-        "{}\n\n--- pcb.toml ---\n{}\n\n--- pcb.sum (dep lines) ---\n{}\n",
-        output,
-        pinned_toml.replace(&head_rev, "<HEAD_REV>"),
-        dep_lines
-            .join("\n")
-            .replace(dep_version, "<PSEUDO_VERSION>")
+        "--- pcb.toml ---\n{}\n",
+        pinned_toml.replace(&pseudo_version, "<PSEUDO_VERSION>")
     ));
     assert_snapshot!("auto_deps_branch_dep_pins_rev_and_builds", snapshot);
 }
 
 #[test]
-fn test_build_writes_empty_pcb_sum_for_local_only_workspace() {
+fn test_local_only_workspace_needs_no_lockfile() {
     let mut sandbox = Sandbox::new();
 
     let output = sandbox
@@ -256,20 +232,19 @@ vcc = Net("VCC")
 gnd = Net("GND")
 "#,
         )
+        .sync()
         .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected build to succeed:\n{output}"
     );
 
-    let pcb_sum_path = sandbox.default_cwd().join("pcb.sum");
+    // A workspace with no external dependencies hydrates to nothing and, under MVS
+    // v2, never produces a pcb.sum lockfile.
     assert!(
-        pcb_sum_path.exists(),
-        "expected pcb.sum to be created even when the lockfile is empty"
+        !sandbox.default_cwd().join("pcb.sum").exists(),
+        "local-only v2 workspace should not create a pcb.sum lockfile"
     );
-
-    let pcb_sum = std::fs::read_to_string(pcb_sum_path).expect("expected pcb.sum to be readable");
-    assert_eq!(pcb_sum, "", "expected empty pcb.sum without a blank line");
 }
 
 #[test]
@@ -328,13 +303,13 @@ vcc = Net("VCC")
 gnd = Net("GND")
 "#;
 
-    let _output = sandbox
+    sandbox
         .write("pcb.toml", workspace_toml)
         .write("modules/Lib/pcb.toml", lib_toml)
         .write("modules/Lib/Lib.zen", lib_zen)
         .write("boards/Main/pcb.toml", board_toml)
         .write("boards/Main/Main.zen", board_zen)
-        .snapshot_run("pcbc", ["build", "boards/Main/Main.zen"]);
+        .sync();
 
     // The board's pcb.toml should now contain a dependency on the Lib package.
     let board_pcb_toml =
@@ -450,6 +425,7 @@ P1 = io(Net)
         )
         .write("libs/Helper/pcb.toml", "[dependencies]\n")
         .write("libs/Helper/Helper.zen", "P1 = io(\"P1\", Net)\n")
+        .sync()
         .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
@@ -466,40 +442,48 @@ P1 = io(Net)
 }
 
 #[test]
-fn test_workspace_package_sync_does_not_downgrade_existing_version() {
+fn test_sync_preserves_pinned_dependency_version() {
     let mut sandbox = Sandbox::new();
+
+    // A remote package published at v1.2.3.
+    sandbox
+        .git_fixture("https://github.com/example/components.git")
+        .write("Helper/pcb.toml", "[dependencies]\n")
+        .write("Helper/Helper.zen", "P1 = io(\"P1\", Net)\n")
+        .commit("Add Helper")
+        .tag("Helper/v1.2.3", false)
+        .push_mirror();
 
     let output = sandbox
         .write(
             "pcb.toml",
             r#"[workspace]
 pcb-version = "0.3"
-repository = "github.com/example/demo"
 
 [dependencies]
-"github.com/example/demo/libs/Helper" = "1.2.3"
+"github.com/example/components/Helper" = "1.2.3"
 "#,
         )
         .write(
             "board.zen",
-            r#"Helper = Module("github.com/example/demo/libs/Helper/Helper.zen")
+            r#"Helper = Module("github.com/example/components/Helper/Helper.zen")
 
 Helper(name = "X", P1 = Net("P1"))
 "#,
         )
-        .write("libs/Helper/pcb.toml", "[dependencies]\n")
-        .write("libs/Helper/Helper.zen", "P1 = io(\"P1\", Net)\n")
+        .sync()
         .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
-        "expected root package build to succeed:\n{output}"
+        "expected build to succeed:\n{output}"
     );
 
+    // sync keeps the pinned version as-is rather than re-resolving it.
     let root_pcb_toml =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
     assert!(
-        root_pcb_toml.contains("\"github.com/example/demo/libs/Helper\" = \"1.2.3\""),
-        "expected existing version to be preserved, got:\n{}",
+        root_pcb_toml.contains("\"github.com/example/components/Helper\" = \"1.2.3\""),
+        "expected pinned version to be preserved, got:\n{}",
         root_pcb_toml
     );
 }
@@ -533,6 +517,7 @@ Child(name = "X", P1 = Net("P1"))
 P1 = io(Net)
 "#,
         )
+        .sync()
         .run("pcbc", ["build", "board.zen", "--locked"])
         .stderr_capture()
         .stdout_capture()
@@ -663,34 +648,33 @@ pcb-version = "0.3"
         rev1
     );
 
-    let output = sandbox
+    sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcbc", ["build", "board.zen"]);
+        .sync();
+
+    // The pinned rev is honoured even though `main` has since moved to a broken commit:
+    // sync resolves to rev1's pseudo-version and the build succeeds against it.
+    let pinned_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    let pseudo_version = pinned_toml
+        .split_once("SimpleResistor\" = \"")
+        .and_then(|(_, rest)| rest.split('"').next())
+        .expect("hydrated manifest should pin SimpleResistor")
+        .to_string();
+    assert!(
+        pseudo_version.ends_with(&rev1),
+        "expected pseudo-version {pseudo_version} to use the pinned rev {rev1}"
+    );
+    assert!(
+        !pseudo_version.ends_with(&rev2),
+        "expected pseudo-version to ignore the moved branch head"
+    );
+
+    let output = sandbox.snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected build to succeed:\n{output}"
-    );
-
-    let pcb_sum =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
-    let dep_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components/SimpleResistor");
-    assert_eq!(
-        dep_lines.len(),
-        2,
-        "expected content and pcb.toml hashes for the pinned dependency"
-    );
-    let dep_version = dep_lines[0]
-        .split_whitespace()
-        .nth(1)
-        .expect("dependency content line must include version");
-    assert!(
-        dep_version.ends_with(&rev1),
-        "expected pseudo-version to use pinned rev"
-    );
-    assert!(
-        !dep_version.ends_with(&rev2),
-        "expected pseudo-version to ignore moved branch head"
     );
 }
 
@@ -713,37 +697,32 @@ pcb-version = "0.3"
 "github.com/mycompany/components/SimpleResistor" = { branch = "main" }
 "#;
 
-    let first_output = sandbox
+    sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcbc", ["build", "board.zen"]);
-    assert!(
-        first_output.contains("Exit Code: 0"),
-        "expected first build to succeed:\n{first_output}"
-    );
-
+        .sync();
     let first_toml =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    let first_sum =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
 
-    let second_output = sandbox.snapshot_run("pcbc", ["build", "board.zen"]);
-    assert!(
-        second_output.contains("Exit Code: 0"),
-        "expected second build to succeed:\n{second_output}"
-    );
-
+    // A second sync must leave the hydrated manifest byte-for-byte identical.
+    sandbox.sync();
     let second_toml =
         std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    let second_sum =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
 
-    assert_eq!(first_toml, second_toml, "expected pcb.toml to be stable");
-    assert_eq!(first_sum, second_sum, "expected pcb.sum to be stable");
+    assert_eq!(
+        first_toml, second_toml,
+        "expected hydrated pcb.toml to be stable across syncs"
+    );
+    assert!(
+        !sandbox.default_cwd().join("pcb.sum").exists(),
+        "v2 hydration must not create a pcb.sum lockfile"
+    );
 }
 
+/// `pcb update` is a legacy (pcb.sum) command. Once a workspace is hydrated to MVS
+/// v2 it is rejected and points the user at `pcb add -u`.
 #[test]
-fn test_update_refreshes_branch_rev_and_lockfile() {
+fn test_update_rejected_on_hydrated_v2_workspace() {
     let mut sandbox = Sandbox::new();
 
     let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
@@ -753,148 +732,35 @@ fn test_update_refreshes_branch_rev_and_lockfile() {
         .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD)
         .commit("v1")
         .push_mirror();
-    let rev1 = fixture.rev_parse_head();
+    let rev = fixture.rev_parse_head();
 
     let pcb_toml = format!(
         r#"[workspace]
 pcb-version = "0.3"
 
 [dependencies]
-"github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{}" }}
-"#,
-        rev1
-    );
-
-    // Seed a lockfile entry for rev1 first so update must replace stale pseudo-version.
-    let build_output = sandbox
-        .write("pcb.toml", pcb_toml.clone())
-        .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
-        .snapshot_run("pcbc", ["build", "board.zen"]);
-    assert!(
-        build_output.contains("Exit Code: 0"),
-        "expected initial build to succeed:\n{build_output}"
-    );
-
-    fixture
-        .write(
-            "SimpleResistor/SimpleResistor.zen",
-            SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"22kOhm\""),
-        )
-        .commit("v2")
-        .push_mirror();
-    let rev2 = fixture.rev_parse_head();
-    assert_ne!(rev1, rev2);
-
-    let output = sandbox.snapshot_run("pcbc", ["update"]);
-    assert!(
-        output.contains("Exit Code: 0"),
-        "expected update to succeed:\n{output}"
-    );
-
-    let updated_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert!(
-        updated_toml.contains(&format!("rev = \"{}\"", rev2)),
-        "expected pcb update to refresh rev to latest branch head"
-    );
-    assert!(
-        !updated_toml.contains(&format!("rev = \"{}\"", rev1)),
-        "expected old rev to be replaced"
-    );
-
-    let pcb_sum =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
-    let dep_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components/SimpleResistor");
-    assert_eq!(
-        dep_lines.len(),
-        2,
-        "expected content and pcb.toml hashes for refreshed dependency"
-    );
-    let dep_version = dep_lines[0]
-        .split_whitespace()
-        .nth(1)
-        .expect("dependency content line must include version");
-    assert!(
-        dep_version.ends_with(&rev2),
-        "expected lockfile pseudo-version to use refreshed rev"
-    );
-    assert!(
-        !dep_version.ends_with(&rev1),
-        "expected lockfile pseudo-version to drop old rev"
-    );
-}
-
-#[test]
-fn test_update_filter_refreshes_only_matching_branch_dep() {
-    let mut sandbox = Sandbox::new();
-
-    let mut fixture_a = sandbox.git_fixture("https://github.com/mycompany/components-a.git");
-    write_simple_resistor_package(&mut fixture_a, SIMPLE_RESISTOR_ZEN);
-    fixture_a.commit("a-v1").push_mirror();
-    let a_rev1 = fixture_a.rev_parse_head();
-    write_simple_resistor_package(
-        &mut fixture_a,
-        &SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"11kOhm\""),
-    );
-    fixture_a.commit("a-v2").push_mirror();
-    let a_rev2 = fixture_a.rev_parse_head();
-
-    let mut fixture_b = sandbox.git_fixture("https://github.com/mycompany/components-b.git");
-    write_simple_resistor_package(&mut fixture_b, SIMPLE_RESISTOR_ZEN);
-    fixture_b.commit("b-v1").push_mirror();
-    let b_rev1 = fixture_b.rev_parse_head();
-    write_simple_resistor_package(
-        &mut fixture_b,
-        &SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"12kOhm\""),
-    );
-    fixture_b.commit("b-v2").push_mirror();
-    let b_rev2 = fixture_b.rev_parse_head();
-
-    let pcb_toml = format!(
-        r#"[workspace]
-pcb-version = "0.3"
-
-[dependencies]
-"github.com/mycompany/components-a/SimpleResistor" = {{ branch = "main", rev = "{}" }}
-"github.com/mycompany/components-b/SimpleResistor" = {{ branch = "main", rev = "{}" }}
-"#,
-        a_rev1, b_rev1
+"github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{rev}" }}
+"#
     );
 
     let output = sandbox
         .write("pcb.toml", pcb_toml)
-        .snapshot_run("pcbc", ["update", "-p", "components-a"]);
-    assert!(
-        output.contains("Exit Code: 0"),
-        "expected update -p to succeed:\n{output}"
-    );
+        .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
+        .sync()
+        .snapshot_run("pcbc", ["update"]);
 
-    let updated_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert!(updated_toml.contains(&format!("rev = \"{}\"", a_rev2)));
-    assert!(!updated_toml.contains(&format!("rev = \"{}\"", a_rev1)));
-    assert!(updated_toml.contains(&format!("rev = \"{}\"", b_rev1)));
-    assert!(!updated_toml.contains(&format!("rev = \"{}\"", b_rev2)));
-
-    let pcb_sum =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
-    let a_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components-a/SimpleResistor");
-    let b_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components-b/SimpleResistor");
     assert!(
-        !a_lines.is_empty(),
-        "expected lockfile entries for components-a"
+        !output.contains("Exit Code: 0"),
+        "expected `pcb update` to be rejected on a hydrated workspace:\n{output}"
     );
     assert!(
-        !b_lines.is_empty(),
-        "expected lockfile entries for components-b"
+        output.contains("`pcb update` is for legacy dependency manifests"),
+        "expected legacy-manifest rejection message:\n{output}"
     );
-
-    let a_ver = a_lines[0].split_whitespace().nth(1).unwrap_or_default();
-    let b_ver = b_lines[0].split_whitespace().nth(1).unwrap_or_default();
-    assert!(a_ver.ends_with(&a_rev2));
-    assert!(!a_ver.ends_with(&a_rev1));
-    assert!(b_ver.ends_with(&b_rev1));
-    assert!(!b_ver.ends_with(&b_rev2));
+    assert!(
+        output.contains("Use `pcb add -u`"),
+        "expected the rejection to point at `pcb add -u`:\n{output}"
+    );
 }
 
 #[test]
@@ -919,6 +785,7 @@ pcb-version = "0.3"
     let output = sandbox
         .write("pcb.toml", pcb_toml)
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
+        .sync()
         .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
@@ -932,79 +799,4 @@ pcb-version = "0.3"
         !output.contains("Failed to discover package"),
         "expected covered import to skip remote discovery warning:\n{output}"
     );
-}
-
-#[test]
-fn test_update_branch_refresh_failure_warns_but_succeeds() {
-    let mut sandbox = Sandbox::new();
-
-    let mut good = sandbox.git_fixture("https://github.com/mycompany/components-good.git");
-    write_simple_resistor_package(&mut good, SIMPLE_RESISTOR_ZEN);
-    good.commit("good-v1").push_mirror();
-    let good_rev1 = good.rev_parse_head();
-    write_simple_resistor_package(
-        &mut good,
-        &SIMPLE_RESISTOR_ZEN.replace("default = \"10kOhm\"", "default = \"15kOhm\""),
-    );
-    good.commit("good-v2").push_mirror();
-    let good_rev2 = good.rev_parse_head();
-
-    let mut bad = sandbox.git_fixture("https://github.com/mycompany/components-bad.git");
-    bad.set_default_branch("dev");
-    write_simple_resistor_package(&mut bad, SIMPLE_RESISTOR_ZEN);
-    bad.commit("bad-dev-v1").push_mirror();
-    let bad_rev = bad.rev_parse_head();
-
-    let pcb_toml = format!(
-        r#"[workspace]
-pcb-version = "0.3"
-
-[dependencies]
-"github.com/mycompany/components-good/SimpleResistor" = {{ branch = "main", rev = "{}" }}
-"github.com/mycompany/components-bad/SimpleResistor" = {{ branch = "main", rev = "{}" }}
-"#,
-        good_rev1, bad_rev
-    );
-
-    let output = sandbox
-        .write("pcb.toml", pcb_toml)
-        .snapshot_run("pcbc", ["update"]);
-    assert!(
-        output.contains("Exit Code: 0"),
-        "expected update to succeed despite one refresh failure:\n{output}"
-    );
-    assert!(
-        !output.contains("Warning: Failed to refresh branch 'main'"),
-        "expected branch refresh failures to be ignored:\n{output}"
-    );
-
-    let updated_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert!(updated_toml.contains(&format!("rev = \"{}\"", good_rev2)));
-    assert!(!updated_toml.contains(&format!("rev = \"{}\"", good_rev1)));
-    assert!(updated_toml.contains(&format!("rev = \"{}\"", bad_rev)));
-
-    let pcb_sum =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
-    let good_lines = lock_dep_lines(
-        &pcb_sum,
-        "github.com/mycompany/components-good/SimpleResistor",
-    );
-    let bad_lines = lock_dep_lines(
-        &pcb_sum,
-        "github.com/mycompany/components-bad/SimpleResistor",
-    );
-    assert!(
-        !good_lines.is_empty(),
-        "expected lockfile entries for components-good"
-    );
-    assert!(
-        !bad_lines.is_empty(),
-        "expected lockfile entries for components-bad"
-    );
-
-    let good_ver = good_lines[0].split_whitespace().nth(1).unwrap_or_default();
-    let bad_ver = bad_lines[0].split_whitespace().nth(1).unwrap_or_default();
-    assert!(good_ver.ends_with(&good_rev2));
-    assert!(bad_ver.ends_with(&bad_rev));
 }
