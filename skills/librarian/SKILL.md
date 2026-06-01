@@ -15,6 +15,7 @@ If you are already operating inside a registry checkout or remote librarian sess
 
 - Do not invent datasheet facts, pin mappings, footprints, passive values, limits, sourceability, or application topology. Find evidence or ask.
 - Do not build reusable circuitry on untrusted symbols, footprints, or pin maps. Curate artifacts against the manufacturer datasheet first.
+- Do not author scratch footprints or synthetic 3D models without explicit user approval. A request like “add a footprint/model” means find, verify, and embed trusted vendor/manufacturer/registry/KiCad artifacts; if none exist or they conflict, stop and ask before writing `.kicad_mod` geometry or generating STEP with FreeCAD, CadQuery, build123d, OpenSCAD, scripts, or hand-written data.
 - Do not add new packages under `reference/`; that tree is deprecated. A component's reference design belongs directly in the component package `.zen`. Use `modules/` for higher-level reusable functional blocks and subsystem schematics that are not simply one component's reference design.
 
 ## Intake And Scope
@@ -77,9 +78,11 @@ pcb new component --component-id <ID> --part-number <MPN> --manufacturer <MFR>
 
 Use `pcb new component <DIR>` when importing a downloaded local ECAD directory.
 
-Fetched artifacts are starting points, not authority. Check every symbol, pin, footprint, datasheet link, sourcing field, and 3D model against the manufacturer datasheet. Footprints need an embedded STEP; imported or KiCad-copied footprints often only reference external models, which you must locate or download and embed. If no matching STEP can be found, do not generate a 3D model yourself.
+Fetched artifacts are starting points, not authority. Check every symbol, pin, footprint, datasheet link, sourcing field, and 3D model against the manufacturer datasheet. Footprints need an embedded STEP; imported or KiCad-copied footprints often only reference external models, which you must locate or download and embed.
 
-Embed STEP models with `pcb embed-step`; do not hand-edit model blocks:
+If trusted footprint or STEP artifacts are unavailable, report what you checked and ask before creating scratch geometry. After approved scratch work, label it as scratch/generated, cite the evidence used, render/verify it, and call out the risk in the README and completion report.
+
+Embed real STEP models with `pcb embed-step`; do not hand-edit model blocks:
 
 ```bash
 pcb embed-step <footprint.kicad_mod> <model.step>
