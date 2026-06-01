@@ -511,8 +511,8 @@ pcb list -m -versions github.com/acme/foo   # Show published versions for a depe
 ```
 
 `pcb list -m -u` must be run from a package directory. It reports direct remote
-dependencies only and shows the latest stable version in the same compatibility
-lane when one is available. It does not update manifests.
+dependencies only, showing the latest stable version in the same compatibility
+lane and the latest newer breaking lane when available. It does not update manifests.
 
 ### pcb update
 

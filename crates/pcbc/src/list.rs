@@ -1,13 +1,12 @@
+use crate::pcb_mod;
+use crate::pcb_mod::request::available_versions_for_module;
+use crate::pcb_mod::target::discover_package_target;
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use pcb_zen::WorkspaceInfo;
 use pcb_zen::package_resolver::{PackageResolver, compatibility_lane};
-use pcb_zen::tags;
 use pcb_zen::workspace::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
-use pcb_zen_core::config::split_repo_and_subpath;
 use semver::Version;
-use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]
 #[command(about = "List package dependency information")]
@@ -25,6 +24,12 @@ pub struct ListArgs {
 enum ListCommand {
     Updates,
     Versions(String),
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AvailableUpdates {
+    compatible: Option<Version>,
+    breaking: Option<Version>,
 }
 
 pub fn execute(args: ListArgs) -> Result<()> {
@@ -51,17 +56,17 @@ fn usage() -> &'static str {
 fn list_updates() -> Result<()> {
     let cwd = std::env::current_dir()?;
     let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
-    validate_workspace(&workspace)?;
+    pcb_mod::validate_workspace(&workspace)?;
 
-    let Some(package_url) = discover_package_target(&workspace, &cwd) else {
+    let Some(target) = discover_package_target(&workspace, &cwd) else {
         bail!("`pcb list -m -u` must be run from a package directory.");
     };
 
     let mut resolver = PackageResolver::new(workspace.clone(), false)?;
-    let resolution = resolver.resolve_package(&package_url)?;
+    let resolution = resolver.resolve_package(&target.package_url)?;
 
     for dep_id in &resolution.direct_remote_ids {
-        if is_configured_kicad_repo(&workspace, &dep_id.path) {
+        if pcb_mod::is_configured_kicad_repo(&workspace, &dep_id.path) {
             continue;
         }
 
@@ -71,9 +76,9 @@ fn list_updates() -> Result<()> {
                 dep_id.path
             )
         })?;
-        let latest = latest_stable_compatible_version(&dep_id.path, current)
+        let updates = available_updates(&dep_id.path, current)
             .with_context(|| format!("Failed to check available versions for {}", dep_id.path))?;
-        print_update_line(&dep_id.path, current, latest.as_ref());
+        print_update_line(&dep_id.path, current, &updates);
     }
 
     Ok(())
@@ -100,81 +105,41 @@ fn list_versions(dep: &str) -> Result<()> {
     Ok(())
 }
 
-fn print_update_line(dep: &str, current: &Version, latest: Option<&Version>) {
-    match latest {
-        Some(latest) => println!("{dep} {current} [{latest}]"),
-        None => println!("{dep} {current}"),
+fn print_update_line(dep: &str, current: &Version, updates: &AvailableUpdates) {
+    let mut line = format!("{dep} {current}");
+    if let Some(compatible) = &updates.compatible {
+        line.push_str(&format!(" [{compatible}]"));
     }
+    if let Some(breaking) = &updates.breaking {
+        line.push_str(&format!(" [breaking: {breaking}]"));
+    }
+    println!("{line}");
 }
 
-fn latest_stable_compatible_version(
-    module_path: &str,
-    current: &Version,
-) -> Result<Option<Version>> {
+fn available_updates(module_path: &str, current: &Version) -> Result<AvailableUpdates> {
     let versions = available_versions_for_module(module_path)?;
-    Ok(select_latest_stable_compatible(&versions, current))
+    Ok(select_available_updates(&versions, current))
 }
 
-fn available_versions_for_module(module_path: &str) -> Result<Vec<Version>> {
-    let (repo_url, subpath) = split_repo_and_subpath(module_path);
-    let all_versions = tags::get_all_versions_for_repo(repo_url)?;
-    Ok(all_versions.get(subpath).cloned().unwrap_or_default())
-}
-
-fn select_latest_stable_compatible(versions: &[Version], current: &Version) -> Option<Version> {
+fn select_available_updates(versions: &[Version], current: &Version) -> AvailableUpdates {
     let lane = compatibility_lane(current);
-    versions
+    let mut updates = AvailableUpdates::default();
+
+    for version in versions
         .iter()
-        .filter(|version| {
-            version.pre.is_empty() && **version > *current && compatibility_lane(version) == lane
-        })
-        .max()
-        .cloned()
-}
-
-fn discover_package_target(workspace: &WorkspaceInfo, start_path: &Path) -> Option<String> {
-    let candidate_dir = candidate_dir(start_path);
-    workspace
-        .packages
-        .iter()
-        .filter_map(|(package_url, package)| {
-            let package_dir = canonicalize(&package.dir(&workspace.root));
-            (candidate_dir == package_dir || candidate_dir.starts_with(&package_dir))
-                .then(|| (package_dir.as_os_str().len(), package_url.clone()))
-        })
-        .max_by_key(|(score, _)| *score)
-        .map(|(_, package_url)| package_url)
-}
-
-fn candidate_dir(start_path: &Path) -> PathBuf {
-    let dir = if start_path.is_file() {
-        start_path.parent().unwrap_or(start_path)
-    } else {
-        start_path
-    };
-    canonicalize(dir)
-}
-
-fn canonicalize(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
-fn is_configured_kicad_repo(workspace: &WorkspaceInfo, module_path: &str) -> bool {
-    workspace
-        .kicad_library_entries()
-        .iter()
-        .any(|entry| entry.repo_urls().any(|repo| repo == module_path))
-}
-
-fn validate_workspace(workspace: &WorkspaceInfo) -> Result<()> {
-    if workspace.errors.is_empty() {
-        return Ok(());
+        .filter(|version| version.pre.is_empty() && **version > *current)
+    {
+        let target = if compatibility_lane(version) == lane {
+            &mut updates.compatible
+        } else {
+            &mut updates.breaking
+        };
+        if target.as_ref().is_none_or(|current| version > current) {
+            *target = Some(version.clone());
+        }
     }
 
-    for err in &workspace.errors {
-        eprintln!("{}: {}", err.path.display(), err.error);
-    }
-    bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
+    updates
 }
 
 #[cfg(test)]
@@ -208,7 +173,7 @@ mod tests {
     fn latest_compatible_ignores_prereleases() {
         let versions = vec![v("1.3.0-rc.1"), v("1.2.1"), v("1.2.0")];
         assert_eq!(
-            select_latest_stable_compatible(&versions, &v("1.2.0")),
+            select_available_updates(&versions, &v("1.2.0")).compatible,
             Some(v("1.2.1"))
         );
     }
@@ -217,7 +182,7 @@ mod tests {
     fn latest_compatible_stays_in_major_lane() {
         let versions = vec![v("2.0.0"), v("1.3.0"), v("1.2.1")];
         assert_eq!(
-            select_latest_stable_compatible(&versions, &v("1.2.0")),
+            select_available_updates(&versions, &v("1.2.0")).compatible,
             Some(v("1.3.0"))
         );
     }
@@ -226,8 +191,32 @@ mod tests {
     fn latest_compatible_treats_zero_minor_as_lane() {
         let versions = vec![v("0.4.0"), v("0.3.9"), v("0.3.2")];
         assert_eq!(
-            select_latest_stable_compatible(&versions, &v("0.3.2")),
+            select_available_updates(&versions, &v("0.3.2")).compatible,
             Some(v("0.3.9"))
+        );
+    }
+
+    #[test]
+    fn latest_breaking_uses_newer_different_lane() {
+        let versions = vec![v("0.3.6"), v("0.2.1"), v("0.1.3"), v("0.1.2")];
+        assert_eq!(
+            select_available_updates(&versions, &v("0.1.2")),
+            AvailableUpdates {
+                compatible: Some(v("0.1.3")),
+                breaking: Some(v("0.3.6")),
+            }
+        );
+    }
+
+    #[test]
+    fn latest_breaking_ignores_prereleases() {
+        let versions = vec![v("2.0.0-rc.1"), v("1.3.0"), v("1.2.0")];
+        assert_eq!(
+            select_available_updates(&versions, &v("1.2.0")),
+            AvailableUpdates {
+                compatible: Some(v("1.3.0")),
+                breaking: None,
+            }
         );
     }
 }

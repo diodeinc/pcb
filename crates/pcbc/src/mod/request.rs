@@ -117,7 +117,7 @@ fn resolve_requested_version(
     }
 }
 
-fn available_versions_for_module(module_path: &str) -> Result<Vec<Version>> {
+pub(crate) fn available_versions_for_module(module_path: &str) -> Result<Vec<Version>> {
     let (repo_url, subpath) = split_repo_and_subpath(module_path);
     let all_versions = tags::get_all_versions_for_repo(repo_url)
         .with_context(|| format!("Failed to fetch versions from {}", repo_url))?;
