@@ -1,15 +1,12 @@
-[workspace]
-name = "zener"
-pcb-version = "0.3"
-
 [dependencies]
-"github.com/diodeinc/registry/reference/BMI270x" = "0.6.2"
-"github.com/diodeinc/registry/reference/LM5163Q1" = "0.6.0"
+workspace = "0.3.87"
 
 [dependencies.indirect]
 "github.com/diodeinc/registry/components/BMI270@0.3" = "0.3.2"
 "github.com/diodeinc/registry/components/LM5163QDDARQ1@0.3" = "0.3.2"
 "github.com/diodeinc/registry/components/SRN6045-470M@0.3" = "0.3.2"
+"github.com/diodeinc/registry/reference/BMI270x@0.6" = "0.6.2"
+"github.com/diodeinc/registry/reference/LM5163Q1@0.6" = "0.6.0"
 "gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
 "gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
 "gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"

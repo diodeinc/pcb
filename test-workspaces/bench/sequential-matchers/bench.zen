@@ -1,5 +1,5 @@
 load(
-    "../matchers.zen",
+    "@workspace/matchers.zen",
     "skip",
     "skip_rest",
     "is_resistor",

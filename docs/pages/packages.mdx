@@ -73,19 +73,11 @@ resolution that depends on what versions exist at build time.
 **Selected versions must be immutable.** Once selected, a version's contents cannot
 change. This rules out mutable references like branches or tags that can be moved.
 
-The package system achieves repeatability through:
-
-1. **Minimal Version Selection (MVS)**: Select the *minimum* version that satisfies
-   all constraints. The selected version is determined entirely by the dependency
-   graph, not by what versions happen to exist on remote servers.
-
-2. **Lockfiles (`pcb.sum`)**: Record the exact versions and cryptographic hashes of
-   all dependencies. Subsequent builds verify against the lockfile rather than
-   resolving again.
-
-3. **Content hashing**: Every package version is identified by a BLAKE3 hash of its
-   contents. If the contents change (even with the same version tag), the hash changes,
-   and the build fails verification.
+The package system achieves repeatability with **Minimal Version Selection
+(MVS)** and hydrated `pcb.toml` manifests. MVS selects the minimum version that
+satisfies the dependency graph. `pcb sync` records that selected graph in
+manifests, including pseudo-versions for branch and commit dependencies, so
+locked and offline builds reuse immutable versions.
 
 ### Cooperation
 
@@ -145,11 +137,11 @@ The package system supports **multiple major versions in a single build**. If yo
 dependency graph contains:
 
 ```toml
-# Library X (not yet migrated)
+# Library X
 [dependencies]
 "github.com/diodeinc/stdlib" = "0.3"
 
-# Library Y (migrated to new API)
+# Library Y
 [dependencies]
 "github.com/diodeinc/stdlib" = "1.0"
 ```
@@ -308,38 +300,30 @@ This separation means:
 - Version changes are localized to manifest files
 - The same source file can work with different versions in different contexts
 
-## Lockfiles
+## Hydrated Manifests
 
-The lockfile (`pcb.sum`) records exact versions and cryptographic hashes:
+Workspaces store resolved dependency state in `pcb.toml`. `pcb sync` updates:
 
+- `[dependencies]`: direct dependencies the package imports or explicitly owns.
+- `[dependencies.indirect]`: the tool-managed MVS closure needed to build it.
+
+Example:
+
+```toml
+[dependencies]
+"github.com/diodeinc/registry/modules/Regulator" = "1.0"
+
+[dependencies.indirect]
+"github.com/diodeinc/registry/components/TPS54331@1" = "1.0.2"
+"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"
 ```
-github.com/diodeinc/stdlib v0.3.2 h1:sL5Wum7w69ati4f0ExSvRMgfk8kD8MoW0neD6yS94Yo=
-github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:abc123def456...
-github.com/diodeinc/registry/components/ti/tps54331 v1.0.0 h1:ghi789jkl012...
-github.com/diodeinc/registry/components/ti/tps54331 v1.0.0/pcb.toml h1:mno345pqr678...
-```
 
-Each dependency has two entries:
-- **Content hash**: BLAKE3 hash of the package's canonical tar archive
-- **Manifest hash**: BLAKE3 hash of the package's `pcb.toml` file
+The `@1` and `@9` suffixes are compatibility lanes. They allow multiple
+incompatible versions of the same package path to coexist while keeping the
+selected version exact.
 
-The lockfile provides:
-
-**Reproducibility.** Any build using this lockfile will use exactly these versions
-with exactly these contents, regardless of what versions exist upstream.
-
-**Integrity verification.** If a package's contents change (whether through
-tampering, tag mutation, or repository corruption), the hash won't match and the
-build fails.
-
-**Efficient updates.** When dependencies change, the lockfile is updated to
-reflect the current resolution. Unused entries are automatically removed.
-
-**Commit the lockfile to version control.** This ensures all engineers and CI
-systems use identical dependencies.
-
-Dependencies without a `pcb.toml` manifest (for example, KiCad symbol/footprint/model
-repos) are intentionally excluded from `pcb.sum`.
+Do not edit `[dependencies.indirect]` by hand. Commit hydrated `pcb.toml` files.
 
 ## KiCad-Style Libraries
 
@@ -373,12 +357,14 @@ http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar
 
 `http_mirror` is optional and supports `{repo}`, `{repo_name}`, `{version}`, and `{major}` placeholders.
 
-Dependencies in `.zen` files are still declared in `[dependencies]` as usual:
+KiCad aliases in `.zen` files are reconciled by `pcb sync`. Transitive KiCad
+assets are written to `[dependencies.indirect]` using lane-qualified keys:
 
 ```toml
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+[dependencies.indirect]
+"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"
 ```
 
 Then regular dependency aliases apply (for example `@kicad-symbols`, `@kicad-footprints`).
@@ -448,7 +434,8 @@ When resolved, these become pseudo-versions like:
 ```
 v0.3.15-0.20251120004415-137e2dcabc28…   # commit hash shortened here for readability
 ```
-The lockfile records the full 40-character commit hash.
+`pcb sync` writes the resolved pseudo-version back to the package manifest with
+the full 40-character commit hash.
 
 The base version (0.3.15) is the next patch version after the most recent tag
 reachable from that commit. This ensures pseudo-versions sort correctly: they're
@@ -469,57 +456,71 @@ code. For production builds, prefer tagged releases.
 
 ### pcb migrate
 
-Upgrades a legacy V1 project to the supported V2 format. Updates `pcb.toml` manifests and
-rewrites `.zen` files to use the new import syntax. V1 workspaces are no longer supported by
-`pcb build`, `pcb layout`, `pcb publish`, etc.
+Upgrades an older project to the supported manifest format. Updates `pcb.toml`
+manifests and rewrites `.zen` files to use the current import syntax. Older
+workspace formats are no longer supported by `pcb build`, `pcb layout`,
+`pcb publish`, etc.
 
 ```bash
 pcb migrate                  # Migrate current workspace
 pcb migrate ./path/to/workspace
 ```
 
-The command:
-1. Detects the workspace root and git repository
-2. Converts `pcb.toml` files to V2 format (adds root `[workspace].pcb-version`, removes package-level `[workspace]` sections, converts `[packages]` to `[dependencies]`)
-3. Rewrites `.zen` files (expands aliases to full URLs, fixes paths)
+The command detects the workspace root, converts manifests and import paths, and
+hydrates dependency manifests.
 
 Review changes with `git diff` before committing.
 
+### pcb sync
+
+Reconciles imports and hydrates package manifests. Run this after adding or
+removing imports, changing dependency versions, or migrating an older project.
+
+```bash
+pcb sync                    # Sync packages under the current workspace/package
+pcb sync --offline          # Use only already cached package data
+pcb sync -v                 # Print changed manifests
+```
+
+The command also downloads selected packages into the cache and vendors packages
+matched by `[workspace].vendor`.
+
+### pcb add
+
+Adds or upgrades a direct dependency for the package in the current directory.
+
+```bash
+pcb add github.com/acme/regulators/Buck@1.2.3
+pcb add github.com/acme/regulators/Buck@latest
+pcb add -u                              # Upgrade all direct remote dependencies
+pcb add -u github.com/acme/regulators/Buck
+```
+
+`pcb add` rewrites the direct dependency entry and rehydrates the package's
+dependency closure.
+
 ### pcb build
 
-Builds a board or workspace package. Automatically resolves dependencies,
-fetches packages, and verifies the lockfile.
+Builds a board or workspace package.
 
 ```bash
 pcb build                    # Build default board
 pcb build WV0002.zen         # Build a specific board file
 pcb build --offline          # Build using only cached/vendored packages
+pcb build --locked           # Do not rewrite manifests; recommended for CI
 ```
 
-On first unlocked build, `pcb.sum` is created with resolved versions and content hashes.
-Subsequent builds verify against the lockfile when one is present. `--locked` does
-not create or update `pcb.sum`; if the lockfile is missing, resolution still proceeds
-without writing one.
+`--locked` checks that the hydrated state is sufficient and does not rewrite
+`pcb.toml`.
 
 ### pcb update
 
-Updates dependencies to newer versions.
+`pcb update` is deprecated. Use `pcb add -u` instead.
 
 ```bash
-pcb update                   # Update all dependencies
-pcb update -p diodeinc       # Update deps matching a substring (workspace-wide)
-pcb update path/to/package   # Update only that workspace package
+pcb add -u                   # Upgrade all direct remote dependencies
+pcb add -u github.com/acme/regulators/Buck
 ```
-
-Non-breaking updates (within the same semver family) are applied automatically.
-Breaking updates are shown separately, and you can interactively select which
-ones to apply.
-
-If the `path` argument points at a discovered workspace package directory (a
-directory containing a `pcb.toml` that is not excluded), `pcb update`
-limits updates to that single package's direct dependencies:
-- Auto-applies patch bumps only
-- Prompts only for breaking bumps
 
 ### pcb publish
 

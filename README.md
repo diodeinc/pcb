@@ -116,7 +116,6 @@ A board repository contains one board plus any local modules and components it o
 ```
 MyBoard/
 ├── pcb.toml              # Workspace and board manifest
-├── pcb.sum               # Dependency lock file
 ├── MyBoard.zen           # Board schematic
 ├── layout/               # KiCad layout files
 ├── modules/              # Reusable circuit modules
@@ -156,7 +155,6 @@ A registry repository contains reusable packages and no board:
 ```
 registry/
 ├── pcb.toml              # Workspace manifest
-├── pcb.sum               # Dependency lock file
 ├── components/           # Component packages
 │   └── TPS54331/
 │       ├── TPS54331.zen
@@ -191,10 +189,9 @@ Zener extends [Starlark](https://github.com/bazelbuild/starlark/blob/master/spec
 
 ## Command Reference
 
-All commands accept `.zen` files or directories as arguments. When omitted, they operate on the current directory.
-
 ```bash
 pcb build [PATHS...]              # Build and validate designs
+pcb sync                          # Reconcile imports and hydrate dependency manifests
 pcb layout [PATHS...]             # Generate layout and open in KiCad
 pcb open [PATHS...]               # Open existing layouts in KiCad
 pcb fmt [PATHS...]                # Format .zen files
