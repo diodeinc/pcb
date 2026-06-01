@@ -1,0 +1,12 @@
+---
+source: crates/pcbc/tests/simple.rs
+expression: output
+---
+Command: pcbc build boards/A.zen boards/B.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ A.zen (0 components)
+✓ B.zen (0 components)

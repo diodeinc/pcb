@@ -159,6 +159,18 @@ fn test_pcb_build_simple_board() {
 
 #[test]
 #[cfg(not(target_os = "windows"))]
+fn test_pcb_build_multiple_explicit_files() {
+    let output = Sandbox::new()
+        .write("pcb.toml", PCB_TOML_MIN)
+        .write("boards/A.zen", SIMPLE_BOARD_ZEN)
+        .write("boards/B.zen", SIMPLE_BOARD_ZEN)
+        .sync()
+        .snapshot_run("pcbc", ["build", "boards/A.zen", "boards/B.zen"]);
+    assert_snapshot!("multiple_explicit_files", output);
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
 fn test_pcb_build_simple_workspace() {
     let output = Sandbox::new()
         .write("pcb.toml", SIMPLE_WORKSPACE_PCB_TOML)
