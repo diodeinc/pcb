@@ -3,6 +3,8 @@ use clap::Args;
 use log::debug;
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
+use pcb_zen::workspace::WorkspaceInfoExt;
+use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::resolution::ResolutionResult;
 use pcb_zen_core::{
     DefaultFileProvider, Diagnostics, EvalContext, EvalContextConfig, FileProvider,
@@ -191,9 +193,11 @@ pub fn create_diagnostics_passes(
 #[derive(Args, Debug, Default, Clone)]
 #[command(about = "Build PCB projects from .zen files")]
 pub struct BuildArgs {
-    /// .zen file or directory to build. Defaults to current directory.
+    /// .zen file(s) or directory to build. Defaults to current directory.
+    ///
+    /// When multiple paths are provided, each path must be a .zen file in the same workspace.
     #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]
-    pub path: Option<PathBuf>,
+    pub paths: Vec<PathBuf>,
 
     #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
     pub config: Vec<String>,
@@ -231,6 +235,112 @@ pub struct BuildArgs {
     /// Does not write pcb.toml or pcb.sum. Recommended for CI.
     #[arg(long)]
     pub locked: bool,
+}
+
+enum BuildInput {
+    Discover {
+        path: Option<PathBuf>,
+    },
+    ExplicitFiles {
+        workspace_root: PathBuf,
+        files: Vec<PathBuf>,
+    },
+}
+
+impl BuildInput {
+    fn resolve_path(&self) -> Option<&Path> {
+        match self {
+            Self::Discover { path } => path.as_deref(),
+            Self::ExplicitFiles { workspace_root, .. } => Some(workspace_root.as_path()),
+        }
+    }
+
+    fn collect_zen_files(&self, workspace_info: &pcb_zen::WorkspaceInfo) -> Result<Vec<PathBuf>> {
+        match self {
+            Self::Discover { path } => Ok(file_walker::collect_workspace_zen_files(
+                path.as_deref(),
+                workspace_info,
+            )?),
+            Self::ExplicitFiles { files, .. } => {
+                validate_explicit_files_in_workspace(files, workspace_info)?;
+                Ok(files.clone())
+            }
+        }
+    }
+}
+
+fn select_build_input(paths: &[PathBuf], has_config: bool) -> Result<BuildInput> {
+    if has_config {
+        if paths.len() != 1 {
+            anyhow::bail!("--config requires a single .zen file target");
+        }
+
+        let path = &paths[0];
+        if path.is_dir() {
+            anyhow::bail!("--config requires a single .zen file target");
+        }
+
+        file_walker::require_zen_file(path)?;
+    }
+
+    if paths.len() <= 1 {
+        return Ok(BuildInput::Discover {
+            path: paths.first().cloned(),
+        });
+    }
+
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        file_walker::require_zen_file(path)?;
+        files.push(
+            path.canonicalize()
+                .with_context(|| format!("Failed to canonicalize {}", path.display()))?,
+        );
+    }
+
+    let file_provider = DefaultFileProvider::new();
+    let workspace_root = find_workspace_root(&file_provider, &files[0])
+        .with_context(|| format!("Failed to find workspace for {}", files[0].display()))?;
+
+    if !workspace_root.join("pcb.toml").is_file() {
+        anyhow::bail!("Multiple build paths require a workspace with pcb.toml");
+    }
+
+    for file in files.iter().skip(1) {
+        let root = find_workspace_root(&file_provider, file)
+            .with_context(|| format!("Failed to find workspace for {}", file.display()))?;
+        if root != workspace_root {
+            anyhow::bail!(
+                "All build paths must belong to the same workspace\n  {} is in {}\n  expected {}",
+                file.display(),
+                root.display(),
+                workspace_root.display()
+            );
+        }
+    }
+
+    files.sort();
+    files.dedup();
+
+    Ok(BuildInput::ExplicitFiles {
+        workspace_root,
+        files,
+    })
+}
+
+fn validate_explicit_files_in_workspace(
+    files: &[PathBuf],
+    workspace_info: &pcb_zen::WorkspaceInfo,
+) -> Result<()> {
+    for file in files {
+        if workspace_info.package_url_for_zen(file).is_none() {
+            anyhow::bail!(
+                "Build file is outside the resolved workspace packages: {}",
+                file.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Print success message with component count for a built schematic
@@ -313,27 +423,15 @@ pub fn execute(args: BuildArgs) -> Result<()> {
         );
     }
 
-    if !args.config.is_empty() {
-        let Some(path) = args.path.as_deref() else {
-            anyhow::bail!("--config requires a single .zen file target");
-        };
-
-        if path.is_dir() {
-            anyhow::bail!("--config requires a single .zen file target");
-        }
-
-        file_walker::require_zen_file(path)?;
-    }
-
+    let build_input = select_build_input(&args.paths, !args.config.is_empty())?;
     let config_inputs = parse_config_overrides(&args.config)?;
 
     // Resolve dependencies before finding .zen files
-    let resolution = crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
+    let resolution =
+        crate::resolve::resolve(build_input.resolve_path(), args.offline, args.locked)?;
     let workspace_root = resolution.workspace_info.root.clone();
 
-    // Process .zen files using shared walker - always recursive for directories
-    let zen_files =
-        file_walker::collect_workspace_zen_files(args.path.as_deref(), &resolution.workspace_info)?;
+    let zen_files = build_input.collect_zen_files(&resolution.workspace_info)?;
 
     let eval_state = BuildEvalState::new(resolution);
 
