@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.88] - 2026-06-02
+
 ### Added
 
 - `pcb build` now accepts multiple explicit `.zen` file paths from the same workspace.
@@ -1137,7 +1139,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.87...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.88...HEAD
+[0.3.88]: https://github.com/diodeinc/pcb/compare/v0.3.87...v0.3.88
 [0.3.87]: https://github.com/diodeinc/pcb/compare/v0.3.86...v0.3.87
 [0.3.86]: https://github.com/diodeinc/pcb/compare/v0.3.85...v0.3.86
 [0.3.85]: https://github.com/diodeinc/pcb/compare/v0.3.84...v0.3.85
