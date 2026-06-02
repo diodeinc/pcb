@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Reduced cache-index SQLite connection churn during `pcb sync` to avoid intermittent crashes.
+- Fixed the Nix flake build and exposed both `pcb` and `pcbc`.
 
 ## [0.3.88] - 2026-06-02
 
