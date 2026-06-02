@@ -136,10 +136,9 @@ fn workspace_vendor_enabled(workspace_info: &WorkspaceInfo) -> bool {
 
 fn workspace_selected_remote(
     workspace_info: &WorkspaceInfo,
-    offline: bool,
+    resolver: &mut PackageResolver,
 ) -> Result<BTreeSet<(ResolvedDepId, Version)>> {
     let mut selected = BTreeSet::new();
-    let mut resolver = PackageResolver::new(workspace_info.clone(), offline)?;
 
     for package_url in workspace_info.packages.keys() {
         let package_selected = if package_has_indirect(workspace_info, package_url) {
@@ -169,12 +168,10 @@ pub fn sync_workspace_vendor(
         return Ok(());
     }
 
-    let selected = workspace_selected_remote(workspace_info, offline)?;
-    let package_roots = materialize_selected(
-        workspace_info,
-        selected.iter().map(|(dep_id, version)| (dep_id, version)),
-        offline,
-    )?;
+    let mut resolver = PackageResolver::new(workspace_info.clone(), offline)?;
+    let selected = workspace_selected_remote(workspace_info, &mut resolver)?;
+    let package_roots = resolver
+        .materialize_selected(selected.iter().map(|(dep_id, version)| (dep_id, version)))?;
     crate::resolve::vendor_package_roots(workspace_info, &package_roots, &[], None, true)?;
     Ok(())
 }
@@ -314,7 +311,12 @@ impl FrozenResolutionBuilder {
             return Ok(());
         }
 
-        materialize_selected(&self.workspace, pending.iter(), self.offline)?;
+        materialize_selected(
+            &self.workspace,
+            pending.iter(),
+            self.offline,
+            &self.cache_index,
+        )?;
         self.materialized_remote.extend(pending);
         Ok(())
     }

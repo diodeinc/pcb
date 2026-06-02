@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reduced cache-index SQLite connection churn during `pcb sync` to avoid intermittent crashes.
+
 ## [0.3.88] - 2026-06-02
 
 ### Added

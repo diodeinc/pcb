@@ -1,42 +1,46 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use crate::cache_index::CacheIndex;
 use anyhow::{Context, Result};
 use pcb_zen_core::kicad_library::{KicadRepoMatch, match_kicad_managed_repo};
-use pcb_zen_core::resolution::ModuleLine;
 use semver::Version;
 
 use super::ResolvedDepId;
 
-pub fn materialize_selected<'a>(
+pub(crate) fn materialize_selected<'a>(
     workspace: &crate::WorkspaceInfo,
     selected_remote: impl IntoIterator<Item = (&'a ResolvedDepId, &'a Version)>,
     offline: bool,
+    cache_index: &CacheIndex,
 ) -> Result<BTreeSet<(String, String)>> {
     let mut package_roots = BTreeSet::new();
-    let mut kicad_assets = HashMap::new();
+    let mut kicad_assets = BTreeSet::new();
     let kicad_entries = workspace.kicad_library_entries();
-    let cache_index = CacheIndex::open()?;
 
     for (dep_id, version) in selected_remote {
         package_roots.insert((dep_id.path.clone(), version.to_string()));
-        let line = ModuleLine::new(dep_id.path.clone(), version);
-        if match_kicad_managed_repo(&kicad_entries, &line.path, version)
+        if match_kicad_managed_repo(&kicad_entries, &dep_id.path, version)
             == KicadRepoMatch::SelectorMatched
         {
-            kicad_assets.insert(line, version.clone());
+            kicad_assets.insert((dep_id.path.clone(), version.clone()));
         } else {
             ensure_remote_package_materialized(
                 workspace,
                 &dep_id.path,
                 version,
                 offline,
-                &cache_index,
+                cache_index,
             )?;
         }
     }
 
-    crate::resolve::materialize_asset_deps(workspace, &kicad_assets, offline)?;
+    crate::resolve::materialize_asset_deps(
+        workspace,
+        kicad_assets
+            .iter()
+            .map(|(repo, version)| (repo.as_str(), version)),
+        offline,
+    )?;
     Ok(package_roots)
 }
 

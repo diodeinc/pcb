@@ -9,6 +9,7 @@ use semver::Version;
 
 use super::ResolvedDepId;
 use super::manifest::ManifestLoader;
+use super::materialize::materialize_selected;
 use super::scan::{ScannedDirectDeps, scan_package_direct_deps};
 use super::versions::SpecVersionResolver;
 
@@ -198,6 +199,18 @@ impl PackageResolver {
             return self.resolve_package(package_url);
         }
         self.build_package_resolution(package_url, direct_overrides)
+    }
+
+    pub fn materialize_selected<'a>(
+        &self,
+        selected_remote: impl IntoIterator<Item = (&'a ResolvedDepId, &'a Version)>,
+    ) -> Result<BTreeSet<(String, String)>> {
+        materialize_selected(
+            &self.workspace,
+            selected_remote,
+            self.spec_resolver.is_offline(),
+            &self.cache_index,
+        )
     }
 
     pub fn build_package_graph(&mut self, package_url: &str) -> Result<DepGraph> {

@@ -803,7 +803,13 @@ pub fn resolve_dependencies(
 
     // Phase 2.5: Materialize asset dependencies (KiCad symbol/footprint/model repos).
     log::debug!("Phase 2.5: Materialize asset dependencies");
-    materialize_asset_deps(workspace_info, &selected_kicad_assets, offline)?;
+    materialize_asset_deps(
+        workspace_info,
+        selected_kicad_assets
+            .iter()
+            .map(|(line, version)| (line.path.as_str(), version)),
+        offline,
+    )?;
     log::debug!("Materialized asset dependencies");
 
     // Phase 3: (Removed - sparse checkout and hashing now done in Phase 1)
@@ -1365,11 +1371,16 @@ fn parse_version_string(s: &str) -> Result<Version> {
 }
 
 /// Materialize asset dependencies selected by dependency resolution.
-pub fn materialize_asset_deps(
+pub fn materialize_asset_deps<'a>(
     workspace_info: &WorkspaceInfo,
-    selected_kicad_assets: &HashMap<ModuleLine, Version>,
+    selected_kicad_assets: impl IntoIterator<Item = (&'a str, &'a Version)>,
     offline: bool,
 ) -> Result<()> {
+    let selected_kicad_assets: BTreeSet<(String, Version)> = selected_kicad_assets
+        .into_iter()
+        .map(|(repo, version)| (repo.to_string(), version.clone()))
+        .collect();
+
     if selected_kicad_assets.is_empty() {
         return Ok(());
     }
@@ -1377,14 +1388,14 @@ pub fn materialize_asset_deps(
     let workspace_cache = workspace_info.root.join(".pcb/cache");
     let missing: Vec<(String, Version)> = selected_kicad_assets
         .iter()
-        .filter(|(line, version)| {
+        .filter(|(repo, version)| {
             !workspace_cache
-                .join(&line.path)
+                .join(repo)
                 .join(version.to_string())
                 .join(".pcb-cached")
                 .exists()
         })
-        .map(|(line, version)| (line.path.clone(), version.clone()))
+        .map(|(repo, version)| (repo.clone(), version.clone()))
         .collect();
 
     if offline && !missing.is_empty() {
@@ -1446,17 +1457,17 @@ pub fn materialize_asset_deps(
         spinner.finish();
     }
 
-    materialize_kicad_symbol_manifests(&kicad_entries, selected_kicad_assets, offline)?;
+    materialize_kicad_symbol_manifests(&kicad_entries, &selected_kicad_assets, offline)?;
     Ok(())
 }
 
 fn materialize_kicad_symbol_manifests(
     kicad_entries: &[pcb_zen_core::config::KicadLibraryConfig],
-    selected_kicad_assets: &HashMap<ModuleLine, Version>,
+    selected_kicad_assets: &BTreeSet<(String, Version)>,
     offline: bool,
 ) -> Result<()> {
-    for (line, version) in selected_kicad_assets {
-        ensure_kicad_parts_index(&cache_base(), kicad_entries, &line.path, version, offline)?;
+    for (repo, version) in selected_kicad_assets {
+        ensure_kicad_parts_index(&cache_base(), kicad_entries, repo, version, offline)?;
     }
 
     Ok(())
@@ -2690,17 +2701,34 @@ mod tests {
         let mut workspace = workspace_with_root_config(config);
         workspace.root = temp.path().to_path_buf();
         let version = Version::new(9, 0, 0);
-        let selected_kicad_assets = HashMap::from([(
-            ModuleLine::new(
-                "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-                &version,
-            ),
-            version,
-        )]);
-        let err = materialize_asset_deps(&workspace, &selected_kicad_assets, true)
+        let selected_kicad_assets = [("gitlab.com/kicad/libraries/kicad-symbols", &version)];
+        let err = materialize_asset_deps(&workspace, selected_kicad_assets, true)
             .expect_err("expected offline mode to require cached asset deps");
 
         assert!(err.to_string().contains("not cached"));
+    }
+
+    #[test]
+    fn test_kicad_repos_offline_keeps_same_family_versions() {
+        let temp = TempDir::new().unwrap();
+        let mut workspace = workspace_with_root_config(PcbToml::default());
+        workspace.root = temp.path().to_path_buf();
+
+        let repo = "gitlab.com/kicad/libraries/kicad-symbols";
+        let cached = Version::new(9, 0, 0);
+        let missing = Version::new(9, 0, 1);
+        let cached_dir = workspace
+            .root
+            .join(".pcb/cache")
+            .join(repo)
+            .join(cached.to_string());
+        std::fs::create_dir_all(&cached_dir).unwrap();
+        std::fs::write(cached_dir.join(".pcb-cached"), "").unwrap();
+
+        let err = materialize_asset_deps(&workspace, [(repo, &cached), (repo, &missing)], true)
+            .expect_err("expected uncached same-family asset version to be required");
+
+        assert!(err.to_string().contains("@9.0.1"));
     }
 
     #[test]
