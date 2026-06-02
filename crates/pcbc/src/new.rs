@@ -329,7 +329,6 @@ pub(crate) fn init_board_repo(dir: &Path, board: &str, repository: &str) -> Resu
         .render(&ctx)
         .context("Failed to render pcb.toml template")?;
     std::fs::write(dir.join("pcb.toml"), pcb_toml_content).context("Failed to write pcb.toml")?;
-    std::fs::write(dir.join("pcb.sum"), "").context("Failed to write pcb.sum")?;
 
     let zen_content = env
         .get_template("board_zen")
