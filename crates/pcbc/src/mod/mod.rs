@@ -7,7 +7,7 @@ use clap::Args;
 use pcb_zen::WorkspaceInfo;
 use pcb_zen::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
 use pcb_zen::package_resolver::{
-    DepGraph, DepGraphNode, PackageResolver, build_frozen_resolution_maps, materialize_selected,
+    DepGraph, DepGraphNode, PackageResolver, build_frozen_resolution_maps,
     target_package_urls_for_path, vendor_selected,
 };
 use pcb_zen::resolve::ensure_package_manifest_in_cache;
@@ -449,7 +449,7 @@ fn run_resolution(
 ) -> Result<()> {
     ensure_workspace_cache_symlink(&workspace.root)?;
     let mut resolver = PackageResolver::new(workspace.clone(), offline)?;
-    let mut package_roots = BTreeSet::new();
+    let mut selected_remote = BTreeSet::new();
 
     for target in targets {
         let overrides = direct_overrides
@@ -464,13 +464,14 @@ fn run_resolution(
                 workspace_relative_path(&workspace.root, &target.pcb_toml_path).display()
             );
         }
-        package_roots.extend(materialize_selected(
-            workspace,
-            resolution.resolved_remote.iter(),
-            offline,
-        )?);
+        selected_remote.extend(resolution.resolved_remote);
     }
 
+    let package_roots = resolver.materialize_selected(
+        selected_remote
+            .iter()
+            .map(|(dep_id, version)| (dep_id, version)),
+    )?;
     vendor_selected(workspace, &package_roots, prune_vendor)?;
 
     Ok(())
