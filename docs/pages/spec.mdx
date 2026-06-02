@@ -70,34 +70,12 @@ Remote package URLs don't include version information. Versions are declared sep
 
 ### Dependency Resolution
 
-Dependencies are automatically resolved when you import remote packages. The toolchain discovers dependencies from import paths, resolves versions, downloads packages, and updates `pcb.toml`.
+Remote package URLs do not include versions. Declare versions in `pcb.toml`, then
+run `pcb sync` to reconcile imports and hydrate dependency manifests. `@stdlib`
+is toolchain-managed and implicit.
 
-`@stdlib` is toolchain-managed and implicit.
-
-KiCad symbol/footprint/model linkage is configured by workspace-level `[[workspace.kicad_library]]` entries.
-Dependencies are still declared in `[dependencies]`, and auto-deps can add them from imports.
-
-If `[[workspace.kicad_library]]` is omitted, the toolchain defaults the workspace to two entries:
-- KiCad 9: `version = "9.0.3"` and `models.KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D"`
-- KiCad 10: `version = "10.0.0"` and `models.KICAD10_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D"`
-
-Both default entries use:
-- `symbols = "gitlab.com/kicad/libraries/kicad-symbols"`
-- `footprints = "gitlab.com/kicad/libraries/kicad-footprints"`
-- `parts = "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml"`
-- `http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"`
-
-`parts` and `http_mirror` are optional and support template placeholders:
-- `{repo}`
-- `{repo_name}`
-- `{version}`
-- `{major}`
-
-Version resolution uses Minimal Version Selection (MVS), which selects the *minimum* version satisfying all constraints rather than the newest. This ensures deterministic builds—the same code always resolves to the same versions regardless of what exists upstream.
-
-The lockfile (`pcb.sum`) records exact versions and cryptographic hashes. Commit it to version control for reproducible builds across machines.
-
-See [Packages](/pages/packages) for complete details on version resolution and dependency commands.
+See [Packages](/pages/packages) for version resolution, KiCad library
+configuration, and dependency commands.
 
 ### Project Structure
 
@@ -110,7 +88,6 @@ A board repository contains one board plus any local modules and components it o
 ```
 MainBoard/
 ├── pcb.toml              # Workspace and board manifest
-├── pcb.sum               # Dependency lock file
 ├── MainBoard.zen
 ├── modules/
 │   └── PowerSupply/
@@ -144,7 +121,8 @@ description = "Replace with concise board description."
 - `endpoint`: Optional Diode host suffix used for workspace-scoped app/API URLs. `"diode.computer"` resolves to `app.diode.computer` and `api.diode.computer`.
 - `[board]`: Defines the repository's buildable board with `name`, entry `path`, and a short `description`
 
-V1 workspaces are no longer supported. If you have an older project, run `pcb migrate` to upgrade manifests and import paths.
+Older workspace formats are no longer supported. If you have an older project,
+run `pcb migrate` to upgrade manifests and import paths.
 Only the workspace root `pcb.toml` should contain a `[workspace]` section.
 Board dependencies are also declared in the root manifest's `[dependencies]` table.
 
@@ -155,7 +133,6 @@ A registry repository contains reusable packages but no board at the root. It us
 ```
 registry/
 ├── pcb.toml              # Workspace manifest
-├── pcb.sum               # Dependency lock file
 ├── components/
 │   └── TPS54331/
 │       ├── pcb.toml      # Package manifest

@@ -1,4 +1,4 @@
-//! Tests for `pcb sync` dependency hydration (the v2 reconcile/auto-dep flow).
+//! Tests for `pcb sync` dependency hydration.
 //!
 //! These tests verify that `pcb sync` reconciles a workspace's source imports and
 //! hydrates its `pcb.toml` manifests with both direct `[dependencies]` and the
@@ -11,6 +11,8 @@
 
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::{FixtureRepo, Sandbox};
+use std::ffi::OsStr;
+use std::process::Output;
 
 const PCB_TOML: &str = r#"[workspace]
 pcb-version = "0.3"
@@ -54,6 +56,59 @@ fn write_simple_resistor_package(repo: &mut FixtureRepo, module_source: &str) {
         .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD);
 }
 
+fn seed_simple_resistor_repo(sandbox: &mut Sandbox, commit_message: &str) -> String {
+    let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
+    write_simple_resistor_package(&mut fixture, SIMPLE_RESISTOR_ZEN);
+    fixture.commit(commit_message).push_mirror();
+    fixture.rev_parse_head()
+}
+
+fn read_sandbox_file(sandbox: &Sandbox, rel: &str) -> String {
+    std::fs::read_to_string(sandbox.default_cwd().join(rel)).unwrap_or_default()
+}
+
+fn read_root_manifest(sandbox: &Sandbox) -> String {
+    read_sandbox_file(sandbox, "pcb.toml")
+}
+
+fn command_output(output: &Output) -> String {
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+fn run_pcbc_unchecked<I>(sandbox: &mut Sandbox, args: I) -> Output
+where
+    I: IntoIterator,
+    I::Item: AsRef<OsStr>,
+{
+    sandbox
+        .run("pcbc", args)
+        .stderr_capture()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .expect("pcbc command should execute")
+}
+
+fn hydrated_version(manifest: &str, package_name: &str) -> String {
+    let needle = format!("{package_name}\" = \"");
+    manifest
+        .split_once(&needle)
+        .and_then(|(_, rest)| rest.split('"').next())
+        .expect("hydrated manifest should pin package")
+        .to_string()
+}
+
+fn assert_no_pcb_sum(sandbox: &Sandbox) {
+    assert!(
+        !sandbox.default_cwd().join("pcb.sum").exists(),
+        "dependency hydration must not create a pcb.sum lockfile"
+    );
+}
+
 /// Test that @stdlib does NOT add a dependency to pcb.toml (toolchain provides it implicitly)
 #[test]
 fn test_auto_deps_stdlib() {
@@ -71,9 +126,7 @@ x = kOhm(10)
         .sync();
 
     // Verify pcb.toml was updated with the dependency
-    let pcb_toml_content =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_stdlib_pcb_toml", pcb_toml_content);
+    assert_snapshot!("auto_deps_stdlib_pcb_toml", read_root_manifest(&sandbox));
 }
 
 /// Test that @kicad-symbols alias auto-adds the configured KiCad symbols dependency.
@@ -90,9 +143,10 @@ symbol_path = "@kicad-symbols/Device.kicad_sym:R"
         .write("board.zen", zen_content)
         .sync();
 
-    let pcb_toml_content =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_kicad_symbols_pcb_toml", pcb_toml_content);
+    assert_snapshot!(
+        "auto_deps_kicad_symbols_pcb_toml",
+        read_root_manifest(&sandbox)
+    );
 }
 
 /// Test that @kicad-footprints alias auto-adds the configured KiCad footprints dependency.
@@ -109,9 +163,10 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
         .write("board.zen", zen_content)
         .sync();
 
-    let pcb_toml_content =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_kicad_footprints_pcb_toml", pcb_toml_content);
+    assert_snapshot!(
+        "auto_deps_kicad_footprints_pcb_toml",
+        read_root_manifest(&sandbox)
+    );
 }
 
 /// Test that multiple auto-deps are added together correctly to pcb.toml
@@ -133,9 +188,7 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
         .write("board.zen", zen_content)
         .sync();
 
-    let pcb_toml_content =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_multiple_pcb_toml", pcb_toml_content);
+    assert_snapshot!("auto_deps_multiple_pcb_toml", read_root_manifest(&sandbox));
 }
 
 /// Test that dynamic kicad alias paths still register the base dependency.
@@ -152,23 +205,17 @@ fn test_auto_deps_kicad_dynamic_path() {
         .write("board.zen", zen_content)
         .sync();
 
-    let pcb_toml_content =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    assert_snapshot!("auto_deps_kicad_dynamic_path_pcb_toml", pcb_toml_content);
+    assert_snapshot!(
+        "auto_deps_kicad_dynamic_path_pcb_toml",
+        read_root_manifest(&sandbox)
+    );
 }
 
 #[test]
 fn test_branch_dep_gets_pinned_to_rev_and_builds() {
     let mut sandbox = Sandbox::new();
 
-    let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
-    fixture
-        .write("SimpleResistor/pcb.toml", "[dependencies]\n")
-        .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
-        .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD)
-        .commit("Add SimpleResistor package")
-        .push_mirror();
-    let head_rev = fixture.rev_parse_head();
+    let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package");
 
     let pcb_toml = r#"[workspace]
 pcb-version = "0.3"
@@ -183,14 +230,9 @@ pcb-version = "0.3"
         .sync();
 
     // `pcb sync` resolves the branch to its HEAD commit and pins the dependency to a
-    // pseudo-version in the hydrated manifest — the v2 replacement for pcb.sum.
-    let pinned_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    let pseudo_version = pinned_toml
-        .split_once("SimpleResistor\" = \"")
-        .and_then(|(_, rest)| rest.split('"').next())
-        .expect("hydrated manifest should pin SimpleResistor")
-        .to_string();
+    // pseudo-version in the hydrated manifest.
+    let pinned_toml = read_root_manifest(&sandbox);
+    let pseudo_version = hydrated_version(&pinned_toml, "SimpleResistor");
     assert!(
         pseudo_version.ends_with(&head_rev),
         "expected pseudo-version {pseudo_version} to embed the branch HEAD rev {head_rev}"
@@ -199,10 +241,7 @@ pcb-version = "0.3"
         pseudo_version.starts_with("0.1.1-0."),
         "expected unpublished branch dep in the 0.1.1 pseudo-version family, got {pseudo_version}"
     );
-    assert!(
-        !sandbox.default_cwd().join("pcb.sum").exists(),
-        "v2 hydration must not create a pcb.sum lockfile"
-    );
+    assert_no_pcb_sum(&sandbox);
 
     let output = sandbox.snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
@@ -239,12 +278,9 @@ gnd = Net("GND")
         "expected build to succeed:\n{output}"
     );
 
-    // A workspace with no external dependencies hydrates to nothing and, under MVS
-    // v2, never produces a pcb.sum lockfile.
-    assert!(
-        !sandbox.default_cwd().join("pcb.sum").exists(),
-        "local-only v2 workspace should not create a pcb.sum lockfile"
-    );
+    // A workspace with no external dependencies hydrates to nothing and never
+    // produces a pcb.sum lockfile.
+    assert_no_pcb_sum(&sandbox);
 }
 
 #[test]
@@ -268,11 +304,7 @@ gnd = Net("GND")
         "expected locked build to succeed without pcb.sum:\n{output}"
     );
 
-    let pcb_sum_path = sandbox.default_cwd().join("pcb.sum");
-    assert!(
-        !pcb_sum_path.exists(),
-        "expected locked build without pcb.sum to leave it absent"
-    );
+    assert_no_pcb_sum(&sandbox);
 }
 
 /// Test that a relative path load("../../modules/Lib/Lib.zen") that escapes a board's
@@ -312,9 +344,7 @@ gnd = Net("GND")
         .sync();
 
     // The board's pcb.toml should now contain a dependency on the Lib package.
-    let board_pcb_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("boards/Main/pcb.toml"))
-            .unwrap_or_default();
+    let board_pcb_toml = read_sandbox_file(&sandbox, "boards/Main/pcb.toml");
     assert!(
         board_pcb_toml.contains("modules/Lib"),
         "expected board pcb.toml to contain auto-dep on modules/Lib package, got:\n{}",
@@ -324,74 +354,52 @@ gnd = Net("GND")
 
 #[test]
 fn test_same_package_url_rejected() {
-    for locked in [false, true] {
-        let mut sandbox = Sandbox::new();
+    let mut sandbox = Sandbox::new();
 
-        let cmd = if locked {
-            vec!["build", "boards/Main/Main.zen", "--locked"]
-        } else {
-            vec!["build", "boards/Main/Main.zen"]
-        };
-
-        let result = sandbox
-            .write(
-                "pcb.toml",
-                r#"[workspace]
+    sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
 pcb-version = "0.3"
 repository = "github.com/example/demo"
 "#,
-            )
-            .write(
-                "boards/Main/pcb.toml",
-                r#"[board]
+        )
+        .write(
+            "boards/Main/pcb.toml",
+            r#"[board]
 name = "Main"
 path = "Main.zen"
 "#,
-            )
-            .write(
-                "boards/Main/Main.zen",
-                r#"
+        )
+        .write(
+            "boards/Main/Main.zen",
+            r#"
 Child = Module("github.com/example/demo/boards/Main/src/Child.zen")
 
 Child(name = "X", P1 = Net("P1"))
 "#,
-            )
-            .write(
-                "boards/Main/src/Child.zen",
-                r#"
+        )
+        .write(
+            "boards/Main/src/Child.zen",
+            r#"
 P1 = io(Net)
 "#,
-            )
-            .run("pcbc", cmd)
-            .stderr_capture()
-            .stdout_capture()
-            .unchecked()
-            .run()
-            .expect("same-package URL run should execute");
-
-        let output = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&result.stdout),
-            String::from_utf8_lossy(&result.stderr),
-        );
-        assert!(
-            !result.status.success(),
-            "expected build to fail:\n{output}"
-        );
-        assert!(
-            output.contains("use a relative path instead"),
-            "expected relative-path guidance, got:\n{output}"
         );
 
-        let board_pcb_toml =
-            std::fs::read_to_string(sandbox.default_cwd().join("boards/Main/pcb.toml"))
-                .unwrap_or_default();
-        assert!(
-            !board_pcb_toml.contains("\"github.com/example/demo/boards/Main\""),
-            "expected build to avoid self-dependency, got:\n{}",
-            board_pcb_toml
-        );
-    }
+    let result = run_pcbc_unchecked(&mut sandbox, ["sync"]);
+    let output = command_output(&result);
+    assert!(!result.status.success(), "expected sync to fail:\n{output}");
+    assert!(
+        output.contains("use a relative path instead"),
+        "expected relative-path guidance, got:\n{output}"
+    );
+
+    let board_pcb_toml = read_sandbox_file(&sandbox, "boards/Main/pcb.toml");
+    assert!(
+        !board_pcb_toml.contains("\"github.com/example/demo/boards/Main\""),
+        "expected sync to avoid self-dependency, got:\n{}",
+        board_pcb_toml
+    );
 }
 
 #[test]
@@ -432,8 +440,7 @@ P1 = io(Net)
         "expected root package build to succeed:\n{output}"
     );
 
-    let root_pcb_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    let root_pcb_toml = read_root_manifest(&sandbox);
     assert!(
         root_pcb_toml.contains("\"github.com/example/demo/boards/Child\""),
         "expected root pcb.toml to gain package dependency, got:\n{}",
@@ -479,8 +486,7 @@ Helper(name = "X", P1 = Net("P1"))
     );
 
     // sync keeps the pinned version as-is rather than re-resolving it.
-    let root_pcb_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    let root_pcb_toml = read_root_manifest(&sandbox);
     assert!(
         root_pcb_toml.contains("\"github.com/example/components/Helper\" = \"1.2.3\""),
         "expected pinned version to be preserved, got:\n{}",
@@ -492,7 +498,7 @@ Helper(name = "X", P1 = Net("P1"))
 fn test_root_package_url_to_package_locked() {
     let mut sandbox = Sandbox::new();
 
-    let result = sandbox
+    sandbox
         .write(
             "pcb.toml",
             r#"[workspace]
@@ -517,19 +523,10 @@ Child(name = "X", P1 = Net("P1"))
 P1 = io(Net)
 "#,
         )
-        .sync()
-        .run("pcbc", ["build", "board.zen", "--locked"])
-        .stderr_capture()
-        .stdout_capture()
-        .unchecked()
-        .run()
-        .expect("locked root package run should execute");
+        .sync();
 
-    let output = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr),
-    );
+    let result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--locked"]);
+    let output = command_output(&result);
     assert!(
         result.status.success(),
         "expected locked root package build to succeed:\n{output}"
@@ -537,8 +534,10 @@ P1 = io(Net)
 }
 
 #[test]
-fn test_branch_only_dep_rejected_in_locked_and_offline() {
+fn test_branch_only_dep_hydrates_before_locked_and_offline() {
     let mut sandbox = Sandbox::new();
+
+    let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package");
 
     let pcb_toml = r#"[workspace]
 pcb-version = "0.3"
@@ -547,43 +546,32 @@ pcb-version = "0.3"
 "github.com/mycompany/components/SimpleResistor" = { branch = "main" }
 "#;
 
-    let locked_result = sandbox
+    sandbox
         .write("pcb.toml", pcb_toml)
-        .write("board.zen", "x = 1\n")
-        .run("pcbc", ["build", "board.zen", "--locked"])
-        .stderr_capture()
-        .stdout_capture()
-        .unchecked()
-        .run()
-        .expect("locked run should execute");
-    let locked_output = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&locked_result.stdout),
-        String::from_utf8_lossy(&locked_result.stderr),
-    );
-    assert!(
-        !locked_result.status.success(),
-        "expected locked build to fail"
-    );
-    assert!(locked_output.contains("without rev, which is not reproducible in --locked mode."));
+        .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
+        .sync();
 
-    let offline_result = sandbox
-        .run("pcbc", ["build", "board.zen", "--offline"])
-        .stderr_capture()
-        .stdout_capture()
-        .unchecked()
-        .run()
-        .expect("offline run should execute");
-    let offline_output = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&offline_result.stdout),
-        String::from_utf8_lossy(&offline_result.stderr),
-    );
+    let hydrated_toml = read_root_manifest(&sandbox);
+    let pseudo_version = hydrated_version(&hydrated_toml, "SimpleResistor");
     assert!(
-        !offline_result.status.success(),
-        "expected offline build to fail"
+        pseudo_version.ends_with(&head_rev),
+        "expected pseudo-version {pseudo_version} to embed branch HEAD {head_rev}"
     );
-    assert!(offline_output.contains("without rev, which is not reproducible in --offline mode."));
+    assert_no_pcb_sum(&sandbox);
+
+    let locked_result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--locked"]);
+    let locked_output = command_output(&locked_result);
+    assert!(
+        locked_result.status.success(),
+        "expected locked build to use hydrated pseudo-version:\n{locked_output}"
+    );
+
+    let offline_result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--offline"]);
+    let offline_output = command_output(&offline_result);
+    assert!(
+        offline_result.status.success(),
+        "expected offline build to use cached hydrated pseudo-version:\n{offline_output}"
+    );
 }
 
 #[test]
@@ -593,22 +581,12 @@ fn test_locked_ignores_kicad_entries_in_lockfile() {
     let pcb_sum = r#"gitlab.com/kicad/libraries/kicad-symbols 9.0.3 h1:legacy
 "#;
 
-    let result = sandbox
+    sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", "x = 1\n")
-        .write("pcb.sum", pcb_sum)
-        .run("pcbc", ["build", "board.zen", "--locked"])
-        .stderr_capture()
-        .stdout_capture()
-        .unchecked()
-        .run()
-        .expect("locked run should execute");
-
-    let output = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr),
-    );
+        .write("pcb.sum", pcb_sum);
+    let result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--locked"]);
+    let output = command_output(&result);
     assert!(
         result.status.success(),
         "expected locked build to succeed:\n{output}"
@@ -655,13 +633,8 @@ pcb-version = "0.3"
 
     // The pinned rev is honoured even though `main` has since moved to a broken commit:
     // sync resolves to rev1's pseudo-version and the build succeeds against it.
-    let pinned_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
-    let pseudo_version = pinned_toml
-        .split_once("SimpleResistor\" = \"")
-        .and_then(|(_, rest)| rest.split('"').next())
-        .expect("hydrated manifest should pin SimpleResistor")
-        .to_string();
+    let pinned_toml = read_root_manifest(&sandbox);
+    let pseudo_version = hydrated_version(&pinned_toml, "SimpleResistor");
     assert!(
         pseudo_version.ends_with(&rev1),
         "expected pseudo-version {pseudo_version} to use the pinned rev {rev1}"
@@ -701,28 +674,23 @@ pcb-version = "0.3"
         .write("pcb.toml", pcb_toml)
         .write("board.zen", BOARD_USING_SIMPLE_RESISTOR)
         .sync();
-    let first_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    let first_toml = read_root_manifest(&sandbox);
 
     // A second sync must leave the hydrated manifest byte-for-byte identical.
     sandbox.sync();
-    let second_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).unwrap_or_default();
+    let second_toml = read_root_manifest(&sandbox);
 
     assert_eq!(
         first_toml, second_toml,
         "expected hydrated pcb.toml to be stable across syncs"
     );
-    assert!(
-        !sandbox.default_cwd().join("pcb.sum").exists(),
-        "v2 hydration must not create a pcb.sum lockfile"
-    );
+    assert_no_pcb_sum(&sandbox);
 }
 
-/// `pcb update` is a legacy (pcb.sum) command. Once a workspace is hydrated to MVS
-/// v2 it is rejected and points the user at `pcb add -u`.
+/// `pcb update` is a legacy (pcb.sum) command. Hydrated workspaces are rejected
+/// and pointed at `pcb add -u`.
 #[test]
-fn test_update_rejected_on_hydrated_v2_workspace() {
+fn test_update_rejected_on_hydrated_workspace() {
     let mut sandbox = Sandbox::new();
 
     let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
