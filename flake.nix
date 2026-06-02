@@ -21,15 +21,21 @@
       packageFor =
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            config.problems.handlers =
+              lib.optionalAttrs (lib.hasSuffix "-darwin" system)
+                {
+                  kicad-base.broken = "warn";
+                };
+          };
           craneLib = crane.mkLib pkgs;
 
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               (craneLib.fileset.commonCargoSources ./.)
-              ./crates/pcb/src/fortune.txt
-              ./crates/pcb/src/templates
+              ./crates/pcbc/src/templates
               ./crates/pcb-component-gen/templates
               ./crates/ipc2581/IPC-2581C.xsd
               ./crates/pcb-ipc2581-tools/src/commands/html_template.html.jinja
@@ -46,7 +52,7 @@
             inherit src;
             strictDeps = true;
             doCheck = false;
-            cargoExtraArgs = "-p pcb";
+            cargoExtraArgs = "-p pcb -p pcbc";
 
             nativeBuildInputs = with pkgs; [
               makeWrapper
@@ -54,6 +60,7 @@
             ];
 
             buildInputs = with pkgs; [
+              openssl
               python312
               python312Packages.kicad
             ];
@@ -67,9 +74,11 @@
             inherit cargoArtifacts;
 
             postFixup = ''
-              wrapProgram $out/bin/pcb \
-                --set KICAD_PYTHON_SITE_PACKAGES "${pkgs.python312Packages.kicad}/${pkgs.python312.sitePackages}" \
-                --set KICAD_PYTHON_INTERPRETER "${pkgs.python312}/bin/python"
+              for binary in pcb pcbc; do
+                wrapProgram "$out/bin/$binary" \
+                  --set KICAD_PYTHON_SITE_PACKAGES "${pkgs.python312Packages.kicad}/${pkgs.python312.sitePackages}" \
+                  --set KICAD_PYTHON_INTERPRETER "${pkgs.python312}/bin/python"
+              done
             '';
 
             meta = with lib; {
@@ -87,10 +96,15 @@
         system:
         let
           pcb = packageFor system;
+          pcbc = pcb // {
+            meta = pcb.meta // {
+              mainProgram = "pcbc";
+            };
+          };
         in
         {
           default = pcb;
-          inherit pcb;
+          inherit pcb pcbc;
         }
       );
 
@@ -98,6 +112,7 @@
         system:
         let
           pcb = self.packages.${system}.pcb;
+          pcbc = self.packages.${system}.pcbc;
         in
         {
           default = {
@@ -107,6 +122,10 @@
           pcb = {
             type = "app";
             program = "${pcb}/bin/pcb";
+          };
+          pcbc = {
+            type = "app";
+            program = "${pcbc}/bin/pcbc";
           };
         }
       );
