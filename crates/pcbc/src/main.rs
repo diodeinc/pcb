@@ -25,6 +25,7 @@ mod info;
 mod ipc2581;
 mod kq;
 mod layout;
+mod list;
 mod lsp;
 mod migrate;
 mod mod_cmd;
@@ -89,6 +90,9 @@ enum Commands {
 
     /// Reconcile source imports and hydrate package dependency manifests
     Sync(pcb_mod::SyncArgs),
+
+    /// List package dependency information
+    List(list::ListArgs),
 
     /// Create a new board, package, or component
     New(new::NewArgs),
@@ -212,6 +216,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Mod(args) => mod_cmd::execute(args),
         Commands::Add(args) => pcb_mod::execute_mod_add(args),
         Commands::Sync(args) => pcb_mod::execute_sync(args),
+        Commands::List(args) => list::execute(args),
         Commands::New(args) => new::execute(args),
         Commands::Update(args) => update::execute(args),
         Commands::Bom(args) => bom::execute(args),

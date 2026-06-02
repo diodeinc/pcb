@@ -1,5 +1,5 @@
-mod request;
-mod target;
+pub(crate) mod request;
+pub(crate) mod target;
 mod writeback;
 
 use anyhow::{Result, bail};
@@ -329,7 +329,7 @@ fn is_remote_dependency(
         && !is_configured_kicad_repo(workspace, module_path)
 }
 
-fn is_configured_kicad_repo(workspace: &WorkspaceInfo, module_path: &str) -> bool {
+pub(crate) fn is_configured_kicad_repo(workspace: &WorkspaceInfo, module_path: &str) -> bool {
     workspace
         .kicad_library_entries()
         .iter()
@@ -476,7 +476,7 @@ fn run_resolution(
     Ok(())
 }
 
-fn validate_workspace(workspace: &WorkspaceInfo) -> Result<()> {
+pub(crate) fn validate_workspace(workspace: &WorkspaceInfo) -> Result<()> {
     if workspace.errors.is_empty() {
         return Ok(());
     }

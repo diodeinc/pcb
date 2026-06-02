@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `pcb build` now accepts multiple explicit `.zen` file paths from the same workspace.
+- Added `pcb list -m -u` and `pcb list -m -versions` for read-only V2 dependency update discovery.
 
 ## [0.3.87] - 2026-05-29
 
