@@ -79,6 +79,7 @@ pub struct StackupLayer {
 #[derive(Debug, Clone)]
 pub struct Step {
     pub name: Symbol,
+    pub step_type: Option<StepType>,
     pub datum: Option<Datum>,
     pub profile: Option<Profile>,
     pub step_repeats: Vec<StepRepeat>,
@@ -88,6 +89,14 @@ pub struct Step {
     pub logical_nets: Vec<LogicalNet>,
     pub phy_net_groups: Vec<PhyNetGroup>,
     pub layer_features: Vec<LayerFeature>,
+}
+
+/// IPC-2581 Step type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepType {
+    Board,
+    Pallet,
+    Ic,
 }
 
 /// StepRepeat places one Step within another Step, usually a board within a panel.

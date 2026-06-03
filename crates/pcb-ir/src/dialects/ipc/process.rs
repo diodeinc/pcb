@@ -43,15 +43,8 @@ pub fn prune_unpainted_paths<S, L>(doc: &mut GeometryDocument<S, L>) {
         feature.path_count = path_count;
     }
 
-    for outline_index in 0..doc.board_outlines.len() {
-        let outline = &doc.board_outlines[outline_index];
-        let path_start = outline.path_start;
-        let path_count = outline.path_count;
-        let (path_start, path_count) = prune_unpainted_path_range(doc, path_start, path_count);
-        let outline = &mut doc.board_outlines[outline_index];
-        outline.path_start = path_start;
-        outline.path_count = path_count;
-    }
+    // Board profiles are physical geometry, not painted layer features, and are
+    // intentionally allowed to use unpainted paths.
 }
 
 fn prune_unpainted_path_range<S, L>(
@@ -151,10 +144,43 @@ pub fn normalize_bounds<S, L>(doc: &mut GeometryDocument<S, L>) {
         doc.paths[path_index].bbox = path_bbox(doc, path_index);
     }
 
-    for outline_index in 0..doc.board_outlines.len() {
-        let outline = &doc.board_outlines[outline_index];
-        doc.board_outlines[outline_index].bbox =
-            paths_bbox(doc, outline.path_start, outline.path_count);
+    for cutout_index in 0..doc.profile_cutouts.len() {
+        let path = doc.profile_cutouts[cutout_index].path;
+        doc.profile_cutouts[cutout_index].bbox = doc.paths[path as usize].bbox;
+    }
+
+    for profile_index in 0..doc.profiles.len() {
+        let outer_path = doc.profiles[profile_index].outer_path;
+        doc.profiles[profile_index].bbox = doc.paths[outer_path as usize].bbox;
+    }
+
+    for board_index in 0..doc.boards.len() {
+        let profile_start = doc.boards[board_index].profile_start;
+        let profile_count = doc.boards[board_index].profile_count;
+        doc.boards[board_index].bbox = profiles_range_bbox(doc, profile_start, profile_count);
+    }
+
+    for instance_index in 0..doc.board_instances.len() {
+        let profile_start = doc.board_instances[instance_index].profile_start;
+        let profile_count = doc.board_instances[instance_index].profile_count;
+        doc.board_instances[instance_index].bbox =
+            profiles_range_bbox(doc, profile_start, profile_count);
+    }
+
+    for panel_index in 0..doc.panels.len() {
+        let profile_start = doc.panels[panel_index].profile_start;
+        let profile_count = doc.panels[panel_index].profile_count;
+        let instance_start = doc.panels[panel_index].board_instance_start;
+        let instance_count = doc.panels[panel_index].board_instance_count;
+        let profile_bbox = profiles_range_bbox(doc, profile_start, profile_count);
+        let instance_bbox = board_instances_range_bbox(doc, instance_start, instance_count);
+        doc.panels[panel_index].profile_bbox = profile_bbox;
+        doc.panels[panel_index].instance_bbox = instance_bbox;
+        doc.panels[panel_index].bbox = if !profile_bbox.is_empty() {
+            profile_bbox
+        } else {
+            instance_bbox
+        };
     }
 
     for feature_index in 0..doc.features.len() {
@@ -164,6 +190,20 @@ pub fn normalize_bounds<S, L>(doc: &mut GeometryDocument<S, L>) {
     for layer_index in 0..doc.layers.len() {
         doc.layers[layer_index].bbox = layer_bbox(doc, layer_index);
     }
+}
+
+fn profiles_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, count: u32) -> BBox {
+    doc.profiles[start as usize..(start + count) as usize]
+        .iter()
+        .map(|profile| profile.bbox)
+        .fold(BBox::empty(), BBox::union)
+}
+
+fn board_instances_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, count: u32) -> BBox {
+    doc.board_instances[start as usize..(start + count) as usize]
+        .iter()
+        .map(|instance| instance.bbox)
+        .fold(BBox::empty(), BBox::union)
 }
 
 pub fn compose_feature_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
@@ -698,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn process_prunes_unpainted_feature_and_outline_paths() {
+    fn process_prunes_unpainted_feature_paths_and_preserves_profile_paths() {
         let mut doc = TestDoc::new("test".to_string());
         doc.layers.push(GeometryLayer {
             name: "TOP".to_string(),
@@ -726,25 +766,31 @@ mod tests {
             )
         });
 
-        let painted_outline_path = doc.push_path(
-            GeometryPath::stroked(0.1, LineCap::Round, BBox::empty()),
+        let outer_profile_path = doc.push_path(
+            GeometryPath::unpainted(BBox::empty()),
             [
                 PathCmd::move_to(Point::new(0.0, 0.0)),
                 PathCmd::line_to(Point::new(1.0, 0.0)),
             ],
         );
-        let mut unpainted = GeometryPath::stroked(0.1, LineCap::Round, BBox::empty());
-        unpainted.flags.stroked = false;
-        let _unpainted_outline_path = doc.push_path(
-            unpainted,
+        let cutout_path = doc.push_path(
+            GeometryPath::unpainted(BBox::empty()),
             [
                 PathCmd::move_to(Point::new(1.0, 0.0)),
                 PathCmd::line_to(Point::new(1.0, 1.0)),
             ],
         );
-        doc.board_outlines.push(BoardOutline {
-            path_start: painted_outline_path,
-            path_count: 2,
+        doc.profile_cutouts.push(BoardProfileCutout {
+            path: cutout_path,
+            bbox: BBox::empty(),
+        });
+        doc.profiles.push(BoardProfile {
+            kind: BoardProfileKind::BoardDefinition,
+            source_step_ref: 0,
+            transform: Affine2::identity(),
+            outer_path: outer_profile_path,
+            cutout_start: 0,
+            cutout_count: 1,
             bbox: BBox::empty(),
         });
 
@@ -755,10 +801,10 @@ mod tests {
         assert_eq!(feature_paths.len(), 1);
         assert!(feature_paths[0].flags.filled);
 
-        let outline_paths = &doc.paths[doc.board_outlines[0].path_start as usize
-            ..(doc.board_outlines[0].path_start + doc.board_outlines[0].path_count) as usize];
-        assert_eq!(outline_paths.len(), 1);
-        assert!(outline_paths[0].flags.stroked);
+        assert_eq!(doc.profiles[0].outer_path, outer_profile_path);
+        assert_eq!(doc.profile_cutouts[0].path, cutout_path);
+        assert!(!doc.paths[outer_profile_path as usize].flags.filled);
+        assert!(!doc.paths[outer_profile_path as usize].flags.stroked);
     }
 
     #[test]

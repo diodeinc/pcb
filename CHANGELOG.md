@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Compute IPC-2581 board dimensions from canonical board profile IR, with panel dimensions and repeated board instances represented separately.
 - Reduced cache-index SQLite connection churn during `pcb sync` to avoid intermittent crashes.
 - Fixed the Nix flake build and exposed both `pcb` and `pcbc`.
 

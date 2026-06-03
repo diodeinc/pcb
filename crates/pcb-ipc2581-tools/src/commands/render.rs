@@ -143,7 +143,7 @@ fn common_mask(
     >,
 ) -> pcb_ir::dialects::mask::MaskDocument<ipc2581::types::LayerFunction> {
     let layer = &geometry.layers[0];
-    let geom = pcb_ir::dialects::ipc::lower_layer_with_board_outlines_to_geom(
+    let geom = pcb_ir::dialects::ipc::lower_layer_with_profiles_to_geom(
         geometry,
         0,
         common_layer_role(layer.layer_function),
