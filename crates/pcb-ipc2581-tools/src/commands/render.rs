@@ -31,7 +31,7 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
         RenderTarget::Svg => render_svg(&geometry, options)?,
         RenderTarget::Png => render_png(&geometry, options)?,
         RenderTarget::Terminal => {
-            let mask = common_mask(&geometry);
+            let mask = geometry::render::layer_mask(&geometry, true);
             pcb_ir::dialects::mask::render_all_to_terminal(&mask).map_err(anyhow::Error::msg)?;
         }
     }
@@ -90,8 +90,7 @@ fn render_svg(
     >,
     options: &RenderOptions,
 ) -> Result<()> {
-    let mask = common_mask(geometry);
-    let svg = pcb_ir::dialects::mask::render_svg_all(&mask);
+    let svg = geometry::render::render_layer_svg(geometry, true);
 
     if let Some(output) = &options.output {
         std::fs::write(output, svg)
@@ -115,7 +114,7 @@ fn render_png(
     >,
     options: &RenderOptions,
 ) -> Result<()> {
-    let mask = common_mask(geometry);
+    let mask = geometry::render::layer_mask(geometry, true);
     let png = pcb_ir::dialects::mask::render_png_all(&mask).map_err(anyhow::Error::msg)?;
 
     if let Some(output) = &options.output {
@@ -134,37 +133,4 @@ fn render_png(
     }
 
     Ok(())
-}
-
-fn common_mask(
-    geometry: &pcb_ir::dialects::ipc::GeometryDocument<
-        ipc2581::Symbol,
-        ipc2581::types::LayerFunction,
-    >,
-) -> pcb_ir::dialects::mask::MaskDocument<ipc2581::types::LayerFunction> {
-    let layer = &geometry.layers[0];
-    let geom = pcb_ir::dialects::ipc::lower_layer_with_profiles_to_geom(
-        geometry,
-        0,
-        common_layer_role(layer.layer_function),
-        pcb_ir::common::Side::None,
-    );
-    pcb_ir::dialects::geom::lower_filled_to_mask(&pcb_ir::dialects::geom::outline_strokes(geom))
-}
-
-fn common_layer_role(function: ipc2581::types::LayerFunction) -> pcb_ir::common::LayerRole {
-    use ipc2581::types::LayerFunction;
-    match function {
-        LayerFunction::Conductor
-        | LayerFunction::CondFilm
-        | LayerFunction::CondFoil
-        | LayerFunction::Plane
-        | LayerFunction::Signal
-        | LayerFunction::Mixed => pcb_ir::common::LayerRole::Copper,
-        LayerFunction::Solderpaste | LayerFunction::Pastemask => pcb_ir::common::LayerRole::Paste,
-        LayerFunction::Soldermask => pcb_ir::common::LayerRole::Soldermask,
-        LayerFunction::Silkscreen | LayerFunction::Legend => pcb_ir::common::LayerRole::Legend,
-        LayerFunction::Rout | LayerFunction::BoardOutline => pcb_ir::common::LayerRole::Profile,
-        _ => pcb_ir::common::LayerRole::Other,
-    }
 }

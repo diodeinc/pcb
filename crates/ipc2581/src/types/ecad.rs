@@ -457,6 +457,91 @@ pub enum LayerFunction {
     Other,
 }
 
+impl LayerFunction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Conductor => "CONDUCTOR",
+            Self::CondFilm => "CONDFILM",
+            Self::CondFoil => "CONDFOIL",
+            Self::Plane => "PLANE",
+            Self::Signal => "SIGNAL",
+            Self::Mixed => "MIXED",
+            Self::CoatingCond => "COATINGCOND",
+            Self::CoatingNonCond => "COATINGNONCOND",
+            Self::Soldermask => "SOLDERMASK",
+            Self::Solderpaste => "SOLDERPASTE",
+            Self::Pastemask => "PASTEMASK",
+            Self::Silkscreen => "SILKSCREEN",
+            Self::Legend => "LEGEND",
+            Self::Drill => "DRILL",
+            Self::Rout => "ROUT",
+            Self::VCut => "V_CUT",
+            Self::Score => "SCORE",
+            Self::EdgeChamfer => "EDGE_CHAMFER",
+            Self::EdgePlating => "EDGE_PLATING",
+            Self::DielBase => "DIELBASE",
+            Self::DielCore => "DIELCORE",
+            Self::DielPreg => "DIELPREG",
+            Self::DielAdhv => "DIELADHV",
+            Self::DielBondPly => "DIELBONDPLY",
+            Self::DielCoverlay => "DIELCOVERLAY",
+            Self::ComponentTop => "COMPONENT_TOP",
+            Self::ComponentBottom => "COMPONENT_BOTTOM",
+            Self::ComponentEmbedded => "COMPONENT_EMBEDDED",
+            Self::ComponentFormed => "COMPONENT_FORMED",
+            Self::Assembly => "ASSEMBLY",
+            Self::ConductiveAdhesive => "CONDUCTIVE_ADHESIVE",
+            Self::Glue => "GLUE",
+            Self::HoleFill => "HOLEFILL",
+            Self::SolderBump => "SOLDERBUMP",
+            Self::Stiffener => "STIFFENER",
+            Self::Capacitive => "CAPACITIVE",
+            Self::Resistive => "RESISTIVE",
+            Self::Document => "DOCUMENT",
+            Self::Graphic => "GRAPHIC",
+            Self::BoardOutline => "BOARD_OUTLINE",
+            Self::BoardFab => "BOARD_FAB",
+            Self::Rework => "REWORK",
+            Self::Fixture => "FIXTURE",
+            Self::Probe => "PROBE",
+            Self::Courtyard => "COURTYARD",
+            Self::LandPattern => "LANDPATTERN",
+            Self::ThievingKeepInout => "THIEVING_KEEP_INOUT",
+            Self::StackupComposite => "STACKUP_COMPOSITE",
+            Self::Other => "OTHER",
+        }
+    }
+
+    pub fn is_dielectric(self) -> bool {
+        matches!(
+            self,
+            Self::DielBase
+                | Self::DielCore
+                | Self::DielPreg
+                | Self::DielAdhv
+                | Self::DielBondPly
+                | Self::DielCoverlay
+        )
+    }
+
+    pub fn is_coating(self) -> bool {
+        matches!(self, Self::CoatingCond | Self::CoatingNonCond)
+    }
+
+    pub fn is_fabrication(self) -> bool {
+        matches!(
+            self,
+            Self::Drill
+                | Self::Rout
+                | Self::VCut
+                | Self::Score
+                | Self::EdgeChamfer
+                | Self::EdgePlating
+                | Self::BoardOutline
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Top,
@@ -465,6 +550,19 @@ pub enum Side {
     Internal,
     All,
     None,
+}
+
+impl Side {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Top => "Top",
+            Self::Bottom => "Bottom",
+            Self::Both => "Both",
+            Self::Internal => "Internal",
+            Self::All => "All",
+            Self::None => "None",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

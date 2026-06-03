@@ -245,7 +245,8 @@ fn extract_step_layer(
                     SetFeature::Hole(_) | SetFeature::Slot(_) => None,
                 };
 
-                if let Some(feature) = feature {
+                if let Some(mut feature) = feature {
+                    feature.source_layer_ref = Some(layer_feature.layer_ref);
                     layer_bbox = layer_bbox.union(feature.bbox);
                     doc.features.push(feature);
                 }
@@ -267,7 +268,7 @@ fn extract_step_layer(
             if is_drill_layer && layer_span_applies_to_layer(source_layer, layer, layers) {
                 for (feature_index, set_feature) in set.features.iter().enumerate() {
                     if let SetFeature::Hole(hole) = set_feature {
-                        let feature = extract_hole(
+                        let mut feature = extract_hole(
                             SourceRef {
                                 set_index: set_index as u32,
                                 feature_index: feature_index as u32,
@@ -275,6 +276,7 @@ fn extract_step_layer(
                             hole,
                             &mut doc,
                         );
+                        feature.source_layer_ref = Some(layer_feature.layer_ref);
                         layer_bbox = layer_bbox.union(feature.bbox);
                         doc.features.push(feature);
                     }
@@ -286,7 +288,7 @@ fn extract_step_layer(
                     if let SetFeature::Slot(slot) = set_feature
                         && slot_applies_to_layer(source_layer, layer, layers, slot)
                     {
-                        let feature = extract_slot(
+                        let mut feature = extract_slot(
                             &context,
                             SourceRef {
                                 set_index: set_index as u32,
@@ -295,6 +297,7 @@ fn extract_step_layer(
                             slot,
                             &mut doc,
                         )?;
+                        feature.source_layer_ref = Some(layer_feature.layer_ref);
                         layer_bbox = layer_bbox.union(feature.bbox);
                         doc.features.push(feature);
                     }

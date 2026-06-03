@@ -1,5 +1,6 @@
 pub mod dxf;
 mod extract;
+pub mod render;
 
 use anyhow::{Context, Result};
 use ipc2581::Ipc2581;
