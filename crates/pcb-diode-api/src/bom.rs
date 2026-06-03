@@ -120,16 +120,8 @@ struct BomLine {
     match_status: Option<BomMatchStatus>,
 }
 
-fn bom_line_no_match(
-    bom_line: &BomLine,
-    has_requested_mpn: bool,
-    resolved_offer_count: usize,
-) -> bool {
-    match bom_line.match_status {
-        Some(BomMatchStatus::MatchFailed) => true,
-        Some(BomMatchStatus::MatchExact | BomMatchStatus::MatchFuzzy) => false,
-        None => resolved_offer_count == 0 && has_requested_mpn,
-    }
+fn bom_line_no_match(bom_line: &BomLine) -> bool {
+    matches!(bom_line.match_status, Some(BomMatchStatus::MatchFailed))
 }
 
 /// Response from /api/boms/match endpoint
@@ -312,7 +304,6 @@ pub fn fetch_and_populate_availability_with_context(
         let Some(bom_entry) = bom.entries.get(path) else {
             continue;
         };
-        let requested_mpn = bom_entry.mpn.as_deref().filter(|mpn| !mpn.is_empty());
 
         let qty = bom
             .designators
@@ -378,11 +369,7 @@ pub fn fetch_and_populate_availability_with_context(
                         global_hard_to_source_reason,
                     )
                 }),
-                no_match: bom_line_no_match(
-                    &bom_line,
-                    requested_mpn.is_some(),
-                    resolved_offers.len(),
-                ),
+                no_match: bom_line_no_match(&bom_line),
                 offers: all_offers,
             },
         );
@@ -535,7 +522,7 @@ fn fetch_pricing_grouped_batch_once(
             .iter()
             .filter_map(|id| match_response.offers.get(id))
             .collect();
-        grouped_no_match[group_idx] |= bom_line_no_match(bom_line, true, resolved_offers.len());
+        grouped_no_match[group_idx] |= bom_line_no_match(bom_line);
         grouped_offers[group_idx].extend(resolved_offers);
     }
 
@@ -599,8 +586,7 @@ fn fetch_pricing_batch_once(
             .filter_map(|id| match_response.offers.get(id))
             .collect();
 
-        *slot =
-            build_search_availability(&offers, bom_line_no_match(&bom_line, true, offers.len()));
+        *slot = build_search_availability(&offers, bom_line_no_match(&bom_line));
     }
 
     Ok(results)
@@ -665,35 +651,27 @@ mod tests {
 
     #[test]
     fn match_status_controls_no_match_detection() {
-        assert!(bom_line_no_match(
-            &bom_line(
-                Some(BomMatchStatus::MatchFailed),
-                vec!["offer-1".to_string()]
-            ),
-            true,
-            1,
-        ));
-        assert!(!bom_line_no_match(
-            &bom_line(Some(BomMatchStatus::MatchExact), Vec::new()),
-            true,
-            0,
-        ));
-        assert!(!bom_line_no_match(
-            &bom_line(Some(BomMatchStatus::MatchFuzzy), Vec::new()),
-            true,
-            0,
-        ));
+        assert!(bom_line_no_match(&bom_line(
+            Some(BomMatchStatus::MatchFailed),
+            vec!["offer-1".to_string()]
+        )));
+        assert!(!bom_line_no_match(&bom_line(
+            Some(BomMatchStatus::MatchExact),
+            Vec::new()
+        )));
+        assert!(!bom_line_no_match(&bom_line(
+            Some(BomMatchStatus::MatchFuzzy),
+            Vec::new()
+        )));
     }
 
     #[test]
-    fn missing_match_status_falls_back_to_legacy_no_match_detection() {
-        assert!(bom_line_no_match(&bom_line(None, Vec::new()), true, 0));
-        assert!(!bom_line_no_match(&bom_line(None, Vec::new()), false, 0));
-        assert!(!bom_line_no_match(
-            &bom_line(None, vec!["offer-1".to_string()]),
-            true,
-            1,
-        ));
+    fn missing_match_status_does_not_imply_no_match() {
+        assert!(!bom_line_no_match(&bom_line(None, Vec::new())));
+        assert!(!bom_line_no_match(&bom_line(
+            None,
+            vec!["offer-1".to_string()]
+        )));
     }
 
     #[test]

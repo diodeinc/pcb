@@ -15,7 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fixed `pcb bom` no-match rows to use magenta designators and avoid `NaN%` house summary percentages.
-- Fixed `pcb bom` no-match detection to use the backend `match` status from `/api/boms/match`.
+- Fixed `pcb bom` no-match detection to rely only on the backend `match` status from `/api/boms/match`.
 
 ## [0.3.84] - 2026-05-21
 
