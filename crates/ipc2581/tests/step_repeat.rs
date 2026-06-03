@@ -1,4 +1,5 @@
 use ipc2581::Ipc2581;
+use ipc2581::types::StepType;
 
 fn panel_fixture() -> &'static str {
     r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -47,6 +48,7 @@ fn parses_step_repeat_on_step() {
         .find(|step| doc.resolve(step.name) == "panel")
         .expect("fixture has panel step");
 
+    assert_eq!(panel.step_type, Some(StepType::Pallet));
     assert_eq!(panel.step_repeats.len(), 1);
     let repeat = &panel.step_repeats[0];
     assert_eq!(doc.resolve(repeat.step_ref), "board");

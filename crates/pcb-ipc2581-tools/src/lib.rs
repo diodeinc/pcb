@@ -5,6 +5,7 @@ pub mod accessors;
 pub mod commands;
 pub mod geometry;
 pub mod gerber;
+mod steps;
 pub mod utils;
 
 // Re-export ipc2581 for external use

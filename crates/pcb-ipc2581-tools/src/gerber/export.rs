@@ -8,7 +8,7 @@ use ipc2581::types::{LayerFunction, Side, ecad::Layer};
 use super::artwork::{ArtworkLayer, ObjectAttributes};
 use super::lower::lower_artwork_layer;
 use crate::{geometry, ipc2581 as ipc};
-use pcb_ir::common::{BBox, LayerRole, LineJoin, PaintPolarity, Unit};
+use pcb_ir::common::{BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Unit};
 use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{FeatureBucket, GeometryPath};
 use pcb_ir::dialects::path as common_path;
@@ -62,7 +62,7 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
     }
 
     if let Some(doc) = first_doc {
-        let profile = profile_artwork_from_outlines(&doc)?;
+        let profile = profile_artwork_from_profiles(&doc)?;
         if !profile.objects.is_empty() {
             let layer = lower_artwork_layer(&profile)?;
             let contents = write_layer(&layer)?;
@@ -281,7 +281,9 @@ fn artwork_from_processed_layer(
     Ok(artwork)
 }
 
-fn profile_artwork_from_outlines(
+const PROFILE_STROKE_WIDTH: f64 = 0.1;
+
+fn profile_artwork_from_profiles(
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
 ) -> Result<ArtworkLayer> {
     let mut artwork = ArtworkLayer::new(Unit::Millimeter);
@@ -294,19 +296,12 @@ fn profile_artwork_from_outlines(
         bbox: BBox::empty(),
         meta: vec!["Profile".into(), "NP".into()],
     });
-    for outline in &doc.board_outlines {
-        for path in &doc.paths
-            [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
+    for profile in pcb_ir::dialects::ipc::render_profiles(doc) {
+        push_profile_artwork_object(&mut artwork, artwork_layer, doc, profile.outer_path);
+        for cutout in &doc.profile_cutouts
+            [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
         {
-            let meta = if path.flags.stroked {
-                ObjectAttributes {
-                    aperture_function: Some("Profile".to_string()),
-                    net: None,
-                }
-            } else {
-                ObjectAttributes::default()
-            };
-            push_artwork_object(&mut artwork, artwork_layer, doc, path, meta, "Profile")?;
+            push_profile_artwork_object(&mut artwork, artwork_layer, doc, cutout.path);
         }
     }
     Ok(artwork)
@@ -374,6 +369,30 @@ fn push_artwork_object(
         },
     );
     Ok(())
+}
+
+fn push_profile_artwork_object(
+    artwork: &mut ArtworkLayer,
+    artwork_layer: u32,
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    path_index: u32,
+) {
+    let path = &doc.paths[path_index as usize];
+    let artwork_path = ArtworkPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round);
+    let path_id = push_artwork_path(artwork, artwork_path, doc, path);
+    artwork.push_object(
+        artwork_layer,
+        ArtworkObject {
+            paint: PaintPolarity::Dark,
+            geometry: ArtworkGeometry::Stroke { path: path_id },
+            net: None,
+            bbox: artwork.paths[path_id as usize].bbox,
+            meta: ObjectAttributes {
+                aperture_function: Some("Profile".to_string()),
+                net: None,
+            },
+        },
+    );
 }
 
 fn artwork_contours(

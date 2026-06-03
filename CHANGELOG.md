@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Render IPC-2581 artwork layers in stackup order, plus non-stackup layer SVGs, in the HTML export through the shared IR geometry pipeline.
+
 ### Fixed
 
 - Reduced cache-index SQLite connection churn during `pcb sync` to avoid intermittent crashes.

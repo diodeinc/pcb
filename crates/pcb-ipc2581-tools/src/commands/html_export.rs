@@ -1,11 +1,14 @@
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use ipc2581::types::ecad::Layer;
 use minijinja::{Environment, context};
 use serde::Serialize;
 
 use crate::UnitFormat;
 use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
+use crate::geometry;
 use crate::utils::file as file_utils;
 
 pub fn execute(
@@ -50,6 +53,7 @@ pub fn generate_html(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<
     // Extract data
     let board_summary = extract_board_summary(accessor, unit_format);
     let stackup = extract_stackup_data(accessor, unit_format);
+    let rendered_layers = extract_rendered_layers(accessor)?;
     let version = env!("CARGO_PKG_VERSION");
 
     // Extract file metadata
@@ -76,6 +80,7 @@ pub fn generate_html(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<
         .render(context! {
             board_summary,
             stackup,
+            rendered_layers,
             css_styles => CSS_STYLES,
             version,
             ipc_revision,
@@ -135,6 +140,24 @@ struct StackupLayer {
     is_dielectric: bool,
 }
 
+#[derive(Default, Serialize)]
+struct RenderedLayers {
+    stackup: Vec<RenderedLayer>,
+    non_stackup: Vec<RenderedLayer>,
+}
+
+#[derive(Serialize)]
+struct RenderedLayer {
+    name: String,
+    function: String,
+    side: String,
+    sequence: Option<String>,
+    svg: Option<String>,
+    warning: Option<String>,
+    #[serde(skip_serializing)]
+    has_native_content: bool,
+}
+
 #[derive(Serialize)]
 struct Color {
     name: String,
@@ -143,7 +166,7 @@ struct Color {
 
 fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> BoardSummary {
     let design_name = accessor
-        .first_step()
+        .primary_step()
         .map(|step| accessor.ipc().resolve(step.name).to_string());
 
     let (width, height) = if let Some(dims) = accessor.board_dimensions() {
@@ -206,6 +229,110 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         nets,
         drill_holes,
     }
+}
+
+fn extract_rendered_layers(accessor: &IpcAccessor) -> Result<RenderedLayers> {
+    let ipc = accessor.ipc();
+    let Some(ecad) = ipc.ecad() else {
+        return Ok(RenderedLayers::default());
+    };
+    let layers_by_ref = ecad
+        .cad_data
+        .layers
+        .iter()
+        .map(|layer| (layer.name, layer))
+        .collect::<HashMap<_, _>>();
+
+    let mut stackup_layer_refs = HashSet::new();
+    let mut stackup_layers = Vec::new();
+
+    if let Some(stackup) = ecad.cad_data.stackups.first() {
+        for stackup_layer in &stackup.layers {
+            stackup_layer_refs.insert(stackup_layer.layer_ref);
+            let Some(layer) = layers_by_ref.get(&stackup_layer.layer_ref).copied() else {
+                continue;
+            };
+            if layer.layer_function.is_dielectric() {
+                continue;
+            }
+
+            let rendered = rendered_source_layer(
+                ipc,
+                layer,
+                stackup_layer.layer_number.map(|number| number.to_string()),
+            );
+            if layer.layer_function.is_coating() && !rendered.has_native_content {
+                continue;
+            }
+            stackup_layers.push(rendered);
+        }
+    } else {
+        for layer in &ecad.cad_data.layers {
+            if layer.layer_function.is_fabrication()
+                || layer.layer_function.is_dielectric()
+                || layer.layer_function.is_coating()
+            {
+                continue;
+            }
+            stackup_layer_refs.insert(layer.name);
+            stackup_layers.push(rendered_source_layer(ipc, layer, None));
+        }
+    }
+
+    let mut non_stackup_layers = Vec::new();
+
+    for layer in &ecad.cad_data.layers {
+        if stackup_layer_refs.contains(&layer.name) {
+            continue;
+        }
+
+        let rendered = rendered_source_layer(ipc, layer, None);
+        if rendered.has_native_content {
+            non_stackup_layers.push(rendered);
+        }
+    }
+
+    Ok(RenderedLayers {
+        stackup: stackup_layers,
+        non_stackup: non_stackup_layers,
+    })
+}
+
+fn rendered_source_layer(
+    ipc: &ipc2581::Ipc2581,
+    layer: &Layer,
+    sequence: Option<String>,
+) -> RenderedLayer {
+    let name = ipc.resolve(layer.name).to_string();
+    let mut rendered = RenderedLayer {
+        name: name.clone(),
+        function: layer.layer_function.as_str().to_string(),
+        side: layer
+            .side
+            .map(|side| side.as_str())
+            .unwrap_or("None")
+            .to_string(),
+        sequence,
+        svg: None,
+        warning: None,
+        has_native_content: false,
+    };
+
+    match geometry::extract_layer(ipc, &name) {
+        Ok(mut geometry) => {
+            rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
+            pcb_ir::dialects::ipc::process::process_document(&mut geometry);
+            rendered.svg = Some(geometry::render::render_layer_svg(&geometry, true));
+            if !geometry.diagnostics.is_empty() {
+                rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
+            }
+        }
+        Err(error) => {
+            rendered.warning = Some(format!("Render unavailable: {error}"));
+        }
+    }
+
+    rendered
 }
 
 /// Format a decimal number with engineering precision:
@@ -321,6 +448,159 @@ fn surface_finish_to_html(finish: &SurfaceFinishInfo) -> SurfaceFinish {
         name: finish.name.clone(),
         hex: finish.hex_color(),
         is_standard: finish.is_standard, // Track but don't render
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn html_board_summary_design_uses_content_step_ref() {
+        let ipc = ipc2581::Ipc2581::parse(panel_design_name_fixture()).unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
+        let design_start = html.find("Design Name:").unwrap();
+        let dimensions_start = html.find("Board Dimensions:").unwrap();
+        let design_row = &html[design_start..dimensions_start];
+
+        assert!(design_row.contains(r#"<span class="summary-value">panel</span>"#));
+        assert!(!design_row.contains(r#"<span class="summary-value">board</span>"#));
+    }
+
+    #[test]
+    fn html_renders_stackup_layers_then_separate_drills_and_outline() {
+        let ipc = ipc2581::Ipc2581::parse(layer_render_fixture()).unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
+
+        assert!(html.contains("<h2>Layers</h2>"));
+        assert!(html.contains("<h3>Stackup Layers</h3>"));
+        assert!(html.contains("<h3>Non-Stackup Layers</h3>"));
+        assert!(html.contains("data-board-outline='true'"));
+        assert!(!html.contains("<span>DIELECTRIC_1</span>"));
+        assert!(!html.contains("<span>COATING_TOP</span>"));
+        assert!(!html.contains("<span>Board Outline</span>"));
+
+        let stackup_heading = html.find("<h3>Stackup Layers</h3>").unwrap();
+        let non_stackup_heading = html.find("<h3>Non-Stackup Layers</h3>").unwrap();
+        let top_copper = html.find("<span>F.Cu</span>").unwrap();
+        let bottom_copper = html.find("<span>B.Cu</span>").unwrap();
+        let edge_cuts = html.find("<span>Edge.Cuts</span>").unwrap();
+        let drill = html.find("<span>F.Cu_B.Cu</span>").unwrap();
+
+        assert!(stackup_heading < top_copper);
+        assert!(top_copper < bottom_copper);
+        assert!(bottom_copper < non_stackup_heading);
+        assert!(non_stackup_heading < edge_cuts);
+        assert!(edge_cuts < drill);
+        assert!(html.matches("<svg ").count() >= 4);
+    }
+
+    fn panel_design_name_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn layer_render_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="F.Cu"/>
+    <LayerRef name="DIELECTRIC_1"/>
+    <LayerRef name="B.Cu"/>
+    <LayerRef name="COATING_TOP"/>
+    <LayerRef name="Edge.Cuts"/>
+    <LayerRef name="F.Cu_B.Cu"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad">
+        <Circle diameter="1"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Layer name="DIELECTRIC_1" layerFunction="DIELCORE" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="B.Cu" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="COATING_TOP" layerFunction="COATINGCOND" side="TOP" polarity="POSITIVE"/>
+      <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>
+      <Layer name="F.Cu_B.Cu" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+      <Stackup name="Primary" overallThickness="1.6">
+        <StackupGroup name="Primary_Group">
+          <StackupLayer layerOrGroupRef="F.Cu" thickness="0.035" sequence="1"/>
+          <StackupLayer layerOrGroupRef="DIELECTRIC_1" thickness="1.53" sequence="2"/>
+          <StackupLayer layerOrGroupRef="COATING_TOP" thickness="0" sequence="3"/>
+          <StackupLayer layerOrGroupRef="B.Cu" thickness="0.035" sequence="4"/>
+        </StackupGroup>
+      </Stackup>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="F.Cu" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="F.Cu">
+          <Set>
+            <Pad padstackDefRef="padstack">
+              <Location x="2" y="3"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="F.Cu_B.Cu">
+          <Set>
+            <Hole name="H1" diameter="0.8" platingStatus="VIA" x="5" y="2.5"/>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Edge.Cuts">
+          <Set>
+            <Features>
+              <Line startX="0" startY="0" endX="10" endY="0">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
     }
 }
 
