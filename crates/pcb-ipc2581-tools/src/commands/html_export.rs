@@ -166,7 +166,7 @@ struct Color {
 
 fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> BoardSummary {
     let design_name = accessor
-        .first_step()
+        .primary_step()
         .map(|step| accessor.ipc().resolve(step.name).to_string());
 
     let (width, height) = if let Some(dims) = accessor.board_dimensions() {
@@ -456,6 +456,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn html_board_summary_design_uses_content_step_ref() {
+        let ipc = ipc2581::Ipc2581::parse(panel_design_name_fixture()).unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
+        let design_start = html.find("Design Name:").unwrap();
+        let dimensions_start = html.find("Board Dimensions:").unwrap();
+        let design_row = &html[design_start..dimensions_start];
+
+        assert!(design_row.contains(r#"<span class="summary-value">panel</span>"#));
+        assert!(!design_row.contains(r#"<span class="summary-value">board</span>"#));
+    }
+
+    #[test]
     fn html_renders_stackup_layers_then_separate_drills_and_outline() {
         let ipc = ipc2581::Ipc2581::parse(layer_render_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
@@ -483,6 +497,34 @@ mod tests {
         assert!(non_stackup_heading < edge_cuts);
         assert!(edge_cuts < drill);
         assert!(html.matches("<svg ").count() >= 4);
+    }
+
+    fn panel_design_name_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
     }
 
     fn layer_render_fixture() -> &'static str {

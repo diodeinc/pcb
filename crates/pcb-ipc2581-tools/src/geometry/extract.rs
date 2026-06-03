@@ -8,7 +8,7 @@ use ipc2581::types::{
 };
 use ipc2581::{Ipc2581, Symbol};
 
-use super::primary_step;
+use crate::steps;
 use pcb_ir::common::*;
 use pcb_ir::dialects::ipc::*;
 
@@ -61,7 +61,8 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
         .iter()
         .find(|layer| ipc.resolve(layer.name) == layer_name)
         .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))?;
-    let step = primary_step(ipc, &ecad.cad_data.steps)?;
+    let step = steps::primary_step(ipc, &ecad.cad_data.steps)
+        .context("IPC-2581 ECAD section has no Step")?;
 
     let mut doc = if is_panel_step(step) {
         extract_panel_layer(
@@ -83,7 +84,8 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
 
 pub fn extract_profiles(ipc: &Ipc2581) -> Result<GeometryDocument> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let step = primary_step(ipc, &ecad.cad_data.steps)?;
+    let step = steps::primary_step(ipc, &ecad.cad_data.steps)
+        .context("IPC-2581 ECAD section has no Step")?;
     let mut doc = GeometryDocument::new(ipc.resolve(step.name).to_string());
     append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?;
     pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);

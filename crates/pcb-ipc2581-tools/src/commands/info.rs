@@ -146,7 +146,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     let layout = accessor.board_layout_info();
 
     // Design name
-    if let Some(step) = accessor.first_step() {
+    if let Some(step) = accessor.primary_step() {
         let design_name = accessor.ipc().resolve(step.name);
         summary_table.add_row(vec![
             Cell::new("Design").fg(Color::Cyan),
