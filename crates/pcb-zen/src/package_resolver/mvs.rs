@@ -10,7 +10,7 @@ use semver::Version;
 use super::ResolvedDepId;
 use super::manifest::ManifestLoader;
 use super::materialize::materialize_selected;
-use super::scan::{ScannedDirectDeps, scan_package_direct_deps};
+use super::scan::{ScannedDirectDeps, WorkspacePackageIndex, scan_package_direct_deps};
 use super::versions::SpecVersionResolver;
 
 #[derive(Debug, Clone)]
@@ -142,16 +142,19 @@ pub struct PackageResolver {
     cache_index: CacheIndex,
     manifest_loader: ManifestLoader,
     spec_resolver: SpecVersionResolver,
+    package_index: WorkspacePackageIndex,
     package_states: BTreeMap<String, PackageResolutionState>,
 }
 
 impl PackageResolver {
     pub fn new(workspace: crate::WorkspaceInfo, offline: bool) -> Result<Self> {
+        let package_index = WorkspacePackageIndex::new(&workspace);
         Ok(Self {
             cache_index: CacheIndex::open()?,
             manifest_loader: ManifestLoader::new(workspace.clone(), offline),
             workspace,
             spec_resolver: SpecVersionResolver::new(offline),
+            package_index,
             package_states: BTreeMap::new(),
         })
     }
@@ -236,6 +239,7 @@ impl PackageResolver {
         let (package_dir, current_config) = self.package_manifest_source(package_url)?;
         let mut scanned = scan_package_direct_deps(
             &self.workspace,
+            &self.package_index,
             package_url,
             &package_dir,
             &current_config,
