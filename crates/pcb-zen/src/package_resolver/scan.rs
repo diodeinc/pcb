@@ -21,6 +21,7 @@ pub(crate) struct ScannedDirectDeps {
 
 pub(crate) fn scan_package_direct_deps(
     workspace_info: &crate::WorkspaceInfo,
+    package_index: &WorkspacePackageIndex,
     package_url: &str,
     package_dir: &Path,
     current_config: &PcbToml,
@@ -31,7 +32,6 @@ pub(crate) fn scan_package_direct_deps(
     let kicad_aliases = kicad_dependency_aliases(&kicad_entries);
     let configured_kicad_versions = workspace_info.stdlib_asset_dep_versions();
     let file_provider = DefaultFileProvider::new();
-    let package_index = WorkspacePackageIndex::new(workspace_info);
     let mut scanned = ScannedDirectDeps::default();
 
     if let Some(version) = configured_kicad_versions.get(KICAD_SYMBOLS_REPO) {
@@ -103,12 +103,12 @@ pub(crate) fn scan_package_direct_deps(
 
 const KICAD_SYMBOLS_REPO: &str = "gitlab.com/kicad/libraries/kicad-symbols";
 
-struct WorkspacePackageIndex {
+pub(crate) struct WorkspacePackageIndex {
     package_dirs: BTreeMap<PathBuf, String>,
 }
 
 impl WorkspacePackageIndex {
-    fn new(workspace_info: &crate::WorkspaceInfo) -> Self {
+    pub(crate) fn new(workspace_info: &crate::WorkspaceInfo) -> Self {
         let package_dirs = workspace_info
             .packages
             .iter()
