@@ -76,6 +76,14 @@ fn configure_summary_table(table: &mut Table) {
     }
 }
 
+fn percentage(part: usize, total: usize) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        (part as f64 / total as f64) * 100.0
+    }
+}
+
 /// Create a summary row with icon, label, and two qty+percentage cells
 fn summary_row(
     icon_color: Color,
@@ -88,8 +96,8 @@ fn summary_row(
     vec![
         Cell::new("■").fg(icon_color),
         Cell::new(label),
-        qty_with_percentage_cell(count, (count as f64 / count_total as f64) * 100.0),
-        qty_with_percentage_cell(qty, (qty as f64 / qty_total as f64) * 100.0),
+        qty_with_percentage_cell(count, percentage(count, count_total)),
+        qty_with_percentage_cell(qty, percentage(qty, qty_total)),
     ]
 }
 
@@ -113,15 +121,20 @@ fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool, tier: Optio
     }
 }
 
+/// Map a sourcing status to its display color, including states outside stock tiers.
+fn color_for_status(is_dnp: bool, no_match: bool, tier: Tier) -> Color {
+    if is_dnp {
+        Color::DarkGrey
+    } else if no_match {
+        Color::Magenta
+    } else {
+        color_for_tier(tier)
+    }
+}
+
 /// Apply styling to a sourcing-status cell, including states outside stock tiers.
 fn styled_status_cell(content: impl ToString, is_dnp: bool, no_match: bool, tier: Tier) -> Cell {
-    if is_dnp {
-        Cell::new(content).fg(Color::DarkGrey)
-    } else if no_match {
-        Cell::new(content).fg(Color::Magenta)
-    } else {
-        Cell::new(content).fg(color_for_tier(tier))
-    }
+    Cell::new(content).fg(color_for_status(is_dnp, no_match, tier))
 }
 
 /// Check if MPN and manufacturer are both present
@@ -489,12 +502,11 @@ impl Bom {
 
             // Create qty and designators cells
             let qty_cell = styled_cell(format!("{:>4}", qty), is_dnp, false, None);
-            let designators_cell = styled_cell(
-                designators.as_str(),
-                is_dnp,
-                false,
-                has_availability.then_some(designator_tier),
-            )
+            let designators_cell = (if has_availability {
+                styled_status_cell(designators.as_str(), is_dnp, no_match, designator_tier)
+            } else {
+                styled_cell(designators.as_str(), is_dnp, false, None)
+            })
             .set_delimiter(',');
 
             // MPN: create hyperlink and style if auto-filled
@@ -706,33 +718,35 @@ impl Bom {
 
             writeln!(writer, "{summary_table}")?;
 
-            writeln!(writer)?;
-            writeln!(writer, "House Component Summary:")?;
-
-            let mut house_table = Table::new();
-            configure_summary_table(&mut house_table);
-
             let house_total_count = house_count + non_house_count;
             let house_total_qty = house_qty + non_house_qty;
 
-            house_table.add_row(summary_row(
-                Color::Blue,
-                "House component",
-                house_count,
-                house_total_count,
-                house_qty,
-                house_total_qty,
-            ));
-            house_table.add_row(summary_row(
-                Color::White,
-                "Non-house component",
-                non_house_count,
-                house_total_count,
-                non_house_qty,
-                house_total_qty,
-            ));
+            if house_total_count > 0 {
+                writeln!(writer)?;
+                writeln!(writer, "House Component Summary:")?;
 
-            writeln!(writer, "{house_table}")?;
+                let mut house_table = Table::new();
+                configure_summary_table(&mut house_table);
+
+                house_table.add_row(summary_row(
+                    Color::Blue,
+                    "House component",
+                    house_count,
+                    house_total_count,
+                    house_qty,
+                    house_total_qty,
+                ));
+                house_table.add_row(summary_row(
+                    Color::White,
+                    "Non-house component",
+                    non_house_count,
+                    house_total_count,
+                    non_house_qty,
+                    house_total_qty,
+                ));
+
+                writeln!(writer, "{house_table}")?;
+            }
         }
         Ok(())
     }
@@ -766,7 +780,15 @@ mod tests {
     }
 
     #[test]
-    fn bom_table_legend_includes_no_match() {
+    fn no_match_status_color_overrides_insufficient_tier() {
+        assert_eq!(
+            color_for_status(false, true, Tier::Insufficient),
+            Color::Magenta
+        );
+    }
+
+    #[test]
+    fn bom_table_no_match_rendering_includes_legend_without_nan_summary() {
         let mut bom = Bom {
             entries: HashMap::new(),
             designators: HashMap::new(),
@@ -804,5 +826,7 @@ mod tests {
 
         assert!(rendered.contains("Legend:"));
         assert!(rendered.contains(NO_MATCH_LABEL));
+        assert!(!rendered.contains("NaN"));
+        assert!(!rendered.contains("House Component Summary:"));
     }
 }

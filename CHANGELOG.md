@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added a `No match (unknown part)` type to the `pcb bom` availability legend and summary.
 
+### Fixed
+
+- Fixed `pcb bom` no-match rows to use magenta designators and avoid `NaN%` house summary percentages.
+
 ## [0.3.84] - 2026-05-21
 
 ### Added
