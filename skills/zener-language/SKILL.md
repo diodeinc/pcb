@@ -11,7 +11,8 @@ Canonical Zener HDL semantics and authoring guidance.
 
 1. Use `pcb doc --package @stdlib` or `pcb doc --package <package>` to find the public API and source root (`<!-- source: ... -->`); add `--list` for the file tree. Read source from that root for exact behavior.
 2. Preserve trailing `# pcb:sch ...` comments. Only update names inside an existing comment when you rename the matching component or net.
-3. For recent Zener, stdlib, and `pcb` CLI changes, check the pcb changelog entries for the installed version and nearby previous releases: <https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md>
+3. After adding, removing, or changing package `Module()` / `load()` imports, run `pcb sync` from the relevant workspace or package, then run `pcb build <path>` to validate. `pcb sync` is the dependency reconciliation step; `pcb build` is the validation step.
+4. For recent Zener, stdlib, and `pcb` CLI changes, check the pcb changelog entries for the installed version and nearby previous releases: <https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md>
 
 ## Language
 
@@ -146,6 +147,18 @@ Resistor(name="R_MSYNC_VCC", value="0ohm", package="0402", P1=MSYNC, P2=VCC, dnp
 Imports and dependencies:
 
 - `@stdlib/...` is implicit and toolchain-managed; do not declare it in `[dependencies]`.
+- Package imports in `.zen` use full package URLs without versions.
+- Do not manually edit `pcb.toml` to add or remove package dependencies. Add or remove the `Module()` / `load()` import in `.zen`, then run `pcb sync`.
+- `pcb sync` updates package manifests: `[dependencies]` for direct package imports and `[dependencies.indirect]` for the resolved transitive dependency state.
+- Let `pcb sync` maintain `pcb.toml`, especially `[dependencies.indirect]`. Commit `pcb.toml` files after `pcb sync` changes them.
+
+Updating dependency versions:
+
+- Run dependency update commands from the package directory.
+- `pcb list -m -u` is read-only. It shows direct remote dependencies, the latest compatible update in brackets, and the latest breaking update as `[breaking: ...]`.
+- `pcb add -u` updates all direct remote dependencies to the latest stable compatible version; `pcb add -u <url>` updates one.
+- For a specific or breaking version, check versions with `pcb list -m -versions <url>`, then run `pcb add <url>@<version>`. Do not edit `pcb.toml`.
+- Do not use `pcb update`; it is for legacy dependency manifests.
 
 `pcb.toml` per repository/package type:
 
