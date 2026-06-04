@@ -110,11 +110,10 @@ pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
     validate_workspace(&workspace)?;
 
     let targets = discover_add_targets(&workspace, cwd)?;
-    run_resolution(
+    sync_targets(
         &workspace,
         &targets,
         args.verbose,
-        None,
         is_workspace_root(&workspace, cwd),
         args.offline,
     )
@@ -437,6 +436,16 @@ fn print_frozen_resolution(
             );
         }
     }
+}
+
+pub(crate) fn sync_targets(
+    workspace: &WorkspaceInfo,
+    targets: &[AddTarget],
+    verbose: bool,
+    prune_vendor: bool,
+    offline: bool,
+) -> Result<()> {
+    run_resolution(workspace, targets, verbose, None, prune_vendor, offline)
 }
 
 fn run_resolution(

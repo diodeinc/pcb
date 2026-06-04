@@ -19,19 +19,19 @@ use tracing::{info_span, instrument};
 use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
 use crate::file_walker;
 
-struct BuildEvalState {
+pub(crate) struct BuildEvalState {
     session: pcb_zen_core::lang::eval::EvalSession,
     file_provider: Arc<DefaultFileProvider>,
     resolution: Arc<ResolutionResult>,
 }
 
-struct BuildResult {
-    schematic: Option<Schematic>,
-    diagnostics: Diagnostics,
+pub(crate) struct BuildResult {
+    pub(crate) schematic: Option<Schematic>,
+    pub(crate) diagnostics: Diagnostics,
 }
 
 impl BuildEvalState {
-    fn new(mut resolution: ResolutionResult) -> Self {
+    pub(crate) fn new(mut resolution: ResolutionResult) -> Self {
         let file_provider = Arc::new(DefaultFileProvider::new());
         resolution.canonicalize_keys(file_provider.as_ref());
         Self {
@@ -63,7 +63,7 @@ impl BuildEvalState {
     }
 
     #[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
-    fn build(
+    pub(crate) fn build(
         &self,
         zen_path: &Path,
         inputs: SmallMap<String, JsonValue>,

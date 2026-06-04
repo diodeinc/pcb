@@ -87,7 +87,7 @@ fn package_target_for_dir(workspace: &WorkspaceInfo, candidate_dir: &Path) -> Op
         .map(|(_, target)| target)
 }
 
-fn add_target_for_package(
+pub(crate) fn add_target_for_package(
     workspace_root: &Path,
     package_url: &str,
     pkg: &WorkspacePackage,
