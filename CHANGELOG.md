@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added ESR-aware stdlib crystal matching, 24 MHz house parts, and lower-ESR ECS 2520 options.
+
 ### Fixed
 
 - `pcb publish` now rehydrates V2 package dependency manifests when publishing dependents of newly tagged workspace packages.
