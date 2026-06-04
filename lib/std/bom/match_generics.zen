@@ -518,35 +518,51 @@ HOUSE_POWER_INDUCTORS_BY_PKG = {
 # House crystal catalog by package
 HOUSE_CRYSTALS_BY_PKG = {
     "3215_2Pin": [
-        crystal("32.768kHz", "12.5pF", "ABS07-32.768KHZ-T", "Abracon LLC", abracon_datasheet("Resonators/ABS07.pdf")),
-        ecs_crystal("32.768kHz", "12.5pF", "ECS-.327-12.5-34QCS-TR", "ECX-34Q.pdf"),
-        crystal("32.768kHz", "12.5pF", "XKXGI-SUA-32.768K", "YXC Crystal Oscillators"),
-        crystal("32.768kHz", "12pF", "Q13FC13500004", "Seiko Epson"),
+        crystal(
+            "32.768kHz",
+            "12.5pF",
+            "ABS07-32.768KHZ-T",
+            "Abracon LLC",
+            abracon_datasheet("Resonators/ABS07.pdf"),
+            esr="70kOhm",
+        ),
+        ecs_crystal("32.768kHz", "12.5pF", "ECS-.327-12.5-34QCS-TR", "ECX-34Q.pdf", esr="70kOhm"),
+        crystal("32.768kHz", "12.5pF", "XKXGI-SUA-32.768K", "YXC Crystal Oscillators", esr="70kOhm"),
+        crystal("32.768kHz", "12pF", "Q13FC13500004", "Seiko Epson", esr="70kOhm"),
     ],
     "3225_4Pin": [
-        ecs_crystal("8MHz", "12pF", "ECS-80-12-33Q-GN-TR", "ECX-33Q.pdf"),
-        abracon_crystal("8MHz", "12pF", "ABM8AIG-8.000MHZ-12-R150-V-T3", "AIGcrystals/ABM8AIG.pdf"),
-        crystal("8MHz", "12pF", "X32258MOB4SI", "YXC Crystal Oscillators"),
-        ecs_crystal("12MHz", "12pF", "ECS-120-12-33Q-JES-TR", "ECX-33Q.pdf"),
-        abracon_crystal("12MHz", "12pF", "ABM8AIG-12.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf"),
-        crystal("12MHz", "12pF", "X322512MOB4SI", "YXC Crystal Oscillators"),
-        ecs_crystal("16MHz", "12pF", "ECS-160-12-33Q-JEN-TR", "ECX-33Q.pdf"),
-        abracon_crystal("16MHz", "12pF", "ABM8AIG-16.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf"),
-        crystal("16MHz", "12pF", "X322516MOB4SI", "YXC Crystal Oscillators"),
-        ecs_crystal("25MHz", "12pF", "ECS-250-12-33Q-JES-TR", "ECX-33Q.pdf"),
-        abracon_crystal("25MHz", "12pF", "ABM8AIG-25.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf"),
-        crystal("25MHz", "12pF", "X322525MOB4SI", "YXC Crystal Oscillators"),
+        ecs_crystal("8MHz", "12pF", "ECS-80-12-33Q-GN-TR", "ECX-33Q.pdf", esr="500Ohm"),
+        abracon_crystal("8MHz", "12pF", "ABM8AIG-8.000MHZ-12-R150-V-T3", "AIGcrystals/ABM8AIG.pdf", esr="150Ohm"),
+        crystal("8MHz", "12pF", "X32258MOB4SI", "YXC Crystal Oscillators", esr="150Ohm"),
+        ecs_crystal("12MHz", "12pF", "ECS-120-12-33Q-JES-TR", "ECX-33Q.pdf", esr="100Ohm"),
+        abracon_crystal("12MHz", "12pF", "ABM8AIG-12.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf", esr="100Ohm"),
+        crystal("12MHz", "12pF", "X322512MOB4SI", "YXC Crystal Oscillators", esr="80Ohm"),
+        ecs_crystal("16MHz", "12pF", "ECS-160-12-33Q-JEN-TR", "ECX-33Q.pdf", esr="80Ohm"),
+        abracon_crystal("16MHz", "12pF", "ABM8AIG-16.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf", esr="70Ohm"),
+        crystal("16MHz", "12pF", "X322516MOB4SI", "YXC Crystal Oscillators", esr="80Ohm"),
+        ecs_crystal("24MHz", "12pF", "ECS-240-12-33Q-JES-TR", "ECX-33Q.pdf", esr="40Ohm"),
+        abracon_crystal("24MHz", "12pF", "ABM8AIG-24.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf", esr="50Ohm"),
+        crystal("24MHz", "12pF", "X322524MOB4SI", "YXC Crystal Oscillators", esr="50Ohm"),
+        ecs_crystal("25MHz", "12pF", "ECS-250-12-33Q-JES-TR", "ECX-33Q.pdf", esr="40Ohm"),
+        abracon_crystal("25MHz", "12pF", "ABM8AIG-25.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf", esr="50Ohm"),
+        crystal("25MHz", "12pF", "X322525MOB4SI", "YXC Crystal Oscillators", esr="50Ohm"),
     ],
     "2520_4Pin": [
-        ecs_crystal("12MHz", "10pF", "ECS-120-10-36Q-AES-TR", "ECX-2236Q.pdf"),
-        abracon_crystal("12MHz", "10pF", "ABM10AIG-12.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf"),
-        crystal("12MHz", "10pF", "TXM12M0004252DBCEO00T", "Yajingxin"),
-        ecs_crystal("16MHz", "10pF", "ECS-160-10-36Q-ES-TR", "ECX-2236Q.pdf"),
-        abracon_crystal("16MHz", "10pF", "ABM10AIG-16.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf"),
-        crystal("16MHz", "10pF", "TXM16M0004252DBCEO00T", "Yajingxin"),
-        ecs_crystal("25MHz", "10pF", "ECS-250-10-36Q-ES-TR", "ECX-2236Q.pdf"),
-        abracon_crystal("25MHz", "10pF", "ABM10AIG-25.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf"),
-        crystal("25MHz", "10pF", "TXM25M0004252DBCEO00T", "Yajingxin"),
+        ecs_crystal("12MHz", "10pF", "ECS-120-10-36Q-AES-TR", "ECX-2236Q.pdf", esr="150Ohm"),
+        abracon_crystal("12MHz", "10pF", "ABM10AIG-12.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf", esr="150Ohm"),
+        ecs_crystal("12MHz", "10pF", "ECS-120-10-36B-CWY-TR3", "ECX-2236B.pdf", esr="130Ohm"),
+        crystal("12MHz", "10pF", "TXM12M0004252DBCEO00T", "Yajingxin", esr="120Ohm"),
+        ecs_crystal("16MHz", "10pF", "ECS-160-10-36Q-ES-TR", "ECX-2236Q.pdf", esr="80Ohm"),
+        abracon_crystal("16MHz", "10pF", "ABM10AIG-16.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf", esr="80Ohm"),
+        ecs_crystal("16MHz", "10pF", "ECS-160-10-36B-CKM-TR", "ECX-2236B.pdf", esr="70Ohm"),
+        crystal("16MHz", "10pF", "TXM16M0004252DBCEO00T", "Yajingxin", esr="60Ohm"),
+        ecs_crystal("24MHz", "10pF", "ECS-240-10-36Q-ES-TR", "ECX-2236Q.pdf", esr="60Ohm"),
+        abracon_crystal("24MHz", "10pF", "ABM10AIG-24.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf", esr="60Ohm"),
+        ecs_crystal("24MHz", "10pF", "ECS-240-10-36B-CTN-TR", "ECX-2236B.pdf", esr="50Ohm"),
+        ecs_crystal("25MHz", "10pF", "ECS-250-10-36Q-ES-TR", "ECX-2236Q.pdf", esr="60Ohm"),
+        abracon_crystal("25MHz", "10pF", "ABM10AIG-25.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf", esr="60Ohm"),
+        ecs_crystal("25MHz", "10pF", "ECS-250-10-36B-CTN-TR", "ECX-2236B.pdf", esr="50Ohm"),
+        crystal("25MHz", "10pF", "TXM25M0004252DBCEO00T", "Yajingxin", esr="45Ohm"),
     ],
 }
 
@@ -1507,12 +1523,17 @@ def assign_house_crystal(c, house_crystals_by_pkg):
     pkg = prop(c, ["package", "Package"])
     freq_req = prop(c, ["frequency", "Frequency"])
     cl_req = prop(c, ["load_capacitance", "Load_capacitance"])
+    esr_req = prop(c, ["esr", "ESR", "Esr"])
 
     if not freq_req:
         return
 
     req_frequency = Frequency(freq_req)
     req_load_cap = Capacitance(cl_req) if cl_req else None
+    req_esr = Resistance(esr_req) if esr_req else None
+    if req_esr and req_esr.min == req_esr.max:
+        # Treat a point ESR request as a maximum allowed ESR.
+        req_esr = Resistance(min="0Ohm", max=req_esr)
 
     parts = house_crystals_by_pkg.get(pkg, [])
     matches = []
@@ -1530,6 +1551,13 @@ def assign_house_crystal(c, house_crystals_by_pkg):
             if req_load_cap.tolerance == 0.0:
                 req_load_cap = req_load_cap.with_tolerance(0.20)
             if not p["load_capacitance"].within(req_load_cap):
+                continue
+
+        if req_esr:
+            part_esr = p.get("esr")
+            if not part_esr:
+                continue
+            if not part_esr.within(req_esr):
                 continue
 
         matches.append(p)

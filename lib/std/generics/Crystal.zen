@@ -1,6 +1,6 @@
 load("../io.zen", "io")
 load("../interfaces.zen", "Net")
-load("../units.zen", "Capacitance", "Frequency")
+load("../units.zen", "Capacitance", "Frequency", "Resistance")
 load("../utils.zen", "format_value")
 
 Mount = enum("SMD")
@@ -24,6 +24,7 @@ mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
 mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
 load_capacitance = config(Capacitance, optional=True, help="Load capacitance for oscillator circuit")
+esr = config(Resistance, optional=True, help="Equivalent series resistance")
 properties = {
     "value": format_value(frequency, load_capacitance),
     "package": package,
@@ -32,6 +33,8 @@ properties = {
 
 if load_capacitance:
     properties["load_capacitance"] = load_capacitance
+if esr:
+    properties["esr"] = esr
 
 # For 2-pin crystals
 XIN = io(Net)

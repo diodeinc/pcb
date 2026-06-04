@@ -296,9 +296,9 @@ def abracon_datasheet(path):
     return "https://abracon.com/" + path
 
 
-def abracon_crystal(frequency, load_capacitance, mpn, datasheet_path):
+def abracon_crystal(frequency, load_capacitance, mpn, datasheet_path, esr=None):
     """Helper to create an Abracon crystal entry with a verified PDF datasheet path."""
-    return crystal(frequency, load_capacitance, mpn, "Abracon LLC", abracon_datasheet(datasheet_path))
+    return crystal(frequency, load_capacitance, mpn, "Abracon LLC", abracon_datasheet(datasheet_path), esr=esr)
 
 
 def onsemi_datasheet(filename):
@@ -371,9 +371,9 @@ def ecs_datasheet(filename):
     return "https://ecsxtal.com/store/pdf/" + filename
 
 
-def ecs_crystal(frequency, load_capacitance, mpn, datasheet_filename):
+def ecs_crystal(frequency, load_capacitance, mpn, datasheet_filename, esr=None):
     """Helper to create an ECS crystal entry with a verified PDF datasheet filename."""
-    return crystal(frequency, load_capacitance, mpn, "ECS Inc.", ecs_datasheet(datasheet_filename))
+    return crystal(frequency, load_capacitance, mpn, "ECS Inc.", ecs_datasheet(datasheet_filename), esr=esr)
 
 
 def discrete_resistor_series(manufacturer, series, max_v, power, tolerance, values_with_mpns, datasheet=None):
@@ -630,7 +630,9 @@ def zener(zener_voltage: str, power: str, mpn: str, manufacturer: str, datasheet
     }
 
 
-def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer: str, datasheet=None) -> dict:
+def crystal(
+    frequency: str, load_capacitance: str | None, mpn: str, manufacturer: str, datasheet=None, esr: str | None = None
+) -> dict:
     """Helper to create crystal catalog entry.
 
     Args:
@@ -638,6 +640,7 @@ def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer
         load_capacitance: Load capacitance (e.g., "7pF", "12.5pF") or None
         mpn: Manufacturer part number
         manufacturer: Manufacturer name
+        esr: Maximum equivalent series resistance, or an explicit resistance range
 
     Returns:
         Crystal dictionary
@@ -645,6 +648,7 @@ def crystal(frequency: str, load_capacitance: str | None, mpn: str, manufacturer
     return {
         "frequency": Frequency(frequency),
         "load_capacitance": Capacitance(load_capacitance) if load_capacitance else None,
+        "esr": Resistance(esr) if esr else None,
         "mpn": mpn,
         "manufacturer": manufacturer,
         "datasheet": datasheet,
