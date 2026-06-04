@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.90] - 2026-06-04
+
 ### Added
 
 - Added ESR-aware stdlib crystal matching, 24 MHz house parts, and lower-ESR ECS 2520 options.
@@ -1158,7 +1160,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.89...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.90...HEAD
+[0.3.90]: https://github.com/diodeinc/pcb/compare/v0.3.89...v0.3.90
 [0.3.89]: https://github.com/diodeinc/pcb/compare/v0.3.88...v0.3.89
 [0.3.88]: https://github.com/diodeinc/pcb/compare/v0.3.87...v0.3.88
 [0.3.87]: https://github.com/diodeinc/pcb/compare/v0.3.86...v0.3.87
