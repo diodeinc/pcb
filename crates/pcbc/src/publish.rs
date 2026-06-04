@@ -22,6 +22,8 @@ use std::fmt;
 use std::path::Path;
 
 use crate::file_walker::{collect_zen_files, resolve_board_target};
+use crate::pcb_mod::sync_targets;
+use crate::pcb_mod::target::add_target_for_package;
 use crate::release;
 
 /// Version bump type for publishing
@@ -114,7 +116,6 @@ impl BumpType {
     }
 }
 
-const CONVENTIONAL_COMMIT_SUBJECT_LEN: usize = 72;
 const DEPENDENCY_BUMP_TITLE: &str = "chore: bump deps";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,18 +175,10 @@ pub struct PublishArgs {
 
 /// Info about a package that will be published
 struct PublishCandidate {
-    pkg: WorkspacePackage,
     next_version: Version,
     tag_name: String,
     content_hash: String,
     manifest_hash: String,
-}
-
-/// Result of publishing a wave
-struct WaveResult {
-    tags: Vec<String>,
-    commit: Option<String>,
-    candidates: BTreeMap<String, PublishCandidate>,
 }
 
 /// Tracks local git state created during publishing.
@@ -728,7 +721,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         preflight_checks(&workspace_root, &remote)?;
     }
 
-    let workspace = get_workspace_info(&file_provider, start_path)?;
+    let mut workspace = get_workspace_info(&file_provider, start_path)?;
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace.errors.is_empty() {
@@ -740,12 +733,13 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
 
     if !args.no_build {
         build_workspace(&workspace, &args.suppress)?;
-        if git::has_uncommitted_changes(&workspace.root)? {
-            bail!(
-                "Build modified the repository.\n\
-                 Resolve or commit the changes before publishing."
-            );
-        }
+    }
+
+    if git::has_uncommitted_changes(&workspace.root)? {
+        bail!(
+            "Working directory has uncommitted changes.\n\
+             Resolve or commit the changes before publishing."
+        );
     }
 
     // Get dirty non-board packages
@@ -795,16 +789,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("Failed to get initial commit"))?,
     );
 
-    let mut published: BTreeMap<String, PublishCandidate> = BTreeMap::new();
-
-    // Process each wave — guard auto-rolls back on early return via `?`
-    for wave_urls in &waves {
-        let wave = publish_wave(&workspace, &bump_map, wave_urls, &published)?;
-
-        guard.tags.extend(wave.tags);
-        guard.has_commits |= wave.commit.is_some();
-        published.extend(wave.candidates);
-    }
+    publish_package_waves(&mut workspace, &bump_map, &waves, &mut guard)?;
 
     if guard.tags.is_empty() {
         guard.disarm();
@@ -861,53 +846,76 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     Ok(())
 }
 
-/// Publish a single wave of packages.
-fn publish_wave(
-    workspace: &WorkspaceInfo,
+fn publish_package_waves(
+    workspace: &mut WorkspaceInfo,
     bump_map: &BTreeMap<String, ReleaseBump>,
-    package_urls: &[String],
-    published: &BTreeMap<String, PublishCandidate>,
-) -> Result<WaveResult> {
-    let all_tags = git::list_all_tags_vec(&workspace.root);
-
-    // Bump pcb.toml for packages that depend on previously published packages
-    let mut changed_pkgs: Vec<&WorkspacePackage> = Vec::new();
-    for url in package_urls {
-        if let Some(pkg) = workspace.packages.get(url) {
-            let has_published_dep = pkg.dependencies().any(|d| published.contains_key(d));
-            if has_published_dep
-                && bump_dependency_versions(&pkg.dir(&workspace.root).join("pcb.toml"), published)?
-            {
-                log::info!("patching: {}/pcb.toml", pkg.rel_path.display());
-                changed_pkgs.push(pkg);
-            }
+    waves: &[Vec<String>],
+    guard: &mut PublishGuard,
+) -> Result<()> {
+    for (idx, wave_urls) in waves.iter().enumerate() {
+        // Previous waves are now tagged. Let `pcb sync` freeze this wave's
+        // manifests against those new workspace versions.
+        if idx > 0 && sync_dependency_wave(workspace, wave_urls, guard)? {
+            workspace.reload()?;
         }
+
+        publish_wave(workspace, bump_map, wave_urls, &mut guard.tags)?;
     }
 
-    // Commit pcb.toml changes before creating tags
-    let commit_sha = if !changed_pkgs.is_empty() {
-        let msg = format_dependency_bump_commit(&changed_pkgs, published);
-        git::commit_with_trailers(&workspace.root, &msg)?;
-        git::rev_parse(&workspace.root, "HEAD")
-    } else {
-        None
-    };
+    Ok(())
+}
 
-    // Build candidates with fresh hashes (after pcb.toml modifications)
+fn sync_dependency_wave(
+    workspace: &WorkspaceInfo,
+    package_urls: &[String],
+    guard: &mut PublishGuard,
+) -> Result<bool> {
+    let targets: Vec<_> = package_urls
+        .iter()
+        .filter_map(|url| {
+            workspace
+                .packages
+                .get(url)
+                .map(|pkg| add_target_for_package(&workspace.root, url, pkg))
+        })
+        .collect();
+    if targets.is_empty() {
+        return Ok(false);
+    }
+
+    let had_commits = guard.has_commits;
+    guard.has_commits = true;
+    sync_targets(workspace, &targets, false, false, false)?;
+    if !git::has_uncommitted_changes(&workspace.root)? {
+        guard.has_commits = had_commits;
+        return Ok(false);
+    }
+
+    git::commit_with_trailers(&workspace.root, DEPENDENCY_BUMP_TITLE)?;
+    Ok(true)
+}
+
+/// Publish a single wave of packages.
+fn publish_wave(
+    workspace: &mut WorkspaceInfo,
+    bump_map: &BTreeMap<String, ReleaseBump>,
+    package_urls: &[String],
+    created_tags: &mut Vec<String>,
+) -> Result<()> {
+    let all_tags = git::list_all_tags_vec(&workspace.root);
+
+    // Build candidates with fresh hashes after any wave-boundary sync commit.
     let candidates = build_candidates(workspace, bump_map, package_urls, &all_tags)?;
 
-    // Create tags
-    let mut created_tags = Vec::new();
     for (url, c) in &candidates {
         git::create_tag(&workspace.root, &c.tag_name, &format_tag_message(url, c))?;
         created_tags.push(c.tag_name.clone());
+        if let Some(pkg) = workspace.packages.get_mut(url) {
+            pkg.version = Some(c.next_version.to_string());
+        }
     }
 
-    Ok(WaveResult {
-        tags: created_tags,
-        commit: commit_sha,
-        candidates,
-    })
+    Ok(())
 }
 
 fn build_candidates(
@@ -938,7 +946,6 @@ fn build_candidates(
             Ok((
                 url.clone(),
                 PublishCandidate {
-                    pkg: pkg.clone(),
                     next_version,
                     tag_name,
                     content_hash,
@@ -991,20 +998,20 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
         pcb_zen::vendor_deps(&resolution, &[], None, true)?;
     }
 
+    let eval_state = crate::build::BuildEvalState::new(resolution);
     let mut has_errors = false;
     let mut has_warnings = false;
-
     for zen_path in &zen_files {
         let file_name = zen_path.file_name().unwrap().to_string_lossy();
-        if let Some(schematic) = crate::build::build(
+        let result = eval_state.build(
             zen_path,
             Default::default(),
             crate::build::create_diagnostics_passes(suppress, &[]),
             false,
             &mut has_errors,
             &mut has_warnings,
-            resolution.clone(),
-        ) {
+        );
+        if let Some(schematic) = result.schematic {
             crate::build::print_build_success(&file_name, &schematic);
         }
     }
@@ -1084,54 +1091,6 @@ fn format_tag_message(url: &str, c: &PublishCandidate) -> String {
     )
 }
 
-fn format_dependency_bump_commit(
-    dependants: &[&WorkspacePackage],
-    candidates: &BTreeMap<String, PublishCandidate>,
-) -> String {
-    let mut pkg_names: Vec<_> = dependants
-        .iter()
-        .filter_map(|p| p.rel_path.file_name())
-        .map(|n| n.to_string_lossy().into_owned())
-        .collect();
-    pkg_names.sort();
-
-    let title = format_dependency_bump_title(&pkg_names);
-
-    let mut updates: Vec<_> = candidates
-        .iter()
-        .filter(|(url, _)| {
-            dependants
-                .iter()
-                .any(|pkg| pkg.dependencies().any(|d| d == url.as_str()))
-        })
-        .map(|(url, c)| {
-            let path = url.split('/').skip(3).collect::<Vec<_>>().join("/");
-            let display = if path.is_empty() { url.as_str() } else { &path };
-            match c.pkg.version.as_deref() {
-                Some(old) => format!("{}: {} → {}", display, old, c.next_version),
-                None => format!("{} → {}", display, c.next_version),
-            }
-        })
-        .collect();
-    updates.sort();
-
-    format!("{}\n\n{}", title, updates.join("\n"))
-}
-
-fn format_dependency_bump_title(pkg_names: &[String]) -> String {
-    match pkg_names {
-        [pkg_name] => {
-            let title = format!("chore({pkg_name}): bump deps");
-            if title.chars().count() <= CONVENTIONAL_COMMIT_SUBJECT_LEN {
-                title
-            } else {
-                DEPENDENCY_BUMP_TITLE.to_string()
-            }
-        }
-        _ => DEPENDENCY_BUMP_TITLE.to_string(),
-    }
-}
-
 fn infer_self_bump(
     workspace: &WorkspaceInfo,
     pkg: &WorkspacePackage,
@@ -1209,29 +1168,6 @@ fn uniform_bump_map(waves: &[Vec<String>], bump: ReleaseBump) -> BTreeMap<String
         .flat_map(|wave| wave.iter())
         .map(|url| (url.clone(), bump))
         .collect()
-}
-
-fn bump_dependency_versions(
-    pcb_toml_path: &Path,
-    candidates: &BTreeMap<String, PublishCandidate>,
-) -> Result<bool> {
-    let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
-    let mut changed = false;
-
-    for (dep_url, c) in candidates {
-        if let Some(existing) = config.dependencies.direct.get(dep_url) {
-            let new_spec = DependencySpec::Version(c.next_version.to_string());
-            if *existing != new_spec {
-                config.dependencies.direct.insert(dep_url.clone(), new_spec);
-                changed = true;
-            }
-        }
-    }
-
-    if changed {
-        std::fs::write(pcb_toml_path, toml::to_string_pretty(&config)?)?;
-    }
-    Ok(changed)
 }
 
 fn collect_publish_tree(
@@ -1461,9 +1397,30 @@ mod tests {
 pcb-version = "0.3"
 "#;
 
+    const TEST_REPOSITORY_WORKSPACE_PCB_TOML: &str = r#"
+[workspace]
+pcb-version = "0.3"
+repository = "github.com/example/workspace"
+"#;
+
     const TEST_MODULE_ZEN: &str = r#"
 P1 = io(Net)
 "#;
+
+    const APP_IMPORTING_DEP_ZEN: &str = r#"
+Dep = Module("github.com/example/workspace/modules/Dep/Dep.zen")
+
+P1 = io(Net)
+"#;
+
+    fn package_dep_manifest(dep_url: &str, version: &str) -> String {
+        format!(
+            r#"
+[dependencies]
+"{dep_url}" = "{version}"
+"#
+        )
+    }
 
     fn setup_publish_workspace(sb: &mut Sandbox, packages: &[(&str, &str)]) {
         sb.cwd("src").write("pcb.toml", TEST_WORKSPACE_PCB_TOML);
@@ -1489,6 +1446,26 @@ P1 = io(Net)
 
     fn load_workspace(sb: &Sandbox) -> WorkspaceInfo {
         get_workspace_info(&DefaultFileProvider::new(), &sb.root_path().join("src")).unwrap()
+    }
+
+    fn package_manifest(sb: &Sandbox, name: &str) -> String {
+        std::fs::read_to_string(
+            sb.root_path()
+                .join("src")
+                .join("modules")
+                .join(name)
+                .join("pcb.toml"),
+        )
+        .expect("read package manifest")
+    }
+
+    fn package_dep_version(sb: &Sandbox, package: &str, dep_url: &str) -> String {
+        let manifest: PcbToml =
+            toml::from_str(&package_manifest(sb, package)).expect("parse package manifest");
+        match manifest.dependencies.direct.get(dep_url) {
+            Some(DependencySpec::Version(version)) => version.clone(),
+            other => panic!("expected version dependency for {dep_url}, got {other:?}"),
+        }
     }
 
     fn dirty_urls(urls: &[&str]) -> HashSet<String> {
@@ -1690,6 +1667,69 @@ P1 = io(Net)
         assert_eq!(inferred.get("modules/Stable"), Some(&ReleaseBump::Major));
     }
 
+    #[test]
+    fn publish_waves_sync_and_rollback() {
+        let mut sb = Sandbox::new();
+        setup_publish_workspace(
+            &mut sb,
+            &[
+                ("Dep", ""),
+                (
+                    "App",
+                    &package_dep_manifest("github.com/example/workspace/modules/Dep", "1.2.3"),
+                ),
+            ],
+        );
+        sb.cwd("src")
+            .write("pcb.toml", TEST_REPOSITORY_WORKSPACE_PCB_TOML)
+            .write("modules/App/App.zen", APP_IMPORTING_DEP_ZEN)
+            .commit("chore: wire app dependency");
+        tag_package(&mut sb, "Dep", "1.2.3");
+        tag_package(&mut sb, "App", "1.2.3");
+
+        sb.cwd("src")
+            .write("modules/Dep/Dep.zen", "P1 = io(Net)\nP2 = io(Net)\n")
+            .commit("feat(Dep): add second pin");
+
+        let mut workspace = load_workspace(&sb);
+        let dirty_urls = expand_dirty_set(
+            &workspace,
+            &dirty_urls(&["github.com/example/workspace/modules/Dep"]),
+        );
+        let waves = compute_publish_waves(&workspace, &dirty_urls).unwrap();
+        let bump_map = uniform_bump_map(&waves, ReleaseBump::Minor);
+        let head_before_publish = git::rev_parse(&workspace.root, "HEAD").unwrap();
+
+        {
+            let mut guard = PublishGuard::new(&workspace.root, head_before_publish.clone());
+            publish_package_waves(&mut workspace, &bump_map, &waves, &mut guard).unwrap();
+
+            assert_eq!(guard.tags, vec!["modules/Dep/v1.3.0", "modules/App/v1.3.0"]);
+            assert!(guard.has_commits);
+            assert!(git::tag_exists(&workspace.root, "modules/Dep/v1.3.0"));
+            assert!(git::tag_exists(&workspace.root, "modules/App/v1.3.0"));
+            assert_eq!(
+                package_dep_version(&sb, "App", "github.com/example/workspace/modules/Dep"),
+                "1.3.0"
+            );
+            assert_eq!(
+                git::run_output(&workspace.root, &["log", "-1", "--format=%s"]).unwrap(),
+                DEPENDENCY_BUMP_TITLE
+            );
+        }
+
+        assert_eq!(
+            git::rev_parse(&workspace.root, "HEAD").unwrap(),
+            head_before_publish
+        );
+        assert!(!git::tag_exists(&workspace.root, "modules/Dep/v1.3.0"));
+        assert!(!git::tag_exists(&workspace.root, "modules/App/v1.3.0"));
+        assert_eq!(
+            package_dep_version(&sb, "App", "github.com/example/workspace/modules/Dep"),
+            "1.2.3"
+        );
+    }
+
     /// Helper to normalize waves for comparison (sort within each wave)
     fn normalize(waves: &[Vec<String>]) -> Vec<Vec<String>> {
         waves
@@ -1700,34 +1740,6 @@ P1 = io(Net)
                 sorted
             })
             .collect()
-    }
-
-    fn assert_dependency_bump_title(pkg_names: &[&str], expected: &str) {
-        let pkg_names = pkg_names
-            .iter()
-            .map(|name| name.to_string())
-            .collect::<Vec<_>>();
-        let title = format_dependency_bump_title(&pkg_names);
-        assert_eq!(title, expected);
-        assert!(title.chars().count() <= CONVENTIONAL_COMMIT_SUBJECT_LEN);
-    }
-
-    #[test]
-    fn test_format_dependency_bump_title_single_package_uses_scope() {
-        assert_dependency_bump_title(&["PCM9211x"], "chore(PCM9211x): bump deps");
-    }
-
-    #[test]
-    fn test_format_dependency_bump_title_multiple_packages_omits_scope() {
-        assert_dependency_bump_title(&["UsbC", "LedIndicator"], "chore: bump deps");
-    }
-
-    #[test]
-    fn test_format_dependency_bump_title_long_single_package_omits_scope() {
-        assert_dependency_bump_title(
-            &["VeryLongPackageNameThatWouldOverflowTheConventionalCommitSubjectLimit"],
-            "chore: bump deps",
-        );
     }
 
     #[test]

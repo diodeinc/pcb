@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb publish` now rehydrates V2 package dependency manifests when publishing dependents of newly tagged workspace packages.
+
 ## [0.3.89] - 2026-06-03
 
 ### Added
