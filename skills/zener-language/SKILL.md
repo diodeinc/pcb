@@ -52,6 +52,12 @@ Components and sourcing:
 - Use physical types from `@stdlib/units.zen` for every physical-value config, even when only a few choices are valid. Constrain discrete choices with `allowed=[...]`; strings auto-convert, e.g. `config(Current, default="3A", allowed=["1A", "2A", "3A"])`.
 - Use `enum()` only for non-physical design choices such as operating mode, protocol variant, polarity, or enablement strategy.
 
+Public compatibility:
+
+- For reusable packages, compatibility means existing consumers can update without changing their Zener, layout, or integration assumptions.
+- Breaking changes include public interface changes (`io()`, `config()`, entrypoints, module call shape), substantial layout/physical integration changes, or behavior changes that require consumer action. Collapsing loose ios into one interface is breaking even if the netlist still builds.
+- `pcb build` passing only validates the current package; it does not prove existing consumers remain compatible. When making a breaking change, document the migration and mark the commit as breaking.
+
 Utilities:
 
 - `Layout(name, path)` associates reusable layout metadata to a module.
