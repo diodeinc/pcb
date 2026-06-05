@@ -102,11 +102,13 @@ struct DesignBomEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum BomMatchStatus {
-    MatchExact,
-    MatchFuzzy,
-    MatchFailed,
+    #[serde(rename = "MATCH_EXACT")]
+    Exact,
+    #[serde(rename = "MATCH_FUZZY")]
+    Fuzzy,
+    #[serde(rename = "MATCH_FAILED")]
+    Failed,
 }
 
 /// BOM Line - represents a single line in the matched BOM response
@@ -121,7 +123,7 @@ struct BomLine {
 }
 
 fn bom_line_no_match(bom_line: &BomLine) -> bool {
-    matches!(bom_line.match_status, Some(BomMatchStatus::MatchFailed))
+    matches!(bom_line.match_status, Some(BomMatchStatus::Failed))
 }
 
 /// Response from /api/boms/match endpoint
@@ -652,15 +654,15 @@ mod tests {
     #[test]
     fn match_status_controls_no_match_detection() {
         assert!(bom_line_no_match(&bom_line(
-            Some(BomMatchStatus::MatchFailed),
+            Some(BomMatchStatus::Failed),
             vec!["offer-1".to_string()]
         )));
         assert!(!bom_line_no_match(&bom_line(
-            Some(BomMatchStatus::MatchExact),
+            Some(BomMatchStatus::Exact),
             Vec::new()
         )));
         assert!(!bom_line_no_match(&bom_line(
-            Some(BomMatchStatus::MatchFuzzy),
+            Some(BomMatchStatus::Fuzzy),
             Vec::new()
         )));
     }
