@@ -290,13 +290,20 @@ impl Bom {
             Cell::new("■").fg(Color::DarkGrey),
             Cell::new("DNP (Do Not Populate)"),
         ]);
-        legend_table.add_row(vec![
-            Cell::new("■").fg(Color::Red),
-            Cell::new("Insufficient stock / hard to source"),
-            Cell::new("  "),
-            Cell::new("■").fg(Color::Magenta),
-            Cell::new(NO_MATCH_LABEL),
-        ]);
+        if has_availability {
+            legend_table.add_row(vec![
+                Cell::new("■").fg(Color::Red),
+                Cell::new("Insufficient stock / hard to source"),
+                Cell::new("  "),
+                Cell::new("■").fg(Color::Magenta),
+                Cell::new(NO_MATCH_LABEL),
+            ]);
+        } else {
+            legend_table.add_row(vec![
+                Cell::new("■").fg(Color::Red),
+                Cell::new("Insufficient stock / hard to source"),
+            ]);
+        }
 
         writeln!(writer, "{legend_table}")?;
 
