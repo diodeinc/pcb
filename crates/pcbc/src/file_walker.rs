@@ -88,7 +88,7 @@ pub fn collect_zen_files(paths: &[impl AsRef<Path>]) -> Result<Vec<PathBuf>> {
 
 /// Collect .zen files.
 ///
-/// Canonicalizes path, collects files, and filters to workspace members only.
+/// Canonicalizes path, collects files, and filters to workspace packages only.
 /// Defaults to current directory if path is None.
 ///
 /// Returns `CollectZenFilesError::NoFilesFound` if no files found.
@@ -99,7 +99,7 @@ pub fn collect_workspace_zen_files(
     let path = path.unwrap_or(Path::new(".")).canonicalize()?;
     let mut zen_files = collect_zen_files(std::slice::from_ref(&path))?;
 
-    // filter to workspace member packages only
+    // Filter to workspace packages only.
     if !workspace_info.packages.is_empty() {
         zen_files.retain(|p| {
             workspace_info

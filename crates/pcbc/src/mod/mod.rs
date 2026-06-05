@@ -1,18 +1,15 @@
-mod dep_id;
-mod manifest;
-mod materialize;
-mod mvs;
-mod request;
-mod resolve;
-mod scan;
-mod target;
-mod versions;
+pub(crate) mod request;
+pub(crate) mod target;
 mod writeback;
 
 use anyhow::{Result, bail};
 use clap::Args;
 use pcb_zen::WorkspaceInfo;
 use pcb_zen::cache_index::{CacheIndex, ensure_workspace_cache_symlink};
+use pcb_zen::package_resolver::{
+    DepGraph, DepGraphNode, PackageResolver, build_frozen_resolution_maps,
+    target_package_urls_for_path, vendor_selected,
+};
 use pcb_zen::resolve::ensure_package_manifest_in_cache;
 use pcb_zen::tags;
 use pcb_zen::workspace::get_workspace_info;
@@ -23,11 +20,8 @@ use pcb_zen_core::resolution::FrozenResolutionMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use self::materialize::{materialize_selected, vendor_selected};
-use self::mvs::{DepGraph, DepGraphNode, PackageResolver};
 use self::request::resolve_direct_dependency_request;
-pub(crate) use self::resolve::{build_frozen_resolution_maps, target_package_urls_for_path};
-use self::target::{AddTarget, discover_add_targets};
+use self::target::{AddTarget, discover_add_targets, discover_package_target};
 use self::writeback::write_package_manifest;
 
 type DirectOverrides = BTreeMap<String, DependencySpec>;
@@ -90,15 +84,14 @@ pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
     let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
     validate_workspace(&workspace)?;
 
-    let targets = discover_add_targets(&workspace, &cwd)?;
-    let [target] = targets.as_slice() else {
-        bail!("`pcb mod add` must be run from a package directory, not the workspace root.");
+    let Some(target) = discover_package_target(&workspace, &cwd) else {
+        bail!("must be run from a package directory.");
     };
-    let overrides = add_overrides(&workspace, target, &args)?;
+    let overrides = add_overrides(&workspace, &target, &args)?;
 
     run_resolution(
         &workspace,
-        std::slice::from_ref(target),
+        std::slice::from_ref(&target),
         false,
         Some((&target.package_url, &overrides)),
         false,
@@ -108,18 +101,53 @@ pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
 
 pub fn execute_sync(args: SyncArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
+    execute_sync_from(&cwd, args)
+}
+
+pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
+    let workspace = get_workspace_info(&DefaultFileProvider::new(), cwd)?;
+    cleanup_deprecated_workspace_members(&workspace, args.verbose)?;
     validate_workspace(&workspace)?;
 
-    let targets = discover_add_targets(&workspace, &cwd)?;
-    run_resolution(
+    let targets = discover_add_targets(&workspace, cwd)?;
+    sync_targets(
         &workspace,
         &targets,
         args.verbose,
-        None,
-        is_workspace_root(&workspace, &cwd),
+        is_workspace_root(&workspace, cwd),
         args.offline,
     )
+}
+
+fn cleanup_deprecated_workspace_members(workspace: &WorkspaceInfo, verbose: bool) -> Result<()> {
+    let Some(config) = workspace.config.as_ref().filter(|config| {
+        config
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| !workspace.members.is_empty())
+    }) else {
+        return Ok(());
+    };
+
+    let pcb_toml_path = workspace.root.join("pcb.toml");
+    if !pcb_toml_path.exists() {
+        return Ok(());
+    }
+
+    let mut rendered = toml::to_string_pretty(&config)?;
+    if !rendered.ends_with('\n') {
+        rendered.push('\n');
+    }
+    std::fs::write(&pcb_toml_path, rendered)?;
+
+    if verbose {
+        println!(
+            "pcb: updated {}",
+            workspace_relative_path(&workspace.root, &pcb_toml_path).display()
+        );
+    }
+
+    Ok(())
 }
 
 pub fn execute_mod_download(args: ModDownloadArgs) -> Result<()> {
@@ -200,11 +228,10 @@ fn load_single_target_workspace(command_name: &str) -> Result<(WorkspaceInfo, Ad
     let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
     validate_workspace(&workspace)?;
 
-    let targets = discover_add_targets(&workspace, &cwd)?;
-    let [target] = targets.as_slice() else {
+    let Some(target) = discover_package_target(&workspace, &cwd) else {
         bail!("`{command_name}` must be run from a package directory, not the workspace root.");
     };
-    Ok((workspace, target.clone()))
+    Ok((workspace, target))
 }
 
 fn build_target_graph(workspace: &WorkspaceInfo, target: &AddTarget) -> Result<DepGraph> {
@@ -224,7 +251,7 @@ fn add_overrides(
     }
 
     let Some(dependency) = args.dependency.as_deref() else {
-        bail!("`pcb mod add` requires a dependency unless -u/--upgrade is used.");
+        bail!("requires a dependency unless -u/--upgrade is used.");
     };
     let (module_path, spec) = resolve_direct_dependency_request(dependency, &current_config)?;
     validate_mod_add_target(workspace, &module_path)?;
@@ -240,18 +267,18 @@ fn upgrade_overrides(
 
     if let Some(dependency) = dependency {
         if dependency.contains('@') {
-            bail!("`pcb mod add -u <url>` expects a bare dependency URL, not a version selector.");
+            bail!("-u/--upgrade expects a bare dependency URL, not a version selector.");
         }
         let Some((module_path, spec)) =
             current_config.dependencies.direct.get_key_value(dependency)
         else {
             bail!(
-                "`pcb mod add -u {}` can only update an existing direct dependency",
+                "can only update an existing direct dependency: {}",
                 dependency
             );
         };
         if !is_remote_dependency(workspace, module_path, spec) {
-            bail!("`pcb mod add -u {}` is not a remote dependency", dependency);
+            bail!("not a remote dependency: {}", dependency);
         }
         validate_mod_add_target(workspace, module_path)?;
         let (_, spec) = resolve_direct_dependency_request(module_path, current_config)?;
@@ -276,16 +303,13 @@ fn upgrade_overrides(
 
 fn validate_mod_add_target(workspace: &WorkspaceInfo, module_path: &str) -> Result<()> {
     if is_stdlib_module_path(module_path) {
-        bail!(
-            "`pcb mod add` does not support stdlib module paths: {}",
-            module_path
-        );
+        bail!("does not support stdlib module paths: {}", module_path);
     }
     if workspace.packages.contains_key(module_path)
         || workspace.workspace_base_url().as_deref() == Some(module_path)
     {
         bail!(
-            "`pcb mod add` does not support workspace-local package URLs: {}",
+            "does not support workspace-local package URLs: {}",
             module_path
         );
     }
@@ -304,7 +328,7 @@ fn is_remote_dependency(
         && !is_configured_kicad_repo(workspace, module_path)
 }
 
-fn is_configured_kicad_repo(workspace: &WorkspaceInfo, module_path: &str) -> bool {
+pub(crate) fn is_configured_kicad_repo(workspace: &WorkspaceInfo, module_path: &str) -> bool {
     workspace
         .kicad_library_entries()
         .iter()
@@ -414,6 +438,16 @@ fn print_frozen_resolution(
     }
 }
 
+pub(crate) fn sync_targets(
+    workspace: &WorkspaceInfo,
+    targets: &[AddTarget],
+    verbose: bool,
+    prune_vendor: bool,
+    offline: bool,
+) -> Result<()> {
+    run_resolution(workspace, targets, verbose, None, prune_vendor, offline)
+}
+
 fn run_resolution(
     workspace: &WorkspaceInfo,
     targets: &[AddTarget],
@@ -424,7 +458,7 @@ fn run_resolution(
 ) -> Result<()> {
     ensure_workspace_cache_symlink(&workspace.root)?;
     let mut resolver = PackageResolver::new(workspace.clone(), offline)?;
-    let mut package_roots = BTreeSet::new();
+    let mut selected_remote = BTreeSet::new();
 
     for target in targets {
         let overrides = direct_overrides
@@ -439,19 +473,20 @@ fn run_resolution(
                 workspace_relative_path(&workspace.root, &target.pcb_toml_path).display()
             );
         }
-        package_roots.extend(materialize_selected(
-            workspace,
-            &resolution.resolved_remote,
-            offline,
-        )?);
+        selected_remote.extend(resolution.resolved_remote);
     }
 
+    let package_roots = resolver.materialize_selected(
+        selected_remote
+            .iter()
+            .map(|(dep_id, version)| (dep_id, version)),
+    )?;
     vendor_selected(workspace, &package_roots, prune_vendor)?;
 
     Ok(())
 }
 
-fn validate_workspace(workspace: &WorkspaceInfo) -> Result<()> {
+pub(crate) fn validate_workspace(workspace: &WorkspaceInfo) -> Result<()> {
     if workspace.errors.is_empty() {
         return Ok(());
     }

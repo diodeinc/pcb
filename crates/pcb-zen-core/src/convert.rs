@@ -19,7 +19,6 @@ use pcb_sch::{AttributeValue, Instance, InstanceKind, InstanceRef, ModuleRef, Ne
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
 use starlark::values::list::ListRef;
-use starlark::values::record::FrozenRecord;
 use starlark::values::{FrozenValue, Value, ValueLike, dict::DictRef};
 use starlark::{codemap::ResolvedSpan, errors::EvalSeverity};
 use std::collections::{BTreeMap, HashMap};
@@ -583,9 +582,8 @@ impl ModuleConverter {
                 .get(key)
                 .map(|val| {
                     // Try to interpret the value as a boolean
-                    if let Some(s) = val.downcast_frozen_str() {
-                        let s_str = s.to_string();
-                        s_str.to_lowercase() == "true" || s_str == "1"
+                    if let Some(s) = val.to_value().unpack_str() {
+                        s.eq_ignore_ascii_case("true") || s == "1"
                     } else {
                         val.unpack_bool().unwrap_or_default()
                     }
@@ -1267,7 +1265,7 @@ fn add_bool_attribute_if_true(instance: &mut Instance, attr_name: &str, value: b
 
 fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<AttributeValue> {
     // Handle scalars first
-    if let Some(s) = v.downcast_frozen_str() {
+    if let Some(s) = v.to_value().unpack_str() {
         return Ok(AttributeValue::String(s.to_string()));
     } else if let Some(n) = v.unpack_i32() {
         return Ok(AttributeValue::Number(n as f64));
@@ -1279,16 +1277,6 @@ fn to_attribute_value(v: starlark::values::FrozenValue) -> anyhow::Result<Attrib
         return Ok(AttributeValue::String(enum_val.value().to_string()));
     } else if let Some(part) = v.downcast_ref::<PartValue>() {
         return Ok(AttributeValue::Json(part.to_json_value()));
-    }
-
-    if v.downcast_ref::<FrozenRecord>().is_some() {
-        match v.to_value().to_json_value() {
-            Ok(json) => return Ok(AttributeValue::Json(json)),
-            Err(_) => {
-                // If JSON conversion fails, fall back to string
-                return Ok(AttributeValue::String(v.to_string()));
-            }
-        }
     }
 
     // Handle lists (no nested list support)

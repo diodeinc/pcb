@@ -21,7 +21,7 @@ use pcb_docgen::generate_stdlib_mdx;
 use std::path::Path;
 
 let result = generate_stdlib_mdx(
-    Path::new("../stdlib"),
+    Path::new("../lib/std"),
     Path::new("docs/pages"),
     Path::new("target/debug/pcb"),
 )?;

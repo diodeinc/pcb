@@ -2,23 +2,14 @@
 source: crates/pcbc/tests/auto_deps.rs
 expression: snapshot
 ---
-Command: pcbc build board.zen
-Exit Code: 0
-
---- STDOUT ---
-
---- STDERR ---
-✓ board.zen (1 components)
-
 --- pcb.toml ---
 [workspace]
 pcb-version = "0.3"
 
-[dependencies."github.com/mycompany/components/SimpleResistor"]
-branch = "main"
-rev = "<HEAD_REV>"
+[dependencies]
+"github.com/mycompany/components/SimpleResistor" = "<PSEUDO_VERSION>"
 
-
---- pcb.sum (dep lines) ---
-github.com/mycompany/components/SimpleResistor <PSEUDO_VERSION> h1:zh3MBSP5FKnSJ5WxEnWYHW2b356zQGUkCyyf1HoxN3w=
-github.com/mycompany/components/SimpleResistor <PSEUDO_VERSION>/pcb.toml h1:E3ma1g4h68BKGUerKwVIXkTssUyU3/mOx4I3AVS1nRA=
+[dependencies.indirect]
+"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"

@@ -1,4 +1,4 @@
-name: WASM Build
+name: WASM
 
 on:
   push:
@@ -8,18 +8,27 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  KICAD_VERSION: 10.0.0
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  wasm_build:
-    name: Build WASM
+  wasm:
+    name: Evaluate publish bundles
     runs-on: ubicloud-standard-16
-    timeout-minutes: 10
+    container:
+      image: ghcr.io/diodeinc/kicad:10.0.0
+      options: --user root
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential pkg-config libssl-dev jq git openssh-client
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -27,29 +36,55 @@ jobs:
           target: wasm32-unknown-unknown
           cache-bin: false
 
-      - name: Build WASM
-        run: cargo build --package pcb-zen-wasm --target wasm32-unknown-unknown --release
+      - uses: taiki-e/install-action@wasm-pack
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Build pcbc
+        run: cargo build -p pcbc --release
+
+      - name: Build WASM bundle
+        run: ./bin/build-wasm-bundle.sh
 
       - name: Check WASM artifact size
         run: |
-          WASM_FILE="target/wasm32-unknown-unknown/release/pcb_zen_wasm.wasm"
-          
+          WASM_FILE="target/wasm-bundle/pcb_zen_wasm_bg.wasm"
+
           if [ ! -f "$WASM_FILE" ]; then
             echo "Error: WASM artifact not found"
             exit 1
           fi
-          
+
           # Get file size in bytes
           SIZE=$(stat -c%s "$WASM_FILE" 2>/dev/null || stat -f%z "$WASM_FILE")
           SIZE_MB=$((SIZE / 1024 / 1024))
-          
+
           echo "WASM bundle size: ${SIZE_MB}MB"
           ls -lh "$WASM_FILE"
-          
+
           # Fail if size exceeds 30MB
           if [ $SIZE -gt 31457280 ]; then
             echo "Error: WASM bundle is too large (${SIZE_MB}MB > 30MB)"
             exit 1
           fi
-          
-          echo "WASM build successful! Size is within limits."
+
+          echo "WASM bundle size is within limits."
+
+      - name: Checkout board workspaces
+        run: |
+          key="$RUNNER_TEMP/code-diode-key"
+          ssh-keygen -q -t ed25519 -N '' -f "$key"
+          export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityFile=$key -o IdentityAgent=none -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@code.diode.computer:demo/b/Demeter workspaces/Demeter
+          git clone --depth 1 git@code.diode.computer:demo/b/Feign workspaces/Feign
+
+      - name: Evaluate publish bundles with WASM
+        run: |
+          for board in Demeter Feign; do
+            node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \
+              --publish "workspaces/$board/$board.zen" \
+              --pcbc target/release/pcbc \
+              > "$RUNNER_TEMP/$board-wasm-netlist.json"
+          done

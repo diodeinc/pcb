@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
-use ipc2581::types::{PolyStep, Polygon, Profile};
+use pcb_ir::common::Point;
+use pcb_ir::dialects::ipc::{GeometryDocument, PathCmd, PathOp, render_profiles};
 
 const OUTLINE_LAYER: &str = "BOARD_OUTLINE";
 const EPSILON: f64 = 1e-9;
@@ -12,15 +13,21 @@ struct DxfVertex {
     bulge: f64,
 }
 
-/// Render an IPC-2581 board profile as an ASCII DXF outline in millimeters.
-pub fn render_outline_dxf(profile: &Profile) -> String {
+/// Render physical IPC profile geometry as an ASCII DXF outline in millimeters.
+pub fn render_profiles_dxf<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> String {
     let mut dxf = String::new();
     write_header(&mut dxf);
     write_tables(&mut dxf);
     write_entities_start(&mut dxf);
-    write_polygon(&mut dxf, &profile.polygon);
-    for cutout in &profile.cutouts {
-        write_polygon(&mut dxf, cutout);
+    for profile in render_profiles(doc) {
+        write_path(&mut dxf, doc, profile.outer_path);
+        for cutout in &doc.profile_cutouts
+            [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
+        {
+            write_path(&mut dxf, doc, cutout.path);
+        }
     }
     write_footer(&mut dxf);
     dxf
@@ -48,8 +55,22 @@ fn write_footer(dxf: &mut String) {
     dxf.push_str("0\nENDSEC\n0\nEOF\n");
 }
 
-fn write_polygon(dxf: &mut String, polygon: &Polygon) {
-    let vertices = polygon_vertices(polygon);
+fn write_path<Symbol, LayerFunction>(
+    dxf: &mut String,
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    path_index: u32,
+) {
+    let path = &doc.paths[path_index as usize];
+    for contour in &doc.contours
+        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+    {
+        let cmds = &doc.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
+        write_polyline(dxf, &contour_vertices(cmds));
+    }
+}
+
+fn write_polyline(dxf: &mut String, vertices: &[DxfVertex]) {
     if vertices.len() < 2 {
         return;
     }
@@ -67,71 +88,82 @@ fn write_polygon(dxf: &mut String, polygon: &Polygon) {
     }
 }
 
-fn polygon_vertices(polygon: &Polygon) -> Vec<DxfVertex> {
-    let first = point(polygon.begin);
-    let mut current = first;
-    let mut vertices = vec![DxfVertex {
-        x: first.0,
-        y: first.1,
-        bulge: 0.0,
-    }];
+fn contour_vertices(cmds: &[PathCmd]) -> Vec<DxfVertex> {
+    let mut first = None;
+    let mut current = Point::default();
+    let mut vertices = Vec::new();
 
-    for (index, step) in polygon.steps.iter().enumerate() {
-        let is_last = index + 1 == polygon.steps.len();
-        match step {
-            PolyStep::Segment(segment) => {
-                current = point(segment.point);
-                vertices.last_mut().unwrap().bulge = 0.0;
-                push_endpoint(&mut vertices, current, first, is_last);
+    for cmd in cmds {
+        match cmd.op {
+            PathOp::MoveTo => {
+                first = Some(cmd.p0);
+                current = cmd.p0;
+                vertices.push(DxfVertex {
+                    x: cmd.p0.x,
+                    y: cmd.p0.y,
+                    bulge: 0.0,
+                });
             }
-            PolyStep::Curve(curve) => {
-                let end = point(curve.point);
-                let center = point(curve.center);
-                if same_point(current, end) && distance(current, center) > EPSILON {
-                    let opposite = opposite_arc_point(current, center, curve.clockwise);
-                    vertices.last_mut().unwrap().bulge = half_circle_bulge(curve.clockwise);
-                    vertices.push(DxfVertex {
-                        x: opposite.0,
-                        y: opposite.1,
-                        bulge: half_circle_bulge(curve.clockwise),
-                    });
-                    push_endpoint(&mut vertices, end, first, is_last);
-                } else {
-                    vertices.last_mut().unwrap().bulge =
-                        arc_bulge(current, end, center, curve.clockwise);
-                    push_endpoint(&mut vertices, end, first, is_last);
+            PathOp::LineTo => {
+                current = cmd.p0;
+                if let Some(first) = first {
+                    vertices.last_mut().unwrap().bulge = 0.0;
+                    push_endpoint(&mut vertices, current, first);
+                }
+            }
+            PathOp::ArcTo => {
+                let end = cmd.p0;
+                let center = cmd.p1;
+                if let Some(first) = first {
+                    if same_point(current, end) && current.distance_to(center) > EPSILON {
+                        let opposite = opposite_arc_point(current, center, cmd.clockwise);
+                        vertices.last_mut().unwrap().bulge = half_circle_bulge(cmd.clockwise);
+                        vertices.push(DxfVertex {
+                            x: opposite.x,
+                            y: opposite.y,
+                            bulge: half_circle_bulge(cmd.clockwise),
+                        });
+                        push_endpoint(&mut vertices, end, first);
+                    } else {
+                        vertices.last_mut().unwrap().bulge =
+                            arc_bulge(current, end, center, cmd.clockwise);
+                        push_endpoint(&mut vertices, end, first);
+                    }
                 }
                 current = end;
             }
+            PathOp::CubicTo => {
+                let start = current;
+                for step in 1..=16 {
+                    let end = cubic_point(start, cmd.p0, cmd.p1, cmd.p2, step as f64 / 16.0);
+                    if let Some(first) = first {
+                        vertices.last_mut().unwrap().bulge = 0.0;
+                        push_endpoint(&mut vertices, end, first);
+                    }
+                    current = end;
+                }
+            }
+            PathOp::Close => {}
         }
     }
 
     vertices
 }
 
-fn push_endpoint(
-    vertices: &mut Vec<DxfVertex>,
-    point: (f64, f64),
-    first: (f64, f64),
-    is_last: bool,
-) {
-    if is_last && same_point(point, first) {
+fn push_endpoint(vertices: &mut Vec<DxfVertex>, point: Point, first: Point) {
+    if same_point(point, first) {
         return;
     }
     vertices.push(DxfVertex {
-        x: point.0,
-        y: point.1,
+        x: point.x,
+        y: point.y,
         bulge: 0.0,
     });
 }
 
-fn point(point: ipc2581::types::Point) -> (f64, f64) {
-    (point.x, point.y)
-}
-
-fn arc_bulge(start: (f64, f64), end: (f64, f64), center: (f64, f64), clockwise: bool) -> f64 {
-    let start_angle = (start.1 - center.1).atan2(start.0 - center.0);
-    let end_angle = (end.1 - center.1).atan2(end.0 - center.0);
+fn arc_bulge(start: Point, end: Point, center: Point, clockwise: bool) -> f64 {
+    let start_angle = start.angle_from(center);
+    let end_angle = end.angle_from(center);
     let ccw_sweep = (end_angle - start_angle).rem_euclid(std::f64::consts::TAU);
     let signed_sweep = if clockwise {
         -(std::f64::consts::TAU - ccw_sweep)
@@ -141,18 +173,18 @@ fn arc_bulge(start: (f64, f64), end: (f64, f64), center: (f64, f64), clockwise: 
     (signed_sweep / 4.0).tan()
 }
 
-fn opposite_arc_point(start: (f64, f64), center: (f64, f64), clockwise: bool) -> (f64, f64) {
-    let radius = distance(start, center);
-    let start_angle = (start.1 - center.1).atan2(start.0 - center.0);
+fn opposite_arc_point(start: Point, center: Point, clockwise: bool) -> Point {
+    let radius = start.distance_to(center);
+    let start_angle = start.angle_from(center);
     let angle = start_angle
         + if clockwise {
             -std::f64::consts::PI
         } else {
             std::f64::consts::PI
         };
-    (
-        center.0 + radius * angle.cos(),
-        center.1 + radius * angle.sin(),
+    Point::new(
+        center.x + radius * angle.cos(),
+        center.y + radius * angle.sin(),
     )
 }
 
@@ -160,12 +192,22 @@ fn half_circle_bulge(clockwise: bool) -> f64 {
     if clockwise { -1.0 } else { 1.0 }
 }
 
-fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
-    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
+fn cubic_point(start: Point, c1: Point, c2: Point, end: Point, t: f64) -> Point {
+    let mt = 1.0 - t;
+    Point::new(
+        mt.powi(3) * start.x
+            + 3.0 * mt.powi(2) * t * c1.x
+            + 3.0 * mt * t.powi(2) * c2.x
+            + t.powi(3) * end.x,
+        mt.powi(3) * start.y
+            + 3.0 * mt.powi(2) * t * c1.y
+            + 3.0 * mt * t.powi(2) * c2.y
+            + t.powi(3) * end.y,
+    )
 }
 
-fn same_point(a: (f64, f64), b: (f64, f64)) -> bool {
-    (a.0 - b.0).abs() <= EPSILON && (a.1 - b.1).abs() <= EPSILON
+fn same_point(a: Point, b: Point) -> bool {
+    (a.x - b.x).abs() <= EPSILON && (a.y - b.y).abs() <= EPSILON
 }
 
 fn fmt_num(value: f64) -> String {
@@ -185,14 +227,14 @@ fn fmt_num(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ipc2581::types::{Point, PolyStepCurve, PolyStepSegment};
+    use pcb_ir::common::{Affine2, BBox};
+    use pcb_ir::dialects::ipc::{BoardProfile, BoardProfileCutout, BoardProfileKind, GeometryPath};
 
     #[test]
-    fn renders_profile_as_mm_dxf_with_closed_outline_layer() {
-        let dxf = render_outline_dxf(&Profile {
-            polygon: rect_polygon(),
-            cutouts: Vec::new(),
-        });
+    fn renders_profile_ir_as_mm_dxf_with_closed_outline_layer() {
+        let doc = rect_profile_doc();
+
+        let dxf = render_profiles_dxf(&doc);
 
         assert!(dxf.contains("9\n$INSUNITS\n70\n4\n"));
         assert!(dxf.contains("2\nBOARD_OUTLINE\n"));
@@ -203,45 +245,66 @@ mod tests {
 
     #[test]
     fn preserves_profile_arcs_as_lwpolyline_bulges() {
-        let dxf = render_outline_dxf(&Profile {
-            polygon: Polygon {
-                begin: Point { x: 1.0, y: 0.0 },
-                steps: vec![
-                    PolyStep::Curve(PolyStepCurve {
-                        point: Point { x: -1.0, y: 0.0 },
-                        center: Point { x: 0.0, y: 0.0 },
-                        clockwise: false,
-                    }),
-                    PolyStep::Curve(PolyStepCurve {
-                        point: Point { x: 1.0, y: 0.0 },
-                        center: Point { x: 0.0, y: 0.0 },
-                        clockwise: false,
-                    }),
-                ],
-            },
-            cutouts: Vec::new(),
+        let mut doc = GeometryDocument::<u32, ()>::new("test".to_string());
+        let path = doc.push_path(
+            GeometryPath::unpainted(BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(1.0, 0.0)),
+                PathCmd::arc_to(Point::new(-1.0, 0.0), Point::new(0.0, 0.0), false),
+                PathCmd::arc_to(Point::new(1.0, 0.0), Point::new(0.0, 0.0), false),
+                PathCmd::close(),
+            ],
+        );
+        doc.profiles.push(BoardProfile {
+            kind: BoardProfileKind::BoardDefinition,
+            source_step_ref: 0,
+            transform: Affine2::identity(),
+            outer_path: path,
+            cutout_start: 0,
+            cutout_count: 0,
+            bbox: BBox::empty(),
         });
+
+        let dxf = render_profiles_dxf(&doc);
 
         assert!(dxf.contains("42\n1\n"));
     }
 
-    fn rect_polygon() -> Polygon {
-        Polygon {
-            begin: Point { x: 0.0, y: 0.0 },
-            steps: vec![
-                PolyStep::Segment(PolyStepSegment {
-                    point: Point { x: 10.0, y: 0.0 },
-                }),
-                PolyStep::Segment(PolyStepSegment {
-                    point: Point { x: 10.0, y: 5.0 },
-                }),
-                PolyStep::Segment(PolyStepSegment {
-                    point: Point { x: 0.0, y: 5.0 },
-                }),
-                PolyStep::Segment(PolyStepSegment {
-                    point: Point { x: 0.0, y: 0.0 },
-                }),
+    fn rect_profile_doc() -> GeometryDocument<u32, ()> {
+        let mut doc = GeometryDocument::new("test".to_string());
+        let outer_path = doc.push_path(
+            GeometryPath::unpainted(BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 5.0)),
+                PathCmd::line_to(Point::new(0.0, 5.0)),
+                PathCmd::close(),
             ],
-        }
+        );
+        let cutout_path = doc.push_path(
+            GeometryPath::unpainted(BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(4.0, 2.0)),
+                PathCmd::line_to(Point::new(6.0, 2.0)),
+                PathCmd::line_to(Point::new(6.0, 3.0)),
+                PathCmd::line_to(Point::new(4.0, 3.0)),
+                PathCmd::close(),
+            ],
+        );
+        doc.profile_cutouts.push(BoardProfileCutout {
+            path: cutout_path,
+            bbox: BBox::empty(),
+        });
+        doc.profiles.push(BoardProfile {
+            kind: BoardProfileKind::BoardDefinition,
+            source_step_ref: 0,
+            transform: Affine2::identity(),
+            outer_path,
+            cutout_start: 0,
+            cutout_count: 1,
+            bbox: BBox::empty(),
+        });
+        doc
     }
 }

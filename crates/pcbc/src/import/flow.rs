@@ -288,7 +288,6 @@ mod tests {
         let modules = board_repo.join("modules");
 
         let pcb_toml_contents = r#"[workspace]
-members = ["modules/*"]
 repository = "github.com/example/custom-board"
 endpoint = "https://example.invalid"
 

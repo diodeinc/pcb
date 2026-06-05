@@ -1,0 +1,6 @@
+---
+source: crates/pcb-zen-core/tests/input.rs
+assertion_line: 1534
+expression: output
+---
+Error: Module.zen:10:1-8 config() does not support record types; use primitive, enum, or physical-value config parameters

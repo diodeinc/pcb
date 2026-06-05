@@ -367,6 +367,7 @@ MyPart = Module("github.com/testorg/components/MyPart/MyPart.zen")
 MyPart(name = "U1", P1 = Net("A"), P2 = Net("B"))
 "#,
         )
+        .sync()
         .snapshot_run("pcbc", ["build", "board.zen", "--netlist"]);
 
     let netlist = parse_netlist_json(&output);

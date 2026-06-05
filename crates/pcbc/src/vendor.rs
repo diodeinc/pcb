@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args;
 use pcb_ui::{Colorize, Style, StyledText};
-use pcb_zen::{get_workspace_info, resolve_dependencies, vendor_deps};
+use pcb_zen::{get_workspace_info, resolve_workspace_dependencies, vendor_deps};
 use pcb_zen_core::DefaultFileProvider;
 use std::path::PathBuf;
 
@@ -27,7 +27,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
         .zen_path
         .unwrap_or_else(|| std::env::current_dir().unwrap())
         .canonicalize()?;
-    let mut workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
+    let workspace_info = get_workspace_info(&DefaultFileProvider::new(), &zen_path)?;
 
     if !args.all {
         println!(
@@ -37,7 +37,7 @@ pub fn execute(args: VendorArgs) -> Result<()> {
     }
 
     // Vendoring always needs network access (offline=false) and allows modifications (locked=false)
-    let resolution = resolve_dependencies(&mut workspace_info, false, false)?;
+    let resolution = resolve_workspace_dependencies(workspace_info, &zen_path, false, false)?;
 
     // If --all, vendor everything with ["**"] pattern
     // Otherwise, pass empty patterns to use only [workspace.vendor] config

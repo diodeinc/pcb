@@ -1,5 +1,6 @@
 ---
 source: crates/pcbc/tests/info.rs
+assertion_line: 147
 expression: human_output
 ---
 Command: pcbc info
@@ -9,7 +10,6 @@ Exit Code: 0
 Workspace
 Root: <TEMP_DIR>
 Toolchain: pcb >= 0.3
-Members: components/*, reference/*, modules/*, boards/*, graphics/*
 
 No boards discovered
 

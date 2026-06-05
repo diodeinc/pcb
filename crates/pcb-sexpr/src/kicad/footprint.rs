@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, io::Read};
 
 use base64::Engine;
 use sha2::{Digest, Sha256};
@@ -134,7 +134,7 @@ fn validate_embedded_file(file: &[Sexpr], issues: &mut Vec<FootprintValidationIs
             return;
         }
     };
-    let decompressed = match zstd::decode_all(compressed.as_slice()) {
+    let decompressed = match decode_zstd(&compressed) {
         Ok(bytes) => bytes,
         Err(err) => {
             issues.push(FootprintValidationIssue::new(
@@ -154,6 +154,16 @@ fn validate_embedded_file(file: &[Sexpr], issues: &mut Vec<FootprintValidationIs
             checksum_span,
         ));
     }
+}
+
+fn decode_zstd(compressed: &[u8]) -> Result<Vec<u8>, String> {
+    let mut decoder =
+        ruzstd::decoding::StreamingDecoder::new(compressed).map_err(|err| err.to_string())?;
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .map_err(|err| err.to_string())?;
+    Ok(decompressed)
 }
 
 fn checksum_matches(stored: &str, data: &[u8]) -> bool {
@@ -316,9 +326,8 @@ mod tests {
     use super::*;
 
     fn embedded_payload(bytes: &[u8]) -> (String, String) {
-        let mut encoder = zstd::Encoder::new(Vec::new(), 17).unwrap();
-        std::io::Write::write_all(&mut encoder, bytes).unwrap();
-        let compressed = encoder.finish().unwrap();
+        let compressed =
+            ruzstd::encoding::compress_to_vec(bytes, ruzstd::encoding::CompressionLevel::Fastest);
         let encoded = base64::engine::general_purpose::STANDARD.encode(compressed);
         let checksum = hex::encode(Sha256::digest(bytes));
         (encoded, checksum)

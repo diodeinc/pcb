@@ -24,6 +24,7 @@ tar = { workspace = true }
 ruzstd = { workspace = true }
 console_log = { workspace = true }
 log = { workspace = true }
+semver = { workspace = true }
 
 [dev-dependencies]
 zstd = { workspace = true }

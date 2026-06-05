@@ -7,6 +7,85 @@ use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 
 pub type PolygonContour = Vec<[f64; 2]>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintOp {
+    Dark,
+    Clear,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ContourImage {
+    pub bbox: BBox,
+    pub contours: Vec<PolygonContour>,
+}
+
+impl ContourImage {
+    pub fn new(contours: Vec<PolygonContour>) -> Self {
+        Self {
+            bbox: polygon_contours_bbox(&contours),
+            contours,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.contours.is_empty()
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct PaintComposer {
+    image: Vec<PolygonContour>,
+    run: Vec<PolygonContour>,
+    run_op: Option<PaintOp>,
+}
+
+impl PaintComposer {
+    pub fn push(&mut self, op: PaintOp, mut contours: Vec<PolygonContour>) {
+        if contours.is_empty() {
+            return;
+        }
+        if self.run_op != Some(op) {
+            self.flush_run();
+            self.run_op = Some(op);
+        }
+        self.run.append(&mut contours);
+    }
+
+    pub fn finish(mut self) -> Vec<PolygonContour> {
+        self.flush_run();
+        self.image
+    }
+
+    pub fn finish_image(self) -> ContourImage {
+        ContourImage::new(self.finish())
+    }
+
+    fn flush_run(&mut self) {
+        let Some(op) = self.run_op.take() else {
+            return;
+        };
+        if self.run.is_empty() {
+            return;
+        }
+
+        match op {
+            PaintOp::Dark => {
+                let mut contours = std::mem::take(&mut self.image);
+                contours.append(&mut self.run);
+                self.image = union_contours(contours, FillRule::NonZero);
+            }
+            PaintOp::Clear => {
+                if self.image.is_empty() {
+                    self.run.clear();
+                } else {
+                    let cutters = union_contours(std::mem::take(&mut self.run), FillRule::NonZero);
+                    self.image = difference_contours(std::mem::take(&mut self.image), cutters);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PathPayload {
     pub bbox: BBox,
@@ -195,6 +274,16 @@ pub fn polygon_contours_to_payloads(contours: Vec<PolygonContour>) -> Vec<PathPa
         .into_iter()
         .filter_map(polygon_contour_to_payload)
         .collect()
+}
+
+pub fn polygon_contours_bbox(contours: &[PolygonContour]) -> BBox {
+    contours
+        .iter()
+        .flat_map(|contour| contour.iter())
+        .fold(BBox::empty(), |mut bbox, &[x, y]| {
+            bbox.include_point(Point::new(x, y));
+            bbox
+        })
 }
 
 pub fn overlay_fill_rule(fill_rule: FillRule) -> OverlayFillRule {

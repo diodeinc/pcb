@@ -1,11 +1,7 @@
 use anyhow::{Context, Result};
-use pcb_zen::ast_utils::{SourceEdit, apply_edits, visit_string_literals};
-use starlark::syntax::{AstModule, Dialect};
-use starlark_syntax::syntax::ast::StmtP;
-use starlark_syntax::syntax::module::AstModuleFields;
 use std::path::{Path, PathBuf};
 
-use super::{Codemod, MigrateContext};
+use super::{Codemod, MigrateContext, rewrite_strings};
 
 /// Convert cross-package relative paths to URLs in .zen files
 pub struct EscapePaths;
@@ -114,73 +110,17 @@ fn convert_file(
     repository: &str,
     workspace_path: Option<&str>,
 ) -> Result<Option<String>> {
-    let mut dialect = Dialect::Extended;
-    dialect.enable_f_strings = true;
-
-    let ast = match AstModule::parse("<memory>", content.to_owned(), &dialect) {
-        Ok(a) => a,
-        Err(_) => return Ok(None),
-    };
-
     let zen_dir = zen_file.parent().context("Zen file has no parent")?;
-    let mut edits: Vec<SourceEdit> = Vec::new();
-
-    // Visit all expressions
-    ast.statement().visit_expr(|expr| {
-        visit_string_literals(expr, &mut |s, lit_expr| {
-            if let Some(url) = try_convert_path(
-                s,
-                zen_dir,
-                package_root,
-                workspace_root,
-                repository,
-                workspace_path,
-            ) {
-                let span = ast.codemap().resolve_span(lit_expr.span);
-                edits.push((
-                    span.begin.line,
-                    span.begin.column,
-                    span.end.line,
-                    span.end.column,
-                    format!("\"{}\"", url),
-                ));
-            }
-        });
-    });
-
-    // Check load() statements
-    for stmt in starlark_syntax::syntax::top_level_stmts::top_level_stmts(ast.statement()) {
-        let StmtP::Load(load) = &stmt.node else {
-            continue;
-        };
-
-        let module_path: &str = &load.module.node;
-        if let Some(url) = try_convert_path(
-            module_path,
+    Ok(rewrite_strings(content, |s| {
+        try_convert_path(
+            s,
             zen_dir,
             package_root,
             workspace_root,
             repository,
             workspace_path,
-        ) {
-            let span = ast.codemap().resolve_span(load.module.span);
-            edits.push((
-                span.begin.line,
-                span.begin.column,
-                span.end.line,
-                span.end.column,
-                format!("\"{}\"", url),
-            ));
-        }
-    }
-
-    if edits.is_empty() {
-        return Ok(None);
-    }
-
-    let mut lines: Vec<String> = content.split('\n').map(|s| s.to_string()).collect();
-    apply_edits(&mut lines, edits);
-    Ok(Some(lines.join("\n")))
+        )
+    }))
 }
 
 /// Normalize a path by resolving . and .. components without requiring the path to exist

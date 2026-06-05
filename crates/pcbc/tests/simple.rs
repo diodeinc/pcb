@@ -100,19 +100,10 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 )
 "#;
 
-fn lock_dep_lines<'a>(pcb_sum: &'a str, module_path: &str) -> Vec<&'a str> {
-    let prefix = format!("{module_path} ");
-    pcb_sum
-        .lines()
-        .filter(|line| line.starts_with(&prefix))
-        .collect()
-}
-
 const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
 name = "simple_workspace"
-members = ["boards"]
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
@@ -139,7 +130,6 @@ const WORKSPACE_NAMESPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.3"
 repository = "github.com/acme/workspace"
-members = ["modules/*"]
 "#;
 
 const REMOTE_IO_MODULE_ZEN: &str = r#"
@@ -162,8 +152,21 @@ fn test_pcb_build_simple_board() {
     let output = Sandbox::new()
         .write("pcb.toml", PCB_TOML_MIN)
         .write("boards/SimpleBoard.zen", SIMPLE_BOARD_ZEN)
+        .sync()
         .snapshot_run("pcbc", ["build", "boards/SimpleBoard.zen"]);
     assert_snapshot!("simple_board", output);
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_pcb_build_multiple_explicit_files() {
+    let output = Sandbox::new()
+        .write("pcb.toml", PCB_TOML_MIN)
+        .write("boards/A.zen", SIMPLE_BOARD_ZEN)
+        .write("boards/B.zen", SIMPLE_BOARD_ZEN)
+        .sync()
+        .snapshot_run("pcbc", ["build", "boards/A.zen", "boards/B.zen"]);
+    assert_snapshot!("multiple_explicit_files", output);
 }
 
 #[test]
@@ -175,6 +178,7 @@ fn test_pcb_build_simple_workspace() {
         .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
         .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
         .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen"])
+        .sync()
         .snapshot_run("pcbc", ["build", "boards/TestBoard.zen"]);
     assert_snapshot!("simple_workspace_build", output);
 }
@@ -212,72 +216,34 @@ pcb-version = "0.3"
 "#,
         )
         .write("board.zen", GIT_FIXTURE_BOARD_ZEN)
+        .sync()
         .snapshot_run("pcbc", ["build", "board.zen"]);
     assert_snapshot!("git_fixture", output);
 }
 
 #[test]
 #[cfg(not(target_os = "windows"))]
-fn test_offline_build_uses_selected_pseudo_version() {
+fn test_offline_build_reuses_vendored_pseudo_version() {
     let mut sandbox = Sandbox::new();
 
+    // Component repo where the board pins the dependency to an exact commit.
     let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
     fixture
         .write("SimpleResistor/pcb.toml", "[dependencies]\n")
         .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
         .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD)
-        .commit("v1")
+        .commit("add SimpleResistor")
         .push_mirror();
-    let rev1 = fixture.rev_parse_head();
+    let rev = fixture.rev_parse_head();
 
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
-    fixture
-        .write(
-            "SimpleResistor/SimpleResistor.zen",
-            r#"
-value = config(str, default = "10kOhm")
-
-P1 = io(Net)
-P2 = io(Net)
-
-Component(
-    name = "R",
-    prefix = "R",
-    footprint = File("test.kicad_mod"),
-    pin_defs = {"P1": "1", "P2": "2"},
-    pins = {"P1": P1, "P2": P2},
-    type = "resistor",
-    properties = {"value": value, "revision": "v2"},
-)
-"#,
-        )
-        .commit("v2")
-        .push_mirror();
-    let rev2 = fixture.rev_parse_head();
-
-    let online_output = sandbox
+    sandbox
         .write(
             "pcb.toml",
             r#"[workspace]
 pcb-version = "0.3"
-members = ["boards/*"]
 vendor = ["github.com/mycompany/components/**"]
 "#,
         )
-        .write(
-            "boards/A/pcb.toml",
-            format!(
-                r#"[board]
-name = "A"
-path = "A.zen"
-
-[dependencies]
-"github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{rev1}" }}
-"#
-            ),
-        )
-        .write("boards/A/A.zen", "x = 1\n")
         .write(
             "boards/B/pcb.toml",
             format!(
@@ -286,38 +252,54 @@ name = "B"
 path = "B.zen"
 
 [dependencies]
-"github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{rev2}" }}
+"github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{rev}" }}
 "#
             ),
         )
-        .write("boards/B/B.zen", GIT_FIXTURE_BOARD_ZEN)
-        .snapshot_run("pcbc", ["build", "boards/B/B.zen"]);
+        .write("boards/B/B.zen", GIT_FIXTURE_BOARD_ZEN);
 
+    // `pcb sync` resolves the branch+rev to a pseudo-version, pins it in the
+    // hydrated manifest, and vendors that exact version. This is the v2
+    // replacement for the legacy pcb.sum lockfile.
+    sandbox.sync();
+
+    let board_manifest =
+        std::fs::read_to_string(sandbox.default_cwd().join("boards/B/pcb.toml")).unwrap();
+    let pseudo_version = board_manifest
+        .split_once("SimpleResistor\" = \"")
+        .and_then(|(_, rest)| rest.split('"').next())
+        .expect("hydrated manifest should pin SimpleResistor to a pseudo-version")
+        .to_string();
+    assert!(
+        pseudo_version.ends_with(&rev),
+        "pseudo-version {pseudo_version} should embed the resolved rev {rev}"
+    );
+    assert!(
+        sandbox
+            .default_cwd()
+            .join(format!(
+                "vendor/github.com/mycompany/components/SimpleResistor/{pseudo_version}"
+            ))
+            .exists(),
+        "sync should vendor the selected pseudo-version"
+    );
+    assert!(
+        !sandbox.default_cwd().join("pcb.sum").exists(),
+        "v2 hydration must not create a pcb.sum lockfile"
+    );
+
+    // The offline build must reuse the vendored pseudo-version without network access.
+    let online_output = sandbox.snapshot_run("pcbc", ["build", "boards/B/B.zen"]);
     let offline_output = sandbox.snapshot_run("pcbc", ["build", "boards/B/B.zen", "--offline"]);
-
-    let pcb_sum =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.sum")).unwrap_or_default();
-    let dep_lines = lock_dep_lines(&pcb_sum, "github.com/mycompany/components/SimpleResistor");
-    let dep_version = dep_lines[0]
-        .split_whitespace()
-        .nth(1)
-        .expect("dependency content line must include version");
 
     let snapshot = sandbox
         .sanitize_output(&format!(
-            "--- online ---\n{}\n--- offline ---\n{}\n--- pcb.sum dep lines ---\n{}\n",
-            online_output,
-            offline_output,
-            dep_lines.join("\n")
+            "--- online ---\n{online_output}\n--- offline ---\n{offline_output}\n--- hydrated dep ---\n{pseudo_version}\n"
         ))
-        .replace(dep_version, "<SELECTED_PSEUDO_VERSION>")
-        .replace(&rev1, "<REV1>")
-        .replace(&rev2, "<REV2>");
+        .replace(&pseudo_version, "<SELECTED_PSEUDO_VERSION>")
+        .replace(&rev, "<REV>");
 
-    assert_snapshot!(
-        "offline_build_reuses_selected_workspace_pseudo_version",
-        snapshot
-    );
+    assert_snapshot!("offline_build_reuses_vendored_pseudo_version", snapshot);
 }
 
 #[test]
@@ -380,12 +362,12 @@ Missing(name="U1", P1=p1, P2=p2)
 
     let stderr = sandbox.sanitize_output(&String::from_utf8_lossy(&result.stderr));
     assert!(
-        stderr.contains("is in this workspace, but no workspace member provides it."),
-        "stderr should explain missing workspace member:\n{stderr}"
+        stderr.contains("is in this workspace, but no workspace package provides it."),
+        "stderr should explain missing workspace package:\n{stderr}"
     );
     assert!(
         stderr.contains("Fix the dependency URL or remove it."),
-        "stderr should explain how to fix the missing workspace member:\n{stderr}"
+        "stderr should explain how to fix the missing workspace package:\n{stderr}"
     );
     assert!(
         !stderr.contains("Failed to fetch github.com/acme/workspace/modules/Missing"),
@@ -516,11 +498,41 @@ Thing(name="U1", P1=p1, P2=p2)
         "stderr should identify the external package that introduced the bad dep:\n{stderr}"
     );
     assert!(
-        stderr.contains("is in this workspace, but no workspace member provides it."),
-        "stderr should explain missing workspace member:\n{stderr}"
+        stderr.contains("is in this workspace, but no workspace package provides it."),
+        "stderr should explain missing workspace package:\n{stderr}"
     );
     assert!(
         !stderr.contains("Failed to fetch github.com/acme/workspace/modules/Missing"),
         "stderr should not contain remote fetch failure:\n{stderr}"
+    );
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_pcb_sync_removes_deprecated_members() {
+    let mut sandbox = Sandbox::new();
+
+    let result = sandbox
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.3"
+members = ["modules/*"]
+"#,
+        )
+        .run("pcbc", ["sync"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("sync command failed");
+
+    assert!(result.status.success(), "sync should succeed: {result:?}");
+
+    let pcb_toml =
+        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).expect("read pcb.toml");
+    assert!(
+        !pcb_toml.contains("members"),
+        "sync should remove deprecated workspace.members:\n{pcb_toml}"
     );
 }

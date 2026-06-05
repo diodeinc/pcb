@@ -6,6 +6,7 @@ pub mod diagnostics;
 pub mod git;
 pub mod import_scanner;
 pub mod lsp;
+pub mod package_resolver;
 pub mod resolve;
 pub mod suppression;
 pub mod tags;
@@ -21,6 +22,7 @@ use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalOutput};
 use serde_json::Value as JsonValue;
 use starlark::collections::SmallMap;
 
+pub use package_resolver::resolve_workspace_dependencies;
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
 pub use resolve::{
@@ -28,7 +30,7 @@ pub use resolve::{
     resolve_dependencies_for_update, vendor_deps,
 };
 pub use starlark::errors::EvalSeverity;
-pub use workspace::{MemberPackage, WorkspaceInfo, get_workspace_info};
+pub use workspace::{WorkspaceInfo, WorkspacePackage, get_workspace_info};
 
 /// Evaluate a .zen file and return EvalOutput (module + signature + prints) with diagnostics.
 pub fn eval(

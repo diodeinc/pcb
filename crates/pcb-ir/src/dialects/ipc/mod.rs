@@ -6,7 +6,11 @@ use crate::dialects::{geom, path as common_path};
 pub struct GeometryDocument<Symbol, LayerFunction> {
     pub board_name: String,
     pub layers: Vec<GeometryLayer<Symbol, LayerFunction>>,
-    pub board_outlines: Vec<BoardOutline>,
+    pub boards: Vec<BoardGeometry<Symbol>>,
+    pub panels: Vec<PanelGeometry<Symbol>>,
+    pub board_instances: Vec<BoardInstance<Symbol>>,
+    pub profiles: Vec<BoardProfile<Symbol>>,
+    pub profile_cutouts: Vec<BoardProfileCutout>,
     pub features: Vec<GeometryFeature<Symbol>>,
     pub paths: Vec<GeometryPath>,
     pub contours: Vec<GeometryContour>,
@@ -19,7 +23,11 @@ impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
         Self {
             board_name,
             layers: Vec::new(),
-            board_outlines: Vec::new(),
+            boards: Vec::new(),
+            panels: Vec::new(),
+            board_instances: Vec::new(),
+            profiles: Vec::new(),
+            profile_cutouts: Vec::new(),
             features: Vec::new(),
             paths: Vec::new(),
             contours: Vec::new(),
@@ -91,6 +99,35 @@ impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
     }
 }
 
+const PROFILE_STROKE_WIDTH: f64 = 0.1;
+
+pub fn profiles_bbox<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Option<BBox> {
+    render_profiles(doc)
+        .map(|profile| profile.bbox)
+        .reduce(BBox::union)
+        .filter(|bbox| !bbox.is_empty())
+}
+
+pub fn board_bbox<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Option<BBox> {
+    doc.boards
+        .iter()
+        .map(|board| board.bbox)
+        .find(|bbox| !bbox.is_empty())
+}
+
+pub fn panel_bbox<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Option<BBox> {
+    doc.panels
+        .iter()
+        .map(|panel| panel.bbox)
+        .find(|bbox| !bbox.is_empty())
+}
+
 pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     layer_index: usize,
@@ -135,7 +172,7 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
     geom
 }
 
-pub fn lower_layer_with_board_outlines_to_geom<Symbol: Clone, LayerFunction: Clone>(
+pub fn lower_layer_with_profiles_to_geom<Symbol: Clone, LayerFunction: Clone>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     layer_index: usize,
     role: LayerRole,
@@ -153,29 +190,55 @@ pub fn lower_layer_with_board_outlines_to_geom<Symbol: Clone, LayerFunction: Clo
         meta: layer.layer_function.clone(),
     });
 
-    for outline in &doc.board_outlines {
-        for path in &doc.paths
-            [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
+    for profile in render_profiles(doc) {
+        push_profile_path_to_geom(&mut geom, outline_layer, doc, profile.outer_path);
+        for cutout in &doc.profile_cutouts
+            [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
         {
-            let Some(geom_path) = lower_path_kind(path) else {
-                continue;
-            };
-            let path_id = geom.push_path(geom_path, path_payloads(doc, path));
-            geom.push_object(
-                outline_layer,
-                geom::GeomObject {
-                    paint: PaintPolarity::Dark,
-                    path: path_id,
-                    bbox: path.bbox,
-                    meta: None,
-                },
-            );
-            geom.layers[outline_layer as usize].bbox =
-                geom.layers[outline_layer as usize].bbox.union(path.bbox);
+            push_profile_path_to_geom(&mut geom, outline_layer, doc, cutout.path);
         }
     }
 
     geom
+}
+
+pub fn render_profiles<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> impl Iterator<Item = &BoardProfile<Symbol>> {
+    let has_panel = !doc.panels.is_empty();
+    doc.profiles.iter().filter(move |profile| {
+        if has_panel {
+            matches!(
+                profile.kind,
+                BoardProfileKind::PanelDefinition | BoardProfileKind::BoardInstance
+            )
+        } else {
+            matches!(profile.kind, BoardProfileKind::BoardDefinition)
+        }
+    })
+}
+
+fn push_profile_path_to_geom<Symbol, LayerFunction>(
+    geom: &mut geom::GeomDocument<LayerFunction, Option<Symbol>>,
+    layer_id: u32,
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    path_index: u32,
+) {
+    let path = &doc.paths[path_index as usize];
+    let path_id = geom.push_path(
+        geom::GeomPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round),
+        path_payloads(doc, path),
+    );
+    geom.push_object(
+        layer_id,
+        geom::GeomObject {
+            paint: PaintPolarity::Dark,
+            path: path_id,
+            bbox: path.bbox,
+            meta: None,
+        },
+    );
+    geom.layers[layer_id as usize].bbox = geom.layers[layer_id as usize].bbox.union(path.bbox);
 }
 
 fn lower_path_kind(path: &GeometryPath) -> Option<geom::GeomPath> {
@@ -215,9 +278,63 @@ fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
 }
 
 #[derive(Debug, Clone)]
-pub struct BoardOutline {
-    pub path_start: u32,
-    pub path_count: u32,
+pub struct BoardGeometry<Symbol> {
+    pub step_ref: Symbol,
+    pub profile_start: u32,
+    pub profile_count: u32,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone)]
+pub struct PanelGeometry<Symbol> {
+    pub step_ref: Symbol,
+    pub profile_start: u32,
+    pub profile_count: u32,
+    pub profile_bbox: BBox,
+    pub board_instance_start: u32,
+    pub board_instance_count: u32,
+    pub instance_bbox: BBox,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoardInstance<Symbol> {
+    pub board_index: u32,
+    pub source_step_ref: Symbol,
+    pub parent_step_ref: Symbol,
+    pub transform: Affine2,
+    pub repeat_index_x: u32,
+    pub repeat_index_y: u32,
+    pub repeat_count_x: u32,
+    pub repeat_count_y: u32,
+    pub repeat_pitch_x: f64,
+    pub repeat_pitch_y: f64,
+    pub profile_start: u32,
+    pub profile_count: u32,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardProfileKind {
+    BoardDefinition,
+    PanelDefinition,
+    BoardInstance,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoardProfile<Symbol> {
+    pub kind: BoardProfileKind,
+    pub source_step_ref: Symbol,
+    pub transform: Affine2,
+    pub outer_path: u32,
+    pub cutout_start: u32,
+    pub cutout_count: u32,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoardProfileCutout {
+    pub path: u32,
     pub bbox: BBox,
 }
 
@@ -237,6 +354,7 @@ pub struct GeometryFeature<Symbol> {
     pub bucket: FeatureBucket,
     pub polarity: GeometryPolarity,
     pub net: Option<Symbol>,
+    pub source_layer_ref: Option<Symbol>,
     pub source: SourceRef,
     pub transform: Affine2,
     pub bbox: BBox,
@@ -267,6 +385,7 @@ impl<Symbol> GeometryFeature<Symbol> {
             bucket,
             polarity,
             net: None,
+            source_layer_ref: None,
             source: SourceRef::default(),
             transform: Affine2::identity(),
             bbox: BBox::empty(),
@@ -329,6 +448,18 @@ impl GeometryPath {
                 filled: false,
                 stroked: true,
             },
+        }
+    }
+
+    pub fn unpainted(bbox: BBox) -> Self {
+        Self {
+            contour_start: 0,
+            contour_count: 0,
+            bbox,
+            fill_rule: FillRule::NonZero,
+            stroke_width: 0.0,
+            line_cap: LineCap::Round,
+            flags: PathFlags::default(),
         }
     }
 }

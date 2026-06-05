@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use pcb_zen::resolve::{RemotePackageVendorStatus, copy_remote_package_to_vendor};
 use pcb_zen::{copy_dir_all, git, vendor_deps};
 use pcb_zen_core::kicad_library::{
     KICAD_PARTS_INDEX_FILE, KicadRepoMatch, match_kicad_managed_repo,
@@ -10,11 +9,8 @@ use pcb_zen_core::resolution::{
 };
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use tracing::{info_span, instrument};
-
-const BUNDLE_ZSTD_LEVEL: i32 = 9;
 
 pub(crate) struct MetadataInput<'a> {
     pub name: &'a str,
@@ -32,15 +28,8 @@ pub(crate) struct SourceBundlePlan<'a> {
     pub resolution: &'a ResolutionResult,
     pub root_package_url: Option<&'a str>,
     pub closure: Option<&'a PackageClosure>,
-    pub remote_vendoring: RemoteVendoring,
     pub staged_src: &'a Path,
     pub resolved_paths: &'a [PathBuf],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RemoteVendoring {
-    ClosureOnly,
-    AllResolved,
 }
 
 #[instrument(name = "write_bundle_metadata", skip_all)]
@@ -97,22 +86,12 @@ fn stage_legacy_source_bundle(plan: &SourceBundlePlan<'_>) -> Result<()> {
     {
         let _span = info_span!("copy_remote_packages").entered();
         let vendor_dir = plan.staged_src.join("vendor");
-        match plan.remote_vendoring {
-            RemoteVendoring::AllResolved => {
-                vendor_deps(
-                    plan.resolution,
-                    &["**".to_string()],
-                    Some(&vendor_dir),
-                    true,
-                )?;
-            }
-            RemoteVendoring::ClosureOnly => {
-                let closure = plan
-                    .closure
-                    .context("closure is required for closure-only remote vendoring")?;
-                vendor_remote_closure_packages(plan.resolution, closure, &vendor_dir)?;
-            }
-        }
+        vendor_deps(
+            plan.resolution,
+            &["**".to_string()],
+            Some(&vendor_dir),
+            true,
+        )?;
     }
 
     {
@@ -173,27 +152,6 @@ fn stage_mvs_v2_source_bundle(
         stage_kicad_resolved_file(plan.staged_src, &kicad_roots, resolved_path)?;
     }
 
-    Ok(())
-}
-
-#[instrument(name = "write_canonical_bundle", skip_all)]
-pub(crate) fn write_canonical_bundle(staging_dir: &Path, output_path: &Path) -> Result<()> {
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let bundle_file = fs::File::create(output_path)?;
-    let buffered = BufWriter::with_capacity(256 * 1024, bundle_file);
-    let mut encoder = zstd::stream::write::Encoder::new(buffered, BUNDLE_ZSTD_LEVEL)?;
-    pcb_canonical::create_canonical_tar(
-        staging_dir,
-        &mut encoder,
-        Some(pcb_canonical::CanonicalTarOptions {
-            exclude_nested_packages: false,
-            ..Default::default()
-        }),
-    )?;
-    encoder.finish()?;
     Ok(())
 }
 
@@ -482,45 +440,9 @@ fn get_git_remotes(path: &Path) -> serde_json::Value {
     serde_json::Value::Object(remotes)
 }
 
-#[instrument(name = "vendor_remote_closure_packages", skip_all)]
-fn vendor_remote_closure_packages(
-    resolution: &ResolutionResult,
-    closure: &PackageClosure,
-    vendor_dir: &Path,
-) -> Result<()> {
-    fs::create_dir_all(vendor_dir)?;
-
-    let workspace_info = &resolution.workspace_info;
-    let workspace_vendor = workspace_info.root.join("vendor");
-
-    let mut remote_packages: Vec<_> = closure.remote_packages.iter().collect();
-    remote_packages.sort();
-
-    for (module_path, version) in remote_packages {
-        let dst = vendor_dir.join(module_path).join(version);
-        if matches!(
-            copy_remote_package_to_vendor(
-                &workspace_vendor,
-                &workspace_info.cache_dir,
-                module_path,
-                version,
-                &dst,
-            )?,
-            RemotePackageVendorStatus::MissingSource
-        ) {
-            bail!("Missing package source for {}@{}", module_path, version);
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        RemoteVendoring, SourceBundlePlan, stage_resolved_file_for_source_bundle,
-        stage_source_bundle,
-    };
+    use super::{SourceBundlePlan, stage_resolved_file_for_source_bundle, stage_source_bundle};
     use pcb_test_utils::sandbox::Sandbox;
     use pcb_zen::resolve_dependencies;
     use pcb_zen::workspace::get_workspace_info;
@@ -550,7 +472,6 @@ pcb-version = "0.3"
             resolution: &resolution,
             root_package_url: None,
             closure: None,
-            remote_vendoring: RemoteVendoring::AllResolved,
             staged_src: &staged_src,
             resolved_paths: &[],
         })

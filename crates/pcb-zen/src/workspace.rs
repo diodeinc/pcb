@@ -1,4 +1,4 @@
-//! Workspace introspection and member discovery
+//! Workspace introspection and package discovery.
 //!
 //! Provides high-level APIs for querying workspace information without
 //! running full dependency resolution. Used by `pcb info` and other commands
@@ -16,7 +16,7 @@ use semver::Version;
 
 // Re-export core types
 pub use pcb_zen_core::workspace::{
-    BoardInfo, DiscoveryError, MemberPackage, SymbolFileInfo, WorkspaceInfo,
+    BoardInfo, DiscoveryError, SymbolFileInfo, WorkspaceInfo, WorkspacePackage,
 };
 
 use crate::git;
@@ -219,7 +219,7 @@ fn package_url_for_path(
 
 /// Get workspace information (native-only).
 ///
-/// Calls core's get_workspace_info, adds path-patched forks as workspace members,
+/// Calls core's get_workspace_info, adds path-patched forks as workspace packages,
 /// enriches with git tag metadata, and populates dirty status.
 #[instrument(name = "get_workspace_info", skip_all)]
 pub fn get_workspace_info<F: FileProvider>(
@@ -227,11 +227,11 @@ pub fn get_workspace_info<F: FileProvider>(
     start_path: &Path,
 ) -> Result<WorkspaceInfo> {
     let mut info = {
-        let _span = info_span!("discover_workspace_members").entered();
+        let _span = info_span!("discover_workspace_packages").entered();
         pcb_zen_core::workspace::get_workspace_info(file_provider, start_path)?
     };
 
-    // Add path-patched forks as workspace members
+    // Add path-patched forks as workspace packages.
     {
         let _span = info_span!("add_path_patched_forks").entered();
         add_path_patched_forks(file_provider, &mut info)?;
@@ -279,7 +279,7 @@ pub fn get_workspace_info<F: FileProvider>(
     Ok(info)
 }
 
-/// Add path-patched forks as workspace members.
+/// Add path-patched forks as workspace packages.
 ///
 /// This allows forks to be treated like regular workspace packages for dependency
 /// resolution, without requiring special handling in resolve.rs.
@@ -311,12 +311,12 @@ fn add_path_patched_forks<F: FileProvider>(
             continue;
         }
 
-        // Skip if already a member
+        // Skip if already discovered.
         if info.packages.contains_key(url) {
             continue;
         }
 
-        // Load config and add as a member
+        // Load config and add as a workspace package.
         let pkg_cfg = PcbToml::from_file(file_provider, &pcb_toml_path)?;
 
         // Extract version from fork path if under fork/ directory
@@ -333,7 +333,7 @@ fn add_path_patched_forks<F: FileProvider>(
 
         info.packages.insert(
             url.clone(),
-            MemberPackage {
+            WorkspacePackage {
                 rel_path: PathBuf::from(rel_path),
                 config: pkg_cfg,
                 version: fork_version, // Use fork path version if available

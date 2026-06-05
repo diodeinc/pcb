@@ -317,9 +317,13 @@ impl Sandbox {
         // Prepare a work repo to compose commits, independent of rewrite rules
         let work = self
             .root_path()
+            .join(".pcb/fixtures")
             .join(format!("work_{}", sanitize_name(&rel)));
         if work.exists() {
             fs::remove_dir_all(&work).expect("remove work dir");
+        }
+        if let Some(parent) = work.parent() {
+            fs::create_dir_all(parent).expect("create fixture work parent");
         }
         run_git(&["init", work.to_str().unwrap()]);
         run_git(&[
@@ -437,6 +441,25 @@ impl Sandbox {
         expr = expr.dir(&self.default_cwd);
         expr = self.inject_env(expr);
         expr
+    }
+
+    /// Reconcile source imports and hydrate dependency manifests
+    /// (`[dependencies.indirect]`) by running `pcb sync`, so subsequent builds
+    /// exercise the frozen MVS v2 resolution path. Panics if `pcbc sync` fails.
+    pub fn sync(&mut self) -> &mut Self {
+        let output = self
+            .run("pcbc", ["sync"])
+            .stderr_capture()
+            .stdout_capture()
+            .unchecked()
+            .run()
+            .expect("failed to spawn pcbc sync");
+        assert!(
+            output.status.success(),
+            "pcb sync failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        self
     }
 
     /// Sanitize temporary paths and timestamps in output to make snapshots deterministic

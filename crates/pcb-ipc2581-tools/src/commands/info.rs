@@ -143,9 +143,10 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     let mut summary_table = Table::new();
     summary_table.load_preset(UTF8_FULL_CONDENSED);
     summary_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+    let layout = accessor.board_layout_info();
 
     // Design name
-    if let Some(step) = accessor.first_step() {
+    if let Some(step) = accessor.primary_step() {
         let design_name = accessor.ipc().resolve(step.name);
         summary_table.add_row(vec![
             Cell::new("Design").fg(Color::Cyan),
@@ -154,13 +155,37 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Board dimensions
-    if let Some(dimensions) = accessor.board_dimensions() {
+    if let Some(dimensions) = layout
+        .as_ref()
+        .and_then(|layout| layout.board_dimensions.as_ref())
+    {
         summary_table.add_row(vec![
             Cell::new("Board Size").fg(Color::Cyan),
             Cell::new(units::format_board_size(
                 dimensions.width_mm(),
                 dimensions.height_mm(),
                 unit_format,
+            )),
+        ]);
+    }
+
+    if let Some(panel) = layout.as_ref().and_then(|layout| layout.panel.as_ref()) {
+        if let Some(dimensions) = panel.dimensions.as_ref() {
+            summary_table.add_row(vec![
+                Cell::new("Panel Size").fg(Color::Cyan),
+                Cell::new(units::format_board_size(
+                    dimensions.width_mm(),
+                    dimensions.height_mm(),
+                    unit_format,
+                )),
+            ]);
+        }
+        summary_table.add_row(vec![
+            Cell::new("Panel Boards").fg(Color::Cyan),
+            Cell::new(format!(
+                "{} instance{}",
+                panel.board_instances,
+                if panel.board_instances == 1 { "" } else { "s" }
             )),
         ]);
     }
@@ -544,6 +569,7 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         "mode": content.function_mode.mode.as_str(),
         "level": content.function_mode.level.map(|l| format!("{:?}", l)),
     });
+    let layout = accessor.board_layout_info();
 
     // File metadata
     if let Some(metadata) = accessor.file_metadata() {
@@ -562,13 +588,32 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
     }
 
     // Board dimensions
-    if let Some(dimensions) = accessor.board_dimensions() {
+    if let Some(dimensions) = layout
+        .as_ref()
+        .and_then(|layout| layout.board_dimensions.as_ref())
+    {
         info["board_dimensions"] = json!({
             "width_mm": dimensions.width_mm(),
             "height_mm": dimensions.height_mm(),
             "width_inch": dimensions.width_inch(),
             "height_inch": dimensions.height_inch(),
         });
+    }
+
+    if let Some(panel) = layout.as_ref().and_then(|layout| layout.panel.as_ref()) {
+        info["panel"] = json!({
+            "step_name": panel.step_name,
+            "board_count": panel.board_count,
+            "board_instances": panel.board_instances,
+        });
+        if let Some(dimensions) = panel.dimensions.as_ref() {
+            info["panel_dimensions"] = json!({
+                "width_mm": dimensions.width_mm(),
+                "height_mm": dimensions.height_mm(),
+                "width_inch": dimensions.width_inch(),
+                "height_inch": dimensions.height_inch(),
+            });
+        }
     }
 
     // Component statistics

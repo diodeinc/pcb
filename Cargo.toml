@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.84"
+version = "0.3.90"
 edition = "2024"
 repository = "https://github.com/diodeinc/pcb"
 homepage = "https://github.com/diodeinc/pcb"
@@ -11,10 +11,11 @@ authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
 glam = "0.32"
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
-allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "78a00c907de1f31ec4edee929447459612da9c94" }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
+allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
+pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
 
 ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
 ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
@@ -113,6 +114,7 @@ pathdiff = "0.2"
 petgraph = "0.8"
 rayon = "1.10"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "charset", "http2", "json", "multipart", "rustls", "system-proxy"] }
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
 rand = "0.8"
 serde-wasm-bindgen = "0.6"
 serde_yaml = "0.9"
@@ -161,4 +163,5 @@ tracing-chrome = "0.7"
 inherits = "release"
 lto = "fat"           # Maximum link-time optimization
 codegen-units = 1     # Better optimization
-strip = "debuginfo"   # Strip debug symbols
+strip = "symbols"     # Strip symbols from published binaries
+panic = "abort"       # Published binaries should not carry unwinding machinery.

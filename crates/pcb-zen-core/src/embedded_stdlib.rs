@@ -10,8 +10,8 @@ use std::sync::OnceLock;
 #[cfg(feature = "native")]
 use walkdir::WalkDir;
 
-/// Embedded stdlib tree sourced directly from repository stdlib/.
-static EMBEDDED_STDLIB: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../stdlib");
+/// Embedded stdlib tree sourced directly from repository lib/std/.
+static EMBEDDED_STDLIB: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../lib/std");
 static EXCLUDED_STDLIB_PATHS: LazyLock<GlobSet> = LazyLock::new(|| {
     let mut builder = GlobSetBuilder::new();
     for pattern in [

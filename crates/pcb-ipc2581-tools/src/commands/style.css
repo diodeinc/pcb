@@ -181,6 +181,56 @@ td {
     font-size: 11px;
 }
 
+.layer-list {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.layer-render {
+    border: 1px solid #d0d0d0;
+    background: #fff;
+}
+
+.layer-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 8px;
+    border-bottom: 1px solid #e0e0e0;
+    font-weight: 600;
+}
+
+.layer-meta {
+    color: #666;
+    font-size: 10px;
+    font-weight: 400;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.layer-preview {
+    padding: 8px;
+    background: #fdfdfd;
+}
+
+.layer-preview svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 420px;
+}
+
+.layer-warning {
+    padding: 5px 8px;
+    border-top: 1px solid #e0e0e0;
+    color: #8a5a00;
+    background: #fff8e6;
+    font-size: 10px;
+}
+
 .file-info {
     margin-top: 48px;
     font-size: 11px;

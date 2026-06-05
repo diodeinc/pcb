@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use colored::Colorize;
-use globset::Glob;
 use inquire::{Select, Text};
 use minijinja::{Environment, context};
 use pcb_zen_core::DefaultFileProvider;
@@ -330,7 +329,6 @@ pub(crate) fn init_board_repo(dir: &Path, board: &str, repository: &str) -> Resu
         .render(&ctx)
         .context("Failed to render pcb.toml template")?;
     std::fs::write(dir.join("pcb.toml"), pcb_toml_content).context("Failed to write pcb.toml")?;
-    std::fs::write(dir.join("pcb.sum"), "").context("Failed to write pcb.sum")?;
 
     let zen_content = env
         .get_template("board_zen")
@@ -366,26 +364,7 @@ fn execute_new_package(package_path: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Invalid package path"))?;
     validate_name(name, "Package")?;
 
-    let (workspace_root, config) = require_workspace()?;
-    let members = &config.workspace.as_ref().unwrap().members;
-    if members.is_empty() {
-        bail!("Workspace has no member patterns defined");
-    }
-
-    let matches_pattern = members.iter().any(|pattern| {
-        Glob::new(pattern)
-            .ok()
-            .and_then(|g| g.compile_matcher().is_match(package_path).then_some(()))
-            .is_some()
-    });
-
-    if !matches_pattern {
-        bail!(
-            "Package path '{}' does not match any workspace member pattern.\nValid patterns: {:?}",
-            package_path,
-            members
-        );
-    }
+    let (workspace_root, _config) = require_workspace()?;
 
     let package_dir = workspace_root.join(package_path);
     if package_dir.exists() {

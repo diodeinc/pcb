@@ -3,16 +3,26 @@ set -euo pipefail
 
 base_url="https://pcb.api.diode.computer/pcb"
 install_dir="${PCB_INSTALL_DIR:-$HOME/.local/bin}"
+mode="release"
 
-case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) target="aarch64-apple-darwin" ;;
-  Darwin-x86_64) target="x86_64-apple-darwin" ;;
-  Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu" ;;
-  Linux-x86_64) target="x86_64-unknown-linux-gnu" ;;
-  *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-esac
+usage() {
+  cat <<EOF
+Usage: install.sh [--local]
 
-command -v curl >/dev/null || { echo "missing required command: curl" >&2; exit 1; }
+Options:
+  --local    Build pcb and pcbc from this checkout and install them side-by-side.
+  -h, --help Show this help.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --local) mode="local" ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown option: $1" >&2; usage >&2; exit 1 ;;
+  esac
+  shift
+done
 
 add_install_dir_to_path() {
   case ":$PATH:" in *":$install_dir:"*) return 0 ;; esac
@@ -45,17 +55,63 @@ EOF
   echo "Added $install_dir to PATH. Restart your shell or run: $source_line"
 }
 
+install_local() {
+  command -v cargo >/dev/null || { echo "missing required command: cargo" >&2; exit 1; }
+
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "$script_dir/Cargo.toml" ] && [ -d "$script_dir/crates/pcb" ] && [ -d "$script_dir/crates/pcbc" ]; then
+    source_dir="$script_dir"
+  elif [ -f "Cargo.toml" ] && [ -d "crates/pcb" ] && [ -d "crates/pcbc" ]; then
+    source_dir="$(pwd)"
+  else
+    echo "could not find pcb checkout; run ./install.sh --local from the repository root" >&2
+    exit 1
+  fi
+
+  target_dir="$source_dir/target"
+  cargo build --release -p pcb -p pcbc --manifest-path "$source_dir/Cargo.toml" --target-dir "$target_dir"
+
+  mkdir -p "$install_dir"
+  install -m 755 "$target_dir/release/pcb" "$install_dir/pcb"
+  install -m 755 "$target_dir/release/pcbc" "$install_dir/pcbc"
+
+  add_install_dir_to_path
+
+  echo "Installed local pcb to $install_dir/pcb"
+  echo "Installed local pcbc to $install_dir/pcbc"
+}
+
+if [ "$mode" = "local" ]; then
+  install_local
+  exit 0
+fi
+
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) target="aarch64-apple-darwin" ;;
+  Darwin-x86_64) target="x86_64-apple-darwin" ;;
+  Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu" ;;
+  Linux-x86_64) target="x86_64-unknown-linux-gnu" ;;
+  *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+esac
+
+command -v curl >/dev/null || { echo "missing required command: curl" >&2; exit 1; }
+
 json="$(curl -fsSL "$base_url/pcb-latest.json")"
 tag="$(printf '%s' "$json" | sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-version="$(printf '%s' "$json" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [ -n "$tag" ] || { echo "could not read latest pcb release" >&2; exit 1; }
 
 artifact="pcb-$target"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-curl -fsSL "$base_url/$tag/$artifact" -o "$tmp/pcb"
 curl -fsSL "$base_url/$tag/$artifact.sha256" -o "$tmp/pcb.sha256"
+if command -v zstd >/dev/null \
+  && curl -fsSL "$base_url/$tag/$artifact.zst" -o "$tmp/pcb.zst" 2>/dev/null; then
+  zstd -q -d -f "$tmp/pcb.zst" -o "$tmp/pcb"
+else
+  curl -fsSL "$base_url/$tag/$artifact" -o "$tmp/pcb"
+fi
+
 expected="$(sed 's/[[:space:]].*//' "$tmp/pcb.sha256")"
 if command -v shasum >/dev/null; then
   actual="$(shasum -a 256 "$tmp/pcb" | sed 's/[[:space:]].*//')"
@@ -71,11 +127,6 @@ mkdir -p "$install_dir"
 chmod +x "$tmp/pcb"
 mv "$tmp/pcb" "$install_dir/pcb"
 
-config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/pcb"
-mkdir -p "$config_dir"
-json_install_dir="$(printf '%s' "$install_dir" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-printf '{"install_prefix":"%s"}\n' "$json_install_dir" > "$config_dir/pcb-receipt.json"
-
 add_install_dir_to_path
 
-echo "Installed pcb ${version:-$tag} to $install_dir/pcb"
+echo "Installed pcb to $install_dir/pcb"

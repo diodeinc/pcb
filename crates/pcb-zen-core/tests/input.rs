@@ -1531,26 +1531,15 @@ snapshot_eval!(interface_mixed_templates_and_types, {
     "#
 });
 
-snapshot_eval!(config_without_convert_fails_type_check, {
+snapshot_eval!(config_record_type_rejected, {
     "Module.zen" => r#"
         UnitType = record(
             value = field(float),
             unit = field(str),
         )
 
-        # This should fail because "5V" is not a record and no converter is provided
-        # Provide a default since records require defaults
         voltage = config(UnitType, default = UnitType(value = 0.0, unit = "V"))
     "#,
-    "top.zen" => r#"
-        Mod = Module("Module.zen")
-
-        # This should fail - string cannot be used for record type without converter
-        Mod(
-            name = "test",
-            voltage = "5V",
-        )
-    "#
 });
 
 snapshot_eval!(io_config_with_help_text, {
@@ -2074,15 +2063,10 @@ snapshot_eval!(config_allowed_invalid_default, {
 
 snapshot_eval!(config_allowed_unsupported_type, {
     "test.zen" => r#"
-        Range = record(
-            min = field(float),
-            max = field(float),
-        )
-
         value = config(
             "value",
-            Range,
-            allowed = [Range(min = 0.0, max = 1.0)],
+            list,
+            allowed = [[]],
         )
     "#
 });
