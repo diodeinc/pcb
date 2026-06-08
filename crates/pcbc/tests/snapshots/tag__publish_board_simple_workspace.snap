@@ -35,7 +35,7 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <1556 bytes, sha256: 226cca3>
+=== netlist.json <1437 bytes, sha256: 3ddc76b>
 === src/boards/Test/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -47,15 +47,19 @@ gnd = Ground("GND")
 test_signal = Gpio("TEST_SIGNAL")
 internal_net = Net("INTERNAL")
 === src/boards/Test/pcb.toml
-
 [board]
 name = "TB0001"
+
+[dependencies.indirect]
+"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"
 === src/pcb.toml
-
 [workspace]
-pcb-version = "0.3"
 name = "test_workspace"
+pcb-version = "0.3"
 
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+[dependencies.indirect]
+"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"

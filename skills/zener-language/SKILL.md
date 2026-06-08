@@ -11,7 +11,8 @@ Canonical Zener HDL semantics and authoring guidance.
 
 1. Use `pcb doc --package @stdlib` or `pcb doc --package <package>` to find the public API and source root (`<!-- source: ... -->`); add `--list` for the file tree. Read source from that root for exact behavior.
 2. Preserve trailing `# pcb:sch ...` comments. Only update names inside an existing comment when you rename the matching component or net.
-3. For recent Zener, stdlib, and `pcb` CLI changes, check the pcb changelog entries for the installed version and nearby previous releases: <https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md>
+3. After adding, removing, or changing package `Module()` / `load()` imports, run `pcb sync` from the relevant workspace or package, then run `pcb build <path>` to validate. `pcb sync` is the dependency reconciliation step; `pcb build` is the validation step.
+4. For recent Zener, stdlib, and `pcb` CLI changes, check the pcb changelog entries for the installed version and nearby previous releases: <https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md>
 
 ## Language
 
@@ -33,23 +34,29 @@ Nets and interfaces:
 Components and sourcing:
 
 - `Component(...)` is the primitive physical-part constructor. Required fields are effectively `name`, `symbol`, and `pins`.
-- The symbol is the source of truth for footprint and part metadata. Make the symbol properties correct; do not repeat `footprint=` or `part=` in `Component()` when they are already provided by the symbol.
+- The symbol is the source of truth for footprint, part metadata, and datasheet metadata. Make the symbol properties correct; do not repeat `footprint=`, `part=`, or `datasheet=` in `Component()` when they are already provided by the symbol.
 - Prefer `part=Part(mpn=..., manufacturer=...)` over legacy scalar `mpn` and `manufacturer` when part metadata is not already in the symbol.
 - `Symbol(library, name=None)` points at a `.kicad_sym`; `name` is required for multi-symbol libraries.
 - Omit `no_connect` pins from `pins`; `Component()` wires `NotConnected()` automatically.
 
 `io()`:
 
-- Preferred form: `NAME = io(template, ...)` where `template` is a net/interface type or instance, e.g. `Power(voltage="3.3V")`.
-- Name is inferred from the assignment target or struct field. `optional=True` means omitted inputs get auto-generated nets or interfaces.
+- Preferred form: flat top-level `NAME = io(template, ...)` where `template` is a net/interface type or instance, e.g. `Power(voltage="3.3V")`.
+- Do not introduce `Pins = struct(...)` wrappers for component pins; that older style is deprecated. Existing packages may still use it, but new and touched `.zen` should expose pins as top-level `io()`s.
+- Name is inferred from the assignment target. `optional=True` means omitted inputs get auto-generated nets or interfaces.
 
 `config()`:
 
 - Preferred form: `name = config(typ, default=..., ...)`; name is inferred from the assignment target.
-- `typ` can be primitive types, enums, records, or physical values such as `Voltage` or `Resistance`.
-- `allowed=` constrains accepted values to a discrete set. Strings auto-convert when possible, e.g. `"10k"` to `Resistance("10k")`.
-- For discrete physical values, prefer a physical type with `allowed=[...]` over an ad hoc enum.
-- Use physical types from `@stdlib/units.zen` for physical-value configs. Use `enum()` only for non-physical design choices.
+- `typ` can be primitive types, enums, records, or physical values such as `Voltage`, `Current`, or `Resistance`.
+- Use physical types from `@stdlib/units.zen` for every physical-value config, even when only a few choices are valid. Constrain discrete choices with `allowed=[...]`; strings auto-convert, e.g. `config(Current, default="3A", allowed=["1A", "2A", "3A"])`.
+- Use `enum()` only for non-physical design choices such as operating mode, protocol variant, polarity, or enablement strategy.
+
+Public compatibility:
+
+- For reusable packages, compatibility means existing consumers can update without changing their Zener, layout, or integration assumptions.
+- Breaking changes include public interface changes (`io()`, `config()`, entrypoints, module call shape), substantial layout/physical integration changes, or behavior changes that require consumer action. Collapsing loose ios into one interface is breaking even if the netlist still builds.
+- `pcb build` passing only validates the current package; it does not prove existing consumers remain compatible. When making a breaking change, document the migration and mark the commit as breaking.
 
 Utilities:
 
@@ -61,7 +68,7 @@ Utilities:
 ### Power, Interfaces, And Checks
 
 - Keep rails explicit with prelude `Power(voltage=...)` and `Ground`; each public `Power` `io()` declares its voltage range unless the local API intentionally keeps it generic.
-- Use `@stdlib/interfaces.zen` interfaces for buses and grouped signals that are not in the prelude.
+- Use `@stdlib/interfaces.zen` interfaces for buses and grouped signals that are not in the prelude; prefer public bus interfaces such as `I2c`, `Spi`, `Qspi`, `Uart`, `Usb2`, or `DiffPair` over separate loose top-level nets when the grouped signal semantics are clear.
 - Use typed values and validation primitives (`check(...)`, `warn(...)`, `error(...)`, `@stdlib/checks.zen`) for electrical constraints instead of comments when possible.
 - Connect `Power` and `Ground` ios directly to pins and passives.
 
@@ -146,6 +153,18 @@ Resistor(name="R_MSYNC_VCC", value="0ohm", package="0402", P1=MSYNC, P2=VCC, dnp
 Imports and dependencies:
 
 - `@stdlib/...` is implicit and toolchain-managed; do not declare it in `[dependencies]`.
+- Package imports in `.zen` use full package URLs without versions.
+- Do not manually edit `pcb.toml` to add or remove package dependencies. Add or remove the `Module()` / `load()` import in `.zen`, then run `pcb sync`.
+- `pcb sync` updates package manifests: `[dependencies]` for direct package imports and `[dependencies.indirect]` for the resolved transitive dependency state.
+- Let `pcb sync` maintain `pcb.toml`, especially `[dependencies.indirect]`. Commit `pcb.toml` files after `pcb sync` changes them.
+
+Updating dependency versions:
+
+- Run dependency update commands from the package directory.
+- `pcb list -m -u` is read-only. It shows direct remote dependencies, the latest compatible update in brackets, and the latest breaking update as `[breaking: ...]`.
+- `pcb add -u` updates all direct remote dependencies to the latest stable compatible version; `pcb add -u <url>` updates one.
+- For a specific or breaking version, check versions with `pcb list -m -versions <url>`, then run `pcb add <url>@<version>`. Do not edit `pcb.toml`.
+- Do not use `pcb update`; it is for legacy dependency manifests.
 
 `pcb.toml` per repository/package type:
 

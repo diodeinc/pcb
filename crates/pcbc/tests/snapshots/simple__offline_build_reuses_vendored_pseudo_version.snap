@@ -1,0 +1,22 @@
+---
+source: crates/pcbc/tests/simple.rs
+expression: snapshot
+---
+--- online ---
+Command: pcbc build boards/B/B.zen
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ B.zen (2 components)
+--- offline ---
+Command: pcbc build boards/B/B.zen --offline
+Exit Code: 0
+
+--- STDOUT ---
+
+--- STDERR ---
+✓ B.zen (2 components)
+--- hydrated dep ---
+<SELECTED_PSEUDO_VERSION>

@@ -157,6 +157,15 @@ impl BBox {
         self
     }
 
+    pub fn intersects(self, other: BBox) -> bool {
+        !self.is_empty()
+            && !other.is_empty()
+            && self.min.x <= other.max.x
+            && self.max.x >= other.min.x
+            && self.min.y <= other.max.y
+            && self.max.y >= other.min.y
+    }
+
     pub fn expand(self, amount: f64) -> Self {
         if self.is_empty() {
             return self;

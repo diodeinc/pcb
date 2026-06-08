@@ -19,7 +19,7 @@ concurrency:
 jobs:
   lint:
     name: Lint and Check
-    runs-on: ubicloud-standard-16-ubuntu-2404
+    runs-on: ubicloud-standard-16
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -37,13 +37,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check stdlib .zen formatting
-        run: cargo run -p pcb -- fmt --check stdlib
+        run: cargo run -p pcb -- fmt --check lib/std
 
       - name: Run Clippy
         run: cargo clippy --workspace -- -D warnings
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Type check Python with ty
         run: uv sync && uvx ty check
@@ -62,7 +62,7 @@ jobs:
           - name: macOS
             runs-on: macos-15-xlarge
           - name: Ubuntu
-            runs-on: ubicloud-standard-30-ubuntu-2204
+            runs-on: ubicloud-standard-16
             container:
               image: ghcr.io/diodeinc/kicad:10.0.0  # Keep in sync with KICAD_VERSION
               options: --user root
@@ -78,7 +78,7 @@ jobs:
       - name: Cache KiCad (macOS)
         if: contains(matrix.config.name, 'macOS')
         id: cache-kicad-mac
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /Applications/KiCad
           key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
@@ -153,7 +153,7 @@ jobs:
         working-directory: crates/pcb-layout/src/scripts
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v8.1.0
       - run: uv sync
         working-directory: .
       - run: uv run ruff check .

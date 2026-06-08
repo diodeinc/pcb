@@ -101,6 +101,16 @@ struct DesignBomEntry {
     path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+enum BomMatchStatus {
+    #[serde(rename = "MATCH_EXACT")]
+    Exact,
+    #[serde(rename = "MATCH_FUZZY")]
+    Fuzzy,
+    #[serde(rename = "MATCH_FAILED")]
+    Failed,
+}
+
 /// BOM Line - represents a single line in the matched BOM response
 #[derive(Debug, Deserialize)]
 struct BomLine {
@@ -108,6 +118,12 @@ struct BomLine {
     design_entry: DesignBomEntry,
     #[serde(rename = "offerIds")]
     offer_ids: Vec<String>,
+    #[serde(rename = "match", default)]
+    match_status: Option<BomMatchStatus>,
+}
+
+fn bom_line_no_match(bom_line: &BomLine) -> bool {
+    matches!(bom_line.match_status, Some(BomMatchStatus::Failed))
 }
 
 /// Response from /api/boms/match endpoint
@@ -369,6 +385,7 @@ pub fn fetch_and_populate_availability_with_context(
                         global_hard_to_source_reason,
                     )
                 }),
+                no_match: bom_line_no_match(&bom_line),
                 offers: all_offers,
             },
         );
@@ -500,6 +517,7 @@ fn fetch_pricing_grouped_batch_once(
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
     let match_response = call_bom_match_api(&ctx, auth_token, &bom_entries, 30, false)?;
     let mut grouped_offers: Vec<Vec<&ComponentOffer>> = vec![Vec::new(); groups.len()];
+    let mut grouped_no_match = vec![false; groups.len()];
 
     for bom_line in &match_response.results {
         let Some(path) = bom_line.design_entry.path.as_deref() else {
@@ -515,17 +533,22 @@ fn fetch_pricing_grouped_batch_once(
             continue;
         };
 
-        grouped_offers[group_idx].extend(
-            bom_line
-                .offer_ids
-                .iter()
-                .filter_map(|id| match_response.offers.get(id)),
-        );
+        let resolved_offers: Vec<_> = bom_line
+            .offer_ids
+            .iter()
+            .filter_map(|id| match_response.offers.get(id))
+            .collect();
+        grouped_no_match[group_idx] |= bom_line_no_match(bom_line);
+        grouped_offers[group_idx].extend(resolved_offers);
     }
 
     Ok(grouped_offers
         .into_iter()
-        .map(|offers| build_search_availability(&offers))
+        .enumerate()
+        .map(|(idx, offers)| {
+            let no_match = grouped_no_match[idx] && offers.is_empty();
+            build_search_availability(&offers, no_match)
+        })
         .collect())
 }
 
@@ -579,13 +602,13 @@ fn fetch_pricing_batch_once(
             .filter_map(|id| match_response.offers.get(id))
             .collect();
 
-        *slot = build_search_availability(&offers);
+        *slot = build_search_availability(&offers, bom_line_no_match(&bom_line));
     }
 
     Ok(results)
 }
 
-fn build_search_availability(offers: &[&ComponentOffer]) -> Availability {
+fn build_search_availability(offers: &[&ComponentOffer], no_match: bool) -> Availability {
     let summary_for = |geo: Geography| {
         let filtered: Vec<_> = offers
             .iter()
@@ -600,6 +623,7 @@ fn build_search_availability(offers: &[&ComponentOffer]) -> Availability {
     Availability {
         us: summary_for(Geography::Us),
         global: summary_for(Geography::Global),
+        no_match,
         offers: offers.iter().map(|offer| offer.to_offer(1)).collect(),
     }
 }
@@ -629,6 +653,41 @@ mod tests {
             stock_available: Some(100),
             product_url: None,
         }
+    }
+
+    fn bom_line(match_status: Option<BomMatchStatus>, offer_ids: Vec<String>) -> BomLine {
+        BomLine {
+            design_entry: DesignBomEntry {
+                path: Some("root.U1".to_string()),
+            },
+            offer_ids,
+            match_status,
+        }
+    }
+
+    #[test]
+    fn match_status_controls_no_match_detection() {
+        assert!(bom_line_no_match(&bom_line(
+            Some(BomMatchStatus::Failed),
+            vec!["offer-1".to_string()]
+        )));
+        assert!(!bom_line_no_match(&bom_line(
+            Some(BomMatchStatus::Exact),
+            Vec::new()
+        )));
+        assert!(!bom_line_no_match(&bom_line(
+            Some(BomMatchStatus::Fuzzy),
+            Vec::new()
+        )));
+    }
+
+    #[test]
+    fn missing_match_status_does_not_imply_no_match() {
+        assert!(!bom_line_no_match(&bom_line(None, Vec::new())));
+        assert!(!bom_line_no_match(&bom_line(
+            None,
+            vec!["offer-1".to_string()]
+        )));
     }
 
     #[test]

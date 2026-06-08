@@ -182,7 +182,7 @@ pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::Re
     resolution.workspace_info.root = workspace_root.to_path_buf();
     resolution.workspace_info.packages.insert(
         "test".to_string(),
-        pcb_zen_core::workspace::MemberPackage {
+        pcb_zen_core::workspace::WorkspacePackage {
             rel_path: PathBuf::new(),
             config: Default::default(),
             version: None,

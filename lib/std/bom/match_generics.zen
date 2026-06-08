@@ -1,0 +1,1624 @@
+"""Generic Component Matcher
+
+Automatically assigns house MPNs to resistors and capacitors.
+"""
+
+load("manufacturers/wurth_electronik.zen", "WURTH_ELEKTRONIK_WR_PHD")
+load(
+    "../units.zen",
+    "Voltage",
+    "Resistance",
+    "Capacitance",
+    "Inductance",
+    "Power",
+    "Current",
+    "Frequency",
+    "Impedance",
+)
+load(
+    "helpers.zen",
+    "prop",
+    "set_from_matches",
+    "find_e_series_match",
+    "iec60062_3digit",
+    "iec60062_4digit",
+    "encode_3digit_multiplier",
+    "panasonic_erj",
+    "uniroyal",
+    "yageo_datasheet",
+    "yageo_asset_datasheet",
+    "panasonic_datasheet",
+    "discrete_resistor_series",
+    "murata_caps_by_pkg",
+    "diodes_inc_datasheet",
+    "abracon_datasheet",
+    "abracon_crystal",
+    "onsemi_rectifier",
+    "onsemi_zener",
+    "vishay_rectifier",
+    "vishay_zener",
+    "vishay_tvs",
+    "vishay_led",
+    "ecs_crystal",
+    "led",
+    "ferrite_bead",
+    "power_inductor",
+    "tvs",
+    "rectifier",
+    "zener",
+    "merge_parts",
+    "crystal",
+)
+
+_BOM_WARN_SUFFIX = ".\nTry using different component values or specify mpn directly (https://docs.pcb.new/pages/spec#match-component-match%2C-parts)"
+
+
+def _no_match_warn(component_type, c, pkg=None, note=None):
+    """Warn when no house part is found."""
+    msg = "No house " + component_type + " found for " + c.value
+    if pkg:
+        msg += " " + pkg
+    if note:
+        msg += ". " + note
+    warn(msg + _BOM_WARN_SUFFIX, kind="bom.match_generic")
+
+
+# Dielectric quality ranking: C0G/NP0 > X7T > X7R > X7S > X5R > Y5V > Z5U
+_DIELECTRIC_RANK = {
+    "C0G": 0,
+    "NP0": 0,
+    "X7T": 1,
+    "X7R": 2,
+    "X7S": 3,
+    "X5R": 4,
+    "Y5V": 5,
+    "Z5U": 6,
+}
+
+# Resistor series by package
+SERIES_BY_PKG = {
+    "0201": [
+        # 0 ohm jumpers (checked first for exact 0 ohm match)
+        discrete_resistor_series(
+            "Panasonic Electronic Components",
+            "ERJ-1GJ",
+            "25V",
+            "0.05W",
+            "0%",
+            [("0Ohm", "ERJ-1GJ0R00C")],
+            panasonic_datasheet("RDA0000/AOA0000C304.pdf"),
+        ),
+        discrete_resistor_series(
+            "YAGEO",
+            "RC_L",
+            "25V",
+            "0.05W",
+            "0%",
+            [("0Ohm", "RC0201FR-070RL")],
+            yageo_asset_datasheet("PYU-RC_GROUP_51_ROHS_L"),
+        ),
+        panasonic_erj(
+            "ERJ-1GJF",
+            "10Ohm – 1MOhm",
+            "25V",
+            "0.05W",
+            "1%",
+            ["e96", "e24"],
+            "C",
+            iec60062_4digit,
+            "RDA0000/AOA0000C304.pdf",
+        ),
+        panasonic_erj(
+            "ERJ-1GNF",
+            "10Ohm – 1MOhm",
+            "25V",
+            "0.05W",
+            "1%",
+            ["e96", "e24"],
+            "C",
+            iec60062_4digit,
+            "RDA0000/AOA0000C304.pdf",
+        ),
+    ],
+    "0402": [
+        # 0 ohm jumpers (checked first for exact 0 ohm match)
+        discrete_resistor_series(
+            "Panasonic Electronic Components",
+            "ERJ-2G",
+            "50V",
+            "0.1W",
+            "0%",
+            [("0Ohm", "ERJ-2GE0R00X")],
+            panasonic_datasheet("RDA0000/AOA0000C304.pdf"),
+        ),
+        panasonic_erj(
+            "ERJ-H2CF",
+            "1Ohm – 9.76Ohm",
+            "50V",
+            "0.1W",
+            "1%",
+            ["e96", "e24"],
+            "X",
+            iec60062_4digit,
+            "pdf-b4/erj-h2cf2r40x.pdf",
+        ),
+        panasonic_erj(
+            "ERJ-2RKF",
+            "10Ohm – 1MOhm",
+            "50V",
+            "0.1W",
+            "1%",
+            ["e96", "e24"],
+            "X",
+            iec60062_4digit,
+            "RDA0000/AOA0000C304.pdf",
+        ),
+        panasonic_erj(
+            "ERJ-U02J", "1MOhm – 10MOhm", "50V", "0.1W", "5%", ["e24"], "X", iec60062_3digit, "RDP0000/AOA0000C334.pdf"
+        ),
+        panasonic_erj(
+            "ERJ-PA2F",
+            "1Ohm – 1MOhm",
+            "50V",
+            "0.1W",
+            "1%",
+            ["e96", "e24"],
+            "X",
+            iec60062_4digit,
+            "RDO0000/AOA0000C331.pdf",
+        ),
+        # Uniroyal 0402WGF series
+        uniroyal("0402WGF", "10Ohm – 10MOhm", "50V", "0.0625W", "1%", ["e96", "e24"], "TCE", encode_3digit_multiplier),
+    ],
+    "0603": [
+        # 0 ohm jumpers (checked first for exact 0 ohm match)
+        discrete_resistor_series(
+            "Panasonic Electronic Components",
+            "ERJ-3G",
+            "75V",
+            "0.333W",
+            "0%",
+            [("0Ohm", "ERJ-3GEY0R00V")],
+            panasonic_datasheet("RDA0000/AOA0000C304.pdf"),
+        ),
+        panasonic_erj(
+            "ERJ-H3QF",
+            "1Ohm – 9.76Ohm",
+            "75V",
+            "0.333W",
+            "1%",
+            ["e96", "e24"],
+            "V",
+            iec60062_4digit,
+            "pdf-b4/erj-h2cf2r40x.pdf",
+        ),
+        panasonic_erj(
+            "ERJ-3EKF",
+            "10Ohm – 1MOhm",
+            "75V",
+            "0.333W",
+            "1%",
+            ["e96", "e24"],
+            "V",
+            iec60062_4digit,
+            "RDA0000/AOA0000C304.pdf",
+        ),
+        panasonic_erj(
+            "ERJ-U03J",
+            "1MOhm – 10MOhm",
+            "75V",
+            "0.333W",
+            "5%",
+            ["e24"],
+            "V",
+            iec60062_3digit,
+            "RDP0000/AOA0000C334.pdf",
+        ),
+        panasonic_erj(
+            "ERJ-PA3F",
+            "1Ohm – 1MOhm",
+            "75V",
+            "0.333W",
+            "1%",
+            ["e96", "e24"],
+            "V",
+            iec60062_4digit,
+            "RDO0000/AOA0000C331.pdf",
+        ),
+    ],
+    "2512": [
+        # Stackpole CSNL series: Current sense resistors
+        discrete_resistor_series(
+            "Stackpole Electronics Inc",
+            "CSNL2512",
+            "170V",
+            "2W",
+            "1%",
+            [
+                ("1mOhm", "CSNL2512FT1L00"),
+                ("2mOhm", "CSNL2512FT2L00"),
+                ("3mOhm", "CSNL2512FT3L00"),
+                ("4mOhm", "CSNL2512FT4L00"),
+                ("5mOhm", "CSNL2512FT5L00"),
+                ("10mOhm", "CSNL2512FT10L0"),
+            ],
+        ),
+        # YAGEO PA_E series: AEC-Q200 current sense resistors
+        discrete_resistor_series(
+            "YAGEO",
+            "PA_E",
+            "170V",
+            "2W",
+            "1%",
+            [
+                ("1mOhm", "PA2512FKF7W0R001E"),
+                ("2mOhm", "PA2512FKF7W0R002E"),
+                ("3mOhm", "PA2512FKF7W0R003E"),
+                ("4mOhm", "PA2512FKF7W0R004E"),
+                ("5mOhm", "PA2512FKF7W0R005E"),
+                ("10mOhm", "PA2512FKF7W0R01E"),
+            ],
+            yageo_datasheet("PA2512FKF7W0R001E"),
+        ),
+    ],
+}
+
+# House capacitor catalog (Murata parts) by package
+HOUSE_CAPS_BY_PKG = murata_caps_by_pkg(
+    {
+        "0201": [
+            ("X7R", "10V", "2.2nF 10%", "GCM033R71A222KA03", ["D", "J"], "GCM033R71A222KA03-01A.pdf"),
+            ("X7R", "10V", "10nF 10%", "GCM033R71A103KA03", ["D", "J"], "GCM033R71A103KA03-01A.pdf"),
+            ("X7R", "10V", "100nF 10%", "GRM033Z71A104KE14", ["D", "J"], "GRM033Z71A104KE14-01A.pdf"),
+            ("X5R", "10V", "1uF 20%", "GRM033R61A105ME44", ["D", "J"], "GRM033R61A105ME44-04A.pdf"),
+        ],
+        "0402": [
+            ("C0G", "50V", "10pF 1%", "GCM1555C1H100FA16", ["D", "J"], "GCM1555C1H100FA16-01A.pdf"),
+            ("C0G", "50V", "12pF 1%", "GCM1555C1H120FA16", ["D", "J"], "GCM1555C1H120FA16-01A.pdf"),
+            ("C0G", "50V", "15pF 1%", "GCM1555C1H150FA16", ["D", "J"], "GCM1555C1H150FA16-01A.pdf"),
+            ("C0G", "50V", "18pF 1%", "GCM1555C1H180FA16", ["D", "J"], "GCM1555C1H180FA16-01A.pdf"),
+            ("C0G", "50V", "22pF 1%", "GCM1555C1H220FA16", ["D", "J"], "GCM1555C1H220FA16-01A.pdf"),
+            ("C0G", "50V", "30pF 1%", "GCM1555C1H300FA16", ["D", "J"], "GCM1555C1H300FA16-01A.pdf"),
+            ("C0G", "50V", "47pF 1%", "GCM1555C1H470FA16", ["D", "J"], "GCM1555C1H470FA16-01A.pdf"),
+            ("C0G", "50V", "82pF 1%", "GCM1555C1H820FA16", ["D", "J"], "GCM1555C1H820FA16-01A.pdf"),
+            ("C0G", "50V", "100pF 1%", "GCM1555C1H101FA16", ["D", "J"], "GCM1555C1H101FA16-01A.pdf"),
+            ("C0G", "50V", "220pF 1%", "GCM1555C1H221FA16", ["D", "J"], "GCM1555C1H221FA16-01A.pdf"),
+            ("C0G", "50V", "330pF 1%", "GCM1555C1H331FA16", ["D", "J"], "GCM1555C1H331FA16-01A.pdf"),
+            ("C0G", "50V", "430pF 1%", "GCM1555C1H431FA16", ["D", "J"], "GCM1555C1H431FA16-01A.pdf"),
+            ("C0G", "50V", "1nF 1%", "GCM1555C1H102FA16", ["D", "J"], "GCM1555C1H102FA16-01A.pdf"),
+            ("C0G", "35V", "10nF 2%", "GRM1555CYA103GE01", ["D", "J"], "GRM1555CYA103GE01-01A.pdf"),
+            ("X7R", "50V", "10nF 10%", "GCM155R71H103KA55", ["D", "J"], "GCM155R71H103KA55-01A.pdf"),
+            ("X7R", "50V", "22nF 10%", "GCM155R71H223KA55", ["D", "J"], "GCM155R71H223KA55-01A.pdf"),
+            ("X7R", "50V", "100nF 10%", "GCM155R71H104KE02", ["D", "J"], "GCM155R71H104KE02-01A.pdf"),
+            ("X7S", "10V", "470nF 10%", "GCM155C71A474KE36", ["D", "J"], "GCM155C71A474KE36-01A.pdf"),
+            ("X7R", "10V", "1uF 10%", "GRM155Z71A105KE01", ["D", "J"], "GRM155Z71A105KE01-01A.pdf"),
+        ],
+        "0603": [
+            ("C0G", "100V", "10nF 5%", "GCM1885C2A103JE02", ["D", "J", "W", "V"], "GCM1885C2A103JE02-01A.pdf"),
+            ("X7R", "100V", "22nF 10%", "GCM188R72A223KA37", ["D", "J"], "GCM188R72A223KA37-01A.pdf"),
+            ("X7R", "100V", "100nF 10%", "GRM188R72A104KA35", ["D", "J"], "GRM188R72A104KA35-01A.pdf"),
+            ("X7R", "50V", "220nF 10%", "GCM188R71H224KA64", ["D", "J"], "GCM188R71H224KA64-01A.pdf"),
+            ("X7R", "25V", "470nF 10%", "GCM188R71E474KA64", ["D", "J"], "GCM188R71E474KA64-04A.pdf"),
+            ("X7R", "25V", "1uF 10%", "GCM188R71E105KA64", ["D", "J"], "GCM188R71E105KA64-04A.pdf"),
+            ("X7R", "25V", "2.2uF 20%", "GRM188Z71E225ME43", ["D", "J"], "GRM188Z71E225ME43-01A.pdf"),
+            ("X7R", "16V", "4.7uF 10%", "GRM188Z71C475KE21", ["D", "J"], "GRM188Z71C475KE21-01A.pdf"),
+            ("X7R", "10V", "10uF 10%", "GRM188Z71A106KA73", ["D", "J"], "GRM188Z71A106KA73-01A.pdf"),
+        ],
+        "0805": [
+            ("X7R", "100V", "220nF 10%", "GRM21AR72A224KAC5", ["K", "L"], "GRM21AR72A224KAC5-01A.pdf"),
+            ("X7R", "50V", "4.7uF 10%", "GRM21BZ71H475KE15", ["K", "L"], "GRM21BZ71H475KE15-01A.pdf"),
+            ("X7R", "25V", "10uF 10%", "GRM21BZ71E106KE15", ["K", "L"], "GRM21BZ71E106KE15-01A.pdf"),
+            ("X7R", "10V", "22uF 20%", "GRM21BZ71A226ME15", ["K", "L"], "GRM21BZ71A226ME15-01A.pdf"),
+        ],
+        "1206": [
+            ("X7R", "100V", "4.7uF 10%", "GRM31CZ72A475KE11", ["K", "L"], "GRM31CZ72A475KE11-01A.pdf"),
+            # X5R, but GRT has good DC bias characteristics
+            ("X5R", "50V", "10uF 10%", "GRT31CR61H106KE01", ["K", "L"], "GRT31CR61H106KE01-01A.pdf"),
+            ("X7R", "16V", "22uF 20%", "GRM31CZ71C226ME15", ["K", "L"], "GRM31CZ71C226ME15-01A.pdf"),
+        ],
+        "1210": [
+            ("X7R", "25V", "22uF 10%", "GRM32ER71E226KE15", ["K", "L"], "GRM32ER71E226KE15-01.pdf"),
+            ("X7R", "10V", "47uF 10%", "GRM32ER71A476KE15", ["K", "L"], "GRM32ER71A476KE15-01.pdf"),
+        ],
+    }
+)
+
+# House LED catalog by package
+HOUSE_LEDS_BY_PKG = {
+    "0402": [
+        # Vishay CHIPLED series (@ 5mA for blue, @ 20mA for AlInGaP)
+        vishay_led("blue", "2.65V – 3.15V (2.8V nom.)", "VLMB1500-GS08", "82554/vlmo1500.pdf"),
+        vishay_led("green", "1.9V – 2.4V (2V nom.)", "VLMG1500-GS08", "82554/vlmo1500.pdf"),
+        vishay_led("orange", "1.8V – 2.4V (2V nom.)", "VLMO1500-GS08", "82554/vlmo1500.pdf"),
+        vishay_led("red", "1.8V – 2.4V (2V nom.)", "VLMS1500-GS08", "82554/vlmo1500.pdf"),
+        # Lite-On LTST-C281 series (0.35mm height, AlInGaP K-series @ 20mA)
+        led("orange", "1.8V – 2.4V (2V nom.)", "LTST-C281KFKT", "Lite-On Inc."),
+        led("green", "1.8V – 2.4V (2V nom.)", "LTST-C281KGKT", "Lite-On Inc."),
+        led("red", "1.8V – 2.4V (2V nom.)", "LTST-C281KRKT", "Lite-On Inc."),
+        led("yellow", "1.8V – 2.4V (2V nom.)", "LTST-C281KSKT", "Lite-On Inc."),
+        # Lite-On LTST-C281 series (0.35mm height, AlInGaP K-series @ 5mA)
+        led("orange", "1.7V – 2.3V (2V nom.)", "LTST-C281KFKT-5A", "Lite-On Inc."),
+        led("green", "1.7V – 2.3V (2V nom.)", "LTST-C281KGKT-5A", "Lite-On Inc."),
+        led("red", "1.7V – 2.3V (2V nom.)", "LTST-C281KRKT-5A", "Lite-On Inc."),
+        led("yellow", "1.7V – 2.3V (2V nom.)", "LTST-C281KSKT-5A", "Lite-On Inc."),
+        # Lite-On LTST-C281 series (0.35mm height, InGaN T-series blue @ 5mA)
+        led("blue", "2.65V – 3.15V (2.9V nom.)", "LTST-C281TBKT-5A", "Lite-On Inc."),
+        # Lite-On LTST-C283 series (0.2mm height, AlInGaP K-series @ 5mA)
+        led("green", "1.7V – 2.3V (2V nom.)", "LTST-C283KGKT-5A", "Lite-On Inc."),
+        led("red", "1.7V – 2.3V (2V nom.)", "LTST-C283KRKT-5A", "Lite-On Inc."),
+        # Lite-On LTST-C283 series (0.2mm height, InGaN T-series blue @ 5mA)
+        led("blue", "2.65V – 3.15V (2.9V nom.)", "LTST-C283TBKT-5A", "Lite-On Inc."),
+    ],
+}
+
+# House ferrite bead catalog by package
+HOUSE_FB_BY_PKG = {
+    "0402": [
+        ferrite_bead("220Ohm 25%", "100MHz", "1.4A", "100mOhm", "BLM15PX221SN1D", "Murata Electronics"),
+    ],
+    "0603": [
+        ferrite_bead("220Ohm 25%", "100MHz", "2A", "50mOhm", "BLM18EG221SN1D", "Murata Electronics"),
+    ],
+    "0805": [
+        ferrite_bead("220Ohm 25%", "100MHz", "2A", "45mOhm", "BLM21PG221SN1D", "Murata Electronics"),
+        ferrite_bead("220Ohm 25%", "100MHz", "3A", "40mOhm", "MPZ2012S221AT000", "TDK Corporation"),
+    ],
+}
+
+# House power inductor catalog by package.
+HOUSE_POWER_INDUCTORS_BY_PKG = {
+    "0603": [
+        # Würth Elektronik WE-PMCI, 0603 (1608 Metric), shielded molded power inductors.
+        power_inductor(
+            "470nH 20%",
+            "3.95A",
+            "75mOhm",
+            "74479262147",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479262147.pdf",
+        ),
+        power_inductor(
+            "1uH 20%",
+            "2.6A",
+            "115mOhm",
+            "74479262210",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479262210.pdf",
+        ),
+    ],
+    "0805": [
+        # Würth Elektronik WE-PMCI, 0805 (2012 Metric), shielded molded power inductors.
+        power_inductor(
+            "470nH 20%",
+            "4.3A",
+            "44mOhm",
+            "74479275147",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479275147.pdf",
+        ),
+        power_inductor(
+            "1uH 20%",
+            "3.3A",
+            "75mOhm",
+            "74479275210",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479275210.pdf",
+        ),
+        power_inductor(
+            "2.2uH 20%",
+            "2A",
+            "190mOhm",
+            "74479275222",
+            "Würth Elektronik",
+            "https://www.we-online.com/catalog/datasheet/74479275222.pdf",
+        ),
+        # Würth Elektronik WE-PMI, 0805 (2012 Metric), shielded multilayer power inductors.
+        power_inductor(
+            "470nH 20%",
+            "1.4A",
+            "100mOhm",
+            "74479775147A",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479775147A.pdf",
+        ),
+        power_inductor(
+            "1uH 20%",
+            "1.1A",
+            "190mOhm",
+            "74479774210",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479774210.pdf",
+        ),
+        power_inductor(
+            "2.2uH 20%",
+            "700mA",
+            "340mOhm",
+            "74479774222",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479774222.pdf",
+        ),
+        power_inductor(
+            "4.7uH 20%",
+            "850mA",
+            "312.5mOhm",
+            "74479775247",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479775247.pdf",
+        ),
+        power_inductor(
+            "6.8uH 20%",
+            "900mA",
+            "375mOhm",
+            "74479777268",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479777268.pdf",
+        ),
+        power_inductor(
+            "10uH 20%",
+            "900mA",
+            "375mOhm",
+            "74479777310A",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479777310A.pdf",
+        ),
+        power_inductor(
+            "10uH 20%",
+            "650mA",
+            "625mOhm",
+            "74479777310",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479777310.pdf",
+        ),
+    ],
+    "1210": [
+        # Würth Elektronik WE-PMFI, 1210 (3225 Metric), shielded molded power inductors.
+        power_inductor(
+            "100nH 30%",
+            "11.4A",
+            "9mOhm",
+            "74479332257110",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257110.pdf",
+        ),
+        power_inductor(
+            "470nH 20%",
+            "7.9A",
+            "19mOhm",
+            "74479332257147",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257147.pdf",
+        ),
+        power_inductor(
+            "1uH 20%",
+            "5.8A",
+            "30mOhm",
+            "74479332257210",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257210.pdf",
+        ),
+        power_inductor(
+            "2.2uH 20%",
+            "4.1A",
+            "67mOhm",
+            "74479332257222",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257222.pdf",
+        ),
+        power_inductor(
+            "4.7uH 20%",
+            "2.7A",
+            "130mOhm",
+            "74479332257247",
+            "Würth Elektronik",
+            "https://www.we-online.com/components/products/datasheet/74479332257247.pdf",
+        ),
+    ],
+}
+
+# House crystal catalog by package
+HOUSE_CRYSTALS_BY_PKG = {
+    "3215_2Pin": [
+        crystal(
+            "32.768kHz",
+            "12.5pF",
+            "ABS07-32.768KHZ-T",
+            "Abracon LLC",
+            abracon_datasheet("Resonators/ABS07.pdf"),
+            esr="70kOhm",
+        ),
+        ecs_crystal("32.768kHz", "12.5pF", "ECS-.327-12.5-34QCS-TR", "ECX-34Q.pdf", esr="70kOhm"),
+        crystal("32.768kHz", "12.5pF", "XKXGI-SUA-32.768K", "YXC Crystal Oscillators", esr="70kOhm"),
+        crystal("32.768kHz", "12pF", "Q13FC13500004", "Seiko Epson", esr="70kOhm"),
+    ],
+    "3225_4Pin": [
+        ecs_crystal("8MHz", "12pF", "ECS-80-12-33Q-GN-TR", "ECX-33Q.pdf", esr="500Ohm"),
+        abracon_crystal("8MHz", "12pF", "ABM8AIG-8.000MHZ-12-R150-V-T3", "AIGcrystals/ABM8AIG.pdf", esr="150Ohm"),
+        crystal("8MHz", "12pF", "X32258MOB4SI", "YXC Crystal Oscillators", esr="150Ohm"),
+        ecs_crystal("12MHz", "12pF", "ECS-120-12-33Q-JES-TR", "ECX-33Q.pdf", esr="100Ohm"),
+        abracon_crystal("12MHz", "12pF", "ABM8AIG-12.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf", esr="100Ohm"),
+        crystal("12MHz", "12pF", "X322512MOB4SI", "YXC Crystal Oscillators", esr="80Ohm"),
+        ecs_crystal("16MHz", "12pF", "ECS-160-12-33Q-JEN-TR", "ECX-33Q.pdf", esr="80Ohm"),
+        abracon_crystal("16MHz", "12pF", "ABM8AIG-16.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf", esr="70Ohm"),
+        crystal("16MHz", "12pF", "X322516MOB4SI", "YXC Crystal Oscillators", esr="80Ohm"),
+        ecs_crystal("24MHz", "12pF", "ECS-240-12-33Q-JES-TR", "ECX-33Q.pdf", esr="40Ohm"),
+        abracon_crystal("24MHz", "12pF", "ABM8AIG-24.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf", esr="50Ohm"),
+        crystal("24MHz", "12pF", "X322524MOB4SI", "YXC Crystal Oscillators", esr="50Ohm"),
+        ecs_crystal("25MHz", "12pF", "ECS-250-12-33Q-JES-TR", "ECX-33Q.pdf", esr="40Ohm"),
+        abracon_crystal("25MHz", "12pF", "ABM8AIG-25.000MHZ-12-2Z-T3", "AIGcrystals/ABM8AIG.pdf", esr="50Ohm"),
+        crystal("25MHz", "12pF", "X322525MOB4SI", "YXC Crystal Oscillators", esr="50Ohm"),
+    ],
+    "2520_4Pin": [
+        ecs_crystal("12MHz", "10pF", "ECS-120-10-36Q-AES-TR", "ECX-2236Q.pdf", esr="150Ohm"),
+        abracon_crystal("12MHz", "10pF", "ABM10AIG-12.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf", esr="150Ohm"),
+        ecs_crystal("12MHz", "10pF", "ECS-120-10-36B-CWY-TR3", "ECX-2236B.pdf", esr="130Ohm"),
+        crystal("12MHz", "10pF", "TXM12M0004252DBCEO00T", "Yajingxin", esr="120Ohm"),
+        ecs_crystal("16MHz", "10pF", "ECS-160-10-36Q-ES-TR", "ECX-2236Q.pdf", esr="80Ohm"),
+        abracon_crystal("16MHz", "10pF", "ABM10AIG-16.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf", esr="80Ohm"),
+        ecs_crystal("16MHz", "10pF", "ECS-160-10-36B-CKM-TR", "ECX-2236B.pdf", esr="70Ohm"),
+        crystal("16MHz", "10pF", "TXM16M0004252DBCEO00T", "Yajingxin", esr="60Ohm"),
+        ecs_crystal("24MHz", "10pF", "ECS-240-10-36Q-ES-TR", "ECX-2236Q.pdf", esr="60Ohm"),
+        abracon_crystal("24MHz", "10pF", "ABM10AIG-24.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf", esr="60Ohm"),
+        ecs_crystal("24MHz", "10pF", "ECS-240-10-36B-CTN-TR", "ECX-2236B.pdf", esr="50Ohm"),
+        ecs_crystal("25MHz", "10pF", "ECS-250-10-36Q-ES-TR", "ECX-2236Q.pdf", esr="60Ohm"),
+        abracon_crystal("25MHz", "10pF", "ABM10AIG-25.000MHZ-4Z-T3", "AIGcrystals/ABM10AIG.pdf", esr="60Ohm"),
+        ecs_crystal("25MHz", "10pF", "ECS-250-10-36B-CTN-TR", "ECX-2236B.pdf", esr="50Ohm"),
+        crystal("25MHz", "10pF", "TXM25M0004252DBCEO00T", "Yajingxin", esr="45Ohm"),
+    ],
+}
+
+# House pin header catalog (Würth Elektronik WR-PHD series)
+# Key: (pitch, rows, pins, orientation) -> [(mpn, manufacturer), ...]
+HOUSE_PH = merge_parts(
+    [
+        WURTH_ELEKTRONIK_WR_PHD,
+        {
+            # 1.27mm pitch, 2 rows, vertical
+            ("1.27mm", 2, 2, "Vertical"): [("62200421121", "Würth Elektronik")],
+            ("1.27mm", 2, 4, "Vertical"): [("62200821121", "Würth Elektronik")],
+            ("1.27mm", 2, 5, "Vertical"): [("62201021121", "Würth Elektronik"), ("ZX-PZ1.27-2-5PZZ", "Megastar")],
+            ("1.27mm", 2, 10, "Vertical"): [("62202021121", "Würth Elektronik")],
+            # 2.54mm pitch, 1 row, vertical
+            ("2.54mm", 1, 2, "Vertical"): [("61300211121", "Würth Elektronik")],
+            ("2.54mm", 1, 3, "Vertical"): [("61300311121", "Würth Elektronik")],
+            ("2.54mm", 1, 4, "Vertical"): [("61300411121", "Würth Elektronik")],
+            ("2.54mm", 1, 5, "Vertical"): [("61300511121", "Würth Elektronik")],
+            ("2.54mm", 1, 6, "Vertical"): [("61300611121", "Würth Elektronik")],
+            ("2.54mm", 1, 8, "Vertical"): [("61300811121", "Würth Elektronik")],
+            ("2.54mm", 1, 10, "Vertical"): [("61301011121", "Würth Elektronik")],
+            ("2.54mm", 1, 15, "Vertical"): [("61301511121", "Würth Elektronik")],
+            # 2.54mm pitch, 2 rows, vertical
+            ("2.54mm", 2, 2, "Vertical"): [("61300421121", "Würth Elektronik")],
+            ("2.54mm", 2, 3, "Vertical"): [("61300621121", "Würth Elektronik")],
+            ("2.54mm", 2, 4, "Vertical"): [("61300821121", "Würth Elektronik")],
+            ("2.54mm", 2, 5, "Vertical"): [("61301021121", "Würth Elektronik")],
+            ("2.54mm", 2, 10, "Vertical"): [("61302021121", "Würth Elektronik")],
+            ("2.54mm", 2, 20, "Vertical"): [("61304021121", "Würth Elektronik")],
+        },
+    ]
+)
+
+# House rectifier diode catalog by technology and package
+HOUSE_RECTIFIERS_BY_PKG = {
+    ("PN", "DO-219AB"): [
+        rectifier("PN", "200V", "1A", "1.05V", "SE10FD-M3/H", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("PN", "400V", "1A", "1.1V", "SEG10FG-M3/H", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("PN", "600V", "1A", "1.05V", "SE10FJ-M3/H", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("PN", "DO-214AC"): [
+        rectifier("PN", "50V", "1A", "1.1V", "S1A-13-F", "Diodes Incorporated", diodes_inc_datasheet("S1A.pdf")),
+        rectifier("PN", "100V", "1A", "1.1V", "S1B-13-F", "Diodes Incorporated", diodes_inc_datasheet("S1B.pdf")),
+        rectifier("PN", "200V", "1A", "1.1V", "S1D-13-F", "Diodes Incorporated", diodes_inc_datasheet("S1D.pdf")),
+        rectifier("PN", "400V", "1A", "1.1V", "S1G-13-F", "Diodes Incorporated", diodes_inc_datasheet("S1G.pdf")),
+        rectifier("PN", "600V", "1A", "1.1V", "S1J-13-F", "Diodes Incorporated", diodes_inc_datasheet("S1J.pdf")),
+        rectifier("PN", "800V", "1A", "1.1V", "S1K-13-F", "Diodes Incorporated", diodes_inc_datasheet("S1K.pdf")),
+        rectifier("PN", "1000V", "1A", "1.1V", "S1M-13-F", "Diodes Incorporated", diodes_inc_datasheet("S1M.pdf")),
+    ],
+    ("PN", "DO-214AA"): [
+        rectifier("PN", "50V", "1.5A", "1.15V", "S2A-13-F", "Diodes Incorporated", diodes_inc_datasheet("S2A.pdf")),
+        rectifier("PN", "100V", "1.5A", "1.15V", "S2B-13-F", "Diodes Incorporated", diodes_inc_datasheet("S2B.pdf")),
+        rectifier("PN", "200V", "1.5A", "1.15V", "S2D-13-F", "Diodes Incorporated", diodes_inc_datasheet("S2D.pdf")),
+        rectifier("PN", "400V", "1.5A", "1.15V", "S2G-13-F", "Diodes Incorporated", diodes_inc_datasheet("S2G.pdf")),
+        rectifier("PN", "600V", "1.5A", "1.15V", "S2J-13-F", "Diodes Incorporated", diodes_inc_datasheet("S2J.pdf")),
+        rectifier("PN", "800V", "1.5A", "1.15V", "S2K-13-F", "Diodes Incorporated", diodes_inc_datasheet("S2K.pdf")),
+        rectifier("PN", "1000V", "1.5A", "1.15V", "S2M-13-F", "Diodes Incorporated", diodes_inc_datasheet("S2M.pdf")),
+    ],
+    ("PN", "DO-214AB"): [
+        rectifier("PN", "50V", "3A", "1.15V", "S3A-13-F", "Diodes Incorporated", diodes_inc_datasheet("S3A.pdf")),
+        rectifier("PN", "100V", "3A", "1.15V", "S3B-13-F", "Diodes Incorporated", diodes_inc_datasheet("S3B.pdf")),
+        rectifier("PN", "200V", "3A", "1.15V", "S3D-13-F", "Diodes Incorporated", diodes_inc_datasheet("S3D.pdf")),
+        rectifier("PN", "400V", "3A", "1.15V", "S3G-13-F", "Diodes Incorporated", diodes_inc_datasheet("S3G.pdf")),
+        rectifier("PN", "600V", "3A", "1.15V", "S3J-13-F", "Diodes Incorporated", diodes_inc_datasheet("S3J.pdf")),
+        rectifier("PN", "800V", "3A", "1.15V", "S3K-13-F", "Diodes Incorporated", diodes_inc_datasheet("S3K.pdf")),
+        rectifier("PN", "1000V", "3A", "1.15V", "S3M-13-F", "Diodes Incorporated", diodes_inc_datasheet("S3M.pdf")),
+    ],
+    ("PN", "SOD-123FL"): [
+        rectifier("PN", "50V", "1A", "1.1V", "S1AFL", "onsemi"),
+        rectifier("PN", "100V", "1A", "1.1V", "S1BFL", "onsemi"),
+        rectifier("PN", "200V", "1A", "1.1V", "S1DFL", "onsemi"),
+        rectifier("PN", "400V", "1A", "1.1V", "S1GFL", "onsemi"),
+        rectifier("PN", "600V", "1A", "1.1V", "S1JFL", "onsemi"),
+        rectifier("PN", "1000V", "1A", "1.1V", "S1MFL", "onsemi"),
+    ],
+    ("PN", "SOD-123"): [
+        vishay_rectifier("PN", "100V", "200mA", "1V", "BAV19W", "86372/bav19w_bav20w_bav21w.pdf"),
+        vishay_rectifier("PN", "150V", "200mA", "1V", "BAV20W", "86372/bav19w_bav20w_bav21w.pdf"),
+        vishay_rectifier("PN", "200V", "200mA", "1V", "BAV21W", "86372/bav19w_bav20w_bav21w.pdf"),
+    ],
+    ("PN", "SOD-323"): [
+        vishay_rectifier("PN", "100V", "200mA", "1V", "BAV19WS", "86453/bav19ws_bav20ws_bav21ws.pdf"),
+        vishay_rectifier("PN", "150V", "200mA", "1V", "BAV20WS", "86453/bav19ws_bav20ws_bav21ws.pdf"),
+        vishay_rectifier("PN", "200V", "200mA", "1V", "BAV21WS", "86453/bav19ws_bav20ws_bav21ws.pdf"),
+    ],
+    ("PN", "SOD-523"): [
+        rectifier(
+            "PN", "80V", "125mA", "1V", "1N4448HWT-7", "Diodes Incorporated", diodes_inc_datasheet("1N4448HWT.pdf")
+        ),
+        rectifier(
+            "PN", "100V", "125mA", "1V", "1N4148WT-7", "Diodes Incorporated", diodes_inc_datasheet("1N4148WT.pdf")
+        ),
+    ],
+    ("Schottky", "DO-214AC"): [
+        rectifier("Schottky", "20V", "1A", "0.5V", "SS12", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "30V", "1A", "0.5V", "SS13", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "40V", "1A", "0.5V", "SS14", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "50V", "1A", "0.75V", "SS15", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "60V", "1A", "0.75V", "SS16", "Taiwan Semiconductor Corporation"),
+    ],
+    ("Schottky", "DO-214AA"): [
+        rectifier("Schottky", "20V", "2A", "0.5V", "SS22", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "30V", "2A", "0.5V", "SS23", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "40V", "2A", "0.5V", "SS24", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "50V", "2A", "0.7V", "SS25", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "60V", "2A", "0.7V", "SS26", "Taiwan Semiconductor Corporation"),
+    ],
+    ("Schottky", "DO-214AB"): [
+        rectifier("Schottky", "20V", "3A", "0.5V", "SS32", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "30V", "3A", "0.5V", "SS33", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "40V", "3A", "0.5V", "SS34", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "50V", "3A", "0.75V", "SS35", "Taiwan Semiconductor Corporation"),
+        rectifier("Schottky", "60V", "3A", "0.75V", "SS36", "Taiwan Semiconductor Corporation"),
+    ],
+    ("Schottky", "DO-219AB"): [
+        rectifier("Schottky", "40V", "1A", "0.52V", "SS1F4-M3/H", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "60V", "1A", "0.53V", "SS1FN6-M3/H", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "100V", "1A", "0.8V", "SS1FH10-M3/H", "Vishay General Semiconductor - Diodes Division"),
+    ],
+    ("Schottky", "SOD-123FL"): [
+        onsemi_rectifier("Schottky", "20V", "1A", "0.34V", "MBR120VLSFT1G", "mbr120vlsft1-d.pdf"),
+        onsemi_rectifier("Schottky", "30V", "1A", "0.45V", "NRVB130LSFT1G", "mbr130lsft1-d.pdf"),
+        rectifier("Schottky", "40V", "1A", "0.56V", "NRVB140ESFT1G", "onsemi"),
+        onsemi_rectifier("Schottky", "100V", "1A", "0.76V", "NRVB1H100SFT3G", "mbr1h100sf-d.pdf"),
+    ],
+    ("Schottky", "SOD-123"): [
+        rectifier("Schottky", "40V", "100mA", "0.9V", "SD101CW", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "50V", "100mA", "1V", "SD101BW", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "60V", "100mA", "1V", "SD101AW", "Vishay General Semiconductor - Diodes Division"),
+        vishay_rectifier("Schottky", "20V", "350mA", "0.6V", "SD103CW", "86414/sd103aw_sd103bw_sd103cw.pdf"),
+        vishay_rectifier("Schottky", "30V", "350mA", "0.6V", "SD103BW", "86414/sd103aw_sd103bw_sd103cw.pdf"),
+        vishay_rectifier("Schottky", "40V", "350mA", "0.6V", "SD103AW", "86414/sd103aw_sd103bw_sd103cw.pdf"),
+    ],
+    ("Schottky", "SOD-323"): [
+        vishay_rectifier("Schottky", "20V", "350mA", "0.6V", "SD103CWS", "86463/sd103aws_sd103bws_sd103cws.pdf"),
+        vishay_rectifier("Schottky", "30V", "350mA", "0.6V", "SD103BWS", "86463/sd103aws_sd103bws_sd103cws.pdf"),
+        vishay_rectifier("Schottky", "40V", "350mA", "0.6V", "SD103AWS", "86463/sd103aws_sd103bws_sd103cws.pdf"),
+    ],
+    ("Schottky", "SOD-523"): [
+        rectifier("Schottky", "30V", "200mA", "1V", "BAT54-02V", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "40V", "120mA", "1V", "BAS40-02V", "Vishay General Semiconductor - Diodes Division"),
+        rectifier("Schottky", "70V", "100mA", "1V", "BAS70-02V", "Vishay General Semiconductor - Diodes Division"),
+    ],
+}
+
+# House zener diode catalog by package
+HOUSE_ZENERS_BY_PKG = {
+    "DO-219AB": [
+        # Vishay BZD27C series
+        vishay_zener("5.1V", "2.3W", "BZD27C5V1P-E3-08", "85153/bzd27series.pdf"),
+        vishay_zener("12V", "2.3W", "BZD27C12P-E3-08", "85153/bzd27series.pdf"),
+        vishay_zener("24V", "2.3W", "BZD27C24P-E3-08", "85153/bzd27series.pdf"),
+        vishay_zener("30V", "2.3W", "BZD27C30P-E3-08", "85153/bzd27series.pdf"),
+        vishay_zener("33V", "2.3W", "BZD27C33P-E3-08", "85153/bzd27series.pdf"),
+    ],
+    "DO-214AA": [
+        # Vishay SMBZ59xxB series
+        vishay_zener("5.6V", "3W", "SMBZ5919B-E3/52", "89418/smbz5945b.pdf"),
+        vishay_zener("12V", "3W", "SMBZ5927B-E3/52", "89418/smbz5945b.pdf"),
+        vishay_zener("24V", "3W", "SMBZ5934B-E3/52", "89418/smbz5945b.pdf"),
+        vishay_zener("30V", "3W", "SMBZ5936B-E3/52", "89418/smbz5945b.pdf"),
+        vishay_zener("33V", "3W", "SMBZ5937B-E3/52", "89418/smbz5945b.pdf"),
+    ],
+    "DO-214AB": [
+        # Comchip ACZRC53xxB automotive SMC series
+        zener("12V", "5W", "ACZRC5349B-G", "Comchip Technology"),
+        zener("24V", "5W", "ACZRC5359B-G", "Comchip Technology"),
+    ],
+    "SOD-323": [
+        onsemi_zener("3.3V", "300mW", "MM3Z3V3T1G", "mm3z2v4t1-d.pdf"),
+        onsemi_zener("5.1V", "300mW", "MM3Z5V1T1G", "mm3z2v4t1-d.pdf"),
+        onsemi_zener("12V", "300mW", "MM3Z12VT1G", "mm3z2v4t1-d.pdf"),
+        onsemi_zener("24V", "300mW", "MM3Z24VT1G", "mm3z2v4t1-d.pdf"),
+        onsemi_zener("30V", "300mW", "MM3Z30VT1G", "mm3z2v4t1-d.pdf"),
+    ],
+    "SOD-123": [
+        onsemi_zener("3.3V", "500mW", "MMSZ5226BT1G", "mmsz5221bt1-d.pdf"),
+        onsemi_zener("5.1V", "500mW", "MMSZ5231BT1G", "mmsz5221bt1-d.pdf"),
+        onsemi_zener("12V", "500mW", "MMSZ5242BT1G", "mmsz5221bt1-d.pdf"),
+        onsemi_zener("24V", "500mW", "MMSZ5252BT1G", "mmsz5221bt1-d.pdf"),
+        onsemi_zener("30V", "500mW", "MMSZ5256BT1G", "mmsz5221bt1-d.pdf"),
+    ],
+    "DO-214AC": [
+        zener("5.1V", "1W", "SMAZ5V1-13-F", "Diodes Incorporated", diodes_inc_datasheet("SMAZ5V1.pdf")),
+        zener("12V", "1W", "SMAZ12-13-F", "Diodes Incorporated", diodes_inc_datasheet("SMAZ12.pdf")),
+        zener("24V", "1W", "SMAZ24-13-F", "Diodes Incorporated", diodes_inc_datasheet("SMAZ24.pdf")),
+        zener("30V", "1W", "SMAZ30-13-F", "Diodes Incorporated", diodes_inc_datasheet("SMAZ30.pdf")),
+        zener("33V", "1W", "SMAZ33-13-F", "Diodes Incorporated", diodes_inc_datasheet("SMAZ33.pdf")),
+    ],
+    "SOD-523": [
+        # onsemi MM5Z4xxx series
+        onsemi_zener("5.1V", "500mW", "MM5Z4689T1G", "mm5z2v4t1-d.pdf"),
+        onsemi_zener("12V", "500mW", "MM5Z4699T5G", "mm5z2v4t1-d.pdf"),
+        onsemi_zener("24V", "500mW", "MM5Z4709T1G", "mm5z2v4t1-d.pdf"),
+    ],
+}
+
+# House TVS diode catalog by package (8/20µs pulse ratings per IEC 61000-4-5)
+HOUSE_TVS_BY_PKG = {
+    ("Unidirectional", "DO-219AB"): [
+        # Vishay VTVS/SMF series
+        vishay_tvs("3.3V", "8.9V", "1000W", "VTVS3V3GSMF-HM3", "85891/vtvs3v3asmf.pdf"),
+        vishay_tvs("5V", "9.2V", "1000W", "SMF5V0A-E3", "85881/smf5v0atosmf58a.pdf"),
+        vishay_tvs("20V", "32.4V", "1000W", "SMF20A-E3", "85881/smf5v0atosmf58a.pdf"),
+        vishay_tvs("24V", "38.9V", "1000W", "SMF24A-E3", "85881/smf5v0atosmf58a.pdf"),
+        # Littelfuse SMF/SZSMF series
+        tvs("5V", "9.2V", "1000W", "SZSMF5.0AT1G", "Littelfuse Inc."),
+        tvs("20V", "32.4V", "1000W", "SMF20A", "Littelfuse Inc."),
+        tvs("20V", "32.4V", "1000W", "SZSMF20AT1G", "Littelfuse Inc."),
+    ],
+    ("Unidirectional", "DO-214AC"): [
+        # Vishay SMAJ A series
+        vishay_tvs("5V", "9.2V", "2000W", "SMAJ5.0A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("12V", "19.9V", "2000W", "SMAJ12A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("20V", "32.4V", "2000W", "SMAJ20A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("24V", "38.9V", "2000W", "SMAJ24A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("33V", "53.3V", "2000W", "SMAJ33A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("60V", "96.8V", "2000W", "SMAJ60A-E3", "88390/smaj50a.pdf"),
+    ],
+    ("Unidirectional", "DO-214AA"): [
+        # Vishay SMBJ A series
+        vishay_tvs("5V", "9.2V", "3000W", "SMBJ5.0A-E3", "88392/smbj.pdf"),
+        vishay_tvs("12V", "19.9V", "3000W", "SMBJ12A-E3", "88392/smbj.pdf"),
+        vishay_tvs("20V", "32.4V", "3000W", "SMBJ20A-E3", "88392/smbj.pdf"),
+        vishay_tvs("24V", "38.9V", "3000W", "SMBJ24A-E3", "88392/smbj.pdf"),
+        vishay_tvs("28V", "45.5V", "3000W", "SMBJ28A-E3", "88392/smbj.pdf"),
+        vishay_tvs("33V", "53.3V", "3000W", "SMBJ33A-E3", "88392/smbj.pdf"),
+        vishay_tvs("48V", "77.4V", "3000W", "SMBJ48A-E3", "88392/smbj.pdf"),
+        vishay_tvs("78V", "126V", "3000W", "SMBJ78A-E3", "88392/smbj.pdf"),
+    ],
+    ("Unidirectional", "DO-214AB"): [
+        # Vishay SMCJ A series
+        vishay_tvs("5V", "9.2V", "6000W", "SMCJ5.0A-E3", "88394/smcj.pdf"),
+        vishay_tvs("12V", "19.9V", "6000W", "SMCJ12A-E3", "88394/smcj.pdf"),
+        vishay_tvs("20V", "32.4V", "6000W", "SMCJ20A-E3", "88394/smcj.pdf"),
+        vishay_tvs("24V", "38.9V", "6000W", "SMCJ24A-E3", "88394/smcj.pdf"),
+        vishay_tvs("33V", "53.3V", "6000W", "SMCJ33A-E3", "88394/smcj.pdf"),
+        vishay_tvs("48V", "77.4V", "6000W", "SMCJ48A-E3", "88394/smcj.pdf"),
+        vishay_tvs("58V", "93.6V", "6000W", "SMCJ58A-E3", "88394/smcj.pdf"),
+        vishay_tvs("60V", "96.8V", "6000W", "SMCJ60A-E3", "88394/smcj.pdf"),
+        vishay_tvs("85V", "137V", "6000W", "SMCJ85A-E3", "88394/smcj.pdf"),
+    ],
+    ("Bidirectional", "DO-214AC"): [
+        # Vishay SMAJ CA series
+        vishay_tvs("5V", "9.2V", "2000W", "SMAJ5.0CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("12V", "19.9V", "2000W", "SMAJ12CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("15V", "24.4V", "2000W", "SMAJ15CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("24V", "38.9V", "2000W", "SMAJ24CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("33V", "53.3V", "2000W", "SMAJ33CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("60V", "96.8V", "2000W", "SMAJ60CA-E3", "88390/smaj50a.pdf"),
+    ],
+    ("Bidirectional", "DO-214AA"): [
+        # Vishay SMBJ CA series
+        vishay_tvs("5V", "9.2V", "3000W", "SMBJ5.0CA-E3", "88392/smbj.pdf"),
+        vishay_tvs("12V", "19.9V", "3000W", "SMBJ12CA-E3", "88392/smbj.pdf"),
+        vishay_tvs("24V", "38.9V", "3000W", "SMBJ24CA-E3", "88392/smbj.pdf"),
+        vishay_tvs("33V", "53.3V", "3000W", "SMBJ33CA-E3", "88392/smbj.pdf"),
+        vishay_tvs("40V", "64.5V", "3000W", "SMBJ40CA-E3", "88392/smbj.pdf"),
+    ],
+    ("Bidirectional", "DO-214AB"): [
+        # Vishay SMCJ CA series
+        vishay_tvs("5V", "9.2V", "6000W", "SMCJ5.0CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("12V", "19.9V", "6000W", "SMCJ12CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("24V", "38.9V", "6000W", "SMCJ24CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("33V", "53.3V", "6000W", "SMCJ33CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("48V", "77.4V", "6000W", "SMCJ48CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("60V", "96.8V", "6000W", "SMCJ60CA-E3", "88394/smcj.pdf"),
+    ],
+    ("Unidirectional", "SOD-882"): [
+        tvs(
+            "5V",
+            "7.5V",
+            None,
+            "SP3031-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/tvs-diode-arrays-sp3031-datasheet?assetguid=2f63a461-bb1a-458d-97ab-119532f3b1f4",
+            capacitance="0.8pF",
+        ),
+        tvs(
+            "5V",
+            "12V",
+            None,
+            "SP1003-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1003_datasheet.pdf?assetguid=12e91f0b-9a70-47f1-8c30-51aa42e84dd5",
+            capacitance="30pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            None,
+            "SP3030-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp3030_datasheet.pdf?assetguid=477be72d-f135-4b27-a334-de0f49e61bac",
+            capacitance="0.5pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            None,
+            "SP1250-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1250_datasheet.pdf?assetguid=e52bbf49-0dd7-4706-9776-b2e12ebb5a3a",
+            capacitance="120pF",
+        ),
+        tvs(
+            "7V",
+            "11.8V",
+            None,
+            "SP3530-01ETG",
+            "Littelfuse Inc.",
+            "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2345/SP3530_Series.pdf",
+        ),
+        tvs(
+            "3.3V",
+            "10V",
+            "95W",
+            "VESD03A1C-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81797/vesd03a1.pdf",
+            capacitance="78pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            "80W",
+            "VESD05A1C-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81798/vesd05a1.pdf",
+            capacitance="63pF",
+        ),
+        tvs(
+            "5V",
+            "12V",
+            "192W",
+            "VESD05A1A-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81800/vesd05a1.pdf",
+            capacitance="130pF",
+        ),
+        tvs(
+            "3.3V",
+            "9V",
+            "31W",
+            "VESD03A1B-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81851/vesd03a1.pdf",
+            capacitance="25pF",
+        ),
+        tvs(
+            "5V",
+            "11V",
+            "33W",
+            "VESD05A1B-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81796/vesd05a1.pdf",
+            capacitance="19pF",
+        ),
+        tvs(
+            "5.5V",
+            "14V",
+            "28W",
+            "VBUS051CD-HD1-G-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81195/vbus051cd.pdf",
+            capacitance="0.6pF",
+        ),
+    ],
+    ("Bidirectional", "SOD-882"): [
+        tvs(
+            "1V",
+            "8.5V",
+            None,
+            "SP0115-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sp0115-01etg-datasheet?assetguid=e612b8e6-e7be-4b03-b9cb-e0e912cf59c1",
+            capacitance="0.85pF",
+        ),
+        tvs(
+            "3.3V",
+            "9V",
+            None,
+            "SC1333-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sc1333-01etg-datasheet?assetguid=3f42833b-e7fb-4dbd-925d-18e1fde6e51d",
+            capacitance="8pF",
+        ),
+        tvs(
+            "3.3V",
+            "8.5V",
+            "180W",
+            "SP1233-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1233_datasheet.pdf?assetguid=0e864491-f5c5-4123-a4af-5b5f312ccc58",
+            capacitance="35pF",
+        ),
+        tvs(
+            "5V",
+            "14.7V",
+            None,
+            "SP3021-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp3021_datasheet.pdf?assetguid=02714df5-d4f5-4e09-baec-2bc99a517824",
+        ),
+        tvs(
+            "5V",
+            "11V",
+            None,
+            "SC1210-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sc1210-01etg-datasheet?assetguid=69d2080a-f0b0-48bb-a865-7cbf0c1070b5",
+            capacitance="26pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            None,
+            "AQ1205-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_aq1205-01etg_datasheet.pdf?assetguid=72e10767-3f7e-4400-818c-12e470836581",
+            capacitance="7pF",
+        ),
+        tvs(
+            "5V",
+            "10V",
+            None,
+            "SC1205-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sc1205-01etg_datasheet.pdf?assetguid=1c78a8be-7e76-4626-a182-63ddf7641a57",
+            capacitance="7pF",
+        ),
+        tvs(
+            "5.3V",
+            "12V",
+            "20W",
+            "SP3022-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sp3022-datasheet?assetguid=a27ecccd-9fa4-4223-9a25-f0bb33be4303",
+        ),
+        tvs(
+            "5.3V",
+            "13V",
+            None,
+            "SP3022-01ETG-NM",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sp3022-01etg-nm-datasheet?assetguid=60969493-fae9-418a-91ac-bc92d273bb80",
+            capacitance="0.35pF",
+        ),
+        tvs(
+            "6V",
+            "15.6V",
+            None,
+            "SP1005-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1005_datasheet.pdf?assetguid=52a245c3-fc07-42d4-9891-4cdd6cceab3f",
+        ),
+        tvs(
+            "6V",
+            "9.2V",
+            None,
+            "SP1007-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1007_datasheet.pdf?assetguid=fcbdfc8e-b10b-4d90-ad90-b7da1dfffcb8",
+        ),
+        tvs(
+            "7V",
+            "14.5V",
+            None,
+            "SP3522-01ETG",
+            "Littelfuse Inc.",
+            "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2292/SP3522_Series.pdf",
+        ),
+        tvs(
+            "18V",
+            "38V",
+            None,
+            "SP3118-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp3118_datasheet.pdf?assetguid=049f1614-7668-459d-a6c4-a91a1217584b",
+            capacitance="0.3pF",
+        ),
+        tvs(
+            "28V",
+            "48V",
+            None,
+            "SP3130-01ETG",
+            "Littelfuse Inc.",
+            "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-arrays-sp3130-datasheet?assetguid=be94cc20-a863-42b7-82be-41ce11851e36",
+            capacitance="0.3pF",
+        ),
+        tvs(
+            "5.5V",
+            "16V",
+            "56W",
+            "VCUT0505B-HD1-GS08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81852/vcut0505.pdf",
+            capacitance="18pF",
+        ),
+        tvs(
+            "5.5V",
+            "12.5V",
+            "38W",
+            "VCUT05B1-DD1-G-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81149/vcut05b1dd1.pdf",
+            capacitance="10pF",
+        ),
+        tvs(
+            "5.5V",
+            "17V",
+            "34W",
+            "VBUS05L1-DD1-G-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81188/vbus05l1.pdf",
+            capacitance="0.33pF",
+        ),
+        tvs(
+            "7V",
+            "15V",
+            "60W",
+            "VCUT07B1-HD1-G4-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/84137/vcut07b1hd1.pdf",
+            capacitance="14pF",
+        ),
+        tvs(
+            "3.5V",
+            "11.5V",
+            "40W",
+            "VCUT03B1-DD1-G-08",
+            "Vishay General Semiconductor - Diodes Division",
+            "https://www.vishay.com/docs/81148/vcut03b1.pdf",
+            capacitance="12.5pF",
+        ),
+    ],
+}
+
+# House terminal block catalog
+# Key: (pitch, pins) -> list of (mpn, manufacturer) tuples
+HOUSE_TERMINAL_BLOCKS = {
+    # 2.54mm pitch
+    # LCSC: DORABO DB125-2.54 series (budget option) + TE Connectivity Buchanan 282834 (quality option)
+    ("2.54mm", 2): [("282834-2", "TE Connectivity"), ("DB125-2.54-2P-GN-S", "DORABO")],
+    ("2.54mm", 3): [("282834-3", "TE Connectivity"), ("DB125-2.54-3P-GN-S", "DORABO")],
+    ("2.54mm", 4): [("282834-4", "TE Connectivity"), ("DB125-2.54-4P-GN-S", "DORABO")],
+    ("2.54mm", 5): [("282834-5", "TE Connectivity"), ("DB125-2.54-5P-GN-S", "DORABO")],
+    ("2.54mm", 6): [("282834-6", "TE Connectivity"), ("DB125-2.54-6P-GN-S", "DORABO")],
+    ("2.54mm", 7): [("282834-7", "TE Connectivity"), ("DB125-2.54-7P-GN-S", "DORABO")],
+    ("2.54mm", 8): [("282834-8", "TE Connectivity"), ("DB125-2.54-8P-GN-S", "DORABO")],
+    ("2.54mm", 9): [("282834-9", "TE Connectivity"), ("DB125-2.54-9P-GN-S", "DORABO")],
+    ("2.54mm", 10): [("1-282834-0", "TE Connectivity"), ("DB125-2.54-10P-GN-S", "DORABO")],
+    # 5.0mm pitch - TE Connectivity Buchanan 282836 series + DORABO DB128V-5.0 series
+    ("5.0mm", 2): [("282836-2", "TE Connectivity"), ("DB128V-5.0-2P-GN-S", "DORABO")],
+    ("5.0mm", 3): [("282836-3", "TE Connectivity"), ("DB128V-5.0-3P-GN-S", "DORABO")],
+    ("5.0mm", 4): [("282836-4", "TE Connectivity"), ("DB128V-5.0-4P-GN-S", "DORABO")],
+    ("5.0mm", 5): [("282836-5", "TE Connectivity"), ("DB128V-5.0-5P-GN-S", "DORABO")],
+    ("5.0mm", 6): [("282836-6", "TE Connectivity"), ("DB128V-5.0-6P-GN-S", "DORABO")],
+    ("5.0mm", 7): [("282836-7", "TE Connectivity"), ("DB128V-5.0-7P-GN-S", "DORABO")],
+    ("5.0mm", 8): [("282836-8", "TE Connectivity"), ("DB128V-5.0-8P-GN-S", "DORABO")],
+    ("5.0mm", 9): [("282836-9", "TE Connectivity"), ("DB128V-5.0-9P-GN-S", "DORABO")],
+    ("5.0mm", 10): [("1-282836-0", "TE Connectivity"), ("DB128V-5.0-10P-GN-S", "DORABO")],
+}
+
+
+def assign_house_resistor(c, series_by_pkg):
+    """Assign house resistor MPNs."""
+    resistance = Resistance(prop(c, ["resistance", "Resistance"]))
+    pkg = prop(c, ["package", "Package"])
+    v_req = prop(c, ["Voltage", "voltage"])
+    voltage_constraint = Voltage(v_req) if v_req else None
+    p_req = prop(c, ["Power", "power"])
+    power_constraint = Power(p_req) if p_req else None
+
+    series_list = series_by_pkg.get(pkg, [])
+    matches = []
+
+    for spec in series_list:
+        spec_type = spec.get("type", "e_series")
+        spec_max_v = spec["max_v"]
+        spec_power = spec["power"]
+        spec_tol = float(spec["tolerance"].replace("%", "")) / 100.0
+
+        if voltage_constraint and voltage_constraint > spec_max_v:
+            continue
+
+        if power_constraint and power_constraint > spec_power:
+            continue
+
+        if spec_type == "discrete":
+            # Discrete series: exact value match with tolerance
+            r_with_tol = resistance.with_tolerance(spec_tol) if resistance.tolerance <= 0 else resistance
+
+            for val_str, mpn in spec["values"]:
+                val_r = Resistance(val_str).with_tolerance(spec_tol)
+                if val_r.within(r_with_tol):
+                    matches.append(
+                        {
+                            "mpn": mpn,
+                            "manufacturer": spec["manufacturer"],
+                            "datasheet": spec.get("datasheet"),
+                        }
+                    )
+        else:
+            # E-series: standard matching logic
+            spec_range = spec["resistance_range"]
+            matched = find_e_series_match(resistance, spec_tol, spec["e_series"])
+            if not matched or matched.value < spec_range.min or matched.value > spec_range.max:
+                continue
+
+            encoder = spec.get("encode", iec60062_4digit)
+            code = encoder(matched.value)
+            mpn = spec["series"] + code + spec.get("suffix", "X")
+            matches.append(
+                {
+                    "mpn": mpn,
+                    "manufacturer": spec["manufacturer"],
+                    "datasheet": spec.get("datasheet"),
+                }
+            )
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_resistor"
+        return
+
+    _no_match_warn("resistor", c, pkg)
+
+
+def assign_house_capacitor(c, house_caps_by_pkg):
+    """Assign Murata house MPNs to capacitors."""
+    cap = Capacitance(prop(c, ["capacitance", "Capacitance"]))
+    pkg = prop(c, ["package", "Package"])
+    req_diel = prop(c, ["dielectric", "Dielectric"])
+    v_req = prop(c, ["voltage", "Voltage"])
+    req_voltage = Voltage(v_req) if v_req else None
+
+    if cap.tolerance <= 0:
+        cap = cap.with_tolerance(0.2)
+
+    parts = house_caps_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        p_cap = p["cap"]
+        p_voltage = p["voltage"]
+
+        if req_diel:
+            h_rank = _DIELECTRIC_RANK.get(p["dielectric"], 99)
+            r_rank = _DIELECTRIC_RANK.get(req_diel, 99)
+            if h_rank > r_rank:
+                continue
+
+        if req_voltage and p_voltage < req_voltage:
+            continue
+
+        if not p_cap.within(cap):
+            continue
+
+        err = p_cap.diff(cap) / cap
+        diel_rank = _DIELECTRIC_RANK.get(p["dielectric"], 99)
+        score = (err, p_cap.tolerance, p_voltage * -1, diel_rank)
+
+        matches.append((score, p))
+
+    if matches:
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        all_parts = []
+
+        for _, p in sorted_matches:
+            all_parts.extend(p["parts"])
+
+        set_from_matches(c, all_parts)
+        best_match = sorted_matches[0][1]
+        spice_model = best_match.get("spice_model")
+        if spice_model and "1" in c.pins and "2" in c.pins:
+            c.spice_model = SpiceModel(
+                spice_model["path"],
+                spice_model["name"],
+                nets=[c.pins["1"], c.pins["2"]],
+                args={},
+            )
+        c.matcher = "assign_house_capacitor"
+        return
+
+    _no_match_warn("cap", c, pkg)
+
+
+def assign_house_led(c, house_leds_by_pkg):
+    """Assign house LED MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    color = prop(c, ["color", "Color"])
+    v_req = prop(c, ["forward_voltage", "Forward_voltage"])
+    req_voltage = Voltage(v_req) if v_req else None
+
+    parts = house_leds_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        # Match color exactly
+        if p["color"] != color:
+            continue
+
+        if req_voltage:
+            if req_voltage.tolerance == 0.0:
+                # Assume 15% tolerance if not specified
+                req_voltage = req_voltage.with_tolerance(0.20)
+            # LED's Vf should be within the specified range
+            if p["forward_voltage"] not in req_voltage:
+                continue
+
+        matches.append(p)
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_led"
+        return
+
+    _no_match_warn("LED", c, pkg)
+
+
+def assign_house_ferrite_bead(c, house_fb_by_pkg):
+    """Assign house ferrite bead MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    impedance_req = prop(c, ["impedance", "Impedance"])
+    freq_req = prop(c, ["frequency", "Frequency"])
+    dcr_constraint = prop(c, ["dcr", "Dcr"])
+    current_constraint = prop(c, ["current", "Current"])
+
+    parts = house_fb_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        # Frequency must match exactly
+        if freq_req and p["frequency"] != freq_req:
+            continue
+
+        # Impedance must match (tolerance-based)
+        if impedance_req:
+            if impedance_req.tolerance == 0.0:
+                impedance_req = impedance_req.with_tolerance(0.25)
+            if not p["impedance"].within(impedance_req):
+                continue
+
+        # DCR: part's DCR must be <= required (lower is better)
+        if dcr_constraint and p["dcr"] > dcr_constraint:
+            continue
+
+        # Current: part's current must be >= required (higher is better)
+        if current_constraint and p["current"] < current_constraint:
+            continue
+
+        matches.append(p)
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_ferrite_bead"
+        return
+
+    _no_match_warn("ferrite bead", c, pkg)
+
+
+def assign_house_inductor(c, house_inductors_by_pkg):
+    """Assign house power inductor MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    if pkg not in house_inductors_by_pkg:
+        return
+
+    inductance_req = Inductance(prop(c, ["inductance", "Inductance"]))
+    current_constraint = prop(c, ["current", "Current"])
+    dcr_constraint = prop(c, ["dcr", "Dcr"])
+
+    if inductance_req.tolerance == 0.0:
+        inductance_req = inductance_req.with_tolerance(0.20)
+
+    parts = house_inductors_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        if not p["inductance"].within(inductance_req):
+            continue
+
+        # Current: part's current must be >= required (higher is better)
+        if current_constraint and p["current"] < current_constraint:
+            continue
+
+        # DCR: part's DCR must be <= required (lower is better)
+        if dcr_constraint and p["dcr"] > dcr_constraint:
+            continue
+
+        err = p["inductance"].diff(inductance_req) / inductance_req
+        score = (err, p["current"] * -1, p["dcr"])
+        matches.append((score, p))
+
+    if matches:
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        set_from_matches(c, [p for score, p in sorted_matches])
+        c.matcher = "assign_house_inductor"
+        return
+
+    _no_match_warn("power inductor", c, pkg)
+
+
+def assign_house_pin_header(c, house_ph):
+    """Assign house pin header MPNs."""
+    pins_req = prop(c, ["pins", "Pins"])
+    rows_req = prop(c, ["rows", "Rows"])
+    pitch_req = prop(c, ["pitch", "Pitch"])
+    orientation_req = prop(c, ["orientation", "Orientation"])
+    gender_req = prop(c, ["gender", "Gender"])
+    mount_req = prop(c, ["mount", "Mount"])
+
+    # O(1) lookup using tuple key
+    if mount_req and gender_req:
+        # Generic pin header with mount and gender
+        key = (pitch_req, rows_req, pins_req, orientation_req, gender_req, mount_req)
+    else:
+        # Legacy style pin header (deprecated)
+        key = (pitch_req, rows_req, pins_req, orientation_req)
+
+    # Check for an exact match
+    matches = house_ph.get(key, [])
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_pin_header"
+        return
+
+    _no_match_warn("pin header", c)
+
+
+def assign_house_tvs(c, house_tvs_by_pkg):
+    """Assign house TVS diode MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    direction = prop(c, ["direction", "Direction"]) or "Unidirectional"
+    req_standoff = prop(c, ["reverse_standoff_voltage", "Reverse_standoff_voltage"])
+    req_clamping = prop(c, ["reverse_clamping_voltage", "Reverse_clamping_voltage"])
+    req_power = prop(c, ["peak_pulse_power", "Peak_pulse_power"])
+    req_capacitance = prop(c, ["capacitance", "Capacitance"])
+    required_power = Power(req_power) if req_power else None
+    required_capacitance = Capacitance(req_capacitance) if req_capacitance else None
+
+    parts = house_tvs_by_pkg.get((direction, pkg), [])
+    matches = []
+
+    for p in parts:
+        # Standoff voltage: part must be within the requirement
+        if req_standoff and p["standoff_voltage"] not in req_standoff:
+            continue
+
+        # Clamping voltage: part must be within the requirement
+        if req_clamping and p["clamping_voltage"] not in req_clamping:
+            continue
+
+        # Power is a minimum acceptable rating; allow higher-power TVS parts.
+        if required_power and (not p["peak_pulse_power"] or p["peak_pulse_power"] < required_power):
+            continue
+
+        if required_capacitance:
+            if not p["capacitance"]:
+                continue
+            if not p["capacitance"].within(required_capacitance):
+                continue
+
+        matches.append(p)
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_tvs"
+        return
+
+    _no_match_warn("TVS diode", c, pkg)
+
+
+def assign_house_rectifier(c, house_rectifiers_by_pkg):
+    """Assign house rectifier diode MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    technology = prop(c, ["technology", "Technology"]) or "PN"
+    req_reverse_voltage = prop(c, ["reverse_voltage", "Reverse_voltage"])
+    req_forward_current = prop(c, ["forward_current", "Forward_current"])
+    req_forward_voltage = prop(c, ["forward_voltage", "Forward_voltage"])
+
+    reverse_voltage = Voltage(req_reverse_voltage) if req_reverse_voltage else None
+    forward_current = Current(req_forward_current) if req_forward_current else None
+    forward_voltage = Voltage(req_forward_voltage) if req_forward_voltage else None
+
+    # The current house ladders represent thermal/current classes. Do not match
+    # them when IF(AV) is unspecified.
+    if not forward_current:
+        _no_match_warn(
+            "rectifier",
+            c,
+            pkg,
+            note="Rectifier house matching currently requires forward_current / IF(AV)",
+        )
+        return
+
+    parts = house_rectifiers_by_pkg.get((technology, pkg), [])
+    matches = []
+
+    for p in parts:
+        if reverse_voltage and p["reverse_voltage"] < reverse_voltage:
+            continue
+
+        if p["forward_current"] < forward_current:
+            continue
+
+        if forward_voltage and p["forward_voltage"] > forward_voltage:
+            continue
+
+        score = (p["forward_current"].value, p["reverse_voltage"].value, p["forward_voltage"].value)
+        matches.append((score, p))
+
+    if matches:
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        set_from_matches(c, [p for score, p in sorted_matches])
+        c.matcher = "assign_house_rectifier"
+        return
+
+    _no_match_warn("rectifier", c, pkg)
+
+
+def assign_house_zener(c, house_zeners_by_pkg):
+    """Assign house zener diode MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    req_zener_voltage = prop(c, ["zener_voltage", "Zener_voltage"])
+    req_power = prop(c, ["power", "Power"])
+
+    zener_voltage = Voltage(req_zener_voltage) if req_zener_voltage else None
+    power = Power(req_power) if req_power else None
+
+    parts = house_zeners_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        if zener_voltage and p["zener_voltage"] not in zener_voltage:
+            continue
+
+        if power and p["power"] < power:
+            continue
+
+        # House zener entries normalize even singleton voltages to closed ranges.
+        score = (p["power"].value, p["zener_voltage"].min, p["zener_voltage"].max)
+        matches.append((score, p))
+
+    if matches:
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        set_from_matches(c, [p for score, p in sorted_matches])
+        c.matcher = "assign_house_zener"
+        return
+
+    _no_match_warn("zener diode", c, pkg)
+
+
+def assign_house_crystal(c, house_crystals_by_pkg):
+    """Assign house crystal MPNs."""
+    pkg = prop(c, ["package", "Package"])
+    freq_req = prop(c, ["frequency", "Frequency"])
+    cl_req = prop(c, ["load_capacitance", "Load_capacitance"])
+    esr_req = prop(c, ["esr", "ESR", "Esr"])
+
+    if not freq_req:
+        return
+
+    req_frequency = Frequency(freq_req)
+    req_load_cap = Capacitance(cl_req) if cl_req else None
+    req_esr = Resistance(esr_req) if esr_req else None
+    if req_esr and req_esr.min == req_esr.max:
+        # Treat a point ESR request as a maximum allowed ESR.
+        req_esr = Resistance(min="0Ohm", max=req_esr)
+
+    parts = house_crystals_by_pkg.get(pkg, [])
+    matches = []
+
+    for p in parts:
+        # Frequency must match exactly
+        if p["frequency"] != req_frequency:
+            continue
+
+        # Load capacitance: if specified, must match (with tolerance)
+        if req_load_cap:
+            if not p["load_capacitance"]:
+                continue
+            # Allow 20% tolerance on load capacitance matching
+            if req_load_cap.tolerance == 0.0:
+                req_load_cap = req_load_cap.with_tolerance(0.20)
+            if not p["load_capacitance"].within(req_load_cap):
+                continue
+
+        if req_esr:
+            part_esr = p.get("esr")
+            if not part_esr:
+                continue
+            if not part_esr.within(req_esr):
+                continue
+
+        matches.append(p)
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_crystal"
+        return
+
+    _no_match_warn("crystal", c, pkg)
+
+
+def assign_house_terminal_block(c, house_terminal_blocks):
+    """Assign house terminal block MPNs."""
+    pins_req = prop(c, ["pins", "Pins"])
+    pitch_req = prop(c, ["pitch", "Pitch"])
+
+    # O(1) lookup using tuple key
+    key = (pitch_req, pins_req)
+    matches = house_terminal_blocks.get(key, [])
+
+    if matches:
+        set_from_matches(c, matches)
+        c.matcher = "assign_house_terminal_block"
+        return
+
+    _no_match_warn("terminal block", c)
+
+
+def assign_house_parts(c):
+    """Single modifier that dispatches component matching by type."""
+    # Skip if already has MPN
+    if hasattr(c, "mpn") and c.mpn:
+        return
+
+    # Skip if type is not set
+    if not hasattr(c, "type"):
+        return
+
+    # Dispatch based on component type
+    if c.type == "resistor":
+        assign_house_resistor(c, SERIES_BY_PKG)
+    elif c.type == "capacitor":
+        assign_house_capacitor(c, HOUSE_CAPS_BY_PKG)
+    elif c.type == "led":
+        assign_house_led(c, HOUSE_LEDS_BY_PKG)
+    elif c.type == "ferrite_bead":
+        assign_house_ferrite_bead(c, HOUSE_FB_BY_PKG)
+    elif c.type == "inductor":
+        assign_house_inductor(c, HOUSE_POWER_INDUCTORS_BY_PKG)
+    elif c.type == "rectifier":
+        assign_house_rectifier(c, HOUSE_RECTIFIERS_BY_PKG)
+    elif c.type == "zener":
+        assign_house_zener(c, HOUSE_ZENERS_BY_PKG)
+    elif c.type == "tvs":
+        assign_house_tvs(c, HOUSE_TVS_BY_PKG)
+    elif c.type == "crystal":
+        assign_house_crystal(c, HOUSE_CRYSTALS_BY_PKG)
+    elif c.type == "connector":
+        connector_type = prop(c, ["connector_type", "Connector_type"])
+        if connector_type == "Pin Header":
+            assign_house_pin_header(c, HOUSE_PH)
+        elif connector_type == "Terminal Block":
+            assign_house_terminal_block(c, HOUSE_TERMINAL_BLOCKS)

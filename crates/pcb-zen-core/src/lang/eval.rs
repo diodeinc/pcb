@@ -4,21 +4,21 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
 use anyhow::anyhow;
 use pcb_sch::physical::{PhysicalValue, PhysicalValueWarningHandler};
 use starlark::{
     PrintHandler,
-    environment::{GlobalsBuilder, LibraryExtension},
+    environment::{GlobalsBuilder, LibraryExtension, Module},
     errors::{EvalMessage, EvalSeverity},
     eval::{Evaluator, FileLoader},
     syntax::{AstModule, Dialect},
     typing::TypeMap,
-    values::{FrozenValue, Heap, Value, ValueLike},
+    values::{FrozenHeapName, FrozenValue, Heap, Value, ValueLike},
 };
-use starlark::{codemap::ResolvedSpan, collections::SmallMap, values::FrozenHeap};
+use starlark::{codemap::ResolvedSpan, collections::SmallMap};
 use starlark::{environment::FrozenModule, typing::Interface};
 use starlark_syntax::syntax::{
     ast::{LoadArgP, StmtP},
@@ -52,6 +52,8 @@ use crate::resolution::{PackageScopeKey, PackageUrlResolution, ResolutionResult}
 use crate::{Diagnostic, Diagnostics, WithDiagnostics};
 use crate::{FileProvider, ResolveContext};
 use crate::{convert::ModuleConverter, lang::context::FrozenPendingChild};
+
+pub use super::evaluator_ext::EvalContextRef;
 
 use super::{
     context::{ContextValue, FrozenContextValue},
@@ -254,8 +256,7 @@ pub struct EvalOutput {
     pub print_output: Vec<String>,
     /// Eval config (file provider, path specs, etc.)
     pub config: EvalContextConfig,
-    /// Session keeps the frozen heap alive for the lifetime of this output.
-    /// Also provides access to the module tree.
+    /// Session owns the frozen module tree for this output.
     session: EvalSession,
 }
 
@@ -422,10 +423,8 @@ pub struct EvalSession {
     /// Per-file interface map for load path → Interface.
     #[allow(dead_code)]
     interface_map: Arc<RwLock<HashMap<PathBuf, HashMap<String, Interface>>>>,
-    /// Tree of all child modules indexed by fully qualified path.
-    module_tree: Arc<RwLock<BTreeMap<ModulePath, FrozenModuleValue>>>,
-    /// Shared frozen heap for the entire evaluation tree.
-    frozen_heap: Arc<Mutex<FrozenHeap>>,
+    /// Tree of all frozen child modules indexed by fully qualified path.
+    module_tree: Arc<RwLock<BTreeMap<ModulePath, FrozenModule>>>,
 }
 
 /// Configuration for creating an EvalContext. Send + Sync safe for passing across threads.
@@ -916,7 +915,6 @@ impl Default for EvalSession {
             type_cache: Arc::new(RwLock::new(HashMap::new())),
             interface_map: Arc::new(RwLock::new(HashMap::new())),
             module_tree: Arc::new(RwLock::new(BTreeMap::new())),
-            frozen_heap: Arc::new(Mutex::new(FrozenHeap::new())),
         }
     }
 }
@@ -929,25 +927,33 @@ impl EvalSession {
     /// since schematic conversion reads the shared module tree from the session.
     pub fn prepare_for_root_eval(&self) {
         self.clear_module_tree();
-        self.reset_frozen_heap();
     }
 
     // --- Module tree ---
 
-    fn insert_module(&self, path: ModulePath, module: FrozenModuleValue) {
+    fn insert_module(&self, path: ModulePath, module: FrozenModule) {
         self.module_tree.write().unwrap().insert(path, module);
     }
 
     fn clone_module_tree(&self) -> BTreeMap<ModulePath, FrozenModuleValue> {
-        self.module_tree.read().unwrap().clone()
+        self.module_tree
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(path, module)| {
+                let module_value = module
+                    .extra_value()
+                    .and_then(|extra| extra.downcast_ref::<FrozenContextValue>())
+                    .expect("module_tree entry missing FrozenContextValue")
+                    .module
+                    .clone();
+                (path.clone(), module_value)
+            })
+            .collect()
     }
 
     fn clear_module_tree(&self) {
         self.module_tree.write().unwrap().clear();
-    }
-
-    fn reset_frozen_heap(&self) {
-        *self.frozen_heap.lock().unwrap() = FrozenHeap::new();
     }
 
     // --- Load cache ---
@@ -1086,28 +1092,23 @@ impl EvalSession {
         }
     }
 
-    /// Add a reference to the shared frozen heap.
-    fn add_frozen_heap_reference(&self, heap: &starlark::values::FrozenHeapRef) {
-        self.frozen_heap.lock().unwrap().add_reference(heap);
-    }
-
     /// Create an EvalContext from an EvalContextConfig.
     /// This is the primary way to create contexts for evaluation.
     pub fn create_context(&self, config: EvalContextConfig) -> EvalContext {
         EvalContext {
-            module: starlark::environment::Module::new(),
             session: self.clone(),
             config,
             load_diagnostics: RefCell::new(Vec::new()),
+            pending_inputs: SmallMap::new(),
+            pending_properties: SmallMap::new(),
+            pending_parent_component_modifiers: Vec::new(),
+            json_inputs: SmallMap::new(),
         }
     }
 }
 
 pub struct EvalContext {
-    /// The starlark::environment::Module we are evaluating.
-    pub module: starlark::environment::Module,
-
-    /// The shared session state (module_tree, frozen_heap, etc.)
+    /// The shared session state (module tree, load cache, symbol maps, etc.)
     session: EvalSession,
 
     /// Configuration for this evaluation context (Send + Sync safe).
@@ -1115,10 +1116,16 @@ pub struct EvalContext {
 
     /// Diagnostics collected during load() calls in this context.
     load_diagnostics: RefCell<Vec<Diagnostic>>,
+
+    /// Values to seed into the active module once its branded heap exists.
+    pending_inputs: SmallMap<String, FrozenValue>,
+    pending_properties: SmallMap<String, FrozenValue>,
+    pending_parent_component_modifiers: Vec<FrozenValue>,
+    json_inputs: SmallMap<String, serde_json::Value>,
 }
 
 /// Helper to recursively convert JSON to heap values
-fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: &'v Heap) -> Value<'v> {
+fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: Heap<'v>) -> Value<'v> {
     use starlark::values::dict::AllocDict;
     match json {
         serde_json::Value::Null => Value::new_none(),
@@ -1217,11 +1224,14 @@ impl EvalContext {
         self
     }
 
-    fn freeze(&mut self) -> FrozenModule {
-        let module = std::mem::take(&mut self.module);
-        let frozen = module.freeze().expect("failed to freeze module");
-        self.session.add_frozen_heap_reference(frozen.frozen_heap());
-        frozen
+    fn frozen_heap_name(&self) -> FrozenHeapName {
+        let source = self
+            .config
+            .source_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        FrozenHeapName::User(Box::new(format!("{}:{source}", self.config.module_path)))
     }
 
     /// Enable or disable eager workspace parsing.
@@ -1366,34 +1376,38 @@ impl EvalContext {
         self
     }
 
-    fn ensure_context_value(&mut self) {
-        if self.module.extra_value().is_none() {
-            let eval = Evaluator::new(&self.module);
-            let ctx_value = eval.heap().alloc_complex(ContextValue::from_context(self));
-            self.module.set_extra_value(ctx_value);
-        }
-    }
-
-    fn context_value(&self) -> &ContextValue<'_> {
-        self.module
-            .extra_value()
-            .unwrap()
+    fn initialize_context_value<'v>(&self, module: &Module<'v>) {
+        let heap = module.heap();
+        let ctx_value = heap.alloc_complex(ContextValue::from_context(self));
+        module.set_extra_value(ctx_value);
+        let ctx_value = ctx_value
             .downcast_ref::<ContextValue>()
-            .unwrap()
+            .expect("extra value should be a ContextValue");
+
+        {
+            let mut module_value = ctx_value.module_mut();
+            for (name, value) in self.pending_inputs.iter() {
+                module_value.add_input(name.clone(), value.to_value());
+            }
+            for (name, json) in self.json_inputs.iter() {
+                module_value.add_input(name.clone(), json_value_to_heap_value(json, heap));
+            }
+            let parent_modifiers = self
+                .pending_parent_component_modifiers
+                .iter()
+                .map(|value| value.to_value())
+                .collect();
+            module_value.set_parent_component_modifiers(parent_modifiers);
+        }
+
+        for (name, value) in self.pending_properties.iter() {
+            ctx_value.add_property(name.clone(), value.to_value());
+        }
     }
 
     /// Set inputs from already frozen parent values.
     pub fn set_inputs_from_frozen_values(&mut self, parent_inputs: SmallMap<String, FrozenValue>) {
-        if parent_inputs.is_empty() {
-            return;
-        }
-
-        self.ensure_context_value();
-        let ctx_value = self.context_value();
-        let mut module = ctx_value.module_mut();
-        for (name, value) in parent_inputs.into_iter() {
-            module.add_input(name, value.to_value());
-        }
+        self.pending_inputs.extend(parent_inputs);
     }
 
     /// Set properties from already frozen parent values.
@@ -1401,15 +1415,7 @@ impl EvalContext {
         &mut self,
         parent_properties: SmallMap<String, FrozenValue>,
     ) {
-        if parent_properties.is_empty() {
-            return;
-        }
-
-        self.ensure_context_value();
-        let ctx_value = self.context_value();
-        for (name, value) in parent_properties.into_iter() {
-            ctx_value.add_property(name, value.to_value());
-        }
+        self.pending_properties.extend(parent_properties);
     }
 
     /// Set parent component modifiers from already frozen parent values.
@@ -1417,18 +1423,7 @@ impl EvalContext {
         &mut self,
         parent_modifiers: Vec<FrozenValue>,
     ) {
-        if parent_modifiers.is_empty() {
-            return;
-        }
-
-        self.ensure_context_value();
-        let ctx_value = self.context_value();
-        let mut module = ctx_value.module_mut();
-        let unfrozen_modifiers: Vec<_> = parent_modifiers
-            .into_iter()
-            .map(|fv| fv.to_value())
-            .collect();
-        module.set_parent_component_modifiers(unfrozen_modifiers);
+        self.pending_parent_component_modifiers = parent_modifiers;
     }
 
     /// Apply component modifiers to all children after module evaluation but before freezing.
@@ -1463,18 +1458,7 @@ impl EvalContext {
 
     /// Convert JSON inputs directly to heap values and set them (for external APIs)
     pub fn set_json_inputs(&mut self, json_inputs: SmallMap<String, serde_json::Value>) {
-        if json_inputs.is_empty() {
-            return;
-        }
-
-        self.ensure_context_value();
-        let eval = Evaluator::new(&self.module);
-        let ctx_value = self.context_value();
-        let mut module = ctx_value.module_mut();
-        for (name, json) in json_inputs.iter() {
-            let value = json_value_to_heap_value(json, eval.heap());
-            module.add_input(name.clone(), value);
-        }
+        self.json_inputs.extend(json_inputs);
     }
 
     /// Evaluate the configured module. All required fields must be provided
@@ -1540,225 +1524,227 @@ impl EvalContext {
             self.add_load_diagnostic(diagnostic);
         }
 
-        // Make prelude symbols available before user code runs.
-        self.inject_prelude();
+        Module::with_temp_heap(|module| {
+            // Make prelude symbols available before user code runs.
+            self.inject_prelude(&module);
 
-        // Create a print handler to collect output
-        let print_handler = CollectingPrintHandler::new();
-        let physical_value_warning_handler =
-            PhysicalValueWarningHandler(emit_physical_value_deprecation);
+            // Attach a `ContextValue` so user code can access evaluation context,
+            // then seed any inputs/properties that were collected before the
+            // branded Starlark heap existed.
+            self.initialize_context_value(&module);
 
-        let eval_result = {
-            let mut eval = Evaluator::new(&self.module);
-            eval.enable_static_typechecking(true);
-            eval.set_loader(&self);
-            eval.set_print_handler(&print_handler);
-            eval.extra = Some(&physical_value_warning_handler);
+            // Create a print handler to collect output
+            let print_handler = CollectingPrintHandler::new();
+            let physical_value_warning_handler =
+                PhysicalValueWarningHandler(emit_physical_value_deprecation);
 
-            // Attach a `ContextValue` so user code can access evaluation context.
-            // Only create one if it doesn't already exist (copy_and_set_inputs/properties may have created it)
-            if self.module.extra_value().is_none() {
-                self.module
-                    .set_extra_value(eval.heap().alloc_complex(ContextValue::from_context(&self)));
-            }
+            let eval_result = {
+                let mut eval_context_ref = EvalContextRef::new(&self);
+                let mut eval = Evaluator::new(&module);
+                eval.enable_static_typechecking(true);
+                eval.set_loader(&self);
+                eval.set_print_handler(&print_handler);
+                eval.extra = Some(&physical_value_warning_handler);
+                eval.extra_mut = Some(&mut eval_context_ref);
 
-            let globals = Self::build_globals();
+                let globals = Self::build_globals();
 
-            // We are only interested in whether evaluation succeeded, not in the
-            // value of the final expression, so map the result to `()`.
-            let _span = info_span!("starlark_eval").entered();
-            eval.eval_module(ast.clone(), &globals)
-                .and_then(|_| Self::apply_component_modifiers(&mut eval))
-        };
+                // We are only interested in whether evaluation succeeded, not in the
+                // value of the final expression, so map the result to `()`.
+                let _span = info_span!("starlark_eval").entered();
+                eval.eval_module(ast.clone(), &globals)
+                    .and_then(|_| Self::apply_component_modifiers(&mut eval))
+            };
 
-        // Collect print output after evaluation
-        let print_output = print_handler.take_output();
+            // Collect print output after evaluation
+            let print_output = print_handler.take_output();
 
-        // Collect load diagnostics - this becomes our accumulator for all diagnostics
-        let mut diagnostics = self.take_load_diagnostics();
+            // Collect load diagnostics - this becomes our accumulator for all diagnostics
+            let mut diagnostics = self.take_load_diagnostics();
 
-        match eval_result {
-            Ok(_) => {
-                // Extract needed references before freezing (which moves self.module)
-                let session_ref = self.session.clone();
-                let config_ref = self.config.clone();
+            match eval_result {
+                Ok(_) => {
+                    let frozen_module = {
+                        let _span = info_span!("freeze_module").entered();
+                        module
+                            .freeze_named(self.frozen_heap_name())
+                            .expect("failed to freeze module")
+                    };
+                    let extra = frozen_module
+                        .extra_value()
+                        .expect("extra value should be set before freezing")
+                        .downcast_ref::<FrozenContextValue>()
+                        .expect("extra value should be a FrozenContextValue");
+                    let signature = extra
+                        .module
+                        .signature()
+                        .iter()
+                        .map(|param| {
+                            // Convert frozen value to regular value for introspection
+                            let type_value = param.type_value.to_value();
+                            let type_info = TypeInfo::from_value(type_value);
 
-                let frozen_module = {
-                    let _span = info_span!("freeze_module").entered();
-                    self.freeze()
-                };
-                let extra = frozen_module
-                    .extra_value()
-                    .expect("extra value should be set before freezing")
-                    .downcast_ref::<FrozenContextValue>()
-                    .expect("extra value should be a FrozenContextValue");
-                let signature = extra
-                    .module
-                    .signature()
-                    .iter()
-                    .map(|param| {
-                        // Convert frozen value to regular value for introspection
-                        let type_value = param.type_value.to_value();
-                        let type_info = TypeInfo::from_value(type_value);
+                            // Convert default value to JSON using Starlark's native serialization
+                            let default_value = param
+                                .default_value
+                                .as_ref()
+                                .and_then(|v| serialize_parameter_value(v.to_value()));
 
-                        // Convert default value to JSON using Starlark's native serialization
-                        let default_value = param
-                            .default_value
-                            .as_ref()
-                            .and_then(|v| serialize_parameter_value(v.to_value()));
+                            // Get human-readable display of default value
+                            let default_display = param.default_display();
+                            let allowed_values = param.allowed_values.as_ref().map(|values| {
+                                values
+                                    .iter()
+                                    .filter_map(|value| serialize_parameter_value(value.to_value()))
+                                    .collect()
+                            });
+                            let allowed_display = param.allowed_display();
 
-                        // Get human-readable display of default value
-                        let default_display = param.default_display();
-                        let allowed_values = param.allowed_values.as_ref().map(|values| {
-                            values
-                                .iter()
-                                .filter_map(|value| serialize_parameter_value(value.to_value()))
-                                .collect()
-                        });
-                        let allowed_display = param.allowed_display();
+                            ParameterInfo {
+                                name: param.name.clone(),
+                                type_info,
+                                required: !param.optional,
+                                default_value,
+                                default_display,
+                                allowed_values,
+                                allowed_display,
+                                help: param.help.clone(),
+                                direction: param.direction,
+                            }
+                        })
+                        .collect();
+                    // Process pending children after parent is frozen
+                    let module_path = extra.module.path().clone();
+                    let is_root = module_path.segments.is_empty();
 
-                        ParameterInfo {
-                            name: param.name.clone(),
-                            type_info,
-                            required: !param.optional,
-                            default_value,
-                            default_display,
-                            allowed_values,
-                            allowed_display,
-                            help: param.help.clone(),
-                            direction: param.direction,
+                    if self.config.build_circuit || is_root {
+                        self.session
+                            .insert_module(module_path, frozen_module.clone());
+                        let process_children_span = info_span!("process_children", module = %extra.module.path().name(), count = extra.pending_children.len());
+                        let _guard = process_children_span.enter();
+
+                        let session = self.session.clone();
+                        let base_config = self.config.clone();
+
+                        #[cfg(feature = "native")]
+                        {
+                            // Collect into Vec to preserve deterministic ordering
+                            let child_diag_vecs: Vec<Vec<Diagnostic>> = extra
+                                .pending_children
+                                .par_iter()
+                                .map(|pending| {
+                                    let child_config =
+                                        base_config.child_for_pending(&pending.final_name);
+                                    session
+                                        .create_context(child_config)
+                                        .process_pending_child(pending.clone())
+                                })
+                                .collect();
+                            for child_diags in child_diag_vecs {
+                                diagnostics.extend(child_diags);
+                            }
                         }
-                    })
-                    .collect();
-                // Process pending children after parent is frozen
-                let module_path = extra.module.path().clone();
-                let is_root = module_path.segments.is_empty();
 
-                if self.config.build_circuit || is_root {
-                    session_ref.insert_module(module_path, extra.module.clone());
-                    let process_children_span = info_span!("process_children", module = %extra.module.path().name(), count = extra.pending_children.len());
-                    let _guard = process_children_span.enter();
-
-                    let session = self.session.clone();
-                    let base_config = self.config.clone();
-
-                    #[cfg(feature = "native")]
-                    {
-                        // Collect into Vec to preserve deterministic ordering
-                        let child_diag_vecs: Vec<Vec<Diagnostic>> = extra
-                            .pending_children
-                            .par_iter()
-                            .map(|pending| {
+                        #[cfg(not(feature = "native"))]
+                        {
+                            for pending in extra.pending_children.iter() {
                                 let child_config =
                                     base_config.child_for_pending(&pending.final_name);
-                                session
-                                    .create_context(child_config)
-                                    .process_pending_child(pending.clone())
-                            })
-                            .collect();
-                        for child_diags in child_diag_vecs {
-                            diagnostics.extend(child_diags);
+                                diagnostics.extend(
+                                    session
+                                        .create_context(child_config)
+                                        .process_pending_child(pending.clone()),
+                                );
+                            }
                         }
                     }
 
-                    #[cfg(not(feature = "native"))]
-                    {
-                        for pending in extra.pending_children.iter() {
-                            let child_config = base_config.child_for_pending(&pending.final_name);
-                            diagnostics.extend(
-                                session
-                                    .create_context(child_config)
-                                    .process_pending_child(pending.clone()),
+                    // Module's own diagnostics (from ContextValue)
+                    diagnostics.extend(extra.diagnostics().iter().cloned());
+
+                    if !diagnostics.iter().any(Diagnostic::is_error) {
+                        diagnostics.extend(ast_style_lints(&ast));
+                    }
+
+                    // Emit warnings for nets renamed due to collisions or unnamed nets
+                    // Skip warnings for NotConnected nets (they're expected to have no name or duplicate names)
+                    for (_id, net_info) in extra.module.introduced_nets() {
+                        // Skip all warnings for NotConnected nets
+                        if net_info.net_type == "NotConnected" {
+                            continue;
+                        }
+
+                        let location = net_info
+                            .call_stack
+                            .frames
+                            .iter()
+                            .rev()
+                            .find_map(|f| f.location.as_ref());
+                        let span = location.map(|loc| loc.resolve_span());
+                        let path = location
+                            .map(|loc| loc.file.filename().to_string())
+                            .unwrap_or_else(|| extra.module.source_path().to_string());
+
+                        if let Some(original) = &net_info.original_name {
+                            if original == "NC" {
+                                continue;
+                            }
+                            let body = format!(
+                                "Net '{}' was renamed to '{}' due to name collision",
+                                original, net_info.final_name
+                            );
+                            diagnostics.push(
+                                crate::Diagnostic::categorized(
+                                    &path,
+                                    &body,
+                                    "net.name_collision",
+                                    EvalSeverity::Warning,
+                                )
+                                .with_span(span)
+                                .with_call_stack(Some(net_info.call_stack.clone())),
+                            );
+                        } else if net_info.auto_named {
+                            let body = format!(
+                                "Net had no explicit name; assigned '{}'",
+                                net_info.final_name
+                            );
+                            diagnostics.push(
+                                crate::Diagnostic::categorized(
+                                    &path,
+                                    &body,
+                                    "net.unnamed",
+                                    EvalSeverity::Warning,
+                                )
+                                .with_span(span)
+                                .with_call_stack(Some(net_info.call_stack.clone())),
                             );
                         }
                     }
-                }
 
-                // Module's own diagnostics (from ContextValue)
-                diagnostics.extend(extra.diagnostics().iter().cloned());
+                    let output = EvalOutput {
+                        ast,
+                        star_module: frozen_module,
+                        sch_module: extra.module.clone(),
+                        signature,
+                        print_output,
+                        config: self.config.clone(),
+                        session: self.session.clone(),
+                    };
 
-                if !diagnostics.iter().any(Diagnostic::is_error) {
-                    diagnostics.extend(ast_style_lints(&ast));
-                }
-
-                // Emit warnings for nets renamed due to collisions or unnamed nets
-                // Skip warnings for NotConnected nets (they're expected to have no name or duplicate names)
-                for (_id, net_info) in extra.module.introduced_nets() {
-                    // Skip all warnings for NotConnected nets
-                    if net_info.net_type == "NotConnected" {
-                        continue;
-                    }
-
-                    let location = net_info
-                        .call_stack
-                        .frames
-                        .iter()
-                        .rev()
-                        .find_map(|f| f.location.as_ref());
-                    let span = location.map(|loc| loc.resolve_span());
-                    let path = location
-                        .map(|loc| loc.file.filename().to_string())
-                        .unwrap_or_else(|| extra.module.source_path().to_string());
-
-                    if let Some(original) = &net_info.original_name {
-                        if original == "NC" {
-                            continue;
-                        }
-                        let body = format!(
-                            "Net '{}' was renamed to '{}' due to name collision",
-                            original, net_info.final_name
-                        );
-                        diagnostics.push(
-                            crate::Diagnostic::categorized(
-                                &path,
-                                &body,
-                                "net.name_collision",
-                                EvalSeverity::Warning,
-                            )
-                            .with_span(span)
-                            .with_call_stack(Some(net_info.call_stack.clone())),
-                        );
-                    } else if net_info.auto_named {
-                        let body = format!(
-                            "Net had no explicit name; assigned '{}'",
-                            net_info.final_name
-                        );
-                        diagnostics.push(
-                            crate::Diagnostic::categorized(
-                                &path,
-                                &body,
-                                "net.unnamed",
-                                EvalSeverity::Warning,
-                            )
-                            .with_span(span)
-                            .with_call_stack(Some(net_info.call_stack.clone())),
-                        );
+                    WithDiagnostics {
+                        output: Some(output),
+                        diagnostics: Diagnostics::from(diagnostics),
                     }
                 }
-
-                let output = EvalOutput {
-                    ast,
-                    star_module: frozen_module,
-                    sch_module: extra.module.clone(),
-                    signature,
-                    print_output,
-                    config: config_ref.clone(),
-                    session: session_ref.clone(),
-                };
-
-                WithDiagnostics {
-                    output: Some(output),
-                    diagnostics: Diagnostics::from(diagnostics),
+                Err(err) => {
+                    diagnostics.push(err.into());
+                    WithDiagnostics {
+                        output: None,
+                        diagnostics: Diagnostics::from(diagnostics),
+                    }
                 }
             }
-            Err(err) => {
-                diagnostics.push(err.into());
-                WithDiagnostics {
-                    output: None,
-                    diagnostics: Diagnostics::from(diagnostics),
-                }
-            }
-        }
+        })
     }
 
     /// Get the file contents from the in-memory cache
@@ -2058,7 +2044,7 @@ impl EvalContext {
 
     /// Inject prelude symbols into the module scope before evaluation.
     /// Controlled by `config.inject_prelude`.
-    fn inject_prelude(&self) {
+    fn inject_prelude<'v>(&self, module: &Module<'v>) {
         if !self.config.inject_prelude {
             return;
         }
@@ -2087,15 +2073,9 @@ impl EvalContext {
                 }
             };
 
-            // Keep the loaded module's heap alive through our module.
-            self.module
-                .frozen_heap()
-                .add_reference(frozen_module.frozen_heap());
-
             for &name in symbols {
                 if let Ok(owned) = frozen_module.get(name) {
-                    self.module
-                        .set(name, owned.owned_value(self.module.frozen_heap()));
+                    module.set(name, module.heap().access_owned_frozen_value(&owned));
                 }
             }
         }
@@ -2249,7 +2229,7 @@ impl EvalContext {
     fn process_pending_child(mut self, pending: FrozenPendingChild) -> Vec<Diagnostic> {
         self.config.strict_io_config = true;
         self.config.build_circuit = true;
-        self.config.source_path = Some(PathBuf::from(&pending.loader.source_path));
+        self = self.set_source_path(PathBuf::from(&pending.loader.source_path));
 
         if let Some(props) = pending.properties {
             self.set_properties_from_frozen_values(props);
@@ -2302,17 +2282,10 @@ impl EvalContext {
 
         // Validate unused arguments
         let used_inputs: HashSet<String> = output
-            .star_module
-            .extra_value()
-            .and_then(|extra| extra.downcast_ref::<FrozenContextValue>())
-            .map(|fctx| {
-                fctx.module
-                    .signature()
-                    .iter()
-                    .map(|param| param.name.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+            .signature
+            .iter()
+            .map(|param| param.name.clone())
+            .collect();
 
         let provided_set: HashSet<String> = pending.provided_names.into_iter().collect();
         let unused: Vec<String> = provided_set.difference(&used_inputs).cloned().collect();

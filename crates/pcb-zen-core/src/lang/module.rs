@@ -15,7 +15,6 @@ use allocative::Allocative;
 use pcb_sch::physical::PhysicalValueType;
 use serde::Serialize;
 use starlark::environment::FrozenModule;
-use starlark::values::record::{FrozenRecordType, RecordType};
 use starlark::values::typing::{TypeCompiled, TypeType};
 use starlark::values::{Heap, UnpackValue, ValueLifetimeless};
 use starlark::{
@@ -41,8 +40,6 @@ use crate::lang::validation::validate_identifier_name;
 use regex::Regex;
 use starlark::codemap::{CodeMap, Pos, ResolvedSpan, Span};
 use starlark::values::dict::{AllocDict, DictRef};
-
-use starlark::values::record::{FrozenRecord, Record};
 use std::fs;
 
 /// Helper macro for frozen module downcasting to reduce repetition
@@ -258,7 +255,7 @@ impl From<MissingInputError> for starlark::Error {
 }
 
 /// Metadata for a module parameter (from io() or config() calls)
-#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 #[repr(C)]
 pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     /// Parameter name
@@ -287,12 +284,6 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     #[freeze(identity)]
     #[allocative(skip)]
     pub declaration_call_stack: starlark::eval::CallStack,
-}
-
-// Manual because no instance for Option<V>
-unsafe impl<From: Coerce<To> + ValueLifetimeless, To: ValueLifetimeless>
-    Coerce<ParameterMetadataGen<To>> for ParameterMetadataGen<From>
-{
 }
 
 starlark_complex_value!(pub ParameterMetadata);
@@ -492,8 +483,9 @@ starlark_complex_value!(pub ModuleValue);
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ModuleValueGen<V>
 where
     Self: ProvidesStaticType<'v>,
+    <Self as ProvidesStaticType<'v>>::StaticType: Send,
 {
-    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         let module_value = heap.alloc_complex(self.clone()).to_value();
 
         match attr {
@@ -519,7 +511,7 @@ where
         }
     }
 
-    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
         matches!(attr, "nets" | "components" | "graph")
     }
 
@@ -966,7 +958,7 @@ pub struct ModuleLoader {
     pub param_types: SmallMap<String, String>,
 
     #[freeze(identity)]
-    pub frozen_module: Option<FrozenModule>,
+    pub frozen_module: FrozenModule,
 }
 starlark_simple_value!(ModuleLoader);
 
@@ -1187,23 +1179,19 @@ where
     // Expose exports from the target module as attributes on the loader so users can refer to
     // them via the familiar dot-notation (e.g. `Sub.Component`).  We lazily evaluate the target
     // file with an *empty* input map – mirroring the lightweight introspection pass in
-    // `Module()` – and then deep-copy the requested symbol into the current heap so that it
-    // lives alongside the callerʼs values.
-    fn get_attr(&self, attr: &str, _heap: &'v Heap) -> Option<Value<'v>> {
+    // `Module()` – and then access the owned frozen value through the current heap so the
+    // heap records the upstream frozen-module dependency.
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         // Fast-path: ignore private/internal names.
         if attr.starts_with("__") {
             return None;
         }
 
-        if let Some(frozen_module) = &self.frozen_module {
-            return frozen_module.get_option(attr).ok().flatten().map(|owned| {
-                // SAFETY: we know the frozen module is alive because we added a reference to it
-                let fv = unsafe { owned.unchecked_frozen_value() };
-                fv.to_value()
-            });
-        }
-
-        None
+        self.frozen_module
+            .get_option(attr)
+            .ok()
+            .flatten()
+            .map(|owned| heap.access_owned_frozen_value(&owned))
     }
 }
 
@@ -1226,14 +1214,6 @@ pub(crate) fn default_for_type<'v>(
 
     // Our EnumType is a simple value (no separate Frozen version)
     // It's already handled above, so this block is no longer needed
-
-    if typ.downcast_ref::<RecordType>().is_some()
-        || typ.downcast_ref::<FrozenRecordType>().is_some()
-    {
-        return Err(anyhow::anyhow!(
-            "Record dependencies require a default value"
-        ));
-    }
 
     // Check if it's a TypeType (like str, int, float constructors)
     if TypeType::unpack_value_opt(typ).is_some() {
@@ -1281,7 +1261,7 @@ pub(crate) fn default_for_type<'v>(
             .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         other => {
             return Err(anyhow::anyhow!(
-                "config/io() only accepts Net, Interface, Enum, Record, str, int, or float types, got {other}"
+                "config/io() only accepts Net, Interface, Enum, str, int, or float types, got {other}"
             ));
         }
     };
@@ -1330,16 +1310,8 @@ fn validate_type<'v>(
     name: &str,
     value: Value<'v>,
     typ: Value<'v>,
-    heap: &'v Heap,
+    heap: Heap<'v>,
 ) -> anyhow::Result<()> {
-    if (typ.downcast_ref::<RecordType>().is_some()
-        || typ.downcast_ref::<FrozenRecordType>().is_some())
-        && (value.downcast_ref::<Record>().is_some()
-            || value.downcast_ref::<FrozenRecord>().is_some())
-    {
-        return Ok(());
-    }
-
     if typ.downcast_ref::<EnumType>().is_some() && value.downcast_ref::<EnumValue>().is_some() {
         return Ok(());
     }
@@ -1877,14 +1849,8 @@ where
             source_path: output.sch_module.source_path.clone(),
             params,
             param_types,
-            frozen_module: Some(output.star_module),
+            frozen_module: output.star_module,
         };
-
-        // Retain the child heap so the cached values remain valid for the lifetime of the
-        // parent module.
-        if let Some(frozen_mod) = &loader.frozen_module {
-            eval.frozen_heap().add_reference(frozen_mod.frozen_heap());
-        }
 
         Ok(eval.heap().alloc(loader))
     }

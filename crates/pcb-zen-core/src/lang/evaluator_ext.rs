@@ -4,6 +4,7 @@ use std::{
 };
 
 use starlark::{
+    any::{AnyLifetime, ProvidesStaticType},
     eval::Evaluator,
     values::{FrozenValue, Value, ValueLike},
 };
@@ -16,6 +17,22 @@ use crate::{
         module::{ModulePath, ModuleValue},
     },
 };
+
+pub struct EvalContextRef<'a> {
+    context: &'a EvalContext,
+}
+
+impl<'a> EvalContextRef<'a> {
+    pub fn new(context: &'a EvalContext) -> Self {
+        Self { context }
+    }
+}
+
+// SAFETY: `EvalContextRef` only carries a lifetime on its borrowed context.
+// Replacing that lifetime with `'static` gives the corresponding static shape.
+unsafe impl<'a> ProvidesStaticType<'a> for EvalContextRef<'a> {
+    type StaticType = EvalContextRef<'static>;
+}
 
 /// Convenience trait that adds helper methods to Starlark `Evaluator`s so they can
 /// interact with the current [`ContextValue`].
@@ -98,7 +115,12 @@ impl<'v> EvaluatorExt<'v> for Evaluator<'v, '_, '_> {
     }
 
     fn eval_context(&self) -> Option<&EvalContext> {
-        self.context_value().map(|ctx| ctx.parent_context())
+        self.extra_mut.as_ref().and_then(|extra| {
+            let extra: &dyn AnyLifetime<'_> = &**extra;
+            extra
+                .downcast_ref::<EvalContextRef>()
+                .map(|extra| extra.context)
+        })
     }
 
     fn module_tree(&self) -> Option<BTreeMap<ModulePath, FrozenModuleValue>> {

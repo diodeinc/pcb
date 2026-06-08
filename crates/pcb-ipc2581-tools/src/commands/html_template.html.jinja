@@ -148,6 +148,52 @@
     </table>
     {% endif %}
 
+    {% if rendered_layers and (rendered_layers.stackup or rendered_layers.non_stackup) %}
+    <h2>Layers</h2>
+
+    {% if rendered_layers.stackup %}
+    <h3>Stackup Layers</h3>
+    <div class="layer-list">
+        {% for layer in rendered_layers.stackup %}
+        <section class="layer-render">
+            <div class="layer-title">
+                <span>{{ layer.name }}</span>
+                <span class="layer-meta">
+                    {% if layer.sequence %}#{{ layer.sequence }} • {% endif %}{{ layer.function }} • {{ layer.side }}
+                </span>
+            </div>
+            {% if layer.svg %}
+            <div class="layer-preview">{{ layer.svg|safe }}</div>
+            {% endif %}
+            {% if layer.warning %}
+            <div class="layer-warning">{{ layer.warning }}</div>
+            {% endif %}
+        </section>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if rendered_layers.non_stackup %}
+    <h3>Non-Stackup Layers</h3>
+    <div class="layer-list">
+        {% for layer in rendered_layers.non_stackup %}
+        <section class="layer-render">
+            <div class="layer-title">
+                <span>{{ layer.name }}</span>
+                <span class="layer-meta">{{ layer.function }} • {{ layer.side }}</span>
+            </div>
+            {% if layer.svg %}
+            <div class="layer-preview">{{ layer.svg|safe }}</div>
+            {% endif %}
+            {% if layer.warning %}
+            <div class="layer-warning">{{ layer.warning }}</div>
+            {% endif %}
+        </section>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endif %}
+
     <div class="file-info">
         Generated with <strong>pcb ipc2581</strong> ({{ version }})<br>
         IPC-2581 {{ ipc_revision }} • {{ mode_str }}

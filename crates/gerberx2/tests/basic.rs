@@ -447,6 +447,24 @@ fn process_applies_clear_polarity_cutouts() {
 }
 
 #[test]
+fn process_keeps_clear_polarity_semantics_after_overlapping_dark_runs() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,4.0X4.0*%\n%ADD11R,2.0X2.0*%\nD10*\nX0Y0D03*\nX0Y0D03*\n%LPC*%\nD11*\nX0Y0D03*\nM02*\n",
+    )
+    .unwrap();
+
+    let mut geometry = gerberx2::geometry::extract_document(&gerber);
+    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+
+    assert!(
+        close(summary.area_mm2, 12.0),
+        "area was {}",
+        summary.area_mm2
+    );
+}
+
+#[test]
 fn process_preserves_ordered_aperture_path_polarity() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%AMORDERED*\n21,1,4,4,0,0,0*\n21,0,2,2,0,0,0*\n21,1,1,1,0,0,0*\n%\n%ADD10ORDERED*%\nD10*\nX0Y0D03*\nM02*\n",

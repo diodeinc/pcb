@@ -1,16 +1,12 @@
 [package]
 name = "pcb"
-version = "0.1.0"
+version = "0.2.1"
 edition = { workspace = true }
 repository = { workspace = true }
 description = "PCB toolchain shim and version manager"
 homepage = { workspace = true }
 authors = { workspace = true }
 default-run = "pcb"
-
-[features]
-default = ["mimalloc"]
-mimalloc = ["dep:mimalloc"]
 
 [package.metadata.wix]
 upgrade-guid = "8F8B3FF2-0D55-454F-B80D-1E216FCA6C42"
@@ -24,12 +20,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-clap = { workspace = true }
-colored = { workspace = true }
 dirs = { workspace = true }
 fslock = { workspace = true }
-mimalloc = { workspace = true, optional = true }
-reqwest = { workspace = true }
 self-replace = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
@@ -37,4 +29,6 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
+ureq = { workspace = true }
 zip = { workspace = true }
+zstd = { workspace = true }

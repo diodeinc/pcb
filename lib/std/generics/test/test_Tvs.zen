@@ -1,0 +1,278 @@
+"""Comprehensive test for TVS Diode component."""
+
+load("../../units.zen", "Voltage")
+load("../../interfaces.zen", "Ground", "Net", "Power")
+load("../../bom/match_generics.zen", "assign_house_parts")
+
+Tvs = Module("../Tvs.zen")
+
+gnd = Ground("GND")
+
+_HOUSE_PARTS = [
+    ("Unidirectional", "DO-219AB", "3.3V", "8.9V"),
+    ("Unidirectional", "DO-219AB", "5V", "9.2V"),
+    ("Unidirectional", "DO-219AB", "20V", "32.4V"),
+    ("Unidirectional", "DO-219AB", "24V", "38.9V"),
+    ("Unidirectional", "DO-214AC", "5V", "9.2V"),
+    ("Unidirectional", "DO-214AC", "12V", "19.9V"),
+    ("Unidirectional", "DO-214AC", "20V", "32.4V"),
+    ("Unidirectional", "DO-214AC", "24V", "38.9V"),
+    ("Unidirectional", "DO-214AC", "33V", "53.3V"),
+    ("Unidirectional", "DO-214AC", "60V", "96.8V"),
+    ("Unidirectional", "DO-214AA", "5V", "9.2V"),
+    ("Unidirectional", "DO-214AA", "12V", "19.9V"),
+    ("Unidirectional", "DO-214AA", "20V", "32.4V"),
+    ("Unidirectional", "DO-214AA", "24V", "38.9V"),
+    ("Unidirectional", "DO-214AA", "28V", "45.5V"),
+    ("Unidirectional", "DO-214AA", "33V", "53.3V"),
+    ("Unidirectional", "DO-214AA", "48V", "77.4V"),
+    ("Unidirectional", "DO-214AA", "78V", "126V"),
+    ("Unidirectional", "DO-214AB", "5V", "9.2V"),
+    ("Unidirectional", "DO-214AB", "12V", "19.9V"),
+    ("Unidirectional", "DO-214AB", "20V", "32.4V"),
+    ("Unidirectional", "DO-214AB", "24V", "38.9V"),
+    ("Unidirectional", "DO-214AB", "33V", "53.3V"),
+    ("Unidirectional", "DO-214AB", "48V", "77.4V"),
+    ("Unidirectional", "DO-214AB", "58V", "93.6V"),
+    ("Unidirectional", "DO-214AB", "60V", "96.8V"),
+    ("Unidirectional", "DO-214AB", "85V", "137V"),
+    ("Bidirectional", "DO-214AC", "5V", "9.2V"),
+    ("Bidirectional", "DO-214AC", "12V", "19.9V"),
+    ("Bidirectional", "DO-214AC", "15V", "24.4V"),
+    ("Bidirectional", "DO-214AC", "24V", "38.9V"),
+    ("Bidirectional", "DO-214AC", "33V", "53.3V"),
+    ("Bidirectional", "DO-214AC", "60V", "96.8V"),
+    ("Bidirectional", "DO-214AA", "5V", "9.2V"),
+    ("Bidirectional", "DO-214AA", "12V", "19.9V"),
+    ("Bidirectional", "DO-214AA", "24V", "38.9V"),
+    ("Bidirectional", "DO-214AA", "33V", "53.3V"),
+    ("Bidirectional", "DO-214AA", "40V", "64.5V"),
+    ("Bidirectional", "DO-214AB", "5V", "9.2V"),
+    ("Bidirectional", "DO-214AB", "12V", "19.9V"),
+    ("Bidirectional", "DO-214AB", "24V", "38.9V"),
+    ("Bidirectional", "DO-214AB", "33V", "53.3V"),
+    ("Bidirectional", "DO-214AB", "48V", "77.4V"),
+    ("Bidirectional", "DO-214AB", "60V", "96.8V"),
+]
+
+
+def _sanitize(s):
+    return s.replace("-", "_").replace(".", "p")
+
+
+def _power_net(name, voltage):
+    return Power(name + "_VCC", voltage=Voltage(voltage))
+
+
+def _tvs_name(kind, direction, package, standoff):
+    return "_".join(
+        [
+            "D",
+            "TVS",
+            kind,
+            _sanitize(direction),
+            _sanitize(package),
+            _sanitize(standoff),
+        ]
+    )
+
+
+# Matcher-only cases ported from stdlib/bom/test/test_match_Tvs.zen.
+# These verify house-part selection using only the minimum required BOM-facing
+# inputs rather than the fuller generic examples above.
+_BOM_MATCH_CASES = [
+    ("Unidirectional", "DO-219AB", "3.3V"),
+    ("Unidirectional", "DO-219AB", "5V"),
+    ("Unidirectional", "DO-219AB", "20V"),
+    ("Unidirectional", "DO-219AB", "24V"),
+    ("Unidirectional", "DO-214AC", "20V"),
+    ("Unidirectional", "DO-214AC", "24V"),
+    ("Unidirectional", "DO-214AC", "60V"),
+    ("Unidirectional", "DO-214AA", "28V"),
+    ("Unidirectional", "DO-214AA", "33V"),
+    ("Unidirectional", "DO-214AA", "48V"),
+    ("Unidirectional", "DO-214AA", "78V"),
+    ("Unidirectional", "DO-214AB", "58V"),
+    ("Unidirectional", "DO-214AB", "85V"),
+    ("Bidirectional", "DO-214AC", "15V"),
+    ("Bidirectional", "DO-214AC", "33V"),
+    ("Bidirectional", "DO-214AC", "60V"),
+    ("Bidirectional", "DO-214AA", "40V"),
+    ("Bidirectional", "DO-214AB", "24V"),
+]
+
+_MIN_POWER_CASES = [
+    ("Unidirectional", "DO-214AC", "24V", "38.9V", "600W"),
+    ("Unidirectional", "DO-214AA", "24V", "38.9V", "600W"),
+    ("Unidirectional", "DO-214AB", "24V", "38.9V", "600W"),
+    ("Bidirectional", "DO-214AC", "24V", "38.9V", "600W"),
+]
+
+_SOD882_BOM_MATCH_CASES = [
+    ("Unidirectional", "5V", "7.5V", "0.8pF", None),
+    ("Unidirectional", "5V", "12V", None, None),
+    ("Unidirectional", "5V", "12V", "30pF", None),
+    ("Unidirectional", "5V", "10V", "0.5pF", None),
+    ("Unidirectional", "5V", "10V", "120pF", None),
+    ("Unidirectional", "7V", "11.8V", None, None),
+    ("Unidirectional", "3.3V", "10V", "78pF", "95W"),
+    ("Unidirectional", "5V", "10V", "63pF", "80W"),
+    ("Unidirectional", "5V", "12V", "130pF", "192W"),
+    ("Unidirectional", "3.3V", "9V", "25pF", "31W"),
+    ("Unidirectional", "5V", "11V", "19pF", "33W"),
+    ("Unidirectional", "5.5V", "14V", "0.6pF", "28W"),
+    ("Bidirectional", "1V", "8.5V", "0.85pF", None),
+    ("Bidirectional", "3.3V", "9V", "8pF", None),
+    ("Bidirectional", "3.3V", "8.5V", "35pF", "180W"),
+    ("Bidirectional", "5V", "14.7V", None, None),
+    ("Bidirectional", "5V", "11V", "26pF", None),
+    ("Bidirectional", "5V", "10V", "7pF", None),
+    ("Bidirectional", "5.3V", "12V", None, "20W"),
+    ("Bidirectional", "5.3V", "13V", "0.35pF", None),
+    ("Bidirectional", "6V", "15.6V", None, None),
+    ("Bidirectional", "6V", "9.2V", None, None),
+    ("Bidirectional", "7V", "14.5V", None, None),
+    ("Bidirectional", "18V", "38V", "0.3pF", None),
+    ("Bidirectional", "28V", "48V", "0.3pF", None),
+    ("Bidirectional", "5.5V", "16V", "18pF", "56W"),
+    ("Bidirectional", "5.5V", "12.5V", "10pF", "38W"),
+    ("Bidirectional", "5.5V", "17V", "0.33pF", "34W"),
+    ("Bidirectional", "7V", "15V", "14pF", "60W"),
+    ("Bidirectional", "3.5V", "11.5V", "12.5pF", "40W"),
+]
+
+_SOD882_CAPACITANCE_RANGE_CASES = [
+    # Range requests should accept low-cap parts while rejecting higher capacitance options.
+    ("Bidirectional", "5.3V", "13V", "0.2pF to 0.5pF", None),
+    # Same capacitance range, different voltage constraints, should select the 0.33pF Vishay part.
+    ("Bidirectional", "5.5V", "17V", "0.2pF to 0.5pF", "34W"),
+]
+
+
+def _sod882_tvs(kind, i, direction, standoff, clamp, capacitance, peak_pulse_power):
+    name = "D_TVS_SOD882_" + kind + "_" + str(i)
+    if direction == "Unidirectional":
+        a = gnd
+        k = Net(name + "_K")
+    else:
+        a = Net(name + "_A")
+        k = Net(name + "_K")
+
+    if capacitance and peak_pulse_power:
+        Tvs(
+            name=name,
+            package="SOD-882",
+            direction=direction,
+            reverse_standoff_voltage=standoff,
+            reverse_clamping_voltage=clamp,
+            peak_pulse_power=peak_pulse_power,
+            capacitance=capacitance,
+            A=a,
+            K=k,
+        )
+    elif capacitance:
+        Tvs(
+            name=name,
+            package="SOD-882",
+            direction=direction,
+            reverse_standoff_voltage=standoff,
+            reverse_clamping_voltage=clamp,
+            capacitance=capacitance,
+            A=a,
+            K=k,
+        )
+    elif peak_pulse_power:
+        Tvs(
+            name=name,
+            package="SOD-882",
+            direction=direction,
+            reverse_standoff_voltage=standoff,
+            reverse_clamping_voltage=clamp,
+            peak_pulse_power=peak_pulse_power,
+            A=a,
+            K=k,
+        )
+    else:
+        Tvs(
+            name=name,
+            package="SOD-882",
+            direction=direction,
+            reverse_standoff_voltage=standoff,
+            reverse_clamping_voltage=clamp,
+            A=a,
+            K=k,
+        )
+
+
+for direction, package, standoff, clamp in _HOUSE_PARTS:
+    name = _tvs_name("HOUSE", direction, package, standoff)
+    if direction == "Unidirectional":
+        a = gnd
+        k = _power_net(name, standoff)
+    else:
+        a = Net(name + "_A")
+        k = Net(name + "_K")
+    Tvs(
+        name=name,
+        package=package,
+        direction=direction,
+        reverse_standoff_voltage=standoff,
+        reverse_clamping_voltage=clamp,
+        A=a,
+        K=k,
+    )
+
+
+for i, (direction, package, standoff) in enumerate(_BOM_MATCH_CASES):
+    name = "D_TVS_MATCH_" + str(i)
+    if direction == "Unidirectional":
+        a = gnd
+        k = _power_net(name, "3.3V")
+    else:
+        a = Net(name + "_A")
+        k = Net(name + "_K")
+    Tvs(
+        name=name,
+        package=package,
+        direction=direction,
+        reverse_standoff_voltage=standoff,
+        A=a,
+        K=k,
+    )
+
+# Verify TVS matching treats peak pulse power as a minimum required rating.
+for direction, package, standoff, clamp, peak_pulse_power in _MIN_POWER_CASES:
+    name = _tvs_name("MIN_POWER", direction, package, standoff)
+    if direction == "Unidirectional":
+        a = gnd
+        k = _power_net(name, standoff)
+    else:
+        a = Net(name + "_A")
+        k = Net(name + "_K")
+    Tvs(
+        name=name,
+        package=package,
+        direction=direction,
+        reverse_standoff_voltage=standoff,
+        reverse_clamping_voltage=clamp,
+        peak_pulse_power=peak_pulse_power,
+        A=a,
+        K=k,
+    )
+
+# Verify SOD-882 ESD diode matching, including capacitance-constrained cases.
+for i, (direction, standoff, clamp, capacitance, peak_pulse_power) in enumerate(_SOD882_BOM_MATCH_CASES):
+    _sod882_tvs("MATCH", i, direction, standoff, clamp, capacitance, peak_pulse_power)
+
+for i, (direction, standoff, clamp, capacitance, peak_pulse_power) in enumerate(_SOD882_CAPACITANCE_RANGE_CASES):
+    _sod882_tvs(
+        "CAP_RANGE",
+        i,
+        direction,
+        standoff,
+        clamp,
+        capacitance,
+        peak_pulse_power,
+    )
+
+builtin.add_component_modifier(assign_house_parts)

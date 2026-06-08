@@ -1,0 +1,109 @@
+"""Comprehensive test for all generic components."""
+
+load("../../interfaces.zen", "Net")
+load("../../properties.zen", "Layout")
+load("../../bom/match_generics.zen", "assign_house_parts")
+
+Crystal = Module("../Crystal.zen")
+
+# Crystals 2Pin
+for package in [package for package in Crystal.Package.values() if "2Pin" in str(package)]:
+    for mount in Crystal.Mount.values():
+        name = "Y_" + str(package) + "_" + str(mount)
+        Crystal(
+            name=name,
+            frequency="16MHz",
+            package=package,
+            mount=mount,
+            mpn="TEST-" + name,
+            manufacturer="Test",
+            XIN=Net(name + "XIN"),
+            XOUT=Net(name + "XOUT"),
+        )
+
+# Crystals 4Pin
+for package in [package for package in Crystal.Package.values() if "4Pin" in str(package)]:
+    for mount in Crystal.Mount.values():
+        name = "Y_" + str(package) + "_" + str(mount)
+        name = name.upper()
+        Crystal(
+            name=name,
+            frequency="16MHz",
+            package=package,
+            mount=mount,
+            load_capacitance="18pF",
+            mpn="TEST-" + name,
+            manufacturer="Test",
+            XIN=Net(f"{name}_XIN"),
+            XOUT=Net(f"{name}_XOUT"),
+            GND=Net(f"{name}_GND"),
+        )
+
+
+CRYSTAL_MATCH_CASES = [
+    ("3215_2Pin", "32.768kHz", "12.5pF", None),
+    ("3225_4Pin", "8MHz", "12pF", None),
+    ("3225_4Pin", "12MHz", "12pF", None),
+    ("3225_4Pin", "16MHz", "12pF", None),
+    ("3225_4Pin", "24MHz", "12pF", None),
+    ("3225_4Pin", "25MHz", "12pF", None),
+    ("2520_4Pin", "12MHz", "10pF", None),
+    ("2520_4Pin", "16MHz", "10pF", None),
+    ("2520_4Pin", "24MHz", "10pF", None),
+    ("2520_4Pin", "25MHz", "10pF", None),
+    ("3225_4Pin", "16MHz", "12pF", "70Ohm"),
+    ("2520_4Pin", "16MHz", "10pF", "70Ohm"),
+    ("2520_4Pin", "16MHz", "10pF", "0Ohm to 70Ohm"),
+    ("2520_4Pin", "16MHz", "10pF", "0Ohm to 60Ohm"),
+    ("2520_4Pin", "24MHz", "10pF", "50Ohm"),
+    ("2520_4Pin", "25MHz", "10pF", "50Ohm"),
+    ("3215_2Pin", "32.768kHz", "12.5pF", "80kOhm"),
+]
+
+for i, (package, frequency, load_capacitance, esr) in enumerate(CRYSTAL_MATCH_CASES):
+    kwargs = {
+        "name": "Y_MATCH_" + str(i),
+        "package": package,
+        "frequency": frequency,
+        "load_capacitance": load_capacitance,
+        "XIN": Net("Y_MATCH_" + str(i) + "_XIN"),
+        "XOUT": Net("Y_MATCH_" + str(i) + "_XOUT"),
+    }
+    if esr:
+        kwargs["esr"] = esr
+    if "4Pin" in package:
+        kwargs["GND"] = Net("Y_MATCH_" + str(i) + "_GND")
+    Crystal(**kwargs)
+
+
+def _check_mpn(c, expected_mpn):
+    if c.mpn != expected_mpn:
+        error("Expected " + c.value + " to match " + expected_mpn + ", got " + str(c.mpn))
+
+
+def _check_house_parts(c):
+    assign_house_parts(c)
+
+    if not hasattr(c, "type") or c.type != "crystal":
+        return
+
+    if c.properties["package"].value != "2520_4Pin":
+        return
+    if str(c.properties["frequency"]) != "16MHz":
+        return
+    if str(c.properties["load_capacitance"]) != "10pF":
+        return
+
+    esr = c.properties.get("esr")
+    if not esr:
+        return
+
+    if esr.min == 70.0 and esr.max == 70.0:
+        _check_mpn(c, "ECS-160-10-36B-CKM-TR")
+    elif esr.min == 0.0 and esr.max == 70.0:
+        _check_mpn(c, "ECS-160-10-36B-CKM-TR")
+    elif esr.min == 0.0 and esr.max == 60.0:
+        _check_mpn(c, "TXM16M0004252DBCEO00T")
+
+
+builtin.add_component_modifier(_check_house_parts)

@@ -1,20 +1,27 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use ipc2581::types::{
     FillProperty, LayerFunction, LineEnd, PadUse, PlatingStatus, Polarity, PolyStep, SlotShape,
     StandardPrimitive, UserPrimitive, UserShapeType,
-    ecad::{Layer, SetFeature, Step, StepRepeat},
+    ecad::{Layer, SetFeature, Step, StepRepeat, StepType},
 };
 use ipc2581::{Ipc2581, Symbol};
 
-use super::primary_step;
+use crate::steps;
 use pcb_ir::common::*;
 use pcb_ir::dialects::ipc::*;
 
 type GeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<Symbol, LayerFunction>;
 type GeometryLayer = pcb_ir::dialects::ipc::GeometryLayer<Symbol, LayerFunction>;
 type GeometryFeature = pcb_ir::dialects::ipc::GeometryFeature<Symbol>;
+
+#[derive(Debug, Clone, Copy)]
+struct ProfileRange {
+    start: u32,
+    count: u32,
+    bbox: BBox,
+}
 
 struct ExtractContext<'a> {
     ipc: &'a Ipc2581,
@@ -54,20 +61,35 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
         .iter()
         .find(|layer| ipc.resolve(layer.name) == layer_name)
         .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))?;
-    let step = primary_step(ipc, &ecad.cad_data.steps)?;
+    let step = steps::primary_step(ipc, &ecad.cad_data.steps)
+        .context("IPC-2581 ECAD section has no Step")?;
 
-    if !step.step_repeats.is_empty() {
-        return extract_panel_layer(
+    let mut doc = if is_panel_step(step) {
+        extract_panel_layer(
             ipc,
             &ecad.cad_data.steps,
             &ecad.cad_data.layers,
             step,
             layer,
             layer_name,
-        );
-    }
+        )?
+    } else {
+        extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
+    };
 
-    extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)
+    append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?;
+    pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
+    Ok(doc)
+}
+
+pub fn extract_profiles(ipc: &Ipc2581) -> Result<GeometryDocument> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let step = steps::primary_step(ipc, &ecad.cad_data.steps)
+        .context("IPC-2581 ECAD section has no Step")?;
+    let mut doc = GeometryDocument::new(ipc.resolve(step.name).to_string());
+    append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?;
+    pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
+    Ok(doc)
 }
 
 fn extract_panel_layer(
@@ -92,11 +114,6 @@ fn extract_panel_layer(
         0,
         Affine2::identity(),
     )?);
-    layer_bbox = layer_bbox.union(append_transformed_outlines(
-        &mut doc,
-        &panel_doc,
-        Affine2::identity(),
-    ));
 
     for repeat in &panel.step_repeats {
         let source_step = steps
@@ -120,11 +137,6 @@ fn extract_panel_layer(
                     0,
                     transform,
                 )?);
-                layer_bbox = layer_bbox.union(append_transformed_outlines(
-                    &mut doc,
-                    &source_doc,
-                    transform,
-                ));
             }
         }
     }
@@ -235,7 +247,8 @@ fn extract_step_layer(
                     SetFeature::Hole(_) | SetFeature::Slot(_) => None,
                 };
 
-                if let Some(feature) = feature {
+                if let Some(mut feature) = feature {
+                    feature.source_layer_ref = Some(layer_feature.layer_ref);
                     layer_bbox = layer_bbox.union(feature.bbox);
                     doc.features.push(feature);
                 }
@@ -257,7 +270,7 @@ fn extract_step_layer(
             if is_drill_layer && layer_span_applies_to_layer(source_layer, layer, layers) {
                 for (feature_index, set_feature) in set.features.iter().enumerate() {
                     if let SetFeature::Hole(hole) = set_feature {
-                        let feature = extract_hole(
+                        let mut feature = extract_hole(
                             SourceRef {
                                 set_index: set_index as u32,
                                 feature_index: feature_index as u32,
@@ -265,6 +278,7 @@ fn extract_step_layer(
                             hole,
                             &mut doc,
                         );
+                        feature.source_layer_ref = Some(layer_feature.layer_ref);
                         layer_bbox = layer_bbox.union(feature.bbox);
                         doc.features.push(feature);
                     }
@@ -276,7 +290,7 @@ fn extract_step_layer(
                     if let SetFeature::Slot(slot) = set_feature
                         && slot_applies_to_layer(source_layer, layer, layers, slot)
                     {
-                        let feature = extract_slot(
+                        let mut feature = extract_slot(
                             &context,
                             SourceRef {
                                 set_index: set_index as u32,
@@ -285,6 +299,7 @@ fn extract_step_layer(
                             slot,
                             &mut doc,
                         )?;
+                        feature.source_layer_ref = Some(layer_feature.layer_ref);
                         layer_bbox = layer_bbox.union(feature.bbox);
                         doc.features.push(feature);
                     }
@@ -292,8 +307,6 @@ fn extract_step_layer(
             }
         }
     }
-
-    layer_bbox = layer_bbox.union(push_board_outline(&mut doc, step, Affine2::identity()));
 
     let feature_count = doc.features.len() as u32 - feature_start;
     doc.layers.push(GeometryLayer {
@@ -405,29 +418,185 @@ fn append_transformed_layer(
     Ok(layer_bbox)
 }
 
-fn append_transformed_outlines(
-    target: &mut GeometryDocument,
-    source: &GeometryDocument,
-    transform: Affine2,
-) -> BBox {
-    let mut outline_bbox = BBox::empty();
-    for outline in &source.board_outlines {
-        let path_start = target.paths.len() as u32;
-        for path in &source.paths
-            [outline.path_start as usize..(outline.path_start + outline.path_count) as usize]
-        {
-            append_transformed_path(target, source, path, transform);
-        }
-        let path_count = target.paths.len() as u32 - path_start;
-        let bbox = paths_bbox(target, path_start, path_count);
-        target.board_outlines.push(BoardOutline {
-            path_start,
-            path_count,
-            bbox,
-        });
-        outline_bbox = outline_bbox.union(bbox);
+fn append_layout_geometry(
+    doc: &mut GeometryDocument,
+    ipc: &Ipc2581,
+    steps: &[Step],
+    primary_step: &Step,
+) -> Result<()> {
+    if is_panel_step(primary_step) {
+        append_panel_geometry(doc, ipc, steps, primary_step)
+    } else if is_board_step(primary_step) {
+        ensure_board_geometry(doc, primary_step);
+        Ok(())
+    } else {
+        Ok(())
     }
-    outline_bbox
+}
+
+fn append_panel_geometry(
+    doc: &mut GeometryDocument,
+    ipc: &Ipc2581,
+    steps: &[Step],
+    panel_step: &Step,
+) -> Result<()> {
+    let panel_profiles = append_step_profile(
+        doc,
+        panel_step,
+        Affine2::identity(),
+        BoardProfileKind::PanelDefinition,
+    );
+    let board_instance_start = doc.board_instances.len() as u32;
+    let mut stack = vec![panel_step.name];
+    append_board_instances_from_repeats(
+        doc,
+        ipc,
+        steps,
+        panel_step,
+        Affine2::identity(),
+        &mut stack,
+    )?;
+    let board_instance_count = doc.board_instances.len() as u32 - board_instance_start;
+    let instance_bbox = board_instances_bbox(doc, board_instance_start, board_instance_count);
+    let bbox = if !panel_profiles.bbox.is_empty() {
+        panel_profiles.bbox
+    } else {
+        instance_bbox
+    };
+
+    doc.panels.push(PanelGeometry {
+        step_ref: panel_step.name,
+        profile_start: panel_profiles.start,
+        profile_count: panel_profiles.count,
+        profile_bbox: panel_profiles.bbox,
+        board_instance_start,
+        board_instance_count,
+        instance_bbox,
+        bbox,
+    });
+
+    Ok(())
+}
+
+fn append_board_instances_from_repeats(
+    doc: &mut GeometryDocument,
+    ipc: &Ipc2581,
+    steps: &[Step],
+    parent_step: &Step,
+    parent_transform: Affine2,
+    stack: &mut Vec<Symbol>,
+) -> Result<()> {
+    for repeat in &parent_step.step_repeats {
+        let source_step = steps
+            .iter()
+            .find(|step| step.name == repeat.step_ref)
+            .with_context(|| {
+                format!(
+                    "StepRepeat references unknown Step '{}'",
+                    ipc.resolve(repeat.step_ref)
+                )
+            })?;
+
+        if stack.contains(&source_step.name) {
+            bail!(
+                "StepRepeat cycle references Step '{}'",
+                ipc.resolve(source_step.name)
+            );
+        }
+
+        for iy in 0..repeat.ny {
+            for ix in 0..repeat.nx {
+                let transform = parent_transform.concat(step_repeat_transform(repeat, ix, iy));
+                if is_panel_step(source_step) {
+                    stack.push(source_step.name);
+                    append_board_instances_from_repeats(
+                        doc,
+                        ipc,
+                        steps,
+                        source_step,
+                        transform,
+                        stack,
+                    )?;
+                    stack.pop();
+                } else if is_board_step(source_step) {
+                    append_board_instance(doc, parent_step, source_step, repeat, ix, iy, transform);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn append_board_instance(
+    doc: &mut GeometryDocument,
+    parent_step: &Step,
+    board_step: &Step,
+    repeat: &StepRepeat,
+    ix: u32,
+    iy: u32,
+    transform: Affine2,
+) {
+    let board_index = ensure_board_geometry(doc, board_step);
+    let profiles = append_step_profile(doc, board_step, transform, BoardProfileKind::BoardInstance);
+
+    doc.board_instances.push(BoardInstance {
+        board_index,
+        source_step_ref: board_step.name,
+        parent_step_ref: parent_step.name,
+        transform,
+        repeat_index_x: ix,
+        repeat_index_y: iy,
+        repeat_count_x: repeat.nx,
+        repeat_count_y: repeat.ny,
+        repeat_pitch_x: repeat.dx,
+        repeat_pitch_y: repeat.dy,
+        profile_start: profiles.start,
+        profile_count: profiles.count,
+        bbox: profiles.bbox,
+    });
+}
+
+fn ensure_board_geometry(doc: &mut GeometryDocument, step: &Step) -> u32 {
+    if let Some(index) = doc
+        .boards
+        .iter()
+        .position(|board| board.step_ref == step.name)
+    {
+        return index as u32;
+    }
+
+    let profiles = append_step_profile(
+        doc,
+        step,
+        Affine2::identity(),
+        BoardProfileKind::BoardDefinition,
+    );
+    let board_index = doc.boards.len() as u32;
+    doc.boards.push(BoardGeometry {
+        step_ref: step.name,
+        profile_start: profiles.start,
+        profile_count: profiles.count,
+        bbox: profiles.bbox,
+    });
+    board_index
+}
+
+fn board_instances_bbox(doc: &GeometryDocument, start: u32, count: u32) -> BBox {
+    doc.board_instances[start as usize..(start + count) as usize]
+        .iter()
+        .map(|instance| instance.bbox)
+        .fold(BBox::empty(), BBox::union)
+}
+
+fn is_panel_step(step: &Step) -> bool {
+    matches!(step.step_type, Some(StepType::Pallet))
+        || (step.step_type.is_none() && !step.step_repeats.is_empty())
+}
+
+fn is_board_step(step: &Step) -> bool {
+    matches!(step.step_type, Some(StepType::Board))
+        || (step.step_type.is_none() && step.step_repeats.is_empty())
 }
 
 fn append_transformed_path(
@@ -435,22 +604,18 @@ fn append_transformed_path(
     source: &GeometryDocument,
     path: &GeometryPath,
     transform: Affine2,
-) {
+) -> u32 {
     let contour_start = target.contours.len() as u32;
     let mut path_bbox = BBox::empty();
 
     for contour in &source.contours
         [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
     {
+        let source_cmds = &source.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
+        let (mut contour_bbox, cmds) = transform_path_cmds(source_cmds.iter().copied(), transform);
         let cmd_start = target.path_cmds.len() as u32;
-        let mut contour_bbox = BBox::empty();
-        for cmd in &source.path_cmds
-            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
-        {
-            target
-                .path_cmds
-                .push(transform_path_cmd(*cmd, transform, &mut contour_bbox));
-        }
+        target.path_cmds.extend(cmds);
         if path.flags.stroked {
             contour_bbox = contour_bbox.expand(path.stroke_width / 2.0);
         }
@@ -468,7 +633,9 @@ fn append_transformed_path(
     path.contour_start = contour_start;
     path.contour_count = target.contours.len() as u32 - contour_start;
     path.bbox = path_bbox;
+    let path_id = target.paths.len() as u32;
     target.paths.push(path);
+    path_id
 }
 
 fn slot_applies_to_layer(
@@ -897,44 +1064,55 @@ fn extract_polygon(
     feature
 }
 
-const BOARD_OUTLINE_STROKE_WIDTH: f64 = 0.1;
-
-fn push_board_outline(doc: &mut GeometryDocument, step: &Step, transform: Affine2) -> BBox {
+fn append_step_profile(
+    doc: &mut GeometryDocument,
+    step: &Step,
+    transform: Affine2,
+    kind: BoardProfileKind,
+) -> ProfileRange {
+    let start = doc.profiles.len() as u32;
     let Some(profile) = &step.profile else {
-        return BBox::empty();
+        return ProfileRange {
+            start,
+            count: 0,
+            bbox: BBox::empty(),
+        };
     };
 
-    let path_start = doc.paths.len() as u32;
-    push_outline_polygon(doc, &profile.polygon, transform);
+    let outer_path = push_profile_polygon(doc, &profile.polygon, transform);
+    let cutout_start = doc.profile_cutouts.len() as u32;
     for cutout in &profile.cutouts {
-        push_outline_polygon(doc, cutout, transform);
-    }
-    let path_count = doc.paths.len() as u32 - path_start;
-    let bbox = paths_bbox(doc, path_start, path_count);
-    if path_count > 0 {
-        doc.board_outlines.push(BoardOutline {
-            path_start,
-            path_count,
-            bbox,
+        let path = push_profile_polygon(doc, cutout, transform);
+        doc.profile_cutouts.push(BoardProfileCutout {
+            path,
+            bbox: doc.paths[path as usize].bbox,
         });
     }
-    bbox
+    let cutout_count = doc.profile_cutouts.len() as u32 - cutout_start;
+    let bbox = doc.paths[outer_path as usize].bbox;
+    doc.profiles.push(BoardProfile {
+        kind,
+        source_step_ref: step.name,
+        transform,
+        outer_path,
+        cutout_start,
+        cutout_count,
+        bbox,
+    });
+    ProfileRange {
+        start,
+        count: doc.profiles.len() as u32 - start,
+        bbox,
+    }
 }
 
-fn push_outline_polygon(
+fn push_profile_polygon(
     doc: &mut GeometryDocument,
     polygon: &ipc2581::types::Polygon,
     transform: Affine2,
-) {
+) -> u32 {
     let (bbox, cmds) = polygon_contour(polygon, transform);
-    doc.push_path(
-        GeometryPath::stroked(
-            BOARD_OUTLINE_STROKE_WIDTH,
-            LineCap::Round,
-            bbox.expand(BOARD_OUTLINE_STROKE_WIDTH / 2.0),
-        ),
-        cmds,
-    );
+    doc.push_path(GeometryPath::unpainted(bbox), cmds)
 }
 
 fn push_stroked_polyline(
@@ -1776,11 +1954,7 @@ fn push_rounded_rect_path(
     }
     cmds.push(PathCmd::close());
 
-    let mut bbox = BBox::empty();
-    let cmds = cmds
-        .into_iter()
-        .map(|cmd| transform_path_cmd(cmd, transform, &mut bbox))
-        .collect::<Vec<_>>();
+    let (bbox, cmds) = transform_path_cmds(cmds, transform);
     doc.push_path(GeometryPath::filled(FillRule::NonZero, bbox), cmds);
 }
 
@@ -1956,38 +2130,56 @@ fn push_oval_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, he
     }
     local_cmds.push(PathCmd::close());
 
-    let mut bbox = BBox::empty();
-    let cmds = local_cmds
-        .into_iter()
-        .map(|cmd| transform_path_cmd(cmd, transform, &mut bbox))
-        .collect::<Vec<_>>();
+    let (bbox, cmds) = transform_path_cmds(local_cmds, transform);
     doc.push_path(GeometryPath::filled(FillRule::NonZero, bbox), cmds);
 }
 
-fn transform_path_cmd(cmd: PathCmd, transform: Affine2, bbox: &mut BBox) -> PathCmd {
-    let mut transformed = cmd;
-    transformed.p0 = transform.transform_point(cmd.p0);
-    transformed.p1 = transform.transform_point(cmd.p1);
-    if cmd.op != PathOp::ArcTo {
-        transformed.p2 = transform.transform_point(cmd.p2);
-    } else if transform.determinant() < 0.0 {
-        transformed.clockwise = !cmd.clockwise;
-    }
-    match cmd.op {
-        PathOp::MoveTo | PathOp::LineTo => bbox.include_point(transformed.p0),
-        PathOp::ArcTo => {
-            bbox.include_point(transformed.p0);
-            bbox.include_point(transformed.p1);
+fn transform_path_cmds(
+    cmds: impl IntoIterator<Item = PathCmd>,
+    transform: Affine2,
+) -> (BBox, Vec<PathCmd>) {
+    let mut bbox = BBox::empty();
+    let mut current = Point::default();
+    let mut transformed_cmds = Vec::new();
+
+    for cmd in cmds {
+        let start = current;
+        let mut transformed = cmd;
+        transformed.p0 = transform.transform_point(cmd.p0);
+        transformed.p1 = transform.transform_point(cmd.p1);
+        if cmd.op != PathOp::ArcTo {
+            transformed.p2 = transform.transform_point(cmd.p2);
+        } else if transform.determinant() < 0.0 {
+            transformed.clockwise = !cmd.clockwise;
         }
-        PathOp::CubicTo => {
-            bbox.include_point(transformed.p0);
-            bbox.include_point(transformed.p1);
-            bbox.include_point(transformed.p2);
+
+        match cmd.op {
+            PathOp::MoveTo | PathOp::LineTo => {
+                current = cmd.p0;
+                bbox.include_point(transformed.p0);
+            }
+            PathOp::ArcTo => {
+                bbox.include_circular_arc(
+                    transform.transform_point(start),
+                    transformed.p0,
+                    transformed.p1,
+                    transformed.clockwise,
+                );
+                current = cmd.p0;
+            }
+            PathOp::CubicTo => {
+                bbox.include_point(transformed.p0);
+                bbox.include_point(transformed.p1);
+                bbox.include_point(transformed.p2);
+                current = cmd.p2;
+            }
+            PathOp::Close => {}
         }
-        PathOp::Close => {}
+
+        transformed_cmds.push(transformed);
     }
 
-    transformed
+    (bbox, transformed_cmds)
 }
 
 fn push_donut_path(
@@ -2106,32 +2298,29 @@ fn circular_sector_contour(
     let end_angle = end_degrees.to_radians();
     let start = Point::new(radius * start_angle.cos(), radius * start_angle.sin());
     let end = Point::new(radius * end_angle.cos(), radius * end_angle.sin());
-    let mut bbox = BBox::empty();
-    let cmds = [
-        PathCmd::move_to(Point::default()),
-        PathCmd::line_to(start),
-        PathCmd::arc_to(end, Point::default(), false),
-        PathCmd::close(),
-    ]
-    .into_iter()
-    .map(|cmd| transform_path_cmd(cmd, transform, &mut bbox))
-    .collect();
+    let (bbox, cmds) = transform_path_cmds(
+        [
+            PathCmd::move_to(Point::default()),
+            PathCmd::line_to(start),
+            PathCmd::arc_to(end, Point::default(), false),
+            PathCmd::close(),
+        ],
+        transform,
+    );
     (bbox, cmds)
 }
 
 fn rect_contour(transform: Affine2, x0: f64, y0: f64, x1: f64, y1: f64) -> (BBox, Vec<PathCmd>) {
-    let mut bbox = BBox::empty();
-    let cmds = [
-        PathCmd::move_to(Point::new(x0, y0)),
-        PathCmd::line_to(Point::new(x1, y0)),
-        PathCmd::line_to(Point::new(x1, y1)),
-        PathCmd::line_to(Point::new(x0, y1)),
-        PathCmd::close(),
-    ]
-    .into_iter()
-    .map(|cmd| transform_path_cmd(cmd, transform, &mut bbox))
-    .collect();
-    (bbox, cmds)
+    transform_path_cmds(
+        [
+            PathCmd::move_to(Point::new(x0, y0)),
+            PathCmd::line_to(Point::new(x1, y0)),
+            PathCmd::line_to(Point::new(x1, y1)),
+            PathCmd::line_to(Point::new(x0, y1)),
+            PathCmd::close(),
+        ],
+        transform,
+    )
 }
 
 fn paths_bbox(doc: &GeometryDocument, path_start: u32, path_count: u32) -> BBox {
@@ -2454,6 +2643,18 @@ mod tests {
         assert_eq!(features[2].source.set_index, 2);
         assert_eq!(layer.bbox.min, Point::new(11.5, 4.5));
         assert_eq!(layer.bbox.max, Point::new(40.5, 23.5));
+        assert_eq!(doc.boards.len(), 1);
+        assert_eq!(doc.panels.len(), 1);
+        assert_eq!(doc.board_instances.len(), 2);
+        assert_eq!(doc.boards[0].bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(doc.boards[0].bbox.max, Point::new(10.0, 5.0));
+        assert_eq!(doc.panels[0].profile_bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(doc.panels[0].profile_bbox.max, Point::new(100.0, 80.0));
+        assert_eq!(doc.panels[0].board_instance_count, 2);
+        assert_eq!(doc.board_instances[0].bbox.min, Point::new(10.0, 20.0));
+        assert_eq!(doc.board_instances[0].bbox.max, Point::new(20.0, 25.0));
+        assert_eq!(doc.board_instances[1].bbox.min, Point::new(25.0, 20.0));
+        assert_eq!(doc.board_instances[1].bbox.max, Point::new(35.0, 25.0));
     }
 
     #[test]
@@ -2477,16 +2678,29 @@ mod tests {
     }
 
     #[test]
-    fn extracts_step_profile_and_cutouts_as_board_outlines() {
+    fn extracts_step_profile_and_cutouts_as_physical_board_profiles() {
         let ipc = ipc2581::Ipc2581::parse(profile_fixture())
             .expect("synthetic profile fixture should parse");
         let doc = extract_layer(&ipc, "TOP").expect("profile outline should extract");
 
-        assert_eq!(doc.board_outlines.len(), 1);
-        assert_eq!(doc.board_outlines[0].path_count, 2);
-        assert_eq!(doc.layers[0].bbox.min, Point::new(-0.05, -0.05));
-        assert_eq!(doc.layers[0].bbox.max, Point::new(20.05, 10.05));
-        assert!(doc.paths.iter().all(|path| path.flags.stroked));
+        assert_eq!(doc.profiles.len(), 1);
+        assert_eq!(doc.profile_cutouts.len(), 1);
+        assert_eq!(doc.boards.len(), 1);
+        assert!(doc.panels.is_empty());
+        assert!(doc.board_instances.is_empty());
+        assert_eq!(doc.profiles[0].kind, BoardProfileKind::BoardDefinition);
+        assert_eq!(doc.boards[0].profile_start, 0);
+        assert_eq!(doc.boards[0].profile_count, 1);
+        assert_eq!(doc.boards[0].bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(doc.boards[0].bbox.max, Point::new(20.0, 10.0));
+        assert_eq!(doc.profiles[0].bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(doc.profiles[0].bbox.max, Point::new(20.0, 10.0));
+        assert!(doc.layers[0].bbox.is_empty());
+        assert!(
+            doc.paths
+                .iter()
+                .all(|path| !path.flags.filled && !path.flags.stroked)
+        );
         assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
     }
 
@@ -2607,6 +2821,14 @@ mod tests {
     <CadData>
       <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
         <PadStackDef name="padstack">
           <PadstackPadDef layerRef="TOP" padUse="REGULAR">
             <StandardPrimitiveRef id="pad"/>
@@ -2621,6 +2843,14 @@ mod tests {
         </LayerFeature>
       </Step>
       <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="100" y="0"/>
+            <PolyStepSegment x="100" y="80"/>
+            <PolyStepSegment x="0" y="80"/>
+          </Polygon>
+        </Profile>
         <PadStackDef name="panel_padstack">
           <PadstackPadDef layerRef="TOP" padUse="REGULAR">
             <StandardPrimitiveRef id="pad"/>

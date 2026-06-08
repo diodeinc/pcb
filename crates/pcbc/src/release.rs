@@ -6,7 +6,7 @@ use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
-use crate::bundle::{self, MetadataInput, RemoteVendoring, SourceBundlePlan};
+use crate::bundle::{self, MetadataInput, SourceBundlePlan};
 use pcb_zen::WorkspaceInfo;
 use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen_core::EvalOutput;
@@ -23,15 +23,6 @@ use std::path::{Path, PathBuf};
 use zip::{ZipWriter, write::FileOptions};
 
 use pcb_zen::git;
-
-/// Serialize a value to RFC 8785 canonical JSON (sorted keys, consistent formatting).
-fn to_canonical_json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    let mut ser =
-        serde_json::Serializer::with_formatter(&mut buf, canon_json::CanonicalFormatter::new());
-    serde::Serialize::serialize(value, &mut ser)?;
-    Ok(buf)
-}
 
 #[derive(ValueEnum, Debug, Clone, PartialEq)]
 #[value(rename_all = "lowercase")]
@@ -287,10 +278,11 @@ pub fn build_board_release(
         let info_spinner = Spinner::builder("Gathering release information").start();
 
         let package_url = workspace.package_url_for_zen(&zen_path);
-        let is_mvs_v2_board = package_url
-            .as_deref()
-            .and_then(|url| workspace.packages.get(url))
-            .is_some_and(|pkg| !pkg.config.dependencies.indirect.is_empty());
+        let is_mvs_v2_board = workspace.requires_mvs_v2()
+            || package_url
+                .as_deref()
+                .and_then(|url| workspace.packages.get(url))
+                .is_some_and(|pkg| !pkg.config.dependencies.indirect.is_empty());
 
         // Legacy release still requires pcb.sum for reproducible old-style
         // resolution. Hydrated MVS v2 boards are complete from pcb.toml.
@@ -563,7 +555,6 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         resolution: &info.resolution,
         root_package_url: info.root_package_url.as_deref(),
         closure: info.closure.as_ref(),
-        remote_vendoring: RemoteVendoring::AllResolved,
         staged_src: &info.staging_dir.join("src"),
         resolved_paths: &info.schematic.resolved_paths,
     })
@@ -789,8 +780,8 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
                 .context("Failed to write fp-lib-table for staged layout")?;
         }
 
-        // Write netlist JSON to staging directory (RFC 8785 canonical for deterministic output)
-        let netlist_json = to_canonical_json(sch).context("Failed to serialize netlist")?;
+        // Write RFC 8785 canonical netlist JSON to staging directory.
+        let netlist_json = sch.to_json().context("Failed to serialize netlist")?;
         fs::write(info.staging_dir.join("netlist.json"), &netlist_json)
             .context("Failed to write netlist.json")?;
     }

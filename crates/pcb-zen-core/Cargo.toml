@@ -21,6 +21,7 @@ table = ["pcb-sch/table"]
 
 [dependencies]
 allocative = { workspace = true }
+pagable = { workspace = true }
 
 starlark = { workspace = true }
 starlark_map = { workspace = true }

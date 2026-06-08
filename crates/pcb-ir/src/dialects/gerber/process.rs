@@ -65,21 +65,23 @@ pub fn outline_stroked_paths<A: Clone>(doc: &mut GeometryDocument<A>) {
 }
 
 pub fn resolve_polarity_and_cutouts<A>(doc: &mut GeometryDocument<A>) {
-    let mut image = Vec::new();
+    let mut composer = common_path::PaintComposer::default();
+
     for feature in &doc.features {
         let feature_image = feature_image_contours(doc, feature);
         if feature_image.is_empty() {
             continue;
         }
-        if feature.polarity == Polarity::Clear || feature.bucket == FeatureBucket::Cutout {
-            image = common_path::difference_contours(image, feature_image);
+
+        let op = if feature.polarity == Polarity::Clear || feature.bucket == FeatureBucket::Cutout {
+            common_path::PaintOp::Clear
         } else {
-            image = common_path::union_contours(
-                image.into_iter().chain(feature_image).collect(),
-                FillRule::NonZero,
-            );
-        }
+            common_path::PaintOp::Dark
+        };
+        composer.push(op, feature_image);
     }
+    let image = composer.finish();
+
     if image.is_empty() {
         clear_all_features(doc);
         return;
@@ -102,7 +104,8 @@ fn feature_image_contours<A>(
     doc: &GeometryDocument<A>,
     feature: &GeometryFeature<A>,
 ) -> Vec<common_path::PolygonContour> {
-    let mut image = Vec::new();
+    let mut composer = common_path::PaintComposer::default();
+
     for path in
         &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
     {
@@ -113,19 +116,16 @@ fn feature_image_contours<A>(
         if path_contours.is_empty() {
             continue;
         }
-        if path.polarity == Polarity::Clear {
-            image = common_path::difference_contours(
-                image,
-                common_path::union_contours(path_contours, FillRule::NonZero),
-            );
+
+        let op = if path.polarity == Polarity::Clear {
+            common_path::PaintOp::Clear
         } else {
-            image = common_path::union_contours(
-                image.into_iter().chain(path_contours).collect(),
-                FillRule::NonZero,
-            );
-        }
+            common_path::PaintOp::Dark
+        };
+        composer.push(op, path_contours);
     }
-    image
+
+    composer.finish()
 }
 
 fn clear_all_features<A>(doc: &mut GeometryDocument<A>) {

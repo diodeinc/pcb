@@ -149,7 +149,7 @@ mod tests {
         dialect.enable_f_strings = true;
 
         let stdlib_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../stdlib")
+            .join("../../lib/std")
             .canonicalize()
             .expect("canonicalize stdlib path");
 

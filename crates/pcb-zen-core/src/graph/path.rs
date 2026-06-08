@@ -9,7 +9,7 @@ impl CircuitGraph {
     pub fn resolve_label_to_port<'v>(
         &self,
         label: Value<'v>,
-        _heap: &'v Heap,
+        _heap: Heap<'v>,
     ) -> starlark::Result<PortId> {
         // Check if it's a string (net name) - assume it's referring to external net
         if let Some(net_name) = label.unpack_str() {
@@ -59,7 +59,7 @@ impl CircuitGraph {
         port_path: &[PortId],
         factors: &[FactorId],
         components: &HashMap<ModulePath, FrozenValue>,
-        heap: &'v Heap,
+        heap: Heap<'v>,
     ) -> starlark::Result<Value<'v>> {
         use crate::graph::starlark::PathValueGen;
 

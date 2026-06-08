@@ -13,13 +13,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::{Result, bail};
 use semver::Version;
 
 use crate::FileProvider;
-use crate::STDLIB_MODULE_PATH;
 use crate::config::{DependencyDetail, DependencySpec, Lockfile, ManifestPart, PcbToml};
 use crate::kicad_library::effective_kicad_library_for_repo;
 use crate::workspace::{LOCAL_WORKSPACE_ROOT_URL, WorkspaceInfo, package_url_covers};
+use crate::{STDLIB_MODULE_PATH, is_stdlib_module_path, parse_relaxed_version};
 
 /// Stable identity for package-local evaluation state.
 ///
@@ -264,12 +265,11 @@ pub fn select_version_for_detail(
 
 /// Build the package coordinate → absolute root directory mapping.
 ///
-/// Workspace members come from `workspace_info.packages`. External deps
-/// are discovered from `package_resolutions` values (already resolved by the
-/// resolver through patches → vendor → cache).
-pub fn build_package_roots(
+/// Workspace packages come from `workspace_info.packages`. External deps are
+/// discovered from resolved package-local dependency maps.
+pub fn build_package_roots<'a>(
     workspace_info: &WorkspaceInfo,
-    package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
+    dependency_maps: impl IntoIterator<Item = &'a BTreeMap<String, PathBuf>>,
 ) -> BTreeMap<String, PathBuf> {
     let mut roots = BTreeMap::new();
     roots.insert(
@@ -293,7 +293,7 @@ pub fn build_package_roots(
         );
     }
 
-    for deps in package_resolutions.values() {
+    for deps in dependency_maps {
         for (module_path, dep_root) in deps {
             let version = dep_root.file_name().and_then(|f| f.to_str());
             let parent_matches = dep_root
@@ -317,15 +317,22 @@ fn resolution_package_roots(
     package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     mvs_v2_resolution: Option<&FrozenResolutionSet>,
 ) -> BTreeMap<String, PathBuf> {
-    let mut roots = build_package_roots(workspace_info, package_resolutions);
-    if let Some(resolution) = mvs_v2_resolution {
-        roots.extend(
-            resolution
-                .values()
-                .flat_map(FrozenResolutionMap::package_roots),
-        );
-    }
-    roots
+    build_package_roots(
+        workspace_info,
+        package_resolutions
+            .values()
+            .chain(frozen_dependency_maps(mvs_v2_resolution)),
+    )
+}
+
+fn frozen_dependency_maps(
+    resolution: Option<&FrozenResolutionSet>,
+) -> impl Iterator<Item = &BTreeMap<String, PathBuf>> {
+    resolution
+        .into_iter()
+        .flat_map(|resolution_set| resolution_set.values())
+        .flat_map(|resolution| resolution.packages.values())
+        .map(|package| &package.deps)
 }
 
 /// Resolve a single dependency to its path.
@@ -409,7 +416,7 @@ fn resolve_package_deps<R: PackagePathResolver>(
 /// Used by WASM where all dependencies must be pre-vendored in the zip.
 pub struct VendoredPathResolver {
     vendor_dir: PathBuf,
-    /// Pre-computed closure from lockfile: ModuleLine -> Version
+    /// Pre-computed closure: ModuleLine -> Version
     closure: HashMap<ModuleLine, Version>,
 }
 
@@ -417,6 +424,16 @@ impl VendoredPathResolver {
     /// Get the closure (ModuleLine -> Version mapping).
     pub fn closure(&self) -> &HashMap<ModuleLine, Version> {
         &self.closure
+    }
+
+    pub fn from_selected_versions(
+        vendor_dir: PathBuf,
+        closure: HashMap<ModuleLine, Version>,
+    ) -> Self {
+        Self {
+            vendor_dir,
+            closure,
+        }
     }
 
     /// Create a new vendored path resolver from a lockfile.
@@ -467,7 +484,7 @@ impl PackagePathResolver for VendoredPathResolver {
     }
 }
 
-/// Build the per-package resolution map for workspace members and all packages in the closure.
+/// Build the per-package resolution map for workspace packages and all packages in the closure.
 ///
 /// Returns a map from package root path to (dependency URL -> resolved path).
 pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
@@ -478,11 +495,11 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
 ) -> HashMap<PathBuf, BTreeMap<String, PathBuf>> {
     let mut results = HashMap::new();
 
-    // Build map for each workspace member (already have their configs loaded).
-    for member in workspace.packages.values() {
-        let member_dir = member.dir(&workspace.root);
-        let resolved = resolve_package_deps(resolver, workspace, &member_dir, &member.config);
-        results.insert(member_dir, resolved);
+    // Build map for each workspace package (already have their configs loaded).
+    for package in workspace.packages.values() {
+        let package_dir = package.dir(&workspace.root);
+        let resolved = resolve_package_deps(resolver, workspace, &package_dir, &package.config);
+        results.insert(package_dir, resolved);
     }
 
     // Build map for workspace root if not already included as a package.
@@ -532,7 +549,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
 ///
 /// Resolution order: patches → vendor → cache.
 ///
-/// Note: Workspace members are handled directly in `build_resolution_map` before
+/// Note: Workspace packages are handled directly in `build_resolution_map` before
 /// calling the resolver, so they don't need to be tracked here.
 pub struct NativePathResolver {
     pub vendor_dir: PathBuf,
@@ -576,38 +593,6 @@ pub struct FrozenResolutionMap {
 }
 
 impl FrozenResolutionMap {
-    pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
-        self.packages
-            .iter()
-            .map(|(root, package)| (package.identity.package_coord(), root.clone()))
-            .collect()
-    }
-
-    pub fn kicad_model_dirs(&self, workspace_info: &WorkspaceInfo) -> BTreeMap<String, PathBuf> {
-        let workspace_cfg = workspace_info.workspace_config();
-        let mut model_dirs = BTreeMap::new();
-
-        for (root, package) in &self.packages {
-            let FrozenPackageIdentity::Remote { dep_id, version } = &package.identity else {
-                continue;
-            };
-            let Some(entry) = effective_kicad_library_for_repo(
-                &workspace_cfg.kicad_library,
-                &dep_id.path,
-                version,
-            ) else {
-                continue;
-            };
-            for (var, model_repo) in &entry.models {
-                if model_repo == &dep_id.path {
-                    model_dirs.insert(var.clone(), root.clone());
-                }
-            }
-        }
-
-        model_dirs
-    }
-
     pub fn package_for_file(&self, file: &Path) -> Option<(&PathBuf, &FrozenPackage)> {
         self.packages
             .iter()
@@ -652,6 +637,119 @@ pub struct FrozenDepId {
     pub lane: String,
 }
 
+impl FrozenDepId {
+    pub fn new(path: impl Into<String>, lane: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            lane: lane.into(),
+        }
+    }
+
+    pub fn for_version(path: impl Into<String>, version: &Version) -> Self {
+        Self::new(path, compatibility_lane(version))
+    }
+
+    pub fn indirect_key(&self) -> String {
+        format!("{}@{}", self.path, self.lane)
+    }
+}
+
+pub fn compatibility_lane(version: &Version) -> String {
+    if version.major == 0 {
+        format!("0.{}", version.minor)
+    } else {
+        version.major.to_string()
+    }
+}
+
+pub fn parse_lane_qualified_key(raw: &str) -> Result<FrozenDepId> {
+    let Some((path, lane)) = raw.rsplit_once('@') else {
+        bail!(
+            "Expected lane-qualified dependency key '<module>@<lane>', got '{}'",
+            raw
+        );
+    };
+    if path.is_empty() || lane.is_empty() {
+        bail!(
+            "Expected lane-qualified dependency key '<module>@<lane>', got '{}'",
+            raw
+        );
+    }
+    Ok(FrozenDepId::new(path, lane))
+}
+
+pub fn selected_remote_from_hydrated_manifest(
+    workspace: &WorkspaceInfo,
+    package_url: &str,
+) -> Result<BTreeMap<FrozenDepId, Version>> {
+    let package = workspace
+        .packages
+        .get(package_url)
+        .ok_or_else(|| anyhow::anyhow!("Unknown workspace package {package_url}"))?;
+    if package.config.dependencies.indirect.is_empty() {
+        bail!(
+            "{} is missing resolved dependency entries; run `pcb sync` first",
+            package_url
+        );
+    }
+
+    let mut selected = BTreeMap::new();
+    for (dep_url, spec) in &package.config.dependencies.direct {
+        if is_remote_manifest_dependency(workspace, dep_url, spec) {
+            let version = exact_manifest_version(dep_url, spec)?;
+            selected.insert(FrozenDepId::for_version(dep_url.clone(), &version), version);
+        }
+    }
+
+    for (raw_key, spec) in &package.config.dependencies.indirect {
+        let dep_id = parse_lane_qualified_key(raw_key)?;
+        let version = exact_manifest_version(raw_key, spec)?;
+        let expected_lane = compatibility_lane(&version);
+        if dep_id.lane != expected_lane {
+            bail!(
+                "Indirect dependency {} resolves to lane {}, not {}",
+                raw_key,
+                expected_lane,
+                dep_id.lane
+            );
+        }
+        selected.insert(dep_id, version);
+    }
+
+    Ok(selected)
+}
+
+fn is_remote_manifest_dependency(
+    workspace: &WorkspaceInfo,
+    dep_url: &str,
+    spec: &DependencySpec,
+) -> bool {
+    !is_stdlib_module_path(dep_url)
+        && !workspace
+            .packages
+            .keys()
+            .any(|package_url| package_url_covers(package_url, dep_url))
+        && workspace.workspace_base_url().as_deref() != Some(dep_url)
+        && !matches!(spec, DependencySpec::Detailed(detail) if detail.path.is_some())
+}
+
+fn exact_manifest_version(dep_url: &str, spec: &DependencySpec) -> Result<Version> {
+    let raw = match spec {
+        DependencySpec::Version(version) => version,
+        DependencySpec::Detailed(detail) if detail.version.is_some() => {
+            detail.version.as_ref().expect("checked above")
+        }
+        DependencySpec::Detailed(_) => {
+            bail!(
+                "Dependency {} must specify an exact version; run `pcb sync` to update dependency versions",
+                dep_url
+            );
+        }
+    };
+    parse_relaxed_version(raw)
+        .ok_or_else(|| anyhow::anyhow!("Dependency {} has invalid version '{}'", dep_url, raw))
+}
+
 #[derive(Debug, Clone)]
 pub struct FrozenPackage {
     pub identity: FrozenPackageIdentity,
@@ -676,14 +774,6 @@ impl FrozenPackageIdentity {
             Self::Remote { dep_id, version } => {
                 format!("{}@{} = {}", dep_id.path, dep_id.lane, version)
             }
-            Self::Stdlib => STDLIB_MODULE_PATH.to_string(),
-        }
-    }
-
-    pub fn package_coord(&self) -> String {
-        match self {
-            Self::Workspace(url) => url.clone(),
-            Self::Remote { dep_id, version } => format!("{}@{}", dep_id.path, version),
             Self::Stdlib => STDLIB_MODULE_PATH.to_string(),
         }
     }
@@ -964,7 +1054,7 @@ impl ResolutionResult {
 
     /// Build the package coordinate → absolute root directory mapping.
     ///
-    /// Workspace members come from `workspace_info.packages`. External deps
+    /// Workspace packages come from `workspace_info.packages`. External deps
     /// are discovered from `package_resolutions` values (already resolved by the
     /// resolver through patches → vendor → cache).
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
@@ -1002,7 +1092,12 @@ impl ResolutionResult {
     pub fn kicad_model_dirs(&self) -> BTreeMap<String, PathBuf> {
         let mut model_dirs = BTreeMap::new();
         let workspace_cfg = self.workspace_info.workspace_config();
-        for deps in self.package_resolutions.values() {
+
+        for deps in self
+            .package_resolutions
+            .values()
+            .chain(frozen_dependency_maps(self.mvs_v2_resolution.as_ref()))
+        {
             for (repo, path) in deps {
                 let Some(version_str) = path.file_name().and_then(|name| name.to_str()) else {
                     continue;
@@ -1020,11 +1115,6 @@ impl ResolutionResult {
                         model_dirs.insert(var.clone(), path.clone());
                     }
                 }
-            }
-        }
-        if let Some(resolution_set) = &self.mvs_v2_resolution {
-            for resolution in resolution_set.values() {
-                model_dirs.extend(resolution.kicad_model_dirs(&self.workspace_info));
             }
         }
         model_dirs
@@ -1138,7 +1228,7 @@ mod tests {
     }
 
     #[test]
-    fn package_roots_reflect_attached_mvs_v2_resolution() {
+    fn package_roots_reflect_mvs_v2_dependency_roots() {
         let mut result = ResolutionResult::native(
             WorkspaceInfo {
                 root: PathBuf::from("/workspace"),
@@ -1163,16 +1253,10 @@ mod tests {
             FrozenResolutionMap {
                 selected_remote: BTreeMap::new(),
                 packages: BTreeMap::from([(
-                    dep_root.clone(),
+                    PathBuf::from("/workspace"),
                     FrozenPackage {
-                        identity: FrozenPackageIdentity::Remote {
-                            dep_id: FrozenDepId {
-                                path: "github.com/acme/dep".into(),
-                                lane: "v1".into(),
-                            },
-                            version: Version::parse("1.2.3").unwrap(),
-                        },
-                        deps: BTreeMap::new(),
+                        identity: FrozenPackageIdentity::Workspace("github.com/acme/root".into()),
+                        deps: BTreeMap::from([("github.com/acme/dep".into(), dep_root.clone())]),
                         parts: Vec::new(),
                     },
                 )]),
@@ -1515,7 +1599,7 @@ mod tests {
             config: None,
             packages: BTreeMap::from([(
                 "github.com/dioderobot/diode/boards/IP0003".to_string(),
-                crate::workspace::MemberPackage {
+                crate::workspace::WorkspacePackage {
                     rel_path: PathBuf::from("boards/IP0003"),
                     config: PcbToml {
                         dependencies: crate::config::DependencyTable {
@@ -1627,7 +1711,7 @@ mod tests {
             config: None,
             packages: BTreeMap::from([(
                 "github.com/example/demo".to_string(),
-                crate::workspace::MemberPackage {
+                crate::workspace::WorkspacePackage {
                     rel_path: PathBuf::from("boards/demo"),
                     config: PcbToml {
                         dependencies: crate::config::DependencyTable {

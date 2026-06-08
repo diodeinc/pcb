@@ -105,7 +105,7 @@ impl<'v> StarlarkValue<'v> for PartValue
 where
     Self: ProvidesStaticType<'v>,
 {
-    fn get_attr(&self, attr: &str, heap: &'v Heap) -> Option<Value<'v>> {
+    fn get_attr(&self, attr: &str, heap: Heap<'v>) -> Option<Value<'v>> {
         match attr {
             "mpn" => Some(heap.alloc_str(self.mpn()).to_value()),
             "manufacturer" => Some(heap.alloc_str(self.manufacturer()).to_value()),
@@ -126,7 +126,7 @@ where
         }
     }
 
-    fn has_attr(&self, attr: &str, _heap: &'v Heap) -> bool {
+    fn has_attr(&self, attr: &str, _heap: Heap<'v>) -> bool {
         matches!(
             attr,
             "mpn" | "manufacturer" | "qualifications" | "datasheet"

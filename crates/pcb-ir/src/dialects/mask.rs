@@ -404,7 +404,7 @@ fn layer_style(role: LayerRole) -> (&'static str, f64) {
         LayerRole::Copper => ("#d87822", 0.9),
         LayerRole::Soldermask => ("#159447", 0.55),
         LayerRole::Paste => ("#aeb4bb", 0.9),
-        LayerRole::Legend => ("#f8f9fa", 0.95),
+        LayerRole::Legend => ("#000000", 0.95),
         LayerRole::Profile => ("#000000", 1.0),
         LayerRole::Drill | LayerRole::Mechanical | LayerRole::Other => ("#5c7cfa", 0.85),
     }
@@ -625,5 +625,31 @@ mod tests {
         assert!(svg.contains("fill='#d87822'"));
         assert!(svg.contains("stroke='#000000'"));
         assert!(svg.contains("data-board-outline='true'"));
+    }
+
+    #[test]
+    fn renders_legend_layer_as_black_for_legibility() {
+        let mut doc = MaskDocument::<()>::new(Unit::Millimeter);
+        let legend = doc.push_layer(MaskLayer::new("F.Silkscreen", LayerRole::Legend, Side::Top));
+        doc.push_shape(
+            legend,
+            MaskShape::new(FillRule::NonZero),
+            vec![PathPayload {
+                bbox: BBox {
+                    min: Point::new(0.0, 0.0),
+                    max: Point::new(1.0, 1.0),
+                },
+                cmds: vec![
+                    PathCmd::move_to(Point::new(0.0, 0.0)),
+                    PathCmd::line_to(Point::new(1.0, 0.0)),
+                    PathCmd::line_to(Point::new(1.0, 1.0)),
+                    PathCmd::close(),
+                ],
+            }],
+        );
+
+        let svg = render_svg(&doc, 0);
+
+        assert!(svg.contains("fill='#000000'"));
     }
 }

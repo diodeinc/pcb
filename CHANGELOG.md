@@ -10,8 +10,89 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Added a `No match (unknown part)` type to the `pcb bom` availability legend and summary.
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
+
+## [0.3.91] - 2026-06-08
+
+### Changed
+
+- Added a `No match (unknown part)` type to the `pcb bom` availability legend and summary.
+
+## [0.3.90] - 2026-06-04
+
+### Added
+
+- Added ESR-aware stdlib crystal matching, 24 MHz house parts, and lower-ESR ECS 2520 options.
+
+### Fixed
+
+- `pcb publish` now rehydrates V2 package dependency manifests when publishing dependents of newly tagged workspace packages.
+
+## [0.3.89] - 2026-06-03
+
+### Added
+
+- Render IPC-2581 artwork layers in stackup order, plus non-stackup layer SVGs, in the HTML export through the shared IR geometry pipeline.
+
+### Fixed
+
+- Reduced cache-index SQLite connection churn during `pcb sync` to avoid intermittent crashes.
+- Fixed the Nix flake build and exposed both `pcb` and `pcbc`.
+
+## [0.3.88] - 2026-06-02
+
+### Added
+
+- `pcb build` now accepts multiple explicit `.zen` file paths from the same workspace.
+- Added `pcb list -m -u` and `pcb list -m -versions` for read-only V2 dependency update discovery.
+
+### Fixed
+
+- `pcb new board` and fresh `pcb import` output no longer create obsolete `pcb.sum` files.
+
+## [0.3.87] - 2026-05-29
+
+### Changed
+
+- Batched IPC/Gerber polygon boolean operations for much faster real-board geometry processing.
+
+### Fixed
+
+- `pcb open` now ignores diagnostics when evaluation still produces usable output.
+- `pcb build` now syncs workspace-vendored dependencies before evaluating hydrated MVS v2 projects.
+- `pcb publish` V2 source bundles now validate offline without requiring KiCad assets in `.pcb/cache`.
+- V2 workspaces now derive KiCad footprint library names from resolved stdlib dependencies.
+
+## [0.3.86] - 2026-05-28
+
+### Added
+
+- Added a 48 V Vishay SMBJ DO-214AA unidirectional TVS house part.
+- Added `install.sh --local` to build and install local `pcb` and `pcbc` binaries side-by-side for development.
+
+### Changed
+
+- `config()` now rejects Starlark `record()` types as module input types.
+- Lowered the default board-config minimum silkscreen text height from 0.8 mm to 0.6 mm.
+- Removed the hidden `pcb package` subcommand.
+- `pcb update` now rejects hydrated V2 dependency manifests and points users to `pcb add -u`.
+- Workspaces with `pcb-version = "0.4"` or newer now always use MVS v2 dependency resolution.
+- `pcb migrate` now hydrates V2 dependency manifests and removes obsolete `pcb.sum` lockfiles.
+- Workspace package discovery is now implicit; use `[workspace].exclude` to prune paths.
+- Updated the embedded Starlark runtime integration to the current starlark-rust APIs.
+
+### Fixed
+
+- Removed stale KiCad board items that reference layers deleted by layout stackup sync.
+- `pcb add -u` now works when the workspace root is also a package directory.
+- Use hydrated MVS v2 dependency resolution consistently across CLI, LSP, docs, and WASM evaluation.
+
+## [0.3.85] - 2026-05-21
+
+### Added
+
+- Added Würth Elektronik WE-PMFI 1210 power inductors to stdlib house BOM matching.
+
 
 ## [0.3.84] - 2026-05-21
 
@@ -1090,7 +1171,14 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.84...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.91...HEAD
+[0.3.91]: https://github.com/diodeinc/pcb/compare/v0.3.90...v0.3.91
+[0.3.90]: https://github.com/diodeinc/pcb/compare/v0.3.89...v0.3.90
+[0.3.89]: https://github.com/diodeinc/pcb/compare/v0.3.88...v0.3.89
+[0.3.88]: https://github.com/diodeinc/pcb/compare/v0.3.87...v0.3.88
+[0.3.87]: https://github.com/diodeinc/pcb/compare/v0.3.86...v0.3.87
+[0.3.86]: https://github.com/diodeinc/pcb/compare/v0.3.85...v0.3.86
+[0.3.85]: https://github.com/diodeinc/pcb/compare/v0.3.84...v0.3.85
 [0.3.84]: https://github.com/diodeinc/pcb/compare/v0.3.83...v0.3.84
 [0.3.83]: https://github.com/diodeinc/pcb/compare/v0.3.82...v0.3.83
 [0.3.82]: https://github.com/diodeinc/pcb/compare/v0.3.81...v0.3.82

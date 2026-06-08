@@ -321,6 +321,27 @@ snapshot_eval!(interface_net_template_naming, {
     "#,
 });
 
+#[test]
+fn net_dir_lists_net_attribute() {
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+        Power = interface(
+            NET = Net("VCC"),
+        )
+
+        power = Power("POWER")
+        net = Net("SIG")
+
+        check("NET" in dir(power.NET), "dir(power.NET) should include NET")
+        check("NET" in dir(net), "dir(net) should include NET")
+    "#
+        .to_string(),
+    )]);
+
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}
+
 snapshot_eval!(net_type_cast_preserves_name_across_modules, {
     "interfaces.zen" => r#"
         # Typed net definitions for testing net type promotion

@@ -397,11 +397,11 @@ pub struct WorkspaceConfig {
     )]
     pub kicad_library: Vec<KicadLibraryConfig>,
 
-    /// List of board directories/patterns (supports globs)
-    #[serde(
-        default = "default_members",
-        skip_serializing_if = "is_default_members"
-    )]
+    /// Deprecated compatibility field.
+    ///
+    /// Parsed from older V2 manifests, but ignored by workspace discovery and omitted
+    /// from serialized manifests.
+    #[serde(default, skip_serializing)]
     pub members: Vec<String>,
 
     /// Default board name to use
@@ -418,7 +418,7 @@ pub struct WorkspaceConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preferred: Vec<String>,
 
-    /// Patterns to exclude from member discovery (supports globs, applied after members)
+    /// Patterns to exclude from workspace package discovery (supports globs)
     /// Example: ["modules/deprecated/*", "boards/test-*"]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
@@ -436,7 +436,7 @@ impl Default for WorkspaceConfig {
             bom: BomConfig::default(),
             kicad_library: default_kicad_library(),
             default_board: None,
-            members: default_members(),
+            members: Vec::new(),
             vendor: Vec::new(),
             preferred: Vec::new(),
             exclude: Vec::new(),
@@ -521,10 +521,6 @@ pub fn stdlib_pinned_kicad_library() -> KicadLibraryConfig {
 
 fn is_default_kicad_library(value: &[KicadLibraryConfig]) -> bool {
     value == default_kicad_library().as_slice()
-}
-
-fn is_default_members(value: &[String]) -> bool {
-    value == default_members().as_slice()
 }
 
 /// Access control configuration (shared by V1 and V2)
@@ -829,17 +825,6 @@ impl std::fmt::Display for Lockfile {
     }
 }
 
-/// Default members pattern
-pub fn default_members() -> Vec<String> {
-    vec![
-        "components/*".to_string(),
-        "reference/*".to_string(),
-        "modules/*".to_string(),
-        "boards/*".to_string(),
-        "graphics/*".to_string(),
-    ]
-}
-
 /// Extract inline pcb.toml manifest from .zen file content
 ///
 /// Looks for a comment block in the leading comments like:
@@ -1086,6 +1071,10 @@ allow = ["*@weaverobots.com"]
             Some("https://example.com/kicad-parts.toml")
         );
         assert_eq!(workspace.members, vec!["boards/*"]);
+        assert!(
+            !toml::to_string_pretty(&config).unwrap().contains("members"),
+            "deprecated workspace.members should be parsed but not serialized"
+        );
 
         let access = config.access.as_ref().unwrap();
         assert_eq!(access.allow, vec!["*@weaverobots.com"]);
@@ -1289,7 +1278,6 @@ path = "test.zen"
         let content = r#"
 [workspace]
 pcb-version = "0.3"
-members = ["boards/*"]
 
 [board]
 name = "RootBoard"
@@ -1306,7 +1294,6 @@ name = "RootBoard"
     fn test_workspace_no_pcb_version_is_v1() {
         let content = r#"
 [workspace]
-members = ["boards/*"]
 
 [board]
 name = "TestBoard"

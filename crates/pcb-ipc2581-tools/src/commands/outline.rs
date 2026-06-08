@@ -1,10 +1,6 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use ipc2581::Symbol;
-use ipc2581::types::Profile;
-use ipc2581::types::ecad::Step;
+use anyhow::{Context, Result, bail};
 
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
@@ -20,9 +16,15 @@ pub struct OutlineOptions {
 pub fn execute(input_file: &Path, options: &OutlineOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = Ipc2581::parse(&content)?;
-    let profile = board_profile(&ipc)?;
+    let profiles = geometry::extract_profiles(&ipc)?;
+    if pcb_ir::dialects::ipc::render_profiles(&profiles)
+        .next()
+        .is_none()
+    {
+        bail!("IPC-2581 primary step and repeated child steps have no board Profile outline");
+    }
 
-    let dxf = geometry::dxf::render_outline_dxf(profile);
+    let dxf = geometry::dxf::render_profiles_dxf(&profiles);
     std::fs::write(&options.output, dxf)
         .with_context(|| format!("Failed to write DXF to {}", options.output.display()))?;
     println!(
@@ -30,39 +32,6 @@ pub fn execute(input_file: &Path, options: &OutlineOptions) -> Result<()> {
         options.output.display()
     );
     Ok(())
-}
-
-fn board_profile(ipc: &Ipc2581) -> Result<&Profile> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let primary = geometry::primary_step(ipc, &ecad.cad_data.steps)?;
-    find_profile_step(primary, &ecad.cad_data.steps, &mut HashSet::new())
-        .and_then(|step| step.profile.as_ref())
-        .with_context(|| {
-            format!(
-                "IPC-2581 step '{}' and its repeated child steps have no board Profile outline",
-                ipc.resolve(primary.name)
-            )
-        })
-}
-
-fn find_profile_step<'a>(
-    step: &'a Step,
-    steps: &'a [Step],
-    visited: &mut HashSet<Symbol>,
-) -> Option<&'a Step> {
-    if !visited.insert(step.name) {
-        return None;
-    }
-    if step.profile.is_some() {
-        return Some(step);
-    }
-
-    step.step_repeats.iter().find_map(|repeat| {
-        steps
-            .iter()
-            .find(|candidate| candidate.name == repeat.step_ref)
-            .and_then(|child| find_profile_step(child, steps, visited))
-    })
 }
 
 #[cfg(test)]
@@ -100,8 +69,12 @@ mod tests {
         )
         .unwrap();
 
-        let profile = board_profile(&ipc).unwrap();
+        let profiles = geometry::extract_profiles(&ipc).unwrap();
 
-        assert_eq!(profile.polygon.steps.len(), 3);
+        assert_eq!(profiles.boards.len(), 1);
+        assert_eq!(profiles.panels.len(), 1);
+        assert_eq!(profiles.board_instances.len(), 1);
+        assert_eq!(profiles.profiles.len(), 2);
+        assert_eq!(pcb_ir::dialects::ipc::render_profiles(&profiles).count(), 1);
     }
 }

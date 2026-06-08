@@ -1639,6 +1639,10 @@ impl<'a> Parser<'a> {
 
     fn parse_step(&mut self, node: &Node) -> Result<Step> {
         let name = self.required_attr(node, "name", "Step")?;
+        let step_type = self
+            .attr(node, "type")
+            .map(|step_type| self.parse_step_type(step_type))
+            .transpose()?;
 
         // Single pass through children
         let mut datum = None;
@@ -1668,6 +1672,7 @@ impl<'a> Parser<'a> {
 
         Ok(Step {
             name,
+            step_type,
             datum,
             profile,
             step_repeats,
@@ -1678,6 +1683,18 @@ impl<'a> Parser<'a> {
             phy_net_groups,
             layer_features,
         })
+    }
+
+    fn parse_step_type(&self, s: &str) -> Result<ecad::StepType> {
+        match s {
+            "BOARD" => Ok(ecad::StepType::Board),
+            "PALLET" => Ok(ecad::StepType::Pallet),
+            "IC" => Ok(ecad::StepType::Ic),
+            _ => Err(Ipc2581Error::InvalidAttribute(format!(
+                "Invalid Step type: {}",
+                s
+            ))),
+        }
     }
 
     fn parse_step_repeat(&mut self, node: &Node) -> Result<StepRepeat> {

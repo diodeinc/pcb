@@ -59,6 +59,7 @@ impl CacheIndex {
         });
         let pool = Pool::builder()
             .max_size(8)
+            .min_idle(Some(1))
             .error_handler(Box::new(r2d2::NopErrorHandler))
             .build(manager)
             .with_context(|| format!("Failed to create connection pool at {}", path.display()))?;

@@ -89,7 +89,7 @@ fn run_docgen_for_package(pkg: &str) -> Result<()> {
     }
 
     // When a bare package URL matches the current workspace namespace, prefer the
-    // local workspace member over the published remote package.
+    // local workspace package over the published remote package.
     if !pkg.contains('@')
         && let Some((package_dir, package_url, filter)) = resolve_local_workspace_package_url(pkg)
     {
@@ -121,13 +121,13 @@ fn resolve_local_workspace_package_url(pkg: &str) -> Option<(PathBuf, String, Op
         .iter()
         .filter(|(package_url, _)| pcb_zen_core::workspace::package_url_covers(package_url, pkg))
         .max_by_key(|(package_url, _)| package_url.len())
-        .map(|(package_url, member)| {
+        .map(|(package_url, package)| {
             let filter = pkg
                 .strip_prefix(package_url)
                 .and_then(|rest| rest.strip_prefix('/'))
                 .map(str::to_string);
             (
-                member.dir(&workspace_info.root),
+                package.dir(&workspace_info.root),
                 package_url.clone(),
                 filter,
             )

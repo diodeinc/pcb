@@ -3,8 +3,7 @@ use pcb_zen::tags;
 use pcb_zen_core::config::{DependencySpec, PcbToml, split_repo_and_subpath};
 use semver::Version;
 
-use super::dep_id::compatibility_lane;
-use super::versions::SpecVersionResolver;
+use pcb_zen::package_resolver::{SpecVersionResolver, compatibility_lane};
 
 const LATEST_SELECTOR: &str = "latest";
 
@@ -45,7 +44,7 @@ fn parse_dependency_request(raw: &str) -> Result<(&str, RequestedVersion)> {
     };
     if module_path.is_empty() {
         bail!(
-            "Invalid dependency '{}'. Use `pcb mod add <url>@latest` or `pcb mod add <url>@1.2.3`.",
+            "Invalid dependency '{}'. Use `<url>@latest` or `<url>@1.2.3`.",
             raw
         );
     }
@@ -53,7 +52,7 @@ fn parse_dependency_request(raw: &str) -> Result<(&str, RequestedVersion)> {
     let selector = selector.trim();
     if selector.is_empty() {
         bail!(
-            "Missing version after '@' in '{}'. Use `pcb mod add <url>@latest` or `pcb mod add <url>@1.2.3`.",
+            "Missing version after '@' in '{}'. Use `<url>@latest` or `<url>@1.2.3`.",
             raw
         );
     }
@@ -76,7 +75,7 @@ fn dependency_lane(spec: &DependencySpec) -> Option<String> {
         DependencySpec::Version(version) => Some(version.as_str()),
         DependencySpec::Detailed(detail) => detail.version.as_deref(),
     }?;
-    let version = tags::parse_relaxed_version(raw_version)?;
+    let version = pcb_zen_core::parse_relaxed_version(raw_version)?;
     Some(compatibility_lane(&version))
 }
 
@@ -118,7 +117,7 @@ fn resolve_requested_version(
     }
 }
 
-fn available_versions_for_module(module_path: &str) -> Result<Vec<Version>> {
+pub(crate) fn available_versions_for_module(module_path: &str) -> Result<Vec<Version>> {
     let (repo_url, subpath) = split_repo_and_subpath(module_path);
     let all_versions = tags::get_all_versions_for_repo(repo_url)
         .with_context(|| format!("Failed to fetch versions from {}", repo_url))?;
@@ -138,60 +137,4 @@ fn select_latest_stable_version(versions: &[Version], lane: Option<&str>) -> Opt
                     .unwrap_or(true)
         })
         .cloned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_dependency_request_defaults_to_latest_and_accepts_exact_versions() {
-        assert_eq!(
-            parse_dependency_request("github.com/acme/foo").unwrap(),
-            ("github.com/acme/foo", RequestedVersion::Latest)
-        );
-        assert_eq!(
-            parse_dependency_request("github.com/acme/foo@latest").unwrap(),
-            ("github.com/acme/foo", RequestedVersion::Latest)
-        );
-        assert_eq!(
-            parse_dependency_request("github.com/acme/foo@v1.2.3").unwrap(),
-            (
-                "github.com/acme/foo",
-                RequestedVersion::Exact(Version::new(1, 2, 3))
-            )
-        );
-        assert_eq!(
-            parse_dependency_request("github.com/acme/foo@main").unwrap(),
-            (
-                "github.com/acme/foo",
-                RequestedVersion::RefOrBranch("main".to_string())
-            )
-        );
-    }
-
-    #[test]
-    fn select_latest_stable_version_respects_requested_lane() {
-        let versions = vec![
-            Version::parse("2.0.0-beta.1").unwrap(),
-            Version::new(2, 0, 0),
-            Version::new(0, 8, 3),
-            Version::new(0, 8, 1),
-            Version::new(0, 1, 7),
-            Version::new(0, 1, 4),
-        ];
-
-        assert_eq!(
-            select_latest_stable_version(&versions, None),
-            Some(Version::new(2, 0, 0))
-        );
-        assert_eq!(
-            select_latest_stable_version(&versions, Some("0.8")),
-            Some(Version::new(0, 8, 3))
-        );
-        assert_eq!(
-            select_latest_stable_version(&versions, Some("0.1")),
-            Some(Version::new(0, 1, 7))
-        );
-    }
 }

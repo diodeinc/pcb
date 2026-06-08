@@ -9,6 +9,7 @@ use starlark::{
     collections::SmallMap,
     errors::EvalSeverity,
     eval::{Arguments, Evaluator},
+    values::record::{FrozenRecordType, RecordType},
     values::{Freeze, Heap, NoSerialize, StarlarkValue, Trace, Value, ValueLike, starlark_value},
 };
 
@@ -135,7 +136,7 @@ struct DeferredParam<'v> {
 }
 
 impl<'v> starlark::values::AllocValue<'v> for DeferredParam<'v> {
-    fn alloc_value(self, heap: &'v Heap) -> Value<'v> {
+    fn alloc_value(self, heap: Heap<'v>) -> Value<'v> {
         heap.alloc_complex(self)
     }
 }
@@ -218,7 +219,7 @@ fn none_if_none(value: Value<'_>) -> Option<Value<'_>> {
 fn parse_decl_args<'v>(
     kind: ParamKind,
     args: &Arguments<'v, '_>,
-    heap: &'v Heap,
+    heap: Heap<'v>,
 ) -> starlark::Result<(Option<String>, DeclArgs<'v>)> {
     let function = kind.kind_name();
     let positional_values: Vec<Value<'v>> = args.positions(heap)?.collect();
@@ -399,6 +400,15 @@ fn resolve_config<'v>(
     declaration_site: &DeclarationSite,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
+    if args.typ.downcast_ref::<RecordType>().is_some()
+        || args.typ.downcast_ref::<FrozenRecordType>().is_some()
+    {
+        return Err(anyhow::anyhow!(
+            "config() does not support record types; use primitive, enum, or physical-value config parameters"
+        )
+        .into());
+    }
+
     let convert_value = |eval: &mut Evaluator<'v, '_, '_>, value| {
         validate_or_convert(name, value, args.typ, args.convert, eval)
             .map_err(starlark::Error::from)
@@ -728,7 +738,7 @@ fn net_skips_implicit_checks<'v>(value: Value<'v>) -> bool {
 
 fn materialize_net_template<'v>(
     template: Value<'v>,
-    heap: &'v Heap,
+    heap: Heap<'v>,
 ) -> starlark::Result<Value<'v>> {
     if let Some(net) = template.downcast_ref::<NetValue<'v>>() {
         Ok(net.with_declaration_site(

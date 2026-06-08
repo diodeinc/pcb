@@ -99,7 +99,7 @@ pub fn auto_add_zen_deps(workspace_info: &WorkspaceInfo) -> Result<AutoDepsSumma
 
 fn collect_manifest_paths(
     workspace_root: &Path,
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    packages: &BTreeMap<String, crate::workspace::WorkspacePackage>,
     package_imports: &HashMap<PathBuf, CollectedImports>,
 ) -> BTreeSet<PathBuf> {
     let mut manifests: BTreeSet<PathBuf> = package_imports.keys().cloned().collect();
@@ -141,7 +141,7 @@ fn can_materialize_dep(
     index: &CacheIndex,
     dep: &ResolvedDep,
 ) -> bool {
-    let Some(parsed_version) = crate::tags::parse_relaxed_version(&dep.version) else {
+    let Some(parsed_version) = pcb_zen_core::parse_relaxed_version(&dep.version) else {
         log::debug!(
             "Skipping auto-dep package {}@{} (invalid version)",
             dep.module_path,
@@ -171,7 +171,7 @@ fn can_materialize_dep(
 
 fn resolve_dep_candidate(
     url: &str,
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    packages: &BTreeMap<String, crate::workspace::WorkspacePackage>,
     index: &CacheIndex,
 ) -> Option<ResolvedDep> {
     if let Some(package_url) = find_matching_package_url(url, packages)
@@ -202,7 +202,7 @@ fn resolve_dep_candidate(
 
 fn find_matching_package_url<'a>(
     url: &str,
-    packages: &'a BTreeMap<String, crate::workspace::MemberPackage>,
+    packages: &'a BTreeMap<String, crate::workspace::WorkspacePackage>,
 ) -> Option<&'a str> {
     packages
         .keys()
@@ -211,7 +211,7 @@ fn find_matching_package_url<'a>(
         .map(|package_url| package_url.as_str())
 }
 
-/// Scan .zen files in workspace member packages and group found imports by their nearest pcb.toml
+/// Scan .zen files in workspace packages and group found imports by their nearest pcb.toml.
 fn collect_imports_by_package(
     workspace_info: &WorkspaceInfo,
 ) -> Result<HashMap<PathBuf, CollectedImports>> {
@@ -219,11 +219,14 @@ fn collect_imports_by_package(
     let packages = &workspace_info.packages;
     let mut result: HashMap<PathBuf, CollectedImports> = HashMap::new();
 
-    // Determine directories to scan: member packages if any, otherwise workspace root
+    // Determine directories to scan: workspace packages if any, otherwise workspace root.
     let dirs_to_scan: Vec<PathBuf> = if packages.is_empty() {
         vec![workspace_root.to_path_buf()]
     } else {
-        packages.values().map(|m| m.dir(workspace_root)).collect()
+        packages
+            .values()
+            .map(|pkg| pkg.dir(workspace_root))
+            .collect()
     };
 
     let Some((first, rest)) = dirs_to_scan.split_first() else {
@@ -273,7 +276,7 @@ fn collect_imports_by_package(
         imports.aliases.extend(extracted.aliases);
         imports.urls.extend(extracted.urls);
 
-        // Resolve relative paths that escape the package boundary to workspace member URLs
+        // Resolve relative paths that escape the package boundary to workspace package URLs.
         if !extracted.relative_paths.is_empty() {
             let file_dir = path.parent().unwrap_or(path);
             let pkg_root = pcb_toml
@@ -288,8 +291,9 @@ fn collect_imports_by_package(
                 if resolved.starts_with(&pkg_root) {
                     continue; // within same package, no dep needed
                 }
-                if let Some(member_url) = find_owning_member(workspace_root, packages, &resolved) {
-                    imports.urls.insert(member_url);
+                if let Some(package_url) = find_owning_package(workspace_root, packages, &resolved)
+                {
+                    imports.urls.insert(package_url);
                 }
             }
         }
@@ -298,13 +302,13 @@ fn collect_imports_by_package(
     Ok(result)
 }
 
-/// Find the workspace member URL that owns the given canonicalized path.
-fn find_owning_member(
+/// Find the workspace package URL that owns the given canonicalized path.
+fn find_owning_package(
     workspace_root: &Path,
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    packages: &BTreeMap<String, crate::workspace::WorkspacePackage>,
     resolved_path: &Path,
 ) -> Option<String> {
-    // Find the longest-matching member directory (most specific package)
+    // Find the longest-matching package directory.
     let mut best: Option<(&str, usize)> = None;
     for (url, pkg) in packages {
         let pkg_dir = pkg.dir(workspace_root);
@@ -336,11 +340,11 @@ fn find_nearest_pcb_toml(from: &Path, workspace_root: &Path) -> Option<PathBuf> 
     None
 }
 
-/// Add dependencies to a pcb.toml file and correct workspace member versions
+/// Add dependencies to a pcb.toml file and correct workspace package versions.
 fn mutate_manifest_dependencies(
     pcb_toml_path: &Path,
     deps: &[ResolvedDep],
-    packages: &BTreeMap<String, crate::workspace::MemberPackage>,
+    packages: &BTreeMap<String, crate::workspace::WorkspacePackage>,
 ) -> Result<(usize, usize)> {
     let mut config = PcbToml::from_file(&DefaultFileProvider::new(), pcb_toml_path)?;
     let mut added = 0usize;
@@ -360,7 +364,7 @@ fn mutate_manifest_dependencies(
         changed = true;
     }
 
-    // Correct workspace member versions (but preserve branch/rev/path overrides)
+    // Correct workspace package versions (but preserve branch/rev/path overrides).
     for (url, pkg) in packages {
         let version = pkg
             .version
@@ -414,8 +418,8 @@ fn plain_version(spec: &DependencySpec) -> Option<&str> {
 
 fn is_upgrade_version(current: &str, target: &str) -> bool {
     match (
-        crate::tags::parse_relaxed_version(current),
-        crate::tags::parse_relaxed_version(target),
+        pcb_zen_core::parse_relaxed_version(current),
+        pcb_zen_core::parse_relaxed_version(target),
     ) {
         (Some(current), Some(target)) => target > current,
         _ => false,

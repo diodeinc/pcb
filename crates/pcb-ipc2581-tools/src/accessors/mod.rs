@@ -1,6 +1,8 @@
 use ipc2581::Ipc2581;
 use ipc2581::types::{Ecad, Step};
 
+use crate::steps;
+
 mod board;
 mod bom;
 mod components;
@@ -46,5 +48,41 @@ impl<'a> IpcAccessor<'a> {
     /// Get first step from ECAD (common helper)
     pub fn first_step(&self) -> Option<&Step> {
         self.ecad()?.cad_data.steps.first()
+    }
+
+    /// Get the primary IPC-2581 job step from Content/StepRef.
+    pub fn primary_step(&self) -> Option<&Step> {
+        let ecad = self.ecad()?;
+        steps::primary_step(self.ipc, &ecad.cad_data.steps)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primary_step_prefers_content_step_ref_over_cad_data_order() {
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD"/>
+      <Step name="panel" type="PALLET"/>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        assert_eq!(ipc.resolve(accessor.first_step().unwrap().name), "board");
+        assert_eq!(ipc.resolve(accessor.primary_step().unwrap().name), "panel");
     }
 }

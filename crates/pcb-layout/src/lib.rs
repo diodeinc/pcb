@@ -1252,6 +1252,10 @@ fn build_stackup_patchset(
         })?
         .span;
     patches.replace_raw(layers_span, layers.to_string());
+    patches.extend(
+        pcb_sexpr::board::build_prune_items_not_in_layers_patchset(board, layers)
+            .map_err(LayoutError::StackupPatchingError)?,
+    );
 
     let setup_idx = pcb_sexpr::find_named_list_index(root_items, "setup").ok_or_else(|| {
         LayoutError::StackupPatchingError("PCB file is missing (setup ...) section".to_string())
@@ -1441,6 +1445,48 @@ mod tests {
         assert!(out.contains("(dashed_line_gap_ratio 3.000000)"));
         assert!(out.contains("(hpglpendiameter 15.000000)"));
         assert!(out.contains("(thickness 1.6062)"));
+    }
+
+    #[test]
+    fn build_stackup_patchset_removes_items_on_removed_layers() {
+        let input = r#"(kicad_pcb
+	(version 20240101)
+	(generator "pcbnew")
+	(general (thickness 1.6))
+	(layers
+		(0 "F.Cu" signal)
+		(1 "In1.Cu" signal)
+		(31 "B.Cu" signal)
+	)
+	(setup (stackup (old yes)))
+	(segment
+		(start 0 0) (end 1 1) (width 0.2) (layer "In1.Cu") (net 1)
+		(uuid "removed-inner-segment")
+	)
+	(segment
+		(start 0 0) (end 1 1) (width 0.2) (layer "F.Cu") (net 1)
+		(uuid "keep-front-segment")
+	)
+)"#;
+
+        let board = pcb_sexpr::parse(input).unwrap();
+        let layers = pcb_sexpr::parse(
+            r#"(layers
+                (0 "F.Cu" signal)
+                (2 "B.Cu" signal)
+                (39 "User.1" user)
+            )"#,
+        )
+        .unwrap();
+        let stackup = pcb_sexpr::parse(r#"(stackup (layer "F.Cu") (layer "B.Cu"))"#).unwrap();
+
+        let patches = build_stackup_patchset(&board, &layers, &stackup, None).unwrap();
+        let mut out = Vec::new();
+        patches.write_to(input, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        assert!(!out.contains(r#"(uuid "removed-inner-segment")"#));
+        assert!(out.contains(r#"(uuid "keep-front-segment")"#));
     }
 
     #[test]
