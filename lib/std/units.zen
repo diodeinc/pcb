@@ -17,5 +17,6 @@ Energy = builtin.physical_value("J")
 MagneticFlux = builtin.physical_value("Wb")
 Conductance = builtin.physical_value("S")
 
+
 def unit(spec, type):
     return type(spec)
