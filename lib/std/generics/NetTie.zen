@@ -22,7 +22,7 @@ Variant = enum(
     "4_THT_1.0mm",
 )
 
-variant = config(Variant, help="Net tie variant (pins_mount_padsize)")
+variant = config(Variant, default="2_SMD_0.5mm", optional=True, help="Net tie variant (pins_mount_padsize)")
 mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
 

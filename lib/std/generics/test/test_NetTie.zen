@@ -5,6 +5,12 @@ load("../../properties.zen", "Layout")
 
 NetTie = Module("../NetTie.zen")
 
+NetTie(
+    name="NT_DEFAULT",
+    P1=Net("NT_DEFAULT_P1"),
+    P2=Net("NT_DEFAULT_P2"),
+)
+
 for variant in NetTie.Variant.values():
     name = "NT_" + str(variant)
     name = name.replace(".", "_")
