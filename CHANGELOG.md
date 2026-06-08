@@ -8,9 +8,16 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### Changed
+### Changes
 
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
+- Updated stdlib generics to use KiCad 10.0.3 symbols and footprints.
+- Removed legacy manifest and import support: `[module]`, `[packages]`, `[assets]`, and `[workspace].resolver` are rejected; legacy stdlib load paths are no longer accepted; `pcb migrate` no longer runs V1 codemods.
+- Removed deprecated stdlib files and modules, including `config.zen`, `metadata.zen`, `pins.zen`, `kicad/*`, and the generic BJT, diode, MOSFET, standoff, and terminal-block modules.
+- Removed deprecated stdlib API shims, including `Properties()`, `Schematics()`, `config_unit()`, `config_properties()`, `*Range` unit aliases, legacy `NetTie` inputs, and legacy resistor, capacitor, ferrite, and inductor inputs.
+- Removed deprecated language shims, including `config(convert=...)`, bare `add_property(...)`, `NET=` net casts, module DNP properties, automatic component property key capitalization, legacy `Component(properties={...})` sourcing/DNP keys, and legacy net moved aliases.
+- Regular nets now require explicit or assignment-inferred unique names; unnamed or duplicate regular nets fail evaluation.
+- `NotConnected` nets are now source-unnamed; explicit names are ignored with a warning and downstream tools assign connection-derived names as needed.
 
 ## [0.3.92] - 2026-06-09
 
@@ -80,9 +87,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `config()` now rejects Starlark `record()` types as module input types.
 - Lowered the default board-config minimum silkscreen text height from 0.8 mm to 0.6 mm.
-- Duplicate regular net names now fail evaluation instead of receiving generated suffixes.
-- `NotConnected` net names are now ignored with a warning; downstream tools assign connection-derived names.
-- Unnamed regular nets now fail evaluation instead of receiving generated `N...` names.
 - Removed the hidden `pcb package` subcommand.
 - `pcb update` now rejects hydrated V2 dependency manifests and points users to `pcb add -u`.
 - Workspaces with `pcb-version = "0.4"` or newer now always use MVS v2 dependency resolution.
