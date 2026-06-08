@@ -370,10 +370,8 @@ impl KicadLibraryConfig {
 
 pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
     "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst";
-// The KiCad parts index is generated independently of the symbols/footprints/model archives.
-// Keep using the latest published index until a 10.0.3-specific one exists.
 pub const DEFAULT_KICAD_PARTS_URL: &str =
-    "https://kicad-mirror.api.diode.computer/kicad-parts-10.0.0.toml";
+    "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml";
 pub const STDLIB_PINNED_KICAD_VERSION: Version = Version::new(10, 0, 3);
 
 fn default_kicad_library_entry(version: Version, model_var: &str) -> KicadLibraryConfig {
@@ -915,6 +913,10 @@ pcb-version = "0.3"
         assert_eq!(
             workspace.kicad_library[1].models.get("KICAD10_3DMODEL_DIR"),
             Some(&"gitlab.com/kicad/libraries/kicad-packages3D".to_string())
+        );
+        assert_eq!(
+            workspace.kicad_library[1].parts.as_deref(),
+            Some(DEFAULT_KICAD_PARTS_URL)
         );
     }
 
