@@ -326,12 +326,9 @@ Do not edit `[dependencies.indirect]` by hand. Commit hydrated `pcb.toml` files.
 
 ## KiCad-Style Libraries
 
-KiCad symbol/footprint/3D relationships are configured at workspace root with
-`[[workspace.kicad_library]]` entries. If omitted, the workspace defaults to two
-entries: KiCad `9.0.3` and KiCad `10.0.3`.
-
-The toolchain-managed `@stdlib` package separately pins its implicit KiCad asset
-dependencies to KiCad `10.0.3`.
+KiCad symbol, footprint, and 3D model relationships are configured at workspace
+root with `[[workspace.kicad_library]]` entries. Workspaces default to KiCad
+`9.0.3` and `10.0.3`; stdlib generics use KiCad `10.0.3`.
 
 ```toml
 [[workspace.kicad_library]]
@@ -360,7 +357,7 @@ http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar
 `http_mirror` is optional and supports `{repo}`, `{repo_name}`, `{version}`, and `{major}` placeholders.
 
 KiCad aliases in `.zen` files are reconciled by `pcb sync`. Transitive KiCad
-assets are written to `[dependencies.indirect]` using lane-qualified keys:
+dependencies are written to `[dependencies.indirect]` using lane-qualified keys:
 
 ```toml
 [dependencies.indirect]
@@ -469,12 +466,11 @@ code. For production builds, prefer tagged releases.
 
 ### pcb migrate
 
-Runs project migrations when a release provides them. The command is currently kept
-as a stable entry point, but this release does not include legacy V1 manifest or
-import-path migrations.
+Runs project migrations supplied by the active toolchain. When no migrations are
+available, the command prints that nothing needs to run.
 
 ```bash
-pcb migrate                  # Run available migrations, if any
+pcb migrate
 pcb migrate ./path/to/workspace
 ```
 
