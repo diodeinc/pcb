@@ -621,7 +621,29 @@ fn resolve_symbol_library_path(
         .get_config()
         .resolve_path(library_path, current_file)
     {
-        Ok(path) => Ok(path),
+        Ok(path) => {
+            let file_provider = eval_ctx.file_provider();
+            if file_provider.exists(&path) || file_provider.is_directory(&path) {
+                return Ok(path);
+            }
+
+            let Some(stem) = library_path.strip_suffix(".kicad_sym") else {
+                return Ok(path);
+            };
+
+            let fallback_path = format!("{stem}.kicad_symdir");
+            match eval_ctx
+                .get_config()
+                .resolve_path(&fallback_path, current_file)
+            {
+                Ok(fallback)
+                    if file_provider.exists(&fallback) || file_provider.is_directory(&fallback) =>
+                {
+                    Ok(fallback)
+                }
+                _ => Ok(path),
+            }
+        }
         Err(err) => {
             let Some(stem) = library_path.strip_suffix(".kicad_sym") else {
                 return Err(starlark::Error::new_other(anyhow!(
