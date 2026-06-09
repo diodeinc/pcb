@@ -244,10 +244,6 @@ fn expand_dirty_set(
     // Build reverse dependency map: url -> packages that depend on it
     let mut reverse_deps: HashMap<String, Vec<String>> = HashMap::new();
     for (url, pkg) in &workspace.packages {
-        // Skip boards
-        if pkg.config.board.is_some() {
-            continue;
-        }
         for dep_url in pkg.dependencies() {
             reverse_deps
                 .entry(dep_url.to_string())
@@ -742,11 +738,11 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
         );
     }
 
-    // Get dirty non-board packages
+    // Get dirty packages
     let directly_dirty: HashSet<String> = workspace
         .packages
         .iter()
-        .filter(|(_, p)| p.dirty && p.config.board.is_none())
+        .filter(|(_, p)| p.dirty)
         .map(|(url, _)| url.clone())
         .collect();
 
