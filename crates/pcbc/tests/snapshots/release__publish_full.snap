@@ -1,6 +1,5 @@
 ---
 source: crates/pcbc/tests/release.rs
-assertion_line: 286
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === bom/design_bom.json
@@ -119,7 +118,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
     "user": "<USER>"
   }
 }
-=== netlist.json <75991 bytes, sha256: f69b44f>
+=== netlist.json <76135 bytes, sha256: 9f6453b>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
