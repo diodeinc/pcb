@@ -77,9 +77,9 @@ pub fn execute(file: &Path, format: OutputFormat, offline: bool) -> Result<()> {
             .token()
             .context("Not authenticated. Run `pcb auth login` to authenticate.")?;
 
-        if let Err(e) =
-            pcb_diode_api::fetch_and_populate_availability_with_context(&ctx, &token, &mut bom)
-        {
+        if let Err(e) = pcb_diode_api::fetch_and_populate_availability_with_context(
+            &ctx, &token, &mut bom, false,
+        ) {
             log::warn!("Failed to fetch availability data: {}", e);
         }
 

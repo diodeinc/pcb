@@ -406,6 +406,17 @@ endpoint = "diode.computer"
 - This applies to workspace-aware commands such as `pcb auth`, `pcb bom`, `pcb publish`, `pcb preview`, and routing flows.
 - Authentication is scoped per resolved endpoint, so logging into one workspace endpoint does not overwrite tokens for another.
 
+## BOM Matching (`[workspace.bom]`)
+
+Workspace manifests can opt into strict BOM matching for `pcb bom` availability lookups:
+
+```toml
+[workspace.bom]
+strict = true
+```
+
+When enabled, `pcb bom` asks the BOM service to require exact MPN matches. The default is `false`, which preserves the legacy fuzzy matching behavior.
+
 ## Registry Search Scope
 
 Registry-backed `pcb search` defaults to the public Diode registry and registries in the workspace configured by `[workspace].repository`.

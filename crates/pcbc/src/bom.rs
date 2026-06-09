@@ -95,6 +95,11 @@ pub fn execute(args: BomArgs) -> Result<()> {
 
     // Resolve dependencies before evaluation
     let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline, args.locked)?;
+    let strict = resolution_result
+        .workspace_info
+        .workspace_config()
+        .bom
+        .strict;
 
     let file_name = args.file.file_name().unwrap().to_string_lossy();
 
@@ -132,7 +137,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
             Ok(token) => {
                 spinner.set_message(format!("{file_name}: Fetching availability"));
                 if let Err(e) = pcb_diode_api::fetch_and_populate_availability_with_context(
-                    &ctx, &token, &mut bom,
+                    &ctx, &token, &mut bom, strict,
                 ) {
                     log::warn!("Failed to fetch availability data: {}", e);
                 }

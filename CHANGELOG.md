@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
+
 ## [0.3.92] - 2026-06-09
 
 ### Changed
@@ -94,6 +98,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added Würth Elektronik WE-PMFI 1210 power inductors to stdlib house BOM matching.
+
 
 ## [0.3.84] - 2026-05-21
 
