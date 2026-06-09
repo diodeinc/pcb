@@ -10,8 +10,6 @@ load("@stdlib/interfaces.zen", "Spi")
 PowerSupplyModule = Module("modules/PowerSupplyModule.zen")
 LedIndicatorModule = Module("modules/LedIndicatorModule.zen")
 
-Flash = Module("github.com/diodeinc/kicad/Memory_Flash/W25Q128JVE.zen")
-
 # Power rails
 vcc_3v3 = Power("VCC_3V3")
 gnd = Ground("GND")
@@ -55,17 +53,6 @@ Component(
         "alternatives": [
             Part(mpn="ERJ-3EKF1001V", manufacturer="Panasonic"),
         ],
-    },
-)
-
-Flash(
-    name="FLASH",
-    VCC=vcc_3v3,
-    GND=gnd,
-    HOLD=Net("HODL"),
-    spi=Spi(),
-    properties={
-        "embed": "true",
     },
 )
 
