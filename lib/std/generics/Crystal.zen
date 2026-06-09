@@ -76,21 +76,35 @@ def _footprint(package: Package):
     return _footprints[package]
 
 
-def _pins(package: Package, XIN: Net, XOUT: Net, GND: Net | None):
+def _pin_maps(package: Package, XIN: Net, XOUT: Net, GND: Net | None):
     if "4Pin" in str(package):
         if not GND:
             error("GND is required for 4-pin crystals")
-        pins = {
-            "1": XIN,
-            "G": GND,
-            "3": XOUT,
-        }
-    else:
-        pins = {
+        return (
+            {
+                "XIN": "1",
+                "GND_2": "2",
+                "XOUT": "3",
+                "GND_4": "4",
+            },
+            {
+                "XIN": XIN,
+                "GND_2": GND,
+                "XOUT": XOUT,
+                "GND_4": GND,
+            },
+        )
+
+    return (
+        {
+            "1": "1",
+            "2": "2",
+        },
+        {
             "1": XIN,
             "2": XOUT,
-        }
-    return pins
+        },
+    )
 
 
 def _spice_subcircuit_name(package: Package):
@@ -133,11 +147,14 @@ def _spice_args(frequency, load_capacitance, package):
     return args
 
 
+pin_defs, pins = _pin_maps(package, XIN, XOUT, GND)
+
 Component(
     name="Y",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     prefix="Y",
     symbol=Symbol(**_symbol(package)),
+    pin_defs=pin_defs,
     footprint=File(_footprint(package)),
     spice_model=SpiceModel(
         "spice/Crystal.lib",
@@ -145,7 +162,7 @@ Component(
         nets=_spice_nets(package, XIN, XOUT, GND),
         args=_spice_args(frequency, load_capacitance, package),
     ),
-    pins=_pins(package, XIN, XOUT, GND),
+    pins=pins,
     properties=properties,
     type="crystal",
 )
