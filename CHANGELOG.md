@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
 - Updated stdlib generics to use KiCad 10.0.3 symbols and footprints.
+- `pcb publish` now bundles only referenced KiCad split-symbol files instead of whole split-library directories.
 - Removed legacy manifest and import support: `[module]`, `[packages]`, `[assets]`, and `[workspace].resolver` are rejected; legacy stdlib load paths are no longer accepted; `pcb migrate` no longer runs V1 codemods.
 - Removed deprecated stdlib files and modules, including `config.zen`, `metadata.zen`, `pins.zen`, `kicad/*`, and the generic BJT, diode, MOSFET, standoff, and terminal-block modules.
 - Removed deprecated stdlib API shims, including `Properties()`, `Schematics()`, `config_unit()`, `config_properties()`, `*Range` unit aliases, legacy `NetTie` inputs, and legacy resistor, capacitor, ferrite, and inductor inputs.

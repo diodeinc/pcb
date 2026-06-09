@@ -132,19 +132,40 @@ fn stage_mvs_v2_source_bundle(
                 copy_dir_all(root, &plan.staged_src.join(rel_path), &excluded_roots)?;
             }
             FrozenPackageIdentity::Remote { dep_id, version } => {
-                let dst = plan
-                    .staged_src
-                    .join("vendor")
-                    .join(&dep_id.path)
-                    .join(version.to_string());
                 if is_managed_kicad_repo(workspace_info, &dep_id.path, version) {
-                    fs::create_dir_all(&dst)?;
-                    kicad_roots.insert(root.clone(), (dep_id.path.clone(), version.to_string()));
+                    register_kicad_root(
+                        plan.staged_src,
+                        &mut kicad_roots,
+                        root,
+                        &dep_id.path,
+                        version,
+                    )?;
                 } else {
+                    let dst = plan
+                        .staged_src
+                        .join("vendor")
+                        .join(&dep_id.path)
+                        .join(version.to_string());
                     copy_dir_all(root, &dst, &HashSet::new())?;
                 }
             }
             FrozenPackageIdentity::Stdlib => {}
+        }
+    }
+
+    for package in frozen.packages.values() {
+        for (repo, root) in &package.deps {
+            let Some(version_str) = root.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Ok(version) = semver::Version::parse(version_str) else {
+                continue;
+            };
+            if !is_managed_kicad_repo(workspace_info, repo, &version) {
+                continue;
+            }
+
+            register_kicad_root(plan.staged_src, &mut kicad_roots, root, repo, &version)?;
         }
     }
 
@@ -230,6 +251,21 @@ fn is_managed_kicad_repo(
     )
 }
 
+fn register_kicad_root(
+    staged_src: &Path,
+    kicad_roots: &mut BTreeMap<PathBuf, (String, String)>,
+    root: &Path,
+    repo: &str,
+    version: &semver::Version,
+) -> Result<()> {
+    let version = version.to_string();
+    fs::create_dir_all(staged_src.join("vendor").join(repo).join(&version))?;
+    kicad_roots
+        .entry(root.to_path_buf())
+        .or_insert_with(|| (repo.to_string(), version));
+    Ok(())
+}
+
 fn stage_kicad_resolved_file(
     staged_src: &Path,
     kicad_roots: &BTreeMap<PathBuf, (String, String)>,
@@ -247,6 +283,9 @@ fn stage_kicad_resolved_file(
         return Ok(());
     };
     if rel_path.as_os_str().is_empty() {
+        return Ok(());
+    }
+    if is_split_symbol_library_dir(resolved_path) {
         return Ok(());
     }
     if !resolved_path.exists() {
@@ -302,6 +341,9 @@ pub(crate) fn stage_resolved_file_for_source_bundle(
     if rel_path.as_os_str().is_empty() {
         return Ok(());
     }
+    if is_split_symbol_library_dir(resolved_path) {
+        return Ok(());
+    }
     if !resolved_path.exists() {
         log::warn!(
             "Skipping missing referenced library path during source bundle staging: {}",
@@ -339,6 +381,10 @@ pub(crate) fn stage_resolved_file_for_source_bundle(
     }
 
     Ok(())
+}
+
+fn is_split_symbol_library_dir(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()) == Some("kicad_symdir")
 }
 
 fn copy_bundle_path(src: &Path, dst: &Path) -> Result<()> {
