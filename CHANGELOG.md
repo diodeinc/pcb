@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.3.92] - 2026-06-09
+
 ### Changed
 
 - `pcb publish` package mode now includes board manifests.
@@ -1170,7 +1172,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.91...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.92...HEAD
+[0.3.92]: https://github.com/diodeinc/pcb/compare/v0.3.91...v0.3.92
 [0.3.91]: https://github.com/diodeinc/pcb/compare/v0.3.90...v0.3.91
 [0.3.90]: https://github.com/diodeinc/pcb/compare/v0.3.89...v0.3.90
 [0.3.89]: https://github.com/diodeinc/pcb/compare/v0.3.88...v0.3.89
