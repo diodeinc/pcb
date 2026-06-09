@@ -1525,6 +1525,7 @@ fn legacy_property_diagnostics(
                 (&diag.severity, &severity),
                 (EvalSeverity::Warning, EvalSeverity::Warning)
                     | (EvalSeverity::Advice, EvalSeverity::Advice)
+                    | (EvalSeverity::Error, EvalSeverity::Error)
             )
         })
         .filter_map(|diag| {
@@ -1543,8 +1544,8 @@ fn legacy_property_diagnostics(
 }
 
 #[test]
-fn warns_for_each_legacy_component_property_key() {
-    let diagnostics = eval_component_diagnostics(vec![(
+fn errors_for_each_legacy_component_property_key() {
+    let result = common::eval_zen(vec![(
         "test.zen".to_string(),
         r#"
 P1 = Net()
@@ -1578,9 +1579,10 @@ Component(
 "#
         .to_string(),
     )]);
+    let mut diagnostics = result.diagnostics;
+    SortPass.apply(&mut diagnostics);
 
-    let warning_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Warning);
-    let advice_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Advice);
+    let error_bodies = legacy_property_diagnostics(&diagnostics, EvalSeverity::Error);
 
     for (legacy_key, typed_kwarg) in [
         ("do_not_populate", "dnp"),
@@ -1598,23 +1600,23 @@ Component(
         ("Description", "description"),
     ] {
         let expected = format!(
-            "Component 'R1': `properties[\"{legacy_key}\"]` is deprecated; pass `{typed_kwarg}=...` to Component() instead"
+            "Component 'R1': `properties[\"{legacy_key}\"]` is no longer supported; pass `{typed_kwarg}=...` to Component() instead"
         );
         assert!(
-            warning_bodies.iter().any(|b| b == &expected),
-            "expected legacy-property warning for `{legacy_key}`, got: {:?}",
-            warning_bodies
+            error_bodies.iter().any(|b| b == &expected),
+            "expected legacy-property error for `{legacy_key}`, got: {:?}",
+            error_bodies
         );
     }
 
     for sourcing_key in ["mpn", "Mpn", "manufacturer", "Manufacturer"] {
         let expected = format!(
-            "Component 'R1': `properties[\"{sourcing_key}\"]` is deprecated; pass `part=Part(mpn=..., manufacturer=...)` to Component() instead"
+            "Component 'R1': `properties[\"{sourcing_key}\"]` is no longer supported; pass `part=Part(mpn=..., manufacturer=...)` to Component() instead"
         );
         assert!(
-            advice_bodies.iter().any(|b| b == &expected),
-            "expected sourcing-key advice for `{sourcing_key}`, got: {:?}",
-            advice_bodies
+            error_bodies.iter().any(|b| b == &expected),
+            "expected sourcing-key error for `{sourcing_key}`, got: {:?}",
+            error_bodies
         );
     }
 }
@@ -1777,7 +1779,8 @@ Component(
 
 #[test]
 fn legacy_dnp_property_still_takes_effect() {
-    let component = eval_single_root_component(
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
         r#"
 P1 = Net()
 P2 = Net()
@@ -1789,8 +1792,32 @@ Component(
     pins = {"1": P1, "2": P2},
     properties = {"do_not_populate": True},
 )
-"#,
+"#
+        .to_string(),
+    )]);
+    let mut diagnostics = result.diagnostics;
+    SortPass.apply(&mut diagnostics);
+
+    assert!(
+        legacy_property_diagnostics(&diagnostics, EvalSeverity::Error)
+            .iter()
+            .any(|body| body.contains("`properties[\"do_not_populate\"]` is no longer supported")),
+        "expected legacy-property error, got: {:?}",
+        diagnostics
     );
+
+    let output = result
+        .output
+        .expect("expected eval output despite diagnostics");
+    let module_tree = output.module_tree();
+    let root_module = module_tree
+        .values()
+        .find(|module| module.path().is_root())
+        .expect("expected root module");
+    let component = root_module
+        .components()
+        .next()
+        .expect("expected root component");
 
     assert!(
         component.dnp(),

@@ -364,7 +364,7 @@ fn resolve_dep<R: PackagePathResolver>(
     resolver.resolve_package(url, &version)
 }
 
-/// Build resolution map for a single package's [dependencies] and promoted [assets].
+/// Build resolution map for a single package's [dependencies].
 fn resolve_package_deps<R: PackagePathResolver>(
     resolver: &R,
     workspace: &WorkspaceInfo,
@@ -533,7 +533,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
         results.insert(pkg_path, resolved);
     }
 
-    // Stdlib has implicit managed KiCad dependencies pinned by workspace config.
+    // Stdlib has implicit managed KiCad dependencies pinned by the toolchain.
     let stdlib_root = workspace.workspace_stdlib_dir();
     let stdlib_deps = results.entry(stdlib_root).or_default();
     for (repo, version) in workspace.stdlib_asset_dep_versions() {
@@ -1699,7 +1699,7 @@ mod tests {
             }
         }
 
-        let version = Version::new(10, 0, 0);
+        let version = Version::new(10, 0, 3);
         let version_str = version.to_string();
         let symbols = "gitlab.com/kicad/libraries/kicad-symbols".to_string();
         let footprints = "gitlab.com/kicad/libraries/kicad-footprints".to_string();
@@ -1776,7 +1776,7 @@ mod tests {
 
     #[test]
     fn test_kicad_model_dirs_use_selected_builtin_family() {
-        let version = "10.0.0";
+        let version = "10.0.3";
         let models = "gitlab.com/kicad/libraries/kicad-packages3D".to_string();
         let result = ResolutionResult::native(
             WorkspaceInfo {

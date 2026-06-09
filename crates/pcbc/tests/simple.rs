@@ -106,8 +106,8 @@ pcb-version = "0.3"
 name = "simple_workspace"
 
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 const TEST_BOARD_PCB_TOML: &str = r#"
@@ -122,8 +122,8 @@ const PCB_TOML_MIN: &str = r#"
 pcb-version = "0.3"
 
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 const WORKSPACE_NAMESPACE_PCB_TOML: &str = r#"

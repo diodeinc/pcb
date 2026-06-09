@@ -1748,30 +1748,7 @@ impl PhysicalValueType {
             false,
         )
     }
-
-    pub fn deprecation_message(&self) -> Option<String> {
-        let exported_name = self.exported_name.get()?;
-        let replacement = exported_name.strip_suffix("Range")?;
-        (replacement == self.instance_ty_name())
-            .then(|| format!("{exported_name} is deprecated. Use {replacement} instead."))
-    }
-
-    fn warn_if_deprecated<'v>(&self, eval: &Evaluator<'v, '_, '_>) {
-        let Some(message) = self.deprecation_message() else {
-            return;
-        };
-        let Some(handler) = eval
-            .extra
-            .and_then(|extra| extra.downcast_ref::<PhysicalValueWarningHandler>())
-        else {
-            return;
-        };
-        handler.0(eval, &message);
-    }
 }
-
-#[derive(Clone, Copy, Debug, ProvidesStaticType)]
-pub struct PhysicalValueWarningHandler(pub for<'v, 'a, 'e> fn(&Evaluator<'v, 'a, 'e>, &str));
 
 impl PartialEq for PhysicalValueType {
     fn eq(&self, other: &Self) -> bool {
@@ -1848,8 +1825,6 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
         args: &Arguments<'v, '_>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
-        self.warn_if_deprecated(eval);
-
         self.parameters_spec()
             .parser(args, eval, |param_parser, eval| {
                 let pos_value: Option<Value> = param_parser.next_opt()?;

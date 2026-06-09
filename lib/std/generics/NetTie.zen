@@ -1,12 +1,6 @@
 load("../io.zen", "io")
 load("../interfaces.zen", "Net")
 
-# Legacy enums (deprecated)
-PadSize = enum("0.3mm", "0.5mm", "1.0mm", "2.0mm")
-MountType = enum("SMD", "THT", "SMD_THT")
-PinCount = enum("2", "3", "4")
-
-# New variant enum - combines pin count, mount type, and pad size
 Variant = enum(
     # 2-pin variants
     "2_SMD_0.3mm",
@@ -28,31 +22,16 @@ Variant = enum(
     "4_THT_1.0mm",
 )
 
-# New variant-based approach (preferred)
-variant = config(Variant, optional=True, help="Net tie variant (pins_mount_padsize)")
+variant = config(Variant, default="2_SMD_0.5mm", optional=True, help="Net tie variant (pins_mount_padsize)")
 mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
 
-# Legacy parameters (deprecated)
-mount_type = config(MountType, default=MountType("SMD"), optional=True, help="Mounting type (SMD, THT, or SMD_THT)")
-pad_size = config(PadSize, default=PadSize("0.5mm"), optional=True, help="Pad size")
-pin_count_legacy = config("pin_count", int, default=2, optional=True, help="Number of pins")
-use_jumper_footprint = config(bool, default=False, optional=True, help="Use solder jumper footprint instead")
-
-# Determine actual pin count from variant or legacy parameter
-pin_count = int(variant.value.split("_")[0]) if variant else pin_count_legacy
+pin_count = int(variant.value.split("_")[0])
 properties = {
     "value": " ",
     "pin_count": pin_count,
+    "variant": variant,
 }
-
-if variant:
-    properties["variant"] = variant
-else:
-    if mount_type:
-        properties["mount_type"] = mount_type
-    if pad_size:
-        properties["pad_size"] = pad_size
 
 P = [io("P{}".format(i), Net) for i in range(1, pin_count + 1)]
 
@@ -85,45 +64,9 @@ def _variant_footprint(variant):
     return variant_footprints.get(variant.value, None)
 
 
-def _legacy_footprint(pin_count, mount_type, pad_size):
-    """Return the appropriate net tie footprint."""
-
-    mount = mount_type.value
-    pad = pad_size.value
-    if mount == "SMD_THT":
-        if pin_count == 2:
-            if pad_size == PadSize("0.3mm"):
-                return "footprints/NetTie-2_SMD_THT_Pad0.3mm.kicad_mod"
-            elif pad_size == PadSize("1.0mm"):
-                return "footprints/NetTie-2_SMD_THT_Pad1.0mm.kicad_mod"
-            else:
-                error("Unsupported pad size: {}".format(pad_size))
-        else:
-            error("Unsupported pin count: {}".format(pin_count))
-    elif mount == "SMD" and pin_count == 2 and pad_size == PadSize("0.3mm"):
-        return "footprints/NetTie-2_SMD_Pad0.3mm.kicad_mod"
-    else:
-        return "@kicad-footprints/NetTie.pretty/NetTie-{}_{}_Pad{}.kicad_mod".format(pin_count, mount, pad)
-
-
-def _footprint(pin_count, mount_type, pad_size, use_jumper_footprint, variant):
+def _footprint(variant):
     """Returns the appropriate net tie footprint."""
-
-    if use_jumper_footprint:
-        # Use jumper footprints as a substitute for net ties
-        if pin_count == 2:
-            return "@kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"
-        elif pin_count == 3:
-            return "@kicad-footprints/Jumper.pretty/SolderJumper-3_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"
-        else:
-            # For 4-pin, use a 2x2 jumper arrangement
-            return "@kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"
-
-    # Use variant-based approach if variant is provided
-    if variant:
-        return _variant_footprint(variant)
-    else:
-        return _legacy_footprint(pin_count, mount_type, pad_size)
+    return _variant_footprint(variant)
 
 
 def _symbol(pin_count):
@@ -185,7 +128,7 @@ Component(
     name="NT",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     symbol=Symbol(**_symbol(pin_count)),
-    footprint=File(_footprint(pin_count, mount_type, pad_size, use_jumper_footprint, variant)),
+    footprint=File(_footprint(variant)),
     prefix="NT",
     pins=_pins(P),
     spice_model=SpiceModel(

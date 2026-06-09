@@ -49,4 +49,4 @@ ElectricalCheck(
 )
 
 # Option 2: Use helper in io()
-vbat = io("VBAT", Power, check_voltage_within("20–30 V", severity=Severity("warning")))
+VBAT_IO = io(Power, check_voltage_within("20–30 V", severity=Severity("warning")))

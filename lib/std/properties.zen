@@ -11,42 +11,6 @@ Hint = struct(
 )
 
 
-def Properties(user_properties: dict | None, base_properties: dict) -> dict:
-    """Helper function to merge user properties with base properties.
-
-    Args:
-        user_properties: The user properties to merge with the base properties.
-        base_properties: The base properties to merge with the user properties.
-
-    Returns:
-        dict: The merged properties.
-    """
-    warn("Properties() is deprecated. Use properties directly instead.", kind="deprecated")
-    properties = {}
-
-    def to_string(value):
-        if hasattr(value, "__str__"):
-            return value.__str__(value)
-        if hasattr(value, "value"):
-            return value.value
-        return str(value)
-
-    def add_property(key, value):
-        key = to_string(key).lower().capitalize()
-        if value == None:
-            return
-        properties[key] = to_string(value)
-
-    for key, value in base_properties.items():
-        add_property(key, value)
-
-    if user_properties:
-        for key, value in user_properties.items():
-            add_property(key, value)
-
-    return properties
-
-
 def Layout(
     name: str,
     path: str | None = None,
@@ -71,18 +35,6 @@ def Layout(
     builtin.add_property("layout_name", name)
     if hints:
         builtin.add_property("layout_hints", hints)
-
-
-def Schematics(name: str, collapse: bool | None = None) -> None:
-    """Helper function to create a schematics object"""
-
-    warn(
-        'Schematics() is deprecated. Use schematic="collapse" directly instead.',
-        kind="deprecated",
-    )
-
-    if collapse:
-        builtin.add_property("collapse", collapse)
 
 
 def Simulation(

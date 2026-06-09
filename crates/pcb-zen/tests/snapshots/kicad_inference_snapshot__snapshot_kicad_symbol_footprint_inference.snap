@@ -1,6 +1,5 @@
 ---
 source: crates/pcb-zen/tests/kicad_inference_snapshot.rs
-assertion_line: 45
 expression: snapshot_output
 ---
 (export (version "E")
@@ -16,6 +15,7 @@ expression: snapshot_output
       (sheetpath (names "U1") (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db"))
       (tstamps "bb9170a7-68d4-539c-bed9-f036cbc8d7db")
       (property (name "Reference") (value "U1"))
+      (property (name "alternatives") (value "{\"manufacturer\":\"Texas Instruments\",\"mpn\":\"INA240A1D\",\"qualifications\":[]}"))
       (property (name "datasheet") (value "http://www.ti.com/lit/ds/symlink/ina240.pdf"))
       (property (name "description") (value "High- and Low-Side, Bidirectional, Zero-Drift, Current-Sense Amplifier With Enhanced PWM Rejection, 20V/V, SOIC-8"))
       (property (name "manufacturer") (value "TEST"))

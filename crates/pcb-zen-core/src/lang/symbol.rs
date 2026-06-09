@@ -1,6 +1,6 @@
 #![allow(clippy::needless_lifetimes)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use allocative::Allocative;
@@ -20,8 +20,8 @@ use tracing::instrument;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::EvalContext;
 use crate::lang::evaluator_ext::EvaluatorExt;
+use crate::{EvalContext, EvalContextConfig, FileProvider};
 
 use anyhow::anyhow;
 use pcb_eda::kicad::symbol_library::KicadSymbolLibrary;
@@ -267,7 +267,12 @@ impl<'v> SymbolValue {
 
             let (_symbol_name, symbol, source_path) = if file_provider.is_directory(&resolved_path)
             {
-                load_split_library_symbol(&resolved_path, name, file_provider)?
+                let (symbol_name, symbol, source_path, source_paths) =
+                    load_split_library_symbol(&resolved_path, name, file_provider)?;
+                for path in source_paths {
+                    eval_ctx.get_config().track_file(&path);
+                }
+                (symbol_name, symbol, source_path)
             } else {
                 // Get or load the library (lazy - only scans for symbol names, doesn't parse them)
                 let library = get_or_load_library(&resolved_path, file_provider)?;
@@ -615,30 +620,48 @@ fn get_or_load_library(
 fn resolve_symbol_library_path(
     library_path: &str,
     eval_ctx: &EvalContext,
-    current_file: &std::path::Path,
-) -> starlark::Result<std::path::PathBuf> {
-    match eval_ctx
-        .get_config()
-        .resolve_path(library_path, current_file)
-    {
-        Ok(path) => Ok(path),
-        Err(err) => {
-            let Some(stem) = library_path.strip_suffix(".kicad_sym") else {
-                return Err(starlark::Error::new_other(anyhow!(
-                    "Failed to resolve library path: {}",
-                    err
-                )));
-            };
+    current_file: &Path,
+) -> starlark::Result<PathBuf> {
+    let config = eval_ctx.get_config();
+    let file_provider = eval_ctx.file_provider();
 
-            let fallback_path = format!("{stem}.kicad_symdir");
-            eval_ctx
-                .get_config()
-                .resolve_path(&fallback_path, current_file)
-                .map_err(|_| {
-                    starlark::Error::new_other(anyhow!("Failed to resolve library path: {}", err))
-                })
+    match config.resolve_path(library_path, current_file) {
+        Ok(path) if path_exists(file_provider, &path) => Ok(path),
+        Ok(path) => Ok(existing_split_symbol_library_path(
+            library_path,
+            config,
+            current_file,
+            file_provider,
+        )
+        .unwrap_or(path)),
+        Err(err) => {
+            existing_split_symbol_library_path(library_path, config, current_file, file_provider)
+                .ok_or_else(|| unresolved_symbol_library_path(err))
         }
     }
+}
+
+fn existing_split_symbol_library_path(
+    library_path: &str,
+    config: &EvalContextConfig,
+    current_file: &Path,
+    file_provider: &dyn FileProvider,
+) -> Option<PathBuf> {
+    let stem = library_path.strip_suffix(".kicad_sym")?;
+    let split_library_path = format!("{stem}.kicad_symdir");
+    let path = config
+        .resolve_path(&split_library_path, current_file)
+        .ok()?;
+
+    path_exists(file_provider, &path).then_some(path)
+}
+
+fn path_exists(file_provider: &dyn FileProvider, path: &Path) -> bool {
+    file_provider.exists(path) || file_provider.is_directory(path)
+}
+
+fn unresolved_symbol_library_path(err: anyhow::Error) -> starlark::Error {
+    starlark::Error::new_other(anyhow!("Failed to resolve library path: {}", err))
 }
 
 fn split_library_symbol_files(
@@ -669,7 +692,7 @@ fn collect_split_library_sources(
     symbol_name: &str,
     file_provider: &dyn crate::FileProvider,
     seen: &mut HashSet<String>,
-    sources: &mut Vec<String>,
+    sources: &mut Vec<(PathBuf, String)>,
 ) -> starlark::Result<()> {
     if !seen.insert(symbol_name.to_string()) {
         return Ok(());
@@ -708,7 +731,7 @@ fn collect_split_library_sources(
         collect_split_library_sources(dir, parent_name, file_provider, seen, sources)?;
     }
 
-    sources.push(contents);
+    sources.push((symbol_path, contents));
     Ok(())
 }
 
@@ -716,7 +739,7 @@ fn load_split_library_symbol(
     dir: &std::path::Path,
     requested_name: Option<String>,
     file_provider: &dyn crate::FileProvider,
-) -> starlark::Result<(String, pcb_eda::Symbol, std::path::PathBuf)> {
+) -> starlark::Result<(String, pcb_eda::Symbol, std::path::PathBuf, Vec<PathBuf>)> {
     let symbol_files = split_library_symbol_files(dir, file_provider)?;
     let available: Vec<String> = symbol_files.iter().map(|(name, _)| name.clone()).collect();
 
@@ -750,8 +773,18 @@ fn load_split_library_symbol(
     let mut sources = Vec::new();
     let mut seen = HashSet::new();
     collect_split_library_sources(dir, &symbol_name, file_provider, &mut seen, &mut sources)?;
+    let source_paths = sources
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
 
-    let library = KicadSymbolLibrary::from_sources(sources).map_err(|e| {
+    let library = KicadSymbolLibrary::from_sources(
+        sources
+            .into_iter()
+            .map(|(_, contents)| contents)
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|e| {
         starlark::Error::new_other(anyhow!(
             "Failed to parse symbol library {}: {}",
             dir.display(),
@@ -775,6 +808,7 @@ fn load_split_library_symbol(
         symbol_name.clone(),
         symbol,
         dir.join(format!("{symbol_name}.kicad_sym")),
+        source_paths,
     ))
 }
 

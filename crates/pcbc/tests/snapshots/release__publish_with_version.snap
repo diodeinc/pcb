@@ -44,7 +44,7 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <70415 bytes, sha256: 1bf61b9>
+=== netlist.json <75396 bytes, sha256: 115f9fc>
 === src/boards/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -90,15 +90,15 @@ name = "TB0001"
 path = "TB0001.zen"
 
 [dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.3"
 === src/pcb.toml
 [workspace]
 name = "test_workspace"
 pcb-version = "0.3"
 
 [dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.3"

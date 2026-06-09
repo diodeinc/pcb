@@ -66,8 +66,8 @@ const SIMPLE_BOARD_WITH_POSITIONS_ZEN: &str = r#"
 # pcb-version = "0.3"
 #
 # [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
+# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -83,10 +83,10 @@ Led(name="D1", color="red", package="0603", A=led_anode, K=gnd)
 # Position comments that should be parsed and included in netlist
 # pcb:sch R1 x=100.0000 y=200.0000 rot=0
 # pcb:sch D1 x=150.0000 y=200.0000 rot=90
-# pcb:sch VCC_3V3_VCC.1 x=80.0000 y=180.0000 rot=0
-# pcb:sch VCC_3V3_VCC.2 x=120.0000 y=180.0000 rot=0
-# pcb:sch GND_GND.1 x=80.0000 y=220.0000 rot=0
-# pcb:sch GND_GND.2 x=170.0000 y=220.0000 rot=0
+# pcb:sch VCC_3V3.1 x=80.0000 y=180.0000 rot=0
+# pcb:sch VCC_3V3.2 x=120.0000 y=180.0000 rot=0
+# pcb:sch GND.1 x=80.0000 y=220.0000 rot=0
+# pcb:sch GND.2 x=170.0000 y=220.0000 rot=0
 # pcb:sch LED_ANODE x=125.0000 y=200.0000 rot=0
 "#;
 
@@ -106,10 +106,10 @@ LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Gpio("LED_CTR
 # pcb:sch LED1.D1 x=150.0000 y=100.0000 rot=90
 # pcb:sch LED2.R1 x=100.0000 y=200.0000 rot=0
 # pcb:sch LED2.D1 x=150.0000 y=200.0000 rot=90
-# pcb:sch VCC_3V3_VCC.1 x=50.0000 y=150.0000 rot=0
-# pcb:sch VCC_3V3_VCC.2 x=200.0000 y=150.0000 rot=0
-# pcb:sch GND_GND.1 x=50.0000 y=250.0000 rot=0
-# pcb:sch GND_GND.2 x=200.0000 y=250.0000 rot=0
+# pcb:sch VCC_3V3.1 x=50.0000 y=150.0000 rot=0
+# pcb:sch VCC_3V3.2 x=200.0000 y=150.0000 rot=0
+# pcb:sch GND.1 x=50.0000 y=250.0000 rot=0
+# pcb:sch GND.2 x=200.0000 y=250.0000 rot=0
 # pcb:sch LED_CTRL_LED_CTRL x=80.0000 y=120.0000 rot=0
 # pcb:sch LED_CTRL2_LED_CTRL2 x=80.0000 y=220.0000 rot=0
 "#;
@@ -119,8 +119,8 @@ const WORKSPACE_PCB_TOML: &str = r#"
 pcb-version = "0.3"
 
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 const SIMPLE_BOARD_WITH_MIRROR_POSITIONS_ZEN: &str = r#"
@@ -129,8 +129,8 @@ const SIMPLE_BOARD_WITH_MIRROR_POSITIONS_ZEN: &str = r#"
 # pcb-version = "0.3"
 #
 # [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
+# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -146,10 +146,10 @@ Led(name="D1", color="red", package="0603", A=led_anode, K=gnd)
 # Position comments with optional mirror
 # pcb:sch R1 x=100.0000 y=200.0000 rot=0 mirror=x
 # pcb:sch D1 x=150.0000 y=200.0000 rot=90
-# pcb:sch VCC_3V3_VCC.1 x=80.0000 y=180.0000 rot=0 mirror=y
-# pcb:sch VCC_3V3_VCC.2 x=120.0000 y=180.0000 rot=0
-# pcb:sch GND_GND.1 x=80.0000 y=220.0000 rot=0
-# pcb:sch GND_GND.2 x=170.0000 y=220.0000 rot=0
+# pcb:sch VCC_3V3.1 x=80.0000 y=180.0000 rot=0 mirror=y
+# pcb:sch VCC_3V3.2 x=120.0000 y=180.0000 rot=0
+# pcb:sch GND.1 x=80.0000 y=220.0000 rot=0
+# pcb:sch GND.2 x=170.0000 y=220.0000 rot=0
 # pcb:sch LED_ANODE x=125.0000 y=200.0000 rot=0
 "#;
 
@@ -257,8 +257,8 @@ fn test_netlist_no_positions() {
 # pcb-version = "0.3"
 #
 # [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
+# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -287,8 +287,8 @@ fn test_netlist_mixed_position_formats() {
 # pcb-version = "0.3"
 #
 # [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
+# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -302,7 +302,7 @@ Resistor(name="R1", value="1kOhm", package="0603", P1=vcc, P2=sig)
 Led(name="D1", color="red", package="0603", A=sig, K=gnd)
 
 # pcb:sch R1 x=100.0000 y=100.0000 rot=0
-# pcb:sch VCC_VCC x=80.0000 y=80.0000 rot=0
+# pcb:sch VCC x=80.0000 y=80.0000 rot=0
 # pcb:sch SIGNAL.1 x=125.0000 y=100.0000 rot=0
 # pcb:sch SIGNAL.2 x=125.0000 y=150.0000 rot=0
 "#;
@@ -372,14 +372,14 @@ const NOT_CONNECTED_BOARD_ZEN: &str = r#"
 # pcb-version = "0.3"
 #
 # [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
+# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 PowerConsumer = Module("PowerConsumer.zen")
 
 # NotConnected promotes to Power - the net should retain its NotConnected kind
-nc = NotConnected("NC_PIN")
+nc = NotConnected()
 
 PowerConsumer(name = "U1", vcc = nc)
 "#;

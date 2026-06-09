@@ -239,14 +239,6 @@ impl std::fmt::Debug for FrozenComponentValue {
     }
 }
 
-fn capitalize_first(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-    }
-}
-
 /// Helper to consolidate boolean properties from kwargs and legacy property names.
 /// Handles both boolean values and string representations ("true", "1", etc.)
 fn consolidate_bool_property<'v>(
@@ -332,9 +324,9 @@ fn warn_legacy_component_inputs<'v>(
         if properties_map.contains_key(*legacy_key) {
             diagnostics.push((
                 format!(
-                    "Component '{component_name}': `properties[\"{legacy_key}\"]` is deprecated; pass `{typed_kwarg}=...` to Component() instead",
+                    "Component '{component_name}': `properties[\"{legacy_key}\"]` is no longer supported; pass `{typed_kwarg}=...` to Component() instead",
                 ),
-                EvalSeverity::Warning,
+                EvalSeverity::Error,
             ));
         }
     }
@@ -344,9 +336,9 @@ fn warn_legacy_component_inputs<'v>(
         if properties_map.contains_key(*key) {
             diagnostics.push((
                 format!(
-                    "Component '{component_name}': `properties[\"{key}\"]` is deprecated; {part_suggestion}",
+                    "Component '{component_name}': `properties[\"{key}\"]` is no longer supported; {part_suggestion}",
                 ),
-                EvalSeverity::Advice,
+                EvalSeverity::Error,
             ));
         }
     }
@@ -861,7 +853,6 @@ fn alloc_not_connected<'v>(
         derived_from_base_net: false,
         was_bound: std::sync::OnceLock::new(),
         inferred_name: std::sync::OnceLock::new(),
-        inferred_original_name: std::sync::OnceLock::new(),
         declaration_path,
         declaration_span,
         type_name: "NotConnected".to_string(),
@@ -1245,26 +1236,20 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             }
             // Fallback: check properties map
             _ => {
-                // We have to check both the original and capitalized keys
-                // because config_properties does automatic case conversion
-                // TODO: drop this when config_properties no longer does case conversion
-                let keys = [attr.to_string(), capitalize_first(attr)];
-                keys.iter()
-                    .find_map(|key| data.properties.get(key))
-                    .map(|v| {
-                        // For capacitance/resistance, attempt to convert string to PhysicalValue
-                        let is_special = matches!(
-                            attr,
-                            "capacitance" | "Capacitance" | "resistance" | "Resistance"
-                        );
-                        if is_special
-                            && let Some(s) = v.unpack_str()
-                            && let Ok(pv) = s.parse::<PhysicalValue>()
-                        {
-                            return heap.alloc(pv);
-                        }
-                        v.to_value()
-                    })
+                data.properties.get(attr).map(|v| {
+                    // For capacitance/resistance, attempt to convert string to PhysicalValue
+                    let is_special = matches!(
+                        attr,
+                        "capacitance" | "Capacitance" | "resistance" | "Resistance"
+                    );
+                    if is_special
+                        && let Some(s) = v.unpack_str()
+                        && let Ok(pv) = s.parse::<PhysicalValue>()
+                    {
+                        return heap.alloc(pv);
+                    }
+                    v.to_value()
+                })
             }
         }
     }
@@ -1400,7 +1385,7 @@ impl<'v> StarlarkValue<'v> for ComponentValue<'v> {
             return true;
         }
         let data = self.data.borrow();
-        data.properties.contains_key(attr) || data.properties.contains_key(&capitalize_first(attr))
+        data.properties.contains_key(attr)
     }
 
     fn dir_attr(&self) -> Vec<String> {
@@ -1514,26 +1499,20 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
                 Some(heap.alloc(AllocDict(connections_vec)))
             }
             _ => {
-                // We have to check both the original and capitalized keys
-                // because config_properties does automatic case conversion
-                // TODO: drop this when config_properties no longer does case conversion
-                let keys = [attr.to_string(), capitalize_first(attr)];
-                keys.iter()
-                    .find_map(|key| self.data.properties.get(key))
-                    .map(|v| {
-                        // For capacitance/resistance, attempt to convert string to PhysicalValue
-                        let is_special = matches!(
-                            attr,
-                            "capacitance" | "Capacitance" | "resistance" | "Resistance"
-                        );
-                        if is_special
-                            && let Some(s) = v.to_value().unpack_str()
-                            && let Ok(pv) = s.parse::<PhysicalValue>()
-                        {
-                            return heap.alloc(pv);
-                        }
-                        v.to_value()
-                    })
+                self.data.properties.get(attr).map(|v| {
+                    // For capacitance/resistance, attempt to convert string to PhysicalValue
+                    let is_special = matches!(
+                        attr,
+                        "capacitance" | "Capacitance" | "resistance" | "Resistance"
+                    );
+                    if is_special
+                        && let Some(s) = v.to_value().unpack_str()
+                        && let Ok(pv) = s.parse::<PhysicalValue>()
+                    {
+                        return heap.alloc(pv);
+                    }
+                    v.to_value()
+                })
             }
         }
     }
@@ -1558,7 +1537,6 @@ impl<'v> StarlarkValue<'v> for FrozenComponentValue {
             return true;
         }
         self.data.properties.contains_key(attr)
-            || self.data.properties.contains_key(&capitalize_first(attr))
     }
 
     fn dir_attr(&self) -> Vec<String> {

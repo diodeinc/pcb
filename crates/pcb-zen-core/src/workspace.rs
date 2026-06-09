@@ -475,37 +475,6 @@ pub fn get_workspace_info<F: FileProvider>(
         None
     };
 
-    if let Some(cfg) = &config
-        && !cfg.is_v2()
-    {
-        let mut reasons: Vec<&'static str> = Vec::new();
-        if cfg
-            .workspace
-            .as_ref()
-            .is_some_and(|w| w.pcb_version.is_none())
-        {
-            reasons.push("missing `[workspace].pcb-version`");
-        }
-        if !cfg.packages.is_empty() {
-            reasons.push("uses legacy `[packages]` aliases");
-        }
-        if cfg.module.is_some() {
-            reasons.push("uses legacy `[module]` configuration");
-        }
-
-        let src = config_source.as_deref().unwrap_or(pcb_toml_path.as_path());
-        let mut msg = format!(
-            "Unsupported legacy (V1) pcb manifest at {}\n  \
-                This toolchain only supports V2 manifests.",
-            src.display()
-        );
-        if !reasons.is_empty() {
-            msg.push_str(&format!("\n  Detected: {}", reasons.join(", ")));
-        }
-        msg.push_str("\n  Run `pcb migrate` to upgrade this workspace to V2.");
-        return Err(anyhow::anyhow!(msg));
-    }
-
     if let Some(cfg) = &config {
         let src = config_source.as_deref().unwrap_or(pcb_toml_path.as_path());
         validate_workspace_pcb_version(cfg, src)?;
@@ -558,15 +527,6 @@ pub fn get_workspace_info<F: FileProvider>(
                     continue;
                 }
             };
-
-            if !pkg_config.is_v2() {
-                errors.push(DiscoveryError {
-                    path: pkg_toml_path,
-                    error: "legacy (V1) package manifest is no longer supported; run `pcb migrate`"
-                        .to_string(),
-                });
-                continue;
-            }
 
             if pkg_config.is_workspace() {
                 errors.push(DiscoveryError {
@@ -702,11 +662,11 @@ footprints = "gitlab.com/kicad/libraries/kicad-footprints"
             entries[0].http_mirror.as_deref(),
             Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
         );
-        assert_eq!(entries[1].version, Version::new(10, 0, 0));
+        assert_eq!(entries[1].version, Version::new(10, 0, 3));
         assert_eq!(
             info.stdlib_asset_dep_versions()
                 .get("gitlab.com/kicad/libraries/kicad-symbols"),
-            Some(&Version::new(9, 0, 3))
+            Some(&Version::new(10, 0, 3))
         );
     }
 

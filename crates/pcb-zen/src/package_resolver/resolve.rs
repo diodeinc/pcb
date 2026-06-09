@@ -276,6 +276,7 @@ impl FrozenResolutionBuilder {
             .selected_remote_from_root_manifest(package_url)
             .with_context(|| format!("while reading resolved closure for {}", package_url))?;
 
+        add_stdlib_selected_remote(&self.workspace, &mut self.selected_remote);
         self.materialize_selected_remote()?;
         self.packages.clear();
 
@@ -597,24 +598,32 @@ fn local_path_dependency_root(package_root: &Path, spec: &DependencySpec) -> Opt
     detail.path.as_ref().map(|path| package_root.join(path))
 }
 
+fn add_stdlib_selected_remote(
+    workspace: &WorkspaceInfo,
+    selected_remote: &mut BTreeMap<ResolvedDepId, Version>,
+) {
+    for (repo, version) in workspace.stdlib_asset_dep_versions() {
+        let dep_id = ResolvedDepId::for_version(repo, &version);
+        if selected_remote
+            .get(&dep_id)
+            .is_none_or(|selected| version > *selected)
+        {
+            selected_remote.insert(dep_id, version);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    use pcb_zen_core::config::{DependencySpec, PcbToml, WorkspaceConfig};
+    use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
 
     use super::*;
 
-    fn workspace(pcb_version: &str, indirect: bool) -> WorkspaceInfo {
+    fn workspace(pcb_version: &str) -> WorkspaceInfo {
         let package_url = "github.com/example/project/boards/Board".to_string();
-        let mut package_config = PcbToml::default();
-        if indirect {
-            package_config.dependencies.indirect.insert(
-                "github.com/vendor/components/Leaf@1".to_string(),
-                DependencySpec::Version("1.0.0".to_string()),
-            );
-        }
 
         WorkspaceInfo {
             root: PathBuf::from("/workspace"),
@@ -630,7 +639,7 @@ mod tests {
                 package_url,
                 crate::WorkspacePackage {
                     rel_path: PathBuf::from("boards/Board"),
-                    config: package_config,
+                    config: PcbToml::default(),
                     version: None,
                     published_at: None,
                     preferred: false,
@@ -646,7 +655,7 @@ mod tests {
 
     #[test]
     fn mvs_v2_detection_accepts_pcb_version_0_4_without_indirect_dependencies() {
-        let workspace = workspace("0.4", false);
+        let workspace = workspace("0.4");
         assert!(use_frozen_resolution(
             &workspace,
             &["github.com/example/project/boards/Board".to_string()]

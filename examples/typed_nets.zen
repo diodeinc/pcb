@@ -51,7 +51,7 @@ print("  original_name:", GND.original_name)
 print("  type:", GND.type)
 print("  net_id:", GND.net_id)
 
-# Create net with optional name (defaults to empty string, then gets auto-named)
+# Create net with assignment-inferred name
 unnamed_net = Net()
 print("\nUnnamed net:", unnamed_net)
 print("  name:", unnamed_net.name)
@@ -62,8 +62,6 @@ net2 = Net(name="control_signal")
 print("\nNet with keyword name:", net2)
 print("  name:", net2.name)
 print("  net_id:", net2.net_id)
-
-print(Net())
 
 # The type system ensures these are distinct types
 # Net("x") has type "Net"

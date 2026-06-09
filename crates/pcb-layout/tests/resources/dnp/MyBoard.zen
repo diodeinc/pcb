@@ -15,7 +15,7 @@ Resistor(
     value="1kohms",
     P1=P1,
     P2=P2,
-    do_not_populate=True,
+    dnp=True,
 )
 
 Resistor(
@@ -23,7 +23,7 @@ Resistor(
     value="1kohms",
     P1=P1,
     P2=P2,
-    exclude_from_bom=True,
+    skip_bom=True,
 )
 
 Resistor(
@@ -31,8 +31,8 @@ Resistor(
     value="1kohms",
     P1=P1,
     P2=P2,
-    exclude_from_bom=True,
-    do_not_populate=True,
+    skip_bom=True,
+    dnp=True,
 )
 
 Layout(name="MyBoard", path="build/", bom_profile=None)

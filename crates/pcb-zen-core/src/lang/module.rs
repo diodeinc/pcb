@@ -64,19 +64,36 @@ use starlark::errors::EvalMessage;
 /// Info about a net introduced by this module
 #[derive(Clone, Debug, Trace, Allocative, Freeze)]
 pub struct IntroducedNet {
-    pub final_name: String,
-    /// Original name before deduplication (only set if collision occurred)
-    pub original_name: Option<String>,
-    /// True if the net name was auto-generated due to an empty/whitespace input name
-    pub auto_named: bool,
-    /// True if the net can still adopt an assigned variable name via `export_as`.
-    pub assignment_inferable: bool,
+    pub name: IntroducedNetName,
     /// The net type name (e.g., "Net", "Power", "Ground", "NotConnected")
     pub net_type: String,
-    /// Call stack at the time the net was registered (for diagnostic context)
-    #[freeze(identity)]
-    #[allocative(skip)]
-    pub call_stack: starlark::eval::CallStack,
+}
+
+#[derive(Clone, Debug, Trace, Allocative, Freeze)]
+pub enum IntroducedNetName {
+    Named(String),
+    PendingInference(String),
+    Unnamed,
+}
+
+impl IntroducedNetName {
+    pub fn as_str(&self) -> &str {
+        match self {
+            IntroducedNetName::Named(name) | IntroducedNetName::PendingInference(name) => name,
+            IntroducedNetName::Unnamed => "",
+        }
+    }
+
+    pub fn is_pending_inference(&self) -> bool {
+        matches!(self, IntroducedNetName::PendingInference(_))
+    }
+
+    pub fn named(&self) -> Option<&str> {
+        match self {
+            IntroducedNetName::Named(name) => Some(name),
+            IntroducedNetName::PendingInference(_) | IntroducedNetName::Unnamed => None,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Allocative, Freeze, Serialize)]
@@ -748,113 +765,86 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             .filter_map(move |child| child.downcast_ref::<FrozenTestBenchValue>())
     }
 
-    fn reserve_unique_net_name(&self, id: NetId, base_name: &str) -> (String, bool) {
-        let unique_name = if let Some(existing_id) = self.net_name_to_id.get(base_name) {
-            if *existing_id == id {
-                base_name.to_owned()
-            } else {
-                let mut counter: u32 = 2;
-                let mut candidate = format!("{base_name}_{counter}");
-                while let Some(other_id) = self.net_name_to_id.get(&candidate) {
-                    if *other_id == id {
-                        break;
-                    }
-                    counter += 1;
-                    candidate = format!("{base_name}_{counter}");
-                }
-                candidate
-            }
-        } else {
-            base_name.to_owned()
-        };
-
-        let had_collision = unique_name != base_name;
-        (unique_name, had_collision)
-    }
-
     /// Record that this module introduced a net with `id` and `local_name`.
-    /// If another net with the same local name already exists in this module,
-    /// generate a unique variant by appending a numeric suffix (e.g. `_2`, `_3`, ...).
     pub fn register_net(
         &mut self,
         id: NetId,
         local_name: String,
         assignment_inferable: bool,
         net_type: String,
-        call_stack: starlark::eval::CallStack,
     ) -> anyhow::Result<String> {
         // If this id was already registered, keep the first assignment (idempotent)
         if let Some(info) = self.introduced_nets.get(&id) {
-            return Ok(info.final_name.clone());
+            return Ok(info.name.as_str().to_string());
         }
 
-        // If the provided name is empty/whitespace, fall back to a stable placeholder.
-        let was_auto_named = local_name.trim().is_empty();
-        let base_name = if was_auto_named {
-            format!("N{id}")
+        let base_name = local_name;
+        let regular_net = net_type != "NotConnected";
+
+        if regular_net && !assignment_inferable && base_name.trim().is_empty() {
+            anyhow::bail!("Net is unnamed");
+        }
+
+        let name = if assignment_inferable {
+            IntroducedNetName::PendingInference(base_name.clone())
+        } else if base_name.trim().is_empty() {
+            IntroducedNetName::Unnamed
         } else {
-            local_name
-        };
-        let (unique_name, had_collision) = self.reserve_unique_net_name(id, &base_name);
-        let original_name = if had_collision {
-            Some(base_name.clone())
-        } else {
-            None
+            IntroducedNetName::Named(base_name.clone())
         };
 
-        self.net_name_to_id.insert(unique_name.clone(), id);
-        self.introduced_nets.insert(
-            id,
-            IntroducedNet {
-                final_name: unique_name.clone(),
-                original_name,
-                auto_named: was_auto_named,
-                assignment_inferable,
-                net_type,
-                call_stack,
-            },
-        );
-        Ok(unique_name)
+        if !assignment_inferable
+            && regular_net
+            && let Some(existing_id) = self.net_name_to_id.get(&base_name)
+            && *existing_id != id
+        {
+            anyhow::bail!("Duplicate net name: {base_name}");
+        }
+
+        if regular_net && !assignment_inferable && !base_name.trim().is_empty() {
+            self.net_name_to_id.insert(base_name.clone(), id);
+        }
+        self.introduced_nets
+            .insert(id, IntroducedNet { name, net_type });
+        Ok(base_name)
     }
 
     /// Rename a net that was provisionally created before its assigned variable
     /// name was known.
-    pub fn infer_net_name(
-        &mut self,
-        id: NetId,
-        inferred_name: String,
-    ) -> anyhow::Result<(String, Option<String>)> {
+    pub fn infer_net_name(&mut self, id: NetId, inferred_name: String) -> anyhow::Result<String> {
         let Some(existing) = self.introduced_nets.get(&id).cloned() else {
-            return Ok((inferred_name, None));
+            return Ok(inferred_name);
         };
 
-        if !existing.assignment_inferable {
-            return Ok((existing.final_name, existing.original_name));
+        if !existing.name.is_pending_inference() {
+            return Ok(existing.name.as_str().to_string());
         }
 
-        self.net_name_to_id.shift_remove(&existing.final_name);
+        let regular_net = existing.net_type != "NotConnected";
 
-        let base_name = inferred_name;
-        let (unique_name, had_collision) = self.reserve_unique_net_name(id, &base_name);
-        let original_name = if had_collision {
-            Some(base_name.clone())
-        } else {
-            None
-        };
-        self.net_name_to_id.insert(unique_name.clone(), id);
+        if regular_net && inferred_name.trim().is_empty() {
+            anyhow::bail!("Net is unnamed");
+        }
+
+        if regular_net
+            && let Some(existing_id) = self.net_name_to_id.get(&inferred_name)
+            && *existing_id != id
+        {
+            anyhow::bail!("Duplicate net name: {inferred_name}");
+        }
+
+        if regular_net && !inferred_name.trim().is_empty() {
+            self.net_name_to_id.insert(inferred_name.clone(), id);
+        }
         self.introduced_nets.insert(
             id,
             IntroducedNet {
-                final_name: unique_name.clone(),
-                original_name: original_name.clone(),
-                auto_named: false,
-                assignment_inferable: false,
+                name: IntroducedNetName::Named(inferred_name.clone()),
                 net_type: existing.net_type,
-                call_stack: existing.call_stack,
             },
         );
 
-        Ok((unique_name, original_name))
+        Ok(inferred_name)
     }
 
     /// Return the map of nets introduced by this module.
@@ -915,23 +905,29 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     pub fn unregister_net(&mut self, id: NetId) {
         // Find the name associated with this id (if any)
         let mut name_to_remove: Option<String> = None;
+        let mut found = false;
         for (nid, info) in self.introduced_nets.iter() {
             if *nid == id {
-                name_to_remove = Some(info.final_name.clone());
+                found = true;
+                name_to_remove = info.name.named().map(str::to_string);
                 break;
             }
         }
 
-        if let Some(name) = name_to_remove {
-            // Rebuild introduced_nets without the given id
-            let mut rebuilt_nets = starlark::collections::SmallMap::new();
-            for (nid, info) in self.introduced_nets.iter() {
-                if *nid != id {
-                    rebuilt_nets.insert(*nid, info.clone());
-                }
-            }
-            self.introduced_nets = rebuilt_nets;
+        if !found {
+            return;
+        }
 
+        // Rebuild introduced_nets without the given id
+        let mut rebuilt_nets = starlark::collections::SmallMap::new();
+        for (nid, info) in self.introduced_nets.iter() {
+            if *nid != id {
+                rebuilt_nets.insert(*nid, info.clone());
+            }
+        }
+        self.introduced_nets = rebuilt_nets;
+
+        if let Some(name) = name_to_remove {
             // Rebuild net_name_to_id without the given name
             let mut rebuilt_lookup = starlark::collections::SmallMap::new();
             for (k, v) in self.net_name_to_id.iter() {
@@ -995,9 +991,6 @@ where
         let mut override_name: Option<String> = None;
         // Optional map of properties passed via `properties = {...}`.
         let mut properties_override: Option<SmallMap<String, Value<'v>>> = None;
-        // Legacy DNP keys found in the user-authored `properties = {...}` dict.
-        // Collected here so we can emit warnings once `final_name` is known.
-        let mut legacy_dnp_keys_in_properties: Vec<String> = Vec::new();
 
         for (arg_name, value) in args.names_map()? {
             if arg_name.as_str() == "name" {
@@ -1032,9 +1025,6 @@ where
                     let key_str = k.unpack_str().ok_or_else(|| {
                         starlark::Error::new_other(anyhow::anyhow!("property keys must be strings"))
                     })?;
-                    if LEGACY_MODULE_DNP_KEYS.contains(&key_str) {
-                        legacy_dnp_keys_in_properties.push(key_str.to_string());
-                    }
                     map.insert(key_str.to_string(), v);
                 }
 
@@ -1107,10 +1097,6 @@ where
             // Use the file-stem derived name from the loader as a fallback.
             self.name.clone()
         };
-
-        for key in &legacy_dnp_keys_in_properties {
-            warn_legacy_module_dnp_properties_dict(eval, &final_name, key);
-        }
 
         let context = eval
             .module()
@@ -1397,7 +1383,6 @@ pub(crate) fn validate_or_convert<'v>(
     name: &str,
     value: Value<'v>,
     typ: Value<'v>,
-    convert: Option<Value<'v>>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Value<'v>> {
     // First, try a direct type match.
@@ -1406,15 +1391,6 @@ pub(crate) fn validate_or_convert<'v>(
     }
 
     if let Some(converted) = try_implicit_type_conversion(value, typ, eval)? {
-        validate_type(name, converted, typ, eval.heap())?;
-        return Ok(converted);
-    }
-
-    // Keep the deprecated custom converter path working until it is fully removed.
-    if let Some(conv_fn) = convert {
-        let converted = eval
-            .eval_function(conv_fn, &[value], &[])
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         validate_type(name, converted, typ, eval.heap())?;
         return Ok(converted);
     }
@@ -1456,7 +1432,7 @@ pub(crate) fn normalize_allowed_values<'v>(
     let mut normalized = Vec::new();
     let mut seen = HashSet::new();
     for candidate in allowed_candidates(name, allowed)? {
-        let value = validate_or_convert(name, candidate, typ, None, eval)?;
+        let value = validate_or_convert(name, candidate, typ, eval)?;
         let key = value.to_repr();
 
         if !seen.insert(key.clone()) {
@@ -1519,14 +1495,13 @@ pub(crate) fn normalize_config_default<'v>(
     default: Option<Value<'v>>,
     typ: Value<'v>,
     allowed_values: Option<&[Value<'v>]>,
-    convert: Option<Value<'v>>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> anyhow::Result<Option<Value<'v>>> {
     let Some(default) = default else {
         return Ok(None);
     };
 
-    let default = validate_or_convert(name, default, typ, convert, eval)?;
+    let default = validate_or_convert(name, default, typ, eval)?;
     validate_allowed_config_value(name, default, allowed_values)?;
     Ok(Some(default))
 }
@@ -1900,19 +1875,6 @@ pub(crate) fn warn_legacy_module_dnp_add_property(eval: &Evaluator<'_, '_, '_>, 
     );
 }
 
-fn warn_legacy_module_dnp_properties_dict(
-    eval: &Evaluator<'_, '_, '_>,
-    module_name: &str,
-    key: &str,
-) {
-    warn_deprecated_module_property(
-        eval,
-        format!(
-            "Module '{module_name}': `properties[\"{key}\"]` is deprecated; pass `dnp=True` to Module() instead"
-        ),
-    );
-}
-
 #[starlark_module]
 pub fn module_globals(builder: &mut GlobalsBuilder) {
     const Module: ModuleType = ModuleType;
@@ -1924,33 +1886,6 @@ pub fn module_globals(builder: &mut GlobalsBuilder) {
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
         invoke_config(args, eval)
-    }
-
-    fn add_property<'v>(
-        #[starlark(require = pos)] name: String,
-        #[starlark(require = pos)] value: Value<'v>,
-        eval: &mut Evaluator<'v, '_, '_>,
-    ) -> anyhow::Result<Value<'v>> {
-        let (path, span) = eval
-            .call_stack_top_location()
-            .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-            .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
-        eval.add_diagnostic(
-            crate::Diagnostic::categorized(
-                &path,
-                "`add_property(...)` is deprecated",
-                "deprecated.add_property",
-                starlark::errors::EvalSeverity::Warning,
-            )
-            .with_span(span)
-            .with_call_stack(Some(eval.call_stack())),
-        );
-
-        warn_legacy_module_dnp_add_property(eval, &name);
-
-        eval.add_property(&name, value);
-
-        Ok(Value::new_none())
     }
 
     /// Record a path movement directive for refactoring support.

@@ -1,12 +1,13 @@
 ---
 source: crates/pcbc/tests/netlist.rs
+assertion_line: 397
 expression: output
 ---
 {
-  "NC_PIN": {
+  "U1.NC_R1_1": {
     "id": "<ID>",
     "kind": "NotConnected",
-    "name": "NC_PIN",
+    "name": "U1.NC_R1_1",
     "ports": [
       "<TEMP_DIR>/boards/NCBoard.zen:<root>.U1.R1.1"
     ],

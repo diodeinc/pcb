@@ -81,47 +81,6 @@ snapshot_eval!(module_loader_attrs, {
 });
 
 #[test]
-fn stdlib_units_range_alias_warns_on_constructor() {
-    let result = eval_zen(vec![(
-        "test.zen".to_string(),
-        r#"
-            load("@stdlib/units.zen", "VoltageRange")
-            VoltageRange("3.3V")
-        "#
-        .to_string(),
-    )]);
-
-    let warning_bodies = warning_bodies(&result);
-
-    assert!(
-        warning_bodies
-            .iter()
-            .any(|body| body == "VoltageRange is deprecated. Use Voltage instead."),
-        "expected deprecation warning, got: {warning_bodies:?}"
-    );
-}
-
-#[test]
-fn stdlib_units_range_alias_does_not_warn_on_load() {
-    let result = eval_zen(vec![(
-        "test.zen".to_string(),
-        r#"
-            load("@stdlib/units.zen", "VoltageRange")
-        "#
-        .to_string(),
-    )]);
-
-    let warning_bodies = warning_bodies(&result);
-
-    assert!(
-        !warning_bodies
-            .iter()
-            .any(|body| body.contains("VoltageRange is deprecated")),
-        "did not expect deprecation warning, got: {warning_bodies:?}"
-    );
-}
-
-#[test]
 fn stdlib_units_primary_type_does_not_warn_on_constructor() {
     let result = eval_zen(vec![(
         "test.zen".to_string(),

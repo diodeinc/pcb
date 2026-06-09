@@ -117,12 +117,12 @@ description = "Replace with concise board description."
 
 - `name`: Optional Diode workspace name override for board release uploads. When omitted, publish uses the first path segment of `repository`, such as `myorg` from `github.com/myorg/MainBoard`.
 - `repository`: Git remote URL (used to derive package URLs for publishing)
-- `pcb-version`: Compatible `pcbc` toolchain release lane (e.g., `"0.3"`) or the explicit moving `"nightly"` channel. For semver lanes, `pcb` selects the newest installed toolchain in that lane, installing the newest available patch release for the lane when none is installed. It never auto-upgrades a workspace across lanes such as `"0.3"` to `"0.4"`; run `pcb migrate` to make breaking-version upgrades explicit. Required for workspaces.
+- `pcb-version`: Required `pcbc` toolchain lane, such as `"0.3"`, `"0.4"`, or `"nightly"`. For semver lanes, `pcb` selects the newest installed patch in that lane and installs one if needed. It never auto-upgrades across lanes; change this field intentionally after applying the release notes.
 - `endpoint`: Optional Diode host suffix used for workspace-scoped app/API URLs. `"diode.computer"` resolves to `app.diode.computer` and `api.diode.computer`.
 - `[board]`: Defines the repository's buildable board with `name`, entry `path`, and a short `description`
 
-Older workspace formats are no longer supported. If you have an older project,
-run `pcb migrate` to upgrade manifests and import paths.
+Older workspace formats are no longer supported. Update legacy manifests and
+imports before building with the current toolchain.
 Only the workspace root `pcb.toml` should contain a `[workspace]` section.
 Board dependencies are also declared in the root manifest's `[dependencies]` table.
 
@@ -204,7 +204,10 @@ GND = Ground()  # inferred from assignment; voltage defaults to 0V
 nc = NotConnected()
 ```
 
-`Net(name, voltage=None, impedance=None)` — all parameters optional. `Power` and `Ground` additionally accept a `voltage` parameter. Additional net types (`Analog`, `Pwm`, `Gpio`) are available from `@stdlib/interfaces.zen`.
+`Net(name_or_net=None, voltage=None, impedance=None)` accepts a positional-only
+name string or existing net to cast. `Power` and `Ground` also accept `voltage`.
+Additional net types (`Analog`, `Pwm`, `Gpio`) are available from
+`@stdlib/interfaces.zen`.
 
 If a net constructor omits `name`, the assigned variable name is used when available:
 
@@ -215,16 +218,26 @@ VDD = Power()     # equivalent to Power("VDD")
 
 If you do spell out the same name that assignment inference would choose, Zener raises a style advice because the explicit name is redundant.
 
-Explicit constructor names still win, and unassigned constructor calls keep the existing generated-name behavior:
+Explicit constructor names still win. Regular nets must either have a name or be
+assigned where a name can be inferred:
 
 ```python
 alias = Net("CLK")  # name is "CLK", not "alias"
-Net()               # uses an auto-generated name
+Net()               # error: Net is unnamed
 ```
 
-Typed net fields validate against their declared field type and use the same string coercions as module inputs, so `Power("VCC", voltage="3.3V")` is equivalent to `Power("VCC", voltage=Voltage("3.3V"))`.
+Regular net names must be unique. Duplicate regular net names are rejected; `NotConnected` nets are exempt.
+`NotConnected()` has no source-level name. If you pass a name, it is ignored with a warning, and downstream tools assign connection-derived names where needed.
 
-Net types follow automatic conversion rules across `io()` boundaries: `NotConnected` promotes to any type (universal donor), any specialized type demotes to `Net`, but `Net` cannot automatically promote to specialized types. For explicit casting, call the target constructor with an existing net: `Power(net, voltage=Voltage("3.3V"))` or `Net(power_net)`.
+Typed net fields validate against their declared field type and use the same
+string coercions as module inputs, so `Power("VCC", voltage="3.3V")` is
+equivalent to `Power("VCC", voltage=Voltage("3.3V"))`.
+
+Net types follow automatic conversion rules across `io()` boundaries:
+`NotConnected` promotes to any type, specialized types demote to `Net`, and
+`Net` does not automatically promote to specialized types. For explicit casting,
+call the target constructor with an existing net as the first positional
+argument: `Power(net, voltage=Voltage("3.3V"))` or `Net(power_net)`.
 
 ### Interfaces
 

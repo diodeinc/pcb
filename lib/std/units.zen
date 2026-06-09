@@ -17,23 +17,6 @@ Energy = builtin.physical_value("J")
 MagneticFlux = builtin.physical_value("Wb")
 Conductance = builtin.physical_value("S")
 
-# DEPRECATED: Use Voltage instead
-VoltageRange = builtin.physical_value("V")
-# DEPRECATED: Use Current instead
-CurrentRange = builtin.physical_value("A")
-# DEPRECATED: Use Resistance instead
-ResistanceRange = builtin.physical_value("Ohm")
-# DEPRECATED: Use Capacitance instead
-CapacitanceRange = builtin.physical_value("F")
-# DEPRECATED: Use Inductance instead
-InductanceRange = builtin.physical_value("H")
-# DEPRECATED: Use Frequency instead
-FrequencyRange = builtin.physical_value("Hz")
-# DEPRECATED: Use Temperature instead
-TemperatureRange = builtin.physical_value("K")
-# DEPRECATED: Use Time instead
-TimeRange = builtin.physical_value("s")
-
 
 def unit(spec, type):
     return type(spec)

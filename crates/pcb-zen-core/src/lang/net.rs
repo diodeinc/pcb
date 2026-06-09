@@ -90,12 +90,12 @@ pub fn reset_net_id_counter() {
 pub struct NetValueGen<V> {
     /// The globally unique identifier for this net
     pub(crate) net_id: NetId,
-    /// The final name after deduplication
+    /// The source-level name for this net, or empty while awaiting assignment inference.
     pub(crate) name: String,
     /// The explicit constructor-provided leaf name used when cloning templates.
     #[serde(skip, default)]
     pub(crate) template_name: Option<String>,
-    /// The name originally requested before deduplication
+    /// The explicit constructor-provided source name, if any.
     pub original_name: Option<String>,
     /// Whether this net may adopt an assigned variable name after construction.
     #[serde(skip, default)]
@@ -114,11 +114,6 @@ pub struct NetValueGen<V> {
     #[trace(unsafe_ignore)]
     #[allocative(skip)]
     pub(crate) inferred_name: OnceLock<String>,
-    #[serde(skip, default)]
-    #[freeze(identity)]
-    #[trace(unsafe_ignore)]
-    #[allocative(skip)]
-    pub(crate) inferred_original_name: OnceLock<Option<String>>,
     /// Source file path where this net was created.
     #[serde(skip, default)]
     pub(crate) declaration_path: String,
@@ -238,9 +233,7 @@ impl<V> NetValueGen<V> {
     }
 
     fn resolved_original_name_opt(&self) -> Option<&str> {
-        self.inferred_original_name
-            .get()
-            .map_or(self.original_name.as_deref(), |name| name.as_deref())
+        self.original_name.as_deref()
     }
 
     fn clone_once_lock<T: Clone>(value: &OnceLock<T>) -> OnceLock<T> {
@@ -269,7 +262,6 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             derived_from_base_net: self.derived_from_base_net,
             was_bound: Self::clone_once_lock(&self.was_bound),
             inferred_name: Self::clone_once_lock(&self.inferred_name),
-            inferred_original_name: Self::clone_once_lock(&self.inferred_original_name),
             declaration_path: self.declaration_path.clone(),
             declaration_span: self.declaration_span,
             type_name,
@@ -294,14 +286,13 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             return Ok(());
         }
 
-        let (final_name, original_name) = if let Some(ctx) = eval.context_value() {
+        let final_name = if let Some(ctx) = eval.context_value() {
             ctx.infer_net_name(self.net_id, inferred_name)?
         } else {
-            (inferred_name.to_owned(), None)
+            inferred_name.to_owned()
         };
 
         let _ignore = self.inferred_name.set(final_name.clone());
-        let _ignore = self.inferred_original_name.set(original_name);
 
         Ok(())
     }
@@ -317,7 +308,6 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             derived_from_base_net: false,
             was_bound: OnceLock::new(),
             inferred_name: OnceLock::new(),
-            inferred_original_name: OnceLock::new(),
             declaration_path: String::new(),
             declaration_span: None,
             type_name: "Net".to_string(),
@@ -364,7 +354,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         self.declaration_span
     }
 
-    /// Return the original name as Option (None if auto-generated)
+    /// Return the explicit constructor-provided source name, if any.
     pub fn original_name_opt(&self) -> Option<&str> {
         self.resolved_original_name_opt()
     }
@@ -419,7 +409,6 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             derived_from_base_net: self.derived_from_base_net,
             was_bound: Self::clone_once_lock(&self.was_bound),
             inferred_name: Self::clone_once_lock(&self.inferred_name),
-            inferred_original_name: Self::clone_once_lock(&self.inferred_original_name),
             declaration_path: declaration_path.into(),
             declaration_span,
             type_name: self.type_name.clone(),
@@ -549,7 +538,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
     pub(crate) fn instantiate(
         &self,
         base_net: Option<&NetValue<'v>>,
-        explicit_name: Option<String>,
+        mut explicit_name: Option<String>,
         field_values: SmallMap<String, Value<'v>>,
         options: NetInstantiateOptions,
         eval: &mut Evaluator<'v, '_, '_>,
@@ -560,35 +549,54 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
             .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
 
+        let source_names_enabled = self.type_name != "NotConnected";
+        if !source_names_enabled && explicit_name.is_some() {
+            eval.add_diagnostic(
+                crate::Diagnostic::categorized(
+                    &declaration_path,
+                    "NotConnected does not support names; name ignored",
+                    "net.not_connected_name_ignored",
+                    starlark::errors::EvalSeverity::Warning,
+                )
+                .with_span(declaration_span),
+            );
+            explicit_name = None;
+        }
+
+        let source_named_base = source_names_enabled.then_some(base_net).flatten();
         let requested_name = explicit_name
             .clone()
-            .or_else(|| base_net.and_then(|n| n.original_name_opt().map(str::to_owned)));
+            .or_else(|| source_named_base.and_then(|n| n.original_name_opt().map(str::to_owned)));
         let runtime_name = requested_name
             .clone()
-            .or_else(|| base_net.map(|n| n.name().to_owned()));
-        let template_name_for_new_net = (!options.assignment_inferable)
-            .then(|| explicit_name.as_ref().cloned())
-            .flatten();
+            .or_else(|| source_named_base.map(|n| n.name().to_owned()));
+        let assignment_inferable = options.assignment_inferable && source_names_enabled;
+        let template_name = if assignment_inferable {
+            None
+        } else {
+            explicit_name.clone()
+        };
 
         if let Some(ref n) = requested_name {
             validate_identifier_name(n, "Net name")?;
         }
 
-        let (template_name, original_name, mut properties, net_id) = if let Some(n) = base_net {
-            (
-                n.template_name_opt().map(str::to_owned),
-                requested_name,
-                n.properties.clone(),
-                n.net_id,
-            )
-        } else {
-            (
-                template_name_for_new_net,
-                requested_name,
-                SmallMap::new(),
-                generate_net_id(),
-            )
-        };
+        let (template_name, original_name, mut properties, net_id) =
+            if let Some(base_net) = base_net {
+                (
+                    source_named_base.and_then(|n| n.template_name_opt().map(str::to_owned)),
+                    requested_name,
+                    base_net.properties.clone(),
+                    base_net.net_id,
+                )
+            } else {
+                (
+                    template_name,
+                    requested_name,
+                    SmallMap::new(),
+                    generate_net_id(),
+                )
+            };
 
         for (field_name, field_spec) in &self.fields {
             let provided_value = field_values.get(field_name).copied();
@@ -630,19 +638,12 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
         }
 
         let net_name = runtime_name.unwrap_or_default();
-        let call_stack = eval.call_stack();
         let final_name = if options.should_register {
             eval.module()
                 .extra_value()
                 .and_then(|e| e.downcast_ref::<ContextValue>())
                 .map(|ctx| {
-                    ctx.register_net(
-                        net_id,
-                        &net_name,
-                        options.assignment_inferable,
-                        &self.type_name,
-                        call_stack.clone(),
-                    )
+                    ctx.register_net(net_id, &net_name, assignment_inferable, &self.type_name)
                 })
                 .transpose()
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
@@ -651,34 +652,15 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             net_name.clone()
         };
 
-        if base_net.is_none() && !net_name.is_empty() {
-            let legacy_suffix = match self.type_name.as_str() {
-                "Power" => Some("VCC"),
-                "Ground" => Some("GND"),
-                _ => None,
-            };
-
-            if let Some(suffix) = legacy_suffix
-                && let Some(ctx) = eval
-                    .module()
-                    .extra_value()
-                    .and_then(|e| e.downcast_ref::<ContextValue>())
-            {
-                let old_name = format!("{net_name}_{suffix}");
-                ctx.add_moved_directive(old_name, net_name.clone(), true);
-            }
-        }
-
         Ok(heap.alloc(NetValue {
             net_id,
             name: final_name,
             template_name,
             original_name,
-            assignment_inferable: options.assignment_inferable,
+            assignment_inferable,
             derived_from_base_net: base_net.is_some(),
             was_bound: OnceLock::new(),
             inferred_name: OnceLock::new(),
-            inferred_original_name: OnceLock::new(),
             declaration_path,
             declaration_span,
             type_name: self.type_name.clone(),
@@ -737,7 +719,6 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
     /// Returns the runtime parameter specification for parsing arguments
     fn parameters_spec(&self) -> ParametersSpec<FrozenValue> {
         let mut named_params = vec![
-            ("NET", ParametersSpecParam::Optional),
             ("name", ParametersSpecParam::Optional),
             ("__register", ParametersSpecParam::Optional),
         ];
@@ -751,7 +732,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             [("value", ParametersSpecParam::Optional)], // positional-only - accepts string or NetValue
             [],                                         // pos_or_named (args)
             false,
-            named_params, // named-only (NET, name + fields + __register)
+            named_params, // named-only (name + fields + __register)
             false,
         )
     }
@@ -856,9 +837,10 @@ pub(crate) fn instantiate_generated_net<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
     if let Some(net_type) = spec.downcast_ref::<NetType<'v>>() {
+        let generated_name = (net_type.type_name != "NotConnected").then_some(generated_name);
         return net_type.instantiate(
             None,
-            Some(generated_name),
+            generated_name,
             SmallMap::new(),
             NetInstantiateOptions {
                 should_register,
@@ -869,9 +851,10 @@ pub(crate) fn instantiate_generated_net<'v>(
     }
 
     if let Some(net_type) = spec.downcast_ref::<FrozenNetType>() {
+        let generated_name = (net_type.type_name != "NotConnected").then_some(generated_name);
         return net_type.instantiate(
             None,
-            Some(generated_name),
+            generated_name,
             SmallMap::new(),
             NetInstantiateOptions {
                 should_register,
@@ -886,30 +869,6 @@ pub(crate) fn instantiate_generated_net<'v>(
         spec.get_type()
     )
     .into())
-}
-
-fn emit_net_keyword_deprecation<'v>(eval: &Evaluator<'v, '_, '_>, type_name: &str) {
-    let message = format!(
-        "{type_name}() keyword argument `NET=` is deprecated; use the positional form `{type_name}(other_net)` instead"
-    );
-    let (path, span) = match eval.call_stack_top_location() {
-        Some(location) => (
-            location.filename().to_owned(),
-            Some(location.resolve_span()),
-        ),
-        None => (eval.source_path().unwrap_or_default(), None),
-    };
-
-    eval.add_diagnostic(
-        crate::Diagnostic::categorized(
-            &path,
-            &message,
-            "deprecated.net_constructor_kwarg",
-            starlark::errors::EvalSeverity::Warning,
-        )
-        .with_span(span)
-        .with_call_stack(Some(eval.call_stack())),
-    );
 }
 
 #[starlark_value(type = "NetType")]
@@ -928,9 +887,8 @@ where
             .parser(args, eval, |param_parser, eval| {
                 let type_name = self.instance_ty_name();
 
-                // Parse arguments: positional value, NET= keyword, name= keyword, and field values
+                // Parse arguments: positional value, name= keyword, and field values
                 let positional_value: Option<Value> = param_parser.next_opt()?;
-                let net_keyword: Option<Value> = param_parser.next_opt()?;
                 let name_keyword: Option<Value> = param_parser.next_opt()?;
 
                 // Parse hidden __register parameter (for internal use only)
@@ -976,25 +934,6 @@ where
                         )
                         .into());
                     }
-                }
-
-                if let Some(v) = net_keyword {
-                    let nv = NetValue::from_value(v).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "{}() NET= expects Net value, got {}",
-                            type_name,
-                            v.get_type()
-                        )
-                    })?;
-                    if base_net.is_some() {
-                        return Err(anyhow::anyhow!(
-                            "{}() cannot provide both a positional Net and NET=",
-                            type_name
-                        )
-                        .into());
-                    }
-                    base_net = Some(nv);
-                    emit_net_keyword_deprecation(eval, &type_name);
                 }
 
                 // Choose requested name: name= overrides positional string, which overrides base net's original name
