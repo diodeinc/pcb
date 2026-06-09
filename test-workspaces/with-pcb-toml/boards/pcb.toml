@@ -2,7 +2,7 @@
 name = "WorkspaceTestBoard"
 
 [dependencies]
-"github.com/diodeinc/kicad" = "0.2.2"
+"github.com/diodeinc/kicad" = "0.2.3"
 
 [dependencies.indirect]
 "gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
