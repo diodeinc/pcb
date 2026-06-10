@@ -378,32 +378,16 @@ fn parse_git_timezone_offset(offset: &str) -> Option<i32> {
     Some(sign * (hour * 3_600 + minute * 60))
 }
 
-fn clone(remote_url: &str, dest_dir: &Path, bare: bool, prompt: bool) -> anyhow::Result<()> {
+fn clone(remote_url: &str, dest_dir: &Path, prompt: bool) -> anyhow::Result<()> {
     let mut cmd = git_global_with_prompt(prompt);
     cmd.arg("clone");
-    if bare {
-        cmd.arg("--bare");
-    }
     cmd.args(["--quiet", remote_url]).arg(dest_dir);
     run_silent(cmd)
 }
 
-pub fn clone_bare(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    clone(remote_url, dest_dir, true, true)
-}
-
-pub fn clone_bare_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
-    let https_url = format!("https://{}.git", repo_url);
-    if clone(&https_url, dest, true, false).is_ok() {
-        return Ok(());
-    }
-    clone_bare(&format_ssh_url(repo_url), dest)
-}
-
-pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
+pub fn fetch_in_source_repo(source_repo: &Path) -> anyhow::Result<()> {
     run_in(
-        bare_repo,
+        source_repo,
         &[
             "fetch",
             "origin",
@@ -417,19 +401,17 @@ pub fn fetch_in_bare_repo(bare_repo: &Path) -> anyhow::Result<()> {
     )
 }
 
-pub fn ensure_rev_in_bare_repo(bare_repo: &Path, rev: &str) -> anyhow::Result<()> {
-    if rev_parse(bare_repo, rev).is_some() {
+pub fn ensure_rev_in_source_repo(source_repo: &Path, rev: &str) -> anyhow::Result<()> {
+    if rev_parse(source_repo, rev).is_some() {
         return Ok(());
     }
 
-    run_in(bare_repo, &["fetch", "origin", "--quiet", rev])
+    run_in(source_repo, &["fetch", "origin", "--quiet", rev])
 }
 
 pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    let mut cmd = git_global();
-    cmd.arg("--git-dir")
-        .arg(repo_root)
-        .args(["archive", "--format=tar", treeish])
+    let mut cmd = git(repo_root);
+    cmd.args(["archive", "--format=tar", treeish])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -488,19 +470,14 @@ pub fn push_branch_force(repo_root: &Path, branch: &str, remote: &str) -> anyhow
     run_in(repo_root, &["push", "--force", remote, branch])
 }
 
-/// Clone a repository to a destination directory (regular clone, not bare)
-pub fn clone_repo(remote_url: &str, dest_dir: &Path) -> anyhow::Result<()> {
-    clone(remote_url, dest_dir, false, true)
-}
-
 /// Clone a repository with HTTPS, falling back to SSH
 pub fn clone_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
     let https_url = format!("https://{}.git", repo_url);
-    if clone(&https_url, dest, false, false).is_ok() {
+    if clone(&https_url, dest, false).is_ok() {
         return Ok(());
     }
-    clone_repo(&format_ssh_url(repo_url), dest)
+    clone(&format_ssh_url(repo_url), dest, true)
 }
 
 /// Create or reset a branch to point at a specific ref
