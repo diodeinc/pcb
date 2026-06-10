@@ -384,6 +384,63 @@ nc = NotConnected()
 PowerConsumer(name = "U1", vcc = nc)
 "#;
 
+const IO_RENAMED_CHILD_ZEN: &str = r#"
+IN_GD = io("IN_GD", Net)
+GND = io("GND", Net)
+
+Component(
+    name = "R1",
+    footprint = "TEST:0402",
+    pin_defs = {"1": "1", "2": "2"},
+    skip_bom = True,
+    pins = {"1": IN_GD, "2": GND},
+)
+
+# pcb:sch IN_GD.0 x=-351.5200 y=-140.7000 rot=0
+# pcb:sch GND.1 x=-100.0000 y=-50.0000 rot=0
+"#;
+
+const IO_RENAMED_PARENT_ZEN: &str = r#"
+Child = Module("Child.zen")
+
+VBUS_RAW = Net("VBUS_RAW")
+GND = Net("GND")
+
+Child(name = "U1", IN_GD = VBUS_RAW, GND = GND)
+
+# pcb:sch U1.VBUS_RAW.0 x=-1498.6000 y=-25.4000 rot=0
+# pcb:sch U1.GND.1 x=-1562.1000 y=12.7000 rot=0
+"#;
+
+/// Descendant net-symbol overrides (`<child>.<NET>.<idx>` comments in the parent)
+/// must survive conversion even when the parent renames the net across the module
+/// boundary (here `IN_GD=VBUS_RAW`); the override key uses the global net name.
+#[test]
+fn test_netlist_descendant_net_symbol_override_with_renamed_io() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("boards/Child.zen", IO_RENAMED_CHILD_ZEN)
+        .write("boards/Parent.zen", IO_RENAMED_PARENT_ZEN);
+    let output = sandbox.snapshot_run("pcbc", &["build", "boards/Parent.zen", "--netlist"]);
+
+    let json_start = output.find('{').expect("netlist JSON in output");
+    let json_end = output.rfind('}').expect("netlist JSON in output");
+    let netlist: serde_json::Value =
+        serde_json::from_str(&output[json_start..=json_end]).expect("netlist parses as JSON");
+
+    let root_positions = netlist["instances"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find_map(|(path, inst)| path.ends_with(":<root>").then(|| &inst["symbol_positions"]))
+        .expect("root instance present");
+
+    // Renamed io: parent override uses the global net name, not the child's local name.
+    assert_eq!(root_positions["sym:U1.VBUS_RAW#0"]["x"], -1498.6);
+    // Same-named net keeps working.
+    assert_eq!(root_positions["sym:U1.GND#1"]["x"], -1562.1);
+}
+
 #[test]
 fn test_netlist_not_connected_promotion() {
     let mut sandbox = Sandbox::new();

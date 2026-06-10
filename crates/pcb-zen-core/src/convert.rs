@@ -1014,34 +1014,29 @@ impl ModuleConverter {
         }
 
         for split_idx in 1..segments.len() {
-            let descendant_ref =
-                segments[..split_idx]
-                    .iter()
-                    .try_fold(instance_ref, |current_ref, part| {
-                        let child_ref = self
-                            .schematic
-                            .instances
-                            .get(current_ref)?
-                            .children
-                            .get(*part)?;
-                        let child_instance = self.schematic.instances.get(child_ref)?;
-                        (child_instance.kind == InstanceKind::Module).then_some(child_ref)
-                    })?;
+            // The prefix must resolve to a descendant module instance.
+            segments[..split_idx]
+                .iter()
+                .try_fold(instance_ref, |current_ref, part| {
+                    let child_ref = self
+                        .schematic
+                        .instances
+                        .get(current_ref)?
+                        .children
+                        .get(*part)?;
+                    let child_instance = self.schematic.instances.get(child_ref)?;
+                    (child_instance.kind == InstanceKind::Module).then_some(child_ref)
+                })?;
 
-            let Some(descendant_module) =
-                self.module_instances
-                    .iter()
-                    .find_map(|(candidate_ref, module)| {
-                        (candidate_ref == descendant_ref).then_some(module)
-                    })
-            else {
-                continue;
-            };
-
-            let descendant_local_key = format!("{}.{}", segments[split_idx..].join("."), suffix);
-            if descendant_module
-                .positions()
-                .contains_key(descendant_local_key.as_str())
+            // The remainder must name an actual net. Override keys are
+            // `<module path>.<global net name>.<index>` because converted net-symbol
+            // keys use global net names (e.g. a descendant's local `IN_GD.0` comment
+            // converts to `sym:VBUS_RAW#0` when the parent connects `IN_GD=VBUS_RAW`).
+            let rest = segments[split_idx..].join(".");
+            if self
+                .net_to_info
+                .values()
+                .any(|info| info.name.as_deref() == Some(rest.as_str()))
             {
                 return Some(format!("sym:{}#{}", net_part, suffix));
             }
