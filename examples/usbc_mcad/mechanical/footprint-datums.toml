@@ -1,0 +1,14 @@
+# Maps each IDF package's mechanical datum into footprint-local mm so the
+# resolver can place the footprint origin where the datum lands as declared.
+
+# USB-C datum is the mating face: 3.65 mm along +Y from the footprint origin.
+[[datum]]
+idf_package = "USB_C_RECEPTACLE"
+footprint = "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.3/Connector_USB.pretty/USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod"
+mechanical_origin_in_footprint = { x_mm = 0.0, y_mm = 3.65 }
+
+# Mounting holes: datum is the hole axis, which is also the footprint origin.
+[[datum]]
+idf_package = "MTG_HOLE_M3"
+footprint = "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.3/MountingHole.pretty/MountingHole_3.2mm_M3_DIN965_Pad_TopBottom.kicad_mod"
+mechanical_origin_in_footprint = { x_mm = 0.0, y_mm = 0.0 }

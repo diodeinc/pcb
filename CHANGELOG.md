@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changes
 
+- Added MCAD-driven placement: `pcb layout` now consumes IDF (`.emn`) exports — discovered via `mechanical/<board>.emn` or declared under `[board.mechanical.idf]` in `pcb.toml` — and places MCAD-owned components at their exact mechanical pose, locked, using a `mechanical/footprint-datums.toml` catalog to map mechanical datums to footprint origins.
 - `pcb migrate` now upgrades workspace `pcb-version` after successful latest-toolchain migrations.
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
 - Updated stdlib generics to use KiCad 10.0.3 symbols and footprints, while keeping `Crystal()` compatible with KiCad 9 four-pin symbols.

@@ -56,6 +56,26 @@ from .kicad_adapter import (
 logger = logging.getLogger("pcb.lens")
 
 
+def _fixed_placement_from_raw(
+    raw: Optional[Dict[str, Any]],
+) -> Optional[FootprintComplement]:
+    """A compiler-supplied pose (`BoardPose`) pins the footprint fixed and locked."""
+    if not raw:
+        return None
+    side = raw.get("side", "top")
+    layer = {"top": "F.Cu", "bottom": "B.Cu"}.get(side)
+    if layer is None:
+        raise ValueError(f"unknown placement side {side!r}")
+    if "x_nm" not in raw or "y_nm" not in raw:
+        raise ValueError(f"fixed placement is missing x_nm/y_nm: {raw!r}")
+    return FootprintComplement(
+        position=Position(x=int(raw["x_nm"]), y=int(raw["y_nm"])),
+        orientation=float(raw.get("rotation_deg", 0.0)),
+        layer=layer,
+        locked=True,
+    )
+
+
 @dataclass
 class FragmentData:
     """Data extracted from a layout fragment for lens logic.
@@ -132,6 +152,7 @@ def get(netlist: Any) -> BoardView:
             exclude_from_bom=exclude_from_bom,
             exclude_from_pos=exclude_from_pos,
             fields=fields,
+            fixed_placement=_fixed_placement_from_raw(getattr(part, "placement", None)),
         )
 
     fp_id_by_ref: Dict[str, EntityId] = {
@@ -638,7 +659,10 @@ def adapt_complement(
     for entity_id, fp_view in new_view.footprints.items():
         existing = old_complement.footprints.get(entity_id)
 
-        if existing:
+        if fp_view.fixed_placement:
+            # Compiler-owned fixed placement wins over destination placement.
+            new_footprints[entity_id] = fp_view.fixed_placement
+        elif existing:
             # Exact match (same path + same fpid) - preserve complement
             new_footprints[entity_id] = existing
         else:

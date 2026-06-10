@@ -33,6 +33,7 @@ pcb-command-runner = { path = "crates/pcb-command-runner" }
 pcb-eda = { path = "crates/pcb-eda" }
 pcb-component-gen = { path = "crates/pcb-component-gen" }
 pcb-layout = { path = "crates/pcb-layout" }
+pcb-mechanical = { path = "crates/pcb-mechanical" }
 pcb-sch = { path = "crates/pcb-sch" }
 pcb-canonical = { path = "crates/pcb-canonical" }
 pcb-zen = { path = "crates/pcb-zen" }

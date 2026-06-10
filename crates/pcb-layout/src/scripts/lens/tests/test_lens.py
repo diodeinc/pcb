@@ -55,6 +55,46 @@ class TestAdaptComplement:
         changeset = build_sync_changeset(new_view, new_complement, old_complement)
         assert entity_id not in changeset.added_footprints
 
+    def test_fixed_placement_overrides_existing_complement(self):
+        """Fixed compiler placements should replace destination placement."""
+        entity_id = EntityId.from_string("Connectors.J1")
+
+        new_view = BoardView(
+            footprints={
+                entity_id: FootprintView(
+                    entity_id=entity_id,
+                    reference="J1",
+                    value="USB-C",
+                    fpid="Connector_USB:USB_C_Receptacle",
+                    fixed_placement=FootprintComplement(
+                        position=Position(x=11_000_000, y=22_000_000),
+                        orientation=180.0,
+                        layer="B.Cu",
+                        locked=True,
+                    ),
+                )
+            }
+        )
+
+        old_complement = BoardComplement(
+            footprints={
+                entity_id: FootprintComplement(
+                    position=Position(x=5000, y=6000),
+                    orientation=90.0,
+                    layer="F.Cu",
+                    locked=False,
+                )
+            }
+        )
+
+        new_complement = adapt_complement(new_view, old_complement)
+
+        complement = new_complement.footprints[entity_id]
+        assert complement.position == Position(x=11_000_000, y=22_000_000)
+        assert complement.orientation == 180.0
+        assert complement.layer == "B.Cu"
+        assert complement.locked
+
     def test_new_footprint_gets_default_complement(self):
         """New footprints should get default complement."""
         entity_id = EntityId.from_string("Power.C1")

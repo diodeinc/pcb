@@ -42,6 +42,14 @@ pub const ATTR_LAYOUT_PATH: &str = "layout_path";
 /// `AttributeValue::String`.
 pub const ATTR_LAYOUT_HINTS: &str = "layout_hints";
 
+/// Attribute key that stores the board's layout name (set by `Board(name = …)`).
+/// Used with `AttributeValue::String`.
+pub const ATTR_LAYOUT_NAME: &str = "layout_name";
+
+/// Attribute key that stores a component's resolved footprint reference
+/// (a `package://` URI or file path). Used with `AttributeValue::String`.
+pub const ATTR_FOOTPRINT: &str = "footprint";
+
 /// URI prefix for stable, machine-independent package references.
 pub const PACKAGE_URI_PREFIX: &str = "package://";
 
@@ -321,6 +329,24 @@ pub enum InstanceKind {
     Pin,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BoardSide {
+    Top,
+    Bottom,
+}
+
+/// A fixed, locked footprint pose. When an `Instance` carries one, the layout
+/// sync places the component here and leaves it alone — it is mechanically
+/// owned (e.g. by an MCAD/IDF export), not the auto-placer's to move.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BoardPose {
+    pub x_nm: i64,
+    pub y_nm: i64,
+    pub rotation_deg: f64,
+    pub side: BoardSide,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PhysicalUnit {
     Ohms,
@@ -486,6 +512,10 @@ pub struct Instance {
     pub attributes: HashMap<Symbol, AttributeValue>,
     pub children: HashMap<Symbol, InstanceRef>,
     pub reference_designator: Option<String>,
+    /// Fixed, mechanically-owned pose. `Some` means the layout sync must place
+    /// the component here, locked, instead of auto-placing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<BoardPose>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub symbol_positions: HashMap<String, Position>,
 }
@@ -498,6 +528,7 @@ impl Instance {
             attributes: HashMap::new(),
             children: HashMap::new(),
             reference_designator: None,
+            placement: None,
             symbol_positions: HashMap::new(),
         }
     }

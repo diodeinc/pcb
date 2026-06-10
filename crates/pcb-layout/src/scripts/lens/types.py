@@ -112,6 +112,8 @@ class FootprintView:
     exclude_from_bom: bool = False
     exclude_from_pos: bool = False
     fields: Dict[str, str] = field(default_factory=dict)
+    # Compiler-owned fixed placement (e.g. from MCAD); wins over destination.
+    fixed_placement: Optional["FootprintComplement"] = None
 
     @property
     def path(self) -> EntityPath:
