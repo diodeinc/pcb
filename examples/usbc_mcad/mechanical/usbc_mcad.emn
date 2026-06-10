@@ -1,0 +1,30 @@
+# IDF 3.0 export "from the enclosure CAD" — the .PLACEMENT section is the
+# MCAD/ECAD ownership contract. Coordinates in mm, mapped 1:1 to the KiCad sheet.
+.HEADER
+BOARD_FILE 3.0 "usbc_mcad enclosure export" 2026/06/10.10:00:00 1
+usbc_mcad.emn MM
+.END_HEADER
+
+# 30 x 20 mm rectangular outline.
+.BOARD_OUTLINE MCAD
+1.6
+0 133.5 95.0 0.0
+0 163.5 95.0 0.0
+0 163.5 115.0 0.0
+0 133.5 115.0 0.0
+0 133.5 95.0 0.0
+.END_BOARD_OUTLINE
+
+.PLACEMENT
+# USB-C mating face centered on the y = 115 board edge; MCAD owns it.
+"USB_C_RECEPTACLE" "TYPE-C-31-M-12" J1
+148.5 115.0 0.0 0 TOP MCAD
+# M3 mounting bosses in the enclosure base; MCAD owns them.
+"MTG_HOLE_M3" "" H1
+137.0 98.5 0.0 0 TOP MCAD
+"MTG_HOLE_M3" "" H2
+160.0 98.5 0.0 0 TOP MCAD
+# The LED stays ECAD-owned; its row is parsed and ignored.
+"LED_0402" "" D1
+0.0 0.0 0.0 0 TOP ECAD
+.END_PLACEMENT

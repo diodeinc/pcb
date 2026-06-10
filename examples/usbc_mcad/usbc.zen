@@ -1,0 +1,30 @@
+# USB Type-C receptacle (USB 2.0, 16-pin) wrapped as a reusable module.
+
+VBUS = io(Power)
+GND = io(Ground)
+DP = io(Net)
+DM = io(Net)
+CC1 = io(Net)
+CC2 = io(Net)
+
+Component(
+    name = "USBC",
+    prefix = "J",
+    part = builtin.Part(mpn = "TYPE-C-31-M-12", manufacturer = "HRO"),
+    symbol = Symbol(
+        library = "@kicad-symbols/Connector.kicad_sym",
+        name = "USB_C_Receptacle_USB2.0_16P",
+    ),
+    footprint = File("@kicad-footprints/Connector_USB.pretty/USB_C_Receptacle_HRO_TYPE-C-31-M-12.kicad_mod"),
+    pins = {
+        "VBUS": VBUS.NET,
+        "GND": GND.NET,
+        "D+": DP,
+        "D-": DM,
+        "CC1": CC1,
+        "CC2": CC2,
+        "SBU1": NotConnected("SBU1_NC"),
+        "SBU2": NotConnected("SBU2_NC"),
+        "SHIELD": GND.NET,
+    },
+)

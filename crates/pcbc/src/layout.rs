@@ -98,14 +98,14 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
 
-    let Some(schematic) = build(
+    let Some(mut schematic) = build(
         zen_path,
         config_inputs,
         create_diagnostics_passes(&args.suppress, &[]),
         false,
         &mut false.clone(),
         &mut false.clone(),
-        resolution_result,
+        resolution_result.clone(),
     ) else {
         anyhow::bail!("Build failed");
     };
@@ -122,6 +122,8 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
 
         return Ok(());
     }
+
+    pcb_mechanical::apply_mcad_positions(&mut schematic, zen_path, &resolution_result)?;
 
     // Process layout and collect diagnostics
     let spinner_msg = if args.check {

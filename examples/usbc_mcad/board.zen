@@ -1,0 +1,43 @@
+# MCAD-driven placement demo: mechanical/usbc_mcad.emn fixes the USB-C and
+# mounting-hole positions; everything else is ECAD-owned. See README.md.
+
+UsbC = Module("./usbc.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Led = Module("@stdlib/generics/Led.zen")
+MountingHole = Module("@stdlib/generics/MountingHole.zen")
+
+VBUS = Power("VBUS")
+GND = Ground("GND")
+DP = Net("DP")
+DM = Net("DM")
+CC1 = Net("CC1")
+CC2 = Net("CC2")
+LED_A = Net("LED_A")
+
+UsbC(
+    name = "J1",
+    VBUS = VBUS,
+    GND = GND,
+    DP = DP,
+    DM = DM,
+    CC1 = CC1,
+    CC2 = CC2,
+)
+
+# USB sink: 5.1k pull-downs on CC advertise a UFP to the source.
+Resistor(name = "R1", value = "5.1kohm", package = "0402", P1 = CC1, P2 = GND)
+Resistor(name = "R2", value = "5.1kohm", package = "0402", P1 = CC2, P2 = GND)
+
+# Power indicator.
+Resistor(name = "R3", value = "1kohm", package = "0402", P1 = VBUS, P2 = LED_A)
+Led(name = "D1", package = "0402", color = "green", A = LED_A, K = GND)
+
+# Enclosure-positioned mounting holes.
+MountingHole(name = "H1", diameter = "M3", P1 = GND)
+MountingHole(name = "H2", diameter = "M3", P1 = GND)
+
+Board(
+    name = "usbc_mcad",
+    layers = 2,
+    layout_path = "layout",
+)
