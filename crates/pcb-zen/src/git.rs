@@ -381,7 +381,8 @@ fn parse_git_timezone_offset(offset: &str) -> Option<i32> {
 fn clone(remote_url: &str, dest_dir: &Path, prompt: bool) -> anyhow::Result<()> {
     let mut cmd = git_global_with_prompt(prompt);
     cmd.arg("clone");
-    cmd.args(["--quiet", remote_url]).arg(dest_dir);
+    cmd.args(["--quiet", "--no-checkout", remote_url])
+        .arg(dest_dir);
     run_silent(cmd)
 }
 
