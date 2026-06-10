@@ -190,6 +190,11 @@ jobs:
       - name: Upload artifacts to S3
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         run: |
+          # Upload the stdlib first: the shim discovers a release as soon as any
+          # object exists under its prefix and requires stdlib.tar.zst to install.
+          aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ needs.prepare.outputs.tag }}/" \
+            --exclude "*" --include "stdlib.tar.zst*" \
+            --cache-control "public, max-age=31536000, immutable"
           aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ needs.prepare.outputs.tag }}/" \
             --cache-control "public, max-age=31536000, immutable"
 

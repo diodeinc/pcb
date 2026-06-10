@@ -15,6 +15,7 @@ const RELEASE_BASE_URL: &str = "https://pcb.api.diode.computer/pcb";
 const SHIM_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/pcb-latest.json";
 const NIGHTLY_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/nightly/latest.json";
 const USER_AGENT: &str = "pcb";
+const STDLIB_ARCHIVE_NAME: &str = "stdlib.tar.zst";
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -381,6 +382,16 @@ fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
 fn best_local_toolchain(request: &ToolchainRequest) -> Result<Option<(Version, PathBuf)>> {
     let mut candidates = installed_toolchains()?;
 
+    let local_binary = toolchains_dir()
+        .join("local")
+        .join(target_triple())
+        .join(pcbc_binary_name());
+    if local_binary.is_file()
+        && let Some(version) = pcbc_version(&local_binary)
+    {
+        candidates.insert(version, local_binary);
+    }
+
     if let Some((version, binary)) = sibling_pcbc() {
         candidates.insert(version, binary);
     }
@@ -625,6 +636,7 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
         staging_dir.join("receipt.json"),
         serde_json::to_vec_pretty(&receipt)?,
     )?;
+    stage_stdlib_archive(&release.base_url, &staging_dir)?;
 
     if install_dir.exists() {
         fs::remove_dir_all(&install_dir)?;
@@ -697,6 +709,7 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
         staging_dir.join("receipt.json"),
         serde_json::to_vec_pretty(&receipt)?,
     )?;
+    stage_stdlib_archive(&format!("{RELEASE_BASE_URL}/v{version}"), &staging_dir)?;
 
     if install_dir.exists() {
         fs::remove_dir_all(&install_dir)?;
@@ -707,6 +720,25 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
     fs::rename(&staging_dir, &install_dir)?;
 
     Ok(install_dir.join(pcbc_binary_name()))
+}
+
+fn stage_stdlib_archive(base_url: &str, staging_dir: &Path) -> Result<()> {
+    let url = format!("{}/{}", base_url.trim_end_matches('/'), STDLIB_ARCHIVE_NAME);
+    let bytes = download_optional(&http_client(ARCHIVE_TIMEOUT)?, &url)?
+        .ok_or_else(|| anyhow::anyhow!("not found: {url}"))?;
+    verify_checksum(&url, &bytes)?;
+
+    let unpacked = decompress_zstd(&url, bytes)?;
+    let stdlib_dir = staging_dir.join("lib").join("std");
+    fs::create_dir_all(&stdlib_dir)?;
+    tar::Archive::new(Cursor::new(unpacked))
+        .unpack(&stdlib_dir)
+        .with_context(|| format!("failed to extract stdlib archive {url}"))?;
+    anyhow::ensure!(
+        stdlib_dir.join("interfaces.zen").is_file(),
+        "stdlib archive {url} did not contain interfaces.zen at the archive root"
+    );
+    Ok(())
 }
 
 fn download_toolchain(version: &Version) -> Result<Download> {
@@ -888,7 +920,13 @@ fn copy_executable_permissions(_src: &Path, _dst: &Path) -> Result<()> {
 fn toolchain_list() -> Result<()> {
     let installed = installed_toolchains()?;
     let nightly = installed_nightly_toolchain()?;
-    if installed.is_empty() && nightly.is_none() {
+    let local_binary = toolchains_dir()
+        .join("local")
+        .join(target_triple())
+        .join(pcbc_binary_name());
+    let local = local_binary.is_file();
+
+    if installed.is_empty() && nightly.is_none() && !local {
         println!("No pcbc toolchains installed.");
         return Ok(());
     }
@@ -903,6 +941,9 @@ fn toolchain_list() -> Result<()> {
             short_sha(&receipt.sha),
             binary.display()
         );
+    }
+    if local {
+        println!("local\t{}", local_binary.display());
     }
     Ok(())
 }
@@ -1103,11 +1144,11 @@ fn sibling_pcbc() -> Option<(Version, PathBuf)> {
     if sibling == current || !sibling.is_file() {
         return None;
     }
-    let version = sibling_pcbc_version(&sibling)?;
+    let version = pcbc_version(&sibling)?;
     Some((version, sibling))
 }
 
-fn sibling_pcbc_version(binary: &Path) -> Option<Version> {
+fn pcbc_version(binary: &Path) -> Option<Version> {
     let output = Command::new(binary).arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
