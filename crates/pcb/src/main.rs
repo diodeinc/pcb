@@ -135,10 +135,21 @@ fn is_shim_command(args: &[OsString]) -> bool {
 }
 
 fn is_migrate_command(args: &[OsString]) -> bool {
-    matches!(
-        args.first().and_then(|arg| arg.to_str()),
-        Some("migrate" | "m")
-    )
+    matches!(first_command_arg(args), Some("migrate" | "m"))
+}
+
+fn first_command_arg(args: &[OsString]) -> Option<&str> {
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].to_str()?;
+        match arg {
+            "-d" | "--debug" => index += 1,
+            "--profile" => index += 2,
+            _ if arg.starts_with("--profile=") => index += 1,
+            _ => return Some(arg),
+        }
+    }
+    None
 }
 
 fn parse_shim_command(args: &[OsString]) -> Result<ShimCommand> {
@@ -1204,6 +1215,17 @@ mod tests {
     fn migrate_command_uses_latest_stable_toolchain() {
         assert!(is_migrate_command(&args(&["migrate"])));
         assert!(is_migrate_command(&args(&["m", "--dry-run"])));
+        assert!(is_migrate_command(&args(&["-d", "migrate"])));
+        assert!(is_migrate_command(&args(&["--debug", "migrate"])));
+        assert!(is_migrate_command(&args(&[
+            "--profile",
+            "profile.json",
+            "migrate"
+        ])));
+        assert!(is_migrate_command(&args(&[
+            "--profile=profile.json",
+            "migrate"
+        ])));
         assert!(!is_migrate_command(&args(&["build"])));
     }
 
