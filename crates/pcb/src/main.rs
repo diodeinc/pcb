@@ -15,6 +15,7 @@ const RELEASE_BASE_URL: &str = "https://pcb.api.diode.computer/pcb";
 const SHIM_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/pcb-latest.json";
 const NIGHTLY_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/nightly/latest.json";
 const USER_AGENT: &str = "pcb";
+const STDLIB_ARCHIVE_NAME: &str = "stdlib.tar.zst";
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -381,13 +382,55 @@ fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
 fn best_local_toolchain(request: &ToolchainRequest) -> Result<Option<(Version, PathBuf)>> {
     let mut candidates = installed_toolchains()?;
 
+    let local_binary = toolchains_dir()
+        .join("local")
+        .join(target_triple())
+        .join(pcbc_binary_name());
+    if local_binary.is_file()
+        && let Some(version) = pcbc_version(&local_binary)
+    {
+        candidates.insert(version, local_binary);
+    }
+
     if let Some((version, binary)) = sibling_pcbc() {
         candidates.insert(version, binary);
     }
 
-    Ok(candidates
+    let selected = candidates
         .into_iter()
-        .rfind(|(version, _)| request_matches(request, version)))
+        .rfind(|(version, _)| request_matches(request, version));
+
+    if let Some((version, binary)) = &selected {
+        let toolchain_root = toolchains_dir().join(version.to_string());
+        if *binary
+            == toolchain_root
+                .join(target_triple())
+                .join(pcbc_binary_name())
+            && !toolchain_root.join("lib").join("std").is_dir()
+        {
+            let lock_path =
+                locks_dir().join(format!("install-{}-{}.lock", version, target_triple()));
+            if let Some(parent) = lock_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut lock = fslock::LockFile::open(&lock_path)?;
+            lock.lock()?;
+            let result = if toolchain_root.join("lib").join("std").is_dir() {
+                Ok(())
+            } else {
+                install_stdlib_archive(
+                    &format!("{RELEASE_BASE_URL}/v{version}"),
+                    &toolchain_root,
+                    &format!("stdlib-v{version}.tar.zst"),
+                    stdlib_archive_required(version),
+                )
+            };
+            lock.unlock()?;
+            result?;
+        }
+    }
+
+    Ok(selected)
 }
 
 fn installed_toolchains() -> Result<BTreeMap<Version, PathBuf>> {
@@ -537,8 +580,11 @@ fn read_workspace_pcb_version(path: &Path) -> Result<Option<String>> {
 fn ensure_installed(version: &Version) -> Result<PathBuf> {
     ensure_supported_target()?;
 
-    let binary = installed_binary_path(version);
-    if binary.is_file() {
+    let toolchain_root = toolchains_dir().join(version.to_string());
+    let binary = toolchain_root
+        .join(target_triple())
+        .join(pcbc_binary_name());
+    if binary.is_file() && toolchain_root.join("lib").join("std").is_dir() {
         return Ok(binary);
     }
 
@@ -549,6 +595,14 @@ fn ensure_installed(version: &Version) -> Result<PathBuf> {
     let mut lock = fslock::LockFile::open(&lock_path)?;
     lock.lock()?;
     let result = if binary.is_file() {
+        if !toolchain_root.join("lib").join("std").is_dir() {
+            install_stdlib_archive(
+                &format!("{RELEASE_BASE_URL}/v{version}"),
+                &toolchain_root,
+                &format!("stdlib-v{version}.tar.zst"),
+                stdlib_archive_required(version),
+            )?;
+        }
         Ok(binary)
     } else {
         install_toolchain(version)
@@ -560,8 +614,10 @@ fn ensure_installed(version: &Version) -> Result<PathBuf> {
 fn ensure_nightly_installed(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)> {
     ensure_supported_target()?;
 
+    let toolchain_root = toolchains_dir().join("nightly");
     if let Some((receipt, binary)) = installed_nightly_toolchain()?
         && receipt.sha == release.sha
+        && toolchain_root.join("lib").join("std").is_dir()
     {
         return Ok((receipt, binary));
     }
@@ -575,6 +631,14 @@ fn ensure_nightly_installed(release: &NightlyRelease) -> Result<(NightlyReceipt,
     let result = if let Some((receipt, binary)) = installed_nightly_toolchain()?
         && receipt.sha == release.sha
     {
+        if !toolchain_root.join("lib").join("std").is_dir() {
+            install_stdlib_archive(
+                &release.base_url,
+                &toolchain_root,
+                &format!("stdlib-nightly-{}.tar.zst", release.sha),
+                true,
+            )?;
+        }
         Ok((receipt, binary))
     } else {
         install_nightly(release)
@@ -633,6 +697,12 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
         fs::create_dir_all(parent)?;
     }
     fs::rename(&staging_dir, &install_dir)?;
+    install_stdlib_archive(
+        &release.base_url,
+        &toolchains_dir().join("nightly"),
+        &format!("stdlib-nightly-{}.tar.zst", release.sha),
+        true,
+    )?;
 
     Ok((receipt, install_dir.join(pcbc_binary_name())))
 }
@@ -705,8 +775,60 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
         fs::create_dir_all(parent)?;
     }
     fs::rename(&staging_dir, &install_dir)?;
+    install_stdlib_archive(
+        &format!("{RELEASE_BASE_URL}/v{version}"),
+        &toolchains_dir().join(version.to_string()),
+        &format!("stdlib-v{version}.tar.zst"),
+        stdlib_archive_required(version),
+    )?;
 
     Ok(install_dir.join(pcbc_binary_name()))
+}
+
+fn stdlib_archive_required(version: &Version) -> bool {
+    version.major > 0 || version.minor >= 4
+}
+
+fn install_stdlib_archive(
+    base_url: &str,
+    toolchain_root: &Path,
+    cache_name: &str,
+    required: bool,
+) -> Result<()> {
+    let stdlib_dir = toolchain_root.join("lib").join("std");
+    let url = format!("{}/{}", base_url.trim_end_matches('/'), STDLIB_ARCHIVE_NAME);
+    let Some(bytes) = download_optional(&http_client(ARCHIVE_TIMEOUT)?, &url)? else {
+        anyhow::ensure!(!required, "not found: {url}");
+        return Ok(());
+    };
+    verify_checksum(&url, &bytes)?;
+
+    fs::create_dir_all(downloads_dir())?;
+    fs::write(downloads_dir().join(cache_name), &bytes)?;
+
+    let unpacked = decompress_zstd(&url, bytes)?;
+    let staging_dir = stdlib_dir.with_extension("tmp");
+    if staging_dir.is_dir() {
+        fs::remove_dir_all(&staging_dir)?;
+    } else if staging_dir.exists() {
+        fs::remove_file(&staging_dir)?;
+    }
+    fs::create_dir_all(&staging_dir)?;
+
+    tar::Archive::new(Cursor::new(unpacked))
+        .unpack(&staging_dir)
+        .with_context(|| format!("failed to extract stdlib archive {url}"))?;
+
+    if stdlib_dir.is_dir() {
+        fs::remove_dir_all(&stdlib_dir)?;
+    } else if stdlib_dir.exists() {
+        fs::remove_file(&stdlib_dir)?;
+    }
+    if let Some(parent) = stdlib_dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(&staging_dir, &stdlib_dir)?;
+    Ok(())
 }
 
 fn download_toolchain(version: &Version) -> Result<Download> {
@@ -888,7 +1010,13 @@ fn copy_executable_permissions(_src: &Path, _dst: &Path) -> Result<()> {
 fn toolchain_list() -> Result<()> {
     let installed = installed_toolchains()?;
     let nightly = installed_nightly_toolchain()?;
-    if installed.is_empty() && nightly.is_none() {
+    let local_binary = toolchains_dir()
+        .join("local")
+        .join(target_triple())
+        .join(pcbc_binary_name());
+    let local = local_binary.is_file();
+
+    if installed.is_empty() && nightly.is_none() && !local {
         println!("No pcbc toolchains installed.");
         return Ok(());
     }
@@ -903,6 +1031,9 @@ fn toolchain_list() -> Result<()> {
             short_sha(&receipt.sha),
             binary.display()
         );
+    }
+    if local {
+        println!("local\t{}", local_binary.display());
     }
     Ok(())
 }
@@ -1103,11 +1234,11 @@ fn sibling_pcbc() -> Option<(Version, PathBuf)> {
     if sibling == current || !sibling.is_file() {
         return None;
     }
-    let version = sibling_pcbc_version(&sibling)?;
+    let version = pcbc_version(&sibling)?;
     Some((version, sibling))
 }
 
-fn sibling_pcbc_version(binary: &Path) -> Option<Version> {
+fn pcbc_version(binary: &Path) -> Option<Version> {
     let output = Command::new(binary).arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
@@ -1115,10 +1246,6 @@ fn sibling_pcbc_version(binary: &Path) -> Option<Version> {
     let stdout = String::from_utf8(output.stdout).ok()?;
     let version = stdout.split_whitespace().last()?;
     Version::parse(version).ok()
-}
-
-fn installed_binary_path(version: &Version) -> PathBuf {
-    installed_dir(version).join(pcbc_binary_name())
 }
 
 fn installed_dir(version: &Version) -> PathBuf {

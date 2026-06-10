@@ -10,7 +10,7 @@ usage() {
 Usage: install.sh [--local]
 
 Options:
-  --local    Build pcb and pcbc from this checkout and install them side-by-side.
+  --local    Build pcb and pcbc from this checkout and install a local toolchain.
   -h, --help Show this help.
 EOF
 }
@@ -71,28 +71,41 @@ install_local() {
   target_dir="$source_dir/target"
   cargo build --release -p pcb -p pcbc --manifest-path "$source_dir/Cargo.toml" --target-dir "$target_dir"
 
+  local_toolchain_dir="$data_dir/toolchains/local"
+  local_target_dir="$local_toolchain_dir/$target"
+  stdlib_dir="$local_toolchain_dir/lib/std"
+
+  [ -d "$source_dir/lib/std" ] || { echo "missing stdlib: $source_dir/lib/std" >&2; exit 1; }
+
   mkdir -p "$install_dir"
   install -m 755 "$target_dir/release/pcb" "$install_dir/pcb"
-  install -m 755 "$target_dir/release/pcbc" "$install_dir/pcbc"
+  rm -f "$install_dir/pcbc"
+
+  mkdir -p "$local_target_dir" "$(dirname "$stdlib_dir")"
+  install -m 755 "$target_dir/release/pcbc" "$local_target_dir/pcbc"
+  rm -rf "$stdlib_dir"
+  cp -R "$source_dir/lib/std" "$stdlib_dir"
 
   add_install_dir_to_path
 
   echo "Installed local pcb to $install_dir/pcb"
-  echo "Installed local pcbc to $install_dir/pcbc"
+  echo "Installed local pcbc to $local_target_dir/pcbc"
+  echo "Installed local stdlib to $stdlib_dir"
 }
+
+platform="$(uname -s)-$(uname -m)"
+case "$platform" in
+  Darwin-arm64) target="aarch64-apple-darwin"; data_dir="$HOME/Library/Application Support/pcb" ;;
+  Darwin-x86_64) target="x86_64-apple-darwin"; data_dir="$HOME/Library/Application Support/pcb" ;;
+  Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu"; data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pcb" ;;
+  Linux-x86_64) target="x86_64-unknown-linux-gnu"; data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pcb" ;;
+  *) echo "unsupported platform: $platform" >&2; exit 1 ;;
+esac
 
 if [ "$mode" = "local" ]; then
   install_local
   exit 0
 fi
-
-case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) target="aarch64-apple-darwin" ;;
-  Darwin-x86_64) target="x86_64-apple-darwin" ;;
-  Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu" ;;
-  Linux-x86_64) target="x86_64-unknown-linux-gnu" ;;
-  *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-esac
 
 command -v curl >/dev/null || { echo "missing required command: curl" >&2; exit 1; }
 
