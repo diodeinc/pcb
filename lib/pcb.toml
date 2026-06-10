@@ -1,6 +1,6 @@
 [workspace]
 name = "lib"
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies.indirect]
 "gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"

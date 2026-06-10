@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.92"
+version = "0.4.0"
 edition = "2024"
 repository = "https://github.com/diodeinc/pcb"
 homepage = "https://github.com/diodeinc/pcb"
@@ -82,6 +82,7 @@ serde_json = "1.0"
 tempfile = "3.10.1"
 thiserror = "2"
 toml = "1"
+toml_edit = "0.25"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 uuid = { version = "1.4", features = ["v4", "v5", "js"] }
 walkdir = "2.3"

@@ -1,6 +1,6 @@
 [workspace]
 name = "zener"
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/diodeinc/registry/reference/BMI270x" = "0.6.2"

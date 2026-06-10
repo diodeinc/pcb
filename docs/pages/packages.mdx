@@ -466,8 +466,10 @@ code. For production builds, prefer tagged releases.
 
 ### pcb migrate
 
-Runs project migrations supplied by the active toolchain. When no migrations are
-available, the command prints that nothing needs to run.
+Runs project migrations using the latest stable `pcbc` toolchain, regardless of
+the workspace's current `pcb-version` lane. After all migrations succeed, the
+command updates `[workspace].pcb-version` in `pcb.toml` to the target toolchain
+lane.
 
 ```bash
 pcb migrate

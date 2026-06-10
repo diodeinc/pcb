@@ -1,6 +1,6 @@
 [workspace]
 name = "zener"
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
