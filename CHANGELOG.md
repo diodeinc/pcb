@@ -24,6 +24,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Removed deprecated language shims, including `config(convert=...)`, bare `add_property(...)`, `NET=` net casts, module DNP properties, automatic component property key capitalization, legacy `Component(properties={...})` sourcing/DNP keys, and legacy net moved aliases.
 - Regular nets now require explicit or assignment-inferred unique names; unnamed or duplicate regular nets fail evaluation.
 - `NotConnected` nets are now source-unnamed; explicit names are ignored with a warning and downstream tools assign connection-derived names as needed.
+- Added KiCad 10 jumper-pin support.
 
 ## [0.3.92] - 2026-06-09
 

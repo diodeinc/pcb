@@ -133,7 +133,7 @@ fn signal_is_only_no_connect(metadata: &SignalPinMetadata) -> bool {
 
 pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
     let mut signals: BTreeMap<String, SignalPinMetadata> = BTreeMap::new();
-    for pin in &symbol.pins {
+    for pin in symbol.canonical_pins() {
         let signal_name = pin.signal_name().to_string();
         let metadata = signals
             .entry(signal_name)
@@ -397,6 +397,53 @@ mod tests {
         assert!(zen.contains("\"NC\": NC"));
         // No pin_defs needed
         assert!(!zen.contains("pin_defs"));
+    }
+
+    #[test]
+    fn duplicate_pin_numbers_collapse_to_first_public_signal() {
+        let symbol = pcb_eda::Symbol {
+            name: "X".to_string(),
+            internal_connectivity: pcb_eda::InternalConnectivity {
+                duplicate_numbers_are_jumpers: true,
+                groups: Vec::new(),
+            },
+            pins: vec![
+                pcb_eda::Pin {
+                    name: "A".to_string(),
+                    number: "1".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "B".to_string(),
+                    number: "1".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "C".to_string(),
+                    number: "2".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let zen = generate_component_zen(GenerateComponentZenArgs {
+            component_name: "MPN1",
+            symbol: &symbol,
+            symbol_filename: "MPN1.kicad_sym",
+            generated_by: "pcb import",
+            include_skip_bom: false,
+            include_skip_pos: false,
+            skip_bom_default: false,
+            skip_pos_default: false,
+        })
+        .unwrap();
+
+        assert!(zen.contains("A = io(Net)"));
+        assert!(zen.contains("\"A\": A"));
+        assert!(!zen.contains("B = io(Net)"));
+        assert!(!zen.contains("\"B\": B"));
+        assert!(zen.contains("C = io(Net)"));
     }
 
     #[test]

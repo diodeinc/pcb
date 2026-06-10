@@ -801,6 +801,8 @@ impl ModuleConverter {
         if !symbol_value.is_none()
             && let Some(symbol) = symbol_value.downcast_ref::<SymbolValue>()
         {
+            comp_inst.internal_connectivity = symbol.internal_connectivity().clone();
+
             // Add symbol_name for backwards compatibility
             if let Some(name) = symbol.name() {
                 comp_inst.add_attribute(

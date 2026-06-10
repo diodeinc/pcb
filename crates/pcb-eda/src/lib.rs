@@ -6,7 +6,7 @@ use kicad::symbol_library::KicadSymbolLibrary;
 use pcb_sexpr::Sexpr;
 use serde::Serialize;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::Path;
 use std::str::FromStr;
@@ -17,6 +17,8 @@ pub struct Symbol {
     pub footprint: String,
     pub reference: String,
     pub in_bom: bool,
+    #[serde(default, skip_serializing_if = "InternalConnectivity::is_empty")]
+    pub internal_connectivity: InternalConnectivity,
     pub pins: Vec<Pin>,
     pub datasheet: Option<String>,
     pub manufacturer: Option<String>,
@@ -26,6 +28,23 @@ pub struct Symbol {
     pub properties: HashMap<String, String>,
     #[serde(skip)]
     pub raw_sexp: Option<Sexpr>,
+}
+
+/// KiCad jumper metadata parsed from a symbol, preserved as written in the file.
+/// Normalization (merging overlapping groups, dropping singletons) happens when
+/// converting to `pcb_sch::InternalConnectivity`.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Serialize)]
+pub struct InternalConnectivity {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub duplicate_numbers_are_jumpers: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<BTreeSet<String>>,
+}
+
+impl InternalConnectivity {
+    pub fn is_empty(&self) -> bool {
+        !self.duplicate_numbers_are_jumpers && self.groups.is_empty()
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq, Clone, Serialize)]
@@ -116,6 +135,17 @@ impl Symbol {
 
     pub fn raw_sexp(&self) -> Option<&Sexpr> {
         self.raw_sexp.as_ref()
+    }
+
+    /// Pins deduplicated by pin number, first occurrence wins.
+    ///
+    /// Repeated pin numbers (multi-unit shared pins, KiCad 10 duplicate-number
+    /// jumpers) are one logical terminal; the first occurrence names it.
+    pub fn canonical_pins(&self) -> impl Iterator<Item = &Pin> {
+        let mut seen = BTreeSet::new();
+        self.pins
+            .iter()
+            .filter(move |pin| seen.insert(pin.number.as_str()))
     }
 }
 

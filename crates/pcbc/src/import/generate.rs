@@ -2059,7 +2059,7 @@ fn render_component_zen(
 ) -> Result<RenderedComponentZen> {
     let generated_io_names = component_gen::generated_signal_io_names(symbol);
     let mut io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>> = BTreeMap::new();
-    for pin in &symbol.pins {
+    for pin in symbol.canonical_pins() {
         let signal_name = pin.signal_name().to_string();
         let Some(io_name) = generated_io_names.get(&signal_name) else {
             continue;

@@ -74,6 +74,10 @@ pub struct SymbolValue {
     pub raw_sexp: Option<String>, // Raw s-expression of the symbol (if loaded from file, otherwise None)
     pub properties: SmallMap<String, String>, // Properties from the symbol definition
     pub in_bom: bool,             // KiCad in_bom flag (inverse of skip_bom)
+    #[freeze(identity)]
+    #[trace(unsafe_ignore)]
+    #[allocative(skip)]
+    pub internal_connectivity: pcb_sch::InternalConnectivity,
 }
 
 impl std::fmt::Debug for SymbolValue {
@@ -249,6 +253,7 @@ impl<'v> SymbolValue {
                 raw_sexp: None,
                 properties: SmallMap::new(),
                 in_bom: true,
+                internal_connectivity: pcb_sch::InternalConnectivity::default(),
             })
         }
         // Case 2: Load from library
@@ -389,6 +394,32 @@ impl<'v> SymbolValue {
         &self.properties
     }
 
+    pub fn internal_connectivity(&self) -> &pcb_sch::InternalConnectivity {
+        &self.internal_connectivity
+    }
+
+    pub fn explicit_jumper_signal_groups(&self) -> Vec<Vec<&str>> {
+        self.internal_connectivity
+            .groups
+            .iter()
+            .filter_map(|group| {
+                let mut signals = Vec::new();
+                let mut seen = HashSet::new();
+
+                for number in group {
+                    let Some(signal) = self.pad_to_signal.get(number) else {
+                        continue;
+                    };
+                    if seen.insert(signal.as_str()) {
+                        signals.push(signal.as_str());
+                    }
+                }
+
+                (signals.len() >= 2).then_some(signals)
+            })
+            .collect()
+    }
+
     fn from_eda_symbol(
         symbol: &pcb_eda::Symbol,
         source_uri: Option<String>,
@@ -400,7 +431,11 @@ impl<'v> SymbolValue {
             .pins
             .iter()
             .map(|pin| {
-                pad_to_signal.insert(pin.number.clone(), pin.signal_name().to_owned());
+                // First occurrence wins: repeated pin numbers are one logical
+                // terminal, and the first occurrence names its public signal.
+                if !pad_to_signal.contains_key(&pin.number) {
+                    pad_to_signal.insert(pin.number.clone(), pin.signal_name().to_owned());
+                }
                 SymbolPin {
                     name: pin.name.clone(),
                     number: pin.number.clone(),
@@ -428,6 +463,10 @@ impl<'v> SymbolValue {
             raw_sexp,
             properties,
             in_bom: symbol.in_bom,
+            internal_connectivity: pcb_sch::InternalConnectivity::new(
+                symbol.internal_connectivity.duplicate_numbers_are_jumpers,
+                symbol.internal_connectivity.groups.iter().cloned(),
+            ),
         }
     }
 }
@@ -872,6 +911,66 @@ mod tests {
         assert_eq!(
             pin.alternates[1].graphical_style.as_deref(),
             Some("inverted")
+        );
+    }
+
+    #[test]
+    fn duplicate_pin_numbers_collapse_to_first_signal() {
+        let symbol = pcb_eda::Symbol::from_string(
+            r#"(kicad_symbol_lib
+  (version 20251024)
+  (generator "test")
+  (symbol "DuplicatePins"
+    (duplicate_pin_numbers_are_jumpers yes)
+    (symbol "DuplicatePins_1_1"
+      (pin passive line (at 0 0 0) (length 2.54) (name "A") (number "1"))
+      (pin passive line (at 0 0 0) (length 2.54) (name "B") (number "1"))
+    )
+  )
+)"#,
+            "kicad_sym",
+        )
+        .expect("symbol should parse");
+
+        let symbol_value = SymbolValue::from_eda_symbol(&symbol, None, None, SmallMap::new());
+
+        assert_eq!(
+            symbol_value.pad_to_signal().get("1").map(String::as_str),
+            Some("A")
+        );
+        assert_eq!(symbol_value.pins().len(), 2);
+        assert_eq!(symbol_value.pins()[0].name, "A");
+        assert_eq!(symbol_value.pins()[1].name, "B");
+        assert!(
+            symbol_value
+                .internal_connectivity()
+                .duplicate_numbers_are_jumpers
+        );
+    }
+
+    #[test]
+    fn explicit_jumper_groups_map_to_public_signals() {
+        let symbol = pcb_eda::Symbol::from_string(
+            r#"(kicad_symbol_lib
+  (version 20251024)
+  (generator "test")
+  (symbol "ExplicitJumpers"
+    (jumper_pin_groups ("1" "3") ("3" "99"))
+    (symbol "ExplicitJumpers_1_1"
+      (pin passive line (at 0 0 0) (length 2.54) (name "A") (number "1"))
+      (pin passive line (at 0 0 0) (length 2.54) (name "B") (number "3"))
+    )
+  )
+)"#,
+            "kicad_sym",
+        )
+        .expect("symbol should parse");
+
+        let symbol_value = SymbolValue::from_eda_symbol(&symbol, None, None, SmallMap::new());
+
+        assert_eq!(
+            symbol_value.explicit_jumper_signal_groups(),
+            vec![vec!["A", "B"]]
         );
     }
 }

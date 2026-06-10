@@ -213,6 +213,26 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
         .unwrap();
         writeln!(out, "      (tstamps \"{ts_uuid}\")").unwrap();
 
+        if comp
+            .instance
+            .internal_connectivity
+            .duplicate_numbers_are_jumpers
+        {
+            writeln!(out, "      (duplicate_pin_numbers_are_jumpers 1)").unwrap();
+        }
+
+        if !comp.instance.internal_connectivity.groups.is_empty() {
+            writeln!(out, "      (jumper_pin_groups").unwrap();
+            for group in &comp.instance.internal_connectivity.groups {
+                write!(out, "        (group").unwrap();
+                for pin in group {
+                    write!(out, " (pin \"{}\")", escape_kicad_string(pin)).unwrap();
+                }
+                writeln!(out, ")").unwrap();
+            }
+            writeln!(out, "      )").unwrap();
+        }
+
         // Explicitly add the standard KiCad "Reference" property pointing to the component's
         // reference designator.  This ensures the field is always present and consistent
         // irrespective of user-specified attributes.
@@ -344,6 +364,8 @@ pub fn to_kicad_netlist(sch: &Schematic) -> String {
                 ord
             }
         });
+        let mut seen_nodes = HashSet::new();
+        sorted_nodes.retain(|node| seen_nodes.insert((node.refdes.clone(), node.pad.clone())));
 
         writeln!(
             out,
@@ -1016,5 +1038,49 @@ mod tests {
 
         let netlist = to_kicad_netlist(&schematic);
         assert!(netlist.contains("(node (ref \"D1\") (pin \"2\") (pintype \"stereo\"))"));
+    }
+
+    #[test]
+    fn emits_component_internal_connectivity() {
+        let module_ref = crate::ModuleRef::from_path(Path::new("/tmp/test.zen"), "<root>");
+        let comp_ref = InstanceRef::new(module_ref.clone(), vec!["JP1".into()]);
+        let mut component = crate::Instance::component(module_ref.clone());
+        component.reference_designator = Some("JP1".to_owned());
+        component.attributes.insert(
+            "footprint".into(),
+            AttributeValue::String("Jumper:SolderJumper".to_owned()),
+        );
+        component.internal_connectivity = crate::InternalConnectivity::new(
+            true,
+            [std::collections::BTreeSet::from([
+                "1".to_owned(),
+                "3".to_owned(),
+            ])],
+        );
+
+        let port_ref = InstanceRef::new(module_ref.clone(), vec!["JP1".into(), "A".into()]);
+        let mut port = crate::Instance::port(module_ref.clone());
+        port.attributes.insert(
+            "pads".into(),
+            AttributeValue::Array(vec![AttributeValue::String("1".to_owned())]),
+        );
+        component.add_child("A", port_ref.clone());
+
+        let mut schematic = Schematic::new();
+        schematic.add_instance(comp_ref, component);
+        schematic.add_instance(port_ref.clone(), port);
+        schematic.add_net(crate::Net {
+            kind: "Net".to_owned(),
+            id: 1,
+            name: "SHARED".to_owned(),
+            ports: vec![port_ref],
+            properties: HashMap::new(),
+        });
+
+        let netlist = to_kicad_netlist(&schematic);
+
+        assert!(netlist.contains("(duplicate_pin_numbers_are_jumpers 1)"));
+        assert!(netlist.contains("(jumper_pin_groups"));
+        assert!(netlist.contains("(group (pin \"1\") (pin \"3\"))"));
     }
 }

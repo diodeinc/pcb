@@ -635,6 +635,10 @@ fn merge_symbols(parent: &KicadSymbol, child: &KicadSymbol) -> KicadSymbol {
     merged.name = child.name.clone();
     merged.extends = child.extends.clone();
 
+    if !child.internal_connectivity.is_empty() {
+        merged.internal_connectivity = child.internal_connectivity.clone();
+    }
+
     // Override properties that are explicitly set in child
     if !child.footprint.is_empty() {
         merged.footprint = child.footprint.clone();
@@ -1149,6 +1153,29 @@ mod tests {
         let lib = KicadSymbolLibrary::from_string(content).unwrap();
         let extended = lib.get_symbol_lazy("Extended").unwrap().unwrap();
         assert_eq!(extended.reference, "J");
+    }
+
+    #[test]
+    fn test_extends_overrides_jumper_metadata() {
+        let content = r#"(kicad_symbol_lib
+            (symbol "Base"
+                (duplicate_pin_numbers_are_jumpers yes)
+                (jumper_pin_groups ("1" "2"))
+            )
+            (symbol "Extended"
+                (extends "Base")
+                (duplicate_pin_numbers_are_jumpers no)
+                (jumper_pin_groups ("5" "6"))
+            )
+        )"#;
+
+        let lib = KicadSymbolLibrary::from_string(content).unwrap();
+        let extended = lib.get_symbol_lazy("Extended").unwrap().unwrap();
+        let expected: std::collections::BTreeSet<String> =
+            ["5", "6"].into_iter().map(String::from).collect();
+
+        assert!(!extended.internal_connectivity.duplicate_numbers_are_jumpers);
+        assert_eq!(extended.internal_connectivity.groups, vec![expected]);
     }
 
     #[test]

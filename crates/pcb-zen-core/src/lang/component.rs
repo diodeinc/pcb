@@ -812,6 +812,66 @@ fn net_kind_and_name<'v>(value: Value<'v>) -> Option<(&'v str, &'v str)> {
         })
 }
 
+fn net_id_from_value<'v>(value: Value<'v>) -> Option<u64> {
+    value
+        .downcast_ref::<NetValue>()
+        .map(|net| net.net_id())
+        .or_else(|| {
+            value
+                .downcast_ref::<FrozenNetValue>()
+                .map(|net| net.net_id())
+        })
+}
+
+/// Expand explicit jumper groups (symbol pins the part internally bridges) into
+/// effective connections: connected peers auto-fill missing ones, and assigning
+/// distinct nets within one group is an error.
+fn apply_explicit_jumper_connections<'v>(
+    component_name: &str,
+    symbol: &SymbolValue,
+    connections: &mut SmallMap<String, Value<'v>>,
+) -> Result<(), starlark::Error> {
+    for group in symbol.explicit_jumper_signal_groups() {
+        let connected: Vec<(&str, Value<'v>, u64)> = group
+            .iter()
+            .filter_map(|signal_name| {
+                let net = *connections.get(*signal_name)?;
+                Some((*signal_name, net, net_id_from_value(net)?))
+            })
+            .collect();
+
+        let Some(&(_, net, first_id)) = connected.first() else {
+            continue;
+        };
+
+        if connected.iter().any(|&(_, _, id)| id != first_id) {
+            let describe = |net: Value<'v>| match net_kind_and_name(net) {
+                Some((kind, name)) if !name.is_empty() => format!("{kind} '{name}'"),
+                _ => "unnamed net".to_string(),
+            };
+            let assignments: Vec<String> = connected
+                .iter()
+                .map(|&(signal_name, net, _)| format!("{signal_name} -> {}", describe(net)))
+                .collect();
+
+            return Err(starlark::Error::new_other(anyhow!(format!(
+                "Jumpered pins {} on component {} are internally connected but were assigned to different nets: {}. Use one net for the group or explicitly tie the labels together before import.",
+                group.join(", "),
+                component_name,
+                assignments.join(", ")
+            ))));
+        }
+
+        for signal_name in group {
+            if !connections.contains_key(signal_name) {
+                connections.insert(signal_name.to_owned(), net);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn net_diagnostic_location<'v>(
     eval: &Evaluator<'v, '_, '_>,
     value: Value<'v>,
@@ -1906,6 +1966,7 @@ where
                             raw_sexp: symbol_value.raw_sexp.clone(),
                             properties: symbol_value.properties.clone(),
                             in_bom: symbol_value.in_bom,
+                            internal_connectivity: symbol_value.internal_connectivity.clone(),
                         }
                     } else {
                         // symbol is not a Symbol type, just use pin_defs
@@ -1918,6 +1979,7 @@ where
                             raw_sexp: None,
                             properties: SmallMap::new(),
                             in_bom: true,
+                            internal_connectivity: pcb_sch::InternalConnectivity::default(),
                         }
                     }
                 } else {
@@ -1931,6 +1993,7 @@ where
                         raw_sexp: None,
                         properties: SmallMap::new(),
                         in_bom: true,
+                        internal_connectivity: pcb_sch::InternalConnectivity::default(),
                     }
                 }
             } else if let Some(symbol) = &symbol_val {
@@ -1994,6 +2057,8 @@ where
                 warn_pin_net_compatibility(eval_ctx, &name, &final_symbol, &signal_name, v_val);
                 connections.insert(signal_name, v_val);
             }
+
+            apply_explicit_jumper_connections(&name, &final_symbol, &mut connections)?;
 
             // Auto-fill unambiguously no_connect pins and error on all other missing pins.
             let mut missing_pins: Vec<&str> = final_symbol
@@ -2270,6 +2335,7 @@ mod tests {
             raw_sexp: None,
             properties,
             in_bom: true,
+            internal_connectivity: pcb_sch::InternalConnectivity::default(),
         }
     }
 
