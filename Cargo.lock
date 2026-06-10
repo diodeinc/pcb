@@ -5133,6 +5133,7 @@ dependencies = [
  "termimad",
  "thiserror 2.0.18",
  "toml",
+ "toml_edit",
  "tracing",
  "tracing-chrome",
  "tracing-subscriber",
@@ -7874,6 +7875,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

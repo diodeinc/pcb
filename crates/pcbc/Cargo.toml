@@ -52,6 +52,7 @@ comfy-table = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 walkdir = { workspace = true }
 tar = { workspace = true }
 zip = { workspace = true }

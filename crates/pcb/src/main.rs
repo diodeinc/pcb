@@ -112,7 +112,11 @@ fn run() -> Result<()> {
     }
 
     let override_request = take_cli_override(&mut args)?;
-    let selection = select_toolchain(override_request, is_help_request(&args))?;
+    let selection = select_toolchain(
+        override_request,
+        is_migrate_command(&args),
+        is_help_request(&args),
+    )?;
     exec_toolchain(&selection.binary, &args)
 }
 
@@ -127,6 +131,13 @@ fn is_shim_command(args: &[OsString]) -> bool {
     matches!(
         args.first().and_then(|arg| arg.to_str()),
         Some("self" | "toolchain")
+    )
+}
+
+fn is_migrate_command(args: &[OsString]) -> bool {
+    matches!(
+        args.first().and_then(|arg| arg.to_str()),
+        Some("migrate" | "m")
     )
 }
 
@@ -222,10 +233,16 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
 
 fn select_toolchain(
     override_request: Option<ToolchainRequest>,
+    migrate_command: bool,
     prefer_local: bool,
 ) -> Result<ResolvedToolchain> {
     let (request, reason) = if let Some(request) = override_request {
         (request, "command-line override".to_string())
+    } else if migrate_command {
+        (
+            ToolchainRequest::Latest,
+            "migrate uses the latest stable pcbc".to_string(),
+        )
     } else if let Some((path, lane)) = find_workspace_pcb_version()? {
         (
             parse_request(&lane)?,
@@ -860,7 +877,7 @@ fn toolchain_list() -> Result<()> {
 
 fn toolchain_show() -> Result<()> {
     println!("shim: {}", env!("CARGO_PKG_VERSION"));
-    let selection = select_toolchain(None, false)?;
+    let selection = select_toolchain(None, false, false)?;
     println!("active: {}", selection.label);
     println!("reason: {}", selection.reason);
     println!("binary: {}", selection.binary.display());
@@ -1178,6 +1195,17 @@ fn isoish_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn migrate_command_uses_latest_stable_toolchain() {
+        assert!(is_migrate_command(&args(&["migrate"])));
+        assert!(is_migrate_command(&args(&["m", "--dry-run"])));
+        assert!(!is_migrate_command(&args(&["build"])));
+    }
 
     #[test]
     fn release_listing_parser_extracts_only_version_prefixes() {
