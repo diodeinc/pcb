@@ -1194,9 +1194,11 @@ fn footprint_internal_connectivity_insert_at(footprint: &[pcb_sexpr::Sexpr]) -> 
             .as_list()
             .and_then(|child| child.first())
             .and_then(pcb_sexpr::Sexpr::as_sym);
+        // KiCad's board writer emits the jumper nodes right after these, in this
+        // order: attr, stackup, private_layers, net_tie_pad_groups.
         if matches!(
             tag,
-            Some("property" | "attr" | "net_tie_pad_groups" | "private_layers")
+            Some("property" | "attr" | "stackup" | "private_layers" | "net_tie_pad_groups")
         ) {
             insert_at = item.span.end;
         }
