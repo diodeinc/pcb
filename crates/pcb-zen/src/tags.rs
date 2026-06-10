@@ -14,7 +14,7 @@ use anyhow::Result;
 use path_slash::PathExt;
 use semver::Version;
 
-use crate::cache_index::ensure_bare_repo;
+use crate::cache_index::ensure_source_repo;
 use crate::git;
 
 /// Parse a version string, with or without 'v' prefix.
@@ -119,14 +119,14 @@ pub fn find_latest_tag(tags: &[String], prefix: &str) -> Option<String> {
 /// Get all available versions for packages in a repository.
 ///
 /// Returns a map from package_path (relative to repo) to all available versions,
-/// sorted descending (newest first). This fetches/updates the bare repo and parses
+/// sorted descending (newest first). This fetches/updates the source repo and parses
 /// all version tags.
 ///
 /// For root packages (tags like `v1.0.0`), the package path is an empty string.
 /// For nested packages (tags like `path/to/pkg/v1.0.0`), the package path is `path/to/pkg`.
 pub fn get_all_versions_for_repo(repo_url: &str) -> Result<BTreeMap<String, Vec<Version>>> {
-    let bare_dir = ensure_bare_repo(repo_url)?;
-    let tags = git::list_all_tags(&bare_dir)?;
+    let source_dir = ensure_source_repo(repo_url)?;
+    let tags = git::list_all_tags(&source_dir)?;
 
     let mut packages: BTreeMap<String, Vec<Version>> = BTreeMap::new();
     for tag in tags {

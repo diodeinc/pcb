@@ -27,8 +27,8 @@ use tracing::{info_span, instrument};
 use std::time::Instant;
 
 use crate::cache_index::{
-    CacheIndex, bare_repo_dir, cache_base, ensure_bare_repo, ensure_stdlib_materialized,
-    ensure_workspace_cache_symlink,
+    CacheIndex, cache_base, ensure_source_repo, ensure_stdlib_materialized,
+    ensure_workspace_cache_symlink, source_repo_dir,
 };
 use crate::git;
 use crate::tags;
@@ -2039,7 +2039,7 @@ fn resolve_to_version(
 /// Context for pseudo-version generation, caching expensive operations.
 struct PseudoVersionContext {
     index: CacheIndex,
-    bare_repos: HashMap<String, PathBuf>,
+    source_repos: HashMap<String, PathBuf>,
     base_versions: HashMap<String, HashMap<String, Version>>,
 }
 
@@ -2047,17 +2047,17 @@ impl PseudoVersionContext {
     fn new() -> Result<Self> {
         Ok(Self {
             index: CacheIndex::open()?,
-            bare_repos: HashMap::new(),
+            source_repos: HashMap::new(),
             base_versions: HashMap::new(),
         })
     }
 
-    fn ensure_bare_repo(&mut self, repo_url: &str) -> Result<PathBuf> {
-        if let Some(path) = self.bare_repos.get(repo_url) {
+    fn ensure_source_repo(&mut self, repo_url: &str) -> Result<PathBuf> {
+        if let Some(path) = self.source_repos.get(repo_url) {
             return Ok(path.clone());
         }
-        let path = ensure_bare_repo(repo_url)?;
-        self.bare_repos.insert(repo_url.to_string(), path.clone());
+        let path = ensure_source_repo(repo_url)?;
+        self.source_repos.insert(repo_url.to_string(), path.clone());
         Ok(path)
     }
 
@@ -2082,11 +2082,11 @@ impl PseudoVersionContext {
 
     fn generate_pseudo_version(&mut self, module_path: &str, commit: &str) -> Result<Version> {
         let (repo_url, subpath) = split_repo_and_subpath(module_path);
-        let bare_dir = self.ensure_bare_repo(repo_url)?;
+        let source_dir = self.ensure_source_repo(repo_url)?;
 
         // `git fetch origin <sha>` only works with full 40-char object IDs.
         // Users (and tests) may provide short hashes, so resolve to a full commit first.
-        let commit_full = git::rev_parse(&bare_dir, commit).ok_or_else(|| {
+        let commit_full = git::rev_parse(&source_dir, commit).ok_or_else(|| {
             anyhow::anyhow!(
                 "Failed to resolve rev '{}' in {} (provide a full commit hash or a ref that exists)",
                 commit,
@@ -2098,7 +2098,7 @@ impl PseudoVersionContext {
         let timestamp = match self.index.get_commit_metadata(repo_url, commit) {
             Some((ts, _)) => ts,
             None => {
-                let ts = git::show_commit_timestamp(&bare_dir, commit).unwrap_or_else(|| {
+                let ts = git::show_commit_timestamp(&source_dir, commit).unwrap_or_else(|| {
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
@@ -2110,7 +2110,7 @@ impl PseudoVersionContext {
         };
 
         let base_version = self
-            .get_base_version(&bare_dir, repo_url, subpath)
+            .get_base_version(&source_dir, repo_url, subpath)
             .unwrap_or_else(initial_package_version);
 
         // Build pseudo-version:
@@ -2131,13 +2131,13 @@ impl PseudoVersionContext {
 
     fn get_base_version(
         &mut self,
-        bare_dir: &Path,
+        source_dir: &Path,
         repo_url: &str,
         subpath: &str,
     ) -> Option<Version> {
         if !self.base_versions.contains_key(repo_url) {
             let mut versions: HashMap<String, Version> = HashMap::new();
-            if let Ok(tags) = git::list_all_tags(bare_dir) {
+            if let Ok(tags) = git::list_all_tags(source_dir) {
                 for tag in tags {
                     if let Some((pkg_path, version)) = tags::parse_tag(&tag) {
                         versions
@@ -2213,16 +2213,16 @@ fn verify_tag_hashes(
     manifest_hash: &str,
 ) -> Result<()> {
     let (repo_url, subpath) = split_repo_and_subpath(module_path);
-    let bare_dir = bare_repo_dir(repo_url)?;
+    let source_dir = source_repo_dir(repo_url)?;
     let tag_name = if subpath.is_empty() {
         format!("v{}", version)
     } else {
         format!("{}/v{}", subpath, version)
     };
 
-    // Read the annotated tag directly from the shared bare repo. Materialized
+    // Read the annotated tag directly from the shared source repo. Materialized
     // cache directories are plain extracted files now, not git repos.
-    let Some(tag_body) = git::cat_file(&bare_dir, &tag_name) else {
+    let Some(tag_body) = git::cat_file(&source_dir, &tag_name) else {
         return Ok(());
     };
 
@@ -2456,7 +2456,7 @@ where
 ///
 /// On a warm cache hit, this returns the existing immutable cache entry without
 /// touching Git. On a cold miss, it materializes the package once from the
-/// shared bare repo into `~/.pcb/cache/...`, then later builds reuse that cache.
+/// shared source repo into `~/.pcb/cache/...`, then later builds reuse that cache.
 /// Tagged versions archive from the version tag; pseudo-versions archive from
 /// the pinned commit.
 ///
@@ -2553,14 +2553,14 @@ fn fetch_via_git(
     subpath: &str,
     is_pseudo: bool,
 ) -> Result<()> {
-    // Materialize packages directly from the shared bare repo. With fully
-    // hydrated bare repos, this is both simpler and much faster than creating a
-    // temporary repo just to fetch, sparse-checkout, and flatten a subdirectory.
+    // Materialize packages directly from the shared source checkout instead of
+    // creating a temporary repo just to fetch, sparse-checkout, and flatten a
+    // subdirectory.
     std::fs::create_dir_all(dest)?;
-    let bare_dir = ensure_bare_repo(repo_url)?;
+    let source_dir = ensure_source_repo(repo_url)?;
 
     if is_pseudo {
-        git::ensure_rev_in_bare_repo(&bare_dir, ref_spec)?;
+        git::ensure_rev_in_source_repo(&source_dir, ref_spec)?;
     }
     let ref_name = ref_spec.to_string();
     let treeish = if subpath.is_empty() {
@@ -2568,7 +2568,7 @@ fn fetch_via_git(
     } else {
         format!("{ref_name}:{subpath}")
     };
-    git::archive_to_dir(&bare_dir, &treeish, dest)?;
+    git::archive_to_dir(&source_dir, &treeish, dest)?;
 
     Ok(())
 }
