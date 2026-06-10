@@ -71,9 +71,8 @@ install_local() {
   target_dir="$source_dir/target"
   cargo build --release -p pcb -p pcbc --manifest-path "$source_dir/Cargo.toml" --target-dir "$target_dir"
 
-  local_toolchain_dir="$data_dir/toolchains/local"
-  local_target_dir="$local_toolchain_dir/$target"
-  stdlib_dir="$local_toolchain_dir/lib/std"
+  local_target_dir="$data_dir/toolchains/local/$target"
+  stdlib_dir="$local_target_dir/lib/std"
 
   [ -d "$source_dir/lib/std" ] || { echo "missing stdlib: $source_dir/lib/std" >&2; exit 1; }
 
@@ -81,7 +80,7 @@ install_local() {
   install -m 755 "$target_dir/release/pcb" "$install_dir/pcb"
   rm -f "$install_dir/pcbc"
 
-  mkdir -p "$local_target_dir" "$(dirname "$stdlib_dir")"
+  mkdir -p "$local_target_dir/lib"
   install -m 755 "$target_dir/release/pcbc" "$local_target_dir/pcbc"
   rm -rf "$stdlib_dir"
   cp -R "$source_dir/lib/std" "$stdlib_dir"

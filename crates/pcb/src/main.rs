@@ -548,7 +548,7 @@ fn read_workspace_pcb_version(path: &Path) -> Result<Option<String>> {
 fn ensure_installed(version: &Version) -> Result<PathBuf> {
     ensure_supported_target()?;
 
-    let binary = installed_dir(version).join(pcbc_binary_name());
+    let binary = installed_binary_path(version);
     if binary.is_file() {
         return Ok(binary);
     }
@@ -613,10 +613,11 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
         &bytes,
     )?;
 
-    let toolchain_root = toolchains_dir().join("nightly");
-    let staging_root = toolchains_dir().join("nightly.tmp");
-    remove_path(&staging_root)?;
-    let staging_dir = staging_root.join(target_triple());
+    let install_dir = nightly_dir();
+    let staging_dir = install_dir.with_extension("tmp");
+    if staging_dir.exists() {
+        fs::remove_dir_all(&staging_dir)?;
+    }
     fs::create_dir_all(&staging_dir)?;
     let binary = staging_dir.join(pcbc_binary_name());
     fs::write(&binary, bytes)?;
@@ -635,15 +636,17 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
         staging_dir.join("receipt.json"),
         serde_json::to_vec_pretty(&receipt)?,
     )?;
-    stage_stdlib_archive(
-        &release.base_url,
-        &staging_root,
-        &format!("stdlib-nightly-{}.tar.zst", release.sha),
-    )?;
+    stage_stdlib_archive(&release.base_url, &staging_dir)?;
 
-    replace_toolchain_root(&staging_root, &toolchain_root)?;
+    if install_dir.exists() {
+        fs::remove_dir_all(&install_dir)?;
+    }
+    if let Some(parent) = install_dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(&staging_dir, &install_dir)?;
 
-    Ok((receipt, nightly_dir().join(pcbc_binary_name())))
+    Ok((receipt, install_dir.join(pcbc_binary_name())))
 }
 
 fn installed_nightly_toolchain() -> Result<Option<(NightlyReceipt, PathBuf)>> {
@@ -685,10 +688,11 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
             find_extracted_binary(&extract_dir)?
         }
     };
-    let toolchain_root = toolchains_dir().join(version.to_string());
-    let staging_root = toolchains_dir().join(format!("{version}.tmp"));
-    remove_path(&staging_root)?;
-    let staging_dir = staging_root.join(target_triple());
+    let install_dir = installed_dir(version);
+    let staging_dir = install_dir.with_extension("tmp");
+    if staging_dir.exists() {
+        fs::remove_dir_all(&staging_dir)?;
+    }
     fs::create_dir_all(&staging_dir)?;
     let dst_binary = staging_dir.join(pcbc_binary_name());
     fs::copy(&src_binary, &dst_binary)?;
@@ -705,89 +709,35 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
         staging_dir.join("receipt.json"),
         serde_json::to_vec_pretty(&receipt)?,
     )?;
-    stage_stdlib_archive(
-        &format!("{RELEASE_BASE_URL}/v{version}"),
-        &staging_root,
-        &format!("stdlib-v{version}.tar.zst"),
-    )?;
+    stage_stdlib_archive(&format!("{RELEASE_BASE_URL}/v{version}"), &staging_dir)?;
 
-    replace_toolchain_root(&staging_root, &toolchain_root)?;
+    if install_dir.exists() {
+        fs::remove_dir_all(&install_dir)?;
+    }
+    if let Some(parent) = install_dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(&staging_dir, &install_dir)?;
 
-    Ok(installed_dir(version).join(pcbc_binary_name()))
+    Ok(install_dir.join(pcbc_binary_name()))
 }
 
-fn stage_stdlib_archive(base_url: &str, staging_root: &Path, cache_name: &str) -> Result<()> {
+fn stage_stdlib_archive(base_url: &str, staging_dir: &Path) -> Result<()> {
     let url = format!("{}/{}", base_url.trim_end_matches('/'), STDLIB_ARCHIVE_NAME);
-    let Some(bytes) = download_optional(&http_client(ARCHIVE_TIMEOUT)?, &url)? else {
-        return Ok(());
-    };
+    let bytes = download_optional(&http_client(ARCHIVE_TIMEOUT)?, &url)?
+        .ok_or_else(|| anyhow::anyhow!("not found: {url}"))?;
     verify_checksum(&url, &bytes)?;
 
-    fs::create_dir_all(downloads_dir())?;
-    fs::write(downloads_dir().join(cache_name), &bytes)?;
-
     let unpacked = decompress_zstd(&url, bytes)?;
-    let stdlib_dir = staging_root.join("lib").join("std");
+    let stdlib_dir = staging_dir.join("lib").join("std");
     fs::create_dir_all(&stdlib_dir)?;
-
     tar::Archive::new(Cursor::new(unpacked))
         .unpack(&stdlib_dir)
         .with_context(|| format!("failed to extract stdlib archive {url}"))?;
-    validate_stdlib_archive(&stdlib_dir, &url)?;
-    Ok(())
-}
-
-fn validate_stdlib_archive(stdlib_dir: &Path, url: &str) -> Result<()> {
     anyhow::ensure!(
         stdlib_dir.join("interfaces.zen").is_file(),
         "stdlib archive {url} did not contain interfaces.zen at the archive root"
     );
-    anyhow::ensure!(
-        stdlib_dir.join("generics").is_dir(),
-        "stdlib archive {url} did not contain generics/ at the archive root"
-    );
-    Ok(())
-}
-
-fn replace_toolchain_root(staging_root: &Path, toolchain_root: &Path) -> Result<()> {
-    let backup_root = toolchain_root.with_file_name(format!(
-        "{}.old",
-        toolchain_root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("toolchain")
-    ));
-
-    remove_path(&backup_root)?;
-    if let Some(parent) = toolchain_root.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    if toolchain_root.exists() {
-        fs::rename(toolchain_root, &backup_root)?;
-    }
-
-    if let Err(err) = fs::rename(staging_root, toolchain_root) {
-        if backup_root.exists() {
-            let _ = fs::rename(&backup_root, toolchain_root);
-        }
-        return Err(err).with_context(|| {
-            format!(
-                "failed to install toolchain at {}",
-                toolchain_root.display()
-            )
-        });
-    }
-
-    remove_path(&backup_root)?;
-    Ok(())
-}
-
-fn remove_path(path: &Path) -> Result<()> {
-    if path.is_dir() {
-        fs::remove_dir_all(path)?;
-    } else if path.exists() {
-        fs::remove_file(path)?;
-    }
     Ok(())
 }
 
@@ -1206,6 +1156,10 @@ fn pcbc_version(binary: &Path) -> Option<Version> {
     let stdout = String::from_utf8(output.stdout).ok()?;
     let version = stdout.split_whitespace().last()?;
     Version::parse(version).ok()
+}
+
+fn installed_binary_path(version: &Version) -> PathBuf {
+    installed_dir(version).join(pcbc_binary_name())
 }
 
 fn installed_dir(version: &Version) -> PathBuf {
