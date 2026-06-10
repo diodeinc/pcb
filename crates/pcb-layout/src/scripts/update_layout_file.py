@@ -144,11 +144,12 @@ class JsonNetlistParser:
     class Part:
         """Represents a component part from the netlist."""
 
-        def __init__(self, ref, value, footprint, sheetpath):
+        def __init__(self, ref, value, footprint, sheetpath, placement=None):
             self.ref = ref
             self.value = value
             self.footprint = footprint
             self.sheetpath = sheetpath
+            self.placement = placement
             self.properties = []
 
     class Module:
@@ -286,7 +287,9 @@ class JsonNetlistParser:
             sheetpath = JsonNetlistParser.SheetPath(hier_name, ts_uuid)
 
             # Create part
-            part = JsonNetlistParser.Part(ref, value, footprint, sheetpath)
+            part = JsonNetlistParser.Part(
+                ref, value, footprint, sheetpath, placement=instance.get("placement")
+            )
 
             # Add properties from attributes
             for attr_name, attr_value in instance["attributes"].items():

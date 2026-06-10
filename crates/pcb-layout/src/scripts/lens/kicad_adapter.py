@@ -747,7 +747,6 @@ def apply_changeset(
         pcbnew: pcbnew module
         footprint_lib_map: Mapping of library nicknames to paths
         board_path: Path to the .kicad_pcb file (for resolving relative paths)
-
     Returns:
         OpLog with all operations performed
     """
@@ -825,12 +824,13 @@ def apply_changeset(
     # Phase 2: Additions (footprints and groups)
     # ==========================================================================
 
-    # 2a. FP-ADD - create footprints at origin (0,0)
-    # All new footprints start at origin; HierPlace will position them
-    # (including applying fragment positions if the fragment loads successfully)
+    # 2a. FP-ADD - create footprints at their resolved complement (fixed
+    # placements land directly at their pose; the rest start at origin).
     for entity_id in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
         fp_view = view.footprints[entity_id]
-        fp_complement = default_footprint_complement()
+        fp_complement = changeset.complement.footprints.get(
+            entity_id, default_footprint_complement()
+        )
 
         try:
             fp = _create_footprint(
@@ -896,6 +896,11 @@ def apply_changeset(
         _update_footprint_view(
             fp, fp_view, pcbnew, package_roots=package_roots, layout_dir=layout_dir
         )
+        if fp_view.fixed_placement:
+            comp = changeset.complement.footprints.get(entity_id)
+            if comp is not None:
+                apply_footprint_placement(fp, comp, pcbnew)
+                oplog.place_fp(str(entity_id.path), comp.position.x, comp.position.y)
 
     # ==========================================================================
     # Phase 4: Group membership rebuild (uses fresh groups_by_name from above)
@@ -1246,6 +1251,7 @@ def _apply_position_inheritance(
     fps_by_entity_id: Dict[EntityId, Any],
     pcbnew: Any,
     oplog: OpLog,
+    exclude: Optional[Set[EntityId]] = None,
 ) -> Tuple[int, Set[EntityId]]:
     """Apply position inheritance for FPID changes.
 
@@ -1262,7 +1268,11 @@ def _apply_position_inheritance(
         eid.path: (eid, comp) for eid, comp in changeset.removed_footprints.items()
     }
 
+    excluded = exclude or set()
+
     for added_id in changeset.added_footprints:
+        if added_id in excluded:
+            continue
         removed_info = removed_by_path.get(added_id.path)
         if not removed_info:
             continue
@@ -1409,11 +1419,15 @@ def _run_hierarchical_placement(
     Rule C: Non-fragment groups use pure bottom-up HierPlace
     Rule D: Root integration with existing content
     """
+    fixed_footprints: Set[EntityId] = {
+        eid for eid, view in board_view.footprints.items() if view.fixed_placement
+    }
+
     placed, inherited = _apply_position_inheritance(
-        changeset, fps_by_entity_id, pcbnew, oplog
+        changeset, fps_by_entity_id, pcbnew, oplog, exclude=fixed_footprints
     )
 
-    newly_added = changeset.added_footprints - inherited
+    newly_added = changeset.added_footprints - inherited - fixed_footprints
     # IMPORTANT: group-only repairs (GR_ADD with no FP_ADD) must not trigger placement.
     # If a group wrapper was deleted in KiCad but its child footprints still exist,
     # running HierPlace could move existing footprints (via a `PLACE_GR`), which is
@@ -1436,7 +1450,7 @@ def _run_hierarchical_placement(
         plan, inherited, fps_by_entity_id, pcbnew, oplog
     )
     placed += frag_placed
-    exclude = inherited | fragment_fps
+    exclude = inherited | fragment_fps | fixed_footprints
 
     # Rule C & D: Build tree excluding fragment descendants
     tree = _build_group_tree(changeset, plan, exclude_footprints=exclude)
@@ -1447,8 +1461,11 @@ def _run_hierarchical_placement(
     sizes = _collect_item_sizes(
         changeset, fps_by_entity_id, groups_by_name, pcbnew, plan, exclude
     )
+    # Treat fixed footprints as existing content so HierPlace packs around them.
     existing_bbox = _compute_existing_bbox(
-        kicad_board, set(changeset.added_footprints), pcbnew
+        kicad_board,
+        set(changeset.added_footprints) - fixed_footprints,
+        pcbnew,
     )
     layout = _compute_hierarchical_layout(
         tree, sizes, set(changeset.added_groups), set(plan.loaded.keys()), existing_bbox

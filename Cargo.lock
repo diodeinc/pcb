@@ -4863,6 +4863,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-mechanical"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "dirs",
+ "log",
+ "pcb-sch",
+ "pcb-zen-core",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
 name = "pcb-sch"
 version = "0.4.0"
 dependencies = [
@@ -5110,6 +5126,7 @@ dependencies = [
  "pcb-ir",
  "pcb-kicad",
  "pcb-layout",
+ "pcb-mechanical",
  "pcb-sch",
  "pcb-sexpr",
  "pcb-sim",

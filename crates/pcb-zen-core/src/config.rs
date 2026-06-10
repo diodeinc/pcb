@@ -421,9 +421,26 @@ pub struct Board {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 
+    /// External mechanical inputs for this board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanical: Option<MechanicalConfig>,
+
     /// Optional description of the board
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MechanicalConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idf: Option<IdfConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdfConfig {
+    /// IDF board file (`.emn`).
+    #[serde(alias = "board")]
+    pub emn: String,
 }
 
 /// Board configuration (used for compatibility with external crates expecting BoardConfig name)
@@ -801,6 +818,22 @@ description = "A test board"
         assert_eq!(board.name, "TestBoard");
         assert_eq!(board.path, Some("test_board.zen".to_string()));
         assert_eq!(board.description, "A test board");
+    }
+
+    #[test]
+    fn test_parse_board_mechanical_idf() {
+        let content = r#"
+[board]
+name = "TestBoard"
+path = "test_board.zen"
+
+[board.mechanical.idf]
+emn = "mechanical/TestBoard.emn"
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        let idf = config.board.unwrap().mechanical.unwrap().idf.unwrap();
+        assert_eq!(idf.emn, "mechanical/TestBoard.emn");
     }
 
     #[test]

@@ -736,6 +736,7 @@ pub mod utils {
         BoardConfig::from_json_str(config_json).ok()
     }
 
+    /// Extract the registered chassis from the schematic root attributes.
     pub fn extract_layout_name(schematic: &Schematic) -> Option<String> {
         schematic
             .instances

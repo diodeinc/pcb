@@ -384,7 +384,8 @@ pub fn build_board_release(
             None => None,
         };
 
-        let schematic = eval_output.to_schematic()?;
+        let mut schematic = eval_output.to_schematic()?;
+        pcb_mechanical::apply_mcad_positions(&mut schematic, &zen_path, &resolution)?;
 
         let info = ReleaseInfo {
             zen_path,
