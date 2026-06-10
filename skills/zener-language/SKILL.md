@@ -10,7 +10,7 @@ Canonical Zener HDL semantics and authoring guidance.
 ## Workflow
 
 1. Use `pcb doc --package @stdlib` or `pcb doc --package <package>` to find the public API and source root (`<!-- source: ... -->`); add `--list` for the file tree. Read source from that root for exact behavior.
-2. Preserve trailing `# pcb:sch ...` comments. Only update names inside an existing comment when you rename the matching component or net.
+2. Preserve `# pcb:sch ...` comments; see "Schematic Position Comments" below.
 3. After adding, removing, or changing package `Module()` / `load()` imports, run `pcb sync` from the relevant workspace or package, then run `pcb build <path>` to validate. `pcb sync` is the dependency reconciliation step; `pcb build` is the validation step.
 4. For recent Zener, stdlib, and `pcb` CLI changes, check the pcb changelog entries for the installed version and nearby previous releases: <https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md>
 
@@ -138,6 +138,7 @@ Resistor(name="R_MSYNC_VCC", value="0ohm", package="0402", P1=MSYNC, P2=VCC, dnp
 - Avoid overly verbose `help=` text. Use `help=` only when it adds integrator-visible meaning that is not already obvious from the name, type, or default.
 - Omit comments and help text that merely restate the code.
 - Do not use decorative section-divider comments such as `# ===== Config =====`, `# ----- IOs -----`, or multi-line banner blocks. They add no value.
+- These comment-cleanup rules never apply to `# pcb:sch` lines; see "Schematic Position Comments".
 
 ### Naming
 
@@ -147,6 +148,14 @@ Resistor(name="R_MSYNC_VCC", value="0ohm", package="0402", P1=MSYNC, P2=VCC, dnp
 | `config()` names | lowercase | `input_filter`, `output_voltage` |
 | Components | Uppercase functional prefix | `R_LOAD`, `C_VDD`, `U_LDO` |
 | Differential pairs | `_P` / `_N` suffixes | `IN_P`, `IN_N` |
+
+## Schematic Position Comments (`# pcb:sch`)
+
+A block of `# pcb:sch <ID> x=... y=... rot=...` lines at the end of a `.zen` file stores the schematic placement of components and net symbols, usually positioned by hand by the user in a schematic editor. Treat the block as the user's saved layout, not as ordinary comments.
+
+- Preserve the block through every edit and file rewrite, even when lines look stale or machine-generated. Add new code above it.
+- When renaming a component or net, update the matching names inside its lines. When deleting a component, remove only its own lines.
+- Do not add lines for new components (unplaced items are auto-placed), edit coordinates by hand, or otherwise change placement unless the user explicitly asks for schematic layout changes.
 
 ## Packages And Manifests
 
