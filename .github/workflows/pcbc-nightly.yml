@@ -61,6 +61,25 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "base_url=$base_url" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare stdlib source archive
+        if: steps.nightly.outputs.should_build == 'true'
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
+          mkdir -p artifacts
+          git archive --format=tar HEAD:lib/std | zstd -q -3 -c > artifacts/stdlib.tar.zst
+          sha256sum artifacts/stdlib.tar.zst > artifacts/stdlib.tar.zst.sha256
+
+      - name: Upload stdlib source archive
+        if: steps.nightly.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pcbc-nightly-stdlib
+          path: artifacts/stdlib.tar.zst*
+
   build:
     needs: prepare
     if: needs.prepare.outputs.should_build == 'true'

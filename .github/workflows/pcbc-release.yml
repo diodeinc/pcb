@@ -64,6 +64,23 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare stdlib source archive
+        run: |
+          set -euo pipefail
+          if ! command -v zstd >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
+          mkdir -p artifacts
+          git archive --format=tar HEAD:lib/std | zstd -q -3 -c > artifacts/stdlib.tar.zst
+          sha256sum artifacts/stdlib.tar.zst > artifacts/stdlib.tar.zst.sha256
+
+      - name: Upload stdlib source archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: pcbc-stdlib
+          path: artifacts/stdlib.tar.zst*
+
   build:
     needs: prepare
     name: build pcbc (${{ matrix.target }})
@@ -156,10 +173,6 @@ jobs:
       - build
     runs-on: ubicloud-standard-16
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.dry_run && github.ref_name || needs.prepare.outputs.tag }}
-
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:
@@ -184,6 +197,7 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           prerelease_flag=""
           if [ "${{ needs.prepare.outputs.prerelease }}" = "true" ]; then
