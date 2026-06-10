@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changes
 
-- `pcb migrate` now runs the latest stable `pcbc` toolchain and updates the workspace `pcb-version` after migrations succeed.
+- `pcb migrate` now upgrades workspace `pcb-version` after successful latest-toolchain migrations.
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
 - Updated stdlib generics to use KiCad 10.0.3 symbols and footprints, while keeping `Crystal()` compatible with KiCad 9 four-pin symbols.
 - `pcb publish` now bundles only referenced KiCad split-symbol files instead of whole split-library directories.

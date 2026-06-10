@@ -247,32 +247,53 @@ fn select_toolchain(
     migrate_command: bool,
     prefer_local: bool,
 ) -> Result<ResolvedToolchain> {
-    let (request, reason) = if let Some(request) = override_request {
-        (request, "command-line override".to_string())
-    } else if migrate_command {
+    let (request, reason, allow_latest_fallback) = if let Some(request) = override_request {
+        let allow_latest_fallback =
+            should_allow_latest_fallback(&request, migrate_command, prefer_local);
         (
-            ToolchainRequest::Latest,
+            request,
+            "command-line override".to_string(),
+            allow_latest_fallback,
+        )
+    } else if migrate_command {
+        let request = ToolchainRequest::Latest;
+        let allow_latest_fallback =
+            should_allow_latest_fallback(&request, migrate_command, prefer_local);
+        (
+            request,
             "migrate uses the latest stable pcbc".to_string(),
+            allow_latest_fallback,
         )
     } else if let Some((path, lane)) = find_workspace_pcb_version()? {
         (
             parse_request(&lane)?,
             format!("{} requires {lane}", path.display()),
+            true,
         )
     } else {
         (
             ToolchainRequest::Latest,
             "no pcb.toml found; using latest".to_string(),
+            true,
         )
     };
 
-    resolve_request(&request, reason, prefer_local)
+    resolve_request(&request, reason, prefer_local, allow_latest_fallback)
+}
+
+fn should_allow_latest_fallback(
+    request: &ToolchainRequest,
+    migrate_command: bool,
+    prefer_local: bool,
+) -> bool {
+    !matches!(request, ToolchainRequest::Latest) || !migrate_command || prefer_local
 }
 
 fn resolve_request(
     request: &ToolchainRequest,
     reason: String,
     prefer_local: bool,
+    allow_latest_fallback: bool,
 ) -> Result<ResolvedToolchain> {
     if matches!(request, ToolchainRequest::Nightly) {
         return resolve_nightly(reason);
@@ -299,7 +320,7 @@ fn resolve_request(
                 });
             }
             Err(remote_error) => {
-                if let Some(local) = best_local_toolchain(request)? {
+                if allow_latest_fallback && let Some(local) = best_local_toolchain(request)? {
                     eprintln!(
                         "Warning: failed to check latest release ({remote_error}); using installed pcbc {}",
                         local.0
@@ -1227,6 +1248,30 @@ mod tests {
             "migrate"
         ])));
         assert!(!is_migrate_command(&args(&["build"])));
+    }
+
+    #[test]
+    fn migrate_latest_does_not_fallback_to_installed_toolchain() {
+        assert!(!should_allow_latest_fallback(
+            &ToolchainRequest::Latest,
+            true,
+            false
+        ));
+        assert!(should_allow_latest_fallback(
+            &ToolchainRequest::Latest,
+            true,
+            true
+        ));
+        assert!(should_allow_latest_fallback(
+            &ToolchainRequest::Latest,
+            false,
+            false
+        ));
+        assert!(should_allow_latest_fallback(
+            &ToolchainRequest::Lane { major: 0, minor: 4 },
+            true,
+            false
+        ));
     }
 
     #[test]

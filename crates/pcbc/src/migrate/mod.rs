@@ -102,11 +102,7 @@ fn migrate_workspace(root: &Path) -> Result<()> {
     let from_lane = existing.and_then(parse_pcb_version);
     run_versioned_migrations(root, from_lane, target_lane)?;
 
-    let updated = set_workspace_pcb_version(&original, &target, existing.is_none())
-        .with_context(|| format!("Failed to update {}", pcb_toml_path.display()))?;
-    PcbToml::parse_with_path(&updated, &pcb_toml_path)?;
-    fs::write(&pcb_toml_path, updated)
-        .with_context(|| format!("Failed to write {}", pcb_toml_path.display()))?;
+    write_workspace_pcb_version(&pcb_toml_path, &target)?;
 
     if let Some(previous) = existing {
         println!(
@@ -122,6 +118,24 @@ fn migrate_workspace(root: &Path) -> Result<()> {
             target
         );
     }
+    Ok(())
+}
+
+fn write_workspace_pcb_version(pcb_toml_path: &Path, target: &str) -> Result<()> {
+    let content = fs::read_to_string(pcb_toml_path)
+        .with_context(|| format!("Failed to read {}", pcb_toml_path.display()))?;
+    let config = PcbToml::parse_with_path(&content, pcb_toml_path)?;
+    let workspace = config.workspace.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Migration target is not a workspace manifest: {}",
+            pcb_toml_path.display()
+        )
+    })?;
+    let updated = set_workspace_pcb_version(&content, target, workspace.pcb_version.is_none())
+        .with_context(|| format!("Failed to update {}", pcb_toml_path.display()))?;
+    PcbToml::parse_with_path(&updated, pcb_toml_path)?;
+    fs::write(pcb_toml_path, updated)
+        .with_context(|| format!("Failed to write {}", pcb_toml_path.display()))?;
     Ok(())
 }
 
@@ -218,5 +232,23 @@ pcb-version = "not this"
             output,
             "[workspace]\nname = \"demo\"\npcb-version = \"0.4\"\n"
         );
+    }
+
+    #[test]
+    fn writes_workspace_pcb_version_from_current_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pcb.toml");
+        fs::write(&path, "[workspace]\npcb-version = \"0.3\"\n").unwrap();
+
+        fs::write(
+            &path,
+            "[workspace]\npcb-version = \"0.3\"\nname = \"from-migration\"\n",
+        )
+        .unwrap();
+        write_workspace_pcb_version(&path, "0.4").unwrap();
+
+        let output = fs::read_to_string(path).unwrap();
+        assert!(output.contains("name = \"from-migration\""));
+        assert!(output.contains("pcb-version = \"0.4\""));
     }
 }
