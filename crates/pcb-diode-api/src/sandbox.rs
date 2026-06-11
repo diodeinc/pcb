@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::path::Path;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -8,11 +10,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Body, Client};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -239,24 +239,36 @@ impl SandboxClient {
     }
 
     pub fn write_file(&self, sandbox_id: &str, path: &str, bytes: &[u8]) -> Result<()> {
-        #[derive(Serialize)]
-        struct WriteRequest {
-            content: String,
-            encoding: &'static str,
-        }
-
-        let _: serde_json::Value = self.put_json(
+        self.put_octet_stream(
             &format!(
                 "/api/sandboxes/{}/fs/write{}",
                 encode_segment(sandbox_id),
                 encoded_absolute_path(path)?
             ),
-            &WriteRequest {
-                content: BASE64.encode(bytes),
-                encoding: "base64",
-            },
-        )?;
-        Ok(())
+            Body::from(bytes.to_vec()),
+        )
+    }
+
+    pub fn write_file_from_path(
+        &self,
+        sandbox_id: &str,
+        path: &str,
+        local_path: &Path,
+    ) -> Result<()> {
+        let file = File::open(local_path)
+            .with_context(|| format!("Failed to open {}", local_path.display()))?;
+        let len = file
+            .metadata()
+            .with_context(|| format!("Failed to stat {}", local_path.display()))?
+            .len();
+        self.put_octet_stream(
+            &format!(
+                "/api/sandboxes/{}/fs/write{}",
+                encode_segment(sandbox_id),
+                encoded_absolute_path(path)?
+            ),
+            Body::sized(file, len),
+        )
     }
 
     pub fn mkdir_p(&self, sandbox_id: &str, path: &str) -> Result<()> {
@@ -357,21 +369,20 @@ impl SandboxClient {
             .context("Invalid sandbox response")
     }
 
-    fn put_json<T: for<'de> Deserialize<'de>, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> Result<T> {
+    fn put_octet_stream(&self, path: &str, body: Body) -> Result<()> {
         let response = self
             .http
             .put(self.url(path))
             .bearer_auth(self.auth_token.as_str())
-            .json(body)
+            .header("content-type", "application/octet-stream")
+            .body(body)
             .send()
             .context("Sandbox PUT request failed")?;
-        self.ensure_success(response)?
+        let _: serde_json::Value = self
+            .ensure_success(response)?
             .json()
-            .context("Invalid sandbox response")
+            .context("Invalid sandbox response")?;
+        Ok(())
     }
 
     fn ensure_success(

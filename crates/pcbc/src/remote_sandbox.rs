@@ -385,10 +385,7 @@ fn sync_layout_up(
     files
         .par_iter()
         .try_for_each(|(local_path, remote_path)| -> Result<()> {
-            let bytes = fs::read(local_path).with_context(|| {
-                format!("Failed to read local layout file {}", local_path.display())
-            })?;
-            client.write_file(&uri.sandbox_id, remote_path, &bytes)
+            client.write_file_from_path(&uri.sandbox_id, remote_path, local_path)
         })?;
 
     let stale_remote: Vec<_> = client

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Remote sandbox layout sync now streams uploaded layout files as raw bytes instead of base64 JSON payloads.
+
 ## [0.3.85] - 2026-05-21
 
 ### Added
