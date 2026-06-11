@@ -5,9 +5,7 @@ use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::resolution::ResolutionResult;
 use tracing::instrument;
 
-use pcb_zen::{
-    get_workspace_info, package_resolver::sync_workspace_vendor, resolve_workspace_dependencies,
-};
+use pcb_zen::{get_workspace_info, resolve_workspace_dependencies};
 
 /// Resolve dependencies for a workspace/board.
 /// This is a shared helper used by build, bom, layout, open, etc.
@@ -42,7 +40,6 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         );
     }
 
-    sync_workspace_vendor(&workspace_info, path, offline)?;
     let mut res = resolve_workspace_dependencies(workspace_info, path, offline, locked)?;
 
     if res.package_resolutions.is_empty() {
@@ -60,7 +57,6 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
             vendor_result.pruned_count
         );
         let workspace_info = get_workspace_info(&DefaultFileProvider::new(), path)?;
-        sync_workspace_vendor(&workspace_info, path, offline)?;
         res = resolve_workspace_dependencies(workspace_info, path, offline, locked)?;
     }
 
