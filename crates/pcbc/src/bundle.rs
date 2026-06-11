@@ -22,6 +22,7 @@ pub(crate) struct MetadataInput<'a> {
     pub layout_path: Option<&'a Path>,
     pub description: Option<&'a str>,
     pub include_kicad_version: bool,
+    pub bom_strict: bool,
 }
 
 pub(crate) struct SourceBundlePlan<'a> {
@@ -462,6 +463,10 @@ fn create_metadata_json(input: &MetadataInput<'_>) -> serde_json::Value {
                 .unwrap_or_else(|| "unknown".to_string())
         };
         system_obj["kicad_version"] = serde_json::Value::String(kicad_version);
+    }
+
+    if input.bom_strict {
+        system_obj["bom"] = serde_json::json!({ "strict": true });
     }
 
     serde_json::json!({
