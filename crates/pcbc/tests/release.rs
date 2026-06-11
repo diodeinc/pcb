@@ -287,6 +287,49 @@ fn test_publish_board_full() {
 }
 
 #[test]
+fn test_publish_metadata_includes_bom_strict() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.3"
+
+[workspace.bom]
+strict = true
+"#,
+        )
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/modules/component.zen", SIMPLE_COMPONENT)
+        .write("boards/modules/test.kicad_mod", TEST_KICAD_MOD)
+        .write(
+            "boards/modules/datasheet.txt",
+            "Simple component datasheet.",
+        )
+        .write("boards/TestBoard.zen", SIMPLE_BOARD_ZEN)
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .init_git()
+        .commit("Initial commit")
+        .sync();
+
+    sb.run("pcbc", source_only_args("boards/TestBoard.zen"))
+        .run()
+        .expect("Failed to run pcb publish command");
+
+    let staging_dir = find_staging_dir(&sb, "TestBoard");
+    let metadata_file = File::open(
+        sb.root_path()
+            .join("src")
+            .join(&staging_dir)
+            .join("metadata.json"),
+    )
+    .unwrap();
+    let metadata_json: Value = serde_json::from_reader(metadata_file).unwrap();
+    assert_eq!(metadata_json["release"]["bom"]["strict"], true);
+}
+
+#[test]
 fn test_publish_board_with_file() {
     let mut sb = Sandbox::new();
     const DATASHEET_CONTENTS: &str = "Simple component datasheet.";

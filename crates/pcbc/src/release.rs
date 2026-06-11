@@ -831,6 +831,7 @@ fn write_metadata(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         layout_path: info.layout.as_ref().map(|layout| layout.layout_dir_rel()),
         description: board_description.as_deref(),
         include_kicad_version: true,
+        bom_strict: info.workspace_info().workspace_config().bom.strict,
     })
 }
 

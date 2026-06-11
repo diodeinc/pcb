@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb migrate` now upgrades workspace `pcb-version` after successful latest-toolchain migrations.
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
+- `pcb publish` release metadata now records strict workspace BOM matching when enabled.
 - Updated stdlib generics to use KiCad 10.0.3 symbols and footprints, while keeping `Crystal()` compatible with KiCad 9 four-pin symbols.
 - `pcb publish` now bundles only referenced KiCad split-symbol files instead of whole split-library directories.
 - Removed legacy manifest and import support: `[module]`, `[packages]`, `[assets]`, and `[workspace].resolver` are rejected; legacy stdlib load paths are no longer accepted; `pcb migrate` no longer runs V1 codemods.
