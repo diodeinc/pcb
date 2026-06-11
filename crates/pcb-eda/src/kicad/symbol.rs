@@ -1,10 +1,12 @@
 use crate::kicad::metadata::SymbolMetadata;
-use crate::{Part, Pin, PinAlternate, PinAt, Symbol, is_placeholder_kicad_pin_name};
+use crate::{
+    InternalConnectivity, Part, Pin, PinAlternate, PinAt, Symbol, is_placeholder_kicad_pin_name,
+};
 use anyhow::Result;
 use pcb_sexpr::{Sexpr, SexprKind, parse};
 use serde::Serialize;
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
@@ -16,6 +18,7 @@ pub struct KicadSymbol {
     pub(super) extends: Option<String>,
     pub(super) footprint: String,
     pub(super) in_bom: bool,
+    pub(super) internal_connectivity: InternalConnectivity,
     pub(super) pins: Vec<KicadPin>,
     pub(super) mpn: Option<String>,
     pub(super) manufacturer: Option<String>,
@@ -104,6 +107,7 @@ impl From<KicadSymbol> for Symbol {
             footprint: symbol.footprint,
             reference: symbol.reference,
             in_bom: symbol.in_bom,
+            internal_connectivity: symbol.internal_connectivity,
             mpn: symbol.mpn,
             datasheet: symbol.datasheet_url,
             manufacturer: symbol.manufacturer,
@@ -202,6 +206,13 @@ pub(super) fn parse_symbol(symbol_data: &[Sexpr]) -> Result<KicadSymbol> {
                     }
                 }
                 "in_bom" => parse_in_bom(&mut symbol, prop_list),
+                "duplicate_pin_numbers_are_jumpers" => {
+                    symbol.internal_connectivity.duplicate_numbers_are_jumpers =
+                        prop_list.get(1).and_then(parse_bool_atom).unwrap_or(false);
+                }
+                "jumper_pin_groups" => {
+                    symbol.internal_connectivity.groups = parse_jumper_pin_groups(prop_list);
+                }
                 "property" => parse_property(&mut symbol, prop_list),
                 "pin" => {
                     if let Some(pin) = parse_pin(prop_list) {
@@ -350,10 +361,35 @@ fn parse_pin_from_section(pin_data: &[Sexpr]) -> Option<KicadPin> {
 }
 
 fn parse_in_bom(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
-    symbol.in_bom = prop_list
-        .get(1)
-        .map(|v| matches!(&v.kind, SexprKind::Symbol(s) if s == "yes"))
-        .unwrap_or(false);
+    symbol.in_bom = prop_list.get(1).and_then(parse_bool_atom).unwrap_or(false);
+}
+
+fn parse_bool_atom(node: &Sexpr) -> Option<bool> {
+    match node.as_atom() {
+        Some("yes") | Some("1") => Some(true),
+        Some("no") | Some("0") => Some(false),
+        _ => match node.as_int() {
+            Some(1) => Some(true),
+            Some(0) => Some(false),
+            _ => None,
+        },
+    }
+}
+
+fn parse_jumper_pin_groups(prop_list: &[Sexpr]) -> Vec<BTreeSet<String>> {
+    prop_list
+        .iter()
+        .skip(1)
+        .filter_map(|group| {
+            Some(
+                group
+                    .as_list()?
+                    .iter()
+                    .filter_map(|pin| pin.as_str().or_else(|| pin.as_sym()).map(ToOwned::to_owned))
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
 fn parse_property(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {

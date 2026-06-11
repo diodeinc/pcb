@@ -3,7 +3,7 @@ mod test_utils;
 use test_utils::setup_symbol;
 
 use pcb_eda::{Part, Symbol, SymbolLibrary};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 fn test_symbol_property(symbol_name: &str, property: impl Fn(&Symbol) -> String, expected: &str) {
     let symbol = setup_symbol(symbol_name);
@@ -256,6 +256,38 @@ fn test_kicad10_duplicate_pin_numbers_marked_as_jumpers_are_preserved() {
     assert_eq!(symbol.pins[1].number, "1");
     assert_eq!(symbol.pins[0].name, "A");
     assert_eq!(symbol.pins[1].name, "B");
+    assert!(symbol.internal_connectivity.duplicate_numbers_are_jumpers);
+    assert!(symbol.internal_connectivity.groups.is_empty());
+}
+
+#[test]
+fn test_kicad10_jumper_pin_groups_are_preserved() {
+    let content = r#"(kicad_symbol_lib
+  (version 20251024)
+  (generator "kicad_symbol_editor")
+  (generator_version "10.0")
+  (symbol "Jumper_Groups"
+    (jumper_pin_groups ("3" "1") ("3" "4") ("2" "2"))
+    (property "Reference" "JP" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (symbol "Jumper_Groups_1_1"
+      (pin passive line (at 0 0 0) (length 2.54) (name "A") (number "1"))
+      (pin passive line (at 0 0 0) (length 2.54) (name "B") (number "3"))
+      (pin passive line (at 0 0 0) (length 2.54) (name "C") (number "4"))
+    )
+  )
+)"#;
+
+    let lib = SymbolLibrary::from_string(content, "kicad_sym").unwrap();
+    let symbol = lib.get_symbol("Jumper_Groups").unwrap();
+
+    // Groups are preserved as written; normalization (merging overlaps, dropping
+    // singletons) happens downstream in pcb_sch::InternalConnectivity.
+    let group =
+        |numbers: &[&str]| -> BTreeSet<String> { numbers.iter().map(|n| n.to_string()).collect() };
+    assert_eq!(
+        symbol.internal_connectivity.groups,
+        vec![group(&["1", "3"]), group(&["3", "4"]), group(&["2"])]
+    );
 }
 
 #[test]

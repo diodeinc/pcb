@@ -5,10 +5,21 @@ use pcb_zen_core::DiagnosticsPass;
 use pcb_zen_core::SortPass;
 use pcb_zen_core::lang::component::FrozenComponentValue;
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
+use pcb_zen_core::lang::net::FrozenNetValue;
 use starlark::errors::EvalSeverity;
+use starlark::values::{FrozenValue, ValueLike};
 
 fn eval_single_root_component(source: &str) -> FrozenComponentValue {
-    let result = common::eval_zen(vec![("test.zen".to_string(), source.to_string())]);
+    eval_single_root_component_with_files(vec![("test.zen", source)])
+}
+
+fn eval_single_root_component_with_files(files: Vec<(&str, &str)>) -> FrozenComponentValue {
+    let result = common::eval_zen(
+        files
+            .into_iter()
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect(),
+    );
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
 
     let output = result.output.expect("expected eval output");
@@ -31,6 +42,27 @@ fn eval_single_root_component(source: &str) -> FrozenComponentValue {
         .next()
         .expect("expected one component")
 }
+
+fn frozen_net_id(value: FrozenValue) -> u64 {
+    value
+        .downcast_ref::<FrozenNetValue>()
+        .expect("expected frozen net")
+        .net_id()
+}
+
+const EXPLICIT_JUMPER_SYMBOL: &str = r#"(kicad_symbol_lib
+  (version 20251024)
+  (generator "test")
+  (symbol "ExplicitJumper"
+    (property "Reference" "JP")
+    (property "Footprint" "Jumper:SolderJumper")
+    (jumper_pin_groups ("1" "3"))
+    (symbol "ExplicitJumper_1_1"
+      (pin passive line (at 0 0 0) (length 2.54) (name "A") (number "1"))
+      (pin passive line (at 0 0 0) (length 2.54) (name "B") (number "3"))
+    )
+  )
+)"#;
 
 #[test]
 fn component_prefers_part_datasheet_over_component_datasheet() {
@@ -260,6 +292,65 @@ snapshot_eval!(component_with_symbol, {
         )
     "#
 });
+
+#[test]
+fn component_explicit_jumper_group_auto_fills_missing_peer() {
+    let component = eval_single_root_component_with_files(vec![
+        ("explicit_jumper.kicad_sym", EXPLICIT_JUMPER_SYMBOL),
+        (
+            "test.zen",
+            r#"
+shared = Net("SHARED")
+
+Component(
+    name = "JP1",
+    footprint = "Jumper:SolderJumper",
+    symbol = Symbol(library = "explicit_jumper.kicad_sym", name = "ExplicitJumper"),
+    pins = {"A": shared},
+)
+"#,
+        ),
+    ]);
+
+    assert!(component.connections().contains_key("A"));
+    assert!(component.connections().contains_key("B"));
+    assert_eq!(
+        frozen_net_id(*component.connections().get("A").unwrap()),
+        frozen_net_id(*component.connections().get("B").unwrap())
+    );
+}
+
+#[test]
+fn component_explicit_jumper_group_conflicting_nets_error() {
+    let result = common::eval_zen(vec![
+        (
+            "explicit_jumper.kicad_sym".to_string(),
+            EXPLICIT_JUMPER_SYMBOL.to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+Component(
+    name = "JP1",
+    footprint = "Jumper:SolderJumper",
+    symbol = Symbol(library = "explicit_jumper.kicad_sym", name = "ExplicitJumper"),
+    pins = {"A": Net("LEFT"), "B": Net("RIGHT")},
+)
+"#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(!result.is_success(), "expected eval failure");
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.to_string().contains("Jumpered pins A, B")),
+        "expected jumper conflict diagnostic, got {:?}",
+        result.diagnostics
+    );
+}
 
 snapshot_eval!(component_infers_spice_model_from_symbol, {
     "my_model.lib" => r#"

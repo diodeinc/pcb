@@ -791,6 +791,7 @@ mod tests {
             attributes,
             children: Default::default(),
             reference_designator: Some("U1".to_string()),
+            internal_connectivity: Default::default(),
             symbol_positions: HashMap::new(),
         }
     }
