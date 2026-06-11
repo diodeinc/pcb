@@ -428,6 +428,10 @@ fn create_metadata_json(input: &MetadataInput<'_>) -> serde_json::Value {
         release_obj["description"] = serde_json::json!(description);
     }
 
+    if input.bom_strict {
+        release_obj["bom"] = serde_json::json!({ "strict": true });
+    }
+
     let workspace_root = input.workspace_root;
     let (branch, remotes) = {
         let _span = info_span!("collect_git_metadata").entered();
@@ -463,10 +467,6 @@ fn create_metadata_json(input: &MetadataInput<'_>) -> serde_json::Value {
                 .unwrap_or_else(|| "unknown".to_string())
         };
         system_obj["kicad_version"] = serde_json::Value::String(kicad_version);
-    }
-
-    if input.bom_strict {
-        system_obj["bom"] = serde_json::json!({ "strict": true });
     }
 
     serde_json::json!({

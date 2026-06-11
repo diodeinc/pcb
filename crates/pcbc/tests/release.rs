@@ -326,7 +326,7 @@ strict = true
     )
     .unwrap();
     let metadata_json: Value = serde_json::from_reader(metadata_file).unwrap();
-    assert_eq!(metadata_json["system"]["bom"]["strict"], true);
+    assert_eq!(metadata_json["release"]["bom"]["strict"], true);
 }
 
 #[test]
