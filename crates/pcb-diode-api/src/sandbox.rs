@@ -8,22 +8,22 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
+use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::WorkspaceContext;
 
 pub const SANDBOX_LOCK_FILE_PATH: &str = "/home/sandbox/.diode/sandbox-lock.json";
+const LOCK_HEARTBEAT_MAX_FAILURES: usize = 3;
 
 #[derive(Clone)]
 pub struct SandboxClient {
     api_base_url: String,
-    auth_token: Arc<String>,
+    ctx: WorkspaceContext,
     http: Client,
 }
 
@@ -127,7 +127,7 @@ impl SandboxLockOptions {
             message: Some("This sandbox is open for local editing.".to_string()),
             kind: "local-edit".to_string(),
             ttl: Duration::from_secs(90),
-            heartbeat_interval: Duration::from_secs(15),
+            heartbeat_interval: Duration::from_secs(5),
             force_reclaim_stale: true,
         }
     }
@@ -186,10 +186,11 @@ pub struct SandboxLockGuard {
 
 impl SandboxClient {
     pub fn new(ctx: WorkspaceContext) -> Result<Self> {
-        let auth_token = ctx.token()?;
+        ctx.token()?;
+        let api_base_url = ctx.api_base_url().trim_end_matches('/').to_string();
         Ok(Self {
-            api_base_url: ctx.api_base_url().trim_end_matches('/').to_string(),
-            auth_token: Arc::new(auth_token),
+            api_base_url,
+            ctx,
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .build()
@@ -231,7 +232,7 @@ impl SandboxClient {
         let response = self
             .http
             .get(url)
-            .bearer_auth(self.auth_token.as_str())
+            .bearer_auth(self.auth_token()?)
             .send()
             .context("Failed to read sandbox file")?;
         let response = self.ensure_success(response)?;
@@ -239,23 +240,22 @@ impl SandboxClient {
     }
 
     pub fn write_file(&self, sandbox_id: &str, path: &str, bytes: &[u8]) -> Result<()> {
-        #[derive(Serialize)]
-        struct WriteRequest {
-            content: String,
-            encoding: &'static str,
-        }
-
-        let _: serde_json::Value = self.put_json(
-            &format!(
+        let response = self
+            .http
+            .put(self.url(&format!(
                 "/api/sandboxes/{}/fs/write{}",
                 encode_segment(sandbox_id),
                 encoded_absolute_path(path)?
-            ),
-            &WriteRequest {
-                content: BASE64.encode(bytes),
-                encoding: "base64",
-            },
-        )?;
+            )))
+            .bearer_auth(self.auth_token()?)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(bytes.to_vec())
+            .send()
+            .context("Sandbox PUT request failed")?;
+        let _: serde_json::Value = self
+            .ensure_success(response)?
+            .json()
+            .context("Invalid sandbox response")?;
         Ok(())
     }
 
@@ -332,7 +332,7 @@ impl SandboxClient {
         let response = self
             .http
             .get(self.url(path))
-            .bearer_auth(self.auth_token.as_str())
+            .bearer_auth(self.auth_token()?)
             .send()
             .context("Sandbox GET request failed")?;
         self.ensure_success(response)?
@@ -348,27 +348,10 @@ impl SandboxClient {
         let response = self
             .http
             .post(self.url(path))
-            .bearer_auth(self.auth_token.as_str())
+            .bearer_auth(self.auth_token()?)
             .json(body)
             .send()
             .context("Sandbox POST request failed")?;
-        self.ensure_success(response)?
-            .json()
-            .context("Invalid sandbox response")
-    }
-
-    fn put_json<T: for<'de> Deserialize<'de>, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> Result<T> {
-        let response = self
-            .http
-            .put(self.url(path))
-            .bearer_auth(self.auth_token.as_str())
-            .json(body)
-            .send()
-            .context("Sandbox PUT request failed")?;
         self.ensure_success(response)?
             .json()
             .context("Invalid sandbox response")
@@ -392,6 +375,10 @@ impl SandboxClient {
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.api_base_url, path)
+    }
+
+    fn auth_token(&self) -> Result<String> {
+        self.ctx.token()
     }
 }
 
@@ -441,7 +428,13 @@ impl Drop for SandboxLockGuard {
     }
 }
 
+enum LockHeartbeat {
+    Active,
+    Lost,
+}
+
 fn heartbeat_loop(state: Arc<SandboxLockState>, interval: Duration, stop_rx: Receiver<()>) {
+    let mut failures = 0;
     while !state.stop.load(Ordering::SeqCst) {
         match stop_rx.recv_timeout(interval) {
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -450,19 +443,34 @@ fn heartbeat_loop(state: Arc<SandboxLockState>, interval: Duration, stop_rx: Rec
         if state.stop.load(Ordering::SeqCst) {
             break;
         }
-        if heartbeat_once(&state).is_err() {
-            state.active.store(false, Ordering::SeqCst);
-            break;
+        match heartbeat_once(&state) {
+            Ok(LockHeartbeat::Active) => failures = 0,
+            Ok(LockHeartbeat::Lost) => {
+                state.active.store(false, Ordering::SeqCst);
+                break;
+            }
+            Err(err) => {
+                failures += 1;
+                if failures >= LOCK_HEARTBEAT_MAX_FAILURES {
+                    log::warn!(
+                        "Sandbox lock heartbeat failed {LOCK_HEARTBEAT_MAX_FAILURES} times; marking lock inactive: {err:#}"
+                    );
+                    state.active.store(false, Ordering::SeqCst);
+                    break;
+                }
+            }
         }
     }
 }
 
-fn heartbeat_once(state: &SandboxLockState) -> Result<()> {
-    let current = read_lock_file(&state.client, &state.sandbox_id)
+fn heartbeat_once(state: &SandboxLockState) -> Result<LockHeartbeat> {
+    let Some(current) = read_lock_file(&state.client, &state.sandbox_id)
         .context("Failed to refresh sandbox lock")?
-        .context("lock file is missing")?;
+    else {
+        return Ok(LockHeartbeat::Lost);
+    };
     if current.lease_id != state.lease_id {
-        bail!("lock lease no longer matches");
+        return Ok(LockHeartbeat::Lost);
     }
 
     let now = Utc::now();
@@ -473,7 +481,8 @@ fn heartbeat_once(state: &SandboxLockState) -> Result<()> {
         ..current
     };
     write_lock_file(&state.client, &state.sandbox_id, &lock)
-        .context("Failed to refresh sandbox lock")
+        .context("Failed to refresh sandbox lock")?;
+    Ok(LockHeartbeat::Active)
 }
 
 fn release_once(state: &SandboxLockState) -> Result<()> {
@@ -532,7 +541,7 @@ fn delete_lock_file(client: &SandboxClient, sandbox_id: &str) -> Result<()> {
             encode_segment(sandbox_id),
             encoded_absolute_path(SANDBOX_LOCK_FILE_PATH)?
         )))
-        .bearer_auth(client.auth_token.as_str())
+        .bearer_auth(client.auth_token()?)
         .send()
         .context("Failed to delete sandbox lock file")?;
     if response.status() == StatusCode::NOT_FOUND {
@@ -554,7 +563,7 @@ fn read_file_if_exists(
             encode_segment(sandbox_id),
             encoded_absolute_path(path)?
         )))
-        .bearer_auth(client.auth_token.as_str())
+        .bearer_auth(client.auth_token()?)
         .send()
         .context("Failed to read sandbox file")?;
     if response.status() == StatusCode::NOT_FOUND {
