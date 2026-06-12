@@ -42,6 +42,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Removed legacy v1/`pcb.sum` resolution, disabled `pcb update`, and dropped obsolete `--locked` read-command flags.
 - `pcb migrate` removes deprecated `[workspace].members`; other commands reject it.
 - `pcb sync` no longer writes stdlib-only KiCad dependency entries.
+- Added `rectifier`, a standalone CLI that checks and patches KiCad footprint 3D model `(rotate ...)`/`(offset ...)` transforms by matching tessellated STEP geometry against the footprint's pads and holes (`solve`, `patch`, `audit`, `bench` subcommands).
 - `pcb migrate` now upgrades workspace `pcb-version` after successful latest-toolchain migrations.
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
 - `pcb publish` release metadata now records strict workspace BOM matching when enabled.
