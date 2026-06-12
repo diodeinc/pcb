@@ -26,6 +26,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Regular nets now require explicit or assignment-inferred unique names; unnamed or duplicate regular nets fail evaluation.
 - `NotConnected` nets are now source-unnamed; explicit names are ignored with a warning and downstream tools assign connection-derived names as needed.
 - Added KiCad 10 jumper-pin support.
+
+## [0.3.93] - 2026-06-12
+
+### Changed
+
 - Remote sandbox sync now uses octet-stream writes, refreshes auth during sessions, and keeps recoverable local KiCad session files when sync exits unexpectedly.
 
 ## [0.3.92] - 2026-06-09
@@ -1193,7 +1198,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.92...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.93...HEAD
+[0.3.93]: https://github.com/diodeinc/pcb/compare/v0.3.92...v0.3.93
 [0.3.92]: https://github.com/diodeinc/pcb/compare/v0.3.91...v0.3.92
 [0.3.91]: https://github.com/diodeinc/pcb/compare/v0.3.90...v0.3.91
 [0.3.90]: https://github.com/diodeinc/pcb/compare/v0.3.89...v0.3.90
