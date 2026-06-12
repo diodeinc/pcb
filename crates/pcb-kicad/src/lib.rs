@@ -94,7 +94,6 @@ fn require_tool_path(
     }
 }
 
-#[cfg(target_os = "macos")]
 fn pcbnew_app_bundle_path(pcbnew_path: &str) -> Result<String> {
     let path = Path::new(pcbnew_path);
 
@@ -363,12 +362,32 @@ pub fn ensure_board_compatible_with_installed_kicad(pcb_path: &Path) -> Result<(
 
 /// Open a KiCad board in the GUI that matches this toolchain's discovered install.
 pub fn open_pcbnew(pcb_path: impl AsRef<Path>) -> Result<()> {
-    let _child = spawn_pcbnew(pcb_path.as_ref(), false)?;
+    let pcb_path = pcb_path.as_ref();
+    let pcbnew_path = require_pcbnew_launch(pcb_path)?;
+
+    #[cfg(target_os = "macos")]
+    let cmd = {
+        let mut cmd = Command::new("open");
+        cmd.arg("-a")
+            .arg(pcbnew_app_bundle_path(&pcbnew_path)?)
+            .arg(pcb_path);
+        cmd
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let cmd = {
+        let mut cmd = Command::new(&pcbnew_path);
+        cmd.arg(pcb_path);
+        cmd
+    };
+
+    spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path)?;
     Ok(())
 }
 
 pub struct PcbnewSession {
     child: Child,
+    pcbnew_app: String,
 }
 
 impl PcbnewSession {
@@ -377,48 +396,49 @@ impl PcbnewSession {
             .try_wait()
             .context("Failed while checking KiCad PCB Editor status")
     }
+
+    pub fn terminate(&mut self) -> Result<()> {
+        if self.try_wait()?.is_some() {
+            return Ok(());
+        }
+        request_pcbnew_shutdown(self)?;
+        self.child
+            .wait()
+            .context("Failed while waiting for KiCad PCB Editor to terminate")?;
+        Ok(())
+    }
 }
 
 /// Open a KiCad board in a process that can be waited on.
 pub fn open_pcbnew_session(pcb_path: impl AsRef<Path>) -> Result<PcbnewSession> {
-    Ok(PcbnewSession {
-        child: spawn_pcbnew(pcb_path.as_ref(), true)?,
-    })
+    let pcb_path = pcb_path.as_ref();
+    let pcbnew_path = require_pcbnew_launch(pcb_path)?;
+    let pcbnew_app = pcbnew_app_bundle_path(&pcbnew_path)?;
+
+    let mut cmd = Command::new("open");
+    cmd.arg("-n")
+        .arg("-W")
+        .arg("-a")
+        .arg(&pcbnew_app)
+        .arg(pcb_path);
+    spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path)
+        .map(|child| PcbnewSession { child, pcbnew_app })
 }
 
-fn spawn_pcbnew(pcb_path: &Path, wait_for_exit: bool) -> Result<Child> {
-    #[cfg(not(target_os = "macos"))]
-    let _ = wait_for_exit;
-
+fn require_pcbnew_launch(pcb_path: &Path) -> Result<String> {
     if !pcb_path.exists() {
         anyhow::bail!("PCB file not found: {}", pcb_path.display());
     }
 
-    let pcbnew_path = require_tool_path(
+    require_tool_path(
         paths::pcbnew(),
         "KiCad PCB Editor",
         "KICAD_PCBNEW",
         "Please ensure KiCad is installed.",
-    )?;
+    )
+}
 
-    #[cfg(target_os = "macos")]
-    let mut cmd = {
-        let pcbnew_app = pcbnew_app_bundle_path(&pcbnew_path)?;
-        let mut cmd = Command::new("open");
-        if wait_for_exit {
-            cmd.arg("-n").arg("-W");
-        }
-        cmd.arg("-a").arg(pcbnew_app).arg(pcb_path);
-        cmd
-    };
-
-    #[cfg(not(target_os = "macos"))]
-    let mut cmd = {
-        let mut cmd = Command::new(&pcbnew_path);
-        cmd.arg(pcb_path);
-        cmd
-    };
-
+fn spawn_pcbnew_command(mut cmd: Command, pcbnew_path: &str, pcb_path: &Path) -> Result<Child> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -430,6 +450,29 @@ fn spawn_pcbnew(pcb_path: &Path, wait_for_exit: bool) -> Result<Child> {
                 pcb_path.display()
             )
         })
+}
+
+fn request_pcbnew_shutdown(session: &mut PcbnewSession) -> Result<()> {
+    quit_macos_app(&session.pcbnew_app)
+}
+
+fn quit_macos_app(app_path: &str) -> Result<()> {
+    let script = format!("tell application {} to quit", applescript_string(app_path));
+    let status = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .status()
+        .with_context(|| format!("Failed to ask macOS to quit KiCad PCB Editor at {app_path}"))?;
+    if !status.success() {
+        return Err(anyhow!(
+            "macOS failed to quit KiCad PCB Editor at {app_path}"
+        ));
+    }
+    Ok(())
+}
+
+fn applescript_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// Builder for KiCad CLI commands
