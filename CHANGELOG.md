@@ -26,6 +26,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Regular nets now require explicit or assignment-inferred unique names; unnamed or duplicate regular nets fail evaluation.
 - `NotConnected` nets are now source-unnamed; explicit names are ignored with a warning and downstream tools assign connection-derived names as needed.
 - Added KiCad 10 jumper-pin support.
+- Remote sandbox sync now uses octet-stream writes, refreshes auth during sessions, and keeps recoverable local KiCad session files when sync exits unexpectedly.
 
 ## [0.3.92] - 2026-06-09
 
