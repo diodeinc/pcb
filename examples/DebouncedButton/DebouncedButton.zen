@@ -1,0 +1,49 @@
+"""
+Type: Debounced Button Input
+
+Description:
+A reusable GPIO button input circuit with pull-up resistor and RC debounce capacitor.
+"""
+
+load("@stdlib/interfaces.zen", "Gpio")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+pullup_value = config(str, default="10kohms", optional=True)
+debounce_cap_value = config(str, default="100nF", optional=True)
+package = config(str, default="0603", optional=True)
+
+VCC = io(Power, direction="input")
+GND = io(Ground)
+BUTTON_OUT = io(Gpio, direction="output")
+
+Resistor(
+    name="R_PULLUP",
+    value=pullup_value,
+    package=package,
+    P1=VCC,
+    P2=BUTTON_OUT,
+)
+
+Capacitor(
+    name="C_DEBOUNCE",
+    value=debounce_cap_value,
+    package=package,
+    P1=BUTTON_OUT,
+    P2=GND,
+)
+
+Component(
+    name="SW_BUTTON",
+    symbol=Symbol(library="@kicad-symbols/Switch.kicad_sym", name="SW_Push"),
+    footprint="Button_Switch_THT:SW_PUSH_6mm",
+    part=Part(
+        mpn="FSM6JH",
+        manufacturer="TE Connectivity",
+    ),
+    pins={
+        "1": BUTTON_OUT,
+        "2": GND,
+    },
+)
