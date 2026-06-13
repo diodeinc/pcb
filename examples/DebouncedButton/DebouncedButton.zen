@@ -16,21 +16,21 @@ package = config(str, default="0603", optional=True)
 
 VCC = io(Power, direction="input")
 GND = io(Ground)
-BUTTON_OUT = io(Gpio, direction="output")
+BUTTON = io(Gpio, direction="input")
 
 Resistor(
     name="R_PULLUP",
     value=pullup_value,
     package=package,
     P1=VCC,
-    P2=BUTTON_OUT,
+    P2=BUTTON,
 )
 
 Capacitor(
     name="C_DEBOUNCE",
     value=debounce_cap_value,
     package=package,
-    P1=BUTTON_OUT,
+    P1=BUTTON,
     P2=GND,
 )
 
@@ -43,7 +43,7 @@ Component(
         manufacturer="TE Connectivity",
     ),
     pins={
-        "1": BUTTON_OUT,
+        "1": BUTTON,
         "2": GND,
     },
 )
