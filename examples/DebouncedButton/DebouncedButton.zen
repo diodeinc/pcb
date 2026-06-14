@@ -16,7 +16,8 @@ package = config(str, default="0603", optional=True)
 
 VCC = io(Power, direction="input")
 GND = io(Ground)
-BUTTON = io(Gpio, direction="input")
+BUTTON = io(Gpio, direction="output")
+
 
 Resistor(
     name="R_PULLUP",
