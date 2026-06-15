@@ -568,12 +568,17 @@ pub fn selected_remote_from_hydrated_manifest(
     workspace: &WorkspaceInfo,
     package_url: &str,
 ) -> Result<BTreeMap<FrozenDepId, Version>> {
-    let package = workspace
-        .packages
-        .get(package_url)
-        .ok_or_else(|| anyhow::anyhow!("Unknown workspace package {package_url}"))?;
+    let default_config;
+    let config = if let Some(package) = workspace.packages.get(package_url) {
+        &package.config
+    } else if workspace.packages.is_empty() && package_url == LOCAL_WORKSPACE_ROOT_URL {
+        default_config = PcbToml::default();
+        workspace.config.as_ref().unwrap_or(&default_config)
+    } else {
+        bail!("Unknown workspace package {package_url}");
+    };
 
-    selected_remote_from_manifest(workspace, &package.config)
+    selected_remote_from_manifest(workspace, config)
 }
 
 fn selected_remote_from_manifest(

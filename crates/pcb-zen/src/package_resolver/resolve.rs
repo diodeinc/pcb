@@ -87,14 +87,7 @@ pub fn resolve_workspace_dependencies(
             path.display()
         );
     }
-    if use_frozen_resolution(&workspace_info, &package_urls) {
-        return resolve_frozen(workspace_info, package_urls, offline);
-    }
-
-    bail!(
-        "{} does not have hydrated package dependency state; run `pcb sync` first",
-        path.display()
-    )
+    resolve_frozen(workspace_info, package_urls, offline)
 }
 
 fn resolve_frozen(
@@ -124,10 +117,6 @@ fn resolve_frozen(
         resolution_set,
         symbol_parts,
     ))
-}
-
-fn use_frozen_resolution(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
-    !package_urls.is_empty() && workspace_info.requires_mvs_v2()
 }
 
 fn collect_workspace_zen_files(

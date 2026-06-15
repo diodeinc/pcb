@@ -64,11 +64,6 @@ jobs:
           git clone --depth 1 git@code.diode.computer:arduino/b/Nano workspaces/Nano
           git clone --depth 1 git@code.diode.computer:arduino/b/unoQ workspaces/unoQ
 
-          pcbc="$RUNNER_TEMP/pcbc-head/pcbc"
-          for workspace in Demeter DM0001 DM0002 DM0003 Feign Renfield Seward Nano unoQ; do
-            (cd "workspaces/$workspace" && "$pcbc" sync)
-          done
-
       - name: Install hyperfine
         run: |
           wget -q https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine_1.20.0_amd64.deb

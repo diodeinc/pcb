@@ -80,11 +80,6 @@ jobs:
           git clone --depth 1 git@code.diode.computer:demo/b/Demeter workspaces/Demeter
           git clone --depth 1 git@code.diode.computer:demo/b/Feign workspaces/Feign
 
-          pcbc="$(pwd)/target/release/pcbc"
-          for board in Demeter Feign; do
-            (cd "workspaces/$board" && "$pcbc" sync)
-          done
-
       - name: Evaluate publish bundles with WASM
         run: |
           for board in Demeter Feign; do
