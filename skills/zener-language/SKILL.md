@@ -151,11 +151,11 @@ Resistor(name="R_MSYNC_VCC", value="0ohm", package="0402", P1=MSYNC, P2=VCC, dnp
 
 ## Schematic Position Comments (`# pcb:sch`)
 
-A block of `# pcb:sch <ID> x=... y=... rot=...` lines at the end of a `.zen` file stores the schematic placement of components and net symbols, usually positioned by hand by the user in a schematic editor. Treat the block as the user's saved layout, not as ordinary comments.
+Schematic placement is stored in `# pcb:sch <ID> x=... y=... rot=...` comments at the end of a `.zen` file. Treat existing records as persisted layout state, not as ordinary comments.
 
-- Preserve the block through every edit and file rewrite, even when lines look stale or machine-generated. Add new code above it.
-- When renaming a component or net, update the matching names inside its lines. When deleting a component, remove only its own lines.
-- Do not add lines for new components (unplaced items are auto-placed), edit coordinates by hand, or otherwise change placement unless the user explicitly asks for schematic layout changes.
+- Preserve existing placement records through textual Zener edits. Add new code above the block.
+- When renaming a component or net, update the matching names inside its records. When deleting a component, remove only its own records.
+- Do not add records for new components, edit coordinates by hand, or otherwise change placement unless the user explicitly asks for schematic layout changes. Schematic editor/MCP layout operations may update these records as part of layout persistence. Unpositioned new items may be displayed with auto-placement, but that does not make existing placement records disposable.
 
 ## Packages And Manifests
 
