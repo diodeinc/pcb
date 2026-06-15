@@ -12,6 +12,7 @@ pcb-version = "0.3"
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
 "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D" = "9.0.3"
 "#,
     );
 

@@ -518,8 +518,8 @@ pcb build --offline          # Build using only cached/vendored packages
 ```
 
 `pcb build` checks that the hydrated state is sufficient and does not rewrite
-`pcb.toml`, `pcb.sum`, or `vendor/`. Use `pcb sync` or `pcb vendor` to update
-dependency state.
+`pcb.toml` or `vendor/`. Use `pcb sync` or `pcb vendor` to update dependency
+state.
 
 ### pcb list
 
@@ -536,7 +536,7 @@ lane and the latest newer breaking lane when available. It does not update manif
 
 ### pcb update
 
-`pcb update` is deprecated. Use `pcb add -u` instead.
+`pcb update` is disabled. Use `pcb add -u` instead.
 
 ```bash
 pcb add -u                   # Upgrade all direct remote dependencies

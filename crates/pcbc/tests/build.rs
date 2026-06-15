@@ -610,7 +610,7 @@ fn test_commit_stable_ref() {
         .push_mirror()
         .rev_parse_head()[0..7];
 
-    // Create a board that uses branch unstabe ref
+    // Read-only build rejects non-exact refs; `pcb sync` owns dependency hydration.
     let unstable_default_zen = format!(
         r#"# ```pcb
 # [workspace]
@@ -628,7 +628,14 @@ SimpleResistor = Module("github.com/mycompany/components/SimpleResistor.zen")
     let output = sandbox
         .write("board.zen", unstable_default_zen)
         .snapshot_run("pcbc", ["build", "board.zen"]);
-    assert_snapshot!("commit_stable_ref", output);
+    assert!(
+        !output.contains("Exit Code: 0"),
+        "expected build to reject non-exact dependency ref:\n{output}"
+    );
+    assert!(
+        output.contains("must specify an exact version"),
+        "expected exact-version rejection:\n{output}"
+    );
 }
 
 #[test]
@@ -648,6 +655,37 @@ x = 1 + 2
         .write("standalone.zen", inline_manifest_zen)
         .snapshot_run("pcbc", ["build", "standalone.zen"]);
     assert_snapshot!("inline_manifest", output);
+}
+
+#[test]
+fn test_inline_manifest_dependency() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .git_fixture("https://github.com/mycompany/components.git")
+        .write("SimpleResistor/pcb.toml", "[dependencies]\n")
+        .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add SimpleResistor package")
+        .tag("SimpleResistor/v1.0.0", false)
+        .push_mirror();
+
+    let inline_manifest_zen = r#"# ```pcb
+# [dependencies]
+# "github.com/mycompany/components/SimpleResistor" = "1.0.0"
+# ```
+
+SimpleResistor = Module("github.com/mycompany/components/SimpleResistor/SimpleResistor.zen")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+
+SimpleResistor(name = "R1", P1 = vcc, P2 = gnd)
+"#;
+
+    let output = sandbox
+        .write("standalone.zen", inline_manifest_zen)
+        .snapshot_run("pcbc", ["build", "standalone.zen"]);
+    assert_snapshot!("inline_manifest_dependency", output);
 }
 
 #[test]

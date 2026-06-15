@@ -72,7 +72,7 @@ pub struct ModWhyArgs {
 pub struct ModGraphArgs {}
 
 #[derive(Args, Debug)]
-#[command(about = "Print the frozen MVS v2 resolution table for a target")]
+#[command(about = "Print the frozen dependency resolution table for a target")]
 pub struct ModResolveArgs {
     /// .zen file or directory to resolve. Defaults to current directory.
     #[arg(value_name = "PATH", value_hint = clap::ValueHint::AnyPath)]

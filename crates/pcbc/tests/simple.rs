@@ -322,8 +322,7 @@ path = "B.zen"
         .write("boards/B/B.zen", GIT_FIXTURE_BOARD_ZEN);
 
     // `pcb sync` resolves the branch+rev to a pseudo-version, pins it in the
-    // hydrated manifest, and vendors that exact version. This is the v2
-    // replacement for the legacy pcb.sum lockfile.
+    // hydrated manifest, and vendors that exact version.
     sandbox.sync();
 
     let board_manifest =
@@ -348,7 +347,7 @@ path = "B.zen"
     );
     assert!(
         !sandbox.default_cwd().join("pcb.sum").exists(),
-        "v2 hydration must not create a pcb.sum lockfile"
+        "dependency hydration must not create a pcb.sum file"
     );
 
     // The offline build must reuse the vendored pseudo-version without network access.

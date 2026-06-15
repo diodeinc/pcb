@@ -386,10 +386,8 @@ pub struct EvalSession {
     file_contents_cache: Arc<RwLock<HashMap<PathBuf, String>>>,
     /// Dedicated load cache - frequently accessed during parallel module evaluation.
     ///
-    /// MVS v2 resolution is package-local, so cached modules are keyed by the
-    /// loaded file's package identity and resolved dependency map when a frozen
-    /// root is active. V1 keeps the historical path-only behavior via a `None`
-    /// scope.
+    /// Frozen package resolution is package-local, so cached modules are keyed by the
+    /// loaded file's package identity and resolved dependency map.
     load_cache: Arc<RwLock<HashMap<LoadCacheKey, CachedModule>>>,
     /// Cache of validated footprint files.
     footprint_cache: Arc<RwLock<HashMap<FootprintCacheKey, Vec<Diagnostic>>>>,
@@ -439,9 +437,8 @@ pub struct EvalContextConfig {
     /// The absolute path to the module we are evaluating.
     pub(crate) source_path: Option<PathBuf>,
 
-    /// Active MVS v2 root package for this eval tree, when the invocation has
-    /// committed to frozen package-local resolution.
-    pub(crate) mvs_v2_root_package: Option<String>,
+    /// Active root package for this frozen package-local eval tree.
+    pub(crate) active_root_package: Option<String>,
 
     /// The contents of the module we are evaluating.
     pub(crate) contents: Option<String>,
@@ -467,8 +464,8 @@ pub struct EvalContextConfig {
 impl EvalContextConfig {
     /// Create a new root EvalContextConfig.
     ///
-    /// The resolution's `package_resolutions` keys should already be
-    /// canonicalized (see [`EvalContext::new`] which handles this).
+    /// The resolution's package roots should already be canonicalized (see
+    /// [`EvalContext::new`] which handles this).
     pub fn new(file_provider: Arc<dyn FileProvider>, resolution: Arc<ResolutionResult>) -> Self {
         use std::sync::OnceLock;
         static BUILTIN_DOCS: OnceLock<Arc<HashMap<String, String>>> = OnceLock::new();
@@ -491,7 +488,7 @@ impl EvalContextConfig {
             module_path: ModulePath::root(),
             load_chain: HashSet::new(),
             source_path: None,
-            mvs_v2_root_package: None,
+            active_root_package: None,
             contents: None,
             strict_io_config: false,
             build_circuit: false,
@@ -504,14 +501,14 @@ impl EvalContextConfig {
     pub fn set_source_path(mut self, path: PathBuf) -> Self {
         let stdlib_dir = self.resolution.workspace_info.workspace_stdlib_dir();
         self.inject_prelude = self.inject_prelude && !path.starts_with(&stdlib_dir);
-        if self.mvs_v2_root_package.is_none() {
+        if self.active_root_package.is_none() {
             let canonical_path = self
                 .file_provider
                 .canonicalize(&path)
                 .unwrap_or_else(|_| path.clone());
-            self.mvs_v2_root_package = self
+            self.active_root_package = self
                 .resolution
-                .mvs_v2_root_for_file(&canonical_path)
+                .frozen_root_for_file(&canonical_path)
                 .map(|(package_url, _)| package_url.to_string());
         }
         self.source_path = Some(path);
@@ -564,7 +561,7 @@ impl EvalContextConfig {
             module_path: child_module_path,
             load_chain: child_load_chain,
             source_path: None,
-            mvs_v2_root_package: self.mvs_v2_root_package.clone(),
+            active_root_package: self.active_root_package.clone(),
             contents: None,
             strict_io_config: false,
             build_circuit: false,
@@ -593,7 +590,7 @@ impl EvalContextConfig {
             module_path: child_module_path,
             load_chain: HashSet::new(),
             source_path: None,
-            mvs_v2_root_package: self.mvs_v2_root_package.clone(),
+            active_root_package: self.active_root_package.clone(),
             contents: None,
             strict_io_config: false,
             build_circuit: false,
@@ -623,11 +620,8 @@ impl EvalContextConfig {
         &self,
         path: &Path,
     ) -> Option<crate::resolution::ResolvedPackageScope<'_>> {
-        self.resolution.package_scope_for_file(
-            path,
-            self.mvs_v2_root_package.as_deref(),
-            self.file_provider(),
-        )
+        self.resolution
+            .package_scope_for_file(path, self.active_root_package.as_deref())
     }
 
     /// Manually track a file. Useful for entrypoints.
@@ -774,7 +768,7 @@ impl EvalContextConfig {
         self.resolution
             .package_url_for_file(
                 file_path,
-                self.mvs_v2_root_package.as_deref(),
+                self.active_root_package.as_deref(),
                 self.file_provider(),
             )
             .ok_or_else(|| {
@@ -791,7 +785,6 @@ impl EvalContextConfig {
 
         let scope = self.current_package_scope(&context.current_file)?;
         let package_root = scope.root().to_path_buf();
-        let enforce_nested_package_boundary = scope.enforces_nested_package_boundaries();
 
         let current_dir = context
             .current_file
@@ -805,7 +798,6 @@ impl EvalContextConfig {
 
         let mut crosses_package_boundary = !canonical_resolved.starts_with(&canonical_root);
         if !crosses_package_boundary
-            && enforce_nested_package_boundary
             && let Some(target_scope) = self.package_scope_for_file(&canonical_resolved)
         {
             let target_root = context
@@ -1145,8 +1137,8 @@ fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: Heap<'v>) -> Val
 impl EvalContext {
     /// Create a new EvalContext with a fresh session.
     ///
-    /// Canonicalizes `package_resolutions` keys so that path lookups during
-    /// evaluation match the canonicalized file paths used elsewhere.
+    /// Canonicalizes package roots so that path lookups during evaluation match
+    /// the canonicalized file paths used elsewhere.
     pub fn new(file_provider: Arc<dyn FileProvider>, resolution: ResolutionResult) -> Self {
         let mut resolution = resolution;
         resolution.canonicalize_keys(&*file_provider);
@@ -1244,7 +1236,7 @@ impl EvalContext {
             module_path,
             load_chain: self.config.load_chain.clone(),
             source_path: None,
-            mvs_v2_root_package: self.config.mvs_v2_root_package.clone(),
+            active_root_package: self.config.active_root_package.clone(),
             contents: None,
             strict_io_config: false,
             build_circuit: false,
@@ -1296,11 +1288,9 @@ impl EvalContext {
     }
 
     fn load_cache_scope(&self, path: &Path) -> Option<PackageScopeKey> {
-        self.config.resolution.load_cache_scope_key_for_file(
-            path,
-            self.config.mvs_v2_root_package.as_deref(),
-            self.file_provider(),
-        )
+        self.config
+            .resolution
+            .load_cache_scope_key_for_file(path, self.config.active_root_package.as_deref())
     }
 
     fn get_cached_module(&self, path: &Path) -> Option<CachedModule> {

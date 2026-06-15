@@ -3,7 +3,7 @@
 //! These tests verify that `pcb sync` reconciles a workspace's source imports and
 //! hydrates its `pcb.toml` manifests with both direct `[dependencies]` and the
 //! lane-qualified `[dependencies.indirect]` closure. Branch dependencies are pinned
-//! to a pseudo-version in the manifest; no `pcb.sum` lockfile is produced.
+//! to a pseudo-version in the manifest; no `pcb.sum` file is produced.
 //!
 //! Note: @stdlib remains implicit; other aliases require explicit dependencies.
 
@@ -105,7 +105,7 @@ fn hydrated_version(manifest: &str, package_name: &str) -> String {
 fn assert_no_pcb_sum(sandbox: &Sandbox) {
     assert!(
         !sandbox.default_cwd().join("pcb.sum").exists(),
-        "dependency hydration must not create a pcb.sum lockfile"
+        "dependency hydration must not create a pcb.sum file"
     );
 }
 
@@ -257,7 +257,7 @@ pcb-version = "0.3"
 }
 
 #[test]
-fn test_local_only_workspace_needs_no_lockfile() {
+fn test_local_only_workspace_needs_no_generated_dependency_file() {
     let mut sandbox = Sandbox::new();
 
     let output = sandbox
@@ -279,7 +279,7 @@ gnd = Net("GND")
     );
 
     // A workspace with no external dependencies hydrates to nothing and never
-    // produces a pcb.sum lockfile.
+    // produces a pcb.sum file.
     assert_no_pcb_sum(&sandbox);
 }
 
@@ -575,7 +575,7 @@ pcb-version = "0.3"
 }
 
 #[test]
-fn test_build_ignores_kicad_entries_in_lockfile() {
+fn test_build_ignores_obsolete_pcb_sum_file() {
     let mut sandbox = Sandbox::new();
 
     let pcb_sum = r#"gitlab.com/kicad/libraries/kicad-symbols 10.0.3 h1:legacy
@@ -687,8 +687,7 @@ pcb-version = "0.3"
     assert_no_pcb_sum(&sandbox);
 }
 
-/// `pcb update` is a legacy (pcb.sum) command. Hydrated workspaces are rejected
-/// and pointed at `pcb add -u`.
+/// `pcb update` is disabled; use `pcb add -u` instead.
 #[test]
 fn test_update_rejected_on_hydrated_workspace() {
     let mut sandbox = Sandbox::new();
@@ -722,8 +721,8 @@ pcb-version = "0.3"
         "expected `pcb update` to be rejected on a hydrated workspace:\n{output}"
     );
     assert!(
-        output.contains("`pcb update` is for legacy dependency manifests"),
-        "expected legacy-manifest rejection message:\n{output}"
+        output.contains("`pcb update` is no longer supported"),
+        "expected unsupported-command rejection message:\n{output}"
     );
     assert!(
         output.contains("Use `pcb add -u`"),

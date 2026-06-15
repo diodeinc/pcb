@@ -37,5 +37,5 @@ pub fn resolve(input_path: Option<&Path>, offline: bool) -> Result<ResolutionRes
         );
     }
 
-    resolve_workspace_dependencies(workspace_info, path, offline, true)
+    resolve_workspace_dependencies(workspace_info, path, offline)
 }

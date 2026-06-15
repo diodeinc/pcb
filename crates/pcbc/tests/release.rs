@@ -454,7 +454,7 @@ Resistor(name = "foo", P1 = Net("VCC_3V3"), P2 = Net("GND"))
 
 /// Test that `pcb publish` works when run from the board directory with a relative .zen path.
 /// Regression test: previously, `pcb publish DM0002.zen` from `boards/DM0002/` would fail
-/// with "No lockfile found" because workspace discovery broke on the empty parent path.
+/// because workspace discovery broke on the empty parent path.
 #[test]
 fn test_publish_board_from_board_dir() {
     let mut sb = Sandbox::new();

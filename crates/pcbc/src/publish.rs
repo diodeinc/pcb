@@ -981,7 +981,7 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
     }
 
     let resolution =
-        pcb_zen::resolve_workspace_dependencies(workspace.clone(), &workspace.root, false, true)?;
+        pcb_zen::resolve_workspace_dependencies(workspace.clone(), &workspace.root, false)?;
 
     let eval_state = crate::build::BuildEvalState::new(resolution);
     let mut has_errors = false;
@@ -1474,7 +1474,6 @@ P1 = io(Net)
                 ..PcbToml::default()
             }),
             packages: BTreeMap::new(),
-            lockfile: None,
             errors: Vec::new(),
         }
     }

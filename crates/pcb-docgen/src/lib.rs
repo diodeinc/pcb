@@ -40,14 +40,13 @@ pub fn generate_docs(
                 package_root.display()
             )
         })?;
-    let resolution =
-        pcb_zen::resolve_workspace_dependencies(workspace_info, &package_root, false, true)
-            .with_context(|| {
-                format!(
-                    "Failed to resolve dependencies for {}",
-                    package_root.display()
-                )
-            })?;
+    let resolution = pcb_zen::resolve_workspace_dependencies(workspace_info, &package_root, false)
+        .with_context(|| {
+            format!(
+                "Failed to resolve dependencies for {}",
+                package_root.display()
+            )
+        })?;
 
     let mut files = Vec::new();
 

@@ -478,6 +478,8 @@ impl Sandbox {
         let tmp_pattern = Regex::new(r"(?:/private)?/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
         result = tmp_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
 
+        result = result.replace("<TEMP_DIR>/home/.pcb/cache", "<TEMP_DIR>/.pcb/cache");
+
         // Normalize the actual global PCB cache root used by this runtime.
         // Also sanitize its canonicalized alias (if different).
         let cache_base = pcb_zen::cache_index::cache_base()

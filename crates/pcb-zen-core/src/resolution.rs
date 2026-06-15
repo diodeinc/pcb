@@ -9,7 +9,7 @@
 //! - WASM: only checks vendor/ (everything must be pre-vendored)
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -17,14 +17,14 @@ use anyhow::{Result, bail};
 use semver::Version;
 
 use crate::FileProvider;
-use crate::config::{DependencyDetail, DependencySpec, Lockfile, ManifestPart, PcbToml};
+use crate::config::{DependencyDetail, DependencySpec, ManifestPart, PcbToml};
 use crate::kicad_library::effective_kicad_library_for_repo;
 use crate::workspace::{LOCAL_WORKSPACE_ROOT_URL, WorkspaceInfo, package_url_covers};
 use crate::{STDLIB_MODULE_PATH, is_stdlib_module_path, parse_relaxed_version};
 
 /// Stable identity for package-local evaluation state.
 ///
-/// Frozen MVS v2 resolution is package-local: the same file path can be loaded
+/// Frozen package resolution is package-local: the same file path can be loaded
 /// under different dependency environments. This key captures the loaded
 /// package's semantic resolution scope so eval caches can share modules only
 /// when the package identity and its resolved deps match.
@@ -49,67 +49,25 @@ impl PackageScopeKey {
 
 /// Resolved package-local dependency environment for a file.
 ///
-/// This is a read-only view over the existing native v1 and frozen MVS v2
-/// resolution data. Eval code should consume this abstraction rather than
-/// branching on the underlying representation.
+/// This is a read-only view over the frozen package resolution data.
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPackageScope<'a> {
     root: Cow<'a, Path>,
     package_url: Option<Cow<'a, str>>,
     display: Cow<'a, str>,
     deps: Cow<'a, BTreeMap<String, PathBuf>>,
-    cache_key: Option<PackageScopeKey>,
-    enforce_nested_package_boundaries: bool,
+    cache_key: PackageScopeKey,
 }
 
 impl<'a> ResolvedPackageScope<'a> {
-    fn native(
-        root: &'a Path,
-        deps: &'a BTreeMap<String, PathBuf>,
-        package_url: Option<String>,
-    ) -> Self {
-        let display = package_url
-            .as_deref()
-            .map(|url| Cow::Owned(url.to_string()))
-            .unwrap_or_else(|| Cow::Owned(root.display().to_string()));
-        Self {
-            root: Cow::Borrowed(root),
-            package_url: package_url.map(Cow::Owned),
-            display,
-            deps: Cow::Borrowed(deps),
-            cache_key: None,
-            enforce_nested_package_boundaries: false,
-        }
-    }
-
-    fn native_empty(root: PathBuf, package_url: Option<String>) -> Self {
-        let display = package_url
-            .as_deref()
-            .map(|url| Cow::Owned(url.to_string()))
-            .unwrap_or_else(|| Cow::Owned(root.display().to_string()));
-        Self {
-            root: Cow::Owned(root),
-            package_url: package_url.map(Cow::Owned),
-            display,
-            deps: Cow::Owned(BTreeMap::new()),
-            cache_key: None,
-            enforce_nested_package_boundaries: false,
-        }
-    }
-
     fn frozen(root: &'a Path, package: &'a FrozenPackage) -> Self {
         Self {
             root: Cow::Borrowed(root),
             package_url: package.identity.package_url().map(Cow::Borrowed),
             display: Cow::Owned(package.identity.display()),
             deps: Cow::Borrowed(&package.deps),
-            cache_key: Some(PackageScopeKey::frozen(package)),
-            enforce_nested_package_boundaries: true,
+            cache_key: PackageScopeKey::frozen(package),
         }
-    }
-
-    pub(crate) fn enforces_nested_package_boundaries(&self) -> bool {
-        self.enforce_nested_package_boundaries
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -124,7 +82,7 @@ impl<'a> ResolvedPackageScope<'a> {
         self.display.as_ref()
     }
 
-    pub(crate) fn load_cache_key(&self) -> Option<PackageScopeKey> {
+    pub(crate) fn load_cache_key(&self) -> PackageScopeKey {
         self.cache_key.clone()
     }
 
@@ -314,23 +272,16 @@ pub fn build_package_roots<'a>(
 
 fn resolution_package_roots(
     workspace_info: &WorkspaceInfo,
-    package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-    mvs_v2_resolution: Option<&FrozenResolutionSet>,
+    resolution: &FrozenResolutionSet,
 ) -> BTreeMap<String, PathBuf> {
-    build_package_roots(
-        workspace_info,
-        package_resolutions
-            .values()
-            .chain(frozen_dependency_maps(mvs_v2_resolution)),
-    )
+    build_package_roots(workspace_info, frozen_dependency_maps(resolution))
 }
 
 fn frozen_dependency_maps(
-    resolution: Option<&FrozenResolutionSet>,
+    resolution: &FrozenResolutionSet,
 ) -> impl Iterator<Item = &BTreeMap<String, PathBuf>> {
     resolution
-        .into_iter()
-        .flat_map(|resolution_set| resolution_set.values())
+        .values()
         .flat_map(|resolution| resolution.packages.values())
         .map(|package| &package.deps)
 }
@@ -435,34 +386,6 @@ impl VendoredPathResolver {
             closure,
         }
     }
-
-    /// Create a new vendored path resolver from a lockfile.
-    ///
-    /// Package closure is loaded from lockfile entries that include `manifest_hash`.
-    pub fn from_lockfile<F: FileProvider>(
-        file_provider: F,
-        vendor_dir: PathBuf,
-        lockfile: &Lockfile,
-    ) -> Self {
-        let mut closure = HashMap::new();
-
-        for entry in lockfile.iter() {
-            if entry.manifest_hash.is_some() {
-                let path = vendor_dir.join(&entry.module_path).join(&entry.version);
-                if file_provider.exists(&path)
-                    && let Ok(version) = Version::parse(&entry.version)
-                {
-                    let line = ModuleLine::new(entry.module_path.clone(), &version);
-                    closure.insert(line, version);
-                }
-            }
-        }
-
-        Self {
-            vendor_dir,
-            closure,
-        }
-    }
 }
 
 impl PackagePathResolver for VendoredPathResolver {
@@ -475,7 +398,7 @@ impl PackagePathResolver for VendoredPathResolver {
             }
         }
 
-        // Allow non-lockfile deps (e.g. asset dependencies) by direct {module}/{version}.
+        // Allow asset dependencies by direct {module}/{version}.
         Some(self.vendor_dir.join(module_path).join(version))
     }
 
@@ -545,44 +468,7 @@ pub fn build_resolution_map<F: FileProvider, R: PackagePathResolver>(
     results
 }
 
-/// Path resolver for native CLI that supports patches, vendor, and cache.
-///
-/// Resolution order: patches → vendor → cache.
-///
-/// Note: Workspace packages are handled directly in `build_resolution_map` before
-/// calling the resolver, so they don't need to be tracked here.
-pub struct NativePathResolver {
-    pub vendor_dir: PathBuf,
-    pub cache_dir: PathBuf,
-    pub patches: HashMap<String, PathBuf>,
-    pub closure: HashMap<ModuleLine, Version>,
-}
-
-impl PackagePathResolver for NativePathResolver {
-    fn resolve_package(&self, module_path: &str, version: &str) -> Option<PathBuf> {
-        if let Some(patch_path) = self.patches.get(module_path) {
-            return Some(patch_path.clone());
-        }
-
-        let vendor_path = self.vendor_dir.join(module_path).join(version);
-        if vendor_path.exists() {
-            return Some(vendor_path);
-        }
-
-        let cache_path = self.cache_dir.join(module_path).join(version);
-        if cache_path.exists() {
-            return Some(cache_path);
-        }
-
-        None
-    }
-
-    fn selected_versions(&self) -> &HashMap<ModuleLine, Version> {
-        &self.closure
-    }
-}
-
-/// MVS v2 resolution maps keyed by root package URL.
+/// Frozen resolution maps keyed by root package URL.
 pub type FrozenResolutionSet = BTreeMap<String, FrozenResolutionMap>;
 
 /// Frozen package-local resolution table for one root package.
@@ -693,15 +579,22 @@ pub fn selected_remote_from_hydrated_manifest(
         );
     }
 
+    selected_remote_from_manifest(workspace, &package.config)
+}
+
+fn selected_remote_from_manifest(
+    workspace: &WorkspaceInfo,
+    config: &PcbToml,
+) -> Result<BTreeMap<FrozenDepId, Version>> {
     let mut selected = BTreeMap::new();
-    for (dep_url, spec) in &package.config.dependencies.direct {
+    for (dep_url, spec) in &config.dependencies.direct {
         if is_remote_manifest_dependency(workspace, dep_url, spec) {
             let version = exact_manifest_version(dep_url, spec)?;
             selected.insert(FrozenDepId::for_version(dep_url.clone(), &version), version);
         }
     }
 
-    for (raw_key, spec) in &package.config.dependencies.indirect {
+    for (raw_key, spec) in &config.dependencies.indirect {
         let dep_id = parse_lane_qualified_key(raw_key)?;
         let version = exact_manifest_version(raw_key, spec)?;
         let expected_lane = compatibility_lane(&version);
@@ -796,17 +689,7 @@ impl FrozenPackageIdentity {
 pub struct ResolutionResult {
     /// Snapshot of workspace info at the time of resolution
     pub workspace_info: WorkspaceInfo,
-    /// Map from Package Root (Absolute Path) -> Import URL -> Resolved Absolute Path
-    pub package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-    /// Package dependencies in the build closure: ModuleLine -> Version
-    pub closure: HashMap<ModuleLine, Version>,
-    /// MVS v2 package-local frozen resolution tables.
-    ///
-    /// Native CLI resolution populates this for hydrated package scopes, and eval
-    /// uses it as the authoritative package lookup table for those invocations.
-    mvs_v2_resolution: Option<FrozenResolutionSet>,
-    /// Whether the lockfile (pcb.sum) was updated during resolution
-    pub lockfile_changed: bool,
+    resolution: FrozenResolutionSet,
     /// Symbol-to-parts mapping built from `[parts]` sections across all manifests.
     ///
     /// Keys are `package://` URIs for `.kicad_sym` files. Values are ordered lists
@@ -816,114 +699,53 @@ pub struct ResolutionResult {
 }
 
 impl ResolutionResult {
-    fn new(
-        workspace_info: WorkspaceInfo,
-        package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-        closure: HashMap<ModuleLine, Version>,
-        mvs_v2_resolution: Option<FrozenResolutionSet>,
-        lockfile_changed: bool,
-        symbol_parts: HashMap<String, Vec<ManifestPart>>,
-    ) -> Self {
-        let package_roots = Arc::new(resolution_package_roots(
-            &workspace_info,
-            &package_resolutions,
-            mvs_v2_resolution.as_ref(),
-        ));
-        Self {
-            workspace_info,
-            package_resolutions,
-            closure,
-            mvs_v2_resolution,
-            lockfile_changed,
-            symbol_parts,
-            package_roots,
-        }
-    }
-
-    pub fn native(
-        workspace_info: WorkspaceInfo,
-        package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>>,
-        closure: HashMap<ModuleLine, Version>,
-        lockfile_changed: bool,
-        symbol_parts: HashMap<String, Vec<ManifestPart>>,
-    ) -> Self {
-        Self::new(
-            workspace_info,
-            package_resolutions,
-            closure,
-            None,
-            lockfile_changed,
-            symbol_parts,
-        )
-    }
-
     pub fn frozen(
         workspace_info: WorkspaceInfo,
         resolution: FrozenResolutionSet,
         symbol_parts: HashMap<String, Vec<ManifestPart>>,
     ) -> Self {
-        Self::new(
+        let package_roots = Arc::new(resolution_package_roots(&workspace_info, &resolution));
+        Self {
             workspace_info,
-            HashMap::new(),
-            HashMap::new(),
-            Some(resolution),
-            false,
+            resolution,
             symbol_parts,
-        )
+            package_roots,
+        }
     }
 
     /// Create an empty resolution result with no dependencies.
     pub fn empty() -> Self {
-        Self::new(
+        Self::frozen(
             WorkspaceInfo {
                 root: PathBuf::new(),
                 cache_dir: PathBuf::new(),
                 config: None,
                 packages: BTreeMap::new(),
-                lockfile: None,
                 errors: vec![],
             },
-            HashMap::new(),
-            HashMap::new(),
-            None,
-            false,
+            FrozenResolutionSet::new(),
             HashMap::new(),
         )
     }
 
     /// Resolve the package-local dependency scope for a file.
     ///
-    /// When `active_mvs_v2_root` is present, lookup is intentionally scoped to
+    /// When `active_root_package` is present, lookup is intentionally scoped to
     /// that frozen root package. The same physical package root can appear in
-    /// multiple v2 dependency environments, so callers must not use a global
-    /// file → scope lookup for frozen resolution.
+    /// multiple dependency environments, so callers must not use a global
+    /// file-to-scope lookup for frozen resolution.
     pub(crate) fn package_scope_for_file<'a>(
         &'a self,
         file: &Path,
-        active_mvs_v2_root: Option<&str>,
-        file_provider: &dyn FileProvider,
+        active_root_package: Option<&str>,
     ) -> Option<ResolvedPackageScope<'a>> {
-        if let Some(root_package) = active_mvs_v2_root {
+        if let Some(root_package) = active_root_package {
             return self
-                .mvs_v2_root(root_package)
+                .frozen_root(root_package)
                 .and_then(|resolution| resolution.package_for_file(file))
                 .map(|(root, package)| ResolvedPackageScope::frozen(root, package));
         }
 
-        let mut current = file.parent();
-        while let Some(dir) = current {
-            if let Some((root, deps)) = self.package_resolutions.get_key_value(dir) {
-                let package_url = self.package_url_for_package_root(root, file_provider);
-                return Some(ResolvedPackageScope::native(root, deps, package_url));
-            }
-
-            if file_provider.exists(&dir.join("pcb.toml")) {
-                let root = dir.to_path_buf();
-                let package_url = self.package_url_for_package_root(&root, file_provider);
-                return Some(ResolvedPackageScope::native_empty(root, package_url));
-            }
-            current = dir.parent();
-        }
         None
     }
 
@@ -969,25 +791,16 @@ impl ResolutionResult {
             }
         }
 
-        self.package_resolutions
-            .values()
-            .flat_map(|deps| deps.iter())
-            .filter_map(|(dep_url, dep_root)| {
-                let canonical_dep = file_provider
-                    .canonicalize(dep_root)
-                    .unwrap_or_else(|_| dep_root.clone());
-                (canonical_root == canonical_dep).then_some(dep_url.clone())
-            })
-            .max_by_key(|dep_url| dep_url.len())
+        None
     }
 
     pub(crate) fn package_url_for_file(
         &self,
         file: &Path,
-        active_mvs_v2_root: Option<&str>,
+        active_root_package: Option<&str>,
         file_provider: &dyn FileProvider,
     ) -> Option<String> {
-        let scope = self.package_scope_for_file(file, active_mvs_v2_root, file_provider)?;
+        let scope = self.package_scope_for_file(file, active_root_package)?;
         let package_url = scope.package_url()?.to_string();
         let canonical_root = file_provider
             .canonicalize(scope.root())
@@ -1007,34 +820,20 @@ impl ResolutionResult {
     pub(crate) fn load_cache_scope_key_for_file(
         &self,
         file: &Path,
-        active_mvs_v2_root: Option<&str>,
-        file_provider: &dyn FileProvider,
+        active_root_package: Option<&str>,
     ) -> Option<PackageScopeKey> {
-        self.package_scope_for_file(file, active_mvs_v2_root, file_provider)
-            .and_then(|scope| scope.load_cache_key())
+        self.package_scope_for_file(file, active_root_package)
+            .map(|scope| scope.load_cache_key())
     }
 
-    /// Canonicalize `package_resolutions` keys using the given file provider.
     pub fn canonicalize_keys(&mut self, file_provider: &dyn crate::FileProvider) {
         if !self.workspace_info.cache_dir.as_os_str().is_empty() {
             self.workspace_info.cache_dir = file_provider
                 .canonicalize(&self.workspace_info.cache_dir)
                 .unwrap_or_else(|_| self.workspace_info.cache_dir.clone());
         }
-        self.package_resolutions = self
-            .package_resolutions
-            .iter()
-            .map(|(root, deps)| {
-                let canon = file_provider
-                    .canonicalize(root)
-                    .unwrap_or_else(|_| root.clone());
-                (canon, deps.clone())
-            })
-            .collect();
-        if let Some(resolution_set) = &mut self.mvs_v2_resolution {
-            for resolution in resolution_set.values_mut() {
-                resolution.canonicalize_keys(file_provider);
-            }
+        for resolution in self.resolution.values_mut() {
+            resolution.canonicalize_keys(file_provider);
         }
         self.refresh_package_roots();
     }
@@ -1042,21 +841,10 @@ impl ResolutionResult {
     fn refresh_package_roots(&mut self) {
         self.package_roots = Arc::new(resolution_package_roots(
             &self.workspace_info,
-            &self.package_resolutions,
-            self.mvs_v2_resolution.as_ref(),
+            &self.resolution,
         ));
     }
 
-    pub fn set_mvs_v2_resolution(&mut self, resolution: FrozenResolutionSet) {
-        self.mvs_v2_resolution = Some(resolution);
-        self.refresh_package_roots();
-    }
-
-    /// Build the package coordinate → absolute root directory mapping.
-    ///
-    /// Workspace packages come from `workspace_info.packages`. External deps
-    /// are discovered from `package_resolutions` values (already resolved by the
-    /// resolver through patches → vendor → cache).
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
         self.package_roots
             .iter()
@@ -1064,28 +852,47 @@ impl ResolutionResult {
             .collect()
     }
 
+    pub fn remote_package_versions(&self) -> BTreeMap<String, BTreeSet<String>> {
+        let mut package_versions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+        for resolution in self.resolution.values() {
+            for (dep_id, version) in &resolution.selected_remote {
+                package_versions
+                    .entry(dep_id.path.clone())
+                    .or_default()
+                    .insert(version.to_string());
+            }
+        }
+
+        package_versions
+    }
+
     pub(crate) fn package_roots_ref(&self) -> &BTreeMap<String, PathBuf> {
         self.package_roots.as_ref()
     }
 
-    pub fn mvs_v2_root(&self, package_url: &str) -> Option<&FrozenResolutionMap> {
-        self.mvs_v2_resolution
-            .as_ref()
-            .and_then(|resolution| resolution.get(package_url))
+    pub fn frozen_root(&self, package_url: &str) -> Option<&FrozenResolutionMap> {
+        self.resolution.get(package_url)
     }
 
-    pub fn mvs_v2_root_for_file(&self, file: &Path) -> Option<(&str, &FrozenResolutionMap)> {
-        let resolution = self.mvs_v2_resolution.as_ref()?;
+    pub fn frozen_root_for_file(&self, file: &Path) -> Option<(&str, &FrozenResolutionMap)> {
+        if self.workspace_info.packages.is_empty()
+            && file.starts_with(&self.workspace_info.root)
+            && let Some(map) = self.resolution.get(LOCAL_WORKSPACE_ROOT_URL)
+        {
+            return Some((LOCAL_WORKSPACE_ROOT_URL, map));
+        }
+
         self.workspace_info
             .packages
             .iter()
             .filter_map(|(url, package)| {
                 let root = package.dir(&self.workspace_info.root);
-                (file.starts_with(&root) && resolution.contains_key(url))
+                (file.starts_with(&root) && self.resolution.contains_key(url))
                     .then_some((url, root.as_os_str().len()))
             })
             .max_by_key(|(_, root_len)| *root_len)
-            .and_then(|(url, _)| resolution.get(url).map(|map| (url.as_str(), map)))
+            .and_then(|(url, _)| self.resolution.get(url).map(|map| (url.as_str(), map)))
     }
 
     /// KiCad model variable → resolved directory mapping.
@@ -1093,11 +900,7 @@ impl ResolutionResult {
         let mut model_dirs = BTreeMap::new();
         let workspace_cfg = self.workspace_info.workspace_config();
 
-        for deps in self
-            .package_resolutions
-            .values()
-            .chain(frozen_dependency_maps(self.mvs_v2_resolution.as_ref()))
-        {
+        for deps in frozen_dependency_maps(&self.resolution) {
             for (repo, path) in deps {
                 let Some(version_str) = path.file_name().and_then(|name| name.to_str()) else {
                     continue;
@@ -1146,50 +949,6 @@ impl ResolutionResult {
             .collect();
         pcb_sch::format_package_uri(&effective_abs, &package_roots)
     }
-
-    /// Compute the transitive dependency closure for a package.
-    pub fn package_closure(&self, package_url: &str) -> PackageClosure {
-        let workspace_info = &self.workspace_info;
-        let mut closure = PackageClosure::default();
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut stack: Vec<String> = vec![package_url.to_string()];
-
-        while let Some(url) = stack.pop() {
-            if !visited.insert(url.clone()) {
-                continue;
-            }
-
-            if let Some(pkg) = workspace_info.packages.get(&url) {
-                closure.local_packages.insert(url.clone());
-                for dep_url in pkg.config.dependencies.direct.keys() {
-                    stack.push(dep_url.clone());
-                }
-            } else if let Some((_, version)) = self.closure.iter().find(|(l, _)| l.path == url) {
-                closure
-                    .remote_packages
-                    .insert((url.clone(), version.to_string()));
-                // Find resolved root from any package that depends on this one
-                let pkg_root = self
-                    .package_resolutions
-                    .values()
-                    .find_map(|deps| deps.get(&url));
-                if let Some(deps) = pkg_root.and_then(|root| self.package_resolutions.get(root)) {
-                    for dep_url in deps.keys() {
-                        stack.push(dep_url.clone());
-                    }
-                }
-            }
-        }
-
-        closure
-    }
-}
-
-/// Transitive dependency closure for a package
-#[derive(Debug, Clone, Default)]
-pub struct PackageClosure {
-    pub local_packages: HashSet<String>,
-    pub remote_packages: HashSet<(String, String)>,
 }
 
 #[cfg(test)]
@@ -1228,40 +987,38 @@ mod tests {
     }
 
     #[test]
-    fn package_roots_reflect_mvs_v2_dependency_roots() {
-        let mut result = ResolutionResult::native(
+    fn package_roots_reflect_frozen_dependency_roots() {
+        let dep_root = PathBuf::from("/cache/github.com/acme/dep/1.2.3");
+        let dep_coord = "github.com/acme/dep@1.2.3";
+        let result = ResolutionResult::frozen(
             WorkspaceInfo {
                 root: PathBuf::from("/workspace"),
                 cache_dir: PathBuf::new(),
                 config: None,
                 packages: BTreeMap::new(),
-                lockfile: None,
                 errors: vec![],
             },
-            HashMap::new(),
-            HashMap::new(),
-            false,
+            BTreeMap::from([(
+                "github.com/acme/root".into(),
+                FrozenResolutionMap {
+                    selected_remote: BTreeMap::new(),
+                    packages: BTreeMap::from([(
+                        PathBuf::from("/workspace"),
+                        FrozenPackage {
+                            identity: FrozenPackageIdentity::Workspace(
+                                "github.com/acme/root".into(),
+                            ),
+                            deps: BTreeMap::from([(
+                                "github.com/acme/dep".into(),
+                                dep_root.clone(),
+                            )]),
+                            parts: Vec::new(),
+                        },
+                    )]),
+                },
+            )]),
             HashMap::new(),
         );
-        let dep_root = PathBuf::from("/cache/github.com/acme/dep/1.2.3");
-        let dep_coord = "github.com/acme/dep@1.2.3";
-
-        assert!(!result.package_roots().contains_key(dep_coord));
-
-        result.set_mvs_v2_resolution(BTreeMap::from([(
-            "github.com/acme/root".into(),
-            FrozenResolutionMap {
-                selected_remote: BTreeMap::new(),
-                packages: BTreeMap::from([(
-                    PathBuf::from("/workspace"),
-                    FrozenPackage {
-                        identity: FrozenPackageIdentity::Workspace("github.com/acme/root".into()),
-                        deps: BTreeMap::from([("github.com/acme/dep".into(), dep_root.clone())]),
-                        parts: Vec::new(),
-                    },
-                )]),
-            },
-        )]));
 
         assert_eq!(result.package_roots().get(dep_coord), Some(&dep_root));
     }
@@ -1289,7 +1046,6 @@ mod tests {
                 cache_dir: PathBuf::new(),
                 config: None,
                 packages: BTreeMap::new(),
-                lockfile: None,
                 errors: vec![],
             },
             BTreeMap::from([
@@ -1310,20 +1066,11 @@ mod tests {
             ]),
             HashMap::new(),
         );
-        let provider = InMemoryFileProvider::new(HashMap::new());
         let file = shared_root.join("lib.zen");
 
         assert_eq!(
-            resolution.load_cache_scope_key_for_file(
-                &file,
-                Some("github.com/acme/root-a"),
-                &provider,
-            ),
-            resolution.load_cache_scope_key_for_file(
-                &file,
-                Some("github.com/acme/root-b"),
-                &provider,
-            )
+            resolution.load_cache_scope_key_for_file(&file, Some("github.com/acme/root-a"),),
+            resolution.load_cache_scope_key_for_file(&file, Some("github.com/acme/root-b"),)
         );
     }
 
@@ -1347,7 +1094,6 @@ mod tests {
                 cache_dir: PathBuf::new(),
                 config: None,
                 packages: BTreeMap::new(),
-                lockfile: None,
                 errors: vec![],
             },
             BTreeMap::from([
@@ -1374,137 +1120,64 @@ mod tests {
             ]),
             HashMap::new(),
         );
-        let provider = InMemoryFileProvider::new(HashMap::new());
         let file = shared_root.join("lib.zen");
 
         assert_ne!(
-            resolution.load_cache_scope_key_for_file(
-                &file,
-                Some("github.com/acme/root-a"),
-                &provider,
-            ),
-            resolution.load_cache_scope_key_for_file(
-                &file,
-                Some("github.com/acme/root-b"),
-                &provider,
-            )
+            resolution.load_cache_scope_key_for_file(&file, Some("github.com/acme/root-a"),),
+            resolution.load_cache_scope_key_for_file(&file, Some("github.com/acme/root-b"),)
         );
     }
 
     #[test]
-    fn native_scope_cache_key_remains_path_only() {
-        let resolution = ResolutionResult::native(
+    fn frozen_scope_requires_active_root_for_shared_package() {
+        let shared_root = PathBuf::from("/cache/github.com/acme/shared/1.0.0");
+        let package_with_dep = |dep_root: &str| FrozenPackage {
+            identity: FrozenPackageIdentity::Remote {
+                dep_id: FrozenDepId {
+                    path: "github.com/acme/shared".into(),
+                    lane: "v1".into(),
+                },
+                version: Version::parse("1.0.0").unwrap(),
+            },
+            deps: BTreeMap::from([("github.com/acme/base".into(), PathBuf::from(dep_root))]),
+            parts: Vec::new(),
+        };
+        let resolution = ResolutionResult::frozen(
             WorkspaceInfo {
                 root: PathBuf::from("/workspace"),
                 cache_dir: PathBuf::new(),
                 config: None,
                 packages: BTreeMap::new(),
-                lockfile: None,
                 errors: vec![],
             },
-            HashMap::from([(
-                PathBuf::from("/workspace/pkg"),
-                BTreeMap::from([(
-                    "github.com/acme/dep".into(),
-                    PathBuf::from("/cache/github.com/acme/dep/1.0.0"),
-                )]),
-            )]),
-            HashMap::new(),
-            false,
+            BTreeMap::from([
+                (
+                    "github.com/acme/root-a".into(),
+                    FrozenResolutionMap {
+                        selected_remote: BTreeMap::new(),
+                        packages: BTreeMap::from([(
+                            shared_root.clone(),
+                            package_with_dep("/cache/github.com/acme/base/1.0.0"),
+                        )]),
+                    },
+                ),
+                (
+                    "github.com/acme/root-b".into(),
+                    FrozenResolutionMap {
+                        selected_remote: BTreeMap::new(),
+                        packages: BTreeMap::from([(
+                            shared_root.clone(),
+                            package_with_dep("/cache/github.com/acme/base/2.0.0"),
+                        )]),
+                    },
+                ),
+            ]),
             HashMap::new(),
         );
-        let provider = InMemoryFileProvider::new(HashMap::new());
 
         assert_eq!(
-            resolution.load_cache_scope_key_for_file(
-                Path::new("/workspace/pkg/lib.zen"),
-                None,
-                &provider,
-            ),
+            resolution.load_cache_scope_key_for_file(&shared_root.join("lib.zen"), None),
             None
-        );
-    }
-
-    #[test]
-    fn native_scope_walks_to_nearest_package_boundary() {
-        let resolution = ResolutionResult::native(
-            WorkspaceInfo {
-                root: PathBuf::from("/workspace"),
-                cache_dir: PathBuf::new(),
-                config: None,
-                packages: BTreeMap::new(),
-                lockfile: None,
-                errors: vec![],
-            },
-            HashMap::from([(
-                PathBuf::from("/workspace/pkg"),
-                BTreeMap::from([(
-                    "github.com/acme/outer".into(),
-                    PathBuf::from("/cache/github.com/acme/outer/1.0.0"),
-                )]),
-            )]),
-            HashMap::new(),
-            false,
-            HashMap::new(),
-        );
-        let provider = InMemoryFileProvider::new(HashMap::from([(
-            "/workspace/pkg/nested/pcb.toml".to_string(),
-            "[board]\nname = \"nested\"\npath = \"src/lib.zen\"\n".to_string(),
-        )]));
-
-        let scope = resolution
-            .package_scope_for_file(
-                Path::new("/workspace/pkg/nested/src/lib.zen"),
-                None,
-                &provider,
-            )
-            .expect("expected nested package scope");
-
-        assert_eq!(scope.root(), Path::new("/workspace/pkg/nested"));
-        assert_eq!(scope.expand_alias("outer"), None);
-    }
-
-    #[test]
-    fn test_vendored_path_resolver_basic() {
-        // Use platform-appropriate paths
-        let vendor_dir = PathBuf::from("/workspace/vendor");
-        let pkg_path = vendor_dir.join("github.com/user/pkg/1.0.0");
-        let toml_path = pkg_path.join("pcb.toml");
-
-        let mut files = HashMap::new();
-        files.insert(
-            toml_path.to_string_lossy().to_string(),
-            "[board]\nname = \"test\"\npath = \"test.zen\"\n".to_string(),
-        );
-
-        let provider = InMemoryFileProvider::new(files);
-        let lockfile = Lockfile::parse(
-            "github.com/user/pkg 1.0.0 h1:abc123\n\
-             github.com/user/pkg 1.0.0/pcb.toml h1:def456\n",
-        )
-        .unwrap();
-
-        let resolver = VendoredPathResolver::from_lockfile(provider, vendor_dir, &lockfile);
-
-        let path = resolver.resolve_package("github.com/user/pkg", "1.0.0");
-        assert_eq!(path, Some(pkg_path));
-    }
-
-    #[test]
-    fn test_vendored_path_resolver_direct_vendor_fallback() {
-        let vendor_dir = PathBuf::from("/workspace/vendor");
-        let provider = InMemoryFileProvider::new(HashMap::from([(
-            "/workspace/vendor/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/.sentinel"
-                .to_string(),
-            "".to_string(),
-        )]));
-        let lockfile = Lockfile::default();
-        let resolver = VendoredPathResolver::from_lockfile(provider, vendor_dir.clone(), &lockfile);
-
-        let path = resolver.resolve_package("gitlab.com/kicad/libraries/kicad-symbols", "9.0.3");
-        assert_eq!(
-            path,
-            Some(vendor_dir.join("gitlab.com/kicad/libraries/kicad-symbols/9.0.3"))
         );
     }
 
@@ -1517,17 +1190,11 @@ mod tests {
             cache_dir: global_cache.clone(),
             config: None,
             packages: BTreeMap::new(),
-            lockfile: None,
             errors: vec![],
         };
 
-        let result = ResolutionResult::native(
-            workspace,
-            HashMap::new(),
-            HashMap::new(),
-            false,
-            HashMap::new(),
-        );
+        let result =
+            ResolutionResult::frozen(workspace, FrozenResolutionSet::new(), HashMap::new());
 
         let abs = workspace_root
             .join(".pcb")
@@ -1540,18 +1207,15 @@ mod tests {
     #[test]
     fn test_package_roots_include_workspace_fallback_for_standalone_files() {
         let workspace_root = PathBuf::from("/workspace");
-        let result = ResolutionResult::native(
+        let result = ResolutionResult::frozen(
             WorkspaceInfo {
                 root: workspace_root.clone(),
                 cache_dir: PathBuf::new(),
                 config: None,
                 packages: BTreeMap::new(),
-                lockfile: None,
                 errors: vec![],
             },
-            HashMap::new(),
-            HashMap::new(),
-            false,
+            FrozenResolutionSet::new(),
             HashMap::new(),
         );
 
@@ -1624,7 +1288,6 @@ mod tests {
                     symbol_files: Vec::new(),
                 },
             )]),
-            lockfile: None,
             errors: vec![],
         };
         let stable_line = ModuleLine::new(dep_url.clone(), &stable_version);
@@ -1731,7 +1394,6 @@ mod tests {
                     symbol_files: Vec::new(),
                 },
             )]),
-            lockfile: None,
             errors: vec![],
         };
         let resolver = RecordingResolver {
@@ -1778,24 +1440,33 @@ mod tests {
     fn test_kicad_model_dirs_use_selected_builtin_family() {
         let version = "10.0.3";
         let models = "gitlab.com/kicad/libraries/kicad-packages3D".to_string();
-        let result = ResolutionResult::native(
+        let result = ResolutionResult::frozen(
             WorkspaceInfo {
                 root: PathBuf::from("/workspace"),
                 cache_dir: PathBuf::new(),
                 config: None,
                 packages: BTreeMap::new(),
-                lockfile: None,
                 errors: vec![],
             },
-            HashMap::from([(
-                PathBuf::from("/workspace"),
-                BTreeMap::from([(
-                    models.clone(),
-                    PathBuf::from(format!("/cache/{models}/{version}")),
-                )]),
+            BTreeMap::from([(
+                "github.com/acme/root".to_string(),
+                FrozenResolutionMap {
+                    selected_remote: BTreeMap::new(),
+                    packages: BTreeMap::from([(
+                        PathBuf::from("/workspace"),
+                        FrozenPackage {
+                            identity: FrozenPackageIdentity::Workspace(
+                                "github.com/acme/root".to_string(),
+                            ),
+                            deps: BTreeMap::from([(
+                                models.clone(),
+                                PathBuf::from(format!("/cache/{models}/{version}")),
+                            )]),
+                            parts: Vec::new(),
+                        },
+                    )]),
+                },
             )]),
-            HashMap::new(),
-            false,
             HashMap::new(),
         );
 

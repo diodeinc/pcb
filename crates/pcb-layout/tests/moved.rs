@@ -27,8 +27,8 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     let zen_file = temp.path().join("Board.zen");
     assert!(zen_file.exists(), "Board.zen should exist");
 
-    let mut workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
-    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)?;
+    let workspace_info = pcb_zen::get_workspace_info(&DefaultFileProvider::new(), temp.path())?;
+    let res = pcb_zen::resolve_workspace_dependencies(workspace_info, temp.path(), false)?;
     let model_dirs = res.kicad_model_dirs();
 
     let (output, diagnostics) = pcb_zen::run(&zen_file, res.clone(), Default::default()).unpack();

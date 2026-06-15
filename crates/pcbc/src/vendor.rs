@@ -36,8 +36,8 @@ pub fn execute(args: VendorArgs) -> Result<()> {
         );
     }
 
-    // Vendoring always needs network access and allows dependency state modifications.
-    let resolution = resolve_workspace_dependencies(workspace_info, &zen_path, false, false)?;
+    // Vendoring writes only vendor/; dependency manifests are hydrated by pcb sync.
+    let resolution = resolve_workspace_dependencies(workspace_info, &zen_path, false)?;
 
     // If --all, vendor everything with ["**"] pattern
     // Otherwise, pass empty patterns to use only [workspace.vendor] config

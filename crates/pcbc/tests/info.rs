@@ -135,6 +135,9 @@ pcb-version = "0.3"
 
 [dependencies]
 "github.com/vendor/components/Thing" = "1.0.0"
+
+[dependencies.indirect]
+"github.com/vendor/components/Leaf@1" = "1.0.0"
 "#,
     );
 

@@ -152,10 +152,6 @@ fn external_dependencies(
             continue;
         }
 
-        let lock_entry = ws
-            .lockfile
-            .as_ref()
-            .and_then(|lockfile| lockfile.get(module_path, version));
         let config = PcbToml::from_path(&manifest_path).unwrap_or_default();
         let (entrypoints, symbol_files) = discover_package_files(&root)?;
         let module_path = module_path.to_string();
@@ -174,8 +170,8 @@ fn external_dependencies(
                 published_at: None,
                 preferred: false,
                 dirty: false,
-                content_hash: lock_entry.map(|entry| entry.content_hash.clone()),
-                manifest_hash: lock_entry.and_then(|entry| entry.manifest_hash.clone()),
+                content_hash: None,
+                manifest_hash: None,
                 entrypoints,
                 symbol_files,
             },

@@ -1,6 +1,5 @@
 pub mod archive;
 pub mod ast_utils;
-mod auto_deps;
 pub mod cache_index;
 pub mod diagnostics;
 pub mod git;
@@ -25,10 +24,7 @@ use starlark::collections::SmallMap;
 pub use package_resolver::resolve_workspace_dependencies;
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};
-pub use resolve::{
-    VendorResult, copy_dir_all, ensure_sparse_checkout, resolve_dependencies,
-    resolve_dependencies_for_update, vendor_deps,
-};
+pub use resolve::{VendorResult, copy_dir_all, ensure_sparse_checkout, vendor_deps};
 pub use starlark::errors::EvalSeverity;
 pub use workspace::{WorkspaceInfo, WorkspacePackage, get_workspace_info};
 

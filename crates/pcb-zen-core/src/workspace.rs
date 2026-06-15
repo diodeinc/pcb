@@ -12,7 +12,7 @@ use semver::Version;
 
 use crate::FileProvider;
 use crate::config::{
-    KicadLibraryConfig, Lockfile, PcbToml, WorkspaceConfig, find_workspace_root, parse_pcb_version,
+    KicadLibraryConfig, PcbToml, WorkspaceConfig, find_workspace_root, parse_pcb_version,
     pcb_version_from_cargo, pcb_version_is_older, stdlib_pinned_kicad_library,
 };
 use crate::kicad_library::validate_kicad_library_config;
@@ -154,9 +154,6 @@ pub struct WorkspaceInfo {
     pub config: Option<PcbToml>,
     /// Discovered packages keyed by URL
     pub packages: BTreeMap<String, WorkspacePackage>,
-    /// Optional lockfile
-    #[serde(skip)]
-    pub lockfile: Option<Lockfile>,
     /// Discovery errors
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<DiscoveryError>,
@@ -582,16 +579,6 @@ pub fn get_workspace_info<F: FileProvider>(
         );
     }
 
-    // Load lockfile - treat parse errors as hard errors, missing file as None
-    let lockfile_path = workspace_root.join("pcb.sum");
-    let lockfile = match file_provider.read_file(&lockfile_path) {
-        Ok(content) => Some(Lockfile::parse(&content)?),
-        Err(crate::FileProviderError::NotFound(_)) => None,
-        Err(e) => {
-            return Err(anyhow::anyhow!("Failed to read pcb.sum: {}", e));
-        }
-    };
-
     // Populate discovered zen paths for boards without explicit paths
     for pkg in packages.values_mut() {
         if let Some(board) = &mut pkg.config.board
@@ -607,7 +594,6 @@ pub fn get_workspace_info<F: FileProvider>(
         cache_dir: file_provider.cache_dir(),
         config,
         packages,
-        lockfile,
         errors,
     })
 }

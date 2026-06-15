@@ -178,9 +178,8 @@ pub fn test_resolution() -> pcb_zen_core::resolution::ResolutionResult {
 
 /// Build a minimal `ResolutionResult` suitable for in-memory tests at an arbitrary workspace root.
 pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::ResolutionResult {
-    let mut resolution = pcb_zen_core::resolution::ResolutionResult::empty();
-    resolution.workspace_info.root = workspace_root.to_path_buf();
-    resolution.workspace_info.packages.insert(
+    let mut packages = BTreeMap::new();
+    packages.insert(
         "test".to_string(),
         pcb_zen_core::workspace::WorkspacePackage {
             rel_path: PathBuf::new(),
@@ -194,13 +193,43 @@ pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::Re
         },
     );
     let default_deps = default_test_kicad_resolution_map();
-    resolution
-        .package_resolutions
-        .insert(workspace_root.to_path_buf(), default_deps.clone());
-    resolution
-        .package_resolutions
-        .insert(workspace_root.join(".pcb/stdlib"), default_deps);
-    resolution
+    let workspace_info = pcb_zen_core::workspace::WorkspaceInfo {
+        root: workspace_root.to_path_buf(),
+        cache_dir: PathBuf::new(),
+        config: None,
+        packages,
+        errors: Vec::new(),
+    };
+    pcb_zen_core::resolution::ResolutionResult::frozen(
+        workspace_info,
+        BTreeMap::from([(
+            "test".to_string(),
+            pcb_zen_core::resolution::FrozenResolutionMap {
+                selected_remote: BTreeMap::new(),
+                packages: BTreeMap::from([
+                    (
+                        workspace_root.to_path_buf(),
+                        pcb_zen_core::resolution::FrozenPackage {
+                            identity: pcb_zen_core::resolution::FrozenPackageIdentity::Workspace(
+                                "test".to_string(),
+                            ),
+                            deps: default_deps.clone(),
+                            parts: Vec::new(),
+                        },
+                    ),
+                    (
+                        workspace_root.join(".pcb/stdlib"),
+                        pcb_zen_core::resolution::FrozenPackage {
+                            identity: pcb_zen_core::resolution::FrozenPackageIdentity::Stdlib,
+                            deps: default_deps,
+                            parts: Vec::new(),
+                        },
+                    ),
+                ]),
+            },
+        )]),
+        HashMap::new(),
+    )
 }
 
 /// In-memory file provider for tests

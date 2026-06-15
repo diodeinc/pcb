@@ -109,7 +109,7 @@ pub mod attrs {
 }
 
 // Re-export commonly used types
-pub use config::{BoardConfig, LockEntry, Lockfile, PcbToml, WorkspaceConfig};
+pub use config::{BoardConfig, PcbToml, WorkspaceConfig};
 pub use diagnostics::{
     Diagnostic, DiagnosticError, DiagnosticFrame, DiagnosticReference, DiagnosticReport,
     Diagnostics, DiagnosticsPass, DiagnosticsReport, LoadError, WithDiagnostics,

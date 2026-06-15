@@ -32,12 +32,36 @@ fn eval_with_files_and_resolution(
         workspace: Some(WorkspaceConfig::default()),
         ..Default::default()
     });
-    resolution
-        .package_resolutions
-        .insert(PathBuf::from("/"), root_deps.clone());
-    resolution
-        .package_resolutions
-        .insert(PathBuf::from("/.pcb/stdlib"), root_deps);
+    resolution = pcb_zen_core::resolution::ResolutionResult::frozen(
+        resolution.workspace_info,
+        BTreeMap::from([(
+            "test".to_string(),
+            pcb_zen_core::resolution::FrozenResolutionMap {
+                selected_remote: BTreeMap::new(),
+                packages: BTreeMap::from([
+                    (
+                        PathBuf::from("/"),
+                        pcb_zen_core::resolution::FrozenPackage {
+                            identity: pcb_zen_core::resolution::FrozenPackageIdentity::Workspace(
+                                "test".to_string(),
+                            ),
+                            deps: root_deps.clone(),
+                            parts: Vec::new(),
+                        },
+                    ),
+                    (
+                        PathBuf::from("/.pcb/stdlib"),
+                        pcb_zen_core::resolution::FrozenPackage {
+                            identity: pcb_zen_core::resolution::FrozenPackageIdentity::Stdlib,
+                            deps: root_deps,
+                            parts: Vec::new(),
+                        },
+                    ),
+                ]),
+            },
+        )]),
+        HashMap::new(),
+    );
 
     let ctx = EvalContext::new(file_provider, resolution).set_source_path(PathBuf::from(main_file));
     ctx.eval()

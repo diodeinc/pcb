@@ -11,11 +11,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Child net-symbol position overrides (`# pcb:sch <child>.<NET>.<idx>`) are no longer dropped when the net is renamed across the module boundary.
-- Read/evaluation paths no longer mutate dependency state or run legacy vendoring fallbacks.
+- Read/evaluation paths now require hydrated manifests and never mutate dependency state.
 
 ### Changes
 
-- Removed obsolete `--locked` flags from read commands.
+- Removed legacy v1/`pcb.sum` resolution, disabled `pcb update`, and dropped obsolete `--locked` read-command flags.
 - `pcb migrate` now upgrades workspace `pcb-version` after successful latest-toolchain migrations.
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
 - `pcb publish` release metadata now records strict workspace BOM matching when enabled.

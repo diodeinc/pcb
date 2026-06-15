@@ -106,35 +106,63 @@ check(LedValue == "hello from Led", "should load from Led")
         cache_dir: PathBuf::new(),
         config: None,
         packages,
-        lockfile: None,
         errors: vec![],
     };
-
-    // Build resolution maps
-    let mut package_resolutions: HashMap<PathBuf, BTreeMap<String, PathBuf>> = HashMap::new();
 
     // Board's resolution map: only include Led if it's a declared dependency
     let mut board_deps_map = common::default_test_kicad_resolution_map();
     if !board_deps.is_empty() {
         board_deps_map.insert(led_url.clone(), PathBuf::from("/workspace/modules/Led"));
     }
-    package_resolutions.insert(PathBuf::from("/workspace/boards/Main"), board_deps_map);
 
-    // Led and stdlib use the default KiCad asset deps in tests.
-    package_resolutions.insert(
-        PathBuf::from("/workspace/modules/Led"),
-        common::default_test_kicad_resolution_map(),
-    );
-    package_resolutions.insert(stdlib_root, common::default_test_kicad_resolution_map());
-
-    // Workspace root resolution map
-    package_resolutions.insert(workspace_root, common::default_test_kicad_resolution_map());
-
-    let resolution = ResolutionResult::native(
+    let resolution = ResolutionResult::frozen(
         workspace_info,
-        package_resolutions,
-        HashMap::new(),
-        false,
+        BTreeMap::from([(
+            board_url.clone(),
+            pcb_zen_core::resolution::FrozenResolutionMap {
+                selected_remote: BTreeMap::new(),
+                packages: BTreeMap::from([
+                    (
+                        PathBuf::from("/workspace/boards/Main"),
+                        pcb_zen_core::resolution::FrozenPackage {
+                            identity: pcb_zen_core::resolution::FrozenPackageIdentity::Workspace(
+                                board_url,
+                            ),
+                            deps: board_deps_map,
+                            parts: Vec::new(),
+                        },
+                    ),
+                    (
+                        PathBuf::from("/workspace/modules/Led"),
+                        pcb_zen_core::resolution::FrozenPackage {
+                            identity: pcb_zen_core::resolution::FrozenPackageIdentity::Workspace(
+                                led_url,
+                            ),
+                            deps: common::default_test_kicad_resolution_map(),
+                            parts: Vec::new(),
+                        },
+                    ),
+                    (
+                        stdlib_root,
+                        pcb_zen_core::resolution::FrozenPackage {
+                            identity: pcb_zen_core::resolution::FrozenPackageIdentity::Stdlib,
+                            deps: common::default_test_kicad_resolution_map(),
+                            parts: Vec::new(),
+                        },
+                    ),
+                    (
+                        workspace_root,
+                        pcb_zen_core::resolution::FrozenPackage {
+                            identity: pcb_zen_core::resolution::FrozenPackageIdentity::Workspace(
+                                "github.com/myorg/project".to_string(),
+                            ),
+                            deps: common::default_test_kicad_resolution_map(),
+                            parts: Vec::new(),
+                        },
+                    ),
+                ]),
+            },
+        )]),
         HashMap::new(),
     );
 
