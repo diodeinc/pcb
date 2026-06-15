@@ -6,7 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use pcb_canonical::{
-    compute_content_hash_from_dir, compute_manifest_hash, list_canonical_tar_entries,
+    compute_content_hash_from_dir, compute_content_hash_from_memory_files, compute_manifest_hash,
+    list_canonical_tar_entries,
 };
 
 /// Test helper for creating isolated directories with files.
@@ -248,6 +249,46 @@ fn content_change_changes_hash() {
     assert_ne!(
         hash1, hash2,
         "different content should produce different hashes"
+    );
+}
+
+#[test]
+fn pcb_sum_is_excluded_from_content_hashes() {
+    let clean = CanonicalTestDir::new();
+    clean.add_file("pcb.toml", "[dependencies]\n");
+    clean.add_file("main.zen", "x = 1\n");
+
+    let with_lockfile = CanonicalTestDir::new();
+    with_lockfile.add_file("pcb.toml", "[dependencies]\n");
+    with_lockfile.add_file("main.zen", "x = 1\n");
+    with_lockfile.add_file("pcb.sum", "github.com/acme/dep v1.0.0 h1:old\n");
+    with_lockfile.add_file("nested/pcb.sum", "ignored nested lockfile\n");
+
+    let entries = list_canonical_tar_entries(with_lockfile.root(), None).unwrap();
+    assert_eq!(entries, vec!["main.zen", "pcb.toml"]);
+    assert_eq!(
+        compute_content_hash_from_dir(clean.root()).unwrap(),
+        compute_content_hash_from_dir(with_lockfile.root()).unwrap(),
+        "pcb.sum files should not affect directory content hashes"
+    );
+
+    let without_memory_lockfile = compute_content_hash_from_memory_files([
+        (Path::new("pcb.toml"), b"[dependencies]\n".as_slice()),
+        (Path::new("main.zen"), b"x = 1\n".as_slice()),
+    ])
+    .unwrap();
+    let with_memory_lockfile = compute_content_hash_from_memory_files([
+        (Path::new("pcb.toml"), b"[dependencies]\n".as_slice()),
+        (Path::new("main.zen"), b"x = 1\n".as_slice()),
+        (
+            Path::new("pcb.sum"),
+            b"github.com/acme/dep v1.0.0 h1:old\n".as_slice(),
+        ),
+    ])
+    .unwrap();
+    assert_eq!(
+        without_memory_lockfile, with_memory_lockfile,
+        "pcb.sum files should not affect in-memory content hashes"
     );
 }
 
