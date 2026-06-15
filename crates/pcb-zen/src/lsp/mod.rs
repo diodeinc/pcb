@@ -1542,13 +1542,20 @@ mod tests {
     #[test]
     fn lsp_loads_open_dependency_contents() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
-        let dep_path = dir.path().join("dep.zen");
-        let main_path = dir.path().join("main.zen");
+        let root = dir.path().canonicalize()?;
+        let package_dir = root.join("pkg");
+        fs::create_dir_all(&package_dir)?;
+        let dep_path = package_dir.join("dep.zen");
+        let main_path = package_dir.join("main.zen");
 
         let main_contents = "load(\"./dep.zen\", \"foo\")\n";
-        fs::write(dir.path().join("pcb.toml"), "")?;
+        fs::write(
+            root.join("pcb.toml"),
+            "[workspace]\npcb-version = \"0.4\"\n",
+        )?;
+        fs::write(package_dir.join("pcb.toml"), "")?;
         fs::write(&main_path, main_contents)?;
-        fs::write(&dep_path, "def foo(:\n")?;
+        fs::write(&dep_path, "def foo():\n    return 0\n")?;
 
         let ctx = LspEvalContext::default();
         let main_url = LspUrl::File(main_path.clone());
@@ -1571,6 +1578,7 @@ mod tests {
             "expected diagnostics when dependency buffer is invalid"
         );
 
+        fs::write(&dep_path, "def foo(:\n")?;
         ctx.did_close_file(&dep_url);
         let result = ctx.parse_file_with_contents(&main_url, main_contents.to_string());
         assert!(
@@ -1590,7 +1598,7 @@ mod tests {
         fs::write(
             &manifest_path,
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/acme/dep" = { branch = "main" }
@@ -1612,7 +1620,7 @@ pcb-version = "0.3"
         fs::write(
             &manifest_path,
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#,
         )?;
         let _ = ctx.resolution_for(&main_path);
@@ -1630,8 +1638,9 @@ pcb-version = "0.3"
     #[test]
     fn lsp_invalidates_symbol_library_cache_on_edit() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
-        let lib_path = dir.path().join("lib.kicad_sym");
-        let main_path = dir.path().join("main.zen");
+        let root = dir.path().canonicalize()?;
+        let lib_path = root.join("lib.kicad_sym");
+        let main_path = root.join("main.zen");
 
         let single_symbol = r#"(kicad_symbol_lib
     (symbol "OnlySymbol"
@@ -1668,7 +1677,10 @@ pcb-version = "0.3"
 
         let main_contents = "sym = Symbol(\"lib.kicad_sym\")\n";
 
-        fs::write(dir.path().join("pcb.toml"), "")?;
+        fs::write(
+            root.join("pcb.toml"),
+            "[workspace]\npcb-version = \"0.4\"\n",
+        )?;
         fs::write(&lib_path, single_symbol)?;
         fs::write(&main_path, main_contents)?;
 

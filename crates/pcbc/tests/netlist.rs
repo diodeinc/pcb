@@ -63,7 +63,7 @@ fn extract_position_data(sandbox: &Sandbox, netlist: &serde_json::Value) -> Stri
 const SIMPLE_BOARD_WITH_POSITIONS_ZEN: &str = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 #
 # [dependencies]
 # "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
@@ -116,7 +116,7 @@ LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Gpio("LED_CTR
 
 const WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
@@ -126,7 +126,7 @@ pcb-version = "0.3"
 const SIMPLE_BOARD_WITH_MIRROR_POSITIONS_ZEN: &str = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 #
 # [dependencies]
 # "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
@@ -254,7 +254,7 @@ fn test_netlist_no_positions() {
     let board_zen = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 #
 # [dependencies]
 # "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
@@ -284,7 +284,7 @@ fn test_netlist_mixed_position_formats() {
     let board_zen = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 #
 # [dependencies]
 # "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
@@ -369,7 +369,7 @@ Component(
 const NOT_CONNECTED_BOARD_ZEN: &str = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 #
 # [dependencies]
 # "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
@@ -417,7 +417,7 @@ Child(name = "U1", IN_GD = VBUS_RAW, GND = GND)
 /// boundary (here `IN_GD=VBUS_RAW`); the override key uses the global net name.
 #[test]
 fn test_netlist_descendant_net_symbol_override_with_renamed_io() {
-    let mut sandbox = Sandbox::new();
+    let mut sandbox = Sandbox::new().with_workspace();
     sandbox
         .write("boards/Child.zen", IO_RENAMED_CHILD_ZEN)
         .write("boards/Parent.zen", IO_RENAMED_PARENT_ZEN);

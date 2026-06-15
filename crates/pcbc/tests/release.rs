@@ -49,7 +49,7 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3, P2 = led
 
 const PCB_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 name = "test_workspace"
 
 [dependencies]
@@ -294,7 +294,7 @@ fn test_publish_metadata_includes_bom_strict() {
             "pcb.toml",
             r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [workspace.bom]
 strict = true
@@ -411,7 +411,7 @@ fn test_publish_board_vendors_remote_deps_for_validation() {
         .push_mirror();
 
     sb.cwd("src")
-        .write("pcb.toml", "[workspace]\npcb-version = \"0.3\"\n")
+        .write("pcb.toml", "[workspace]\npcb-version = \"0.4\"\n")
         .write(
             "boards/pcb.toml",
             r#"[board]

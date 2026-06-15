@@ -61,7 +61,7 @@ fn netlist_includes_part_and_alternatives_json() {
     let board = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 P1 = Net()
@@ -132,7 +132,7 @@ fn netlist_reflects_modifier_mutations_for_part_and_alternatives() {
     let board = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 P1 = Net()
@@ -191,7 +191,7 @@ fn netlist_signature_includes_io_direction_metadata() {
     let board = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 Child = Module("Child.zen")
@@ -301,7 +301,7 @@ fn datasheet_test_symbol(datasheet: &str) -> String {
 }
 
 fn build_datasheet_test_output(datasheet: &str, extra_files: &[(&str, &str)]) -> String {
-    let mut sandbox = Sandbox::new();
+    let mut sandbox = Sandbox::new().with_workspace();
     sandbox
         .write(
             "components/TestPart/TestPart.kicad_sym",
@@ -353,7 +353,7 @@ Component(
             "pcb.toml",
             r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/testorg/components/MyPart" = "1.0.0"
@@ -589,7 +589,7 @@ Component(
             r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 TestPart = Module("components/TestPart/TestPart.zen")
@@ -630,7 +630,7 @@ Component(
             r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 TestPart = Module("components/TestPart/TestPart.zen")

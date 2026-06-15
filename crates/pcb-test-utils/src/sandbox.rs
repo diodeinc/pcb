@@ -148,6 +148,12 @@ impl Sandbox {
         s
     }
 
+    /// Add a minimal workspace manifest at the sandbox cwd.
+    pub fn with_workspace(mut self) -> Self {
+        self.write("pcb.toml", "[workspace]\npcb-version = \"0.4\"\n");
+        self
+    }
+
     /// Enable `GIT_TRACE=1` for commands run with `run` / `run_ok` / `cmd`.
     pub fn with_trace(mut self, yes: bool) -> Self {
         self.trace = yes;

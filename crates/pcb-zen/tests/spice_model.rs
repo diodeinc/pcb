@@ -55,6 +55,7 @@ macro_rules! sim_snapshot {
 #[test]
 fn snapshot_sim_divider() {
     let env = TestProject::new();
+    env.add_file("pcb.toml", common::KICAD_WORKSPACE_TOML);
 
     env.add_file(
         "r.lib",
@@ -148,6 +149,7 @@ Resistor(name="R2", value=r2_value, package="0603", P1=vout, P2=gnd)
 #[test]
 fn snapshot_sim_setup_inline() {
     let env = TestProject::new();
+    env.add_file("pcb.toml", common::KICAD_WORKSPACE_TOML);
 
     env.add_file(
         "r.lib",
@@ -318,6 +320,7 @@ Resistor(name="R2", value="10kohms", package="0603", P1=vout, P2=gnd)
 #[test]
 fn snapshot_sim_setup_file() {
     let env = TestProject::new();
+    env.add_file("pcb.toml", common::KICAD_WORKSPACE_TOML);
 
     env.add_file(
         "r.lib",

@@ -14,7 +14,7 @@ const FAILING_CHECKS_TESTBENCH_ZEN: &str =
 
 const PCB_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"

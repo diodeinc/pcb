@@ -572,12 +572,6 @@ pub fn selected_remote_from_hydrated_manifest(
         .packages
         .get(package_url)
         .ok_or_else(|| anyhow::anyhow!("Unknown workspace package {package_url}"))?;
-    if package.config.dependencies.indirect.is_empty() {
-        bail!(
-            "{} is missing resolved dependency entries; run `pcb sync` first",
-            package_url
-        );
-    }
 
     selected_remote_from_manifest(workspace, &package.config)
 }

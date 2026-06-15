@@ -25,10 +25,14 @@ package = config(
 )
 "#;
 
+const REMOTE_PACKAGE_TOML: &str = r#"[workspace]
+pcb-version = "0.4"
+"#;
+
 fn seed_remote_package(sb: &mut Sandbox) {
     let mut fixture = sb.git_fixture("https://github.com/mycompany/components.git");
     fixture
-        .write("SimpleResistor/pcb.toml", "")
+        .write("SimpleResistor/pcb.toml", REMOTE_PACKAGE_TOML)
         .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_V1)
         .commit("Add SimpleResistor v1")
         .tag("SimpleResistor/v1.0.0", false)
@@ -120,9 +124,8 @@ fn test_pcb_doc_remote_package_defaults_to_latest() {
 
 #[test]
 fn test_pcb_doc_shows_allowed_values_for_config() {
-    let mut sb = Sandbox::new();
-    sb.write("pcb.toml", "")
-        .write("Widget.zen", ALLOWED_CONFIG_MODULE);
+    let mut sb = Sandbox::new().with_workspace();
+    sb.write("Widget.zen", ALLOWED_CONFIG_MODULE);
 
     let output = run_doc(&mut sb, ".");
 

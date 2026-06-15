@@ -6,6 +6,7 @@ use pcb_test_utils::sandbox::Sandbox;
 #[test]
 fn test_moved_old_component_still_exists_warning() {
     let output = Sandbox::new()
+        .with_workspace()
         .write(
             "board.zen",
             r#"
@@ -50,6 +51,7 @@ moved("OLD_RESISTOR", "NEW_RESISTOR")
 #[test]
 fn test_moved_new_component_missing_warning() {
     let output = Sandbox::new()
+        .with_workspace()
         .write(
             "board.zen",
             r#"
@@ -79,6 +81,7 @@ moved("OLD_COMPONENT", "NEW_COMPONENT")
 #[test]
 fn test_moved_both_issues_warnings() {
     let output = Sandbox::new()
+        .with_workspace()
         .write(
             "board.zen",
             r#"
@@ -111,6 +114,7 @@ moved("NONEXISTENT_OLD", "NONEXISTENT_NEW")
 #[test]
 fn test_moved_valid_directive_no_warnings() {
     let output = Sandbox::new()
+        .with_workspace()
         .write(
             "board.zen",
             r#"

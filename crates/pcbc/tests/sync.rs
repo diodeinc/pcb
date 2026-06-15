@@ -14,7 +14,7 @@ use std::ffi::OsStr;
 use std::process::Output;
 
 const PCB_TOML: &str = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#;
 
 const SIMPLE_RESISTOR_ZEN: &str = r#"
@@ -145,7 +145,7 @@ fn test_sync_pins_branch_dep_to_rev_and_builds() {
     let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package");
 
     let pcb_toml = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = { branch = "main" }
@@ -207,7 +207,7 @@ fn test_sync_adds_workspace_dependency_for_cross_package_relative_load() {
     let mut sandbox = Sandbox::new();
 
     let workspace_toml = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#;
 
     let lib_toml = "[dependencies]\n";
@@ -251,7 +251,7 @@ fn test_same_package_url_rejected() {
         .write(
             "pcb.toml",
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 repository = "github.com/example/demo"
 "#,
         )
@@ -301,7 +301,7 @@ fn test_sync_adds_root_workspace_package_dependency() {
         .write(
             "pcb.toml",
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 repository = "github.com/example/demo"
 
 [dependencies]
@@ -356,7 +356,7 @@ fn test_sync_preserves_pinned_dependency_version() {
         .write(
             "pcb.toml",
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/example/components/Helper" = "1.2.3"
@@ -393,7 +393,7 @@ fn test_root_package_url_to_package_read_only() {
         .write(
             "pcb.toml",
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 repository = "github.com/example/demo"
 
 [dependencies]
@@ -431,7 +431,7 @@ fn test_branch_only_dep_hydrates_before_read_only_and_offline() {
     let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package");
 
     let pcb_toml = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = { branch = "main" }
@@ -488,7 +488,7 @@ fn test_branch_plus_rev_uses_rev_when_branch_moves() {
 
     let pcb_toml = format!(
         r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{}" }}
@@ -534,7 +534,7 @@ fn test_branch_pinning_is_idempotent() {
         .push_mirror();
 
     let pcb_toml = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = { branch = "main" }
@@ -572,7 +572,7 @@ fn test_update_rejected_on_hydrated_workspace() {
 
     let pcb_toml = format!(
         r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{rev}" }}
@@ -610,7 +610,7 @@ fn test_covered_import_skips_unknown_remote_url_warning() {
 
     let pcb_toml = format!(
         r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{}" }}

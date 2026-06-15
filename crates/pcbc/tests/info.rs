@@ -5,12 +5,12 @@ use pcb_test_utils::sandbox::Sandbox;
 
 const WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#;
 
 const WORKSPACE_PCB_TOML_WITH_PREFERRED: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 preferred = ["boards/test-board"]
 "#;
 
@@ -131,12 +131,13 @@ fn test_pcb_info_json_includes_external_dependency_closure() {
         "pcb.toml",
         r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/vendor/components/Thing" = "1.0.0"
 
 [dependencies.indirect]
+"github.com/vendor/components/Thing@1" = "1.0.0"
 "github.com/vendor/components/Leaf@1" = "1.0.0"
 "#,
     );
@@ -174,7 +175,7 @@ fn test_pcb_info_json_includes_sum_free_external_dependency_closure() {
             "pcb.toml",
             r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#,
         )
         .write(
@@ -188,6 +189,7 @@ path = "Board.zen"
 "github.com/vendor/components/Thing" = "1.0.0"
 
 [dependencies.indirect]
+"github.com/vendor/components/Thing@1" = "1.0.0"
 "github.com/vendor/components/Leaf@1" = "1.0.0"
 "#,
         )

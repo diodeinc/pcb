@@ -53,4 +53,4 @@ name = "TB0001"
 === src/pcb.toml
 [workspace]
 name = "test_workspace"
-pcb-version = "0.3"
+pcb-version = "0.4"

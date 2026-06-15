@@ -11,7 +11,7 @@ Exit Code: 0
   "root": "<TEMP_DIR>",
   "config": {
     "workspace": {
-      "pcb-version": "0.3"
+      "pcb-version": "0.4"
     }
   },
   "packages": {

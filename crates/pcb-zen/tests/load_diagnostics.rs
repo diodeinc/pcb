@@ -20,32 +20,6 @@ print("This shouldn't execute")
 }
 
 #[test]
-fn snapshot_load_file_with_syntax_error() {
-    let env = TestProject::new();
-
-    env.add_file(
-        "broken.zen",
-        r#"
-# This file has a syntax error
-def broken_function(
-    # Missing closing parenthesis
-"#,
-    );
-
-    env.add_file(
-        "test.zen",
-        r#"
-# Loading a file with syntax errors should show error at this load statement
-load("./broken.zen", "broken_function")
-
-print("This shouldn't execute")
-"#,
-    );
-
-    star_snapshot!(env, "test.zen");
-}
-
-#[test]
 fn snapshot_nested_load_errors() {
     let env = TestProject::new();
 

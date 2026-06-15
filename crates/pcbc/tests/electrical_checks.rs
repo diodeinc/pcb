@@ -6,6 +6,7 @@ use pcb_test_utils::sandbox::Sandbox;
 #[test]
 fn test_electrical_check_error_severity() {
     let output = Sandbox::new()
+        .with_workspace()
         .write(
             "board.zen",
             r#"
@@ -25,6 +26,7 @@ builtin.add_electrical_check(
 #[test]
 fn test_electrical_check_warning_severity() {
     let output = Sandbox::new()
+        .with_workspace()
         .write(
             "board.zen",
             r#"
@@ -47,6 +49,7 @@ builtin.add_electrical_check(
 #[test]
 fn test_electrical_check_passing() {
     let output = Sandbox::new()
+        .with_workspace()
         .write(
             "board.zen",
             r#"
@@ -67,6 +70,7 @@ builtin.add_electrical_check(
 #[test]
 fn test_electrical_check_invalid_severity() {
     let output = Sandbox::new()
+        .with_workspace()
         .write(
             "board.zen",
             r#"
@@ -87,6 +91,7 @@ builtin.add_electrical_check(
 #[test]
 fn test_electrical_check_with_inputs() {
     let output = Sandbox::new()
+        .with_workspace()
         .write(
             "board.zen",
             r#"

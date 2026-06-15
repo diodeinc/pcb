@@ -5,7 +5,7 @@ use pcb_test_utils::sandbox::Sandbox;
 
 const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#;
 
 const LOCAL_PATH_TEST_BOARD_PCB_TOML: &str = r#"

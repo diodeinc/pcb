@@ -202,13 +202,20 @@ fn package_source(ws: &WorkspaceInfo, module_path: &str, root: &Path) -> Package
     if is_path_patch(ws, module_path, root) {
         return PackageSource::Patch;
     }
-    if root.starts_with(ws.root.join("vendor")) {
+    let root = canonical_or_self(root);
+    if root.starts_with(canonical_or_self(&ws.root.join("vendor"))) {
         return PackageSource::Vendor;
     }
-    if root.starts_with(ws.workspace_cache_dir()) || root.starts_with(&ws.cache_dir) {
+    if root.starts_with(canonical_or_self(&ws.workspace_cache_dir()))
+        || root.starts_with(canonical_or_self(&ws.cache_dir))
+    {
         return PackageSource::Cache;
     }
     PackageSource::Other
+}
+
+fn canonical_or_self(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn is_path_patch(ws: &WorkspaceInfo, module_path: &str, root: &Path) -> bool {

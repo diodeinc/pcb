@@ -3,12 +3,22 @@ use std::path::{Path, PathBuf};
 use pcb_zen_core::WithDiagnostics;
 
 pub const WORKSPACE_TOML: &str = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
+"#;
+
+#[allow(dead_code)]
+pub const KICAD_WORKSPACE_TOML: &str = r#"[workspace]
+pcb-version = "0.4"
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
 "gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
 "gitlab.com/kicad/libraries/kicad-packages3D" = "9.0.3"
+
+[dependencies.indirect]
+"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
+"gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
 "#;
 
 /// Utility to build an isolated Starlark project for integration tests.

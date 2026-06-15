@@ -22,7 +22,6 @@ use semver::Version;
 use super::ResolvedDepId;
 use super::manifest::{ManifestLoader, package_version_root};
 use super::materialize::materialize_selected;
-use super::mvs::PackageResolver;
 
 const STANDALONE_PACKAGE_URL: &str = "workspace";
 
@@ -128,25 +127,7 @@ fn resolve_frozen(
 }
 
 fn use_frozen_resolution(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
-    !package_urls.is_empty()
-        && (workspace_info.packages.is_empty()
-            || local_workspace_root_target(workspace_info, package_urls)
-            || workspace_info.requires_mvs_v2()
-            || package_urls
-                .iter()
-                .all(|package_url| package_has_indirect(workspace_info, package_url)))
-}
-
-fn local_workspace_root_target(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
-    workspace_info.workspace_base_url().is_none()
-        && matches!(package_urls, [package_url] if package_url == STANDALONE_PACKAGE_URL)
-}
-
-fn package_has_indirect(workspace_info: &WorkspaceInfo, package_url: &str) -> bool {
-    workspace_info
-        .packages
-        .get(package_url)
-        .is_some_and(|package| !package.config.dependencies.indirect.is_empty())
+    !package_urls.is_empty() && workspace_info.requires_mvs_v2()
 }
 
 fn collect_workspace_zen_files(
@@ -211,8 +192,7 @@ impl FrozenResolutionBuilder {
     }
 
     fn build(&mut self, package_url: &str) -> Result<FrozenResolutionMap> {
-        self.selected_remote = self
-            .selected_remote_from_root_manifest(package_url)
+        self.selected_remote = selected_remote_from_hydrated_manifest(&self.workspace, package_url)
             .with_context(|| format!("while reading resolved closure for {}", package_url))?;
 
         add_stdlib_selected_remote(&self.workspace, &mut self.selected_remote);
@@ -480,25 +460,6 @@ impl FrozenResolutionBuilder {
             match_kicad_managed_repo(&self.workspace.kicad_library_entries(), path, version),
             KicadRepoMatch::SelectorMatched
         )
-    }
-
-    fn selected_remote_from_root_manifest(
-        &self,
-        package_url: &str,
-    ) -> Result<BTreeMap<ResolvedDepId, Version>> {
-        if self.workspace.workspace_base_url().is_none() && package_url == STANDALONE_PACKAGE_URL {
-            return Ok(PackageResolver::new(self.workspace.clone(), self.offline)?
-                .resolve_package(package_url)?
-                .resolved_remote);
-        }
-
-        if self.workspace.requires_mvs_v2() && !package_has_indirect(&self.workspace, package_url) {
-            return Ok(PackageResolver::new(self.workspace.clone(), self.offline)?
-                .resolve_package(package_url)?
-                .resolved_remote);
-        }
-
-        selected_remote_from_hydrated_manifest(&self.workspace, package_url)
     }
 }
 

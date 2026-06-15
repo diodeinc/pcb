@@ -93,4 +93,4 @@ description = "A test board with a description"
 === src/pcb.toml
 [workspace]
 name = "test_workspace"
-pcb-version = "0.3"
+pcb-version = "0.4"

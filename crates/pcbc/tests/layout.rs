@@ -5,7 +5,7 @@ use serde_json::Value;
 
 const PCB_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#;
 
 const BOARD_ZEN: &str = r#"
