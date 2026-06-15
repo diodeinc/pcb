@@ -60,7 +60,7 @@ Treat this as the default direction, not a rigid script. Focused patches may onl
 
 Functional variants need symbols; order-code variants do not. For example, fixed-output LDO voltages get separate symbols because the selected silicon changes electrical behavior, but tape/reel, temperature grade, RoHS, and packing suffixes do not.
 
-Use `kicad-symbol` for symbol-file structure, editing, `extends`, rendering, and signature rules. The librarian-level rule is to curate the family symbols before `.zen` work and to cover functional variants without duplicating order-code variants.
+Use `kicad-symbol` for symbol-file structure, editing, `extends`, rendering, and signature rules. Use `rectifier` for footprint STEP/model transform validation and patching. The librarian-level rule is to curate the family symbols before `.zen` work, cover functional variants without duplicating order-code variants, and check every new or modified 3D model transform.
 
 ## Artifact Acquisition
 
@@ -90,7 +90,7 @@ Embed real STEP models with `pcb embed-step`; do not hand-edit model blocks:
 pcb embed-step <footprint.kicad_mod> <model.step>
 ```
 
-After embedding or touching a 3D model, check that the model's stored
+After embedding or touching a 3D model, read the `rectifier` skill. Check that the model's stored
 `(rotate ...)`/`(offset ...)` actually lines up the component pins/pads with the
 footprint's pads/holes, and patch it when flagged:
 
