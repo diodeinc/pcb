@@ -161,10 +161,7 @@ fn external_dependencies(
             coord,
             PackageMetadata {
                 version: Some(version),
-                rel_path: root
-                    .strip_prefix(&ws.root)
-                    .unwrap_or(root.as_path())
-                    .to_path_buf(),
+                rel_path: dependency_rel_path(ws, &root),
                 source: package_source(ws, &module_path, &root),
                 config,
                 published_at: None,
@@ -179,6 +176,31 @@ fn external_dependencies(
     }
 
     Ok(deps)
+}
+
+fn dependency_rel_path(ws: &WorkspaceInfo, root: &Path) -> PathBuf {
+    let workspace_cache = ws.workspace_cache_dir();
+    if let Some(rel) = strip_prefix(root, &workspace_cache) {
+        return PathBuf::from(".pcb/cache").join(rel);
+    }
+    if let Some(rel) = strip_prefix(root, &ws.cache_dir) {
+        return PathBuf::from(".pcb/cache").join(rel);
+    }
+    root.strip_prefix(&ws.root).unwrap_or(root).to_path_buf()
+}
+
+fn strip_prefix(path: &Path, base: &Path) -> Option<PathBuf> {
+    if base.as_os_str().is_empty() {
+        return None;
+    }
+    path.strip_prefix(base)
+        .map(Path::to_path_buf)
+        .ok()
+        .or_else(|| {
+            let path = canonical_or_self(path);
+            let base = canonical_or_self(base);
+            path.strip_prefix(base).map(Path::to_path_buf).ok()
+        })
 }
 
 fn external_package_coord<'a>(

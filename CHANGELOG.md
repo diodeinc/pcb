@@ -13,6 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Child net-symbol position overrides (`# pcb:sch <child>.<NET>.<idx>`) are no longer dropped when the net is renamed across the module boundary.
 - Package content hashes ignore generated `pcb.sum` files.
 - Read/evaluation paths now require hydrated manifests and never mutate dependency state.
+- `pcb info` reports cache dependencies using stable `.pcb/cache` paths.
 
 ### Changes
 
