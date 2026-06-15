@@ -85,7 +85,6 @@ pub fn execute_open(uri: SandboxFileUri, args: OpenArgs) -> Result<()> {
             temp: false,
             check: false,
             suppress: Vec::new(),
-            locked: args.locked,
             no_sync: true,
             format: LayoutOutputFormat::Human,
         };
@@ -399,9 +398,6 @@ fn run_remote_layout(
     }
     if args.offline {
         command.push("--offline".to_string());
-    }
-    if args.locked {
-        command.push("--locked".to_string());
     }
     if args.check {
         command.push("--check".to_string());

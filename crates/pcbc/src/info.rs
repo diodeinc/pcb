@@ -87,7 +87,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
         None => env::current_dir()?,
     };
 
-    let resolution = crate::resolve::resolve(Some(&start_path), false, true)?;
+    let resolution = crate::resolve::resolve(Some(&start_path), false)?;
     let mut workspace_info = resolution.workspace_info.clone();
 
     match args.format {

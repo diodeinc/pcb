@@ -230,11 +230,6 @@ pub struct BuildArgs {
     /// Supports hierarchical matching (e.g., 'style' matches 'style.naming.io')
     #[arg(short = 'W', long = "warn", value_name = "KIND")]
     pub warn: Vec<String>,
-
-    /// Require that pcb.toml is up-to-date and verify pcb.sum if it exists.
-    /// Does not write pcb.toml or pcb.sum. Recommended for CI.
-    #[arg(long)]
-    pub locked: bool,
 }
 
 enum BuildInput {
@@ -427,8 +422,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
     let config_inputs = parse_config_overrides(&args.config)?;
 
     // Resolve dependencies before finding .zen files
-    let resolution =
-        crate::resolve::resolve(build_input.resolve_path(), args.offline, args.locked)?;
+    let resolution = crate::resolve::resolve(build_input.resolve_path(), args.offline)?;
     let workspace_root = resolution.workspace_info.root.clone();
 
     let zen_files = build_input.collect_zen_files(&resolution.workspace_info)?;

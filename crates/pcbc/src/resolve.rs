@@ -7,17 +7,14 @@ use tracing::instrument;
 
 use pcb_zen::{get_workspace_info, resolve_workspace_dependencies};
 
-/// Resolve dependencies for a workspace/board.
-/// This is a shared helper used by build, bom, layout, open, etc.
+/// Resolve dependencies for read-style commands such as build, bom, layout, and open.
 ///
 /// If `input_path` is None or empty, defaults to the current working directory.
 ///
-/// When `locked` is true:
-/// - Auto-deps will not modify pcb.toml files
-/// - The lockfile (pcb.sum) will not be written
-/// - An existing pcb.sum is verified, but a missing one does not cause failure
+/// This helper must not modify source dependency state. Dependency hydration and vendoring
+/// belong to explicit write commands such as `pcb sync` and `pcb vendor`.
 #[instrument(name = "resolve_dependencies", skip_all)]
-pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result<ResolutionResult> {
+pub fn resolve(input_path: Option<&Path>, offline: bool) -> Result<ResolutionResult> {
     let cwd;
     let path = match input_path {
         // Handle both None and empty paths (e.g., "file.zen".parent() returns Some(""))
@@ -40,25 +37,5 @@ pub fn resolve(input_path: Option<&Path>, offline: bool, locked: bool) -> Result
         );
     }
 
-    let mut res = resolve_workspace_dependencies(workspace_info, path, offline, locked)?;
-
-    if res.package_resolutions.is_empty() {
-        return Ok(res);
-    }
-
-    // Sync vendor dir: add missing, prune stale (only prune when not offline and not locked)
-    let prune = !offline && !locked;
-    let vendor_result = pcb_zen::vendor_deps(&res, &[], None, prune)?;
-
-    // If we pruned stale entries, re-run resolution so the dep map points to valid paths
-    if vendor_result.pruned_count > 0 {
-        log::debug!(
-            "Pruned {} stale vendor entries, re-running resolution",
-            vendor_result.pruned_count
-        );
-        let workspace_info = get_workspace_info(&DefaultFileProvider::new(), path)?;
-        res = resolve_workspace_dependencies(workspace_info, path, offline, locked)?;
-    }
-
-    Ok(res)
+    resolve_workspace_dependencies(workspace_info, path, offline, true)
 }

@@ -278,23 +278,9 @@ pub fn build_board_release(
         let info_spinner = Spinner::builder("Gathering release information").start();
 
         let package_url = workspace.package_url_for_zen(&zen_path);
-        let is_mvs_v2_board = workspace.requires_mvs_v2()
-            || package_url
-                .as_deref()
-                .and_then(|url| workspace.packages.get(url))
-                .is_some_and(|pkg| !pkg.config.dependencies.indirect.is_empty());
-
-        // Legacy release still requires pcb.sum for reproducible old-style
-        // resolution. Hydrated MVS v2 boards are complete from pcb.toml.
-        if !is_mvs_v2_board && workspace.lockfile.is_none() {
-            anyhow::bail!(
-                "No lockfile found. Run 'pcb build' or 'pcb layout' first to generate one.\n\
-                 Release requires a lockfile to ensure reproducible builds."
-            );
-        }
 
         info_spinner.set_message("Resolving dependencies");
-        let resolution = crate::resolve::resolve(Some(&zen_path), false, true)?;
+        let resolution = crate::resolve::resolve(Some(&zen_path), false)?;
         let closure = package_url
             .as_deref()
             .map(|url| resolution.package_closure(url));
@@ -715,9 +701,9 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     debug!("Validating build of: {}", staged_zen_path.display());
 
-    // Re-resolve in offline+locked mode. All dependencies (including KiCad
+    // Re-resolve in offline mode. All dependencies (including KiCad
     // library files) are vendored from eval1 by copy_sources.
-    let staged_resolution = crate::resolve::resolve(Some(&staged_zen_path), true, true)?;
+    let staged_resolution = crate::resolve::resolve(Some(&staged_zen_path), true)?;
 
     // Use build function with offline mode but allow warnings
     // Suspend spinner during build to allow diagnostics to render properly

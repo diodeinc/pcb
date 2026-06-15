@@ -223,6 +223,69 @@ pcb-version = "0.3"
 
 #[test]
 #[cfg(not(target_os = "windows"))]
+fn test_pcb_build_does_not_prune_existing_vendor_entries() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .git_fixture("https://github.com/mycompany/components.git")
+        .write("SimpleResistor/pcb.toml", "[dependencies]\n")
+        .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_ZEN)
+        .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD)
+        .commit("Add simple resistor component")
+        .tag("SimpleResistor/v1.0.0", false)
+        .push_mirror();
+
+    sandbox
+        .write(
+            "pcb.toml",
+            r#"
+[workspace]
+pcb-version = "0.3"
+vendor = ["github.com/mycompany/components/**"]
+
+[dependencies]
+"github.com/mycompany/components/SimpleResistor" = "1.0.0"
+"#,
+        )
+        .write("board.zen", GIT_FIXTURE_BOARD_ZEN)
+        .write(
+            "vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.3/marker.txt",
+            "keep me",
+        );
+
+    let manifest_path = sandbox.default_cwd().join("pcb.toml");
+    let manifest_before = std::fs::read_to_string(&manifest_path).unwrap();
+    let vendor_marker = sandbox
+        .default_cwd()
+        .join("vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.3/marker.txt");
+
+    let output = sandbox
+        .run("pcbc", ["build", "board.zen"])
+        .stderr_capture()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "build failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&manifest_path).unwrap(),
+        manifest_before,
+        "build must not rewrite pcb.toml"
+    );
+    assert!(
+        vendor_marker.exists(),
+        "build must not prune unrelated existing vendor entries"
+    );
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
 fn test_offline_build_reuses_vendored_pseudo_version() {
     let mut sandbox = Sandbox::new();
 

@@ -284,7 +284,7 @@ gnd = Net("GND")
 }
 
 #[test]
-fn test_locked_build_without_pcb_sum() {
+fn test_build_without_pcb_sum() {
     let mut sandbox = Sandbox::new();
 
     let output = sandbox
@@ -298,10 +298,10 @@ vcc = Net("VCC")
 gnd = Net("GND")
 "#,
         )
-        .snapshot_run("pcbc", ["build", "board.zen", "--locked"]);
+        .snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
-        "expected locked build to succeed without pcb.sum:\n{output}"
+        "expected build to succeed without pcb.sum:\n{output}"
     );
 
     assert_no_pcb_sum(&sandbox);
@@ -495,7 +495,7 @@ Helper(name = "X", P1 = Net("P1"))
 }
 
 #[test]
-fn test_root_package_url_to_package_locked() {
+fn test_root_package_url_to_package_read_only() {
     let mut sandbox = Sandbox::new();
 
     sandbox
@@ -525,16 +525,16 @@ P1 = io(Net)
         )
         .sync();
 
-    let result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--locked"]);
+    let result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen"]);
     let output = command_output(&result);
     assert!(
         result.status.success(),
-        "expected locked root package build to succeed:\n{output}"
+        "expected root package build to succeed:\n{output}"
     );
 }
 
 #[test]
-fn test_branch_only_dep_hydrates_before_locked_and_offline() {
+fn test_branch_only_dep_hydrates_before_read_only_and_offline() {
     let mut sandbox = Sandbox::new();
 
     let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package");
@@ -559,11 +559,11 @@ pcb-version = "0.3"
     );
     assert_no_pcb_sum(&sandbox);
 
-    let locked_result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--locked"]);
-    let locked_output = command_output(&locked_result);
+    let build_result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen"]);
+    let build_output = command_output(&build_result);
     assert!(
-        locked_result.status.success(),
-        "expected locked build to use hydrated pseudo-version:\n{locked_output}"
+        build_result.status.success(),
+        "expected build to use hydrated pseudo-version:\n{build_output}"
     );
 
     let offline_result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--offline"]);
@@ -575,7 +575,7 @@ pcb-version = "0.3"
 }
 
 #[test]
-fn test_locked_ignores_kicad_entries_in_lockfile() {
+fn test_build_ignores_kicad_entries_in_lockfile() {
     let mut sandbox = Sandbox::new();
 
     let pcb_sum = r#"gitlab.com/kicad/libraries/kicad-symbols 10.0.3 h1:legacy
@@ -585,11 +585,11 @@ fn test_locked_ignores_kicad_entries_in_lockfile() {
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", "x = 1\n")
         .write("pcb.sum", pcb_sum);
-    let result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--locked"]);
+    let result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen"]);
     let output = command_output(&result);
     assert!(
         result.status.success(),
-        "expected locked build to succeed:\n{output}"
+        "expected build to succeed:\n{output}"
     );
 }
 

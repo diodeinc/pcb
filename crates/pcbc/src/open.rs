@@ -12,11 +12,6 @@ pub struct OpenArgs {
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
-
-    /// Require that pcb.toml is up-to-date and verify pcb.sum if it exists.
-    /// Does not write pcb.toml or pcb.sum. Recommended for CI.
-    #[arg(long)]
-    pub locked: bool,
 }
 
 pub fn execute(args: OpenArgs) -> Result<()> {
@@ -32,7 +27,7 @@ pub fn execute(args: OpenArgs) -> Result<()> {
     crate::file_walker::require_zen_file(&args.file)?;
 
     // Resolve dependencies before evaluating
-    let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline, args.locked)?;
+    let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline)?;
 
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy();

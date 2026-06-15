@@ -495,13 +495,13 @@ fn test_aggregated_warnings() {
         .tag("SimpleResistor/v1.0.0", false)
         .push_mirror();
 
-    // Create pcb.toml with a package alias that points to an unstable ref
+    // Create pcb.toml with a package alias.
     let pcb_toml_content = r#"
 [workspace]
 pcb-version = "0.3"
 
 [dependencies]
-"github.com/mycompany/components/SimpleResistor" = { branch = "main" }
+"github.com/mycompany/components/SimpleResistor" = "1.0.0"
 "#;
 
     // Create a board that uses the alias multiple times - should aggregate warnings
@@ -558,15 +558,15 @@ fn test_mixed_aggregated_and_unique_warnings() {
         .tag("Component2/v1.0.0", false)
         .push_mirror();
 
-    // Create pcb.toml with unstable refs (branch) for both deps.
+    // Create pcb.toml with dependencies for both deps.
     // The first dep is referenced twice and should aggregate.
     let pcb_toml_content = r#"
 [workspace]
 pcb-version = "0.3"
 
 [dependencies]
-"github.com/company1/components/Component1" = { branch = "main" }
-"github.com/company2/components/Component2" = { branch = "main" }
+"github.com/company1/components/Component1" = "1.0.0"
+"github.com/company2/components/Component2" = "1.0.0"
 "#;
 
     // Create a board with both aggregated and unique warnings

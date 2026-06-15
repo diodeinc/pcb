@@ -103,11 +103,6 @@ fn stage_legacy_source_bundle(plan: &SourceBundlePlan<'_>) -> Result<()> {
         }
     }
 
-    let lockfile_src = workspace_root.join("pcb.sum");
-    if lockfile_src.exists() {
-        fs::copy(&lockfile_src, plan.staged_src.join("pcb.sum"))?;
-    }
-
     Ok(())
 }
 
@@ -510,9 +505,7 @@ pcb-version = "0.3"
     #[test]
     fn stage_source_bundle_without_closure_still_copies_root_files() {
         let mut sb = Sandbox::new();
-        sb.cwd("src")
-            .write("pcb.toml", ROOT_PCB_TOML)
-            .write("pcb.sum", "test/package 0.1.0 h1:test\n");
+        sb.cwd("src").write("pcb.toml", ROOT_PCB_TOML);
 
         let mut workspace =
             get_workspace_info(&DefaultFileProvider::new(), &sb.root_path().join("src")).unwrap();
@@ -529,7 +522,7 @@ pcb-version = "0.3"
         .unwrap();
 
         assert!(staged_src.join("pcb.toml").exists());
-        assert!(staged_src.join("pcb.sum").exists());
+        assert!(!staged_src.join("pcb.sum").exists());
     }
 
     #[test]

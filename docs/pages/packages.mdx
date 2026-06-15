@@ -77,7 +77,7 @@ The package system achieves repeatability with **Minimal Version Selection
 (MVS)** and hydrated `pcb.toml` manifests. MVS selects the minimum version that
 satisfies the dependency graph. `pcb sync` records that selected graph in
 manifests, including pseudo-versions for branch and commit dependencies, so
-locked and offline builds reuse immutable versions.
+read-only and offline builds reuse immutable versions.
 
 ### Cooperation
 
@@ -377,9 +377,12 @@ Vendoring policy is controlled by the root workspace manifest:
 vendor = ["github.com/myorg/**"]
 ```
 
-- `pcb build` and `pcb publish` use the same `[workspace].vendor` patterns.
+- `pcb publish` uses `[workspace].vendor` patterns when staging release sources.
+- `pcb sync` vendors packages matched by `[workspace].vendor`.
 - `pcb vendor` without `--all` uses `[workspace].vendor`.
 - `pcb vendor --all` vendors everything.
+- Read commands such as `pcb build`, `pcb layout`, `pcb test`, `pcb open`, and
+  `pcb bom` do not change `vendor/` or rewrite dependency manifests.
 
 ## Workspace Name (`[workspace].name`)
 
@@ -512,11 +515,11 @@ Builds a board or workspace package.
 pcb build                    # Build default board
 pcb build WV0002.zen         # Build a specific board file
 pcb build --offline          # Build using only cached/vendored packages
-pcb build --locked           # Do not rewrite manifests; recommended for CI
 ```
 
-`--locked` checks that the hydrated state is sufficient and does not rewrite
-`pcb.toml`.
+`pcb build` checks that the hydrated state is sufficient and does not rewrite
+`pcb.toml`, `pcb.sum`, or `vendor/`. Use `pcb sync` or `pcb vendor` to update
+dependency state.
 
 ### pcb list
 

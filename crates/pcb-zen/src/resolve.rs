@@ -246,7 +246,7 @@ fn branch_only_mode(offline: bool, locked: bool) -> Option<&'static str> {
     if offline {
         Some("--offline")
     } else if locked {
-        Some("--locked")
+        Some("read-only")
     } else {
         None
     }
@@ -264,7 +264,7 @@ fn branch_without_rev_error(
     );
     anyhow::anyhow!(
         "{} uses branch='{}' without rev, which is not reproducible in {} mode.\n\
-        Run `pcb build` or `pcb update` online to pin it to a commit.",
+        Run `pcb sync` or `pcb add -u` online to pin it to a commit.",
         context,
         branch,
         mode
@@ -799,7 +799,7 @@ pub fn resolve_dependencies(
                 let new_lockfile =
                     update_lockfile(&workspace_root, &old_lockfile, &closure, &patches)?;
 
-                // In locked mode: fail if lockfile additions would be required.
+                // In read-only mode: fail if lockfile additions would be required.
                 let mut missing: Vec<_> = new_lockfile
                     .entries
                     .keys()
@@ -822,9 +822,9 @@ pub fn resolve_dependencies(
                         .map(|n| format!("\n    ... and {} more", n))
                         .unwrap_or_default();
                     anyhow::bail!(
-                        "Lockfile is out of date (--locked mode)\n\
+                        "Lockfile is out of date (read-only mode)\n\
                         Missing entries in pcb.sum:\n{list}{more}\n\n\
-                        Run `pcb build` without --locked to update pcb.sum"
+                        Run `pcb sync` to update dependency state"
                     );
                 }
             }
