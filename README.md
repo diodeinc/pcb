@@ -162,18 +162,12 @@ Run `pcb help` or `pcb help <command>` for the full command reference.
 
 ## License
 
-Zener is licensed under the MIT License. See [LICENSE](LICENSE) for details.
-
-### Third-Party Software
-
-- **ruff**: The `pcb fmt` command uses `ruff fmt` from the
-  [astral-sh/ruff](https://github.com/astral-sh/ruff) project, which is
-  licensed under the MIT License. See
-  [LICENSE](https://github.com/astral-sh/ruff/blob/main/LICENSE) for the full
-  license text.
+Zener is licensed under the MIT License. See [LICENSE](LICENSE) for details. Third-party notices are maintained in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Acknowledgments
 
+- Made possible by the excellent [KiCad](https://kicad.org/) PCB design suite.
 - Built on [starlark-rust](https://github.com/facebookexperimental/starlark-rust) by Meta.
 - Inspired by [atopile](https://github.com/atopile/atopile),
   [tscircuit](https://github.com/tscircuit/tscircuit), and others.
