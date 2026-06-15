@@ -122,10 +122,6 @@ Excluded directories are pruned, so `pcb` neither discovers a package there nor
 searches below it. The tool also always skips generated/cache directories such as
 `.git`, `.pcb`, `vendor`, `target`, `node_modules`, and `fork`.
 
-Older manifests may still contain `[workspace].members`; the field is parsed for
-compatibility but ignored. `pcb sync` removes it when it rewrites the workspace
-manifest.
-
 ## Coexisting Versions
 
 Sometimes breaking changes are necessary. A component library might need to

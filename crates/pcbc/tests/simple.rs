@@ -564,33 +564,3 @@ Thing(name="U1", P1=p1, P2=p2)
         "stderr should not contain remote fetch failure:\n{stderr}"
     );
 }
-
-#[test]
-#[cfg(not(target_os = "windows"))]
-fn test_pcb_sync_removes_deprecated_members() {
-    let mut sandbox = Sandbox::new();
-
-    let result = sandbox
-        .write(
-            "pcb.toml",
-            r#"
-[workspace]
-pcb-version = "0.3"
-members = ["modules/*"]
-"#,
-        )
-        .run("pcbc", ["sync"])
-        .stdout_capture()
-        .stderr_capture()
-        .run()
-        .expect("sync command failed");
-
-    assert!(result.status.success(), "sync should succeed: {result:?}");
-
-    let pcb_toml =
-        std::fs::read_to_string(sandbox.default_cwd().join("pcb.toml")).expect("read pcb.toml");
-    assert!(
-        !pcb_toml.contains("members"),
-        "sync should remove deprecated workspace.members:\n{pcb_toml}"
-    );
-}

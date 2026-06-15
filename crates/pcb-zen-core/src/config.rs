@@ -278,13 +278,6 @@ pub struct WorkspaceConfig {
     )]
     pub kicad_library: Vec<KicadLibraryConfig>,
 
-    /// Deprecated compatibility field.
-    ///
-    /// Parsed from older V2 manifests, but ignored by workspace discovery and omitted
-    /// from serialized manifests.
-    #[serde(default, skip_serializing)]
-    pub members: Vec<String>,
-
     /// Default board name to use
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_board: Option<String>,
@@ -316,7 +309,6 @@ impl Default for WorkspaceConfig {
             bom: BomConfig::default(),
             kicad_library: default_kicad_library(),
             default_board: None,
-            members: Vec::new(),
             vendor: Vec::new(),
             preferred: Vec::new(),
             exclude: Vec::new(),
@@ -697,6 +689,19 @@ resolver = "2"
     }
 
     #[test]
+    fn test_parse_rejects_workspace_members() {
+        let err = PcbToml::parse(
+            r#"
+[workspace]
+members = ["boards/*"]
+"#,
+        )
+        .expect_err("workspace.members should not parse");
+
+        assert!(err.to_string().contains("unknown field `members`"));
+    }
+
+    #[test]
     fn test_parse_v2_package() {
         let content = r#"
 [workspace]
@@ -766,7 +771,6 @@ pcb-version = "0.3"
         let content = r#"
 [workspace]
 pcb-version = "0.3"
-members = ["boards/*"]
 
 [[workspace.kicad_library]]
 version = "9.0.3"
@@ -789,11 +793,6 @@ allow = ["*@weaverobots.com"]
         assert_eq!(
             workspace.kicad_library[0].parts.as_deref(),
             Some("https://example.com/kicad-parts.toml")
-        );
-        assert_eq!(workspace.members, vec!["boards/*"]);
-        assert!(
-            !toml::to_string_pretty(&config).unwrap().contains("members"),
-            "deprecated workspace.members should be parsed but not serialized"
         );
 
         let access = config.access.as_ref().unwrap();

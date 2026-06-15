@@ -40,6 +40,27 @@ fn migrate_leaves_current_workspace_manifest_unchanged() {
     assert_eq!(content, original);
 }
 
+#[test]
+fn migrate_removes_deprecated_workspace_members() {
+    let target = pcb_version_from_cargo();
+    let original = format!(
+        r#"[workspace]
+pcb-version = "{target}"
+members = ["boards/*"]
+name = "demo"
+"#
+    );
+    let mut sandbox = Sandbox::new();
+    sandbox.write("pcb.toml", original);
+
+    run_migrate(&mut sandbox);
+
+    let content = fs::read_to_string(sandbox.root_path().join("pcb.toml")).unwrap();
+    assert!(content.contains(&format!("pcb-version = \"{target}\"")));
+    assert!(content.contains("name = \"demo\""));
+    assert!(!content.contains("members"));
+}
+
 fn run_migrate(sandbox: &mut Sandbox) {
     let output = sandbox
         .run("pcbc", ["migrate"])

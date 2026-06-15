@@ -550,7 +550,7 @@ mod tests {
                     .append_data(&mut metadata_header, "metadata.json", &metadata[..])
                     .expect("append metadata");
 
-                let workspace = b"[workspace]\nmembers = [\"reference/*\"]\n";
+                let workspace = b"[workspace]\n";
                 let mut workspace_header = tar::Header::new_gnu();
                 workspace_header.set_size(workspace.len() as u64);
                 workspace_header.set_mode(0o644);

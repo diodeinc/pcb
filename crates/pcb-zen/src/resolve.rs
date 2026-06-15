@@ -185,7 +185,6 @@ pub fn copy_remote_package_to_vendor(
         dst,
         Some(CanonicalTarOptions {
             exclude_nested_packages: true,
-            ..Default::default()
         }),
     )?;
     Ok(RemotePackageVendorStatus::Copied)

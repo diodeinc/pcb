@@ -725,30 +725,6 @@ pcb-version = "0.3"
     }
 
     #[test]
-    fn test_workspace_members_are_ignored_for_discovery() {
-        let files = HashMap::from([
-            (
-                "/repo/pcb.toml".to_string(),
-                r#"
-[workspace]
-pcb-version = "0.3"
-members = ["boards/*"]
-"#
-                .to_string(),
-            ),
-            (
-                "/repo/modules/Lib/pcb.toml".to_string(),
-                "[dependencies]\n".to_string(),
-            ),
-        ]);
-        let provider = InMemoryFileProvider::new(files);
-
-        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
-        assert!(info.errors.is_empty());
-        assert!(info.packages.contains_key("modules/Lib"));
-    }
-
-    #[test]
     fn test_workspace_exclude_prunes_discovery() {
         let files = HashMap::from([
             (
