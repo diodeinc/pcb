@@ -1,32 +1,14 @@
-# `pcb`: CLI for circuit boards
+# pcb
 
-> PCB tooling by [Diode Computers, Inc.](https://diode.computer/)
+`pcb` is a command-line tool for circuit board projects written in Zener.
+Zener is a Starlark-based language for describing PCB schematics; `pcb` builds
+those designs, manages dependencies, and generates KiCad layout files.
 
-`pcb` is a command-line utility for building PCBs. It uses the Zener language to describe
-PCB schematics and provides automations on top of KiCad to build PCBs fast.
-
-**[Read the docs](https://docs.pcb.new)** | [Language Reference](https://docs.pcb.new/pages/spec)
-
-> [!WARNING]
-> **Windows support is experimental.** Some features may be limited or unstable. For the best
-> experience, we recommend using WSL2 or macOS/Linux. If you encounter issues, please open an
-> issue in our [issue tracker](https://github.com/diodeinc/pcb/issues).
-
-## Table of Contents
-
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Project Structure](#project-structure)
-- [Core Concepts](#core-concepts)
-- [Command Reference](#command-reference)
-- [Architecture](#architecture)
-- [License](#license)
+[Documentation](https://docs.pcb.new) | [Language reference](https://docs.pcb.new/pages/spec)
 
 ## Installation
 
-### From Installer
-
-Install the `pcb` shim, which will download and run the right `pcbc` toolchain for each project:
+Install the `pcb` shim:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/diodeinc/pcb/main/install.sh | bash
@@ -38,33 +20,30 @@ On Windows:
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/diodeinc/pcb/main/install.ps1 | iex"
 ```
 
-The Unix installer writes `pcb` to `$HOME/.local/bin` by default. The Windows installer writes
-`pcb.exe` to `%USERPROFILE%\.pcb\bin` by default. Set `PCB_INSTALL_DIR` to choose a different
-directory. The installers add that directory to your user `PATH` when needed.
+The shim downloads and runs the `pcbc` toolchain requested by each project.
+The Unix installer writes `pcb` to `$HOME/.local/bin` by default. The Windows
+installer writes `pcb.exe` to `%USERPROFILE%\.pcb\bin` by default. Set
+`PCB_INSTALL_DIR` to choose a different directory.
 
-### From Source
+Requirements:
+
+- [KiCad 10.x](https://kicad.org/) for generating and editing layouts.
+
+Windows support is experimental. For the most stable experience, use WSL2,
+macOS, or Linux.
+
+### Developing from source
 
 ```bash
-# Clone the repository
 git clone https://github.com/diodeinc/pcb.git
 cd pcb
-
-# Build locally
 cargo build -p pcb -p pcbc
-
-# Install local release builds for development
 ./install.sh --local
 ```
 
-### Requirements
-
-- [KiCad 10.x](https://kicad.org/) (for generating and editing layouts)
-
 ## Quick Start
 
-### 1. Create Your First Design
-
-Create a file called `blinky.zen`:
+Create `blinky.zen`:
 
 [embed-readme]:# (examples/blinky.zen python)
 ```python
@@ -85,24 +64,16 @@ Led(name="D1", package="0402", color="red", A=LED_ANODE, K=GND)
 Board(name="blinky", layers=4, layout_path="layout/blinky")
 ```
 
-### 2. Build Your Design
+Build the design:
 
 ```bash
-# Compile the design and check for errors
 pcb build blinky.zen
-
-# Output:
-# ✓ blinky.zen (2 components)
 ```
 
-### 3. Generate Layout
+Generate a KiCad layout:
 
 ```bash
-# Generate PCB layout files
 pcb layout blinky.zen
-
-# Output:
-# ✓ blinky.zen (layout/blinky.kicad_pcb)
 ```
 
 ## Project Structure
@@ -111,9 +82,10 @@ Zener projects use one of two repository shapes.
 
 ### Board repository
 
-A board repository contains one board plus any local modules and components it owns:
+A board repository contains one board plus any local modules and components it
+owns:
 
-```
+```text
 MyBoard/
 ├── pcb.toml              # Workspace and board manifest
 ├── MyBoard.zen           # Board schematic
@@ -136,7 +108,8 @@ Create one with:
 pcb new board MyBoard https://github.com/myorg/MyBoard
 ```
 
-**Board repository `pcb.toml`:**
+Board repository `pcb.toml`:
+
 ```toml
 [workspace]
 repository = "github.com/myorg/MyBoard"
@@ -152,7 +125,7 @@ description = "Replace with concise board description."
 
 A registry repository contains reusable packages and no board:
 
-```
+```text
 registry/
 ├── pcb.toml              # Workspace manifest
 ├── components/           # Component packages
@@ -167,50 +140,25 @@ registry/
         └── pcb.toml
 ```
 
-**Registry `pcb.toml`:**
+Registry `pcb.toml`:
+
 ```toml
 [workspace]
 repository = "github.com/myorg/registry"
 pcb-version = "0.3"
 ```
 
-## Core Concepts
-
-Zener extends [Starlark](https://github.com/bazelbuild/starlark/blob/master/spec.md) with PCB-specific primitives. See the [Language Reference](https://docs.pcb.new/pages/spec) for full details.
-
-| Concept | Description |
-|---------|-------------|
-| **Net** | Electrical connection between pins (`Net("VCC")`, `Power("5V")`, `Ground()`) |
-| **Component** | Physical part with symbol, footprint, and pin connections |
-| **Interface** | Reusable connection patterns (e.g., SPI, I2C, USB) |
-| **Module** | Hierarchical subcircuit loaded from a `.zen` file |
-| **config()** | Declare configuration parameters for modules |
-| **io()** | Declare net/interface inputs for modules |
-
-## Command Reference
+## Common Commands
 
 ```bash
-pcb build [PATHS...]              # Build and validate designs
-pcb sync                          # Reconcile imports and hydrate dependency manifests
-pcb layout [PATHS...]             # Generate layout and open in KiCad
-pcb open [PATHS...]               # Open existing layouts in KiCad
-pcb fmt [PATHS...]                # Format .zen files
+pcb new board <NAME> <REPO_URL>              # Create a board repository
+pcb build [PATHS...]                         # Build and validate designs
+pcb sync                                     # Reconcile imports and dependency manifests
+pcb layout <FILE>                            # Generate layout files
+pcb import <KICAD_PRO> <OUTPUT_DIR>          # Import a KiCad project
 ```
 
-## Architecture
-
-Rust workspace with specialized crates:
-
-| Crate | Description |
-|-------|-------------|
-| `pcb` | Main CLI tool |
-| `pcb-zen` | Starlark runtime, LSP server, DAP support |
-| `pcb-zen-core` | Core language: components, modules, nets, interfaces |
-| `pcb-zen-wasm` | WebAssembly bindings for browser execution |
-| `pcb-layout` | PCB layout generation |
-| `pcb-kicad` | KiCad file format parsing and generation |
-| `pcb-ipc2581-tools` | IPC-2581 export for manufacturing |
-| `pcb-starlark-lsp` | Language Server Protocol implementation |
+Run `pcb help` or `pcb help <command>` for the full command reference.
 
 ## License
 
@@ -218,15 +166,14 @@ Zener is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ### Third-Party Software
 
-- **ruff**: The `pcb fmt` command uses `ruff fmt` from the [astral-sh/ruff](https://github.com/astral-sh/ruff) project, which is licensed under the MIT. See [LICENSE](https://github.com/astral-sh/ruff/blob/main/LICENSE) for the full license text.
+- **ruff**: The `pcb fmt` command uses `ruff fmt` from the
+  [astral-sh/ruff](https://github.com/astral-sh/ruff) project, which is
+  licensed under the MIT License. See
+  [LICENSE](https://github.com/astral-sh/ruff/blob/main/LICENSE) for the full
+  license text.
 
 ## Acknowledgments
 
 - Built on [starlark-rust](https://github.com/facebookexperimental/starlark-rust) by Meta.
-- Inspired by [atopile](https://github.com/atopile/atopile), [tscircuit](https://github.com/tscircuit/tscircuit), and others.
-
----
-
-<p align="center">
-  Made in Brooklyn, NY, USA.
-</p>
+- Inspired by [atopile](https://github.com/atopile/atopile),
+  [tscircuit](https://github.com/tscircuit/tscircuit), and others.
