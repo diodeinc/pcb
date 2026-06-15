@@ -139,8 +139,7 @@ impl Sandbox {
             default_cwd,
             trace: false,
             hash_globs: Vec::new(),
-            // Ignore pcb.sum by default - it's a lockfile that changes with stdlib versions
-            ignore_globs: vec!["**/pcb.sum".to_string()],
+            ignore_globs: Vec::new(),
         };
         s.write_gitconfig();
         // Most integration tests need stdlib and KiCad assets. Seeding here keeps tests offline
@@ -166,7 +165,6 @@ impl Sandbox {
     }
 
     /// Add glob patterns for files that should be ignored in snapshots.
-    /// Extends the default ignore patterns (e.g., `**/pcb.sum`).
     pub fn ignore_globs<I, S>(&mut self, globs: I) -> &mut Self
     where
         I: IntoIterator<Item = S>,
@@ -982,23 +980,6 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(clone_dir.join("src/main.rs")).unwrap(),
             "fn main() {\n    println!(\"Hello, world!\");\n}"
-        );
-    }
-
-    #[test]
-    fn test_sandbox_default_ignores_pcb_sum() {
-        let mut sb = Sandbox::new();
-
-        // Create a file structure with pcb.sum
-        sb.write("src/pcb.sum", "lockfile content")
-            .write("src/pcb.toml", "keep this");
-
-        // Snapshot should exclude pcb.sum by default
-        let manifest = sb.snapshot_dir(".");
-        assert!(manifest.contains("pcb.toml"), "pcb.toml should be included");
-        assert!(
-            !manifest.contains("pcb.sum"),
-            "pcb.sum should be excluded by default"
         );
     }
 

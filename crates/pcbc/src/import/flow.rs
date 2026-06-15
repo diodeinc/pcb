@@ -102,7 +102,6 @@ fn remove_generated_output(board_dir: &std::path::Path, board_name: &str) -> Res
         board_dir.join("modules"),
         board_dir.join("components"),
         board_dir.join("layout"),
-        board_dir.join("pcb.sum"),
         board_dir.join(".kicad.import.extraction.json"),
         board_dir.join(".kicad.validation.diagnostics.json"),
         board_dir.join(format!("{board_name}.kicad.archive.zip")),
@@ -276,13 +275,12 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn force_import_preserves_existing_board_repo_metadata_and_drops_obsolete_sum() -> Result<()> {
+    fn force_import_preserves_existing_board_repo_metadata() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let board_repo = temp.path().join("board");
         std::fs::create_dir(&board_repo)?;
 
         let pcb_toml = board_repo.join("pcb.toml");
-        let pcb_sum = board_repo.join("pcb.sum");
         let readme = board_repo.join("README.md");
         let gitignore = board_repo.join(".gitignore");
         let board_zen = board_repo.join("ImportedBoard.zen");
@@ -300,12 +298,10 @@ description = "Custom board description."
 [dependencies]
 foo = { path = "modules/foo" }
 "#;
-        let pcb_sum_contents = "obsolete dependency state\n";
         let readme_contents = "# Custom README\n";
         let gitignore_contents = "custom-ignore\n";
 
         std::fs::write(&pcb_toml, pcb_toml_contents)?;
-        std::fs::write(&pcb_sum, pcb_sum_contents)?;
         std::fs::write(&readme, readme_contents)?;
         std::fs::write(&gitignore, gitignore_contents)?;
         std::fs::write(&board_zen, "old generated board\n")?;
@@ -347,7 +343,6 @@ foo = { path = "modules/foo" }
         prepare_output(&paths, &selection, &args)?;
 
         assert_eq!(std::fs::read_to_string(&pcb_toml)?, pcb_toml_contents);
-        assert!(!pcb_sum.exists());
         assert_eq!(std::fs::read_to_string(&readme)?, readme_contents);
         assert_eq!(std::fs::read_to_string(&gitignore)?, gitignore_contents);
         assert!(!board_zen.exists());

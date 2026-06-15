@@ -45,7 +45,7 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <76135 bytes, sha256: 46b011b>
+=== netlist.json <76134 bytes, sha256: 8a06b3e>
 === src/boards/DescBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -90,17 +90,7 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL)
 name = "DescBoard"
 path = "DescBoard.zen"
 description = "A test board with a description"
-
-[dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.3"
 === src/pcb.toml
 [workspace]
 name = "test_workspace"
 pcb-version = "0.3"
-
-[dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.3"

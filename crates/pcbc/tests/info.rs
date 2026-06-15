@@ -199,10 +199,6 @@ path = "Board.zen"
         .expect("run pcb info");
 
     assert!(output.status.success(), "pcb info failed: {output:?}");
-    assert!(
-        !sandbox.root_path().join("pcb.sum").exists(),
-        "sum-free info should not create pcb.sum"
-    );
 
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("parse pcb info JSON");

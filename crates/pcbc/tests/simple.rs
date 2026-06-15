@@ -345,10 +345,6 @@ path = "B.zen"
             .exists(),
         "sync should vendor the selected pseudo-version"
     );
-    assert!(
-        !sandbox.default_cwd().join("pcb.sum").exists(),
-        "dependency hydration must not create a pcb.sum file"
-    );
 
     // The offline build must reuse the vendored pseudo-version without network access.
     let online_output = sandbox.snapshot_run("pcbc", ["build", "boards/B/B.zen"]);

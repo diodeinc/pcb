@@ -441,12 +441,6 @@ impl PackageResolver {
             &mut selected,
             &mut queue,
         )?;
-        self.seed_specs(
-            &scanned.implicit_remote,
-            "implicit dependency",
-            &mut selected,
-            &mut queue,
-        )?;
         for (dep_id, version) in imported_workspace_floors {
             enqueue_floor_version(&mut selected, dep_id.clone(), version.clone(), &mut queue);
         }

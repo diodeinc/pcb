@@ -25,14 +25,12 @@ use unicode_normalization::UnicodeNormalization;
 #[derive(Debug, Clone, Copy)]
 pub struct CanonicalTarOptions {
     pub exclude_nested_packages: bool,
-    pub exclude_lockfile: bool,
 }
 
 impl Default for CanonicalTarOptions {
     fn default() -> Self {
         Self {
             exclude_nested_packages: true,
-            exclude_lockfile: false,
         }
     }
 }
@@ -49,10 +47,6 @@ fn canonicalize_path(path: &Path) -> Result<String> {
     // NFC normalization: macOS stores filenames as NFD, Linux as NFC.
     // Normalizing to NFC ensures identical hashes across platforms.
     Ok(s.nfc().collect::<String>().replace('\\', "/"))
-}
-
-fn should_exclude_canonical_path(path: &Path) -> bool {
-    path.file_name().and_then(|name| name.to_str()) == Some("pcb.sum")
 }
 
 /// Collect entries for canonical tar (shared between create and list)
@@ -101,9 +95,6 @@ fn collect_canonical_entries(
         // Only include files - directories are implicit from file paths in tar
         // This avoids issues with empty directories (which git doesn't track anyway)
         if file_type.is_file() {
-            if options.exclude_lockfile && should_exclude_canonical_path(entry_path) {
-                continue;
-            }
             let canonical = canonicalize_path(rel_path)?;
             entries.push((rel_path.to_path_buf(), canonical));
         }
@@ -210,14 +201,7 @@ pub fn create_canonical_tar<W: std::io::Write>(
 pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
     // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
     let mut hasher = blake3::Hasher::new();
-    create_canonical_tar(
-        cache_dir,
-        &mut hasher,
-        Some(CanonicalTarOptions {
-            exclude_lockfile: true,
-            ..Default::default()
-        }),
-    )?;
+    create_canonical_tar(cache_dir, &mut hasher, None)?;
     let hash = hasher.finalize();
     Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
 }
@@ -232,9 +216,6 @@ where
 {
     let mut entries = Vec::new();
     for (path, contents) in files {
-        if should_exclude_canonical_path(path) {
-            continue;
-        }
         let canonical = canonicalize_path(path)?;
         entries.push((canonical, contents));
     }
