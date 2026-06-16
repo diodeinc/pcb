@@ -65,14 +65,6 @@ jobs:
         run: |
           ./install.sh --local
           export PATH="$HOME/.local/bin:$PATH"
-          case "$(uname -s)-$(uname -m)" in
-            Darwin-arm64) pcbc="$HOME/Library/Application Support/pcb/toolchains/local/aarch64-apple-darwin/pcbc" ;;
-            Darwin-x86_64) pcbc="$HOME/Library/Application Support/pcb/toolchains/local/x86_64-apple-darwin/pcbc" ;;
-            Linux-aarch64|Linux-arm64) pcbc="${XDG_DATA_HOME:-$HOME/.local/share}/pcb/toolchains/local/aarch64-unknown-linux-gnu/pcbc" ;;
-            Linux-x86_64) pcbc="${XDG_DATA_HOME:-$HOME/.local/share}/pcb/toolchains/local/x86_64-unknown-linux-gnu/pcbc" ;;
-            *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-          esac
-          ln -sf "$pcbc" "$HOME/.local/bin/pcbc"
           pcb --help
           pcbc --help
 
