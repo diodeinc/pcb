@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y curl build-essential pkg-config libssl-dev jq git openssh-client
+          apt-get install -y curl build-essential pkg-config libssl-dev jq git openssh-client zstd
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -42,8 +42,19 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Build pcbc
-        run: cargo build -p pcbc --release
+      - name: Install local pcb toolchain
+        run: |
+          ./install.sh --local
+          case "$(uname -s)-$(uname -m)" in
+            Linux-aarch64|Linux-arm64) pcbc="${XDG_DATA_HOME:-$HOME/.local/share}/pcb/toolchains/local/aarch64-unknown-linux-gnu/pcbc" ;;
+            Linux-x86_64) pcbc="${XDG_DATA_HOME:-$HOME/.local/share}/pcb/toolchains/local/x86_64-unknown-linux-gnu/pcbc" ;;
+            *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          echo "PCBC=$pcbc" >> "$GITHUB_ENV"
+          "$pcbc" --help
+
+      - name: Prepare stdlib artifact
+        run: git archive --format=tar HEAD:lib/std | zstd -q -3 -c > "$RUNNER_TEMP/stdlib.tar.zst"
 
       - name: Build WASM bundle
         run: ./bin/build-wasm-bundle.sh
@@ -85,6 +96,7 @@ jobs:
           for board in Demeter Feign; do
             node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \
               --publish "workspaces/$board/$board.zen" \
-              --pcbc target/release/pcbc \
+              --pcbc "$PCBC" \
+              --stdlib "$RUNNER_TEMP/stdlib.tar.zst" \
               > "$RUNNER_TEMP/$board-wasm-netlist.json"
           done
