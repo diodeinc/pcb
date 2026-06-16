@@ -18,7 +18,7 @@ fn find_staging_dir(sb: &Sandbox, board_name: &str) -> String {
 
 const PCB_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 name = "test_workspace"
 
 [dependencies]
@@ -28,7 +28,7 @@ name = "test_workspace"
 
 const PCB_TOML_WITH_PATCH: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 name = "test_workspace"
 
 [dependencies]

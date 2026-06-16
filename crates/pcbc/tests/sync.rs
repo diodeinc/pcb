@@ -3,19 +3,18 @@
 //! These tests verify that `pcb sync` reconciles a workspace's source imports and
 //! hydrates its `pcb.toml` manifests with both direct `[dependencies]` and the
 //! lane-qualified `[dependencies.indirect]` closure. Branch dependencies are pinned
-//! to a pseudo-version in the manifest; no `pcb.sum` lockfile is produced.
+//! to a pseudo-version in the manifest.
 //!
-//! Note: @stdlib remains implicit; other aliases require explicit dependencies.
+//! Note: @stdlib remains implicit.
 
 #![cfg(not(target_os = "windows"))]
 
-use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::{FixtureRepo, Sandbox};
 use std::ffi::OsStr;
 use std::process::Output;
 
 const PCB_TOML: &str = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#;
 
 const SIMPLE_RESISTOR_ZEN: &str = r#"
@@ -102,16 +101,8 @@ fn hydrated_version(manifest: &str, package_name: &str) -> String {
         .to_string()
 }
 
-fn assert_no_pcb_sum(sandbox: &Sandbox) {
-    assert!(
-        !sandbox.default_cwd().join("pcb.sum").exists(),
-        "dependency hydration must not create a pcb.sum lockfile"
-    );
-}
-
-/// Test that @stdlib does NOT add a dependency to pcb.toml (toolchain provides it implicitly)
 #[test]
-fn test_auto_deps_stdlib() {
+fn test_sync_keeps_stdlib_implicit() {
     let mut sandbox = Sandbox::new();
 
     let zen_content = r#"load("@stdlib/units.zen", "kOhm")
@@ -119,66 +110,19 @@ fn test_auto_deps_stdlib() {
 x = kOhm(10)
 "#;
 
-    // Run build (will fail due to missing dep, but pcb.toml should be modified)
     sandbox
         .write("pcb.toml", PCB_TOML)
         .write("board.zen", zen_content)
         .sync();
 
-    // Verify pcb.toml was updated with the dependency
-    assert_snapshot!("auto_deps_stdlib_pcb_toml", read_root_manifest(&sandbox));
+    assert_eq!(read_root_manifest(&sandbox), PCB_TOML);
 }
 
-/// Test that @kicad-symbols alias auto-adds the configured KiCad symbols dependency.
 #[test]
-fn test_auto_deps_kicad_symbols() {
+fn test_sync_hydrates_kicad_alias_dependencies() {
     let mut sandbox = Sandbox::new();
 
-    let zen_content = r#"# Reference a KiCad symbol (this triggers auto-dep detection)
-symbol_path = "@kicad-symbols/Device.kicad_sym:R"
-"#;
-
-    sandbox
-        .write("pcb.toml", PCB_TOML)
-        .write("board.zen", zen_content)
-        .sync();
-
-    assert_snapshot!(
-        "auto_deps_kicad_symbols_pcb_toml",
-        read_root_manifest(&sandbox)
-    );
-}
-
-/// Test that @kicad-footprints alias auto-adds the configured KiCad footprints dependency.
-#[test]
-fn test_auto_deps_kicad_footprints() {
-    let mut sandbox = Sandbox::new();
-
-    let zen_content = r#"# Reference a KiCad footprint (this triggers auto-dep detection)
-footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
-"#;
-
-    sandbox
-        .write("pcb.toml", PCB_TOML)
-        .write("board.zen", zen_content)
-        .sync();
-
-    assert_snapshot!(
-        "auto_deps_kicad_footprints_pcb_toml",
-        read_root_manifest(&sandbox)
-    );
-}
-
-/// Test that multiple auto-deps are added together correctly to pcb.toml
-#[test]
-fn test_auto_deps_multiple() {
-    let mut sandbox = Sandbox::new();
-
-    let zen_content = r#"load("@stdlib/units.zen", "kOhm", "pF")
-
-# Use stdlib and kicad aliases
-resistance = kOhm(10)
-capacitance = pF(100)
+    let zen_content = r#"
 symbol_path = "@kicad-symbols/Device.kicad_sym:R"
 footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
 "#;
@@ -188,37 +132,20 @@ footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_
         .write("board.zen", zen_content)
         .sync();
 
-    assert_snapshot!("auto_deps_multiple_pcb_toml", read_root_manifest(&sandbox));
-}
-
-/// Test that dynamic kicad alias paths still register the base dependency.
-#[test]
-fn test_auto_deps_kicad_dynamic_path() {
-    let mut sandbox = Sandbox::new();
-
-    // Dynamic footprint path still carries a resolvable alias.
-    let zen_content = r#"footprint_template = "@kicad-footprints/Resistor_SMD.pretty/R_{size}.kicad_mod"
-"#;
-
-    sandbox
-        .write("pcb.toml", PCB_TOML)
-        .write("board.zen", zen_content)
-        .sync();
-
-    assert_snapshot!(
-        "auto_deps_kicad_dynamic_path_pcb_toml",
-        read_root_manifest(&sandbox)
-    );
+    let manifest = read_root_manifest(&sandbox);
+    assert!(manifest.contains("\"gitlab.com/kicad/libraries/kicad-symbols\" = \"10.0.3\""));
+    assert!(manifest.contains("\"gitlab.com/kicad/libraries/kicad-footprints\" = \"10.0.3\""));
+    assert!(manifest.contains("\"gitlab.com/kicad/libraries/kicad-packages3D@10\" = \"10.0.3\""));
 }
 
 #[test]
-fn test_branch_dep_gets_pinned_to_rev_and_builds() {
+fn test_sync_pins_branch_dep_to_rev_and_builds() {
     let mut sandbox = Sandbox::new();
 
     let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package");
 
     let pcb_toml = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = { branch = "main" }
@@ -241,23 +168,19 @@ pcb-version = "0.3"
         pseudo_version.starts_with("0.1.1-0."),
         "expected unpublished branch dep in the 0.1.1 pseudo-version family, got {pseudo_version}"
     );
-    assert_no_pcb_sum(&sandbox);
-
     let output = sandbox.snapshot_run("pcbc", ["build", "board.zen"]);
     assert!(
         output.contains("Exit Code: 0"),
         "expected build to succeed:\n{output}"
     );
 
-    let snapshot = sandbox.sanitize_output(&format!(
-        "--- pcb.toml ---\n{}\n",
-        pinned_toml.replace(&pseudo_version, "<PSEUDO_VERSION>")
-    ));
-    assert_snapshot!("auto_deps_branch_dep_pins_rev_and_builds", snapshot);
+    assert!(pinned_toml.contains(&format!(
+        "\"github.com/mycompany/components/SimpleResistor\" = \"{pseudo_version}\""
+    )));
 }
 
 #[test]
-fn test_local_only_workspace_needs_no_lockfile() {
+fn test_sync_local_only_workspace_builds() {
     let mut sandbox = Sandbox::new();
 
     let output = sandbox
@@ -277,44 +200,14 @@ gnd = Net("GND")
         output.contains("Exit Code: 0"),
         "expected build to succeed:\n{output}"
     );
-
-    // A workspace with no external dependencies hydrates to nothing and never
-    // produces a pcb.sum lockfile.
-    assert_no_pcb_sum(&sandbox);
 }
 
 #[test]
-fn test_locked_build_without_pcb_sum() {
-    let mut sandbox = Sandbox::new();
-
-    let output = sandbox
-        .write("pcb.toml", PCB_TOML)
-        .write(
-            "board.zen",
-            r#"
-Layout(name="LocalOnly", path="build/LocalOnly", bom_profile=None)
-
-vcc = Net("VCC")
-gnd = Net("GND")
-"#,
-        )
-        .snapshot_run("pcbc", ["build", "board.zen", "--locked"]);
-    assert!(
-        output.contains("Exit Code: 0"),
-        "expected locked build to succeed without pcb.sum:\n{output}"
-    );
-
-    assert_no_pcb_sum(&sandbox);
-}
-
-/// Test that a relative path load("../../modules/Lib/Lib.zen") that escapes a board's
-/// package boundary into another workspace package triggers auto-dep for that package.
-#[test]
-fn test_auto_deps_relative_path_cross_package() {
+fn test_sync_adds_workspace_dependency_for_cross_package_relative_load() {
     let mut sandbox = Sandbox::new();
 
     let workspace_toml = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#;
 
     let lib_toml = "[dependencies]\n";
@@ -323,7 +216,6 @@ P1 = io(Net)
 P2 = io(Net)
 "#;
 
-    // Board loads the library module via a relative path that escapes the board package
     let board_toml = r#"[board]
 name = "Main"
 path = "Main.zen"
@@ -343,11 +235,10 @@ gnd = Net("GND")
         .write("boards/Main/Main.zen", board_zen)
         .sync();
 
-    // The board's pcb.toml should now contain a dependency on the Lib package.
     let board_pcb_toml = read_sandbox_file(&sandbox, "boards/Main/pcb.toml");
     assert!(
         board_pcb_toml.contains("modules/Lib"),
-        "expected board pcb.toml to contain auto-dep on modules/Lib package, got:\n{}",
+        "expected board pcb.toml to contain dependency on modules/Lib package, got:\n{}",
         board_pcb_toml
     );
 }
@@ -360,7 +251,7 @@ fn test_same_package_url_rejected() {
         .write(
             "pcb.toml",
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 repository = "github.com/example/demo"
 "#,
         )
@@ -403,14 +294,14 @@ P1 = io(Net)
 }
 
 #[test]
-fn test_root_package_url_to_package_auto_dep() {
+fn test_sync_adds_root_workspace_package_dependency() {
     let mut sandbox = Sandbox::new();
 
     let output = sandbox
         .write(
             "pcb.toml",
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 repository = "github.com/example/demo"
 
 [dependencies]
@@ -465,7 +356,7 @@ fn test_sync_preserves_pinned_dependency_version() {
         .write(
             "pcb.toml",
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/example/components/Helper" = "1.2.3"
@@ -495,14 +386,14 @@ Helper(name = "X", P1 = Net("P1"))
 }
 
 #[test]
-fn test_root_package_url_to_package_locked() {
+fn test_root_package_url_to_package_read_only() {
     let mut sandbox = Sandbox::new();
 
     sandbox
         .write(
             "pcb.toml",
             r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 repository = "github.com/example/demo"
 
 [dependencies]
@@ -525,22 +416,22 @@ P1 = io(Net)
         )
         .sync();
 
-    let result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--locked"]);
+    let result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen"]);
     let output = command_output(&result);
     assert!(
         result.status.success(),
-        "expected locked root package build to succeed:\n{output}"
+        "expected root package build to succeed:\n{output}"
     );
 }
 
 #[test]
-fn test_branch_only_dep_hydrates_before_locked_and_offline() {
+fn test_branch_only_dep_hydrates_before_read_only_and_offline() {
     let mut sandbox = Sandbox::new();
 
     let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package");
 
     let pcb_toml = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = { branch = "main" }
@@ -557,13 +448,11 @@ pcb-version = "0.3"
         pseudo_version.ends_with(&head_rev),
         "expected pseudo-version {pseudo_version} to embed branch HEAD {head_rev}"
     );
-    assert_no_pcb_sum(&sandbox);
-
-    let locked_result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--locked"]);
-    let locked_output = command_output(&locked_result);
+    let build_result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen"]);
+    let build_output = command_output(&build_result);
     assert!(
-        locked_result.status.success(),
-        "expected locked build to use hydrated pseudo-version:\n{locked_output}"
+        build_result.status.success(),
+        "expected build to use hydrated pseudo-version:\n{build_output}"
     );
 
     let offline_result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--offline"]);
@@ -571,25 +460,6 @@ pcb-version = "0.3"
     assert!(
         offline_result.status.success(),
         "expected offline build to use cached hydrated pseudo-version:\n{offline_output}"
-    );
-}
-
-#[test]
-fn test_locked_ignores_kicad_entries_in_lockfile() {
-    let mut sandbox = Sandbox::new();
-
-    let pcb_sum = r#"gitlab.com/kicad/libraries/kicad-symbols 10.0.3 h1:legacy
-"#;
-
-    sandbox
-        .write("pcb.toml", PCB_TOML)
-        .write("board.zen", "x = 1\n")
-        .write("pcb.sum", pcb_sum);
-    let result = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen", "--locked"]);
-    let output = command_output(&result);
-    assert!(
-        result.status.success(),
-        "expected locked build to succeed:\n{output}"
     );
 }
 
@@ -618,7 +488,7 @@ fn test_branch_plus_rev_uses_rev_when_branch_moves() {
 
     let pcb_toml = format!(
         r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{}" }}
@@ -664,7 +534,7 @@ fn test_branch_pinning_is_idempotent() {
         .push_mirror();
 
     let pcb_toml = r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = { branch = "main" }
@@ -684,11 +554,9 @@ pcb-version = "0.3"
         first_toml, second_toml,
         "expected hydrated pcb.toml to be stable across syncs"
     );
-    assert_no_pcb_sum(&sandbox);
 }
 
-/// `pcb update` is a legacy (pcb.sum) command. Hydrated workspaces are rejected
-/// and pointed at `pcb add -u`.
+/// `pcb update` is disabled; use `pcb add -u` instead.
 #[test]
 fn test_update_rejected_on_hydrated_workspace() {
     let mut sandbox = Sandbox::new();
@@ -704,7 +572,7 @@ fn test_update_rejected_on_hydrated_workspace() {
 
     let pcb_toml = format!(
         r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{rev}" }}
@@ -722,8 +590,8 @@ pcb-version = "0.3"
         "expected `pcb update` to be rejected on a hydrated workspace:\n{output}"
     );
     assert!(
-        output.contains("`pcb update` is for legacy dependency manifests"),
-        "expected legacy-manifest rejection message:\n{output}"
+        output.contains("`pcb update` is no longer supported"),
+        "expected unsupported-command rejection message:\n{output}"
     );
     assert!(
         output.contains("Use `pcb add -u`"),
@@ -742,7 +610,7 @@ fn test_covered_import_skips_unknown_remote_url_warning() {
 
     let pcb_toml = format!(
         r#"[workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "github.com/mycompany/components/SimpleResistor" = {{ branch = "main", rev = "{}" }}

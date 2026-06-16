@@ -20,11 +20,11 @@ pub struct PcbToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board: Option<Board>,
 
-    /// Dependencies (V2 only - code packages with pcb.toml)
+    /// Code package dependencies.
     #[serde(default, skip_serializing_if = "DependencyTable::is_empty")]
     pub dependencies: DependencyTable,
 
-    /// Patches for local development (V2 only)
+    /// Patches for local development.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub patch: BTreeMap<String, PatchSpec>,
 
@@ -43,9 +43,8 @@ pub struct PcbToml {
 /// Dependency tables stored under `[dependencies]` and `[dependencies.indirect]`.
 ///
 /// Existing runtime behavior only consumes the direct dependency map. The nested
-/// indirect table is additive plumbing for MVS v2 and is ignored by current build
-/// resolution. Direct keys stay bare module paths; indirect keys may be
-/// lane-qualified as `<module>@<lane>`.
+/// indirect table is hydrated by `pcb sync`. Direct keys stay bare module paths;
+/// indirect keys may be lane-qualified as `<module>@<lane>`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DependencyTable {
     /// Direct dependencies under `[dependencies]`.
@@ -54,8 +53,9 @@ pub struct DependencyTable {
 
     /// Tool-managed transitive dependency closure under `[dependencies.indirect]`.
     ///
-    /// MVS v2 should write exact version entries here, but we reuse `DependencySpec`
-    /// so both dependency tables share the same manifest encoding.
+    /// `pcb sync` writes exact version entries here, but we reuse
+    /// `DependencySpec` so both dependency tables share the same manifest
+    /// encoding.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub indirect: BTreeMap<String, DependencySpec>,
 }
@@ -278,13 +278,6 @@ pub struct WorkspaceConfig {
     )]
     pub kicad_library: Vec<KicadLibraryConfig>,
 
-    /// Deprecated compatibility field.
-    ///
-    /// Parsed from older V2 manifests, but ignored by workspace discovery and omitted
-    /// from serialized manifests.
-    #[serde(default, skip_serializing)]
-    pub members: Vec<String>,
-
     /// Default board name to use
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_board: Option<String>,
@@ -316,7 +309,6 @@ impl Default for WorkspaceConfig {
             bom: BomConfig::default(),
             kicad_library: default_kicad_library(),
             default_board: None,
-            members: Vec::new(),
             vendor: Vec::new(),
             preferred: Vec::new(),
             exclude: Vec::new(),
@@ -508,165 +500,6 @@ pub struct ManifestPart {
     pub datasheet: Option<String>,
 }
 
-/// V2 Lockfile entry
-///
-/// Stores resolved version and cryptographic hashes for a dependency.
-/// Format mirrors Go's go.sum with separate content and manifest hashes.
-///
-/// # Example
-/// ```text
-/// github.com/diodeinc/stdlib v0.3.2 h1:abc123...
-/// github.com/diodeinc/stdlib v0.3.2/pcb.toml h1:def456...
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LockEntry {
-    /// Module path (e.g., "github.com/diodeinc/stdlib")
-    pub module_path: String,
-
-    /// Resolved version (may be pseudo-version for branches)
-    pub version: String,
-
-    /// Content hash (h1: prefix + base64-encoded BLAKE3)
-    pub content_hash: String,
-
-    /// Manifest hash (h1: prefix + base64-encoded BLAKE3)
-    /// None for non-package repos without pcb.toml (for example KiCad repos)
-    pub manifest_hash: Option<String>,
-}
-
-/// V2 Lockfile (pcb.sum)
-///
-/// Stores resolved versions and cryptographic hashes for reproducible builds.
-/// Automatically updated when dependencies change.
-#[derive(Debug, Clone, Default)]
-pub struct Lockfile {
-    /// Map from (module_path, version) to lock entry.
-    /// Uses BTreeMap for deterministic iteration order.
-    pub entries: BTreeMap<(String, String), LockEntry>,
-}
-
-impl Lockfile {
-    /// Parse pcb.sum file
-    ///
-    /// Format:
-    /// ```text
-    /// module_path version h1:hash
-    /// module_path version/pcb.toml h1:hash
-    /// ```
-    pub fn parse(content: &str) -> Result<Self> {
-        let mut entries = BTreeMap::new();
-
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() != 3 {
-                anyhow::bail!("Invalid lockfile line: {}", line);
-            }
-
-            let module_path = parts[0];
-            let version_part = parts[1];
-            let hash = parts[2];
-
-            if !hash.starts_with("h1:") {
-                anyhow::bail!("Invalid hash format (expected h1:): {}", hash);
-            }
-
-            // Check if this is a manifest hash line (ends with /pcb.toml)
-            if let Some(version) = version_part.strip_suffix("/pcb.toml") {
-                // Update existing entry with manifest hash
-                let key = (module_path.to_string(), version.to_string());
-                entries
-                    .entry(key.clone())
-                    .or_insert_with(|| LockEntry {
-                        module_path: module_path.to_string(),
-                        version: version.to_string(),
-                        content_hash: String::new(),
-                        manifest_hash: None,
-                    })
-                    .manifest_hash = Some(hash.to_string());
-            } else {
-                // Content hash line
-                let key = (module_path.to_string(), version_part.to_string());
-                entries
-                    .entry(key.clone())
-                    .or_insert_with(|| LockEntry {
-                        module_path: module_path.to_string(),
-                        version: version_part.to_string(),
-                        content_hash: String::new(),
-                        manifest_hash: None,
-                    })
-                    .content_hash = hash.to_string();
-            }
-        }
-
-        Ok(Lockfile { entries })
-    }
-
-    /// Get lock entry for a module
-    pub fn get(&self, module_path: &str, version: &str) -> Option<&LockEntry> {
-        self.entries
-            .get(&(module_path.to_string(), version.to_string()))
-    }
-
-    /// Insert or update lock entry
-    pub fn insert(&mut self, entry: LockEntry) {
-        let key = (entry.module_path.clone(), entry.version.clone());
-        self.entries.insert(key, entry);
-    }
-
-    /// Iterate over all lock entries
-    pub fn iter(&self) -> impl Iterator<Item = &LockEntry> {
-        self.entries.values()
-    }
-
-    /// Find any locked version for a module path
-    ///
-    /// Returns the first entry found for the given module path (useful for branch/rev lookups).
-    pub fn find_by_path(&self, module_path: &str) -> Option<&LockEntry> {
-        self.entries.values().find(|e| e.module_path == module_path)
-    }
-}
-
-impl std::fmt::Display for Lockfile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut lines = Vec::new();
-
-        // Sort entries for deterministic output
-        let mut sorted: Vec<_> = self.entries.values().collect();
-        sorted.sort_by(|a, b| {
-            a.module_path
-                .cmp(&b.module_path)
-                .then(a.version.cmp(&b.version))
-        });
-
-        for entry in sorted {
-            // Content hash line
-            lines.push(format!(
-                "{} {} {}",
-                entry.module_path, entry.version, entry.content_hash
-            ));
-
-            // Manifest hash line (if present)
-            if let Some(manifest_hash) = &entry.manifest_hash {
-                lines.push(format!(
-                    "{} {}/pcb.toml {}",
-                    entry.module_path, entry.version, manifest_hash
-                ));
-            }
-        }
-
-        if lines.is_empty() {
-            Ok(())
-        } else {
-            writeln!(f, "{}", lines.join("\n"))
-        }
-    }
-}
-
 /// Extract inline pcb.toml manifest from .zen file content
 ///
 /// Looks for a comment block in the leading comments like:
@@ -856,6 +689,19 @@ resolver = "2"
     }
 
     #[test]
+    fn test_parse_rejects_workspace_members() {
+        let err = PcbToml::parse(
+            r#"
+[workspace]
+members = ["boards/*"]
+"#,
+        )
+        .expect_err("workspace.members should not parse");
+
+        assert!(err.to_string().contains("unknown field `members`"));
+    }
+
+    #[test]
     fn test_parse_v2_package() {
         let content = r#"
 [workspace]
@@ -925,7 +771,6 @@ pcb-version = "0.3"
         let content = r#"
 [workspace]
 pcb-version = "0.3"
-members = ["boards/*"]
 
 [[workspace.kicad_library]]
 version = "9.0.3"
@@ -948,11 +793,6 @@ allow = ["*@weaverobots.com"]
         assert_eq!(
             workspace.kicad_library[0].parts.as_deref(),
             Some("https://example.com/kicad-parts.toml")
-        );
-        assert_eq!(workspace.members, vec!["boards/*"]);
-        assert!(
-            !toml::to_string_pretty(&config).unwrap().contains("members"),
-            "deprecated workspace.members should be parsed but not serialized"
         );
 
         let access = config.access.as_ref().unwrap();

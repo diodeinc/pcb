@@ -22,7 +22,8 @@ use semver::Version;
 use super::ResolvedDepId;
 use super::manifest::{ManifestLoader, package_version_root};
 use super::materialize::materialize_selected;
-use super::mvs::PackageResolver;
+
+const STANDALONE_PACKAGE_URL: &str = "workspace";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum PackageNode {
@@ -35,6 +36,10 @@ enum PackageNode {
 
 pub fn target_package_urls_for_path(workspace: &WorkspaceInfo, path: &Path) -> Result<Vec<String>> {
     let path = path.canonicalize()?;
+    if workspace.packages.is_empty() {
+        return Ok(vec![STANDALONE_PACKAGE_URL.to_string()]);
+    }
+
     if path.is_file() {
         return package_url_for_zen(workspace, &path).map(|url| vec![url]);
     }
@@ -71,26 +76,18 @@ pub fn build_frozen_resolution_maps(
 }
 
 pub fn resolve_workspace_dependencies(
-    mut workspace_info: WorkspaceInfo,
+    workspace_info: WorkspaceInfo,
     path: &Path,
     offline: bool,
-    locked: bool,
 ) -> Result<ResolutionResult> {
-    let package_urls = target_package_urls_for_path(&workspace_info, path)
-        .inspect_err(|err| {
-            log::debug!(
-                "Skipping MVS v2 target discovery for {}: {err:#}",
-                path.display()
-            );
-        })
-        .unwrap_or_default();
-    if use_frozen_resolution(&workspace_info, &package_urls) {
-        return resolve_frozen(workspace_info, package_urls, offline);
+    let package_urls = target_package_urls_for_path(&workspace_info, path)?;
+    if package_urls.is_empty() {
+        bail!(
+            "No workspace package target found for {}; run this command from a package or workspace",
+            path.display()
+        );
     }
-
-    let mut res = crate::resolve_dependencies(&mut workspace_info, offline, locked)?;
-    attach_mvs_v2_resolution_for_packages(&mut res, package_urls, offline);
-    Ok(res)
+    resolve_frozen(workspace_info, package_urls, offline)
 }
 
 fn resolve_frozen(
@@ -120,40 +117,6 @@ fn resolve_frozen(
         resolution_set,
         symbol_parts,
     ))
-}
-
-pub fn attach_mvs_v2_resolution_for_packages(
-    res: &mut ResolutionResult,
-    package_urls: impl IntoIterator<Item = String>,
-    offline: bool,
-) {
-    let package_urls: Vec<_> = package_urls
-        .into_iter()
-        .filter(|package_url| package_has_indirect(&res.workspace_info, package_url))
-        .collect();
-    if package_urls.is_empty() {
-        return;
-    }
-
-    match build_frozen_resolution_maps(&res.workspace_info, package_urls, offline) {
-        Ok(resolution) => res.set_mvs_v2_resolution(resolution),
-        Err(err) => log::debug!("Skipping shadow MVS v2 resolution: {err:#}"),
-    }
-}
-
-fn use_frozen_resolution(workspace_info: &WorkspaceInfo, package_urls: &[String]) -> bool {
-    !package_urls.is_empty()
-        && (workspace_info.requires_mvs_v2()
-            || package_urls
-                .iter()
-                .all(|package_url| package_has_indirect(workspace_info, package_url)))
-}
-
-fn package_has_indirect(workspace_info: &WorkspaceInfo, package_url: &str) -> bool {
-    workspace_info
-        .packages
-        .get(package_url)
-        .is_some_and(|package| !package.config.dependencies.indirect.is_empty())
 }
 
 fn collect_workspace_zen_files(
@@ -218,8 +181,7 @@ impl FrozenResolutionBuilder {
     }
 
     fn build(&mut self, package_url: &str) -> Result<FrozenResolutionMap> {
-        self.selected_remote = self
-            .selected_remote_from_root_manifest(package_url)
+        self.selected_remote = selected_remote_from_hydrated_manifest(&self.workspace, package_url)
             .with_context(|| format!("while reading resolved closure for {}", package_url))?;
 
         add_stdlib_selected_remote(&self.workspace, &mut self.selected_remote);
@@ -419,6 +381,11 @@ impl FrozenResolutionBuilder {
     }
 
     fn workspace_manifest(&self, package_url: &str) -> Result<(PathBuf, PcbToml)> {
+        if self.workspace.packages.is_empty() && package_url == STANDALONE_PACKAGE_URL {
+            let config = self.workspace.config.clone().unwrap_or_default();
+            return Ok((self.workspace.root.clone(), config));
+        }
+
         if let Some(pkg) = self.workspace.packages.get(package_url) {
             return Ok((pkg.dir(&self.workspace.root), pkg.config.clone()));
         }
@@ -483,19 +450,6 @@ impl FrozenResolutionBuilder {
             KicadRepoMatch::SelectorMatched
         )
     }
-
-    fn selected_remote_from_root_manifest(
-        &self,
-        package_url: &str,
-    ) -> Result<BTreeMap<ResolvedDepId, Version>> {
-        if self.workspace.requires_mvs_v2() && !package_has_indirect(&self.workspace, package_url) {
-            return Ok(PackageResolver::new(self.workspace.clone(), self.offline)?
-                .resolve_package(package_url)?
-                .resolved_remote);
-        }
-
-        selected_remote_from_hydrated_manifest(&self.workspace, package_url)
-    }
 }
 
 fn canonicalize(path: &Path) -> PathBuf {
@@ -556,55 +510,5 @@ fn add_stdlib_selected_remote(
         {
             selected_remote.insert(dep_id, version);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::path::PathBuf;
-
-    use pcb_zen_core::config::{PcbToml, WorkspaceConfig};
-
-    use super::*;
-
-    fn workspace(pcb_version: &str) -> WorkspaceInfo {
-        let package_url = "github.com/example/project/boards/Board".to_string();
-
-        WorkspaceInfo {
-            root: PathBuf::from("/workspace"),
-            cache_dir: PathBuf::from("/workspace/.pcb/cache"),
-            config: Some(PcbToml {
-                workspace: Some(WorkspaceConfig {
-                    pcb_version: Some(pcb_version.to_string()),
-                    ..WorkspaceConfig::default()
-                }),
-                ..PcbToml::default()
-            }),
-            packages: BTreeMap::from([(
-                package_url,
-                crate::WorkspacePackage {
-                    rel_path: PathBuf::from("boards/Board"),
-                    config: PcbToml::default(),
-                    version: None,
-                    published_at: None,
-                    preferred: false,
-                    dirty: false,
-                    entrypoints: Vec::new(),
-                    symbol_files: Vec::new(),
-                },
-            )]),
-            lockfile: None,
-            errors: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn mvs_v2_detection_accepts_pcb_version_0_4_without_indirect_dependencies() {
-        let workspace = workspace("0.4");
-        assert!(use_frozen_resolution(
-            &workspace,
-            &["github.com/example/project/boards/Board".to_string()]
-        ));
     }
 }

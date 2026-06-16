@@ -55,7 +55,7 @@ Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3, P2 = led
 const SIMPLE_RESISTOR_BOARD_ZEN: &str = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -71,7 +71,7 @@ Resistor(name = "R3", value = "4.7kOhm", package = "0402", P1 = vcc, P2 = gnd)
 const CAPACITOR_BOARD_ZEN: &str = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 Capacitor = Module("@stdlib/generics/Capacitor.zen")
@@ -87,7 +87,7 @@ Capacitor(name = "C3", value = "1uF", package = "0603", P1 = vcc, P2 = gnd)
 const SKIP_BOM_BOARD_ZEN: &str = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 P1 = Net()
@@ -133,7 +133,7 @@ Component(
 const DNP_BOARD_ZEN: &str = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 P1 = Net()
@@ -183,7 +183,7 @@ Component(
 const MODULE_DNP_BOARD_ZEN: &str = r#"
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -205,7 +205,7 @@ Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc, P2 = gnd)
 
 const WORKSPACE_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [dependencies]
 "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"

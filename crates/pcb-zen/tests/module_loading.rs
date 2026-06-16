@@ -88,7 +88,7 @@ fn module_with_workspace_root() {
         "pcb.toml",
         r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#,
     );
 
@@ -177,7 +177,7 @@ Component(
         "pcb.toml",
         r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#,
     );
 

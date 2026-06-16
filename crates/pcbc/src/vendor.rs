@@ -31,13 +31,13 @@ pub fn execute(args: VendorArgs) -> Result<()> {
 
     if !args.all {
         println!(
-            "{} `pcb build` automatically vendors [workspace.vendor] dependencies.",
+            "{} `pcb vendor` uses [workspace.vendor] dependencies. Use --all to vendor everything.",
             "Note:".yellow()
         );
     }
 
-    // Vendoring always needs network access (offline=false) and allows modifications (locked=false)
-    let resolution = resolve_workspace_dependencies(workspace_info, &zen_path, false, false)?;
+    // Vendoring writes only vendor/; dependency manifests are hydrated by pcb sync.
+    let resolution = resolve_workspace_dependencies(workspace_info, &zen_path, false)?;
 
     // If --all, vendor everything with ["**"] pattern
     // Otherwise, pass empty patterns to use only [workspace.vendor] config

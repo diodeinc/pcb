@@ -9,9 +9,9 @@ macro_rules! sim_snapshot {
         let top_path = $env.root().join($entry);
 
         let file_provider = pcb_zen_core::DefaultFileProvider::new();
-        let mut workspace_info =
+        let workspace_info =
             pcb_zen::get_workspace_info(&file_provider, &top_path).expect("get workspace info");
-        let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
+        let res = pcb_zen::resolve_workspace_dependencies(workspace_info, &top_path, false)
             .expect("dependency resolution");
 
         let mut buf = Vec::new();
@@ -55,6 +55,7 @@ macro_rules! sim_snapshot {
 #[test]
 fn snapshot_sim_divider() {
     let env = TestProject::new();
+    env.add_file("pcb.toml", common::KICAD_WORKSPACE_TOML);
 
     env.add_file(
         "r.lib",
@@ -148,6 +149,7 @@ Resistor(name="R2", value=r2_value, package="0603", P1=vout, P2=gnd)
 #[test]
 fn snapshot_sim_setup_inline() {
     let env = TestProject::new();
+    env.add_file("pcb.toml", common::KICAD_WORKSPACE_TOML);
 
     env.add_file(
         "r.lib",
@@ -318,6 +320,7 @@ Resistor(name="R2", value="10kohms", package="0603", P1=vout, P2=gnd)
 #[test]
 fn snapshot_sim_setup_file() {
     let env = TestProject::new();
+    env.add_file("pcb.toml", common::KICAD_WORKSPACE_TOML);
 
     env.add_file(
         "r.lib",
@@ -407,9 +410,9 @@ builtin.set_sim_setup(content=".tran 1u 10m")
 
     let top_path = env.root().join("test.zen");
     let file_provider = pcb_zen_core::DefaultFileProvider::new();
-    let mut workspace_info =
+    let workspace_info =
         pcb_zen::get_workspace_info(&file_provider, &top_path).expect("get workspace info");
-    let res = pcb_zen::resolve_dependencies(&mut workspace_info, false, false)
+    let res = pcb_zen::resolve_workspace_dependencies(workspace_info, &top_path, false)
         .expect("dependency resolution");
 
     let result = pcb_zen::eval(&top_path, res, Default::default());

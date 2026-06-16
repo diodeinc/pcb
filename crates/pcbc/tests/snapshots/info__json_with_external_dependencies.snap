@@ -10,10 +10,14 @@ Exit Code: 0
   "root": "<TEMP_DIR>",
   "config": {
     "workspace": {
-      "pcb-version": "0.3"
+      "pcb-version": "0.4"
     },
     "dependencies": {
-      "github.com/vendor/components/Thing": "1.0.0"
+      "github.com/vendor/components/Thing": "1.0.0",
+      "indirect": {
+        "github.com/vendor/components/Leaf@1": "1.0.0",
+        "github.com/vendor/components/Thing@1": "1.0.0"
+      }
     }
   },
   "packages": {
@@ -21,10 +25,14 @@ Exit Code: 0
       "rel_path": "",
       "config": {
         "workspace": {
-          "pcb-version": "0.3"
+          "pcb-version": "0.4"
         },
         "dependencies": {
-          "github.com/vendor/components/Thing": "1.0.0"
+          "github.com/vendor/components/Thing": "1.0.0",
+          "indirect": {
+            "github.com/vendor/components/Leaf@1": "1.0.0",
+            "github.com/vendor/components/Thing@1": "1.0.0"
+          }
         }
       },
       "preferred": false,

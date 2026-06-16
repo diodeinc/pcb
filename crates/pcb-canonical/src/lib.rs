@@ -10,6 +10,7 @@
 //! - Paths use forward slashes and are sorted by byte value (not path components)
 //! - Metadata is normalized: mtime=0, uid=0, gid=0, mode=0644, empty user/group names
 //! - Only regular files are included (directories are implicit)
+//! - Generated resolver state such as `pcb.sum` is excluded
 
 use std::fs;
 use std::io::Cursor;
@@ -25,14 +26,12 @@ use unicode_normalization::UnicodeNormalization;
 #[derive(Debug, Clone, Copy)]
 pub struct CanonicalTarOptions {
     pub exclude_nested_packages: bool,
-    pub exclude_lockfile: bool,
 }
 
 impl Default for CanonicalTarOptions {
     fn default() -> Self {
         Self {
             exclude_nested_packages: true,
-            exclude_lockfile: false,
         }
     }
 }
@@ -51,8 +50,8 @@ fn canonicalize_path(path: &Path) -> Result<String> {
     Ok(s.nfc().collect::<String>().replace('\\', "/"))
 }
 
-fn should_exclude_canonical_path(path: &Path) -> bool {
-    path.file_name().and_then(|name| name.to_str()) == Some("pcb.sum")
+fn is_generated_state_file(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "pcb.sum")
 }
 
 /// Collect entries for canonical tar (shared between create and list)
@@ -68,6 +67,9 @@ fn collect_canonical_entries(
         let filename = path
             .file_name()
             .with_context(|| format!("path has no filename: {:?}", path))?;
+        if is_generated_state_file(Path::new(filename)) {
+            return Ok(Vec::new());
+        }
         let canonical = canonicalize_path(Path::new(filename))?;
         return Ok(vec![(PathBuf::from(filename), canonical)]);
     }
@@ -100,10 +102,7 @@ fn collect_canonical_entries(
         let file_type = entry.file_type().unwrap();
         // Only include files - directories are implicit from file paths in tar
         // This avoids issues with empty directories (which git doesn't track anyway)
-        if file_type.is_file() {
-            if options.exclude_lockfile && should_exclude_canonical_path(entry_path) {
-                continue;
-            }
+        if file_type.is_file() && !is_generated_state_file(rel_path) {
             let canonical = canonicalize_path(rel_path)?;
             entries.push((rel_path.to_path_buf(), canonical));
         }
@@ -161,6 +160,7 @@ pub fn list_canonical_tar_entries(
 /// - File mode: 0644
 /// - End with two 512-byte zero blocks
 /// - Respect .gitignore and filter internal marker files
+/// - Exclude generated resolver state such as `pcb.sum`
 /// - Exclude nested packages (subdirs with pcb.toml)
 ///
 /// For single files, creates a tar with just that file using its filename as the path.
@@ -210,14 +210,7 @@ pub fn create_canonical_tar<W: std::io::Write>(
 pub fn compute_content_hash_from_dir(cache_dir: &Path) -> Result<String> {
     // Stream canonical tar directly to BLAKE3 hasher (avoids buffering entire tar in memory)
     let mut hasher = blake3::Hasher::new();
-    create_canonical_tar(
-        cache_dir,
-        &mut hasher,
-        Some(CanonicalTarOptions {
-            exclude_lockfile: true,
-            ..Default::default()
-        }),
-    )?;
+    create_canonical_tar(cache_dir, &mut hasher, None)?;
     let hash = hasher.finalize();
     Ok(format!("h1:{}", STANDARD.encode(hash.as_bytes())))
 }
@@ -232,7 +225,7 @@ where
 {
     let mut entries = Vec::new();
     for (path, contents) in files {
-        if should_exclude_canonical_path(path) {
+        if is_generated_state_file(path) {
             continue;
         }
         let canonical = canonicalize_path(path)?;

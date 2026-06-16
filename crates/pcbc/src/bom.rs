@@ -82,11 +82,6 @@ pub struct BomArgs {
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
-
-    /// Require that pcb.toml is up-to-date and verify pcb.sum if it exists.
-    /// Does not write pcb.toml or pcb.sum. Recommended for CI.
-    #[arg(long)]
-    pub locked: bool,
 }
 
 pub fn execute(args: BomArgs) -> Result<()> {
@@ -94,7 +89,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     let config_inputs = parse_config_overrides(&args.config)?;
 
     // Resolve dependencies before evaluation
-    let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline, args.locked)?;
+    let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline)?;
     let strict = resolution_result
         .workspace_info
         .workspace_config()

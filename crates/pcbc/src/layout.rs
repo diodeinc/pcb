@@ -42,11 +42,6 @@ pub struct LayoutArgs {
     #[arg(short = 'S', long = "suppress", value_name = "KIND")]
     pub suppress: Vec<String>,
 
-    /// Require that pcb.toml is up-to-date and verify pcb.sum if it exists.
-    /// Does not write pcb.toml or pcb.sum. Recommended for CI.
-    #[arg(long)]
-    pub locked: bool,
-
     /// Resolve existing layout files without updating them
     #[arg(long = "no-sync", conflicts_with_all = ["temp", "check"])]
     pub no_sync: bool,
@@ -88,11 +83,8 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         args.no_open = true;
     }
 
-    // Default to locked mode in CI environments
-    let locked = args.locked || std::env::var("CI").is_ok();
-
     // Resolve dependencies before building
-    let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline, locked)?;
+    let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline)?;
     let model_dirs = resolution_result.kicad_model_dirs();
 
     let zen_path = &args.file;

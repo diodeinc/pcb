@@ -9,7 +9,7 @@ Exit Code: 0
 --- STDOUT ---
 Workspace
 Root: <TEMP_DIR>
-Toolchain: pcb >= 0.3
+Toolchain: pcb >= 0.4
 
 No boards discovered
 

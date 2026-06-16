@@ -138,7 +138,6 @@ mod tests {
                     package("modules/Lib"),
                 ),
             ]),
-            lockfile: None,
             errors: vec![],
         }
     }

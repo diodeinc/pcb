@@ -1,8 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{
-    PcbToml, find_workspace_root, parse_pcb_version, pcb_version_from_cargo, pcb_version_is_older,
+    PcbToml, parse_pcb_version, pcb_version_from_cargo, pcb_version_is_older,
 };
 use std::collections::BTreeSet;
 use std::fs;
@@ -38,7 +37,6 @@ pub fn execute(args: MigrateArgs) -> Result<()> {
 }
 
 fn migration_roots(paths: Vec<PathBuf>) -> Result<BTreeSet<PathBuf>> {
-    let file_provider = DefaultFileProvider::new();
     let starts = if paths.is_empty() {
         vec![std::env::current_dir()?]
     } else {
@@ -47,7 +45,7 @@ fn migration_roots(paths: Vec<PathBuf>) -> Result<BTreeSet<PathBuf>> {
 
     let mut roots = BTreeSet::new();
     for path in starts {
-        let root = find_workspace_root(&file_provider, &path)
+        let root = find_migration_root(&path)
             .with_context(|| format!("Failed to find workspace for {}", path.display()))?;
         let pcb_toml_path = root.join("pcb.toml");
         if !pcb_toml_path.is_file() {
@@ -61,11 +59,57 @@ fn migration_roots(paths: Vec<PathBuf>) -> Result<BTreeSet<PathBuf>> {
     Ok(roots)
 }
 
+fn find_migration_root(start: &Path) -> Result<PathBuf> {
+    let abs_start = fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    let start_dir = if abs_start.is_dir() {
+        abs_start
+    } else {
+        abs_start.parent().unwrap_or(&abs_start).to_path_buf()
+    };
+
+    let mut candidates = Vec::new();
+    for dir in std::iter::successors(Some(start_dir.as_path()), |dir| dir.parent()) {
+        let pcb_toml = dir.join("pcb.toml");
+        if !pcb_toml.is_file() {
+            continue;
+        }
+
+        let content = fs::read_to_string(&pcb_toml)
+            .with_context(|| format!("Failed to read {}", pcb_toml.display()))?;
+        let document = content
+            .parse::<DocumentMut>()
+            .with_context(|| format!("Failed to parse {}", pcb_toml.display()))?;
+        let is_workspace = document
+            .get("workspace")
+            .and_then(Item::as_table_like)
+            .is_some();
+        candidates.push((dir.to_path_buf(), is_workspace));
+    }
+
+    Ok(candidates
+        .iter()
+        .find(|(_, is_workspace)| *is_workspace)
+        .or_else(|| candidates.first())
+        .map(|(path, _)| path.clone())
+        .unwrap_or(start_dir))
+}
+
 fn migrate_workspace(root: &Path) -> Result<()> {
     let pcb_toml_path = root.join("pcb.toml");
     let original = fs::read_to_string(&pcb_toml_path)
         .with_context(|| format!("Failed to read {}", pcb_toml_path.display()))?;
-    let config = PcbToml::parse_with_path(&original, &pcb_toml_path)?;
+    let (content, removed_members) = remove_workspace_members(&original)
+        .with_context(|| format!("Failed to update {}", pcb_toml_path.display()))?;
+    if removed_members {
+        fs::write(&pcb_toml_path, &content)
+            .with_context(|| format!("Failed to write {}", pcb_toml_path.display()))?;
+        println!(
+            "pcb: removed deprecated [workspace].members from {}",
+            pcb_toml_path.display()
+        );
+    }
+
+    let config = PcbToml::parse_with_path(&content, &pcb_toml_path)?;
     let workspace = config.workspace.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
             "Migration target is not a workspace manifest: {}",
@@ -124,6 +168,8 @@ fn migrate_workspace(root: &Path) -> Result<()> {
 fn write_workspace_pcb_version(pcb_toml_path: &Path, target: &str) -> Result<()> {
     let content = fs::read_to_string(pcb_toml_path)
         .with_context(|| format!("Failed to read {}", pcb_toml_path.display()))?;
+    let (content, _) = remove_workspace_members(&content)
+        .with_context(|| format!("Failed to update {}", pcb_toml_path.display()))?;
     let config = PcbToml::parse_with_path(&content, pcb_toml_path)?;
     let workspace = config.workspace.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
@@ -137,6 +183,25 @@ fn write_workspace_pcb_version(pcb_toml_path: &Path, target: &str) -> Result<()>
     fs::write(pcb_toml_path, updated)
         .with_context(|| format!("Failed to write {}", pcb_toml_path.display()))?;
     Ok(())
+}
+
+fn remove_workspace_members(content: &str) -> Result<(String, bool)> {
+    let mut document = content
+        .parse::<DocumentMut>()
+        .context("Failed to parse manifest for editing")?;
+    let Some(workspace) = document
+        .get_mut("workspace")
+        .and_then(Item::as_table_like_mut)
+    else {
+        return Ok((content.to_owned(), false));
+    };
+
+    let removed = workspace.remove("members").is_some();
+    if removed {
+        Ok((document.to_string(), true))
+    } else {
+        Ok((content.to_owned(), false))
+    }
 }
 
 fn run_versioned_migrations(root: &Path, from: Option<PcbLane>, to: PcbLane) -> Result<()> {
@@ -232,6 +297,26 @@ pcb-version = "not this"
             output,
             "[workspace]\nname = \"demo\"\npcb-version = \"0.4\"\n"
         );
+    }
+
+    #[test]
+    fn removes_workspace_members_without_touching_other_tables() {
+        let input = r#"# keep
+[workspace] # root
+name = "demo"
+members = ["boards/*"] # old
+pcb-version = "0.3"
+
+[dependencies]
+members = "not this"
+"#;
+
+        let (output, removed) = remove_workspace_members(input).unwrap();
+
+        assert!(removed);
+        assert!(output.contains("# keep\n[workspace] # root\nname = \"demo\"\n"));
+        assert!(!output.contains("members = [\"boards/*\"]"));
+        assert!(output.contains("[dependencies]\nmembers = \"not this\""));
     }
 
     #[test]

@@ -16,7 +16,6 @@ use pcb_zen_core::workspace::package_url_covers;
 pub(crate) struct ScannedDirectDeps {
     pub(crate) remote: BTreeMap<String, DependencySpec>,
     pub(crate) workspace: BTreeSet<String>,
-    pub(crate) implicit_remote: BTreeMap<String, DependencySpec>,
 }
 
 pub(crate) fn scan_package_direct_deps(
@@ -33,13 +32,6 @@ pub(crate) fn scan_package_direct_deps(
     let configured_kicad_versions = workspace_info.stdlib_asset_dep_versions();
     let file_provider = DefaultFileProvider::new();
     let mut scanned = ScannedDirectDeps::default();
-
-    if let Some(version) = configured_kicad_versions.get(KICAD_SYMBOLS_REPO) {
-        scanned.implicit_remote.insert(
-            KICAD_SYMBOLS_REPO.to_string(),
-            DependencySpec::Version(version.to_string()),
-        );
-    }
 
     for zen_path in package_index.zen_files(package_dir, package_url) {
         let content = file_provider
@@ -100,8 +92,6 @@ pub(crate) fn scan_package_direct_deps(
 
     Ok(scanned)
 }
-
-const KICAD_SYMBOLS_REPO: &str = "gitlab.com/kicad/libraries/kicad-symbols";
 
 pub(crate) struct WorkspacePackageIndex {
     package_dirs: BTreeMap<PathBuf, String>,

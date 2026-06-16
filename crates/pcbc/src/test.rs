@@ -29,11 +29,6 @@ pub struct TestArgs {
     #[arg(long = "offline")]
     pub offline: bool,
 
-    /// Require that pcb.toml is up-to-date and verify pcb.sum if it exists.
-    /// Does not write pcb.toml or pcb.sum. Recommended for CI.
-    #[arg(long)]
-    pub locked: bool,
-
     /// Set lint level to deny (treat as error). Use 'warnings' for all warnings,
     /// or specific lint names like 'unstable-refs'
     #[arg(short = 'D', long = "deny", value_name = "LINT")]
@@ -275,8 +270,7 @@ pub fn execute(args: TestArgs) -> Result<()> {
     let config_inputs = parse_config_overrides(&args.config)?;
 
     // Resolve dependencies before finding .zen files
-    let resolution_result =
-        crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
+    let resolution_result = crate::resolve::resolve(args.path.as_deref(), args.offline)?;
 
     // Process .zen files using shared walker - always recursive for directories
     let zen_paths = file_walker::collect_workspace_zen_files(

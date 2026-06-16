@@ -87,7 +87,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
         None => env::current_dir()?,
     };
 
-    let resolution = crate::resolve::resolve(Some(&start_path), false, true)?;
+    let resolution = crate::resolve::resolve(Some(&start_path), false)?;
     let mut workspace_info = resolution.workspace_info.clone();
 
     match args.format {
@@ -152,10 +152,6 @@ fn external_dependencies(
             continue;
         }
 
-        let lock_entry = ws
-            .lockfile
-            .as_ref()
-            .and_then(|lockfile| lockfile.get(module_path, version));
         let config = PcbToml::from_path(&manifest_path).unwrap_or_default();
         let (entrypoints, symbol_files) = discover_package_files(&root)?;
         let module_path = module_path.to_string();
@@ -165,17 +161,14 @@ fn external_dependencies(
             coord,
             PackageMetadata {
                 version: Some(version),
-                rel_path: root
-                    .strip_prefix(&ws.root)
-                    .unwrap_or(root.as_path())
-                    .to_path_buf(),
+                rel_path: dependency_rel_path(ws, &root),
                 source: package_source(ws, &module_path, &root),
                 config,
                 published_at: None,
                 preferred: false,
                 dirty: false,
-                content_hash: lock_entry.map(|entry| entry.content_hash.clone()),
-                manifest_hash: lock_entry.and_then(|entry| entry.manifest_hash.clone()),
+                content_hash: None,
+                manifest_hash: None,
                 entrypoints,
                 symbol_files,
             },
@@ -183,6 +176,31 @@ fn external_dependencies(
     }
 
     Ok(deps)
+}
+
+fn dependency_rel_path(ws: &WorkspaceInfo, root: &Path) -> PathBuf {
+    let workspace_cache = ws.workspace_cache_dir();
+    if let Some(rel) = strip_prefix(root, &workspace_cache) {
+        return PathBuf::from(".pcb/cache").join(rel);
+    }
+    if let Some(rel) = strip_prefix(root, &ws.cache_dir) {
+        return PathBuf::from(".pcb/cache").join(rel);
+    }
+    root.strip_prefix(&ws.root).unwrap_or(root).to_path_buf()
+}
+
+fn strip_prefix(path: &Path, base: &Path) -> Option<PathBuf> {
+    if base.as_os_str().is_empty() {
+        return None;
+    }
+    path.strip_prefix(base)
+        .map(Path::to_path_buf)
+        .ok()
+        .or_else(|| {
+            let path = canonical_or_self(path);
+            let base = canonical_or_self(base);
+            path.strip_prefix(base).map(Path::to_path_buf).ok()
+        })
 }
 
 fn external_package_coord<'a>(
@@ -206,13 +224,20 @@ fn package_source(ws: &WorkspaceInfo, module_path: &str, root: &Path) -> Package
     if is_path_patch(ws, module_path, root) {
         return PackageSource::Patch;
     }
-    if root.starts_with(ws.root.join("vendor")) {
+    let root = canonical_or_self(root);
+    if root.starts_with(canonical_or_self(&ws.root.join("vendor"))) {
         return PackageSource::Vendor;
     }
-    if root.starts_with(ws.workspace_cache_dir()) || root.starts_with(&ws.cache_dir) {
+    if root.starts_with(canonical_or_self(&ws.workspace_cache_dir()))
+        || root.starts_with(canonical_or_self(&ws.cache_dir))
+    {
         return PackageSource::Cache;
     }
     PackageSource::Other
+}
+
+fn canonical_or_self(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn is_path_patch(ws: &WorkspaceInfo, module_path: &str, root: &Path) -> bool {

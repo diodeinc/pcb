@@ -10,7 +10,7 @@ use crate::bundle::{self, MetadataInput, SourceBundlePlan};
 use pcb_zen::WorkspaceInfo;
 use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen_core::EvalOutput;
-use pcb_zen_core::resolution::{PackageClosure, ResolutionResult};
+use pcb_zen_core::resolution::ResolutionResult;
 
 use inquire::Confirm;
 use std::fs;
@@ -110,7 +110,6 @@ struct ReleaseInfo {
     suppress: Vec<String>,
     resolution: ResolutionResult,
     root_package_url: Option<String>,
-    closure: Option<PackageClosure>,
     allow_errors: bool,
 }
 
@@ -278,27 +277,9 @@ pub fn build_board_release(
         let info_spinner = Spinner::builder("Gathering release information").start();
 
         let package_url = workspace.package_url_for_zen(&zen_path);
-        let is_mvs_v2_board = workspace.requires_mvs_v2()
-            || package_url
-                .as_deref()
-                .and_then(|url| workspace.packages.get(url))
-                .is_some_and(|pkg| !pkg.config.dependencies.indirect.is_empty());
-
-        // Legacy release still requires pcb.sum for reproducible old-style
-        // resolution. Hydrated MVS v2 boards are complete from pcb.toml.
-        if !is_mvs_v2_board && workspace.lockfile.is_none() {
-            anyhow::bail!(
-                "No lockfile found. Run 'pcb build' or 'pcb layout' first to generate one.\n\
-                 Release requires a lockfile to ensure reproducible builds."
-            );
-        }
 
         info_spinner.set_message("Resolving dependencies");
-        let resolution = crate::resolve::resolve(Some(&zen_path), false, true)?;
-        let closure = package_url
-            .as_deref()
-            .map(|url| resolution.package_closure(url));
-
+        let resolution = crate::resolve::resolve(Some(&zen_path), false)?;
         info_spinner.set_message("Evaluating zen file");
 
         // Evaluate the zen file (still needed for schematic)
@@ -399,7 +380,6 @@ pub fn build_board_release(
             suppress,
             resolution,
             root_package_url: package_url,
-            closure,
             allow_errors,
         };
 
@@ -554,7 +534,6 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     bundle::stage_source_bundle(&SourceBundlePlan {
         resolution: &info.resolution,
         root_package_url: info.root_package_url.as_deref(),
-        closure: info.closure.as_ref(),
         staged_src: &info.staging_dir.join("src"),
         resolved_paths: &info.schematic.resolved_paths,
     })
@@ -715,9 +694,9 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     debug!("Validating build of: {}", staged_zen_path.display());
 
-    // Re-resolve in offline+locked mode. All dependencies (including KiCad
+    // Re-resolve in offline mode. All dependencies (including KiCad
     // library files) are vendored from eval1 by copy_sources.
-    let staged_resolution = crate::resolve::resolve(Some(&staged_zen_path), true, true)?;
+    let staged_resolution = crate::resolve::resolve(Some(&staged_zen_path), true)?;
 
     // Use build function with offline mode but allow warnings
     // Suspend spinner during build to allow diagnostics to render properly
@@ -1394,7 +1373,6 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     #[test]
     fn update_kicad_pro_release_variables_adds_missing_release_variables() -> Result<()> {
@@ -1461,30 +1439,6 @@ mod tests {
         assert!(content.contains(r#"(property "PCB_VERSION" "1.2.3")"#));
         assert!(content.contains(r#"(property "PCB_GIT_HASH" "abcdef0")"#));
 
-        Ok(())
-    }
-
-    #[test]
-    fn stage_resolved_paths_skip_manifest_dependencies() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let dep_root = temp_dir.path().join("fork/github.com/acme/normal/1.2.3");
-        let resolved_path = dep_root.join("layout/NormalModule");
-        fs::create_dir_all(&resolved_path)?;
-        fs::write(resolved_path.join("layout.kicad_pcb"), "dummy")?;
-        fs::write(dep_root.join("pcb.toml"), "[package]\nname = \"normal\"\n")?;
-
-        let mut package_roots = BTreeMap::new();
-        package_roots.insert("github.com/acme/normal@1.2.3".to_string(), dep_root.clone());
-        let staged_src = temp_dir.path().join("staging/src");
-        fs::create_dir_all(&staged_src)?;
-        crate::bundle::stage_resolved_file_for_source_bundle(
-            &staged_src,
-            &package_roots,
-            &resolved_path,
-        )?;
-
-        let unexpected = staged_src.join("vendor/github.com/acme/normal/1.2.3/layout/NormalModule");
-        assert!(!unexpected.exists());
         Ok(())
     }
 }

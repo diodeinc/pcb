@@ -139,14 +139,19 @@ impl Sandbox {
             default_cwd,
             trace: false,
             hash_globs: Vec::new(),
-            // Ignore pcb.sum by default - it's a lockfile that changes with stdlib versions
-            ignore_globs: vec!["**/pcb.sum".to_string()],
+            ignore_globs: Vec::new(),
         };
         s.write_gitconfig();
         // Most integration tests need stdlib and KiCad assets. Seeding here keeps tests offline
         // while avoiding repeated downloads.
         s.seed_stdlib();
         s
+    }
+
+    /// Add a minimal workspace manifest at the sandbox cwd.
+    pub fn with_workspace(mut self) -> Self {
+        self.write("pcb.toml", "[workspace]\npcb-version = \"0.4\"\n");
+        self
     }
 
     /// Enable `GIT_TRACE=1` for commands run with `run` / `run_ok` / `cmd`.
@@ -166,7 +171,6 @@ impl Sandbox {
     }
 
     /// Add glob patterns for files that should be ignored in snapshots.
-    /// Extends the default ignore patterns (e.g., `**/pcb.sum`).
     pub fn ignore_globs<I, S>(&mut self, globs: I) -> &mut Self
     where
         I: IntoIterator<Item = S>,
@@ -477,6 +481,8 @@ impl Sandbox {
         // Linux and macOS tmp alias: /tmp/.tmpXXX or /private/tmp/.tmpXXX
         let tmp_pattern = Regex::new(r"(?:/private)?/tmp/\.tmp[a-zA-Z0-9]+").unwrap();
         result = tmp_pattern.replace_all(&result, "<TEMP_DIR>").to_string();
+
+        result = result.replace("<TEMP_DIR>/home/.pcb/cache", "<TEMP_DIR>/.pcb/cache");
 
         // Normalize the actual global PCB cache root used by this runtime.
         // Also sanitize its canonicalized alias (if different).
@@ -980,23 +986,6 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(clone_dir.join("src/main.rs")).unwrap(),
             "fn main() {\n    println!(\"Hello, world!\");\n}"
-        );
-    }
-
-    #[test]
-    fn test_sandbox_default_ignores_pcb_sum() {
-        let mut sb = Sandbox::new();
-
-        // Create a file structure with pcb.sum
-        sb.write("src/pcb.sum", "lockfile content")
-            .write("src/pcb.toml", "keep this");
-
-        // Snapshot should exclude pcb.sum by default
-        let manifest = sb.snapshot_dir(".");
-        assert!(manifest.contains("pcb.toml"), "pcb.toml should be included");
-        assert!(
-            !manifest.contains("pcb.sum"),
-            "pcb.sum should be excluded by default"
         );
     }
 

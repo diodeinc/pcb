@@ -20,7 +20,7 @@ enum ModCommand {
     /// Print the lane-aware dependency graph
     Graph(pcb_mod::ModGraphArgs),
 
-    /// Print the frozen MVS v2 resolution table for a target
+    /// Print the frozen dependency resolution table for a target
     Resolve(pcb_mod::ModResolveArgs),
 
     /// Download modules to the package cache

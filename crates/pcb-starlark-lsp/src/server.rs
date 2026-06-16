@@ -1711,16 +1711,10 @@ impl<T: LspContext> Backend<T> {
                     method: "workspace/didChangeWatchedFiles".to_owned(),
                     register_options: Some(
                         serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
-                            watchers: vec![
-                                FileSystemWatcher {
-                                    glob_pattern: GlobPattern::String("**/pcb.toml".to_owned()),
-                                    kind,
-                                },
-                                FileSystemWatcher {
-                                    glob_pattern: GlobPattern::String("**/pcb.sum".to_owned()),
-                                    kind,
-                                },
-                            ],
+                            watchers: vec![FileSystemWatcher {
+                                glob_pattern: GlobPattern::String("**/pcb.toml".to_owned()),
+                                kind,
+                            }],
                         })
                         .unwrap(),
                     ),

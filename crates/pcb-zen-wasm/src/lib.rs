@@ -6,7 +6,7 @@ use pcb_zen_core::resolution::{
 };
 use pcb_zen_core::workspace::WorkspaceInfo;
 use pcb_zen_core::workspace::get_workspace_info;
-use pcb_zen_core::{EvalContext, FileProvider, FileProviderError, Lockfile};
+use pcb_zen_core::{EvalContext, FileProvider, FileProviderError};
 use ruzstd::decoding::StreamingDecoder;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -550,7 +550,7 @@ mod tests {
                     .append_data(&mut metadata_header, "metadata.json", &metadata[..])
                     .expect("append metadata");
 
-                let workspace = b"[workspace]\nmembers = [\"reference/*\"]\n";
+                let workspace = b"[workspace]\n";
                 let mut workspace_header = tar::Header::new_gnu();
                 workspace_header.set_size(workspace.len() as u64);
                 workspace_header.set_mode(0o644);
@@ -588,7 +588,7 @@ mod tests {
     }
 }
 
-/// Build package resolution map from lockfile and vendored dependencies.
+/// Build frozen package resolution from hydrated manifests and vendored dependencies.
 ///
 /// Assumes all deps are vendored in `vendor/`. No patches, no cache fallback.
 /// Uses shared resolution logic from pcb-zen-core.
@@ -600,41 +600,32 @@ fn resolve_packages<F: FileProvider + Clone>(
     let vendor_dir = workspace_root.join("vendor");
     let workspace = get_workspace_info(&file_provider, workspace_root)
         .map_err(|e| format!("Failed to discover workspace metadata: {e}"))?;
-    let resolver = if let Some(package_url) = hydrated_package_url(&workspace, main_path) {
-        VendoredPathResolver::from_selected_versions(
-            vendor_dir,
-            selected_versions_from_manifest(&workspace, &package_url)?,
-        )
-    } else {
-        let lockfile_path = workspace_root.join("pcb.sum");
-        let lockfile_content = file_provider
-            .read_file(&lockfile_path)
-            .map_err(|e| format!("Failed to read {}: {}", lockfile_path.display(), e))?;
-        let lockfile = Lockfile::parse(&lockfile_content)
-            .map_err(|e| format!("Failed to parse {}: {}", lockfile_path.display(), e))?;
-        VendoredPathResolver::from_lockfile(file_provider.clone(), vendor_dir, &lockfile)
-    };
+    let package_url = hydrated_package_url(&workspace, main_path).ok_or_else(|| {
+        "Source bundle is missing hydrated dependency state; run `pcb sync` before bundling"
+            .to_string()
+    })?;
+    let resolver = VendoredPathResolver::from_selected_versions(
+        vendor_dir,
+        selected_versions_from_manifest(&workspace, &package_url)?,
+    );
 
     let package_resolutions =
         build_resolution_map(&file_provider, &resolver, &workspace, resolver.closure());
-    let mut resolution = pcb_zen_core::resolution::ResolutionResult::native(
+    let frozen = build_wasm_frozen_resolution(
+        &workspace,
+        &package_resolutions,
+        &file_provider,
+        &package_url,
+    )?;
+    Ok(pcb_zen_core::resolution::ResolutionResult::frozen(
         workspace,
-        package_resolutions,
+        FrozenResolutionSet::from([(package_url, frozen)]),
         HashMap::new(),
-        false,
-        HashMap::new(),
-    );
-    attach_frozen_resolution_if_hydrated(&mut resolution, &file_provider, main_path)?;
-    Ok(resolution)
+    ))
 }
 
 fn hydrated_package_url(workspace: &WorkspaceInfo, main_path: &Path) -> Option<String> {
-    let package_url = package_url_for_zen(workspace, main_path)?;
-    workspace
-        .packages
-        .get(&package_url)
-        .is_some_and(|package| !package.config.dependencies.indirect.is_empty())
-        .then_some(package_url)
+    package_url_for_zen(workspace, main_path)
 }
 
 fn selected_versions_from_manifest(
@@ -650,26 +641,6 @@ fn selected_versions_from_manifest(
     )
 }
 
-fn attach_frozen_resolution_if_hydrated<F: FileProvider>(
-    resolution: &mut pcb_zen_core::resolution::ResolutionResult,
-    file_provider: &F,
-    main_path: &Path,
-) -> Result<(), String> {
-    let Some(package_url) = package_url_for_zen(&resolution.workspace_info, main_path) else {
-        return Ok(());
-    };
-    let Some(package) = resolution.workspace_info.packages.get(&package_url) else {
-        return Ok(());
-    };
-    if package.config.dependencies.indirect.is_empty() {
-        return Ok(());
-    }
-
-    let frozen = build_wasm_frozen_resolution(resolution, file_provider, &package_url)?;
-    resolution.set_mvs_v2_resolution(FrozenResolutionSet::from([(package_url, frozen)]));
-    Ok(())
-}
-
 fn package_url_for_zen(workspace: &WorkspaceInfo, path: &Path) -> Option<String> {
     workspace
         .packages
@@ -680,16 +651,16 @@ fn package_url_for_zen(workspace: &WorkspaceInfo, path: &Path) -> Option<String>
 }
 
 fn build_wasm_frozen_resolution<F: FileProvider>(
-    resolution: &pcb_zen_core::resolution::ResolutionResult,
+    workspace: &WorkspaceInfo,
+    package_resolutions: &HashMap<PathBuf, BTreeMap<String, PathBuf>>,
     file_provider: &F,
     package_url: &str,
 ) -> Result<FrozenResolutionMap, String> {
-    let workspace = &resolution.workspace_info;
     let selected_remote = selected_remote_from_hydrated_manifest(workspace, package_url)
         .map_err(|e| e.to_string())?;
     let mut packages = BTreeMap::new();
 
-    for (root, deps) in &resolution.package_resolutions {
+    for (root, deps) in package_resolutions {
         let Some(identity) = frozen_identity_for_root(workspace, &selected_remote, root) else {
             continue;
         };

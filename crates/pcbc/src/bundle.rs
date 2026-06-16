@@ -1,12 +1,10 @@
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use pcb_zen::{copy_dir_all, git, vendor_deps};
+use pcb_zen::{copy_dir_all, git};
 use pcb_zen_core::kicad_library::{
     KICAD_PARTS_INDEX_FILE, KicadRepoMatch, match_kicad_managed_repo,
 };
-use pcb_zen_core::resolution::{
-    FrozenPackageIdentity, FrozenResolutionMap, PackageClosure, ResolutionResult,
-};
+use pcb_zen_core::resolution::{FrozenPackageIdentity, FrozenResolutionMap, ResolutionResult};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,7 +26,6 @@ pub(crate) struct MetadataInput<'a> {
 pub(crate) struct SourceBundlePlan<'a> {
     pub resolution: &'a ResolutionResult,
     pub root_package_url: Option<&'a str>,
-    pub closure: Option<&'a PackageClosure>,
     pub staged_src: &'a Path,
     pub resolved_paths: &'a [PathBuf],
 }
@@ -43,75 +40,19 @@ pub(crate) fn write_metadata_json(input: &MetadataInput<'_>) -> Result<()> {
 
 #[instrument(name = "stage_source_bundle", skip_all)]
 pub(crate) fn stage_source_bundle(plan: &SourceBundlePlan<'_>) -> Result<()> {
-    if let Some(root_package_url) = plan.root_package_url
-        && let Some(frozen) = plan.resolution.mvs_v2_root(root_package_url)
-    {
-        return stage_mvs_v2_source_bundle(plan, frozen);
-    }
-
-    stage_legacy_source_bundle(plan)
-}
-
-fn stage_legacy_source_bundle(plan: &SourceBundlePlan<'_>) -> Result<()> {
-    let workspace_root = &plan.resolution.workspace_info.root;
-    fs::create_dir_all(plan.staged_src)?;
-
-    let root_pcb_toml = workspace_root.join("pcb.toml");
-    if root_pcb_toml.exists() {
-        fs::copy(&root_pcb_toml, plan.staged_src.join("pcb.toml"))?;
-    }
-
-    let all_pkg_roots: HashSet<PathBuf> = plan
+    let root_package_url = plan
+        .root_package_url
+        .context("Source bundling requires a workspace package target")?;
+    let frozen = plan
         .resolution
-        .workspace_info
-        .packages
-        .values()
-        .map(|pkg| workspace_root.join(&pkg.rel_path))
-        .collect();
-
-    {
-        let _span = info_span!("copy_local_packages").entered();
-        if let Some(closure) = plan.closure {
-            let mut local_packages: Vec<_> = closure.local_packages.iter().collect();
-            local_packages.sort();
-            for pkg_url in local_packages {
-                let Some(pkg) = plan.resolution.workspace_info.packages.get(pkg_url) else {
-                    continue;
-                };
-                let dest = plan.staged_src.join(&pkg.rel_path);
-                copy_dir_all(&pkg.dir(workspace_root), &dest, &all_pkg_roots)?;
-            }
-        }
-    }
-
-    {
-        let _span = info_span!("copy_remote_packages").entered();
-        let vendor_dir = plan.staged_src.join("vendor");
-        vendor_deps(
-            plan.resolution,
-            &["**".to_string()],
-            Some(&vendor_dir),
-            true,
-        )?;
-    }
-
-    {
-        let _span = info_span!("stage_resolved_assets").entered();
-        let package_roots = plan.resolution.package_roots();
-        for resolved_path in plan.resolved_paths {
-            stage_resolved_file_for_source_bundle(plan.staged_src, &package_roots, resolved_path)?;
-        }
-    }
-
-    let lockfile_src = workspace_root.join("pcb.sum");
-    if lockfile_src.exists() {
-        fs::copy(&lockfile_src, plan.staged_src.join("pcb.sum"))?;
-    }
-
-    Ok(())
+        .frozen_root(root_package_url)
+        .with_context(|| {
+            format!("{root_package_url} is missing hydrated dependency state; run `pcb sync` first")
+        })?;
+    stage_frozen_source_bundle(plan, frozen)
 }
 
-fn stage_mvs_v2_source_bundle(
+fn stage_frozen_source_bundle(
     plan: &SourceBundlePlan<'_>,
     frozen: &FrozenResolutionMap,
 ) -> Result<()> {
@@ -321,69 +262,6 @@ fn stage_kicad_resolved_file(
     Ok(())
 }
 
-pub(crate) fn stage_resolved_file_for_source_bundle(
-    staged_src: &Path,
-    package_roots: &BTreeMap<String, PathBuf>,
-    resolved_path: &Path,
-) -> Result<()> {
-    let Some((repo, version, dep_root)) =
-        pcb_zen_core::kicad_library::package_coord_for_path(resolved_path, package_roots)
-    else {
-        return Ok(());
-    };
-
-    if dep_root.join("pcb.toml").exists() {
-        return Ok(());
-    }
-
-    let Ok(rel_path) = resolved_path.strip_prefix(&dep_root) else {
-        return Ok(());
-    };
-    if rel_path.as_os_str().is_empty() {
-        return Ok(());
-    }
-    if is_split_symbol_library_dir(resolved_path) {
-        return Ok(());
-    }
-    if !resolved_path.exists() {
-        log::warn!(
-            "Skipping missing referenced library path during source bundle staging: {}",
-            resolved_path.display()
-        );
-        return Ok(());
-    }
-
-    let dst = staged_src
-        .join("vendor")
-        .join(&repo)
-        .join(&version)
-        .join(rel_path);
-    copy_bundle_path(resolved_path, &dst)?;
-
-    let parts_index = dep_root.join(KICAD_PARTS_INDEX_FILE);
-    if parts_index.exists() {
-        let staged_parts_index = staged_src
-            .join("vendor")
-            .join(&repo)
-            .join(&version)
-            .join(KICAD_PARTS_INDEX_FILE);
-        if !staged_parts_index.exists() {
-            if let Some(parent) = staged_parts_index.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::copy(&parts_index, &staged_parts_index).with_context(|| {
-                format!(
-                    "Failed to copy {} to {}",
-                    parts_index.display(),
-                    staged_parts_index.display()
-                )
-            })?;
-        }
-    }
-
-    Ok(())
-}
-
 fn is_split_symbol_library_dir(path: &Path) -> bool {
     path.extension().and_then(|ext| ext.to_str()) == Some("kicad_symdir")
 }
@@ -489,85 +367,4 @@ fn get_git_remotes(path: &Path) -> serde_json::Value {
     }
 
     serde_json::Value::Object(remotes)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{SourceBundlePlan, stage_resolved_file_for_source_bundle, stage_source_bundle};
-    use pcb_test_utils::sandbox::Sandbox;
-    use pcb_zen::resolve_dependencies;
-    use pcb_zen::workspace::get_workspace_info;
-    use pcb_zen_core::DefaultFileProvider;
-    use pcb_zen_core::kicad_library::KICAD_PARTS_INDEX_FILE;
-    use std::collections::BTreeMap;
-    use std::fs;
-
-    const ROOT_PCB_TOML: &str = r#"
-[workspace]
-pcb-version = "0.3"
-"#;
-
-    #[test]
-    fn stage_source_bundle_without_closure_still_copies_root_files() {
-        let mut sb = Sandbox::new();
-        sb.cwd("src")
-            .write("pcb.toml", ROOT_PCB_TOML)
-            .write("pcb.sum", "test/package 0.1.0 h1:test\n");
-
-        let mut workspace =
-            get_workspace_info(&DefaultFileProvider::new(), &sb.root_path().join("src")).unwrap();
-        let resolution = resolve_dependencies(&mut workspace, false, false).unwrap();
-        let staged_src = sb.root_path().join("staged/src");
-
-        stage_source_bundle(&SourceBundlePlan {
-            resolution: &resolution,
-            root_package_url: None,
-            closure: None,
-            staged_src: &staged_src,
-            resolved_paths: &[],
-        })
-        .unwrap();
-
-        assert!(staged_src.join("pcb.toml").exists());
-        assert!(staged_src.join("pcb.sum").exists());
-    }
-
-    #[test]
-    fn stage_resolved_file_copies_kicad_parts_index() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let dep_root = temp_dir
-            .path()
-            .join("cache/gitlab.com/kicad/libraries/kicad-symbols/9.0.3");
-        let resolved_path = dep_root.join("Diode.kicad_sym");
-        fs::create_dir_all(&dep_root).unwrap();
-        fs::write(&resolved_path, "(kicad_symbol_lib)").unwrap();
-        fs::write(
-            dep_root.join(KICAD_PARTS_INDEX_FILE),
-            r#"{"package://gitlab.com/kicad/libraries/kicad-symbols@9.0.3/Diode.kicad_sym":[{"mpn":"1N4004-E3/54","symbol":"./Diode.kicad_sym","symbol_name":"1N4004","manufacturer":"Vishay","qualifications":[]}]}"#,
-        )
-        .unwrap();
-
-        let mut package_roots = BTreeMap::new();
-        package_roots.insert(
-            "gitlab.com/kicad/libraries/kicad-symbols@9.0.3".to_string(),
-            dep_root.clone(),
-        );
-
-        let staged_src = temp_dir.path().join("staged/src");
-        fs::create_dir_all(&staged_src).unwrap();
-
-        stage_resolved_file_for_source_bundle(&staged_src, &package_roots, &resolved_path).unwrap();
-
-        assert!(
-            staged_src
-                .join("vendor/gitlab.com/kicad/libraries/kicad-symbols/9.0.3/Diode.kicad_sym")
-                .exists()
-        );
-        assert!(
-            staged_src
-                .join("vendor/gitlab.com/kicad/libraries/kicad-symbols/9.0.3")
-                .join(KICAD_PARTS_INDEX_FILE)
-                .exists()
-        );
-    }
 }

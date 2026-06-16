@@ -35,11 +35,6 @@ pub struct SimArgs {
     #[arg(long = "offline")]
     pub offline: bool,
 
-    /// Require that pcb.toml is up-to-date and verify pcb.sum if it exists.
-    /// Does not write pcb.toml or pcb.sum. Recommended for CI.
-    #[arg(long)]
-    pub locked: bool,
-
     /// Print the .cir netlist to stdout (skip running ngspice)
     #[arg(long = "netlist")]
     pub netlist: bool,
@@ -166,7 +161,7 @@ pub fn execute(args: SimArgs) -> Result<()> {
         && path.is_file()
     {
         file_walker::require_zen_file(path)?;
-        let resolution_result = crate::resolve::resolve(Some(path), args.offline, args.locked)?;
+        let resolution_result = crate::resolve::resolve(Some(path), args.offline)?;
         simulate_one(path, resolution_result, config_inputs, &args)?;
         return Ok(());
     }
@@ -178,8 +173,7 @@ pub fn execute(args: SimArgs) -> Result<()> {
         );
     }
 
-    let resolution_result =
-        crate::resolve::resolve(args.path.as_deref(), args.offline, args.locked)?;
+    let resolution_result = crate::resolve::resolve(args.path.as_deref(), args.offline)?;
 
     let zen_files = file_walker::collect_workspace_zen_files(
         args.path.as_deref(),

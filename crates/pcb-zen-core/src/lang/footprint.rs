@@ -84,11 +84,9 @@ pub(crate) fn footprint_cache_key(
         .file_provider()
         .canonicalize(path)
         .unwrap_or_else(|_| path.to_path_buf());
-    let scope = config.resolution.load_cache_scope_key_for_file(
-        &canonical,
-        config.mvs_v2_root_package.as_deref(),
-        config.file_provider(),
-    );
+    let scope = config
+        .resolution
+        .load_cache_scope_key_for_file(&canonical, config.active_root_package.as_deref());
     (scope, canonical)
 }
 

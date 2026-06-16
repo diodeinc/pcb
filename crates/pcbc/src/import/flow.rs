@@ -281,7 +281,6 @@ mod tests {
         std::fs::create_dir(&board_repo)?;
 
         let pcb_toml = board_repo.join("pcb.toml");
-        let pcb_sum = board_repo.join("pcb.sum");
         let readme = board_repo.join("README.md");
         let gitignore = board_repo.join(".gitignore");
         let board_zen = board_repo.join("ImportedBoard.zen");
@@ -299,12 +298,10 @@ description = "Custom board description."
 [dependencies]
 foo = { path = "modules/foo" }
 "#;
-        let pcb_sum_contents = "custom lockfile contents\n";
         let readme_contents = "# Custom README\n";
         let gitignore_contents = "custom-ignore\n";
 
         std::fs::write(&pcb_toml, pcb_toml_contents)?;
-        std::fs::write(&pcb_sum, pcb_sum_contents)?;
         std::fs::write(&readme, readme_contents)?;
         std::fs::write(&gitignore, gitignore_contents)?;
         std::fs::write(&board_zen, "old generated board\n")?;
@@ -346,7 +343,6 @@ foo = { path = "modules/foo" }
         prepare_output(&paths, &selection, &args)?;
 
         assert_eq!(std::fs::read_to_string(&pcb_toml)?, pcb_toml_contents);
-        assert_eq!(std::fs::read_to_string(&pcb_sum)?, pcb_sum_contents);
         assert_eq!(std::fs::read_to_string(&readme)?, readme_contents);
         assert_eq!(std::fs::read_to_string(&gitignore)?, gitignore_contents);
         assert!(!board_zen.exists());
