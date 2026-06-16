@@ -27,29 +27,9 @@ jobs:
         with:
           cache-bin: false
 
-      - name: Build pcbc (head)
-        run: cargo build -p pcbc --release
-
-      - name: Stash head binary
-        run: |
-          mkdir -p "$RUNNER_TEMP/pcbc-head/lib"
-          cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-head/pcbc"
-          cp -R "lib/std" "$RUNNER_TEMP/pcbc-head/lib/std"
-
       - name: Create base worktree
         run: |
           git worktree add "$RUNNER_TEMP/pcb-base" "${{ github.event.pull_request.base.sha }}"
-
-      - name: Build pcbc (base)
-        run: cargo build -p pcbc --release --manifest-path "$RUNNER_TEMP/pcb-base/Cargo.toml"
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/target
-
-      - name: Stash base binary
-        run: |
-          mkdir -p "$RUNNER_TEMP/pcbc-base/lib"
-          cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-base/pcbc"
-          cp -R "$RUNNER_TEMP/pcb-base/lib/std" "$RUNNER_TEMP/pcbc-base/lib/std"
 
       - name: Checkout benchmark workspace
         run: |
@@ -74,14 +54,23 @@ jobs:
       - name: Run performance benchmarks
         run: |
           mkdir -p perf
+
+          PCB_INSTALL_DIR="$RUNNER_TEMP/pcb-bin" ./install.sh --local
+          PCB_INSTALL_DIR="$RUNNER_TEMP/base-bin" "$RUNNER_TEMP/pcb-base/install.sh" --local
           for workspace in Demeter DM0001 DM0002 DM0003 Feign Renfield Seward Nano unoQ; do
             python3 bin/pcb-build-perf \
-              --pcb "$RUNNER_TEMP/pcbc-base/pcbc" \
+              --pcb "$RUNNER_TEMP/pcb-bin/pcb" \
+              --pcb-arg +local \
               --workspace "workspaces/$workspace" \
               --suppress bom \
               --output "perf/$workspace-base.json"
+          done
+
+          PCB_INSTALL_DIR="$RUNNER_TEMP/pcb-bin" ./install.sh --local
+          for workspace in Demeter DM0001 DM0002 DM0003 Feign Renfield Seward Nano unoQ; do
             python3 bin/pcb-build-perf \
-              --pcb "$RUNNER_TEMP/pcbc-head/pcbc" \
+              --pcb "$RUNNER_TEMP/pcb-bin/pcb" \
+              --pcb-arg +local \
               --workspace "workspaces/$workspace" \
               --suppress bom \
               --output "perf/$workspace-head.json"

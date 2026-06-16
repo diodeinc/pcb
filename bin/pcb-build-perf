@@ -100,6 +100,12 @@ def main() -> int:
         help="Path to pcb binary (default: pcb in PATH).",
     )
     parser.add_argument(
+        "--pcb-arg",
+        action="append",
+        default=[],
+        help="Extra argument before the pcb subcommand (repeatable).",
+    )
+    parser.add_argument(
         "--output",
         help="Write JSON output to this path (also prints to stdout).",
     )
@@ -131,9 +137,14 @@ def main() -> int:
     if not os.path.isdir(workspace):
         raise SystemExit(f"Workspace directory not found: {workspace}")
 
-    pcb_path = os.path.abspath(args.pcb) if not args.pcb.startswith("/") and args.pcb != "pcb" else args.pcb
+    pcb_path = (
+        os.path.abspath(args.pcb)
+        if not args.pcb.startswith("/") and args.pcb != "pcb"
+        else args.pcb
+    )
+    pcb_cmd = [pcb_path, *args.pcb_arg]
 
-    info = run_json([pcb_path, "info", "-f", "json", workspace], cwd=None)
+    info = run_json([*pcb_cmd, "info", "-f", "json", workspace], cwd=None)
     boards = collect_boards(info)
     if not boards:
         raise SystemExit(f"No boards found in workspace: {workspace}")
@@ -152,7 +163,7 @@ def main() -> int:
     board_results = []
     for board in boards:
         zen_path = board["zen_path"]
-        cmd = [pcb_path, "build", *build_flags, zen_path]
+        cmd = [*pcb_cmd, "build", *build_flags, zen_path]
 
         hf = run_hyperfine(cmd, cwd=workspace, warmup=args.warmup)
 
