@@ -21,6 +21,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -50,25 +51,34 @@ jobs:
       - name: Run performance benchmarks
         run: |
           mkdir -p perf
-          PCB_INSTALL_DIR="$RUNNER_TEMP/pcb-bin" ./install.sh --local
-          shim="$RUNNER_TEMP/pcb-bin/pcb"
+          merge_base="$(git merge-base HEAD "${{ github.event.pull_request.base.sha }}")"
+          base_dir="$RUNNER_TEMP/pcb-base"
+          base_bin="$RUNNER_TEMP/pcb-base-bin"
+          base_data="$RUNNER_TEMP/pcb-base-data"
+          head_bin="$RUNNER_TEMP/pcb-head-bin"
+          head_data="$RUNNER_TEMP/pcb-head-data"
+          head_shim="$head_bin/pcb"
           workspaces="Demeter DM0001 DM0002 DM0003 Feign Renfield Seward Nano unoQ"
 
           bench() {
             suffix="$1"
-            selector="$2"
+            data_home="$2"
             for workspace in $workspaces; do
-              python3 bin/pcb-build-perf \
-                --pcb "$shim" \
-                --pcb-arg "$selector" \
+              XDG_DATA_HOME="$data_home" python3 bin/pcb-build-perf \
+                --pcb "$head_shim" \
+                --pcb-arg +local \
                 --workspace "workspaces/$workspace" \
                 --suppress bom \
                 --output "perf/$workspace-$suffix.json"
             done
           }
 
-          bench nightly +nightly
-          bench local +local
+          git worktree add --detach "$base_dir" "$merge_base"
+          XDG_DATA_HOME="$base_data" PCB_INSTALL_DIR="$base_bin" "$base_dir/install.sh" --local
+
+          XDG_DATA_HOME="$head_data" PCB_INSTALL_DIR="$head_bin" ./install.sh --local
+          bench base "$base_data"
+          bench head "$head_data"
 
       - name: Create PR comment body
         id: perf_comment
@@ -93,19 +103,19 @@ jobs:
               return f"{ms:.0f}ms ±{stddev_ms:.0f}"
             return f"{ms:.0f}ms"
 
-          def analyze_change(nightly, local):
-            """Compare nightly vs local using median and check for significance."""
-            nightly_median = nightly["median_seconds"]
-            local_median = local["median_seconds"]
-            nightly_stddev = nightly["stddev_seconds"]
-            local_stddev = local["stddev_seconds"]
+          def analyze_change(base, head):
+            """Compare base vs head using median and check for significance."""
+            base_median = base["median_seconds"]
+            head_median = head["median_seconds"]
+            base_stddev = base["stddev_seconds"]
+            head_stddev = head["stddev_seconds"]
 
-            delta = local_median - nightly_median
-            pct = (delta / nightly_median * 100) if nightly_median > 0 else None
+            delta = head_median - base_median
+            pct = (delta / base_median * 100) if base_median > 0 else None
 
             # Use pooled stddev for significance check
             # Change is significant if |delta| > combined noise floor
-            noise = math.sqrt(nightly_stddev ** 2 + local_stddev ** 2)
+            noise = math.sqrt(base_stddev ** 2 + head_stddev ** 2)
             significant = False
             if pct is not None and abs(pct) >= 5:
               # Require delta to exceed 2x the noise floor
@@ -114,22 +124,22 @@ jobs:
 
             return delta, pct, significant
 
-          def compute_speedup(nightly, local):
+          def compute_speedup(base, head):
             """Compute speedup ratio with uncertainty (like hyperfine comparison)."""
-            nightly_mean = nightly["mean_seconds"]
-            local_mean = local["mean_seconds"]
-            nightly_stddev = nightly["stddev_seconds"]
-            local_stddev = local["stddev_seconds"]
+            base_mean = base["mean_seconds"]
+            head_mean = head["mean_seconds"]
+            base_stddev = base["stddev_seconds"]
+            head_stddev = head["stddev_seconds"]
 
-            if local_mean <= 0 or nightly_mean <= 0:
+            if head_mean <= 0 or base_mean <= 0:
               return None, None
 
-            ratio = nightly_mean / local_mean  # >1 means local is faster
+            ratio = base_mean / head_mean  # >1 means head is faster
 
             # Propagate uncertainty: for ratio r = a/b, σ_r/r = sqrt((σ_a/a)² + (σ_b/b)²)
-            rel_err_nightly = nightly_stddev / nightly_mean if nightly_mean > 0 else 0
-            rel_err_local = local_stddev / local_mean if local_mean > 0 else 0
-            rel_err = math.sqrt(rel_err_nightly ** 2 + rel_err_local ** 2)
+            rel_err_base = base_stddev / base_mean if base_mean > 0 else 0
+            rel_err_head = head_stddev / head_mean if head_mean > 0 else 0
+            rel_err = math.sqrt(rel_err_base ** 2 + rel_err_head ** 2)
             ratio_err = ratio * rel_err
 
             return ratio, ratio_err
@@ -149,35 +159,35 @@ jobs:
           }
 
           for name in ["Demeter", "DM0001", "DM0002", "DM0003", "Feign", "Renfield", "Seward", "Nano", "unoQ"]:
-            nightly = load(Path("perf") / f"{name}-nightly.json")
-            local = load(Path("perf") / f"{name}-local.json")
-            nightly_boards = {b["zen_path"]: b for b in nightly.get("boards", [])}
-            local_boards = {b["zen_path"]: b for b in local.get("boards", [])}
-            all_paths = sorted(set(nightly_boards) | set(local_boards))
+            base = load(Path("perf") / f"{name}-base.json")
+            head = load(Path("perf") / f"{name}-head.json")
+            base_boards = {b["zen_path"]: b for b in base.get("boards", [])}
+            head_boards = {b["zen_path"]: b for b in head.get("boards", [])}
+            all_paths = sorted(set(base_boards) | set(head_boards))
 
             for zen_path in all_paths:
-              nightly_board = nightly_boards.get(zen_path)
-              local_board = local_boards.get(zen_path)
+              base_board = base_boards.get(zen_path)
+              head_board = head_boards.get(zen_path)
               board_name = zen_path
-              if local_board and local_board.get("name"):
-                board_name = local_board["name"]
-              elif nightly_board and nightly_board.get("name"):
-                board_name = nightly_board["name"]
+              if head_board and head_board.get("name"):
+                board_name = head_board["name"]
+              elif base_board and base_board.get("name"):
+                board_name = base_board["name"]
               workspace_label = workspace_labels[name]
               if board_name.lower() == name.lower():
                 label = workspace_label
               else:
                 label = f"{workspace_label}/{board_name}"
 
-              if not nightly_board or not local_board:
+              if not base_board or not head_board:
                 rows.append((label, "—", "—", "missing"))
                 continue
 
-              delta, pct, significant = analyze_change(nightly_board, local_board)
-              ratio, ratio_err = compute_speedup(nightly_board, local_board)
+              delta, pct, significant = analyze_change(base_board, head_board)
+              ratio, ratio_err = compute_speedup(base_board, head_board)
 
-              nightly_str = fmt_ms(nightly_board["median_seconds"], nightly_board["stddev_seconds"])
-              local_str = fmt_ms(local_board["median_seconds"], local_board["stddev_seconds"])
+              base_str = fmt_ms(base_board["median_seconds"], base_board["stddev_seconds"])
+              head_str = fmt_ms(head_board["median_seconds"], head_board["stddev_seconds"])
 
               if pct is None:
                 change_text = "—"
@@ -196,13 +206,13 @@ jobs:
                   else:
                     change_text = f"**{pct:+.1f}% slower**"
 
-              rows.append((label, nightly_str, local_str, change_text))
+              rows.append((label, base_str, head_str, change_text))
 
           lines = ["### Build Performance", ""]
-          lines.append("| Board | Nightly (median) | Local (median) | Change |")
+          lines.append("| Board | Base (median) | Head (median) | Change |")
           lines.append("|:------|-----:|-----:|:------|")
-          for label, nightly, local, change in rows:
-            lines.append(f"| {label} | {nightly} | {local} | {change} |")
+          for label, base, head, change in rows:
+            lines.append(f"| {label} | {base} | {head} | {change} |")
           lines.append("")
           lines.append("<sub>Measured with [hyperfine](https://github.com/sharkdp/hyperfine). Times show median ±stddev.</sub>")
           lines.append("")
