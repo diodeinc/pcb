@@ -4839,7 +4839,6 @@ dependencies = [
  "anyhow",
  "assert_fs",
  "atomicwrites",
- "base64",
  "include_dir",
  "insta",
  "log",
@@ -4860,7 +4859,6 @@ dependencies = [
  "uuid",
  "walkdir",
  "zip 8.5.1",
- "zstd",
 ]
 
 [[package]]

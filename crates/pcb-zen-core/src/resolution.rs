@@ -849,11 +849,6 @@ impl ResolutionResult {
             .map(|(root_package, resolution, _)| (root_package, resolution))
     }
 
-    /// KiCad model variable → resolved directory mapping.
-    pub fn kicad_model_dirs(&self) -> BTreeMap<String, PathBuf> {
-        BTreeMap::new()
-    }
-
     /// Resolve a package URI (`package://…`) to an absolute filesystem path.
     pub fn resolve_package_uri(&self, uri: &str) -> anyhow::Result<PathBuf> {
         pcb_sch::resolve_package_uri(uri, self.package_roots.as_ref())

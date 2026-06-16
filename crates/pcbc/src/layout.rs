@@ -85,7 +85,6 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
 
     // Resolve dependencies before building
     let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline)?;
-    let model_dirs = resolution_result.kicad_model_dirs();
 
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
@@ -123,13 +122,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     };
     let spinner = Spinner::builder(spinner_msg).hidden(hide_progress).start();
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
-    let result = process_layout(
-        &schematic,
-        &model_dirs,
-        args.temp,
-        args.check,
-        &mut diagnostics,
-    )?;
+    let result = process_layout(&schematic, args.temp, args.check, &mut diagnostics)?;
     spinner.finish();
 
     let Some(layout_result) = result else {
