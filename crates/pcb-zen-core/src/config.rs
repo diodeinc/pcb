@@ -236,7 +236,7 @@ impl PcbToml {
 }
 
 /// Workspace configuration
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceConfig {
     /// Optional Diode workspace name override.
@@ -287,23 +287,6 @@ pub struct WorkspaceConfig {
     /// Example: ["modules/deprecated/*", "boards/test-*"]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
-}
-
-impl Default for WorkspaceConfig {
-    fn default() -> Self {
-        Self {
-            name: None,
-            repository: None,
-            path: None,
-            pcb_version: None,
-            endpoint: None,
-            bom: BomConfig::default(),
-            default_board: None,
-            vendor: Vec::new(),
-            preferred: Vec::new(),
-            exclude: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
