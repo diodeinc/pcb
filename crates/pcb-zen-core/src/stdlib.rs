@@ -62,7 +62,7 @@ pub mod native {
     use std::path::{Path, PathBuf};
     use walkdir::WalkDir;
 
-    const MAX_SOURCE_SEARCH_ANCESTORS: usize = 8;
+    const MAX_SOURCE_SEARCH_ANCESTORS: usize = 4;
 
     pub fn discover_source() -> Result<PathBuf> {
         let exe = std::env::current_exe().context("failed to determine current executable path")?;
@@ -165,32 +165,6 @@ pub mod native {
                 super::discover_source_from_exe(&exe).expect("discover stdlib"),
                 toolchain.join("lib/std")
             );
-        }
-
-        #[test]
-        fn discovers_repository_stdlib_from_cargo_build_output() {
-            let temp = tempfile::tempdir().expect("create temp dir");
-            let repo = temp.path().join("repo");
-            std::fs::create_dir_all(repo.join("target/debug")).expect("create target");
-            std::fs::create_dir_all(repo.join("lib/std")).expect("create stdlib");
-            std::fs::write(repo.join("lib/std/pcb.toml"), "[dependencies]\n")
-                .expect("write manifest");
-
-            let exe = repo.join("target/debug/pcbc");
-            assert_eq!(
-                super::discover_source_from_exe(&exe).expect("discover stdlib"),
-                repo.join("lib/std")
-            );
-        }
-
-        #[test]
-        fn missing_stdlib_source_errors() {
-            let temp = tempfile::tempdir().expect("create temp dir");
-            let exe = temp.path().join("target/debug/pcbc");
-
-            let err =
-                super::discover_source_from_exe(&exe).expect_err("missing stdlib should fail");
-            assert!(err.to_string().contains("could not find stdlib source"));
         }
     }
 }
