@@ -20,6 +20,7 @@ const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const RELEASE_LIST_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const NIGHTLY_RELEASE_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 
 enum ShimCommand {
     SelfUpdate,
@@ -66,11 +67,17 @@ struct LatestRelease {
     tag: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct NightlyRelease {
     date: String,
     sha: String,
     base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NightlyReleaseCache {
+    fetched_at: u64,
+    release: NightlyRelease,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -375,7 +382,7 @@ fn resolve_request(
 }
 
 fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
-    match fetch_nightly_release().and_then(|release| ensure_nightly_installed(&release)) {
+    match fetch_nightly_release(false).and_then(|release| ensure_nightly_installed(&release)) {
         Ok((receipt, binary)) => Ok(ResolvedToolchain {
             label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
             binary,
@@ -976,7 +983,7 @@ fn toolchain_install(raw: &str) -> Result<()> {
         anyhow::bail!("local toolchains are installed with ./install.sh --local");
     }
     if matches!(request, ToolchainRequest::Nightly) {
-        let release = fetch_nightly_release()?;
+        let release = fetch_nightly_release(true)?;
         let (receipt, binary) = ensure_nightly_installed(&release)?;
         println!(
             "installed pcbc nightly {} ({}): {}",
@@ -1093,7 +1100,7 @@ fn self_update() -> Result<()> {
 
     if installed_nightly_toolchain()?.is_some()
         && let Err(err) =
-            fetch_nightly_release().and_then(|nightly| ensure_nightly_installed(&nightly))
+            fetch_nightly_release(true).and_then(|nightly| ensure_nightly_installed(&nightly))
     {
         eprintln!("Warning: failed to update installed nightly toolchain ({err})");
     }
@@ -1109,9 +1116,38 @@ fn fetch_latest_release() -> Result<LatestRelease> {
     Ok(serde_json::from_str(&content)?)
 }
 
-fn fetch_nightly_release() -> Result<NightlyRelease> {
+fn fetch_nightly_release(force_refresh: bool) -> Result<NightlyRelease> {
+    if !force_refresh
+        && let Some(cache) = read_nightly_release_cache()?
+        && unix_timestamp().saturating_sub(cache.fetched_at) < NIGHTLY_RELEASE_CACHE_TTL.as_secs()
+    {
+        return Ok(cache.release);
+    }
+
     let content = download_text(&http_client(METADATA_TIMEOUT)?, NIGHTLY_LATEST_RELEASE_URL)?;
-    Ok(serde_json::from_str(&content)?)
+    let release = serde_json::from_str(&content)?;
+    write_nightly_release_cache(&release)?;
+    Ok(release)
+}
+
+fn read_nightly_release_cache() -> Result<Option<NightlyReleaseCache>> {
+    let Ok(content) = fs::read_to_string(nightly_release_cache_path()) else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_str(&content).ok())
+}
+
+fn write_nightly_release_cache(release: &NightlyRelease) -> Result<()> {
+    let path = nightly_release_cache_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let cache = NightlyReleaseCache {
+        fetched_at: unix_timestamp(),
+        release: release.clone(),
+    };
+    fs::write(path, serde_json::to_vec_pretty(&cache)?)?;
+    Ok(())
 }
 
 fn install_shim_update(latest: &LatestRelease) -> Result<()> {
@@ -1245,6 +1281,10 @@ fn locks_dir() -> PathBuf {
 
 fn release_list_cache_path() -> PathBuf {
     data_dir().join("release-list-cache.json")
+}
+
+fn nightly_release_cache_path() -> PathBuf {
+    data_dir().join("nightly-release-cache.json")
 }
 
 fn binary_artifact_name(binary: &str) -> String {
