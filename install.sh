@@ -82,11 +82,6 @@ install_local() {
   mkdir -p "$local_target_dir/lib"
   install -m 755 "$target_dir/release/pcbc" "$local_target_dir/pcbc"
   rm -f "$install_dir/pcbc"
-  cat > "$install_dir/pcbc" <<EOF
-#!/usr/bin/env bash
-exec "$local_target_dir/pcbc" "\$@"
-EOF
-  chmod 755 "$install_dir/pcbc"
   rm -rf "$stdlib_dir"
   cp -R "$source_dir/lib/std" "$stdlib_dir"
 
@@ -94,7 +89,6 @@ EOF
 
   echo "Installed local pcb to $install_dir/pcb"
   echo "Installed local pcbc to $local_target_dir/pcbc"
-  echo "Installed local pcbc launcher to $install_dir/pcbc"
   echo "Installed local stdlib to $stdlib_dir"
 }
 

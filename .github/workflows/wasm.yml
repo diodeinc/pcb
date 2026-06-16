@@ -46,7 +46,7 @@ jobs:
         run: |
           ./install.sh --local
           export PATH="$HOME/.local/bin:$PATH"
-          pcbc --help
+          pcb +local --help
 
       - name: Prepare stdlib artifact
         run: git archive --format=tar HEAD:lib/std | zstd -q -3 -c > "$RUNNER_TEMP/stdlib.tar.zst"
@@ -91,7 +91,8 @@ jobs:
           for board in Demeter Feign; do
             node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \
               --publish "workspaces/$board/$board.zen" \
-              --pcbc pcbc \
+              --pcbc pcb \
+              --pcbc-arg +local \
               --stdlib "$RUNNER_TEMP/stdlib.tar.zst" \
               > "$RUNNER_TEMP/$board-wasm-netlist.json"
           done

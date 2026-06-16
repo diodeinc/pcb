@@ -10,6 +10,7 @@ const repoRoot = path.resolve(import.meta.dirname, '../../..')
 const defaults = {
   wasmBundle: path.join(repoRoot, 'target/wasm-bundle'),
   pcbc: path.join(repoRoot, 'target/debug/pcbc'),
+  pcbcArgs: [],
   inputs: '{}',
   mainFile: '',
   stdlib: '',
@@ -39,7 +40,8 @@ Options:
   --stdlib <tar.zst>    Stdlib artifact matching the evaluator/toolchain
   --bundle <zip>        Existing pcb publish release zip to evaluate
   --publish <board.zen> Run pcbc publish for a board, then evaluate newest release zip
-  --pcbc <path>         pcbc binary for --publish (default: target/debug/pcbc)
+  --pcbc <path>         Publish command for --publish (default: target/debug/pcbc)
+  --pcbc-arg <arg>      Extra argument before publish; repeatable
   --build-wasm          Run ./bin/build-wasm-bundle.sh before evaluating
   --build-pcbc          Run cargo build -p pcbc before --publish
   --main-file <path>    Main .zen path inside bundle source root (default: metadata/autodetect)
@@ -101,6 +103,9 @@ function parseArgs(argv) {
       case '--pcbc':
         args.pcbc = requiredValue(argv, ++i, arg)
         break
+      case '--pcbc-arg':
+        args.pcbcArgs.push(requiredValue(argv, ++i, arg))
+        break
       case '--main-file':
         args.mainFile = requiredValue(argv, ++i, arg)
         break
@@ -158,6 +163,7 @@ function publishBundle(args) {
   }
 
   run(args.pcbc, [
+    ...args.pcbcArgs,
     'publish',
     args.publish,
     ...excludedArtifacts.flatMap((artifact) => ['--exclude', artifact]),
