@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+const KICAD_SYMBOLS_ALIAS: &str = "kicad-symbols";
+const KICAD_FOOTPRINTS_ALIAS: &str = "kicad-footprints";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LoadSpec {
     Package {
@@ -129,6 +132,14 @@ impl LoadSpec {
                 });
             }
 
+            if let Some(stdlib_dir) = kicad_stdlib_alias(package) {
+                let mut path = PathBuf::from(stdlib_dir);
+                if !rel_path.is_empty() {
+                    path.push(rel_path);
+                }
+                return Some(LoadSpec::Stdlib { path });
+            }
+
             Some(LoadSpec::Package {
                 package: package.to_string(),
                 path: PathBuf::from(rel_path),
@@ -155,6 +166,14 @@ impl LoadSpec {
     }
 }
 
+fn kicad_stdlib_alias(package: &str) -> Option<&'static str> {
+    match package {
+        KICAD_SYMBOLS_ALIAS => Some(KICAD_SYMBOLS_ALIAS),
+        KICAD_FOOTPRINTS_ALIAS => Some(KICAD_FOOTPRINTS_ALIAS),
+        _ => None,
+    }
+}
+
 fn is_package_url(s: &str) -> bool {
     if s.starts_with("./") || s.starts_with("../") || s.starts_with('/') {
         return false;
@@ -178,6 +197,31 @@ mod tests {
             spec,
             Some(LoadSpec::Stdlib {
                 path: PathBuf::from("math.zen"),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_load_spec_kicad_symbol_alias() {
+        let spec = LoadSpec::parse("@kicad-symbols/Device.kicad_symdir/C.kicad_sym");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Stdlib {
+                path: PathBuf::from("kicad-symbols/Device.kicad_symdir/C.kicad_sym"),
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_load_spec_kicad_footprint_alias() {
+        let spec =
+            LoadSpec::parse("@kicad-footprints/Capacitor_SMD.pretty/C_0603_1608Metric.kicad_mod");
+        assert_eq!(
+            spec,
+            Some(LoadSpec::Stdlib {
+                path: PathBuf::from(
+                    "kicad-footprints/Capacitor_SMD.pretty/C_0603_1608Metric.kicad_mod"
+                ),
             })
         );
     }
