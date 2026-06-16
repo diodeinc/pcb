@@ -1,0 +1,229 @@
+(footprint "TestPoint_Bridge_Pitch2.54mm_Drill1.0mm"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "wire loop as test point, pitch 2.54mm, hole diameter 1.0mm, wire diameter 0.8mm")
+	(tags "test point wire loop")
+	(property "Reference" "REF**"
+		(at 1.1 2.1 0)
+		(layer "F.SilkS")
+		(uuid "0b7ea5b0-1342-490b-a65f-a037137af800")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "TestPoint_Bridge_Pitch2.54mm_Drill1.0mm"
+		(at 1 -1.7 0)
+		(layer "F.Fab")
+		(uuid "f9274854-4f4a-41bb-a2c0-c29096c2e9d3")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "1a6f3520-7202-4031-b286-337418988531")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "ae448673-9705-473c-8161-9d3aad7da2e9")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr through_hole)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -1.2 -1.2)
+		(end -1.2 1.2)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "22db61e4-87c3-4491-9e50-ffe9f0dda18f")
+	)
+	(fp_line
+		(start -1.2 1.2)
+		(end 3.7 1.2)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "15ea5ed7-1096-49bf-b871-99cc55511c25")
+	)
+	(fp_line
+		(start 3.7 -1.2)
+		(end -1.2 -1.2)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "2327aef1-6037-401f-8ff7-c4dae281cf54")
+	)
+	(fp_line
+		(start 3.7 1.2)
+		(end 3.7 -1.2)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "36a9123b-d888-46f9-a9cc-14853d8277d0")
+	)
+	(fp_line
+		(start -1.5 -1.5)
+		(end -1.5 1.5)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "b34ad50a-4d01-431f-adde-856192c77171")
+	)
+	(fp_line
+		(start -1.5 -1.5)
+		(end 4.04 -1.5)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "8509800f-1943-45f4-8b06-a902832bfb5b")
+	)
+	(fp_line
+		(start 4.04 1.5)
+		(end -1.5 1.5)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "5ea1589e-0402-48f9-aa83-95292b3747aa")
+	)
+	(fp_line
+		(start 4.04 1.5)
+		(end 4.04 -1.5)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(layer "F.CrtYd")
+		(uuid "7cf1c9a5-19a6-47e3-aca1-089515e1eeb9")
+	)
+	(fp_line
+		(start 2.54 0)
+		(end 0 0)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "2e2d3a64-592a-4f08-8c59-bf40bc102704")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 1.1 2.1 0)
+		(layer "F.Fab")
+		(uuid "d702bbea-f8ca-4a03-8777-0c6d72e66ad5")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" thru_hole circle
+		(at 0 0)
+		(size 2 2)
+		(drill 1)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "d90d2be5-21cf-46eb-b4fb-71ed56bc4977")
+	)
+	(pad "1" thru_hole circle
+		(at 2.54 0)
+		(size 2 2)
+		(drill 1)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "927100b4-06f5-45c8-8df1-a733f96eedff")
+	)
+	(embedded_fonts no)
+	(embedded_files
+		(file
+			(name TestPoint_Bridge_Pitch2.54mm_Drill1.0mm.step)
+			(type model)
+			(data |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|
+			)
+			(checksum "6B522BBE33E8225B7CE944208A74FD2C")
+		)
+	)
+	(model "kicad-embed://TestPoint_Bridge_Pitch2.54mm_Drill1.0mm.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

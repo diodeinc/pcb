@@ -1,0 +1,110 @@
+(footprint "NetTie-3_THT_Pad1.0mm"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Net tie, 3 pin, 1.0mm round THT pads")
+	(tags "net tie")
+	(property "Reference" "REF**"
+		(at 2.6 -1.6 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "aeee07fb-0cd7-4485-906e-19e79751dea8")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "NetTie-3_THT_Pad1.0mm"
+		(at 2.6 1.6 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "e019f44f-c196-4a53-86c5-0c3627bb9fe9")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "38bd3dfa-54d6-4cb9-a10d-bd0a62e3a2f2")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "e296e9f5-9bb8-4d26-8746-7dd0dbcb4fd2")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr exclude_from_pos_files exclude_from_bom allow_missing_courtyard)
+	(net_tie_pad_groups "1, 2, 3")
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_poly
+		(pts
+			(xy 0 -0.65) (xy 5.2 -0.65) (xy 5.2 0.65) (xy 0 0.65)
+		)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.Cu")
+		(uuid "035a6dfc-4a40-4c5c-8ab8-3f58df348f17")
+	)
+	(fp_poly
+		(pts
+			(xy 0 -0.65) (xy 5.2 -0.65) (xy 5.2 0.65) (xy 0 0.65)
+		)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill yes)
+		(layer "B.Cu")
+		(uuid "ad9a4444-ee03-4513-bb27-27fe72fad170")
+	)
+	(pad "1" thru_hole circle
+		(at 0 0)
+		(size 1.3 1.3)
+		(drill 1)
+		(layers "*.Cu")
+		(remove_unused_layers no)
+		(uuid "af1a13e0-fd10-419d-b2f3-c028b0cd892f")
+	)
+	(pad "2" thru_hole circle
+		(at 2.6 0)
+		(size 1.3 1.3)
+		(drill 1)
+		(layers "*.Cu")
+		(remove_unused_layers no)
+		(uuid "e904bd8b-8e4a-4772-b465-3fedee5c5a1a")
+	)
+	(pad "3" thru_hole circle
+		(at 5.2 0)
+		(size 1.3 1.3)
+		(drill 1)
+		(layers "*.Cu")
+		(remove_unused_layers no)
+		(uuid "f7ebed3f-ecf1-4f13-b333-f4bd6954675c")
+	)
+	(embedded_fonts no)
+)

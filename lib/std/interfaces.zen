@@ -9,13 +9,13 @@ Net = builtin.net_type(
 
 Power = builtin.net_type(
     "Power",
-    symbol=field(Symbol, default=Symbol(library="@kicad-symbols/power.kicad_sym", name="VCC")),
+    symbol=field(Symbol, default=Symbol("kicad-symbols/power.kicad_symdir/VCC.kicad_sym")),
     voltage=field(Voltage | None, default=None),
 )
 
 Ground = builtin.net_type(
     "Ground",
-    symbol=field(Symbol, default=Symbol(library="@kicad-symbols/power.kicad_sym", name="GND")),
+    symbol=field(Symbol, default=Symbol("kicad-symbols/power.kicad_symdir/GND.kicad_sym")),
     voltage=field(Voltage, default=Voltage("0V")),
 )
 

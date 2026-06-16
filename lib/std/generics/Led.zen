@@ -4,7 +4,7 @@ load("../units.zen", "Current", "Voltage")
 load("../utils.zen", "format_value")
 
 Mount = enum("SMD")
-Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512", "1210_Reverse", "1812")
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512", "1812")
 Color = enum("red", "green", "blue", "yellow", "white", "amber", "orange", "pink", "uv", "rgb", "other")
 package = config(Package)
 color = config(Color)
@@ -30,18 +30,15 @@ K = io(Net)
 
 def _footprint(package: Package) -> str:
     kicad_footprints = {
-        Package("0201"): "@kicad-footprints/LED_SMD.pretty/LED_0201_0603Metric.kicad_mod",
-        Package("0402"): "@kicad-footprints/LED_SMD.pretty/LED_0402_1005Metric.kicad_mod",
-        Package("0603"): "@kicad-footprints/LED_SMD.pretty/LED_0603_1608Metric.kicad_mod",
-        Package("0805"): "@kicad-footprints/LED_SMD.pretty/LED_0805_2012Metric.kicad_mod",
-        Package("1206"): "@kicad-footprints/LED_SMD.pretty/LED_1206_3216Metric.kicad_mod",
-        Package("1210"): "@kicad-footprints/LED_SMD.pretty/LED_1210_3225Metric.kicad_mod",
-        Package("2010"): "@kicad-footprints/LED_SMD.pretty/LED_2010_5025Metric.kicad_mod",
-        Package("2512"): "@kicad-footprints/LED_SMD.pretty/LED_2512_6332Metric.kicad_mod",
-        Package(
-            "1210_Reverse"
-        ): "@kicad-footprints/LED_SMD.pretty/LED_1206_3216Metric_ReverseMount_Hole1.8x2.4mm.kicad_mod",
-        Package("1812"): "@kicad-footprints/LED_SMD.pretty/LED_1812_4532Metric.kicad_mod",
+        Package("0201"): "../kicad-footprints/LED_SMD.pretty/LED_0201_0603Metric.kicad_mod",
+        Package("0402"): "../kicad-footprints/LED_SMD.pretty/LED_0402_1005Metric.kicad_mod",
+        Package("0603"): "../kicad-footprints/LED_SMD.pretty/LED_0603_1608Metric.kicad_mod",
+        Package("0805"): "../kicad-footprints/LED_SMD.pretty/LED_0805_2012Metric.kicad_mod",
+        Package("1206"): "../kicad-footprints/LED_SMD.pretty/LED_1206_3216Metric.kicad_mod",
+        Package("1210"): "../kicad-footprints/LED_SMD.pretty/LED_1210_3225Metric.kicad_mod",
+        Package("2010"): "../kicad-footprints/LED_SMD.pretty/LED_2010_5025Metric.kicad_mod",
+        Package("2512"): "../kicad-footprints/LED_SMD.pretty/LED_2512_6332Metric.kicad_mod",
+        Package("1812"): "../kicad-footprints/LED_SMD.pretty/LED_1812_4532Metric.kicad_mod",
     }
     if package not in kicad_footprints:
         error("Invalid package: " + str(package))
@@ -49,10 +46,7 @@ def _footprint(package: Package) -> str:
 
 
 def _symbol(_package: Package):
-    return {
-        "library": "@kicad-symbols/Device.kicad_sym",
-        "name": "LED_Small_Filled",
-    }
+    return "../kicad-symbols/Device.kicad_symdir/LED_Small_Filled.kicad_sym"
 
 
 def _value(color: Color, package: Package) -> str:
@@ -113,7 +107,7 @@ def _spice_args(color: Color, forward_voltage, forward_current):
 Component(
     name="LED",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
-    symbol=Symbol(**_symbol(package)),
+    symbol=Symbol(_symbol(package)),
     footprint=File(_footprint(package)),
     prefix="D",
     spice_model=SpiceModel(

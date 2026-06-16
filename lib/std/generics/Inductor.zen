@@ -28,23 +28,20 @@ P2 = io(Net)
 
 
 def _symbol(package: Package):
-    return {
-        "library": "@kicad-symbols/Device.kicad_sym",
-        "name": "L",
-    }
+    return "../kicad-symbols/Device.kicad_symdir/L.kicad_sym"
 
 
 def _footprint(package: Package) -> str:
     """Returns the appropriate inductor footprint based on the package."""
     footprints = {
-        Package("0201"): "@kicad-footprints/Inductor_SMD.pretty/L_0201_0603Metric.kicad_mod",
-        Package("0402"): "@kicad-footprints/Inductor_SMD.pretty/L_0402_1005Metric.kicad_mod",
-        Package("0603"): "@kicad-footprints/Inductor_SMD.pretty/L_0603_1608Metric.kicad_mod",
-        Package("0805"): "@kicad-footprints/Inductor_SMD.pretty/L_0805_2012Metric.kicad_mod",
-        Package("1206"): "@kicad-footprints/Inductor_SMD.pretty/L_1206_3216Metric.kicad_mod",
-        Package("1210"): "@kicad-footprints/Inductor_SMD.pretty/L_1210_3225Metric.kicad_mod",
-        Package("2010"): "@kicad-footprints/Inductor_SMD.pretty/L_2010_5025Metric.kicad_mod",
-        Package("2512"): "@kicad-footprints/Inductor_SMD.pretty/L_2512_6332Metric.kicad_mod",
+        Package("0201"): "../kicad-footprints/Inductor_SMD.pretty/L_0201_0603Metric.kicad_mod",
+        Package("0402"): "../kicad-footprints/Inductor_SMD.pretty/L_0402_1005Metric.kicad_mod",
+        Package("0603"): "../kicad-footprints/Inductor_SMD.pretty/L_0603_1608Metric.kicad_mod",
+        Package("0805"): "../kicad-footprints/Inductor_SMD.pretty/L_0805_2012Metric.kicad_mod",
+        Package("1206"): "../kicad-footprints/Inductor_SMD.pretty/L_1206_3216Metric.kicad_mod",
+        Package("1210"): "../kicad-footprints/Inductor_SMD.pretty/L_1210_3225Metric.kicad_mod",
+        Package("2010"): "../kicad-footprints/Inductor_SMD.pretty/L_2010_5025Metric.kicad_mod",
+        Package("2512"): "../kicad-footprints/Inductor_SMD.pretty/L_2512_6332Metric.kicad_mod",
     }
 
     if package not in footprints:
@@ -103,7 +100,7 @@ def _spice_args(value, package, dcr=None):
 Component(
     name="L",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
-    symbol=Symbol(**_symbol(package)),
+    symbol=Symbol(_symbol(package)),
     footprint=File(_footprint(package)),
     prefix="L",
     pins={

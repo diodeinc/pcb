@@ -13,11 +13,7 @@ Variant = enum(
     "Bridge_Pitch5.08mm_Drill1.3mm",
     "Bridge_Pitch6.35mm_Drill1.3mm",
     "Bridge_Pitch7.62mm_Drill1.3mm",
-    "Keystone_5000-5004_Miniature",
     "Keystone_5005-5009_Compact",
-    "Keystone_5010-5014_Multipurpose",
-    "Keystone_5015_Micro_Mini",
-    "Keystone_5019_Miniature",
     "Loop_D1.80mm_Drill1.0mm_Beaded",
     "Loop_D2.50mm_Drill1.0mm_LowProfile",
     "Loop_D2.50mm_Drill1.0mm",
@@ -66,16 +62,13 @@ P1 = io(Net)
 
 
 def _symbol(variant: Variant):
-    return {
-        "library": "@kicad-symbols/Connector.kicad_sym",
-        "name": "TestPoint",
-    }
+    return "../kicad-symbols/Connector.kicad_symdir/TestPoint.kicad_sym"
 
 
 def _footprint(variant):
     """Returns the footprint for a specific variant."""
     name = variant.value
-    return f"@kicad-footprints/TestPoint.pretty/TestPoint_{name}.kicad_mod"
+    return f"../kicad-footprints/TestPoint.pretty/TestPoint_{name}.kicad_mod"
 
 
 def _keystone_mpn(variant: Variant, color: Color):
@@ -97,7 +90,7 @@ if "Keystone" in variant.value:
         name="TP",
         prefix="TP",
         mpn=_keystone_mpn(variant, color),
-        symbol=Symbol(**_symbol(variant)),
+        symbol=Symbol(_symbol(variant)),
         footprint=File(_footprint(variant)),
         properties={
             "color": color,
@@ -110,7 +103,7 @@ else:
     Component(
         name="TP",
         prefix="TP",
-        symbol=Symbol(**_symbol(variant)),
+        symbol=Symbol(_symbol(variant)),
         footprint=File(_footprint(variant)),
         properties={
             "variant": variant,

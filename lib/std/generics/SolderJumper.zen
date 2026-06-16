@@ -56,14 +56,14 @@ def _footprint(pin_count, style, variant, pitch):
     # Simplified mapping for common solder jumper footprints
     if pin_count == 2:
         if style == SolderJumperStyle("Open"):
-            return "@kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"
+            return "../kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"
         else:
-            return "@kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Bridged_Pad1.0x1.5mm.kicad_mod"
+            return "../kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Bridged_Pad1.0x1.5mm.kicad_mod"
     elif pin_count == 3:
         if style == SolderJumperStyle("Open"):
-            return "@kicad-footprints/Jumper.pretty/SolderJumper-3_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"
+            return "../kicad-footprints/Jumper.pretty/SolderJumper-3_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"
         else:
-            return "@kicad-footprints/Jumper.pretty/SolderJumper-3_P1.3mm_Bridged12_Pad1.0x1.5mm.kicad_mod"
+            return "../kicad-footprints/Jumper.pretty/SolderJumper-3_P1.3mm_Bridged12_Pad1.0x1.5mm.kicad_mod"
     else:
         error("Unsupported pin count: {}".format(pin_count))
 
@@ -73,15 +73,9 @@ def _symbol(pin_count):
 
     # Use NetTie symbols for solder jumpers
     if pin_count == 2:
-        return {
-            "library": "@kicad-symbols/Device.kicad_sym",
-            "name": "NetTie_2",
-        }
+        return "../kicad-symbols/Device.kicad_symdir/NetTie_2.kicad_sym"
     elif pin_count == 3:
-        return {
-            "library": "@kicad-symbols/Device.kicad_sym",
-            "name": "NetTie_3",
-        }
+        return "../kicad-symbols/Device.kicad_symdir/NetTie_3.kicad_sym"
     else:
         error("Unsupported pin count: {}".format(pin_count))
 
@@ -101,7 +95,7 @@ pins = _pins_and_connections(pin_count)
 
 Component(
     name="SJ",
-    symbol=Symbol(**_symbol(pin_count)),
+    symbol=Symbol(_symbol(pin_count)),
     footprint=File(_footprint(pin_count, style, variant, pitch)),
     prefix="JP",
     pins=pins,

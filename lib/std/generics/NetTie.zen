@@ -43,22 +43,22 @@ def _variant_footprint(variant):
     variant_footprints = {
         # 2-pin variants
         "2_SMD_0.3mm": "footprints/NetTie-2_SMD_Pad0.3mm.kicad_mod",
-        "2_SMD_0.5mm": "@kicad-footprints/NetTie.pretty/NetTie-2_SMD_Pad0.5mm.kicad_mod",
-        "2_SMD_2.0mm": "@kicad-footprints/NetTie.pretty/NetTie-2_SMD_Pad2.0mm.kicad_mod",
-        "2_THT_0.3mm": "@kicad-footprints/NetTie.pretty/NetTie-2_THT_Pad0.3mm.kicad_mod",
-        "2_THT_1.0mm": "@kicad-footprints/NetTie.pretty/NetTie-2_THT_Pad1.0mm.kicad_mod",
+        "2_SMD_0.5mm": "../kicad-footprints/NetTie.pretty/NetTie-2_SMD_Pad0.5mm.kicad_mod",
+        "2_SMD_2.0mm": "../kicad-footprints/NetTie.pretty/NetTie-2_SMD_Pad2.0mm.kicad_mod",
+        "2_THT_0.3mm": "../kicad-footprints/NetTie.pretty/NetTie-2_THT_Pad0.3mm.kicad_mod",
+        "2_THT_1.0mm": "../kicad-footprints/NetTie.pretty/NetTie-2_THT_Pad1.0mm.kicad_mod",
         "2_SMD_THT_0.3mm": "footprints/NetTie-2_SMD_THT_Pad0.3mm.kicad_mod",
         "2_SMD_THT_1.0mm": "footprints/NetTie-2_SMD_THT_Pad1.0mm.kicad_mod",
         # 3-pin variants
-        "3_SMD_0.5mm": "@kicad-footprints/NetTie.pretty/NetTie-3_SMD_Pad0.5mm.kicad_mod",
-        "3_SMD_2.0mm": "@kicad-footprints/NetTie.pretty/NetTie-3_SMD_Pad2.0mm.kicad_mod",
-        "3_THT_0.3mm": "@kicad-footprints/NetTie.pretty/NetTie-3_THT_Pad0.3mm.kicad_mod",
-        "3_THT_1.0mm": "@kicad-footprints/NetTie.pretty/NetTie-3_THT_Pad1.0mm.kicad_mod",
+        "3_SMD_0.5mm": "../kicad-footprints/NetTie.pretty/NetTie-3_SMD_Pad0.5mm.kicad_mod",
+        "3_SMD_2.0mm": "../kicad-footprints/NetTie.pretty/NetTie-3_SMD_Pad2.0mm.kicad_mod",
+        "3_THT_0.3mm": "../kicad-footprints/NetTie.pretty/NetTie-3_THT_Pad0.3mm.kicad_mod",
+        "3_THT_1.0mm": "../kicad-footprints/NetTie.pretty/NetTie-3_THT_Pad1.0mm.kicad_mod",
         # 4-pin variants
-        "4_SMD_0.5mm": "@kicad-footprints/NetTie.pretty/NetTie-4_SMD_Pad0.5mm.kicad_mod",
-        "4_SMD_2.0mm": "@kicad-footprints/NetTie.pretty/NetTie-4_SMD_Pad2.0mm.kicad_mod",
-        "4_THT_0.3mm": "@kicad-footprints/NetTie.pretty/NetTie-4_THT_Pad0.3mm.kicad_mod",
-        "4_THT_1.0mm": "@kicad-footprints/NetTie.pretty/NetTie-4_THT_Pad1.0mm.kicad_mod",
+        "4_SMD_0.5mm": "../kicad-footprints/NetTie.pretty/NetTie-4_SMD_Pad0.5mm.kicad_mod",
+        "4_SMD_2.0mm": "../kicad-footprints/NetTie.pretty/NetTie-4_SMD_Pad2.0mm.kicad_mod",
+        "4_THT_0.3mm": "../kicad-footprints/NetTie.pretty/NetTie-4_THT_Pad0.3mm.kicad_mod",
+        "4_THT_1.0mm": "../kicad-footprints/NetTie.pretty/NetTie-4_THT_Pad1.0mm.kicad_mod",
     }
 
     return variant_footprints.get(variant.value, None)
@@ -72,20 +72,11 @@ def _footprint(variant):
 def _symbol(pin_count):
     """Returns the appropriate net tie symbol based on pin count."""
     if pin_count == 2:
-        return {
-            "library": "@kicad-symbols/Device.kicad_sym",
-            "name": "NetTie_2",
-        }
+        return "../kicad-symbols/Device.kicad_symdir/NetTie_2.kicad_sym"
     elif pin_count == 3:
-        return {
-            "library": "@kicad-symbols/Device.kicad_sym",
-            "name": "NetTie_3",
-        }
+        return "../kicad-symbols/Device.kicad_symdir/NetTie_3.kicad_sym"
     elif pin_count == 4:
-        return {
-            "library": "@kicad-symbols/Device.kicad_sym",
-            "name": "NetTie_4",
-        }
+        return "../kicad-symbols/Device.kicad_symdir/NetTie_4.kicad_sym"
     else:
         error("Unsupported pin count: {}".format(pin_count))
 
@@ -127,7 +118,7 @@ def _spice_nets(P, pin_count):
 Component(
     name="NT",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
-    symbol=Symbol(**_symbol(pin_count)),
+    symbol=Symbol(_symbol(pin_count)),
     footprint=File(_footprint(variant)),
     prefix="NT",
     pins=_pins(P),

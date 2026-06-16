@@ -162,7 +162,8 @@ Run `pcb help` or `pcb help <command>` for the full command reference.
 
 ## License
 
-Zener is licensed under the MIT License. See [LICENSE](LICENSE) for details. Third-party notices are maintained in
+Diode-authored code and docs are licensed under the MIT License except where
+otherwise noted. See [LICENSE](LICENSE) and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Acknowledgments

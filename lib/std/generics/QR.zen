@@ -1,7 +1,7 @@
 Component(
     name="QR",
     prefix="QR",
-    symbol=Symbol("./footprints/QR.kicad_sym"),
+    symbol=Symbol("./symbols/QR.kicad_sym"),
     footprint=File("./footprints/QR.kicad_mod"),
     pins={},
     skip_bom=True,

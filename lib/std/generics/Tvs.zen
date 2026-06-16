@@ -54,11 +54,11 @@ if K.voltage and A.voltage:
 
 def _footprint(package: Package) -> str:
     kicad_footprints = {
-        Package("DO-219AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMF.kicad_mod",
-        Package("DO-214AC"): "@kicad-footprints/Diode_SMD.pretty/D_SMA.kicad_mod",
-        Package("DO-214AA"): "@kicad-footprints/Diode_SMD.pretty/D_SMB.kicad_mod",
-        Package("DO-214AB"): "@kicad-footprints/Diode_SMD.pretty/D_SMC.kicad_mod",
-        Package("SOD-882"): "@kicad-footprints/Diode_SMD.pretty/D_SOD-882.kicad_mod",
+        Package("DO-219AB"): "../kicad-footprints/Diode_SMD.pretty/D_SMF.kicad_mod",
+        Package("DO-214AC"): "../kicad-footprints/Diode_SMD.pretty/D_SMA.kicad_mod",
+        Package("DO-214AA"): "../kicad-footprints/Diode_SMD.pretty/D_SMB.kicad_mod",
+        Package("DO-214AB"): "../kicad-footprints/Diode_SMD.pretty/D_SMC.kicad_mod",
+        Package("SOD-882"): "../kicad-footprints/Diode_SMD.pretty/D_SOD-882.kicad_mod",
     }
     return kicad_footprints[package]
 
@@ -67,6 +67,10 @@ def _symbol_name(direction: Direction) -> str:
     if direction == Direction("Bidirectional"):
         return "D_TVS"
     return "D_Zener"
+
+
+def _symbol(direction: Direction) -> str:
+    return "../kicad-symbols/Device.kicad_symdir/" + _symbol_name(direction) + ".kicad_sym"
 
 
 def _pins(direction: Direction):
@@ -114,7 +118,7 @@ Component(
     name="D",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     prefix="D",
-    symbol=Symbol(library="@kicad-symbols/Device.kicad_sym", name=_symbol_name(direction)),
+    symbol=Symbol(_symbol(direction)),
     footprint=File(_footprint(package)),
     spice_model=SpiceModel(
         "spice/Tvs.lib",
