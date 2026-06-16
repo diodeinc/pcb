@@ -62,7 +62,7 @@ pub mod native {
     use std::path::{Path, PathBuf};
     use walkdir::WalkDir;
 
-    const MAX_SOURCE_SEARCH_ANCESTORS: usize = 4;
+    const MAX_SOURCE_SEARCH_ANCESTORS: usize = 5;
 
     pub fn discover_source() -> Result<PathBuf> {
         let exe = std::env::current_exe().context("failed to determine current executable path")?;
