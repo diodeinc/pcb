@@ -12,6 +12,7 @@ const defaults = {
   pcbc: path.join(repoRoot, 'target/debug/pcbc'),
   inputs: '{}',
   mainFile: '',
+  stdlib: '',
 }
 
 const excludedArtifacts = [
@@ -35,6 +36,7 @@ function usage() {
 
 Options:
   --wasm-bundle <dir>   wasm-pack output dir (default: target/wasm-bundle)
+  --stdlib <tar.zst>    Stdlib artifact matching the evaluator/toolchain
   --bundle <zip>        Existing pcb publish release zip to evaluate
   --publish <board.zen> Run pcbc publish for a board, then evaluate newest release zip
   --pcbc <path>         pcbc binary for --publish (default: target/debug/pcbc)
@@ -48,10 +50,12 @@ Options:
 Examples:
   node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \
     --wasm-bundle target/wasm-bundle \
+    --stdlib /path/to/stdlib.tar.zst \
     --bundle /path/to/Feign-44c930a.zip
 
   node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \
     --build-wasm --build-pcbc \
+    --stdlib /path/to/stdlib.tar.zst \
     --publish /Users/akhilles/src/diodehub/demo/Feign/Feign.zen
 `)
 }
@@ -85,6 +89,9 @@ function parseArgs(argv) {
       case '--wasm-bundle':
         args.wasmBundle = requiredValue(argv, ++i, arg)
         break
+      case '--stdlib':
+        args.stdlib = requiredValue(argv, ++i, arg)
+        break
       case '--bundle':
         args.bundle = requiredValue(argv, ++i, arg)
         break
@@ -107,6 +114,9 @@ function parseArgs(argv) {
 
   if ((args.bundle ? 1 : 0) + (args.publish ? 1 : 0) !== 1) {
     throw new Error('Specify exactly one of --bundle or --publish')
+  }
+  if (!args.stdlib) {
+    throw new Error('Specify --stdlib <tar.zst>')
   }
 
   JSON.parse(args.inputs)
@@ -223,7 +233,8 @@ try {
   const bundlePath = args.bundle ? path.resolve(args.bundle) : publishBundle(args)
   const wasm = await loadWasm(args.wasmBundle)
   const bundleBytes = readFileSync(bundlePath)
-  const result = wasm.evaluate(bundleBytes, args.mainFile, args.inputs)
+  const stdlibBytes = readFileSync(path.resolve(args.stdlib))
+  const result = wasm.evaluate(bundleBytes, stdlibBytes, args.mainFile, args.inputs)
 
   if (!result.success) {
     console.error(JSON.stringify(result.diagnostics, null, 2))

@@ -50,7 +50,7 @@ fn eval_with_files_and_resolution(
                         },
                     ),
                     (
-                        PathBuf::from("/.pcb/stdlib"),
+                        pcb_zen_core::workspace_stdlib_root(std::path::Path::new("/")),
                         pcb_zen_core::resolution::FrozenPackage {
                             identity: pcb_zen_core::resolution::FrozenPackageIdentity::Stdlib,
                             deps: root_deps,

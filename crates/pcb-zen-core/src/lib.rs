@@ -9,7 +9,6 @@ use semver::Version;
 pub mod config;
 pub mod convert;
 pub mod diagnostics;
-pub mod embedded_stdlib;
 pub mod erc;
 mod file_provider;
 pub mod graph;
@@ -19,6 +18,7 @@ pub mod load_spec;
 mod moved;
 pub mod passes;
 pub mod resolution;
+pub mod stdlib;
 pub mod workspace;
 
 /// Canonical virtual module path for stdlib.
@@ -75,9 +75,11 @@ pub fn is_stdlib_module_path(path: &str) -> bool {
 
 /// Return the workspace-local stdlib root.
 ///
-/// The resulting path is `<workspace_root>/.pcb/stdlib`.
+/// The resulting path is `<workspace_root>/.pcb/stdlib-<toolchain-version>`.
 pub fn workspace_stdlib_root(workspace_root: &Path) -> PathBuf {
-    workspace_root.join(".pcb").join(STDLIB_MODULE_PATH)
+    workspace_root
+        .join(".pcb")
+        .join(format!("{STDLIB_MODULE_PATH}-{TOOLCHAIN_VERSION}"))
 }
 
 /// Attribute, net, and record field constants used across the core

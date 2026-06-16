@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tar::Archive;
 use wasm_bindgen::prelude::*;
 use zip::ZipArchive;
@@ -28,35 +28,80 @@ fn wasm_stdlib_root() -> PathBuf {
     pcb_zen_core::workspace_stdlib_root(Path::new("."))
 }
 
-/// File provider backed by an in-memory source bundle.
+struct MemoryFiles {
+    files: HashMap<String, Vec<u8>>,
+}
+
+impl MemoryFiles {
+    fn new(files: HashMap<String, Vec<u8>>) -> Self {
+        Self { files }
+    }
+
+    fn read_utf8(
+        &self,
+        normalized: &str,
+        original_path: &Path,
+    ) -> Result<String, FileProviderError> {
+        self.files
+            .get(normalized)
+            .ok_or_else(|| FileProviderError::NotFound(original_path.to_path_buf()))
+            .and_then(|bytes| {
+                std::str::from_utf8(bytes)
+                    .map(str::to_owned)
+                    .map_err(|e| FileProviderError::IoError(e.to_string()))
+            })
+    }
+
+    fn contains_or_dir(&self, normalized: &str) -> bool {
+        self.files.contains_key(normalized) || self.is_dir(normalized)
+    }
+
+    fn is_dir(&self, normalized: &str) -> bool {
+        let prefix = if normalized.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", normalized.trim_end_matches('/'))
+        };
+        self.files.keys().any(|f| f.starts_with(&prefix))
+    }
+
+    fn list_dir(&self, normalized: &str) -> Vec<String> {
+        let prefix = if normalized.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", normalized.trim_end_matches('/'))
+        };
+        self.files
+            .keys()
+            .filter_map(|name| name.strip_prefix(&prefix))
+            .filter_map(|rest| rest.split('/').next())
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect()
+    }
+}
+
+/// File provider backed by in-memory source and stdlib bundles.
 ///
 /// Supports plain source zips, release zips, and canonical `.tar.zst` bundles.
 struct BundleFileProvider {
-    files: HashMap<String, Vec<u8>>,
-    cache: Mutex<HashMap<String, String>>,
-    file_index: HashSet<String>,
+    project: MemoryFiles,
+    stdlib: MemoryFiles,
     hinted_main_file: Option<String>,
     stdlib_root: String,
 }
 
-enum StdlibPath<'a> {
-    NotStdlib,
-    Root,
-    Included(&'a str),
-    Excluded,
-}
-
 impl BundleFileProvider {
-    fn new(bundle_bytes: Vec<u8>) -> Result<Self, String> {
+    fn new(bundle_bytes: Vec<u8>, stdlib_tar_zst_bytes: Vec<u8>) -> Result<Self, String> {
         let parsed = parse_bundle(bundle_bytes)?;
-        let stdlib_root = Self::normalize(&wasm_stdlib_root());
-        let file_index = parsed.files.keys().cloned().collect();
+        let stdlib = MemoryFiles::new(parse_stdlib_archive(&stdlib_tar_zst_bytes)?);
         Ok(Self {
-            files: parsed.files,
-            cache: Mutex::new(HashMap::new()),
-            file_index,
+            project: MemoryFiles::new(parsed.files),
+            stdlib,
             hinted_main_file: parsed.hinted_main_file,
-            stdlib_root,
+            stdlib_root: Self::normalize(&wasm_stdlib_root()),
         })
     }
 
@@ -75,21 +120,10 @@ impl BundleFileProvider {
         normalized.join("/")
     }
 
-    fn classify_stdlib_path<'a>(&'a self, normalized: &'a str) -> StdlibPath<'a> {
-        if normalized == self.stdlib_root {
-            return StdlibPath::Root;
-        }
-
-        match normalized
+    fn stdlib_rel<'a>(&'a self, normalized: &'a str) -> Option<&'a str> {
+        normalized
             .strip_prefix(&self.stdlib_root)
             .and_then(|s| s.strip_prefix('/'))
-        {
-            Some(rel) if pcb_zen_core::embedded_stdlib::include_stdlib_path(Path::new(rel)) => {
-                StdlibPath::Included(rel)
-            }
-            Some(_) => StdlibPath::Excluded,
-            None => StdlibPath::NotStdlib,
-        }
     }
 
     /// Auto-detect the main .zen file in the bundle.
@@ -98,14 +132,15 @@ impl BundleFileProvider {
     /// Returns the path like "boards/LG0002/LG0002.zen" if found.
     fn detect_main_file(&self) -> Option<String> {
         if let Some(main_file) = self.hinted_main_file.as_ref()
-            && self.file_index.contains(main_file)
+            && self.project.files.contains_key(main_file)
         {
             return Some(main_file.clone());
         }
 
         let board_dirs: HashSet<_> = self
-            .file_index
-            .iter()
+            .project
+            .files
+            .keys()
             .filter_map(|path| {
                 let path = path.strip_prefix("boards/")?;
                 let dir = path.split('/').next()?;
@@ -125,8 +160,9 @@ impl BundleFileProvider {
         let board_path = format!("boards/{}", board_dir);
 
         let zen_files: Vec<_> = self
-            .file_index
-            .iter()
+            .project
+            .files
+            .keys()
             .filter(|path| {
                 if let Some(rest) = path.strip_prefix(&format!("{}/", board_path)) {
                     !rest.contains('/') && rest.ends_with(".zen")
@@ -148,80 +184,40 @@ impl FileProvider for BundleFileProvider {
     fn read_file(&self, path: &Path) -> Result<String, FileProviderError> {
         let normalized = Self::normalize(path);
 
-        if let Some(cached) = self.cache.lock().unwrap().get(&normalized).cloned() {
-            return Ok(cached);
+        if normalized == self.stdlib_root {
+            return Err(FileProviderError::NotFound(path.to_path_buf()));
+        }
+        if let Some(rel) = self.stdlib_rel(&normalized) {
+            if pcb_zen_core::stdlib::include_path(Path::new(rel)) {
+                return self.stdlib.read_utf8(rel, path);
+            }
+            return Err(FileProviderError::NotFound(path.to_path_buf()));
         }
 
-        match self.classify_stdlib_path(&normalized) {
-            StdlibPath::Included(rel) => {
-                if let Some(file) =
-                    pcb_zen_core::embedded_stdlib::embedded_stdlib_dir().get_file(rel)
-                {
-                    let contents = std::str::from_utf8(file.contents())
-                        .map_err(|e| FileProviderError::IoError(e.to_string()))?
-                        .to_string();
-                    self.cache
-                        .lock()
-                        .unwrap()
-                        .insert(normalized, contents.clone());
-                    return Ok(contents);
-                }
-                return Err(FileProviderError::NotFound(path.to_path_buf()));
-            }
-            StdlibPath::Root | StdlibPath::Excluded => {
-                return Err(FileProviderError::NotFound(path.to_path_buf()));
-            }
-            StdlibPath::NotStdlib => {}
-        }
-
-        let contents = self
-            .files
-            .get(&normalized)
-            .ok_or_else(|| FileProviderError::NotFound(path.to_path_buf()))
-            .and_then(|bytes| {
-                String::from_utf8(bytes.clone())
-                    .map_err(|e| FileProviderError::IoError(e.to_string()))
-            })?;
-
-        self.cache
-            .lock()
-            .unwrap()
-            .insert(normalized, contents.clone());
-        Ok(contents)
+        self.project.read_utf8(&normalized, path)
     }
 
     fn exists(&self, path: &Path) -> bool {
         let normalized = Self::normalize(path);
-        match self.classify_stdlib_path(&normalized) {
-            StdlibPath::NotStdlib => {
-                self.file_index.contains(&normalized)
-                    || self
-                        .file_index
-                        .iter()
-                        .any(|f| f.starts_with(&format!("{}/", normalized.trim_end_matches('/'))))
-            }
-            StdlibPath::Root => true,
-            StdlibPath::Excluded => false,
-            StdlibPath::Included(rel) => {
-                let stdlib = pcb_zen_core::embedded_stdlib::embedded_stdlib_dir();
-                stdlib.get_file(rel).is_some() || stdlib.get_dir(rel).is_some()
-            }
+        if normalized == self.stdlib_root {
+            return true;
         }
+        if let Some(rel) = self.stdlib_rel(&normalized) {
+            return pcb_zen_core::stdlib::include_path(Path::new(rel))
+                && self.stdlib.contains_or_dir(rel);
+        }
+        self.project.contains_or_dir(&normalized)
     }
 
     fn is_directory(&self, path: &Path) -> bool {
         let normalized = Self::normalize(path);
-        match self.classify_stdlib_path(&normalized) {
-            StdlibPath::NotStdlib => self
-                .file_index
-                .iter()
-                .any(|f| f.starts_with(&format!("{}/", normalized.trim_end_matches('/')))),
-            StdlibPath::Root => true,
-            StdlibPath::Excluded => false,
-            StdlibPath::Included(rel) => pcb_zen_core::embedded_stdlib::embedded_stdlib_dir()
-                .get_dir(rel)
-                .is_some(),
+        if normalized == self.stdlib_root {
+            return true;
         }
+        if let Some(rel) = self.stdlib_rel(&normalized) {
+            return pcb_zen_core::stdlib::include_path(Path::new(rel)) && self.stdlib.is_dir(rel);
+        }
+        self.project.is_dir(&normalized)
     }
 
     fn is_symlink(&self, _path: &Path) -> bool {
@@ -231,49 +227,32 @@ impl FileProvider for BundleFileProvider {
     fn list_directory(&self, path: &Path) -> Result<Vec<PathBuf>, FileProviderError> {
         let normalized = Self::normalize(path).trim_end_matches('/').to_string();
 
-        let stdlib_dir = match self.classify_stdlib_path(&normalized) {
-            StdlibPath::Root => Some(pcb_zen_core::embedded_stdlib::embedded_stdlib_dir()),
-            StdlibPath::Included(rel) => Some(
-                pcb_zen_core::embedded_stdlib::embedded_stdlib_dir()
-                    .get_dir(rel)
-                    .ok_or_else(|| FileProviderError::NotFound(path.to_path_buf()))?,
-            ),
-            StdlibPath::Excluded => return Err(FileProviderError::NotFound(path.to_path_buf())),
-            StdlibPath::NotStdlib => None,
-        };
-        if let Some(dir) = stdlib_dir {
-            let mut entries = HashSet::new();
-            entries.extend(
-                dir.files()
-                    .filter(|f| pcb_zen_core::embedded_stdlib::include_stdlib_path(f.path()))
-                    .filter_map(|f| f.path().file_name())
-                    .map(|n| n.to_string_lossy().to_string()),
-            );
-            entries.extend(
-                dir.dirs()
-                    .filter(|d| pcb_zen_core::embedded_stdlib::include_stdlib_path(d.path()))
-                    .filter_map(|d| d.path().file_name())
-                    .map(|n| n.to_string_lossy().to_string()),
-            );
-            return Ok(entries.into_iter().map(|name| path.join(name)).collect());
+        if normalized == self.stdlib_root {
+            return Ok(self
+                .stdlib
+                .list_dir("")
+                .into_iter()
+                .map(|name| path.join(name))
+                .collect());
+        }
+        if let Some(rel) = self.stdlib_rel(&normalized) {
+            if !pcb_zen_core::stdlib::include_path(Path::new(rel)) || !self.stdlib.is_dir(rel) {
+                return Err(FileProviderError::NotFound(path.to_path_buf()));
+            }
+            return Ok(self
+                .stdlib
+                .list_dir(rel)
+                .into_iter()
+                .map(|name| path.join(name))
+                .collect());
         }
 
-        let prefix = if normalized.is_empty() {
-            String::new()
-        } else {
-            format!("{normalized}/")
-        };
-
-        let entries: HashSet<String> = self
-            .file_index
-            .iter()
-            .filter_map(|name| name.strip_prefix(&prefix))
-            .filter_map(|rest| rest.split('/').next())
-            .filter(|s| !s.is_empty())
-            .map(ToString::to_string)
-            .collect();
-
-        Ok(entries.into_iter().map(|name| path.join(name)).collect())
+        Ok(self
+            .project
+            .list_dir(&normalized)
+            .into_iter()
+            .map(|name| path.join(name))
+            .collect())
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileProviderError> {
@@ -407,6 +386,60 @@ fn parse_tar_zst_bundle(bundle_bytes: &[u8]) -> Result<ParsedBundle, String> {
     })
 }
 
+fn parse_stdlib_archive(stdlib_tar_zst_bytes: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
+    let decoder = StreamingDecoder::new(Cursor::new(stdlib_tar_zst_bytes))
+        .map_err(|e| format!("stdlib zstd decode error: {e}"))?;
+    let mut archive = Archive::new(decoder);
+    let mut files = HashMap::new();
+
+    for entry_result in archive
+        .entries()
+        .map_err(|e| format!("stdlib tar read error: {e}"))?
+    {
+        let mut entry = entry_result.map_err(|e| format!("stdlib tar entry error: {e}"))?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+
+        let path = {
+            let raw_path = entry
+                .path()
+                .map_err(|e| format!("invalid stdlib tar path: {e}"))?;
+            normalize_archive_path(raw_path.as_ref())
+                .ok_or_else(|| format!("invalid stdlib archive path: {}", raw_path.display()))?
+        };
+        if path.is_empty() || !pcb_zen_core::stdlib::include_path(Path::new(&path)) {
+            continue;
+        }
+
+        let mut contents = Vec::new();
+        entry
+            .read_to_end(&mut contents)
+            .map_err(|e| format!("stdlib tar entry read error: {e}"))?;
+        files.insert(path, contents);
+    }
+
+    for required in ["pcb.toml", "interfaces.zen"] {
+        if !files.contains_key(required) {
+            return Err(format!("stdlib archive is missing {required}"));
+        }
+    }
+
+    Ok(files)
+}
+
+fn normalize_archive_path(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(name) => parts.push(name.to_str()?.to_string()),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(parts.join("/"))
+}
+
 fn extract_main_file_from_metadata(metadata: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct BundleMetadata {
@@ -448,25 +481,8 @@ mod tests {
         let mut tar_bytes = Vec::new();
         {
             let mut builder = Builder::new(&mut tar_bytes);
-
-            let metadata = br#"{"kind":"bundle"}"#;
-            let mut metadata_header = tar::Header::new_gnu();
-            metadata_header.set_size(metadata.len() as u64);
-            metadata_header.set_mode(0o644);
-            metadata_header.set_cksum();
-            builder
-                .append_data(&mut metadata_header, "metadata.json", &metadata[..])
-                .expect("append metadata");
-
-            let source = b"print('demo')";
-            let mut source_header = tar::Header::new_gnu();
-            source_header.set_size(source.len() as u64);
-            source_header.set_mode(0o644);
-            source_header.set_cksum();
-            builder
-                .append_data(&mut source_header, "src/boards/demo/demo.zen", &source[..])
-                .expect("append source");
-
+            append_tar_file(&mut builder, "metadata.json", br#"{"kind":"bundle"}"#);
+            append_tar_file(&mut builder, "src/boards/demo/demo.zen", b"print('demo')");
             builder.finish().expect("finish tar");
         }
 
@@ -475,9 +491,40 @@ mod tests {
         encoder.finish().expect("finish zstd")
     }
 
+    fn append_tar_file(builder: &mut Builder<&mut Vec<u8>>, path: &str, contents: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, path, contents)
+            .expect("append tar file");
+    }
+
+    fn stdlib_tar_zst_bytes() -> Vec<u8> {
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = Builder::new(&mut tar_bytes);
+            append_tar_file(&mut builder, "pcb.toml", b"[dependencies]\n");
+            append_tar_file(&mut builder, "interfaces.zen", b"# interfaces\n");
+            append_tar_file(&mut builder, "units.zen", b"# units\n");
+            append_tar_file(&mut builder, "generics/Resistor.zen", b"# resistor\n");
+            append_tar_file(&mut builder, "test/test_checks.zen", b"# excluded\n");
+            builder.finish().expect("finish tar");
+        }
+
+        let mut encoder = zstd::Encoder::new(Vec::new(), 3).expect("encoder");
+        encoder.write_all(&tar_bytes).expect("encode tar");
+        encoder.finish().expect("finish zstd")
+    }
+
+    fn provider(bundle: Vec<u8>) -> BundleFileProvider {
+        BundleFileProvider::new(bundle, stdlib_tar_zst_bytes()).expect("create provider")
+    }
+
     #[test]
-    fn list_stdlib_root_includes_embedded_top_level_entries() {
-        let provider = BundleFileProvider::new(empty_zip_bytes()).expect("create provider");
+    fn list_stdlib_root_includes_archive_top_level_entries() {
+        let provider = provider(empty_zip_bytes());
         let root = wasm_stdlib_root();
         let entries = provider
             .list_directory(&root)
@@ -499,7 +546,7 @@ mod tests {
 
     #[test]
     fn stdlib_excluded_paths_are_hidden() {
-        let provider = BundleFileProvider::new(empty_zip_bytes()).expect("create provider");
+        let provider = provider(empty_zip_bytes());
         let root = wasm_stdlib_root();
         let entries = provider
             .list_directory(&root)
@@ -519,8 +566,17 @@ mod tests {
     }
 
     #[test]
+    fn missing_stdlib_archive_errors() {
+        let err = match BundleFileProvider::new(empty_zip_bytes(), Vec::new()) {
+            Ok(_) => panic!("empty stdlib archive should fail"),
+            Err(err) => err,
+        };
+        assert!(err.contains("stdlib"));
+    }
+
+    #[test]
     fn tar_zst_bundle_is_normalized_to_src_contents() {
-        let provider = BundleFileProvider::new(tar_zst_bundle_bytes()).expect("create provider");
+        let provider = provider(tar_zst_bundle_bytes());
         assert!(provider.exists(Path::new("boards/demo/demo.zen")));
         assert_eq!(
             provider
@@ -540,38 +596,17 @@ mod tests {
             let mut tar_bytes = Vec::new();
             {
                 let mut builder = Builder::new(&mut tar_bytes);
-
-                let metadata = br#"{"release":{"zen_file":"reference/demo/demo.zen"}}"#;
-                let mut metadata_header = tar::Header::new_gnu();
-                metadata_header.set_size(metadata.len() as u64);
-                metadata_header.set_mode(0o644);
-                metadata_header.set_cksum();
-                builder
-                    .append_data(&mut metadata_header, "metadata.json", &metadata[..])
-                    .expect("append metadata");
-
-                let workspace = b"[workspace]\n";
-                let mut workspace_header = tar::Header::new_gnu();
-                workspace_header.set_size(workspace.len() as u64);
-                workspace_header.set_mode(0o644);
-                workspace_header.set_cksum();
-                builder
-                    .append_data(&mut workspace_header, "src/pcb.toml", &workspace[..])
-                    .expect("append workspace");
-
-                let source = b"print('demo')";
-                let mut source_header = tar::Header::new_gnu();
-                source_header.set_size(source.len() as u64);
-                source_header.set_mode(0o644);
-                source_header.set_cksum();
-                builder
-                    .append_data(
-                        &mut source_header,
-                        "src/reference/demo/demo.zen",
-                        &source[..],
-                    )
-                    .expect("append source");
-
+                append_tar_file(
+                    &mut builder,
+                    "metadata.json",
+                    br#"{"release":{"zen_file":"reference/demo/demo.zen"}}"#,
+                );
+                append_tar_file(&mut builder, "src/pcb.toml", b"[workspace]\n");
+                append_tar_file(
+                    &mut builder,
+                    "src/reference/demo/demo.zen",
+                    b"print('demo')",
+                );
                 builder.finish().expect("finish tar");
             }
 
@@ -580,7 +615,7 @@ mod tests {
             encoder.finish().expect("finish zstd")
         };
 
-        let provider = BundleFileProvider::new(tar_bytes).expect("create provider");
+        let provider = provider(tar_bytes);
         assert_eq!(
             provider.detect_main_file().as_deref(),
             Some("reference/demo/demo.zen")
@@ -750,10 +785,11 @@ fn diagnostic_to_json(diag: &pcb_zen_core::Diagnostic) -> DiagnosticInfo {
 /// board directory with a single .zen file (e.g., "boards/LG0002/LG0002.zen").
 pub fn evaluate_impl(
     bundle_bytes: Vec<u8>,
+    stdlib_tar_zst_bytes: Vec<u8>,
     main_file: &str,
     inputs_json: &str,
 ) -> Result<EvaluationResult, String> {
-    let file_provider = Arc::new(BundleFileProvider::new(bundle_bytes)?);
+    let file_provider = Arc::new(BundleFileProvider::new(bundle_bytes, stdlib_tar_zst_bytes)?);
 
     let main_file = if main_file.is_empty() {
         file_provider.detect_main_file().ok_or_else(|| {
@@ -807,11 +843,12 @@ pub fn evaluate_impl(
 #[wasm_bindgen]
 pub fn evaluate(
     bundle_bytes: Vec<u8>,
+    stdlib_tar_zst_bytes: Vec<u8>,
     main_file: &str,
     inputs_json: &str,
 ) -> Result<JsValue, JsValue> {
-    let result =
-        evaluate_impl(bundle_bytes, main_file, inputs_json).map_err(|e| JsValue::from_str(&e))?;
+    let result = evaluate_impl(bundle_bytes, stdlib_tar_zst_bytes, main_file, inputs_json)
+        .map_err(|e| JsValue::from_str(&e))?;
 
     let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
     result

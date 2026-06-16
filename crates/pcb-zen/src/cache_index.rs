@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use pcb_ui::Spinner;
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::config::split_repo_and_subpath;
-use pcb_zen_core::embedded_stdlib::compute_stdlib_dir_hash;
+use pcb_zen_core::stdlib::native::{copy_source, discover_source, source_matches_target};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{OptionalExtension, params};
@@ -280,21 +280,15 @@ pub fn cache_base() -> PathBuf {
     pcb_zen_core::DefaultFileProvider::new().cache_dir()
 }
 
-/// Ensure the embedded stdlib is materialized into the workspace stdlib location.
+/// Ensure the toolchain stdlib is materialized into the workspace stdlib location.
 ///
-/// Materializes to `<workspace>/.pcb/stdlib`, replacing the directory only when
-/// its canonical content hash differs from the embedded stdlib hash.
+/// Materializes to the workspace-local, toolchain-versioned stdlib root.
 pub fn ensure_stdlib_materialized(workspace_root: &std::path::Path) -> Result<PathBuf> {
     let target = pcb_zen_core::workspace_stdlib_root(workspace_root);
     let _lock = git::lock_dir(&target)?;
 
-    let expected_hash = pcb_zen_core::embedded_stdlib::embedded_stdlib_hash();
-    let current_hash = if target.exists() {
-        compute_stdlib_dir_hash(&target).ok()
-    } else {
-        None
-    };
-    if current_hash.as_deref() == Some(expected_hash) {
+    let source = discover_source()?;
+    if target.exists() && source_matches_target(&source, &target).unwrap_or(false) {
         return Ok(target);
     }
 
@@ -309,17 +303,7 @@ pub fn ensure_stdlib_materialized(workspace_root: &std::path::Path) -> Result<Pa
             })
             .with_context(|| format!("Failed to replace stdlib at {}", target.display()))?;
     }
-    pcb_zen_core::embedded_stdlib::extract_embedded_stdlib(&target)?;
-
-    let refreshed_hash = compute_stdlib_dir_hash(&target)
-        .with_context(|| format!("Failed to hash materialized stdlib at {}", target.display()))?;
-    if refreshed_hash != expected_hash {
-        anyhow::bail!(
-            "Materialized stdlib hash mismatch: expected {}, got {}",
-            expected_hash,
-            refreshed_hash
-        );
-    }
+    copy_source(&source, &target)?;
 
     Ok(target)
 }

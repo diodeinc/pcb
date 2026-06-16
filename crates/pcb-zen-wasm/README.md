@@ -8,5 +8,8 @@ The npm package is built and published from [`bin/build-wasm-bundle.sh`](../../b
 To smoke-test the generated WASM bundle against a `pcb publish` release zip:
 
 ```sh
-node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs --build-wasm --bundle path/to/release.zip
+node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \
+  --build-wasm \
+  --stdlib path/to/stdlib.tar.zst \
+  --bundle path/to/release.zip
 ```

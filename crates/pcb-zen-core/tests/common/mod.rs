@@ -76,19 +76,15 @@ fn fake_kicad_test_files() -> HashMap<String, String> {
     .collect()
 }
 
-/// Return stdlib `.zen` files keyed by their absolute in-memory path
-/// (e.g. `"/.pcb/stdlib/interfaces.zen"` or `"/workspace/.pcb/stdlib/interfaces.zen"`).
+/// Return stdlib `.zen` files keyed by their absolute in-memory path.
 /// Also includes the minimal fake KiCad symbol library needed by stdlib prelude defaults.
 pub fn stdlib_test_files_at(workspace_root: &Path) -> HashMap<String, String> {
-    pcb_zen_core::embedded_stdlib::stdlib_files_for_tests()
+    let stdlib_root = pcb_zen_core::workspace_stdlib_root(workspace_root);
+    pcb_zen_core::stdlib::files_for_tests()
         .into_iter()
         .map(|(rel, contents)| {
             (
-                workspace_root
-                    .join(".pcb/stdlib")
-                    .join(rel)
-                    .to_string_lossy()
-                    .into_owned(),
+                stdlib_root.join(rel).to_string_lossy().into_owned(),
                 contents,
             )
         })
@@ -96,9 +92,8 @@ pub fn stdlib_test_files_at(workspace_root: &Path) -> HashMap<String, String> {
         .collect()
 }
 
-/// Return stdlib `.zen` files keyed by their absolute in-memory path
-/// (e.g. `"/.pcb/stdlib/interfaces.zen"`). Intended to be merged into the
-/// files map passed to [`InMemoryFileProvider`].
+/// Return stdlib `.zen` files keyed by their absolute in-memory path. Intended
+/// to be merged into the files map passed to [`InMemoryFileProvider`].
 pub fn stdlib_test_files() -> HashMap<String, String> {
     stdlib_test_files_at(Path::new("/"))
 }
@@ -218,7 +213,7 @@ pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::Re
                         },
                     ),
                     (
-                        workspace_root.join(".pcb/stdlib"),
+                        pcb_zen_core::workspace_stdlib_root(workspace_root),
                         pcb_zen_core::resolution::FrozenPackage {
                             identity: pcb_zen_core::resolution::FrozenPackageIdentity::Stdlib,
                             deps: default_deps,
