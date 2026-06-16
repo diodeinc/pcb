@@ -495,7 +495,7 @@ class ImportNetlist(Step):
     Import the netlist using lens-based synchronization.
 
     This is a thin wrapper around run_lens_sync() that handles:
-    - Environment setup (KiCad paths, footprint library map)
+    - Environment setup (project-local variables, footprint library map)
     - Transferring diagnostics to SyncState
     """
 
@@ -537,7 +537,7 @@ class ImportNetlist(Step):
                 flags=re.IGNORECASE | re.VERBOSE | re.DOTALL,
             )
 
-            # Add the footprint modules found in each enabled KiCad library.
+            # Add footprint modules from each board-local KiCad library entry.
             for lib in libs:
                 # Skip disabled libraries.
                 disabled = re.findall(
@@ -546,7 +546,7 @@ class ImportNetlist(Step):
                 if disabled:
                     continue
 
-                # Skip non-KiCad libraries (primarily git repos).
+                # Skip entry types that do not point at a KiCad footprint directory.
                 type_ = re.findall(
                     r'(?:\(\s*type\s*) ("[^"]*?"|[^)]*?) (?:\s*\))',
                     lib,

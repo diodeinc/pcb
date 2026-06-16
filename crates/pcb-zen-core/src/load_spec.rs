@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-const KICAD_SYMBOLS_ALIAS: &str = "kicad-symbols";
-const KICAD_FOOTPRINTS_ALIAS: &str = "kicad-footprints";
+const LEGACY_KICAD_STDLIB_ALIASES: &[(&str, &str)] = &[
+    ("kicad-symbols", "kicad-symbols"),
+    ("kicad-footprints", "kicad-footprints"),
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum LoadSpec {
@@ -167,11 +169,9 @@ impl LoadSpec {
 }
 
 fn kicad_stdlib_alias(package: &str) -> Option<&'static str> {
-    match package {
-        KICAD_SYMBOLS_ALIAS => Some(KICAD_SYMBOLS_ALIAS),
-        KICAD_FOOTPRINTS_ALIAS => Some(KICAD_FOOTPRINTS_ALIAS),
-        _ => None,
-    }
+    LEGACY_KICAD_STDLIB_ALIASES
+        .iter()
+        .find_map(|(alias, stdlib_dir)| (*alias == package).then_some(*stdlib_dir))
 }
 
 fn is_package_url(s: &str) -> bool {
