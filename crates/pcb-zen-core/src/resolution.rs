@@ -875,23 +875,21 @@ impl ResolutionResult {
     }
 
     pub fn frozen_root_for_file(&self, file: &Path) -> Option<(&str, &FrozenResolutionMap)> {
-        if self.workspace_info.packages.is_empty()
-            && file.starts_with(&self.workspace_info.root)
-            && let Some(map) = self.resolution.get(LOCAL_WORKSPACE_ROOT_URL)
-        {
-            return Some((LOCAL_WORKSPACE_ROOT_URL, map));
-        }
-
-        self.workspace_info
-            .packages
+        self.resolution
             .iter()
-            .filter_map(|(url, package)| {
-                let root = package.dir(&self.workspace_info.root);
-                (file.starts_with(&root) && self.resolution.contains_key(url))
-                    .then_some((url, root.as_os_str().len()))
+            .filter_map(|(root_package, resolution)| {
+                let (root, package) = resolution.package_for_file(file)?;
+                match &package.identity {
+                    FrozenPackageIdentity::Workspace(package_url)
+                        if package_url == root_package =>
+                    {
+                        Some((root_package.as_str(), resolution, root.as_os_str().len()))
+                    }
+                    _ => None,
+                }
             })
-            .max_by_key(|(_, root_len)| *root_len)
-            .and_then(|(url, _)| self.resolution.get(url).map(|map| (url.as_str(), map)))
+            .max_by_key(|(_, _, root_len)| *root_len)
+            .map(|(root_package, resolution, _)| (root_package, resolution))
     }
 
     /// KiCad model variable → resolved directory mapping.
@@ -1020,6 +1018,43 @@ mod tests {
         );
 
         assert_eq!(result.package_roots().get(dep_coord), Some(&dep_root));
+    }
+
+    #[test]
+    fn frozen_root_for_file_uses_frozen_package_roots() {
+        let result = ResolutionResult::frozen(
+            WorkspaceInfo {
+                root: PathBuf::from("/workspace"),
+                cache_dir: PathBuf::new(),
+                config: None,
+                packages: BTreeMap::new(),
+                errors: vec![],
+            },
+            BTreeMap::from([(
+                LOCAL_WORKSPACE_ROOT_URL.to_string(),
+                FrozenResolutionMap {
+                    selected_remote: BTreeMap::new(),
+                    packages: BTreeMap::from([(
+                        PathBuf::from("/private/workspace"),
+                        FrozenPackage {
+                            identity: FrozenPackageIdentity::Workspace(
+                                LOCAL_WORKSPACE_ROOT_URL.to_string(),
+                            ),
+                            deps: BTreeMap::new(),
+                            parts: Vec::new(),
+                        },
+                    )]),
+                },
+            )]),
+            HashMap::new(),
+        );
+
+        assert_eq!(
+            result
+                .frozen_root_for_file(Path::new("/private/workspace/Board.zen"))
+                .map(|(package_url, _)| package_url),
+            Some(LOCAL_WORKSPACE_ROOT_URL)
+        );
     }
 
     #[test]
