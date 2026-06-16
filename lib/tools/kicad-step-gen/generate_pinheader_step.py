@@ -187,6 +187,12 @@ def shape(workplane: cq.Workplane):
     return workplane.val().wrapped
 
 
+def required_float(value: float | None, field: str) -> float:
+    if value is None:
+        raise ValueError(f"{field} is required for this pin header variant")
+    return value
+
+
 def make_doc(name: str) -> TDocStd_Document:
     app = XCAFApp_Application.GetApplication_s()
     doc = TDocStd_Document(TCollection_ExtendedString(name))
@@ -237,14 +243,16 @@ def make_vertical_tht_body(spec: HeaderSpec, pins: int) -> cq.Workplane:
 
 
 def make_vertical_tht_pin(spec: HeaderSpec) -> cq.Workplane:
+    pin_length_below_board = required_float(
+        spec.pin_length_below_board,
+        "pin_length_below_board",
+    )
     total_length = (
-        spec.pin_length_below_board
-        + spec.body_height
-        + spec.pin_length_above_body
+        pin_length_below_board + spec.body_height + spec.pin_length_above_body
     )
     pin = (
         cq.Workplane("XY")
-        .workplane(centerOption="CenterOfMass", offset=-spec.pin_length_below_board)
+        .workplane(centerOption="CenterOfMass", offset=-pin_length_below_board)
         .box(spec.pin_width, spec.pin_width, total_length, centered=(True, True, False))
     )
     if spec.pin_end_chamfer > 0:
@@ -253,18 +261,24 @@ def make_vertical_tht_pin(spec: HeaderSpec) -> cq.Workplane:
 
 
 def make_horizontal_tht_body(spec: HeaderSpec, pins: int) -> cq.Workplane:
+    body_x_offset = required_float(spec.body_x_offset, "body_x_offset")
     return make_Horizontal_THT_base(
         pins,
         spec.pitch,
         spec.rows,
         spec.body_width,
         spec.body_height,
-        spec.body_x_offset,
+        body_x_offset,
         spec.body_chamfer,
     )
 
 
 def make_horizontal_tht_pin_prototypes(spec: HeaderSpec) -> list[cq.Workplane]:
+    body_x_offset = required_float(spec.body_x_offset, "body_x_offset")
+    pin_length_below_board = required_float(
+        spec.pin_length_below_board,
+        "pin_length_below_board",
+    )
     pins = []
     for row in range(spec.rows):
         row_offset = row * spec.pitch
@@ -272,7 +286,7 @@ def make_horizontal_tht_pin_prototypes(spec: HeaderSpec) -> list[cq.Workplane]:
             cq.Workplane("XZ")
             .workplane(centerOption="CenterOfMass", offset=-spec.pin_width / 2)
             .moveTo(
-                spec.body_x_offset
+                body_x_offset
                 + (spec.rows - 1) * spec.pitch
                 + spec.body_height
                 + spec.pin_length_above_body,
@@ -284,19 +298,19 @@ def make_horizontal_tht_pin_prototypes(spec: HeaderSpec) -> list[cq.Workplane]:
             .hLine(
                 -spec.pin_length_above_body
                 - spec.body_height
-                - spec.body_x_offset
+                - body_x_offset
                 - row_offset
                 + spec.pin_width / 2
             )
             .vLine(
                 -(spec.body_width / spec.rows - spec.pin_width) / 2
-                - spec.pin_length_below_board
+                - pin_length_below_board
                 - row_offset
             )
             .hLine(-spec.pin_width)
             .vLine(
                 ((spec.body_width / spec.rows) - spec.pin_width) / 2
-                + spec.pin_length_below_board
+                + pin_length_below_board
                 + row_offset
                 + spec.pin_width
             )
@@ -327,6 +341,10 @@ def make_vertical_smd_body(spec: HeaderSpec, pins: int) -> cq.Workplane:
 
 
 def make_vertical_smd_pin_prototypes(spec: HeaderSpec) -> list[cq.Workplane]:
+    pin_length_horizontal = required_float(
+        spec.pin_length_horizontal,
+        "pin_length_horizontal",
+    )
     y_offset = -((spec.pins - 1) * spec.pitch + spec.pin_width) / 2
     left = (
         cq.Workplane("XZ")
@@ -336,10 +354,15 @@ def make_vertical_smd_pin_prototypes(spec: HeaderSpec) -> list[cq.Workplane]:
             spec.body_z_offset + spec.body_height + spec.pin_length_above_body,
         )
         .hLine(-spec.pin_width)
-        .vLine(-spec.body_z_offset - spec.body_height - spec.pin_length_above_body + spec.pin_width)
-        .hLine(-spec.pin_length_horizontal + spec.pin_width)
+        .vLine(
+            -spec.body_z_offset
+            - spec.body_height
+            - spec.pin_length_above_body
+            + spec.pin_width
+        )
+        .hLine(-pin_length_horizontal + spec.pin_width)
         .vLine(-spec.pin_width)
-        .hLine(spec.pin_length_horizontal)
+        .hLine(pin_length_horizontal)
         .close()
         .extrude(spec.pin_width)
         .edges(">X and <Z")
@@ -357,10 +380,15 @@ def make_vertical_smd_pin_prototypes(spec: HeaderSpec) -> list[cq.Workplane]:
             spec.body_z_offset + spec.body_height + spec.pin_length_above_body,
         )
         .hLine(spec.pin_width)
-        .vLine(-spec.body_z_offset - spec.body_height - spec.pin_length_above_body + spec.pin_width)
-        .hLine(spec.pin_length_horizontal - spec.pin_width)
+        .vLine(
+            -spec.body_z_offset
+            - spec.body_height
+            - spec.pin_length_above_body
+            + spec.pin_width
+        )
+        .hLine(pin_length_horizontal - spec.pin_width)
         .vLine(-spec.pin_width)
-        .hLine(-spec.pin_length_horizontal)
+        .hLine(-pin_length_horizontal)
         .close()
         .extrude(spec.pin_width)
         .edges("<X and <Z")
@@ -525,9 +553,7 @@ def main() -> None:
     args = build_parser().parse_args()
     footprints = discover_footprints(args.footprint_root)
     if args.filter:
-        footprints = [
-            item for item in footprints if args.filter in item[0].name
-        ]
+        footprints = [item for item in footprints if args.filter in item[0].name]
 
     if args.embed and not args.pcbc.exists():
         raise SystemExit(f"{args.pcbc} does not exist; run `cargo build -p pcbc` first")

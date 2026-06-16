@@ -331,6 +331,20 @@ def shape(workplane: cq.Workplane):
     return workplane.val().wrapped
 
 
+def param_float(params: dict[str, object], key: str) -> float:
+    value = params[key]
+    if not isinstance(value, int | float):
+        raise TypeError(f"{key} must be numeric")
+    return float(value)
+
+
+def param_int(params: dict[str, object], key: str) -> int:
+    value = params[key]
+    if not isinstance(value, int):
+        raise TypeError(f"{key} must be an integer")
+    return value
+
+
 def make_doc(name: str) -> TDocStd_Document:
     app = XCAFApp_Application.GetApplication_s()
     doc = TDocStd_Document(TCollection_ExtendedString(name))
@@ -338,7 +352,9 @@ def make_doc(name: str) -> TDocStd_Document:
     return doc
 
 
-def rotate_z(delta: tuple[float, float, float], degrees: float) -> tuple[float, float, float]:
+def rotate_z(
+    delta: tuple[float, float, float], degrees: float
+) -> tuple[float, float, float]:
     angle = radians(degrees)
     x, y, z = delta
     return (
@@ -359,8 +375,10 @@ def parse_footprint(path: Path) -> SocketSpec:
     mount = match["mount"]
     if mount.startswith("Vertical_SMD"):
         kind = "Vertical_SMD"
-        pin_1_start = "Pin1Right" if mount.endswith("_Pin1Right") else (
-            "Pin1Left" if rows == 1 else None
+        pin_1_start = (
+            "Pin1Right"
+            if mount.endswith("_Pin1Right")
+            else ("Pin1Left" if rows == 1 else None)
         )
     else:
         kind = mount
@@ -385,20 +403,22 @@ def discover_footprints(root: Path) -> list[tuple[Path, SocketSpec]]:
 def export_translation(spec: SocketSpec) -> tuple[float, float, float]:
     p = spec.params
     pin_num = spec.pins
-    pitch = float(p["pin_pitch"])
-    rows = int(p["num_pin_rows"])
+    pitch = param_float(p, "pin_pitch")
+    rows = param_int(p, "num_pin_rows")
+    pin_width = param_float(p, "pin_width")
+    pin_thickness = param_float(p, "pin_thickness")
     model_class = spec.model_class
 
     if model_class == "THT-1x1.27mm_Vertical":
         return (
             pitch * (pin_num / 2.0 / rows - 0.5),
-            float(p["pin_width"]) / 2.0 - float(p["pin_thickness"]) - 0.05,
+            pin_width / 2.0 - pin_thickness - 0.05,
             0.0,
         )
     if model_class == "THT-1x2.54mm_Vertical":
         return (
             pitch * (pin_num / 2.0 / rows - 0.5),
-            float(p["pin_width"]) / 2.0 - float(p["pin_thickness"]) - 0.1,
+            pin_width / 2.0 - pin_thickness - 0.1,
             0.0,
         )
     if model_class.startswith("THT-1") and model_class.endswith("Horizontal"):
@@ -406,24 +426,26 @@ def export_translation(spec: SocketSpec) -> tuple[float, float, float]:
     if model_class.startswith("THT-2") and model_class.endswith("Horizontal"):
         return (
             pitch * (pin_num - 1) / 2.0,
-            pitch / 2.0 - float(p["pin_width"]) / 2.0 + float(p["pin_thickness"]) + 0.1,
+            pitch / 2.0 - pin_width / 2.0 + pin_thickness + 0.1,
             0.0,
         )
     if model_class.startswith("SMD"):
-        return (0.0, 0.0, float(p["pin_width"]) / 2.0)
+        return (0.0, 0.0, pin_width / 2.0)
     return (pitch * (pin_num - 1) / 2.0, pitch / 2.0, 0.0)
 
 
 def export_transform(spec: SocketSpec, part: cq.Workplane) -> cq.Workplane:
     tx, ty, tz = export_translation(spec)
     part = part.translate((-tx, ty, tz))
-    rotation = float(spec.params["rotation"])
+    rotation = param_float(spec.params, "rotation")
     if rotation:
         part = part.rotate((0, 0, 0), (0, 0, 1), rotation)
     return part
 
 
-def cqm_for_columns(spec: SocketSpec, columns: int, *, body_overlength: float | None = None):
+def cqm_for_columns(
+    spec: SocketSpec, columns: int, *, body_overlength: float | None = None
+):
     params = dict(spec.params)
     params["num_pins"] = spec.rows * columns
     if body_overlength is not None:
@@ -439,7 +461,9 @@ def cqm_for(spec: SocketSpec):
     return cqm_for_columns(spec, spec.pins)
 
 
-def vertical_pin_components(cqm) -> list[tuple[cq.Workplane, list[tuple[float, float, float]]]]:
+def vertical_pin_components(
+    cqm,
+) -> list[tuple[cq.Workplane, list[tuple[float, float, float]]]]:
     pitch = cqm.pin_pitch
     count = int(cqm.num_pins / cqm.num_pin_rows)
     first = (
@@ -454,7 +478,9 @@ def vertical_pin_components(cqm) -> list[tuple[cq.Workplane, list[tuple[float, f
     return components
 
 
-def horizontal_pin_components(cqm) -> list[tuple[cq.Workplane, list[tuple[float, float, float]]]]:
+def horizontal_pin_components(
+    cqm,
+) -> list[tuple[cq.Workplane, list[tuple[float, float, float]]]]:
     pitch = cqm.pin_pitch
     count = int(cqm.num_pins / cqm.num_pin_rows)
     tl = cqm.translate[1] - (0.0 if cqm.num_pin_rows == 1 else cqm.pin_pitch / 2.0)
@@ -480,7 +506,9 @@ def horizontal_pin_components(cqm) -> list[tuple[cq.Workplane, list[tuple[float,
                 top_length=tl + cqm.pin_pitch,
             )
             .union(cqm._make_pinsocket())
-            .translate((cqm.first_pin_pos[0], -cqm.first_pin_pos[1], cqm.body_board_distance))
+            .translate(
+                (cqm.first_pin_pos[0], -cqm.first_pin_pos[1], cqm.body_board_distance)
+            )
             .rotate((0, 0, 0), (1, 0, 0), -90)
             .translate(cqm.translate)
         )
@@ -489,7 +517,9 @@ def horizontal_pin_components(cqm) -> list[tuple[cq.Workplane, list[tuple[float,
     return components
 
 
-def smd_pin_components(cqm) -> list[tuple[cq.Workplane, list[tuple[float, float, float]]]]:
+def smd_pin_components(
+    cqm,
+) -> list[tuple[cq.Workplane, list[tuple[float, float, float]]]]:
     pitch = cqm.pin_pitch
     base = (
         cqm._make_angled_pin(top_length=cqm.body_board_distance)
@@ -530,7 +560,9 @@ def smd_pin_components(cqm) -> list[tuple[cq.Workplane, list[tuple[float, float,
     return components
 
 
-def pin_components(spec: SocketSpec, cqm) -> list[tuple[cq.Workplane, list[tuple[float, float, float]]]]:
+def pin_components(
+    spec: SocketSpec, cqm
+) -> list[tuple[cq.Workplane, list[tuple[float, float, float]]]]:
     if spec.model_class.startswith("SMD"):
         return smd_pin_components(cqm)
     if spec.model_class.endswith("Horizontal"):
@@ -561,7 +593,9 @@ def make_body_end_cap(spec: SocketSpec, cqm, length: float) -> cq.Workplane:
     return body
 
 
-def body_end_cap_offsets(spec: SocketSpec, cap_length: float) -> list[tuple[float, float, float]]:
+def body_end_cap_offsets(
+    spec: SocketSpec, cap_length: float
+) -> list[tuple[float, float, float]]:
     if cap_length <= 0.0:
         return []
 
@@ -582,7 +616,7 @@ def add_body_components(
     spec: SocketSpec,
     cqm,
 ) -> None:
-    rotation = float(spec.params["rotation"])
+    rotation = param_float(spec.params, "rotation")
     cell_spec = replace(spec, pins=1)
     cell_cqm = cqm_for_columns(spec, 1, body_overlength=0.0)
 
@@ -598,7 +632,7 @@ def add_body_components(
     for offset in body_cell_offsets(spec):
         shape_tool.AddComponent(assembly, body_label, loc(rotate_z(offset, rotation)))
 
-    body_overlength = float(spec.params["body_overlength"])
+    body_overlength = param_float(spec.params, "body_overlength")
     cap_length = body_overlength / 2.0
     if cap_length <= 0.0:
         return
@@ -628,7 +662,7 @@ def write_step(path: Path, spec: SocketSpec, reduce: bool) -> None:
 
     add_body_components(shape_tool, color_tool, assembly, spec, cqm)
 
-    rotation = float(spec.params["rotation"])
+    rotation = param_float(spec.params, "rotation")
     for pin, offsets in pin_components(spec, cqm):
         pin_label = shape_tool.AddShape(shape(export_transform(spec, pin)), False)
         color_tool.SetColor(
@@ -637,7 +671,9 @@ def write_step(path: Path, spec: SocketSpec, reduce: bool) -> None:
             XCAFDoc_ColorType.XCAFDoc_ColorSurf,
         )
         for offset in offsets:
-            shape_tool.AddComponent(assembly, pin_label, loc(rotate_z(offset, rotation)))
+            shape_tool.AddComponent(
+                assembly, pin_label, loc(rotate_z(offset, rotation))
+            )
 
     shape_tool.UpdateAssemblies()
 
