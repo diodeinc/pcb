@@ -21,33 +21,12 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-bin: false
-
-      - name: Build pcbc (head)
-        run: cargo build -p pcbc --release
-
-      - name: Stash head binary
-        run: |
-          mkdir -p "$RUNNER_TEMP/pcbc-head"
-          cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-head/pcbc"
-
-      - name: Create base worktree
-        run: |
-          git worktree add "$RUNNER_TEMP/pcb-base" "${{ github.event.pull_request.base.sha }}"
-
-      - name: Build pcbc (base)
-        run: cargo build -p pcbc --release --manifest-path "$RUNNER_TEMP/pcb-base/Cargo.toml"
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/target
-
-      - name: Stash base binary
-        run: |
-          mkdir -p "$RUNNER_TEMP/pcbc-base"
-          cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-base/pcbc"
 
       - name: Checkout benchmark workspace
         run: |
@@ -72,18 +51,34 @@ jobs:
       - name: Run performance benchmarks
         run: |
           mkdir -p perf
-          for workspace in Demeter DM0001 DM0002 DM0003 Feign Renfield Seward Nano unoQ; do
-            python3 bin/pcb-build-perf \
-              --pcb "$RUNNER_TEMP/pcbc-base/pcbc" \
-              --workspace "workspaces/$workspace" \
-              --suppress bom \
-              --output "perf/$workspace-base.json"
-            python3 bin/pcb-build-perf \
-              --pcb "$RUNNER_TEMP/pcbc-head/pcbc" \
-              --workspace "workspaces/$workspace" \
-              --suppress bom \
-              --output "perf/$workspace-head.json"
-          done
+          merge_base="$(git merge-base HEAD "${{ github.event.pull_request.base.sha }}")"
+          base_dir="$RUNNER_TEMP/pcb-base"
+          base_bin="$RUNNER_TEMP/pcb-base-bin"
+          base_data="$RUNNER_TEMP/pcb-base-data"
+          head_bin="$RUNNER_TEMP/pcb-head-bin"
+          head_data="$RUNNER_TEMP/pcb-head-data"
+          head_shim="$head_bin/pcb"
+          workspaces="Demeter DM0001 DM0002 DM0003 Feign Renfield Seward Nano unoQ"
+
+          bench() {
+            suffix="$1"
+            data_home="$2"
+            for workspace in $workspaces; do
+              XDG_DATA_HOME="$data_home" python3 bin/pcb-build-perf \
+                --pcb "$head_shim" \
+                --pcb-arg +local \
+                --workspace "workspaces/$workspace" \
+                --suppress bom \
+                --output "perf/$workspace-$suffix.json"
+            done
+          }
+
+          git worktree add --detach "$base_dir" "$merge_base"
+          XDG_DATA_HOME="$base_data" PCB_INSTALL_DIR="$base_bin" "$base_dir/install.sh" --local
+
+          XDG_DATA_HOME="$head_data" PCB_INSTALL_DIR="$head_bin" ./install.sh --local
+          bench base "$base_data"
+          bench head "$head_data"
 
       - name: Create PR comment body
         id: perf_comment

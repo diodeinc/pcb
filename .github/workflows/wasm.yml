@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y curl build-essential pkg-config libssl-dev jq git openssh-client
+          apt-get install -y curl build-essential pkg-config libssl-dev jq git openssh-client zstd
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -42,8 +42,14 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Build pcbc
-        run: cargo build -p pcbc --release
+      - name: Install local pcb toolchain
+        run: |
+          ./install.sh --local
+          export PATH="$HOME/.local/bin:$PATH"
+          pcb +local --help
+
+      - name: Prepare stdlib artifact
+        run: tar -C lib/std -cf - . | zstd -q -3 -c > "$RUNNER_TEMP/stdlib.tar.zst"
 
       - name: Build WASM bundle
         run: ./bin/build-wasm-bundle.sh
@@ -85,6 +91,8 @@ jobs:
           for board in Demeter Feign; do
             node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \
               --publish "workspaces/$board/$board.zen" \
-              --pcbc target/release/pcbc \
+              --pcbc pcb \
+              --pcbc-arg +local \
+              --stdlib "$RUNNER_TEMP/stdlib.tar.zst" \
               > "$RUNNER_TEMP/$board-wasm-netlist.json"
           done

@@ -848,18 +848,26 @@ fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
         if path.is_symlink() {
             continue;
         }
+        let rel_name = path
+            .strip_prefix(base_path)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if should_skip_release_zip_path(&rel_name) {
+            continue;
+        }
         if path.is_dir() {
             add_directory_to_zip(zip, &path, base_path)?;
         } else {
-            let file_name = path
-                .strip_prefix(base_path)?
-                .to_string_lossy()
-                .replace('\\', "/");
-            zip.start_file(file_name, FileOptions::<()>::default())?;
+            zip.start_file(rel_name, FileOptions::<()>::default())?;
             std::io::copy(&mut fs::File::open(&path)?, zip)?;
         }
     }
     Ok(())
+}
+
+fn should_skip_release_zip_path(rel_name: &str) -> bool {
+    matches!(rel_name, "src/.pcb/stdlib" | "src/.pcb/stdlib.lock")
+        || rel_name.starts_with("src/.pcb/stdlib/")
 }
 
 /// Generate gerber files
@@ -1438,6 +1446,34 @@ mod tests {
         let content = fs::read_to_string(&kicad_pcb_path)?;
         assert!(content.contains(r#"(property "PCB_VERSION" "1.2.3")"#));
         assert!(content.contains(r#"(property "PCB_GIT_HASH" "abcdef0")"#));
+
+        Ok(())
+    }
+
+    #[test]
+    fn release_zip_skips_materialized_stdlib() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let staging_dir = temp_dir.path().join("stage");
+        fs::create_dir_all(staging_dir.join("src/.pcb/stdlib"))?;
+        fs::write(staging_dir.join("src/.pcb/stdlib/interfaces.zen"), "")?;
+        fs::write(staging_dir.join("src/.pcb/stdlib.lock"), "")?;
+        fs::write(staging_dir.join("src/Feign.zen"), "")?;
+
+        let zip_path = temp_dir.path().join("out.zip");
+        let file = fs::File::create(&zip_path)?;
+        let mut zip = ZipWriter::new(BufWriter::new(file));
+        add_directory_to_zip(&mut zip, &staging_dir, &staging_dir)?;
+        zip.finish()?;
+
+        let file = fs::File::open(&zip_path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        let mut names = Vec::new();
+        for i in 0..archive.len() {
+            names.push(archive.by_index(i)?.name().to_string());
+        }
+
+        assert!(names.contains(&"src/Feign.zen".to_string()));
+        assert!(names.iter().all(|name| !should_skip_release_zip_path(name)));
 
         Ok(())
     }

@@ -20,6 +20,7 @@ const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const RELEASE_LIST_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const NIGHTLY_RELEASE_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 
 enum ShimCommand {
     SelfUpdate,
@@ -35,6 +36,7 @@ enum ToolchainRequest {
     Exact(Version),
     Latest,
     Nightly,
+    Local,
 }
 
 #[derive(Debug, Clone)]
@@ -65,11 +67,17 @@ struct LatestRelease {
     tag: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct NightlyRelease {
     date: String,
     sha: String,
     base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NightlyReleaseCache {
+    fetched_at: u64,
+    release: NightlyRelease,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,7 +214,9 @@ fn take_cli_override(args: &mut Vec<OsString>) -> Result<Option<ToolchainRequest
         return Ok(None);
     };
     if raw.is_empty() {
-        anyhow::bail!("empty toolchain override; expected +0.3, +0.3.83, +latest, or +nightly");
+        anyhow::bail!(
+            "empty toolchain override; expected +0.3, +0.3.83, +latest, +nightly, or +local"
+        );
     }
     let request = parse_request(raw)?;
     args.remove(0);
@@ -219,6 +229,9 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
     }
     if raw == "nightly" {
         return Ok(ToolchainRequest::Nightly);
+    }
+    if raw == "local" {
+        return Ok(ToolchainRequest::Local);
     }
 
     if let Ok(version) = Version::parse(raw) {
@@ -237,7 +250,7 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
         }),
         _ => {
             anyhow::bail!(
-                "invalid pcb toolchain request `{raw}`; expected 0.3, 0.3.83, latest, or nightly"
+                "invalid pcb toolchain request `{raw}`; expected 0.3, 0.3.83, latest, nightly, or local"
             )
         }
     }
@@ -266,11 +279,14 @@ fn select_toolchain(
             allow_latest_fallback,
         )
     } else if let Some((path, lane)) = find_workspace_pcb_version()? {
-        (
-            parse_request(&lane)?,
-            format!("{} requires {lane}", path.display()),
-            true,
-        )
+        let request = parse_request(&lane)?;
+        if matches!(request, ToolchainRequest::Local) {
+            anyhow::bail!(
+                "{} uses pcb-version = \"local\"; use a version lane and run commands with `pcb +local ...` to test a local toolchain",
+                path.display()
+            );
+        }
+        (request, format!("{} requires {lane}", path.display()), true)
     } else {
         (
             ToolchainRequest::Latest,
@@ -296,6 +312,17 @@ fn resolve_request(
     prefer_local: bool,
     allow_latest_fallback: bool,
 ) -> Result<ResolvedToolchain> {
+    if matches!(request, ToolchainRequest::Local) {
+        let Some((version, binary)) = local_toolchain() else {
+            anyhow::bail!("local pcbc toolchain is not installed; run ./install.sh --local");
+        };
+        return Ok(ResolvedToolchain {
+            label: format!("local ({version})"),
+            binary,
+            reason,
+        });
+    }
+
     if matches!(request, ToolchainRequest::Nightly) {
         return resolve_nightly(reason);
     }
@@ -355,7 +382,7 @@ fn resolve_request(
 }
 
 fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
-    match fetch_nightly_release().and_then(|release| ensure_nightly_installed(&release)) {
+    match fetch_nightly_release(false).and_then(|release| ensure_nightly_installed(&release)) {
         Ok((receipt, binary)) => Ok(ResolvedToolchain {
             label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
             binary,
@@ -382,14 +409,8 @@ fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
 fn best_local_toolchain(request: &ToolchainRequest) -> Result<Option<(Version, PathBuf)>> {
     let mut candidates = installed_toolchains()?;
 
-    let local_binary = toolchains_dir()
-        .join("local")
-        .join(target_triple())
-        .join(pcbc_binary_name());
-    if local_binary.is_file()
-        && let Some(version) = pcbc_version(&local_binary)
-    {
-        candidates.insert(version, local_binary);
+    if let Some((version, binary)) = local_toolchain() {
+        candidates.insert(version, binary);
     }
 
     if let Some((version, binary)) = sibling_pcbc() {
@@ -438,6 +459,7 @@ fn request_matches(request: &ToolchainRequest, version: &Version) -> bool {
         ToolchainRequest::Exact(exact) => version == exact,
         ToolchainRequest::Latest => version.pre.is_empty(),
         ToolchainRequest::Nightly => false,
+        ToolchainRequest::Local => false,
     }
 }
 
@@ -447,6 +469,7 @@ fn format_request(request: &ToolchainRequest) -> String {
         ToolchainRequest::Exact(version) => version.to_string(),
         ToolchainRequest::Latest => "latest".to_string(),
         ToolchainRequest::Nightly => "nightly".to_string(),
+        ToolchainRequest::Local => "local".to_string(),
     }
 }
 
@@ -920,10 +943,7 @@ fn copy_executable_permissions(_src: &Path, _dst: &Path) -> Result<()> {
 fn toolchain_list() -> Result<()> {
     let installed = installed_toolchains()?;
     let nightly = installed_nightly_toolchain()?;
-    let local_binary = toolchains_dir()
-        .join("local")
-        .join(target_triple())
-        .join(pcbc_binary_name());
+    let local_binary = local_binary_path();
     let local = local_binary.is_file();
 
     if installed.is_empty() && nightly.is_none() && !local {
@@ -959,8 +979,11 @@ fn toolchain_show() -> Result<()> {
 
 fn toolchain_install(raw: &str) -> Result<()> {
     let request = parse_request(raw)?;
+    if matches!(request, ToolchainRequest::Local) {
+        anyhow::bail!("local toolchains are installed with ./install.sh --local");
+    }
     if matches!(request, ToolchainRequest::Nightly) {
-        let release = fetch_nightly_release()?;
+        let release = fetch_nightly_release(true)?;
         let (receipt, binary) = ensure_nightly_installed(&release)?;
         println!(
             "installed pcbc nightly {} ({}): {}",
@@ -1077,7 +1100,7 @@ fn self_update() -> Result<()> {
 
     if installed_nightly_toolchain()?.is_some()
         && let Err(err) =
-            fetch_nightly_release().and_then(|nightly| ensure_nightly_installed(&nightly))
+            fetch_nightly_release(true).and_then(|nightly| ensure_nightly_installed(&nightly))
     {
         eprintln!("Warning: failed to update installed nightly toolchain ({err})");
     }
@@ -1093,9 +1116,38 @@ fn fetch_latest_release() -> Result<LatestRelease> {
     Ok(serde_json::from_str(&content)?)
 }
 
-fn fetch_nightly_release() -> Result<NightlyRelease> {
+fn fetch_nightly_release(force_refresh: bool) -> Result<NightlyRelease> {
+    if !force_refresh
+        && let Some(cache) = read_nightly_release_cache()?
+        && unix_timestamp().saturating_sub(cache.fetched_at) < NIGHTLY_RELEASE_CACHE_TTL.as_secs()
+    {
+        return Ok(cache.release);
+    }
+
     let content = download_text(&http_client(METADATA_TIMEOUT)?, NIGHTLY_LATEST_RELEASE_URL)?;
-    Ok(serde_json::from_str(&content)?)
+    let release = serde_json::from_str(&content)?;
+    write_nightly_release_cache(&release)?;
+    Ok(release)
+}
+
+fn read_nightly_release_cache() -> Result<Option<NightlyReleaseCache>> {
+    let Ok(content) = fs::read_to_string(nightly_release_cache_path()) else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_str(&content).ok())
+}
+
+fn write_nightly_release_cache(release: &NightlyRelease) -> Result<()> {
+    let path = nightly_release_cache_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let cache = NightlyReleaseCache {
+        fetched_at: unix_timestamp(),
+        release: release.clone(),
+    };
+    fs::write(path, serde_json::to_vec_pretty(&cache)?)?;
+    Ok(())
 }
 
 fn install_shim_update(latest: &LatestRelease) -> Result<()> {
@@ -1146,6 +1198,22 @@ fn sibling_pcbc() -> Option<(Version, PathBuf)> {
     }
     let version = pcbc_version(&sibling)?;
     Some((version, sibling))
+}
+
+fn local_toolchain() -> Option<(Version, PathBuf)> {
+    let binary = local_binary_path();
+    if !binary.is_file() {
+        return None;
+    }
+    let version = pcbc_version(&binary)?;
+    Some((version, binary))
+}
+
+fn local_binary_path() -> PathBuf {
+    toolchains_dir()
+        .join("local")
+        .join(target_triple())
+        .join(pcbc_binary_name())
 }
 
 fn pcbc_version(binary: &Path) -> Option<Version> {
@@ -1213,6 +1281,10 @@ fn locks_dir() -> PathBuf {
 
 fn release_list_cache_path() -> PathBuf {
     data_dir().join("release-list-cache.json")
+}
+
+fn nightly_release_cache_path() -> PathBuf {
+    data_dir().join("nightly-release-cache.json")
 }
 
 fn binary_artifact_name(binary: &str) -> String {

@@ -4,7 +4,7 @@ Generates stdlib docs (`stdlib.mdx`) from `.zen` files.
 
 ## Notes
 
-- Input stdlib path is typically `<workspace>/.pcb/stdlib`.
+- Input stdlib path is typically the workspace-local, toolchain-versioned stdlib root.
 - Output is deterministic and used by `pcb doc`.
 
 ## CLI

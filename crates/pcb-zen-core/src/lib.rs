@@ -9,7 +9,6 @@ use semver::Version;
 pub mod config;
 pub mod convert;
 pub mod diagnostics;
-pub mod embedded_stdlib;
 pub mod erc;
 mod file_provider;
 pub mod graph;
@@ -19,6 +18,7 @@ pub mod load_spec;
 mod moved;
 pub mod passes;
 pub mod resolution;
+pub mod stdlib;
 pub mod workspace;
 
 /// Canonical virtual module path for stdlib.

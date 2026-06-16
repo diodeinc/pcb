@@ -22,7 +22,7 @@ fn setup_cross_package_workspace(
     board_deps: BTreeMap<String, pcb_zen_core::config::DependencySpec>,
 ) -> (Arc<dyn FileProvider>, ResolutionResult, PathBuf) {
     let workspace_root = PathBuf::from("/workspace");
-    let stdlib_root = workspace_root.join(".pcb/stdlib");
+    let stdlib_root = pcb_zen_core::workspace_stdlib_root(&workspace_root);
     let mut files = common::stdlib_test_files_at(&workspace_root);
 
     // modules/Led/Led.zen — the target package

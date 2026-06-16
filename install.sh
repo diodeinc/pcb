@@ -78,10 +78,10 @@ install_local() {
 
   mkdir -p "$install_dir"
   install -m 755 "$target_dir/release/pcb" "$install_dir/pcb"
-  rm -f "$install_dir/pcbc"
 
   mkdir -p "$local_target_dir/lib"
   install -m 755 "$target_dir/release/pcbc" "$local_target_dir/pcbc"
+  rm -f "$install_dir/pcbc"
   rm -rf "$stdlib_dir"
   cp -R "$source_dir/lib/std" "$stdlib_dir"
 
