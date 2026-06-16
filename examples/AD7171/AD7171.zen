@@ -47,7 +47,21 @@ else:
 
 Component(
     name="AD7171",
-    symbol=Symbol(library="@kicad-symbols/Analog_ADC.kicad_sym", name="AD7171"),
+    footprint="Package_DFN_QFN:DFN-10-1EP_3x3mm_P0.5mm_EP1.55x2.48mm",
+    symbol=Symbol(
+        name="AD7171",
+        definition=[
+            ("AIN+", ["AIN+"]),
+            ("AIN-", ["AIN-"]),
+            ("DOUT/~{RDY}", ["DOUT/~{RDY}"]),
+            ("GND", ["GND", "PAD"]),
+            ("REFIN+", ["REFIN+"]),
+            ("REFIN-", ["REFIN-"]),
+            ("SCK", ["SCK"]),
+            ("VDD", ["VDD"]),
+            ("~{PDRST}", ["~{PDRST}"]),
+        ],
+    ),
     part=Part(
         mpn="AD7171",
         manufacturer="Analog Devices",
@@ -58,7 +72,6 @@ Component(
         "AIN-": _AIN_N_FILT,
         "DOUT/~{RDY}": SPI.MISO,
         "GND": GND,
-        "PAD": GND,  # Exposed pad must be connected to ground
         "REFIN+": _VREF,
         "REFIN-": GND if not use_external_ref else _VREF,  # For single-ended reference
         "SCK": SPI.CLK,

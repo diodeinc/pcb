@@ -16,7 +16,7 @@
       (property (name "Type") (value "resistor"))
       (property (name "Value") (value "1k"))
       (property (name "symbol_name") (value "R"))
-      (property (name "symbol_path") (value "/Users/davide/Library/Caches/pcb/gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"))
+      (property (name "symbol_path") (value "Device.kicad_sym"))
     )
   )
   (libparts

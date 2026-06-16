@@ -195,7 +195,7 @@
 				)
 			)
 		)
-		(property "symbol_path" "/Users/davide/Library/Caches/pcb/gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"
+		(property "symbol_path" "Device.kicad_sym"
 			(at 0 0 0)
 			(layer "F.SilkS")
 			(hide yes)
@@ -476,7 +476,7 @@
 				)
 			)
 		)
-		(property "symbol_path" "/Users/davide/Library/Caches/pcb/gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"
+		(property "symbol_path" "Device.kicad_sym"
 			(at 0 0 0)
 			(layer "F.SilkS")
 			(hide yes)
@@ -809,7 +809,7 @@
 				)
 			)
 		)
-		(property "symbol_path" "/Users/davide/Library/Caches/pcb/gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"
+		(property "symbol_path" "Device.kicad_sym"
 			(at 0 0 0)
 			(layer "B.SilkS")
 			(hide yes)
@@ -1035,7 +1035,7 @@
 				)
 			)
 		)
-		(property "symbol_path" "/Users/davide/Library/Caches/pcb/gitlab/kicad/libraries/kicad-symbols/9.0.0/Device.kicad_sym"
+		(property "symbol_path" "Device.kicad_sym"
 			(at 0 0 0)
 			(layer "B.SilkS")
 			(hide yes)

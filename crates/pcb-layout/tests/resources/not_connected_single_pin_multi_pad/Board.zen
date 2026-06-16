@@ -4,9 +4,8 @@ nc = NotConnected()
 
 Component(
     name="U1",
-    footprint=File(
-        "@kicad-footprints/Package_DFN_QFN.pretty/QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"
-    ),
+    skip_bom=True,
+    footprint=File("./Package_DFN_QFN.pretty/QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"),
     symbol=Symbol(
         definition=[
             ("GND", ["5", "17"]),  # Pin 5 and thermal pad (17) share the same logical port

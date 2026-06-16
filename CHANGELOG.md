@@ -20,7 +20,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Removed legacy v1/`pcb.sum` resolution, disabled `pcb update`, and dropped obsolete `--locked` read-command flags.
 - `pcb migrate` removes deprecated `[workspace].members`; other commands reject it.
-- `pcb sync` no longer writes stdlib-only KiCad dependency entries.
 - `pcb migrate` now upgrades workspace `pcb-version` after successful latest-toolchain migrations.
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
 - `pcb publish` release metadata now records strict workspace BOM matching when enabled.
@@ -688,7 +687,6 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 
 - Hidden `pcb kq` command to inspect KiCad symbol libraries as structured JSON views (`sym`, `metadata`, `electrical`, `raw`).
 - `pcb new component --component-id <id>` now installs a web-searched component non-interactively, with optional `--part-number` fallback and `--manufacturer` override/fallback.
-- `[[workspace.kicad_library]]` now supports `parts = "<url>"`, materializing a virtual parts manifest for KiCad symbol repos so `@kicad-symbols/...` symbols can inherit default parts too.
 
 ### Changed
 
@@ -752,7 +750,6 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 
 ### Fixed
 
-- Apply MVS-selected KiCad asset versions in resolution/materialization and sibling promotion, preventing `@kicad-*` alias failures after patch updates.
 - `pcb update` now ignores prerelease dependency versions when selecting updates.
 
 ## [0.3.50] - 2026-03-02
@@ -769,7 +766,6 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 
 ### Changed
 
-- Replace `[assets]` with `[[workspace.kicad_library]]` for built-in resolution of KiCad symbol, footprint, and 3D model repositories.
 - Embed referenced 3D models directly into `.kicad_pcb` layout files, eliminating the need for external 3D model files at layout time.
 
 ## [0.3.48] - 2026-02-28

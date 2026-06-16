@@ -36,16 +36,16 @@ ImplementationType = enum("NO_PASSIVES", "WITH_PASSIVES")
 component_config = {
     "symbols": {
         Package("SOIC"): {
-            Gain("A1"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A1D"),
-            Gain("A2"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A2D"),
-            Gain("A3"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A3D"),
-            Gain("A4"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A4D"),
+            Gain("A1"): "INA240A1D",
+            Gain("A2"): "INA240A2D",
+            Gain("A3"): "INA240A3D",
+            Gain("A4"): "INA240A4D",
         },
         Package("TSSOP"): {
-            Gain("A1"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A1PW"),
-            Gain("A2"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A2PW"),
-            Gain("A3"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A3PW"),
-            Gain("A4"): Symbol(library="@kicad-symbols/Amplifier_Current.kicad_sym", name="INA240A4PW"),
+            Gain("A1"): "INA240A1PW",
+            Gain("A2"): "INA240A2PW",
+            Gain("A3"): "INA240A3PW",
+            Gain("A4"): "INA240A4PW",
         },
     },
     "mpns": {
@@ -61,6 +61,10 @@ component_config = {
             Gain("A3"): "INA240A3QPWRQ1",
             Gain("A4"): "INA240A4QPWRQ1",
         },
+    },
+    "footprints": {
+        Package("SOIC"): "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+        Package("TSSOP"): "Package_SO:TSSOP-8_4.4x3mm_P0.65mm",
     },
 }
 
@@ -109,7 +113,18 @@ elif ref_config == RefConfig("CUSTOM"):
     ref_pins["ref1"] = REF1
     ref_pins["ref2"] = REF2
 
-symbol = component_config["symbols"][package][gain]
+symbol = Symbol(
+    name=component_config["symbols"][package][gain],
+    definition=[
+        ("+", ["+"]),
+        ("-", ["-"]),
+        ("GND", ["GND"]),
+        ("V+", ["V+"]),
+        ("REF2", ["REF2"]),
+        ("REF1", ["REF1"]),
+        ("8", ["8"]),
+    ],
+)
 part = Part(
     mpn=component_config["mpns"][package][gain],
     manufacturer="Texas Instruments",
@@ -118,6 +133,7 @@ part = Part(
 Component(
     name=component_config["mpns"][package][gain],
     description="Automotive-qualified, voltage-output, current-sense amplifier with enhanced PWM rejection",
+    footprint=component_config["footprints"][package],
     symbol=symbol,
     part=part,
     pins={
