@@ -1,5 +1,1 @@
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
-
-[dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"

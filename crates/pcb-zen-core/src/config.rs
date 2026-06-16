@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use ariadne::{Label, Report, ReportKind, Source};
-use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::FileProvider;
@@ -208,7 +207,6 @@ impl PcbToml {
     /// Takes the last path segment as the alias key. Only creates alias if unique (no collisions).
     /// Examples:
     /// - "github.com/diodeinc/registry/reference/XAL7070-562MEx" → "@XAL7070-562MEx"
-    /// - "gitlab.com/kicad/libraries/kicad-symbols" → "@kicad-symbols"
     pub fn auto_generated_aliases(&self) -> HashMap<String, String> {
         let mut aliases = HashMap::new();
         let mut seen_names: HashMap<String, usize> = HashMap::new();
@@ -271,13 +269,6 @@ pub struct WorkspaceConfig {
     #[serde(default, skip_serializing_if = "BomConfig::is_default")]
     pub bom: BomConfig,
 
-    /// Kicad-style library linkage configuration.
-    #[serde(
-        default = "default_kicad_library",
-        skip_serializing_if = "is_default_kicad_library"
-    )]
-    pub kicad_library: Vec<KicadLibraryConfig>,
-
     /// Default board name to use
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_board: Option<String>,
@@ -307,7 +298,6 @@ impl Default for WorkspaceConfig {
             pcb_version: None,
             endpoint: None,
             bom: BomConfig::default(),
-            kicad_library: default_kicad_library(),
             default_board: None,
             vendor: Vec::new(),
             preferred: Vec::new(),
@@ -327,72 +317,6 @@ impl BomConfig {
     fn is_default(&self) -> bool {
         self == &Self::default()
     }
-}
-
-/// Kicad-style library relationship hint.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KicadLibraryConfig {
-    /// Concrete semver version, e.g. "9.0.3".
-    pub version: Version,
-    /// Symbols repo URL (dependency base path).
-    pub symbols: String,
-    /// Footprints repo URL (dependency base path).
-    pub footprints: String,
-    /// Mapping from KiCad text variable name to model repo URL.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub models: BTreeMap<String, String>,
-    /// Optional URL of a TOML file containing `parts = [...]` entries for this symbols repo.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parts: Option<String>,
-    /// Optional HTTP archive URL template for materialization.
-    ///
-    /// Supports `{repo}`, `{repo_name}`, `{version}`, `{major}` placeholders.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub http_mirror: Option<String>,
-}
-
-impl KicadLibraryConfig {
-    /// All repository URLs (symbols, footprints, models) in this entry.
-    pub fn repo_urls(&self) -> impl Iterator<Item = &str> {
-        [self.symbols.as_str(), self.footprints.as_str()]
-            .into_iter()
-            .chain(self.models.values().map(|s| s.as_str()))
-    }
-}
-
-pub const DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE: &str =
-    "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst";
-pub const DEFAULT_KICAD_PARTS_URL: &str =
-    "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml";
-pub const STDLIB_PINNED_KICAD_VERSION: Version = Version::new(10, 0, 3);
-
-fn default_kicad_library_entry(version: Version, model_var: &str) -> KicadLibraryConfig {
-    KicadLibraryConfig {
-        version,
-        symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-        footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
-        models: BTreeMap::from([(
-            model_var.to_string(),
-            "gitlab.com/kicad/libraries/kicad-packages3D".to_string(),
-        )]),
-        parts: Some(DEFAULT_KICAD_PARTS_URL.to_string()),
-        http_mirror: Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE.to_string()),
-    }
-}
-
-fn default_kicad_library() -> Vec<KicadLibraryConfig> {
-    vec![
-        default_kicad_library_entry(Version::new(9, 0, 3), "KICAD9_3DMODEL_DIR"),
-        default_kicad_library_entry(Version::new(10, 0, 3), "KICAD10_3DMODEL_DIR"),
-    ]
-}
-
-pub fn stdlib_pinned_kicad_library() -> KicadLibraryConfig {
-    default_kicad_library_entry(STDLIB_PINNED_KICAD_VERSION, "KICAD10_3DMODEL_DIR")
-}
-
-fn is_default_kicad_library(value: &[KicadLibraryConfig]) -> bool {
-    value == default_kicad_library().as_slice()
 }
 
 /// Access control configuration.
@@ -616,7 +540,6 @@ pub fn find_workspace_root(file_provider: &dyn FileProvider, start: &Path) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kicad_library::validate_kicad_library_config;
 
     #[test]
     fn test_parse_board_only() {
@@ -667,7 +590,7 @@ registry = "github.com/diodeinc/registry"
         let err = PcbToml::parse(
             r#"
 [assets]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
+"github.com/example/assets" = "1.0.0"
 "#,
         )
         .expect_err("legacy [assets] should not parse");
@@ -725,59 +648,10 @@ description = "Power Regulator Board"
     }
 
     #[test]
-    fn test_workspace_kicad_library_defaults_to_kicad9_and_10() {
-        let content = r#"
-[workspace]
-pcb-version = "0.3"
-"#;
-
-        let config = PcbToml::parse(content).unwrap();
-        let workspace = config.workspace.as_ref().unwrap();
-        assert_eq!(workspace.kicad_library.len(), 2);
-        assert_eq!(workspace.kicad_library[0].version, Version::new(9, 0, 3));
-        assert_eq!(
-            workspace.kicad_library[0].symbols,
-            "gitlab.com/kicad/libraries/kicad-symbols"
-        );
-        assert_eq!(
-            workspace.kicad_library[0].footprints,
-            "gitlab.com/kicad/libraries/kicad-footprints"
-        );
-        assert_eq!(
-            workspace.kicad_library[0].models.get("KICAD9_3DMODEL_DIR"),
-            Some(&"gitlab.com/kicad/libraries/kicad-packages3D".to_string())
-        );
-        assert_eq!(
-            workspace.kicad_library[0].parts.as_deref(),
-            Some(DEFAULT_KICAD_PARTS_URL)
-        );
-        assert_eq!(
-            workspace.kicad_library[0].http_mirror.as_deref(),
-            Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
-        );
-        assert_eq!(workspace.kicad_library[1].version, Version::new(10, 0, 3));
-        assert_eq!(
-            workspace.kicad_library[1].models.get("KICAD10_3DMODEL_DIR"),
-            Some(&"gitlab.com/kicad/libraries/kicad-packages3D".to_string())
-        );
-        assert_eq!(
-            workspace.kicad_library[1].parts.as_deref(),
-            Some(DEFAULT_KICAD_PARTS_URL)
-        );
-    }
-
-    #[test]
     fn test_parse_v2_workspace() {
         let content = r#"
 [workspace]
 pcb-version = "0.3"
-
-[[workspace.kicad_library]]
-version = "9.0.3"
-symbols = "gitlab.com/kicad/libraries/kicad-symbols"
-footprints = "gitlab.com/kicad/libraries/kicad-footprints"
-models = { KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
-parts = "https://example.com/kicad-parts.toml"
 
 [access]
 allow = ["*@weaverobots.com"]
@@ -788,12 +662,6 @@ allow = ["*@weaverobots.com"]
 
         let workspace = config.workspace.as_ref().unwrap();
         assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
-        assert_eq!(workspace.kicad_library.len(), 1);
-        assert_eq!(workspace.kicad_library[0].version, Version::new(9, 0, 3));
-        assert_eq!(
-            workspace.kicad_library[0].parts.as_deref(),
-            Some("https://example.com/kicad-parts.toml")
-        );
 
         let access = config.access.as_ref().unwrap();
         assert_eq!(access.allow, vec!["*@weaverobots.com"]);
@@ -1182,32 +1050,5 @@ load("@stdlib/foo.zen", "Bar")
             split_repo_and_subpath("gitlab.com/group/project/pkg"),
             ("gitlab.com/group/project/pkg", "")
         );
-    }
-
-    #[test]
-    fn test_validate_kicad_library_config() {
-        let mut entry = KicadLibraryConfig {
-            version: Version::new(9, 0, 3),
-            symbols: "gitlab.com/kicad/libraries/kicad-symbols".to_string(),
-            footprints: "gitlab.com/kicad/libraries/kicad-footprints".to_string(),
-            models: BTreeMap::from([(
-                "KICAD9_3DMODEL_DIR".to_string(),
-                "gitlab.com/kicad/libraries/kicad-packages3D".to_string(),
-            )]),
-            parts: None,
-            http_mirror: None,
-        };
-        assert!(validate_kicad_library_config(&entry).is_ok());
-
-        entry.symbols = "".to_string();
-        assert!(validate_kicad_library_config(&entry).is_err());
-
-        entry.symbols = "gitlab.com/kicad/libraries/kicad-symbols".to_string();
-        entry.parts = Some("".to_string());
-        assert!(validate_kicad_library_config(&entry).is_err());
-
-        entry.parts = None;
-        entry.http_mirror = Some("".to_string());
-        assert!(validate_kicad_library_config(&entry).is_err());
     }
 }

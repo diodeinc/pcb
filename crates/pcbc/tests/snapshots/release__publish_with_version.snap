@@ -44,7 +44,7 @@ expression: sb.snapshot_dir(staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <75395 bytes, sha256: 50def9a>
+=== netlist.json <74312 bytes, sha256: 6f30339>
 === src/boards/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -89,6 +89,7 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL)
 name = "TB0001"
 path = "TB0001.zen"
 === src/pcb.toml
+
 [workspace]
-name = "test_workspace"
 pcb-version = "0.4"
+name = "test_workspace"

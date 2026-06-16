@@ -110,7 +110,7 @@ check(LedValue == "hello from Led", "should load from Led")
     };
 
     // Board's resolution map: only include Led if it's a declared dependency
-    let mut board_deps_map = common::default_test_kicad_resolution_map();
+    let mut board_deps_map = BTreeMap::new();
     if !board_deps.is_empty() {
         board_deps_map.insert(led_url.clone(), PathBuf::from("/workspace/modules/Led"));
     }
@@ -138,7 +138,7 @@ check(LedValue == "hello from Led", "should load from Led")
                             identity: pcb_zen_core::resolution::FrozenPackageIdentity::Workspace(
                                 led_url,
                             ),
-                            deps: common::default_test_kicad_resolution_map(),
+                            deps: BTreeMap::new(),
                             parts: Vec::new(),
                         },
                     ),
@@ -146,7 +146,7 @@ check(LedValue == "hello from Led", "should load from Led")
                         stdlib_root,
                         pcb_zen_core::resolution::FrozenPackage {
                             identity: pcb_zen_core::resolution::FrozenPackageIdentity::Stdlib,
-                            deps: common::default_test_kicad_resolution_map(),
+                            deps: BTreeMap::new(),
                             parts: Vec::new(),
                         },
                     ),
@@ -156,7 +156,7 @@ check(LedValue == "hello from Led", "should load from Led")
                             identity: pcb_zen_core::resolution::FrozenPackageIdentity::Workspace(
                                 "github.com/myorg/project".to_string(),
                             ),
-                            deps: common::default_test_kicad_resolution_map(),
+                            deps: BTreeMap::new(),
                             parts: Vec::new(),
                         },
                     ),

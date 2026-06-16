@@ -1,6 +1,6 @@
 ---
 source: crates/pcbc/tests/tag.rs
-assertion_line: 103
+assertion_line: 97
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
@@ -36,7 +36,7 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <1514 bytes, sha256: 11d6ba5>
+=== netlist.json <1052 bytes, sha256: edd3882>
 === src/boards/Test/TB0001.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -51,6 +51,7 @@ internal_net = Net("INTERNAL")
 [board]
 name = "TB0001"
 === src/pcb.toml
+
 [workspace]
-name = "test_workspace"
 pcb-version = "0.4"
+name = "test_workspace"

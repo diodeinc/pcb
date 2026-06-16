@@ -1,7 +1,7 @@
 #[macro_use]
 mod common;
 
-use std::path::Path;
+use std::collections::HashMap;
 
 snapshot_eval!(symbol_with_definition, {
     "test.zen" => r#"
@@ -280,18 +280,9 @@ snapshot_eval!(symbol_positional_multiple_colons, {
 
 #[test]
 fn symbol_library_falls_back_to_kicad_symdir() {
-    let workspace_root = Path::new("/");
-    let mut files = common::stdlib_test_files_at(workspace_root);
-    files.remove(
-        &Path::new("/.pcb/cache")
-            .join("gitlab.com/kicad/libraries/kicad-symbols")
-            .join("10.0.3")
-            .join("power.kicad_sym")
-            .to_string_lossy()
-            .into_owned(),
-    );
+    let mut files = HashMap::new();
     files.insert(
-        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.3/power.kicad_symdir/VCC.kicad_sym".to_string(),
+        "power.kicad_symdir/VCC.kicad_sym".to_string(),
         r##"(kicad_symbol_lib
             (symbol "VCC"
                 (property "Reference" "#PWR" (at 0 0 0))
@@ -301,7 +292,7 @@ fn symbol_library_falls_back_to_kicad_symdir() {
         .to_string(),
     );
     files.insert(
-        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.3/power.kicad_symdir/GND.kicad_sym".to_string(),
+        "power.kicad_symdir/GND.kicad_sym".to_string(),
         r##"(kicad_symbol_lib
             (symbol "GND"
                 (property "Reference" "#PWR" (at 0 0 0))
@@ -311,17 +302,16 @@ fn symbol_library_falls_back_to_kicad_symdir() {
         .to_string(),
     );
     files.insert(
-        "/.pcb/cache/gitlab.com/kicad/libraries/kicad-symbols/10.0.3/power.kicad_symdir/BROKEN.kicad_sym".to_string(),
+        "power.kicad_symdir/BROKEN.kicad_sym".to_string(),
         "(kicad_symbol_lib (symbol \"BROKEN\"".to_string(),
     );
     files.insert(
         "/test.zen".to_string(),
         r#"
-            load("@stdlib/interfaces.zen", "Ground", "Power")
-            pwr = Power("VIN")
-            gnd = Ground()
-            print(pwr.symbol)
-            print(gnd.symbol)
+            vcc = Symbol("power.kicad_sym:VCC")
+            gnd = Symbol("power.kicad_sym:GND")
+            print(vcc)
+            print(gnd)
         "#
         .to_string(),
     );

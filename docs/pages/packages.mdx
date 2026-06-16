@@ -310,59 +310,14 @@ Example:
 
 [dependencies.indirect]
 "github.com/diodeinc/registry/components/TPS54331@1" = "1.0.2"
-"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"
+"github.com/diodeinc/registry/modules/Feedback@1" = "1.1.0"
 ```
 
-The `@1` and `@9` suffixes are compatibility lanes. They allow multiple
+The `@1` suffix is a compatibility lane. It allows multiple
 incompatible versions of the same package path to coexist while keeping the
 selected version exact.
 
 Do not edit `[dependencies.indirect]` by hand. Commit hydrated `pcb.toml` files.
-
-## KiCad-Style Libraries
-
-KiCad symbol, footprint, and 3D model relationships are configured at workspace
-root with `[[workspace.kicad_library]]` entries. Workspaces default to KiCad
-`9.0.3` and `10.0.3`; stdlib generics use KiCad `10.0.3`.
-
-```toml
-[[workspace.kicad_library]]
-version = "9.0.3" # concrete version; major is used for symbol↔footprint matching
-symbols = "gitlab.com/kicad/libraries/kicad-symbols"
-footprints = "gitlab.com/kicad/libraries/kicad-footprints"
-models = { KICAD9_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
-parts = "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml"
-http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"
-```
-
-The default KiCad 10 entry uses the same shape, but with:
-
-```toml
-[[workspace.kicad_library]]
-version = "10.0.3"
-symbols = "gitlab.com/kicad/libraries/kicad-symbols"
-footprints = "gitlab.com/kicad/libraries/kicad-footprints"
-models = { KICAD10_3DMODEL_DIR = "gitlab.com/kicad/libraries/kicad-packages3D" }
-parts = "https://kicad-mirror.api.diode.computer/kicad-parts-{version}.toml"
-http_mirror = "https://kicad-mirror.api.diode.computer/{repo_name}-{version}.tar.zst"
-```
-
-`parts` is optional. When set, the file is fetched alongside the selected symbols repo and parsed as a virtual `pcb.toml` containing `parts = [...]` entries for manifest-backed symbol→part inheritance. It supports the same `{repo}`, `{repo_name}`, `{version}`, and `{major}` placeholders as `http_mirror`.
-
-`http_mirror` is optional and supports `{repo}`, `{repo_name}`, `{version}`, and `{major}` placeholders.
-
-KiCad aliases in `.zen` files are reconciled by `pcb sync`. Transitive KiCad
-dependencies are written to `[dependencies.indirect]` using lane-qualified keys:
-
-```toml
-[dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-footprints@10" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-packages3D@10" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-symbols@10" = "10.0.3"
-```
-
-Then regular dependency aliases apply (for example `@kicad-symbols`, `@kicad-footprints`).
 
 ## Vendoring (`[workspace].vendor`)
 

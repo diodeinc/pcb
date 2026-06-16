@@ -10,7 +10,6 @@ use crate::ast_utils::visit_string_literals;
 
 #[derive(Debug, Default)]
 pub struct CollectedImports {
-    pub aliases: BTreeSet<String>,
     pub urls: BTreeSet<String>,
     pub relative_paths: Vec<PathBuf>,
 }
@@ -59,10 +58,7 @@ fn extract_from_literal(s: &str, result: &mut CollectedImports) {
 
 fn collect_spec(s: &str, spec: LoadSpec, result: &mut CollectedImports) {
     match spec {
-        LoadSpec::Stdlib { .. } | LoadSpec::PackageUri { .. } => {}
-        LoadSpec::Package { package, .. } => {
-            result.aliases.insert(package);
-        }
+        LoadSpec::Stdlib { .. } | LoadSpec::PackageUri { .. } | LoadSpec::Package { .. } => {}
         LoadSpec::Url { .. } => {
             result.urls.insert(s.to_string());
         }
@@ -102,25 +98,21 @@ mod tests {
         let mut result = CollectedImports::default();
 
         extract_from_literal(
-            "@kicad-footprints/Resistor_SMD.pretty/R_0603.kicad_mod",
+            "@footprints/Resistor_SMD.pretty/R_0603.kicad_mod",
             &mut result,
         );
-        assert!(result.aliases.contains("kicad-footprints"));
         assert!(result.urls.is_empty());
 
         result = CollectedImports::default();
         extract_from_literal("@stdlib/units.zen", &mut result);
-        assert!(result.aliases.is_empty());
         assert!(result.urls.is_empty());
 
         result = CollectedImports::default();
         extract_from_literal("github.com/diodeinc/stdlib/units.zen", &mut result);
-        assert!(result.aliases.is_empty());
         assert!(result.urls.contains("github.com/diodeinc/stdlib/units.zen"));
 
         result = CollectedImports::default();
-        extract_from_literal("@kicad-footprints/{}.pretty/{}.kicad_mod", &mut result);
-        assert!(result.aliases.contains("kicad-footprints"));
+        extract_from_literal("@footprints/{}.pretty/{}.kicad_mod", &mut result);
         assert!(result.urls.is_empty());
 
         result = CollectedImports::default();
@@ -128,7 +120,6 @@ mod tests {
             "github.com/example/components/Resistor/Resistor.zen",
             &mut result,
         );
-        assert!(result.aliases.is_empty());
         assert!(
             result
                 .urls
@@ -150,7 +141,6 @@ mod tests {
             &mut result,
         );
         extract_from_literal("GPIO_VREF(1.8v/3.3v_Input)", &mut result);
-        assert!(result.aliases.is_empty());
         assert!(result.urls.is_empty());
         assert!(result.relative_paths.is_empty());
     }

@@ -118,7 +118,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
     "user": "<USER>"
   }
 }
-=== netlist.json <76134 bytes, sha256: c657649>
+=== netlist.json <75030 bytes, sha256: 4c96f2c>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -163,6 +163,7 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL)
 name = "TestBoard"
 path = "TestBoard.zen"
 === src/pcb.toml
+
 [workspace]
-name = "test_workspace"
 pcb-version = "0.4"
+name = "test_workspace"

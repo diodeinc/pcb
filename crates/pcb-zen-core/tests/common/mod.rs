@@ -5,79 +5,34 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const TEST_KICAD_LIBRARY_VERSION: &str = "10.0.3";
-const TEST_KICAD_ADDITIONAL_LIBRARY_VERSION: &str = "9.0.3";
-const TEST_KICAD_SYMBOLS_REPO: &str = "gitlab.com/kicad/libraries/kicad-symbols";
-const TEST_KICAD_FOOTPRINTS_REPO: &str = "gitlab.com/kicad/libraries/kicad-footprints";
-const TEST_KICAD_MODELS_REPO: &str = "gitlab.com/kicad/libraries/kicad-packages3D";
-
-fn test_kicad_symbols_root() -> PathBuf {
-    PathBuf::from("/.pcb/cache")
-        .join(TEST_KICAD_SYMBOLS_REPO)
-        .join(TEST_KICAD_LIBRARY_VERSION)
-}
-
-fn test_kicad_footprints_root() -> PathBuf {
-    PathBuf::from("/.pcb/cache")
-        .join(TEST_KICAD_FOOTPRINTS_REPO)
-        .join(TEST_KICAD_LIBRARY_VERSION)
-}
-
-fn test_kicad_models_root() -> PathBuf {
-    PathBuf::from("/.pcb/cache")
-        .join(TEST_KICAD_MODELS_REPO)
-        .join(TEST_KICAD_LIBRARY_VERSION)
-}
-
-fn power_symbol_library() -> String {
-    r##"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
-  (symbol "VCC" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
+fn split_power_symbol(name: &str) -> String {
+    format!(
+        r##"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
+  (symbol "{name}" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
     (property "Reference" "#PWR" (id 0) (at 0 0 0))
-    (symbol "VCC_1_1")
-  )
-  (symbol "GND" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
-    (property "Reference" "#PWR" (id 0) (at 0 0 0))
-    (symbol "GND_1_1")
+    (symbol "{name}_1_1")
   )
 )"##
-    .to_string()
+    )
 }
 
-pub fn default_test_kicad_resolution_map() -> BTreeMap<String, PathBuf> {
-    BTreeMap::from([
+fn stdlib_power_symbol_files(workspace_root: &Path) -> HashMap<String, String> {
+    let root = workspace_root.join(".pcb/stdlib/kicad-symbols/power.kicad_symdir");
+    HashMap::from([
         (
-            TEST_KICAD_SYMBOLS_REPO.to_string(),
-            test_kicad_symbols_root(),
+            root.join("VCC.kicad_sym").to_string_lossy().into_owned(),
+            split_power_symbol("VCC"),
         ),
         (
-            TEST_KICAD_FOOTPRINTS_REPO.to_string(),
-            test_kicad_footprints_root(),
+            root.join("GND.kicad_sym").to_string_lossy().into_owned(),
+            split_power_symbol("GND"),
         ),
-        (TEST_KICAD_MODELS_REPO.to_string(), test_kicad_models_root()),
     ])
 }
 
-fn fake_kicad_test_files() -> HashMap<String, String> {
-    [
-        PathBuf::from("/.pcb/cache")
-            .join(TEST_KICAD_SYMBOLS_REPO)
-            .join(TEST_KICAD_LIBRARY_VERSION),
-        PathBuf::from("/.pcb/cache")
-            .join(TEST_KICAD_SYMBOLS_REPO)
-            .join(TEST_KICAD_ADDITIONAL_LIBRARY_VERSION),
-    ]
-    .into_iter()
-    .map(|root| {
-        (
-            root.join("power.kicad_sym").to_string_lossy().into_owned(),
-            power_symbol_library(),
-        )
-    })
-    .collect()
-}
-
-/// Return stdlib `.zen` files keyed by their absolute in-memory path.
-/// Also includes the minimal fake KiCad symbol library needed by stdlib prelude defaults.
+/// Return stdlib `.zen` files keyed by their absolute in-memory path
+/// (e.g. `"/.pcb/stdlib/interfaces.zen"` or `"/workspace/.pcb/stdlib/interfaces.zen"`).
+/// Also includes the minimal symbol files needed by stdlib prelude defaults.
 pub fn stdlib_test_files_at(workspace_root: &Path) -> HashMap<String, String> {
     let stdlib_root = pcb_zen_core::workspace_stdlib_root(workspace_root);
     pcb_zen_core::stdlib::files_for_tests()
@@ -88,7 +43,7 @@ pub fn stdlib_test_files_at(workspace_root: &Path) -> HashMap<String, String> {
                 contents,
             )
         })
-        .chain(fake_kicad_test_files())
+        .chain(stdlib_power_symbol_files(workspace_root))
         .collect()
 }
 
@@ -187,7 +142,6 @@ pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::Re
             symbol_files: Vec::new(),
         },
     );
-    let default_deps = default_test_kicad_resolution_map();
     let workspace_info = pcb_zen_core::workspace::WorkspaceInfo {
         root: workspace_root.to_path_buf(),
         cache_dir: PathBuf::new(),
@@ -208,7 +162,7 @@ pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::Re
                             identity: pcb_zen_core::resolution::FrozenPackageIdentity::Workspace(
                                 "test".to_string(),
                             ),
-                            deps: default_deps.clone(),
+                            deps: BTreeMap::new(),
                             parts: Vec::new(),
                         },
                     ),
@@ -216,7 +170,7 @@ pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::Re
                         pcb_zen_core::workspace_stdlib_root(workspace_root),
                         pcb_zen_core::resolution::FrozenPackage {
                             identity: pcb_zen_core::resolution::FrozenPackageIdentity::Stdlib,
-                            deps: default_deps,
+                            deps: BTreeMap::new(),
                             parts: Vec::new(),
                         },
                     ),

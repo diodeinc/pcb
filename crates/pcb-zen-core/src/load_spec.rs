@@ -195,11 +195,11 @@ mod tests {
 
     #[test]
     fn test_parse_load_spec_gitlab_nested_path() {
-        let spec = LoadSpec::parse("gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym");
+        let spec = LoadSpec::parse("gitlab.com/example/packages/components/Device.kicad_sym");
         assert_eq!(
             spec,
             Some(LoadSpec::Url {
-                url: "gitlab.com/kicad/libraries/kicad-symbols/Device.kicad_sym".to_string(),
+                url: "gitlab.com/example/packages/components/Device.kicad_sym".to_string(),
             })
         );
     }

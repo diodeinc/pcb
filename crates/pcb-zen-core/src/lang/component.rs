@@ -2,7 +2,6 @@
 
 use allocative::Allocative;
 use pcb_sch::physical::PhysicalValue;
-use semver::Version;
 use starlark::{
     any::ProvidesStaticType,
     codemap::ResolvedSpan,
@@ -38,9 +37,6 @@ use super::path::normalize_path_to_package_uri;
 use super::symbol::{SymbolType, SymbolValue, symbol_pins_from_pad_map};
 use super::validation::validate_identifier_name;
 
-use crate::kicad_library::{
-    KicadSymbolLibraryMatch, match_kicad_library_for_symbol_repo, package_coord_for_path,
-};
 use anyhow::anyhow;
 use thiserror::Error;
 
@@ -1057,27 +1053,6 @@ fn infer_footprint_stem_from_property(value: &str) -> Option<String> {
     }
 }
 
-/// Parse KiCad's `Footprint` property form `<lib>:<fp>`.
-///
-/// Returns `None` for the legacy `<stem>:<stem>` form because that is handled
-/// by `infer_footprint_stem_from_property`.
-fn infer_kicad_lib_fp_from_property(value: &str) -> Option<(String, String)> {
-    let trimmed = value.trim();
-    let (lib, fp) = trimmed.split_once(':')?;
-    if lib.is_empty()
-        || fp.is_empty()
-        || fp.contains(':')
-        || lib == fp
-        || lib.contains('/')
-        || lib.contains('\\')
-        || fp.contains('/')
-        || fp.contains('\\')
-    {
-        return None;
-    }
-    Some((lib.to_owned(), fp.to_owned()))
-}
-
 fn infer_local_footprint_from_symbol_property(
     symbol_source: &Path,
     footprint_prop: &str,
@@ -1098,62 +1073,6 @@ fn infer_local_footprint_from_symbol_property(
     }
 
     Ok(Some(candidate.to_string_lossy().into_owned()))
-}
-
-fn infer_kicad_footprint_fallback(
-    symbol_source: &Path,
-    footprint_prop: &str,
-    eval_ctx: &crate::EvalContext,
-) -> starlark::Result<Option<String>> {
-    let Some((lib, fp)) = infer_kicad_lib_fp_from_property(footprint_prop) else {
-        return Ok(None);
-    };
-    let Some(current_file) = eval_ctx.get_source_path() else {
-        return Ok(None);
-    };
-    let Some((symbol_repo, symbol_version, _)) =
-        package_coord_for_path(symbol_source, eval_ctx.resolution().package_roots_ref())
-    else {
-        return Ok(None);
-    };
-    let Ok(version) = Version::parse(&symbol_version) else {
-        return Ok(None);
-    };
-
-    let workspace_cfg = eval_ctx.resolution().workspace_info.workspace_config();
-    let footprints_repo = match match_kicad_library_for_symbol_repo(
-        &workspace_cfg.kicad_library,
-        &symbol_repo,
-        &version,
-    ) {
-        KicadSymbolLibraryMatch::Matched(entry) => entry.footprints.clone(),
-        KicadSymbolLibraryMatch::SelectorMismatch => {
-            return Err(starlark::Error::new_other(anyhow!(
-                "Failed to infer footprint from KiCad symbol property '{}': symbol source '{}' resolved to {}@{}, but no matching [[workspace.kicad_library]] major version was found.",
-                footprint_prop,
-                symbol_source.display(),
-                symbol_repo,
-                symbol_version
-            )));
-        }
-        KicadSymbolLibraryMatch::NotSymbolRepo => return Ok(None),
-    };
-
-    let inferred_url = format!("{footprints_repo}/{lib}.pretty/{fp}.kicad_mod");
-    let resolved = eval_ctx
-        .get_config()
-        .resolve_path(&inferred_url, current_file)
-        .map_err(|_e| {
-            starlark::Error::new_other(anyhow!(
-                "Failed to infer footprint from KiCad symbol property '{}': could not resolve inferred footprint path '{}' for {}@{}.",
-                footprint_prop,
-                inferred_url,
-                footprints_repo,
-                symbol_version
-            ))
-        })?;
-
-    Ok(Some(resolved.to_string_lossy().into_owned()))
 }
 
 fn resolve_component_footprint(
@@ -1197,14 +1116,8 @@ fn resolve_component_footprint(
         return Ok(inferred);
     }
 
-    if let Some(inferred) =
-        infer_kicad_footprint_fallback(&symbol_source, footprint_prop, eval_ctx)?
-    {
-        return Ok(inferred);
-    }
-
     Err(starlark::Error::new_other(anyhow!(
-        "`Footprint` property '{}' is not inferable; expected '<stem>' or '<lib>:<fp>'",
+        "`Footprint` property '{}' is not inferable; expected '<stem>' or legacy '<stem>:<stem>'",
         footprint_prop
     )))
 }
@@ -2017,11 +1930,9 @@ where
                 )));
             };
 
-            // Resolve footprint source in one place:
-            // explicit `footprint` if set, otherwise infer from symbol `Footprint` as either
-            // `<symbol_dir>/<stem>.kicad_mod` or KiCad `<lib>:<fp>` mapped through
-            // matching `[[workspace.kicad_library]]` to `<footprints-repo>/<lib>.pretty/<fp>.kicad_mod`,
-            // then normalize to `package://...` when possible.
+            // Resolve footprint source in one place: explicit `footprint` if set,
+            // otherwise infer `<symbol_dir>/<stem>.kicad_mod` from the symbol
+            // `Footprint`, then normalize to `package://...` when possible.
             let ctx = eval_ctx.eval_context().ok_or_else(|| {
                 starlark::Error::new_other(anyhow!("Component() requires an evaluation context"))
             })?;

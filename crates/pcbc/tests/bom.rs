@@ -206,10 +206,6 @@ Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc, P2 = gnd)
 const WORKSPACE_TOML: &str = r#"
 [workspace]
 pcb-version = "0.4"
-
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 #[test]

@@ -12,7 +12,6 @@ pub mod diagnostics;
 pub mod erc;
 mod file_provider;
 pub mod graph;
-pub mod kicad_library;
 pub mod lang;
 pub mod load_spec;
 mod moved;

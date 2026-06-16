@@ -20,10 +20,6 @@ const PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.4"
 name = "test_workspace"
-
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 const PCB_TOML_WITH_PATCH: &str = r#"
@@ -32,8 +28,6 @@ pcb-version = "0.4"
 name = "test_workspace"
 
 [dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "github.com/example/components/Qux" = { version = "1.2.3", branch = "main" }
 "github.com/example/components/Quux" = { rev = "def5678" }
 
