@@ -75,11 +75,9 @@ pub fn is_stdlib_module_path(path: &str) -> bool {
 
 /// Return the workspace-local stdlib root.
 ///
-/// The resulting path is `<workspace_root>/.pcb/stdlib-<toolchain-version>`.
+/// The resulting path is `<workspace_root>/.pcb/stdlib`.
 pub fn workspace_stdlib_root(workspace_root: &Path) -> PathBuf {
-    workspace_root
-        .join(".pcb")
-        .join(format!("{STDLIB_MODULE_PATH}-{TOOLCHAIN_VERSION}"))
+    workspace_root.join(".pcb").join(STDLIB_MODULE_PATH)
 }
 
 /// Attribute, net, and record field constants used across the core

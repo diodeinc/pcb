@@ -822,7 +822,7 @@ pcb-version = "0.3"
         let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
         assert_eq!(
             info.workspace_stdlib_dir(),
-            Path::new("/repo").join(format!(".pcb/stdlib-{}", crate::TOOLCHAIN_VERSION))
+            Path::new("/repo").join(".pcb/stdlib")
         );
     }
 

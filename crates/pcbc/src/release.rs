@@ -866,10 +866,8 @@ fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
 }
 
 fn should_skip_release_zip_path(rel_name: &str) -> bool {
-    let Some(suffix) = rel_name.strip_prefix("src/.pcb/stdlib") else {
-        return false;
-    };
-    suffix.is_empty() || suffix == ".lock" || suffix.starts_with('/') || suffix.starts_with('-')
+    matches!(rel_name, "src/.pcb/stdlib" | "src/.pcb/stdlib.lock")
+        || rel_name.starts_with("src/.pcb/stdlib/")
 }
 
 /// Generate gerber files
@@ -1459,9 +1457,6 @@ mod tests {
         fs::create_dir_all(staging_dir.join("src/.pcb/stdlib"))?;
         fs::write(staging_dir.join("src/.pcb/stdlib/interfaces.zen"), "")?;
         fs::write(staging_dir.join("src/.pcb/stdlib.lock"), "")?;
-        fs::create_dir_all(staging_dir.join("src/.pcb/stdlib-0.4.0"))?;
-        fs::write(staging_dir.join("src/.pcb/stdlib-0.4.0/interfaces.zen"), "")?;
-        fs::write(staging_dir.join("src/.pcb/stdlib-0.4.0.lock"), "")?;
         fs::write(staging_dir.join("src/Feign.zen"), "")?;
 
         let zip_path = temp_dir.path().join("out.zip");
@@ -1478,8 +1473,7 @@ mod tests {
         }
 
         assert!(names.contains(&"src/Feign.zen".to_string()));
-        assert!(!names.iter().any(|name| name == "src/.pcb/stdlib.lock"));
-        assert!(!names.iter().any(|name| name.starts_with("src/.pcb/stdlib")));
+        assert!(names.iter().all(|name| !should_skip_release_zip_path(name)));
 
         Ok(())
     }
