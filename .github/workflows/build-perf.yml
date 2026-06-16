@@ -32,8 +32,9 @@ jobs:
 
       - name: Stash head binary
         run: |
-          mkdir -p "$RUNNER_TEMP/pcbc-head"
+          mkdir -p "$RUNNER_TEMP/pcbc-head/lib"
           cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-head/pcbc"
+          cp -R "lib/std" "$RUNNER_TEMP/pcbc-head/lib/std"
 
       - name: Create base worktree
         run: |
@@ -46,8 +47,9 @@ jobs:
 
       - name: Stash base binary
         run: |
-          mkdir -p "$RUNNER_TEMP/pcbc-base"
+          mkdir -p "$RUNNER_TEMP/pcbc-base/lib"
           cp "target/release/pcbc" "$RUNNER_TEMP/pcbc-base/pcbc"
+          cp -R "$RUNNER_TEMP/pcb-base/lib/std" "$RUNNER_TEMP/pcbc-base/lib/std"
 
       - name: Checkout benchmark workspace
         run: |

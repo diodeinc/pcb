@@ -49,7 +49,7 @@ jobs:
           pcb +local --help
 
       - name: Prepare stdlib artifact
-        run: git archive --format=tar HEAD:lib/std | zstd -q -3 -c > "$RUNNER_TEMP/stdlib.tar.zst"
+        run: tar -C lib/std -cf - . | zstd -q -3 -c > "$RUNNER_TEMP/stdlib.tar.zst"
 
       - name: Build WASM bundle
         run: ./bin/build-wasm-bundle.sh
