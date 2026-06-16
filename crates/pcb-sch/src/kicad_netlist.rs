@@ -427,9 +427,10 @@ fn collect_pins_for_component(
 // Footprint conversion helper
 // -------------------------------------------------------------------------------------------------
 
-/// Convert footprint strings that may point to a `.kicad_mod` file into a KiCad `lib:fp` identifier.
-/// Returns the (possibly modified) footprint string and optional `(lib_name, dir)` tuple that can be
-/// used to populate the fp-lib-table.
+/// Convert a footprint file path into a KiCad `lib:fp` identifier.
+///
+/// Returns the formatted footprint string and optional `(lib_name, dir)` tuple
+/// that can be used to populate the fp-lib-table.
 pub fn format_footprint(fp: &str) -> (String, Option<(String, PathBuf)>) {
     format_footprint_with_package_roots(fp, &BTreeMap::new())
 }
@@ -439,10 +440,6 @@ pub fn format_footprint_with_package_roots(
     fp: &str,
     package_roots: &BTreeMap<String, PathBuf>,
 ) -> (String, Option<(String, PathBuf)>) {
-    if is_kicad_lib_fp(fp) {
-        return (fp.to_owned(), None);
-    }
-
     let resolved = if fp.starts_with(PACKAGE_URI_PREFIX) {
         crate::resolve_package_uri(fp, package_roots).unwrap_or_else(|_| PathBuf::from(fp))
     } else {
@@ -458,8 +455,10 @@ pub fn try_format_footprint_with_package_roots(
     fp: &str,
     package_roots: &BTreeMap<String, PathBuf>,
 ) -> anyhow::Result<(String, Option<(String, PathBuf)>)> {
-    if is_kicad_lib_fp(fp) {
-        return Ok((fp.to_owned(), None));
+    if looks_like_raw_footprint_library_ref(fp) {
+        anyhow::bail!(
+            "Raw KiCad footprint library references like '{fp}' are not supported; reference a .kicad_mod file path instead"
+        );
     }
 
     let resolved = if fp.starts_with(PACKAGE_URI_PREFIX) {
@@ -649,20 +648,12 @@ fn strip_final_pretty_suffix(name: &str) -> &str {
     name.strip_suffix(".pretty").unwrap_or(name)
 }
 
-/// Determine whether a given string is a KiCad `lib:footprint` reference rather than a file path.
-///
-/// The heuristic is:
-/// 1. The string contains exactly one `:` splitting it into `(lib, footprint)`.
-/// 2. Neither half contains path separators (`/` or `\`).
-/// 3. The left half is not a single-letter Windows drive designator such as `C`.
-fn is_kicad_lib_fp(s: &str) -> bool {
+fn looks_like_raw_footprint_library_ref(s: &str) -> bool {
     if let Some((lib, fp)) = s.split_once(':') {
-        // Filter out Windows drive prefixes like "C:".
         if lib.len() == 1 && lib.chars().all(|c| c.is_ascii_alphabetic()) {
             return false;
         }
 
-        // Any path separator indicates this is still a filesystem path.
         if lib.contains('/') || lib.contains('\\') || fp.contains('/') || fp.contains('\\') {
             return false;
         }
@@ -812,24 +803,25 @@ mod tests {
     }
 
     #[test]
-    fn test_is_kicad_lib_fp() {
-        // Valid KiCad lib:fp format
-        assert!(is_kicad_lib_fp("Resistor_SMD:R_0603_1608Metric"));
-        assert!(is_kicad_lib_fp("Capacitor_SMD:C_0805_2012Metric"));
+    fn test_try_format_rejects_raw_footprint_library_ref() {
+        let err = try_format_footprint_with_package_roots(
+            "Resistor_SMD:R_0603_1608Metric",
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
 
-        // Windows paths (should return false)
-        assert!(!is_kicad_lib_fp("C:\\path\\to\\footprint.kicad_mod"));
-        assert!(!is_kicad_lib_fp("C:footprint.kicad_mod"));
+        assert!(
+            err.to_string()
+                .contains("Raw KiCad footprint library references")
+        );
 
-        // Unix paths (should return false)
-        assert!(!is_kicad_lib_fp("/path/to/footprint.kicad_mod"));
-        assert!(!is_kicad_lib_fp("./relative/path.kicad_mod"));
-
-        // No colon (should return false)
-        assert!(!is_kicad_lib_fp("footprint_name"));
-
-        // Multiple colons (should return false since split_once will only match first)
-        assert!(is_kicad_lib_fp("lib:footprint:extra")); // This will be treated as lib "lib" and footprint "footprint:extra"
+        assert!(
+            try_format_footprint_with_package_roots(
+                "/path/to/footprint.kicad_mod",
+                &BTreeMap::new(),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
