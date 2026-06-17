@@ -24,10 +24,13 @@ and `lib/std/kicad-footprints/LICENSE.md`.
 | Local path | Changes |
 | --- | --- |
 | `lib/std/kicad-footprints/Capacitor_SMD.pretty/` | Selected files only; embedded referenced STEP models |
+| `lib/std/kicad-footprints/Connector.pretty/` | Selected files only; unmodified |
+| `lib/std/kicad-footprints/Connector_JST.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/Connector_PinHeader_1.27mm.pretty/` | Selected files only; embedded STEP models |
 | `lib/std/kicad-footprints/Connector_PinHeader_2.54mm.pretty/` | Selected files only; embedded STEP models |
 | `lib/std/kicad-footprints/Connector_PinSocket_1.27mm.pretty/` | Selected files only; embedded STEP models |
 | `lib/std/kicad-footprints/Connector_PinSocket_2.54mm.pretty/` | Selected files only; embedded STEP models |
+| `lib/std/kicad-footprints/Connector_USB.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/Crystal.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/Diode_SMD.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/Fiducial.pretty/` | Selected files only; embedded referenced STEP models |
@@ -41,6 +44,7 @@ and `lib/std/kicad-footprints/LICENSE.md`.
 | `lib/std/kicad-footprints/TestPoint.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-symbols/Connector.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Connector_Generic.kicad_symdir/` | Selected files only; unmodified |
+| `lib/std/kicad-symbols/Connector_Generic_MountingPin.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Device.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Mechanical.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Simulation_SPICE.kicad_symdir/` | Selected files only; unmodified |
