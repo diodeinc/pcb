@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-17
+
 ### Fixed
 
 - Net aliases used inside `io()` interface templates no longer unregister the original net name.
@@ -1213,7 +1215,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.3.93...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/diodeinc/pcb/compare/v0.3.93...v0.4.0
 [0.3.93]: https://github.com/diodeinc/pcb/compare/v0.3.92...v0.3.93
 [0.3.92]: https://github.com/diodeinc/pcb/compare/v0.3.91...v0.3.92
 [0.3.91]: https://github.com/diodeinc/pcb/compare/v0.3.90...v0.3.91
