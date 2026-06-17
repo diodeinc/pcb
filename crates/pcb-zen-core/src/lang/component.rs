@@ -1075,6 +1075,51 @@ fn infer_local_footprint_from_symbol_property(
     Ok(Some(candidate.to_string_lossy().into_owned()))
 }
 
+fn infer_kicad_stdlib_footprint_from_symbol_property(
+    footprint_prop: &str,
+    eval_ctx: &crate::EvalContext,
+) -> starlark::Result<Option<String>> {
+    let trimmed = footprint_prop.trim();
+    let Some((lib, fp)) = trimmed.split_once(':') else {
+        return Ok(None);
+    };
+    if lib.is_empty()
+        || fp.is_empty()
+        || fp.contains(':')
+        || lib == fp
+        || lib.contains('/')
+        || lib.contains('\\')
+        || fp.contains('/')
+        || fp.contains('\\')
+    {
+        return Ok(None);
+    }
+
+    let Some(current_file) = eval_ctx.get_source_path() else {
+        return Ok(None);
+    };
+    let footprint_path = format!("@stdlib/kicad-footprints/{lib}.pretty/{fp}.kicad_mod");
+    let candidate = eval_ctx
+        .get_config()
+        .resolve_path(&footprint_path, current_file)
+        .map_err(|e| {
+            starlark::Error::new_other(anyhow!(
+                "Failed to resolve bundled KiCad footprint '{}': {}",
+                footprint_path,
+                e
+            ))
+        })?;
+
+    if !eval_ctx.file_provider().exists(&candidate) {
+        return Err(starlark::Error::new_other(anyhow!(
+            "Bundled KiCad footprint not found: {}",
+            footprint_path
+        )));
+    }
+
+    Ok(Some(candidate.to_string_lossy().into_owned()))
+}
+
 fn resolve_component_footprint(
     explicit_footprint: Option<String>,
     final_symbol: &SymbolValue,
@@ -1116,8 +1161,14 @@ fn resolve_component_footprint(
         return Ok(inferred);
     }
 
+    if let Some(inferred) =
+        infer_kicad_stdlib_footprint_from_symbol_property(footprint_prop, eval_ctx)?
+    {
+        return Ok(inferred);
+    }
+
     Err(starlark::Error::new_other(anyhow!(
-        "`Footprint` property '{}' is not inferable; expected '<stem>' or legacy '<stem>:<stem>'",
+        "`Footprint` property '{}' is not inferable; expected '<stem>', legacy '<stem>:<stem>', or KiCad '<lib>:<footprint>'",
         footprint_prop
     )))
 }
