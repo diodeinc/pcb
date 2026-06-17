@@ -23,6 +23,7 @@ and `lib/std/kicad-footprints/LICENSE.md`.
 
 | Local path | Changes |
 | --- | --- |
+| `lib/std/kicad-footprints/Button_Switch_SMD.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/Capacitor_SMD.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/Connector.pretty/` | Selected files only; unmodified |
 | `lib/std/kicad-footprints/Connector_JST.pretty/` | Selected files only; embedded referenced STEP models |
@@ -39,15 +40,24 @@ and `lib/std/kicad-footprints/LICENSE.md`.
 | `lib/std/kicad-footprints/LED_SMD.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/MountingHole.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/NetTie.pretty/` | Selected files only; embedded referenced STEP models |
+| `lib/std/kicad-footprints/Oscillator.pretty/` | Selected files only; embedded referenced STEP models |
+| `lib/std/kicad-footprints/Package_DFN_QFN.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/Package_SO.pretty/` | Selected files only; embedded referenced STEP models |
+| `lib/std/kicad-footprints/Package_SON.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/Resistor_SMD.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-footprints/TestPoint.pretty/` | Selected files only; embedded referenced STEP models |
 | `lib/std/kicad-symbols/Connector.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Connector_Generic.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Connector_Generic_MountingPin.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Device.kicad_symdir/` | Selected files only; unmodified |
+| `lib/std/kicad-symbols/MCU_RaspberryPi.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Mechanical.kicad_symdir/` | Selected files only; unmodified |
+| `lib/std/kicad-symbols/Memory_Flash.kicad_symdir/` | Selected files only; unmodified |
+| `lib/std/kicad-symbols/Oscillator.kicad_symdir/` | Selected files only; unmodified |
+| `lib/std/kicad-symbols/Power_Protection.kicad_symdir/` | Selected files only; unmodified |
+| `lib/std/kicad-symbols/Regulator_Linear.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Simulation_SPICE.kicad_symdir/` | Selected files only; unmodified |
+| `lib/std/kicad-symbols/Switch.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/power.kicad_symdir/` | Selected files only; unmodified |
 | `lib/std/kicad-symbols/Simulation_SPICE.sp` | Unmodified |
 
