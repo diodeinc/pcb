@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changes
 
+- Stdlib generic passives, diodes, crystals, ferrite beads, and test points now use KiCad small schematic symbols by default.
 - Removed legacy v1/`pcb.sum` resolution, disabled `pcb update`, and dropped obsolete `--locked` read-command flags.
 - `pcb migrate` removes deprecated `[workspace].members`; other commands reject it.
 - `pcb sync` no longer writes stdlib-only KiCad dependency entries.

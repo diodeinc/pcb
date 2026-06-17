@@ -43,9 +43,9 @@ GND = io(Net) if "4Pin" in str(package) else None
 
 def _symbol(package: Package):
     if "2Pin" in str(package):
-        return "../kicad-symbols/Device.kicad_symdir/Crystal.kicad_sym"
+        return "../kicad-symbols/Device.kicad_symdir/Crystal_Small.kicad_sym"
     else:
-        return "../kicad-symbols/Device.kicad_symdir/Crystal_GND24.kicad_sym"
+        return "../kicad-symbols/Device.kicad_symdir/Crystal_GND24_Small.kicad_sym"
 
 
 def _footprint(package: Package):

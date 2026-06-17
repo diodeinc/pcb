@@ -35,9 +35,9 @@ P2 = io(Net)
 
 def _symbol(mount: Mount, package: Package, use_us_symbol: bool):
     if use_us_symbol:
-        name = "R_US"
+        name = "R_Small_US"
     else:
-        name = "R"
+        name = "R_Small"
 
     return "../kicad-symbols/Device.kicad_symdir/" + name + ".kicad_sym"
 

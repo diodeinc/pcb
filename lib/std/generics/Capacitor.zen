@@ -48,7 +48,7 @@ if esr:
 
 
 def _symbol(mount: Mount, package: Package):
-    return "../kicad-symbols/Device.kicad_symdir/C.kicad_sym"
+    return "../kicad-symbols/Device.kicad_symdir/C_Small.kicad_sym"
 
 
 def _footprint(mount: Mount, package: Package):
