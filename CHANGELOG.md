@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Read/evaluation paths now require hydrated manifests and never mutate dependency state.
 - `pcb info` reports cache dependencies using stable `.pcb/cache` paths.
 - Frozen eval root detection uses resolved package roots.
+- Restored stdlib `Crystal` support for the `2012_2Pin` package with its bundled KiCad footprint.
 
 ### Changes
 

@@ -6,6 +6,7 @@ load("../utils.zen", "format_value")
 Mount = enum("SMD")
 Package = enum(
     "0603_4Pin",
+    "2012_2Pin",
     "3215_2Pin",
     "5032_2Pin",
     "3225_4Pin",
@@ -49,6 +50,7 @@ def _symbol(package: Package):
 
 def _footprint(package: Package):
     _footprints = {
+        Package("2012_2Pin"): "../kicad-footprints/Crystal.pretty/Crystal_SMD_2012-2Pin_2.0x1.2mm.kicad_mod",
         Package("3215_2Pin"): "../kicad-footprints/Crystal.pretty/Crystal_SMD_3215-2Pin_3.2x1.5mm.kicad_mod",
         Package("5032_2Pin"): "../kicad-footprints/Crystal.pretty/Crystal_SMD_5032-2Pin_5.0x3.2mm.kicad_mod",
         Package("3225_4Pin"): "../kicad-footprints/Crystal.pretty/Crystal_SMD_3225-4Pin_3.2x2.5mm.kicad_mod",
