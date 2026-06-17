@@ -64,10 +64,6 @@ const SIMPLE_BOARD_WITH_POSITIONS_ZEN: &str = r#"
 # ```pcb
 # [workspace]
 # pcb-version = "0.4"
-#
-# [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -117,20 +113,12 @@ LedModule(name="LED2", led_color="red", VCC=vcc_3v3, GND=gnd, CTRL=Gpio("LED_CTR
 const WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.4"
-
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 const SIMPLE_BOARD_WITH_MIRROR_POSITIONS_ZEN: &str = r#"
 # ```pcb
 # [workspace]
 # pcb-version = "0.4"
-#
-# [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -255,10 +243,6 @@ fn test_netlist_no_positions() {
 # ```pcb
 # [workspace]
 # pcb-version = "0.4"
-#
-# [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -285,10 +269,6 @@ fn test_netlist_mixed_position_formats() {
 # ```pcb
 # [workspace]
 # pcb-version = "0.4"
-#
-# [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -359,7 +339,7 @@ vcc = io(Power)
 
 Component(
     name = "R1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"1": "1"},
     skip_bom = True,
     pins = {"1": vcc},
@@ -370,10 +350,6 @@ const NOT_CONNECTED_BOARD_ZEN: &str = r#"
 # ```pcb
 # [workspace]
 # pcb-version = "0.4"
-#
-# [dependencies]
-# "gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-# "gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 # ```
 
 PowerConsumer = Module("PowerConsumer.zen")
@@ -390,7 +366,7 @@ GND = io("GND", Net)
 
 Component(
     name = "R1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     skip_bom = True,
     pins = {"1": IN_GD, "2": GND},

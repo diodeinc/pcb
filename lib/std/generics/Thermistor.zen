@@ -45,18 +45,15 @@ def _symbol(
     if use_us_symbol:
         name = name + "_US"
 
-    return {
-        "library": "@kicad-symbols/Device.kicad_sym",
-        "name": name,
-    }
+    return "../kicad-symbols/Device.kicad_symdir/" + name + ".kicad_sym"
 
 
 def _footprint(mount: Mount, package: Package):
     kicad_footprints = {
-        Package("0201"): "@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod",
-        Package("0402"): "@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
-        Package("0603"): "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
-        Package("0805"): "@kicad-footprints/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
+        Package("0201"): "../kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod",
+        Package("0402"): "../kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
+        Package("0603"): "../kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
+        Package("0805"): "../kicad-footprints/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
     }
 
     if package not in kicad_footprints:
@@ -94,7 +91,7 @@ def _spice_args(value, package):
 Component(
     name="TH",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
-    symbol=Symbol(**_symbol(mount, package, temperature_coefficient, use_us_symbol)),
+    symbol=Symbol(_symbol(mount, package, temperature_coefficient, use_us_symbol)),
     footprint=File(_footprint(mount, package)),
     prefix="TH",
     pins={

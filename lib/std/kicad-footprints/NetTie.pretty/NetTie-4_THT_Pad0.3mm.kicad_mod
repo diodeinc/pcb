@@ -1,0 +1,118 @@
+(footprint "NetTie-4_THT_Pad0.3mm"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Net tie, 4 pin, 0.3mm round THT pads")
+	(tags "net tie")
+	(property "Reference" "REF**"
+		(at 0.6 -1.3 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "7d6ed2f6-0aef-48ab-9c71-518a894d54d5")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "NetTie-4_THT_Pad0.3mm"
+		(at 0.6 2.5 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "e6d5118f-6064-4e8a-8d08-a69b4670b852")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "7ad93302-c648-4255-bb9c-764e4c22323e")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "b7dd39ac-3f4c-4c76-9fe9-e3d77b96d113")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr exclude_from_pos_files exclude_from_bom allow_missing_courtyard)
+	(net_tie_pad_groups "1, 2, 3, 4")
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_poly
+		(pts
+			(xy -0.3 -0.3) (xy 1.5 -0.3) (xy 1.5 1.5) (xy -0.3 1.5)
+		)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill yes)
+		(layer "F.Cu")
+		(uuid "47739e4f-db00-4433-a4af-d070b06cb3b8")
+	)
+	(fp_poly
+		(pts
+			(xy -0.3 -0.3) (xy 1.5 -0.3) (xy 1.5 1.5) (xy -0.3 1.5)
+		)
+		(stroke
+			(width 0)
+			(type solid)
+		)
+		(fill yes)
+		(layer "B.Cu")
+		(uuid "72e0e769-b302-4ccf-8209-d83b34f27976")
+	)
+	(pad "1" thru_hole circle
+		(at 0 0)
+		(size 0.6 0.6)
+		(drill 0.3)
+		(layers "*.Cu")
+		(remove_unused_layers no)
+		(uuid "8840a923-3bc4-46e9-99fa-27dc273316f2")
+	)
+	(pad "2" thru_hole circle
+		(at 1.2 0)
+		(size 0.6 0.6)
+		(drill 0.3)
+		(layers "*.Cu")
+		(remove_unused_layers no)
+		(uuid "09749280-5794-4b43-98b6-0e24a84ac8ef")
+	)
+	(pad "3" thru_hole circle
+		(at 0 1.2)
+		(size 0.6 0.6)
+		(drill 0.3)
+		(layers "*.Cu")
+		(remove_unused_layers no)
+		(uuid "0a91c665-b0b1-428c-b9a6-1d2abf3f2eeb")
+	)
+	(pad "4" thru_hole circle
+		(at 1.2 1.2)
+		(size 0.6 0.6)
+		(drill 0.3)
+		(layers "*.Cu")
+		(remove_unused_layers no)
+		(uuid "512b9b2a-682e-43cb-9d83-af6ce375ae42")
+	)
+	(embedded_fonts no)
+)

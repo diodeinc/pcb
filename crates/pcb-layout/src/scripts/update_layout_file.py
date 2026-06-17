@@ -495,7 +495,7 @@ class ImportNetlist(Step):
     Import the netlist using lens-based synchronization.
 
     This is a thin wrapper around run_lens_sync() that handles:
-    - Environment setup (KiCad paths, footprint library map)
+    - Environment setup (project-local variables, footprint library map)
     - Transferring diagnostics to SyncState
     """
 
@@ -514,32 +514,12 @@ class ImportNetlist(Step):
         self.footprint_lib_map: Dict[str, str] = {}
 
     def _setup_env(self):
-        """Set up environment variables for footprint resolution."""
+        """Set up project-local variables for footprint resolution."""
         if "KIPRJMOD" not in os.environ.keys():
             os.environ["KIPRJMOD"] = str(self.board_path.parent)
 
-        if "KICAD9_FOOTPRINT_DIR" not in os.environ.keys():
-            if os.name == "nt":
-                os.environ["KICAD9_FOOTPRINT_DIR"] = (
-                    "C:/Program Files/KiCad/9.0/share/kicad/footprints/"
-                )
-            elif sys.platform == "darwin":
-                os.environ["KICAD9_FOOTPRINT_DIR"] = (
-                    "/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints/"
-                )
-            else:
-                os.environ["KICAD9_FOOTPRINT_DIR"] = "/usr/share/kicad/footprints"
-
-        if "KISYSMOD" not in os.environ.keys():
-            if os.name == "nt":
-                os.environ["KISYSMOD"] = (
-                    "C:/Program Files/KiCad/9.0/share/kicad/modules"
-                )
-            else:
-                os.environ["KISYSMOD"] = "/usr/share/kicad/modules"
-
     def _load_footprint_lib_map(self):
-        """Populate self.footprint_lib_map with the global and local fp-lib-table paths."""
+        """Populate self.footprint_lib_map from the board-local fp-lib-table."""
 
         def _load_fp_lib_table(path: str):
             """Load the fp-lib-table from the given path and return the path if found."""
@@ -557,7 +537,7 @@ class ImportNetlist(Step):
                 flags=re.IGNORECASE | re.VERBOSE | re.DOTALL,
             )
 
-            # Add the footprint modules found in each enabled KiCad library.
+            # Add footprint modules from each board-local KiCad library entry.
             for lib in libs:
                 # Skip disabled libraries.
                 disabled = re.findall(
@@ -566,7 +546,7 @@ class ImportNetlist(Step):
                 if disabled:
                     continue
 
-                # Skip non-KiCad libraries (primarily git repos).
+                # Skip entry types that do not point at a KiCad footprint directory.
                 type_ = re.findall(
                     r'(?:\(\s*type\s*) ("[^"]*?"|[^)]*?) (?:\s*\))',
                     lib,
@@ -600,26 +580,6 @@ class ImportNetlist(Step):
                     )
                 self.footprint_lib_map[nickname] = uri
 
-        # Find and load the global fp-lib-table.
-        paths = (
-            "$HOME/.config/kicad",
-            "~/.config/kicad",
-            "%APPDATA%/kicad",
-            "$HOME/Library/Preferences/kicad",
-            "~/Library/Preferences/kicad",
-            "%ProgramFiles%/KiCad/share/kicad/template",
-            "/usr/share/kicad/template",
-            "/Applications/KiCad/Kicad.app/Contents/SharedSupport/template",
-            "C:/Program Files/KiCad/9.0/share/kicad/template",
-        )
-
-        for path in paths:
-            path = os.path.normpath(os.path.expanduser(os.path.expandvars(path)))
-            fp_lib_table_path = os.path.join(path, "fp-lib-table")
-            if os.path.exists(fp_lib_table_path):
-                _load_fp_lib_table(fp_lib_table_path)
-
-        # Load the local fp-lib-table.
         local_fp_lib_table_path = os.path.join(
             str(self.board_path.parent), "fp-lib-table"
         )

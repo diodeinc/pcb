@@ -74,8 +74,8 @@ Remote package URLs do not include versions. Declare versions in `pcb.toml`, the
 run `pcb sync` to reconcile imports and hydrate dependency manifests. `@stdlib`
 is toolchain-managed and implicit.
 
-See [Packages](/pages/packages) for version resolution, KiCad library
-configuration, and dependency commands.
+See [Packages](/pages/packages) for version resolution, package manifests, and
+dependency commands.
 
 ### Project Structure
 
@@ -344,7 +344,7 @@ Use `Part` with the `part` parameter on `Component()` for primary sourcing, and 
 ```python
 Component(
     name = "R1",
-    symbol = Symbol(library="@kicad-symbols/Device.kicad_sym", name="R"),
+    symbol = Symbol(library="Device.kicad_sym", name="R"),
     pins = {"P1": vcc, "P2": gnd},
     part = Part(
         mpn = "RC0603FR-0710KL",
@@ -368,12 +368,12 @@ A `Symbol` represents a schematic symbol loaded from a KiCad symbol library.
 
 ```python
 ic_symbol = Symbol(library="TCA9554DBR.kicad_sym")
-connector = Symbol(library="@kicad-symbols/Connector_Generic.kicad_sym", name="Conn_01x14")
+connector = Symbol(library="Connector_Generic.kicad_sym", name="Conn_01x14")
 ```
 
 **Constructor**: `Symbol(library, name=None)`
 
-- `library`: Path to a `.kicad_sym` file. Supports local paths, `@kicad-symbols/` alias, and package paths.
+- `library`: Path to a `.kicad_sym` file. Supports local paths and package paths.
 - `name`: Symbol name within the library. Required for multi-symbol libraries; omit for single-symbol files.
 
 ### Physical Quantities
@@ -598,7 +598,7 @@ When `layers` is provided, `Board()` selects an appropriate default stackup, net
 
 ```python
 datasheet = File("TPS54331.pdf")
-footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod")
+footprint = File("Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod")
 ```
 
 **`Path(path, allow_not_exist=False)`** — Like `File()` but supports package paths and optional non-existence.

@@ -11,7 +11,7 @@ expression: snapshot_output
   (components
     (comp (ref "U1")
       (value "TEST")
-      (footprint "TEST:0402")
+      (footprint "stdlib_kicad-footprints_Resistor_SMD:R_0402_1005Metric")
       (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "comp0") (tstamps "4398fe89-a23f-5645-8878-bb2e739a72f1"))
       (tstamps "4398fe89-a23f-5645-8878-bb2e739a72f1")

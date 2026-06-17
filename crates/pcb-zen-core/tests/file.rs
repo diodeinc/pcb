@@ -67,3 +67,49 @@ snapshot_eval!(file_consistent_with_load, {
         check(lib_file2 == "package://test/lib/data.txt", "Should resolve path from library")
     "#
 });
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn file_and_symbol_resolve_kicad_aliases_to_stdlib_subdirs() {
+    let result = common::eval_zen(vec![
+        (
+            ".pcb/stdlib/kicad-symbols/Test.kicad_symdir/A.kicad_sym".to_string(),
+            r#"(kicad_symbol_lib
+                (version 20211014)
+                (generator kicad_symbol_editor)
+                (symbol "A"
+                    (property "Reference" "U" (at 0 0 0))
+                    (symbol "A_0_1"
+                        (pin input line (at 0 0 0) (length 2.54)
+                            (name "IN" (effects (font (size 1.27 1.27))))
+                            (number "1" (effects (font (size 1.27 1.27))))
+                        )
+                    )
+                )
+            )"#
+            .to_string(),
+        ),
+        (
+            ".pcb/stdlib/kicad-footprints/Test.pretty/Test.kicad_mod".to_string(),
+            "(footprint \"Test\")".to_string(),
+        ),
+        (
+            "test.zen".to_string(),
+            r#"
+                symbol = Symbol("@kicad-symbols/Test.kicad_symdir/A.kicad_sym")
+                footprint = File("@kicad-footprints/Test.pretty/Test.kicad_mod")
+                check(
+                    footprint == "package://stdlib/kicad-footprints/Test.pretty/Test.kicad_mod",
+                    "KiCad footprint alias should resolve to stdlib",
+                )
+            "#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        result.is_success(),
+        "expected alias resolution to succeed, got diagnostics: {:?}",
+        result.diagnostics
+    );
+}

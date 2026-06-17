@@ -78,11 +78,11 @@ prefix = config(str, default="J")
 Component(
     name = "SMAConnector",
     symbol = Symbol(
-        library = "@kicad-symbols/Connector.kicad_sym",
+        library = "Connector.kicad_sym",
         name = "Conn_Coaxial_Small",
     ),
     footprint = File(
-        "@kicad-footprints/Connector_Coaxial.pretty/SMA_Amphenol_132134_Vertical.kicad_mod"
+        "Connector_Coaxial.pretty/SMA_Amphenol_132134_Vertical.kicad_mod"
     ),
     prefix = prefix,
     pins = {
@@ -103,11 +103,11 @@ prefix = config(str, default="AE")
 Component(
     name = "ChipAntenna",
     symbol = Symbol(
-        library = "@kicad-symbols/Device.kicad_sym",
+        library = "Device.kicad_sym",
         name = "Antenna",
     ),
     footprint = File(
-        "@kicad-footprints/RF_Antenna.pretty/Texas_SWRA416_868MHz_915MHz.kicad_mod"
+        "RF_Antenna.pretty/Texas_SWRA416_868MHz_915MHz.kicad_mod"
     ),
     prefix = prefix,
     pins = {

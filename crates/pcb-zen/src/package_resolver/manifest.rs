@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use crate::cache_index::CacheIndex;
 use anyhow::{Context, Result};
 use pcb_zen_core::config::{DependencySpec, ManifestPart};
-use pcb_zen_core::kicad_library::effective_kicad_library_for_repo;
 use semver::Version;
 
 use super::{ResolvedDepId, compatibility_lane, parse_lane_qualified_key};
@@ -61,10 +60,6 @@ pub(crate) fn load_manifest_for_module_version(
     version: &Version,
     offline: bool,
 ) -> Result<ManifestRequirements> {
-    if let Some(loaded) = synthetic_kicad_manifest(workspace, module_path, version)? {
-        return Ok(loaded);
-    }
-
     let vendor_toml_path =
         package_version_root(workspace.root.join("vendor"), module_path, version).join("pcb.toml");
     let pcb_toml_path = if vendor_toml_path.exists() {
@@ -135,38 +130,6 @@ fn manifest_has_indirect_table(content: &str) -> Result<bool> {
         .get("dependencies")
         .and_then(|deps| deps.get("indirect"))
         .is_some())
-}
-
-fn synthetic_kicad_manifest(
-    workspace: &crate::WorkspaceInfo,
-    module_path: &str,
-    version: &Version,
-) -> Result<Option<ManifestRequirements>> {
-    let workspace_cfg = workspace.workspace_config();
-    let Some(entry) =
-        effective_kicad_library_for_repo(&workspace_cfg.kicad_library, module_path, version)
-    else {
-        return Ok(None);
-    };
-
-    let mut requirements = BTreeMap::new();
-    let spec = || DependencySpec::Version(version.to_string());
-
-    if module_path == entry.symbols {
-        requirements.insert(entry.footprints.clone(), spec());
-    }
-
-    if module_path == entry.footprints {
-        for model_repo in entry.models.values() {
-            requirements.insert(model_repo.clone(), spec());
-        }
-    }
-
-    Ok(Some(ManifestRequirements {
-        direct: requirements,
-        indirect: BTreeMap::new(),
-        parts: Vec::new(),
-    }))
 }
 
 pub(crate) fn package_version_root(

@@ -11,7 +11,7 @@ expression: snapshot_output
   (components
     (comp (ref "R1")
       (value "TEST")
-      (footprint "SMD:0402")
+      (footprint "stdlib_kicad-footprints_Resistor_SMD:R_0402_1005Metric")
       (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "Regulator.R1") (tstamps "a879d39a-b8a0-5473-a37a-6f7cfddd2790"))
       (tstamps "a879d39a-b8a0-5473-a37a-6f7cfddd2790")
@@ -21,7 +21,7 @@ expression: snapshot_output
     )
     (comp (ref "R2")
       (value "TEST")
-      (footprint "SMD:0402")
+      (footprint "stdlib_kicad-footprints_Resistor_SMD:R_0402_1005Metric")
       (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "Regulator.R2") (tstamps "f9a06d42-9647-5330-b3dc-fe00b973cbd6"))
       (tstamps "f9a06d42-9647-5330-b3dc-fe00b973cbd6")

@@ -119,26 +119,6 @@ x = kOhm(10)
 }
 
 #[test]
-fn test_sync_hydrates_kicad_alias_dependencies() {
-    let mut sandbox = Sandbox::new();
-
-    let zen_content = r#"
-symbol_path = "@kicad-symbols/Device.kicad_sym:R"
-footprint_path = "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
-"#;
-
-    sandbox
-        .write("pcb.toml", PCB_TOML)
-        .write("board.zen", zen_content)
-        .sync();
-
-    let manifest = read_root_manifest(&sandbox);
-    assert!(manifest.contains("\"gitlab.com/kicad/libraries/kicad-symbols\" = \"10.0.3\""));
-    assert!(manifest.contains("\"gitlab.com/kicad/libraries/kicad-footprints\" = \"10.0.3\""));
-    assert!(manifest.contains("\"gitlab.com/kicad/libraries/kicad-packages3D@10\" = \"10.0.3\""));
-}
-
-#[test]
 fn test_sync_pins_branch_dep_to_rev_and_builds() {
     let mut sandbox = Sandbox::new();
 

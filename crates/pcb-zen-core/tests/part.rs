@@ -14,7 +14,7 @@ primary = builtin.Part(
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = primary,
@@ -39,7 +39,7 @@ preferred = builtin.Part(
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = preferred,
@@ -70,7 +70,7 @@ builtin.add_component_modifier(mutate)
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
 )

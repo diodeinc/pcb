@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-layout/tests/layout_generation.rs
+assertion_line: 106
 expression: content
 ---
 {
@@ -8,7 +9,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "kicad_libraries_kicad-footprints_Capacitor_SMD@10.0.3:C_0603_1608Metric",
+      "footprint": "stdlib_kicad-footprints_Capacitor_SMD:C_0603_1608Metric",
       "graphical_items": [
         {
           "angle": null,
@@ -139,7 +140,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_1x01_P2.54mm_Vertical",
+      "footprint": "stdlib_kicad-footprints_Connector_PinHeader_2.54mm:PinHeader_1x01_P2.54mm_Vertical",
       "graphical_items": [
         {
           "angle": null,
@@ -158,46 +159,6 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 151595000,
-            "y": 108310000
-          },
-          "layer": "F.Courtyard",
-          "position": {
-            "x": 155135000,
-            "y": 108310000
-          },
-          "shape": 0,
-          "start": {
-            "x": 155135000,
-            "y": 108310000
-          },
-          "text": null,
-          "type": "PCB_SHAPE",
-          "width": 50000
-        },
-        {
-          "angle": null,
-          "end": {
-            "x": 151595000,
-            "y": 111850000
-          },
-          "layer": "F.Courtyard",
-          "position": {
-            "x": 151595000,
-            "y": 108310000
-          },
-          "shape": 0,
-          "start": {
-            "x": 151595000,
-            "y": 108310000
-          },
-          "text": null,
-          "type": "PCB_SHAPE",
-          "width": 50000
-        },
-        {
-          "angle": null,
-          "end": {
             "x": 151985000,
             "y": 108700000
           },
@@ -419,37 +380,17 @@ expression: content
           "angle": null,
           "end": {
             "x": 155135000,
+            "y": 111850000
+          },
+          "layer": "F.Courtyard",
+          "position": {
+            "x": 151595000,
             "y": 108310000
           },
-          "layer": "F.Courtyard",
-          "position": {
-            "x": 155135000,
-            "y": 111850000
-          },
-          "shape": 0,
-          "start": {
-            "x": 155135000,
-            "y": 111850000
-          },
-          "text": null,
-          "type": "PCB_SHAPE",
-          "width": 50000
-        },
-        {
-          "angle": null,
-          "end": {
-            "x": 155135000,
-            "y": 111850000
-          },
-          "layer": "F.Courtyard",
-          "position": {
-            "x": 151595000,
-            "y": 111850000
-          },
-          "shape": 0,
+          "shape": 1,
           "start": {
             "x": 151595000,
-            "y": 111850000
+            "y": 108310000
           },
           "text": null,
           "type": "PCB_SHAPE",
@@ -482,7 +423,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "kicad_libraries_kicad-footprints_Connector_PinHeader_2.54mm@9.0.3:PinHeader_2x05_P2.54mm_Vertical",
+      "footprint": "stdlib_kicad-footprints_Connector_PinHeader_2.54mm:PinHeader_2x05_P2.54mm_Vertical",
       "graphical_items": [
         {
           "angle": null,
@@ -501,46 +442,6 @@ expression: content
         {
           "angle": null,
           "end": {
-            "x": 145455000,
-            "y": 111850000
-          },
-          "layer": "F.Courtyard",
-          "position": {
-            "x": 145455000,
-            "y": 98150000
-          },
-          "shape": 0,
-          "start": {
-            "x": 145455000,
-            "y": 98150000
-          },
-          "text": null,
-          "type": "PCB_SHAPE",
-          "width": 50000
-        },
-        {
-          "angle": null,
-          "end": {
-            "x": 145455000,
-            "y": 98150000
-          },
-          "layer": "F.Courtyard",
-          "position": {
-            "x": 151545000,
-            "y": 98150000
-          },
-          "shape": 0,
-          "start": {
-            "x": 151545000,
-            "y": 98150000
-          },
-          "text": null,
-          "type": "PCB_SHAPE",
-          "width": 50000
-        },
-        {
-          "angle": null,
-          "end": {
             "x": 145845000,
             "y": 111460000
           },
@@ -807,32 +708,12 @@ expression: content
           "layer": "F.Courtyard",
           "position": {
             "x": 145455000,
-            "y": 111850000
-          },
-          "shape": 0,
-          "start": {
-            "x": 145455000,
-            "y": 111850000
-          },
-          "text": null,
-          "type": "PCB_SHAPE",
-          "width": 50000
-        },
-        {
-          "angle": null,
-          "end": {
-            "x": 151545000,
             "y": 98150000
           },
-          "layer": "F.Courtyard",
-          "position": {
-            "x": 151545000,
-            "y": 111850000
-          },
-          "shape": 0,
+          "shape": 1,
           "start": {
-            "x": 151545000,
-            "y": 111850000
+            "x": 145455000,
+            "y": 98150000
           },
           "text": null,
           "type": "PCB_SHAPE",
@@ -937,7 +818,7 @@ expression: content
       "dnp": false,
       "exclude_from_bom": false,
       "exclude_from_pos_files": false,
-      "footprint": "kicad_libraries_kicad-footprints_Resistor_SMD@10.0.3:R_0603_1608Metric",
+      "footprint": "stdlib_kicad-footprints_Resistor_SMD:R_0603_1608Metric",
       "graphical_items": [
         {
           "angle": null,

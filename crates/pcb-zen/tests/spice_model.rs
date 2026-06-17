@@ -3,6 +3,32 @@ use common::TestProject;
 
 use pcb_sim::gen_sim;
 
+const RESISTOR_SYMBOL: &str = r#"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
+  (symbol "R" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
+    (property "Reference" "R" (id 0) (at 0 0 0))
+    (symbol "R_1_1"
+      (pin passive line (at -2.54 0 0) (length 2.54)
+        (name "~" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+      (pin passive line (at 2.54 0 180) (length 2.54)
+        (name "~" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27))))
+      )
+    )
+  )
+)"#;
+
+const RESISTOR_FOOTPRINT: &str = r#"(footprint "R_0201_0603Metric"
+  (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu"))
+  (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu"))
+)"#;
+
+fn add_resistor_artifacts(env: &TestProject) {
+    env.add_file("Device_R.kicad_sym", RESISTOR_SYMBOL);
+    env.add_file("R_0201_0603Metric.kicad_mod", RESISTOR_FOOTPRINT);
+}
+
 #[macro_export]
 macro_rules! sim_snapshot {
     ($env:expr, $entry:expr $(,)?) => {{
@@ -55,7 +81,7 @@ macro_rules! sim_snapshot {
 #[test]
 fn snapshot_sim_divider() {
     let env = TestProject::new();
-    env.add_file("pcb.toml", common::KICAD_WORKSPACE_TOML);
+    add_resistor_artifacts(&env);
 
     env.add_file(
         "r.lib",
@@ -106,8 +132,8 @@ P2 = io(Net)
 
 Component(
     name = "R",
-    symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name="R"),
-    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod"),
+    symbol = Symbol(library = "Device_R.kicad_sym", name="R"),
+    footprint = File("R_0201_0603Metric.kicad_mod"),
     prefix = "R",
     skip_bom = True,
     spice_model = SpiceModel('./r.lib', 'my_resistor',
@@ -149,7 +175,7 @@ Resistor(name="R2", value=r2_value, package="0603", P1=vout, P2=gnd)
 #[test]
 fn snapshot_sim_setup_inline() {
     let env = TestProject::new();
-    env.add_file("pcb.toml", common::KICAD_WORKSPACE_TOML);
+    add_resistor_artifacts(&env);
 
     env.add_file(
         "r.lib",
@@ -184,8 +210,8 @@ P2 = io(Net)
 
 Component(
     name = "R",
-    symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name="R"),
-    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod"),
+    symbol = Symbol(library = "Device_R.kicad_sym", name="R"),
+    footprint = File("R_0201_0603Metric.kicad_mod"),
     prefix = "R",
     skip_bom = True,
     spice_model = SpiceModel('./r.lib', 'my_resistor',
@@ -288,7 +314,7 @@ P2 = io("P2", Net)
 Component(
     name = "R",
     symbol = Symbol(library = "myresistor.kicad_sym"),
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     prefix = "R",
     skip_bom = True,
     pins = {
@@ -320,7 +346,7 @@ Resistor(name="R2", value="10kohms", package="0603", P1=vout, P2=gnd)
 #[test]
 fn snapshot_sim_setup_file() {
     let env = TestProject::new();
-    env.add_file("pcb.toml", common::KICAD_WORKSPACE_TOML);
+    add_resistor_artifacts(&env);
 
     env.add_file(
         "r.lib",
@@ -355,8 +381,8 @@ P2 = io(Net)
 
 Component(
     name = "R",
-    symbol = Symbol(library = "@kicad-symbols/Device.kicad_sym", name="R"),
-    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod"),
+    symbol = Symbol(library = "Device_R.kicad_sym", name="R"),
+    footprint = File("R_0201_0603Metric.kicad_mod"),
     prefix = "R",
     skip_bom = True,
     spice_model = SpiceModel('./r.lib', 'my_resistor',

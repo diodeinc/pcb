@@ -51,10 +51,6 @@ const PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.4"
 name = "test_workspace"
-
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 const BOARD_PCB_TOML: &str = r#"

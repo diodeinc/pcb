@@ -53,7 +53,7 @@ DummyFunction()
 Component(
     name = "TestComponent",
     part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = "SMD:0805",
+    footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
     symbol = Symbol(
         definition = [ 
             ("1" , ["1", "N1"]),
@@ -166,7 +166,7 @@ OUTPUT = io(Net)
 Component(
     name = "test_component",
     part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": INPUT, "2": OUTPUT},
 )

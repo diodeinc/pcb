@@ -19,23 +19,20 @@ properties = {
 # Fiducials have no electrical connections
 
 
-def _symbol(variant: Variant) -> dict:
+def _symbol(variant: Variant) -> str:
     """Returns the fiducial symbol."""
-    return {
-        "library": "@kicad-symbols/Mechanical.kicad_sym",
-        "name": "Fiducial",
-    }
+    return "../kicad-symbols/Mechanical.kicad_symdir/Fiducial.kicad_sym"
 
 
 def _footprint(variant: Variant) -> str:
     """Returns the footprint for a specific variant."""
     name = variant.value
-    return f"@kicad-footprints/Fiducial.pretty/Fiducial_{name}.kicad_mod"
+    return f"../kicad-footprints/Fiducial.pretty/Fiducial_{name}.kicad_mod"
 
 
 Component(
     name="FID",
-    symbol=Symbol(**_symbol(variant)),
+    symbol=Symbol(_symbol(variant)),
     footprint=File(_footprint(variant)),
     prefix="FID",
     pins={},  # No electrical connections

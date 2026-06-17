@@ -535,7 +535,6 @@ fn copy_sources(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         resolution: &info.resolution,
         root_package_url: info.root_package_url.as_deref(),
         staged_src: &info.staging_dir.join("src"),
-        resolved_paths: &info.schematic.resolved_paths,
     })
 }
 
@@ -694,8 +693,8 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     debug!("Validating build of: {}", staged_zen_path.display());
 
-    // Re-resolve in offline mode. All dependencies (including KiCad
-    // library files) are vendored from eval1 by copy_sources.
+    // Re-resolve in offline mode. Dependencies are vendored from eval1 by
+    // copy_sources.
     let staged_resolution = crate::resolve::resolve(Some(&staged_zen_path), true)?;
 
     // Use build function with offline mode but allow warnings
@@ -1323,14 +1322,8 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         .with_context(|| format!("Failed to parse {}", netlist_json_path.display()))?;
 
     // Collect diagnostics from layout sync check (run on staged sources/layout).
-    let model_dirs = info.resolution.kicad_model_dirs();
-    let Some(layout_result) = pcb_layout::process_layout(
-        &staged_schematic,
-        &model_dirs,
-        false,
-        true,
-        &mut diagnostics,
-    )?
+    let Some(layout_result) =
+        pcb_layout::process_layout(&staged_schematic, false, true, &mut diagnostics)?
     else {
         anyhow::bail!("No layout directory for DRC checks");
     };

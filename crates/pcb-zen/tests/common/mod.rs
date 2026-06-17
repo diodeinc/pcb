@@ -6,21 +6,6 @@ pub const WORKSPACE_TOML: &str = r#"[workspace]
 pcb-version = "0.4"
 "#;
 
-#[allow(dead_code)]
-pub const KICAD_WORKSPACE_TOML: &str = r#"[workspace]
-pcb-version = "0.4"
-
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-packages3D" = "9.0.3"
-
-[dependencies.indirect]
-"gitlab.com/kicad/libraries/kicad-symbols@9" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints@9" = "9.0.3"
-"gitlab.com/kicad/libraries/kicad-packages3D@9" = "9.0.3"
-"#;
-
 /// Utility to build an isolated Starlark project for integration tests.
 ///
 /// The helper wraps a [`tempfile::TempDir`] so each invocation gets its own
@@ -35,7 +20,7 @@ pcb-version = "0.4"
 /// // Write a sub-module.
 /// env.add_file(
 ///     "sub.zen",
-///     r#"Component(footprint = "TEST:0402", pins = {"1": PinSpec("p", "1")})"#,
+///     r#"Component(footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"), pins = {"1": PinSpec("p", "1")})"#,
 /// );
 /// // Write a top-level module that loads the sub-module.
 /// env.add_file(
@@ -157,7 +142,7 @@ impl TestProject {
     /// -------
     /// ```text
     /// # --- sub.zen
-    /// Component(symbol = Symbol(library="C146731.kicad_sym", name="C146731"), footprint = "SMD:0805")
+    /// Component(symbol = Symbol(library="C146731.kicad_sym", name="C146731"), footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"))
     /// # --- top.zen
     /// Sub = Module("sub.zen")
     /// Sub()
@@ -199,7 +184,7 @@ impl TestProject {
 /// let env = TestProject::new();
 /// env.add_files_from_blob(r"""
 /// # --- sub.zen
-/// Component(footprint = "TEST:0402", pins = {"1": PinSpec("p", "1")})
+/// Component(footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"), pins = {"1": PinSpec("p", "1")})
 /// # --- top.zen
 /// Sub = Module("sub.zen")
 /// Sub()

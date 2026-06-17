@@ -6,9 +6,8 @@ in_net = Net("IN")
 for i in range(2):
     Component(
         name="C%s" % i,
-        footprint=File(
-            "@kicad-footprints/Package_DFN_QFN.pretty/QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"
-        ),
+        skip_bom=True,
+        footprint=File("./Package_DFN_QFN.pretty/QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"),
         symbol=Symbol(
             definition=[
                 ("VDD", ["1"]),

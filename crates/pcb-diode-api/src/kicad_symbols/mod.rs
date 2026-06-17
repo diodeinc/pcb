@@ -49,11 +49,14 @@ pub struct KicadSymbol {
 
 impl KicadSymbol {
     pub fn path(&self) -> String {
-        format!("{}.kicad_sym:{}", self.symbol_library, self.symbol_name)
+        format!(
+            "@stdlib/kicad-symbols/{}.kicad_sym:{}",
+            self.symbol_library, self.symbol_name
+        )
     }
 
     pub fn clipboard_url(&self) -> String {
-        format!("@kicad-symbols/{}", self.path())
+        self.path()
     }
 
     pub fn primary_mpn(&self) -> Option<&str> {
@@ -298,7 +301,7 @@ impl KicadSymbolsClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT s.id,
-                   '@kicad-symbols/' || s.symbol_library || '.kicad_sym:' || s.symbol_name,
+                   s.symbol_library || '.kicad_sym:' || s.symbol_name,
                    s.symbol_name,
                    s.manufacturer,
                    COALESCE(
@@ -329,7 +332,7 @@ impl KicadSymbolsClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT s.id,
-                   '@kicad-symbols/' || s.symbol_library || '.kicad_sym:' || s.symbol_name,
+                   s.symbol_library || '.kicad_sym:' || s.symbol_name,
                    s.symbol_name,
                    s.manufacturer,
                    COALESCE(
@@ -369,7 +372,7 @@ impl KicadSymbolsClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT s.id,
-                   '@kicad-symbols/' || s.symbol_library || '.kicad_sym:' || s.symbol_name,
+                   s.symbol_library || '.kicad_sym:' || s.symbol_name,
                    s.symbol_name,
                    s.manufacturer,
                    COALESCE(
@@ -405,7 +408,7 @@ impl KicadSymbolsClient {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT s.id,
-                   '@kicad-symbols/' || s.symbol_library || '.kicad_sym:' || s.symbol_name,
+                   s.symbol_library || '.kicad_sym:' || s.symbol_name,
                    s.symbol_name,
                    s.manufacturer,
                    COALESCE(

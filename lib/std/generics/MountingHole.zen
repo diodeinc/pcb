@@ -22,12 +22,9 @@ if plating:
 P1 = io(Net, optional=True) if plating != Plating("Mechanical") else None
 
 
-def _symbol(diameter: Diameter, standard: Standard | None = None, plating: Plating | None = None) -> dict:
+def _symbol(diameter: Diameter, standard: Standard | None = None, plating: Plating | None = None) -> str:
     symbol_name = "MountingHole" if plating == Plating("Mechanical") else "MountingHole_Pad"
-    return {
-        "library": "@kicad-symbols/Mechanical.kicad_sym",
-        "name": symbol_name,
-    }
+    return "../kicad-symbols/Mechanical.kicad_symdir/" + symbol_name + ".kicad_sym"
 
 
 def _footprint(diameter: Diameter, standard: Standard | None = None, plating: Plating | None = None) -> str:
@@ -74,7 +71,7 @@ def _footprint(diameter: Diameter, standard: Standard | None = None, plating: Pl
     # M8 footprints also don't include the standard
     if plating == Plating("Via") or diameter == Diameter("M8"):
         footprint_str = (
-            "@kicad-footprints/MountingHole.pretty/MountingHole_"
+            "../kicad-footprints/MountingHole.pretty/MountingHole_"
             + size
             + "_"
             + str(diameter.value)
@@ -84,7 +81,7 @@ def _footprint(diameter: Diameter, standard: Standard | None = None, plating: Pl
     else:
         # Mechanical and other plated holes include the standard (except M8)
         footprint_str = (
-            "@kicad-footprints/MountingHole.pretty/MountingHole_"
+            "../kicad-footprints/MountingHole.pretty/MountingHole_"
             + size
             + "_"
             + str(diameter.value)
@@ -101,7 +98,7 @@ pins = {} if plating == Plating("Mechanical") else {"1": P1}
 
 Component(
     name="MH",
-    symbol=Symbol(**_symbol(diameter, standard, plating)),
+    symbol=Symbol(_symbol(diameter, standard, plating)),
     footprint=File(_footprint(diameter, standard, plating)),
     prefix="H",
     pins=pins,

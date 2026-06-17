@@ -1,7 +1,7 @@
 Component(
     name="Version",
     prefix="V",
-    symbol=Symbol("./footprints/VERSION.kicad_sym"),
+    symbol=Symbol("./symbols/VERSION.kicad_sym"),
     footprint=File("./footprints/VERSION.kicad_mod"),
     pins={},
     skip_bom=True,

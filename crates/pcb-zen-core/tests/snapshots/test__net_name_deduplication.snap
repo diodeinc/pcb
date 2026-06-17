@@ -15,7 +15,7 @@ expression: output
             FrozenValue(
                 Component {
                     name: "Component",
-                    footprint: "SMD:0805",
+                    footprint: "package://stdlib/kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "P1": FrozenValue(
@@ -44,7 +44,7 @@ expression: output
             FrozenValue(
                 Component {
                     name: "Component",
-                    footprint: "SMD:0805",
+                    footprint: "package://stdlib/kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "P1": FrozenValue(
@@ -73,7 +73,7 @@ expression: output
             FrozenValue(
                 Component {
                     name: "Component",
-                    footprint: "SMD:0805",
+                    footprint: "package://stdlib/kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "P1": FrozenValue(

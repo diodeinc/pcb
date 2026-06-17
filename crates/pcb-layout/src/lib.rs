@@ -20,7 +20,6 @@ use pcb_sch::kicad_netlist::{try_format_footprint_with_package_roots, write_fp_l
 
 mod effective_netlist;
 mod kicad_project_patch;
-mod model_embed_discovery;
 mod moved;
 mod repair_nets;
 use effective_netlist::{
@@ -460,7 +459,6 @@ pub fn check_layout_sync(
 /// - Runs the pure semantic layout sync check without mutating layout files
 pub fn process_layout(
     schematic: &Schematic,
-    kicad_model_dirs: &BTreeMap<String, PathBuf>,
     use_temp_dir: bool,
     check_mode: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
@@ -583,8 +581,6 @@ pub fn process_layout(
         board_config.as_ref(),
         layout_name.as_deref(),
         &component_internal_connectivity_by_path(schematic),
-        kicad_model_dirs,
-        &footprint_lib_dirs,
     )?;
 
     // Add sync diagnostics from JSON file
@@ -849,8 +845,8 @@ mod diff_tests {
     fn layout_json_netlist_adds_derived_footprint_fpid() -> anyhow::Result<()> {
         let mut schematic = Schematic::new();
         schematic.package_roots.insert(
-            "gitlab.com/kicad/libraries/kicad-footprints@10.0.3".to_string(),
-            PathBuf::from("/tmp/vendor/gitlab.com/kicad/libraries/kicad-footprints/10.0.3"),
+            "gitlab.com/example/libs/footprints@10.0.3".to_string(),
+            PathBuf::from("/tmp/vendor/gitlab.com/example/libs/footprints/10.0.3"),
         );
 
         let module_ref = ModuleRef::new("/tmp/demo.zen", "<root>");
@@ -861,7 +857,7 @@ mod diff_tests {
         component.attributes.insert(
             "footprint".into(),
             AttributeValue::String(
-                "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.3/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
+                "package://gitlab.com/example/libs/footprints@10.0.3/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
                     .to_string(),
             ),
         );
@@ -880,11 +876,11 @@ mod diff_tests {
 
         assert_eq!(
             instance["attributes"]["footprint"]["String"],
-            "package://gitlab.com/kicad/libraries/kicad-footprints@10.0.3/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
+            "package://gitlab.com/example/libs/footprints@10.0.3/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"
         );
         assert_eq!(
             instance["footprint_fpid"],
-            "kicad_libraries_kicad-footprints_Resistor_SMD@10.0.3:R_0603_1608Metric"
+            "example_libs_footprints_Resistor_SMD@10.0.3:R_0603_1608Metric"
         );
         assert_eq!(
             instance["internal_connectivity"]["duplicate_numbers_are_jumpers"],
@@ -971,8 +967,6 @@ fn patch_pcb_file(
     board_config: Option<&BoardConfig>,
     layout_name: Option<&str>,
     internal_connectivity_by_path: &BTreeMap<String, pcb_sch::InternalConnectivity>,
-    kicad_model_dirs: &BTreeMap<String, PathBuf>,
-    footprint_lib_dirs: &HashMap<String, PathBuf>,
 ) -> Result<(), LayoutError> {
     let pcb_content = fs::read_to_string(pcb_path).map_err(|e| {
         LayoutError::StackupPatchingError(format!("Failed to read PCB file: {}", e))
@@ -995,47 +989,11 @@ fn patch_pcb_file(
             e
         ))
     })?;
-    let pcb_dir = pcb_path.parent().unwrap_or_else(|| Path::new("."));
-    let (embedded, discovery, applied) = model_embed_discovery::embed_models_in_pcb_source(
-        &patched,
-        pcb_dir,
-        kicad_model_dirs,
-        footprint_lib_dirs,
-    )
-    .map_err(|e| {
-        LayoutError::StackupPatchingError(format!(
-            "Failed to prepare embedded 3D models for {}: {}",
-            pcb_path.display(),
-            e
-        ))
-    })?;
-    if discovery.unresolved_refs > 0 {
-        log::warn!(
-            "Unresolved managed 3D model references in {}: {}",
-            pcb_path.display(),
-            discovery.unresolved_refs
-        );
-    }
-
-    info!(
-        "3D model embed: refs={}, managed={}, candidates={}, rewritten={}, added={}, fp_meta={}, missing={}, unresolved={}, unmanaged={}, embedded={}, collisions={}",
-        discovery.total_refs,
-        discovery.managed_refs,
-        applied.candidate_files,
-        applied.rewritten_refs,
-        applied.embedded_files_added,
-        applied.footprint_metadata_entries,
-        discovery.missing_files,
-        discovery.unresolved_refs,
-        discovery.unmanaged_refs,
-        discovery.already_embedded,
-        applied.basename_collisions
-    );
 
     info!("Updating PCB settings in {}", pcb_path.display());
     AtomicFile::new(pcb_path, OverwriteBehavior::AllowOverwrite)
         .write(|f| {
-            f.write_all(embedded.as_bytes())?;
+            f.write_all(patched.as_bytes())?;
             f.flush()
         })
         .map_err(|e| {

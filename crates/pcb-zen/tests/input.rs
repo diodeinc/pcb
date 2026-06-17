@@ -16,7 +16,7 @@ baud = config(int)
 Component(
     name = "comp0",
     part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"V": "1"},
     pins = {"V": pwr},
 )
@@ -50,7 +50,7 @@ baud = config(int)
 # Tiny component referencing the power net so that the schematic/netlist is non-empty
 Component(
     name = "comp0",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"V": "1"},
     pins = {"V": pwr},
 )
@@ -88,7 +88,7 @@ check(baud == None, "baud should be None when omitted")
 Component(
     name = "comp0",
     part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"V": "1"},
     pins = {"V": Net("INTERNAL_V")},
 )

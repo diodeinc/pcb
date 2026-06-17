@@ -48,26 +48,23 @@ if esr:
 
 
 def _symbol(mount: Mount, package: Package):
-    return {
-        "library": "@kicad-symbols/Device.kicad_sym",
-        "name": "C",
-    }
+    return "../kicad-symbols/Device.kicad_symdir/C.kicad_sym"
 
 
 def _footprint(mount: Mount, package: Package):
     kicad_footprints = {
-        (Mount("SMD"), Package("01005")): "@kicad-footprints/Capacitor_SMD.pretty/C_01005_0402Metric.kicad_mod",
-        (Mount("SMD"), Package("0201")): "@kicad-footprints/Capacitor_SMD.pretty/C_0201_0603Metric.kicad_mod",
-        (Mount("SMD"), Package("0402")): "@kicad-footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
-        (Mount("SMD"), Package("0603")): "@kicad-footprints/Capacitor_SMD.pretty/C_0603_1608Metric.kicad_mod",
-        (Mount("SMD"), Package("0805")): "@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
-        (Mount("SMD"), Package("1206")): "@kicad-footprints/Capacitor_SMD.pretty/C_1206_3216Metric.kicad_mod",
-        (Mount("SMD"), Package("1210")): "@kicad-footprints/Capacitor_SMD.pretty/C_1210_3225Metric.kicad_mod",
-        (Mount("SMD"), Package("1812")): "@kicad-footprints/Capacitor_SMD.pretty/C_1812_4532Metric.kicad_mod",
-        (Mount("SMD"), Package("1825")): "@kicad-footprints/Capacitor_SMD.pretty/C_1825_4564Metric.kicad_mod",
-        (Mount("SMD"), Package("2220")): "@kicad-footprints/Capacitor_SMD.pretty/C_2220_5750Metric.kicad_mod",
-        (Mount("SMD"), Package("2225")): "@kicad-footprints/Capacitor_SMD.pretty/C_2225_5664Metric.kicad_mod",
-        (Mount("SMD"), Package("3640")): "@kicad-footprints/Capacitor_SMD.pretty/C_3640_9110Metric.kicad_mod",
+        (Mount("SMD"), Package("01005")): "../kicad-footprints/Capacitor_SMD.pretty/C_01005_0402Metric.kicad_mod",
+        (Mount("SMD"), Package("0201")): "../kicad-footprints/Capacitor_SMD.pretty/C_0201_0603Metric.kicad_mod",
+        (Mount("SMD"), Package("0402")): "../kicad-footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
+        (Mount("SMD"), Package("0603")): "../kicad-footprints/Capacitor_SMD.pretty/C_0603_1608Metric.kicad_mod",
+        (Mount("SMD"), Package("0805")): "../kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
+        (Mount("SMD"), Package("1206")): "../kicad-footprints/Capacitor_SMD.pretty/C_1206_3216Metric.kicad_mod",
+        (Mount("SMD"), Package("1210")): "../kicad-footprints/Capacitor_SMD.pretty/C_1210_3225Metric.kicad_mod",
+        (Mount("SMD"), Package("1812")): "../kicad-footprints/Capacitor_SMD.pretty/C_1812_4532Metric.kicad_mod",
+        (Mount("SMD"), Package("1825")): "../kicad-footprints/Capacitor_SMD.pretty/C_1825_4564Metric.kicad_mod",
+        (Mount("SMD"), Package("2220")): "../kicad-footprints/Capacitor_SMD.pretty/C_2220_5750Metric.kicad_mod",
+        (Mount("SMD"), Package("2225")): "../kicad-footprints/Capacitor_SMD.pretty/C_2225_5664Metric.kicad_mod",
+        (Mount("SMD"), Package("3640")): "../kicad-footprints/Capacitor_SMD.pretty/C_3640_9110Metric.kicad_mod",
     }
 
     if (mount, package) not in kicad_footprints:
@@ -127,7 +124,7 @@ Component(
     name="C",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
     prefix="C",
-    symbol=Symbol(**_symbol(mount, package)),
+    symbol=Symbol(_symbol(mount, package)),
     footprint=File(_footprint(mount, package)),
     properties=properties,
     type="capacitor",

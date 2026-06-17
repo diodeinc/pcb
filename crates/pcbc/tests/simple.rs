@@ -97,10 +97,6 @@ const SIMPLE_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.4"
 name = "simple_workspace"
-
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 const TEST_BOARD_PCB_TOML: &str = r#"
@@ -113,10 +109,6 @@ description = "Main test board for validation"
 const PCB_TOML_MIN: &str = r#"
 [workspace]
 pcb-version = "0.4"
-
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 #[test]
@@ -222,7 +214,7 @@ vendor = ["github.com/mycompany/components/**"]
         )
         .write("board.zen", GIT_FIXTURE_BOARD_ZEN)
         .write(
-            "vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.3/marker.txt",
+            "vendor/github.com/other/package/9.0.3/marker.txt",
             "keep me",
         );
 
@@ -230,7 +222,7 @@ vendor = ["github.com/mycompany/components/**"]
     let manifest_before = std::fs::read_to_string(&manifest_path).unwrap();
     let vendor_marker = sandbox
         .default_cwd()
-        .join("vendor/gitlab.com/kicad/libraries/kicad-footprints/9.0.3/marker.txt");
+        .join("vendor/github.com/other/package/9.0.3/marker.txt");
 
     let output = sandbox
         .run("pcbc", ["build", "board.zen"])

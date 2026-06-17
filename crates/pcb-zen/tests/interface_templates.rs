@@ -1,5 +1,15 @@
 mod common;
 use common::TestProject;
+use pcb_zen_core::WithDiagnostics;
+
+fn expect_netlist(result: WithDiagnostics<String>) -> String {
+    assert!(
+        result.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        result.diagnostics
+    );
+    result.output.expect("expected netlist output")
+}
 
 #[test]
 fn test_interface_with_net_template() {
@@ -11,28 +21,23 @@ fn test_interface_with_net_template() {
 # Test interface with net template
 MyIf = interface(test = Net("MYTEST"))
 instance = MyIf("PREFIX")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
-# Create component to use the net
-Component(
+# Create a component to use the net
+Resistor(
     name = "component",
-    type = "test_component",
-    pin_defs = {"P1": "1"},
-    footprint = "TEST:FOOTPRINT",
+    value = "1kohm",
+    package = "0402",
     skip_bom = True,
-    pins = {"P1": instance.test},
+    P1 = instance.test,
+    P2 = Net("GND"),
 )
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-
-    // Check that evaluation succeeded
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-
     // The netlist output should contain our net with the proper name
     // For single-net interfaces, the instance name becomes the net name directly
-    let netlist = result.output.unwrap();
+    let netlist = expect_netlist(env.eval_netlist("test.zen"));
     assert!(
         netlist.contains("PREFIX"),
         "Should contain PREFIX net (single-net interface uses instance name directly)"
@@ -55,44 +60,30 @@ Power = interface(
 
 # Create instance with prefix
 pwr = Power("MCU")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Create components to use the nets
-Component(
+Resistor(
     name = "resistor",
-    type = "resistor",
-    pin_defs = {"P1": "1", "P2": "2"},
-    footprint = "SMD:0805",
+    value = "1kohm",
+    package = "0402",
     skip_bom = True,
-    pins = {
-        "P1": pwr.vcc,
-        "P2": pwr.gnd,
-    },
+    P1 = pwr.vcc,
+    P2 = pwr.gnd,
 )
 
-Component(
-    name = "transistor",
-    type = "transistor",
-    pin_defs = {"G": "1", "D": "2", "S": "3"},
-    footprint = "SOT:23",
+Resistor(
+    name = "enable_pull",
+    value = "10kohm",
+    package = "0402",
     skip_bom = True,
-    pins = {
-        "G": pwr.enable,
-        "D": pwr.vcc,
-        "S": pwr.gnd,
-    },
+    P1 = pwr.enable,
+    P2 = pwr.vcc,
 )
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-    if !result.diagnostics.is_empty() {
-        eprintln!("Diagnostics: {:?}", result.diagnostics);
-    }
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-
-    let netlist = result.output.unwrap();
-    println!("netlist:\n{netlist}");
+    let netlist = expect_netlist(env.eval_netlist("test.zen"));
     assert!(netlist.contains("MCU_3V3"), "Should contain MCU_3V3 net");
     assert!(netlist.contains("MCU_GND"), "Should contain MCU_GND net");
     assert!(
@@ -125,32 +116,30 @@ System = interface(
 
 # Create system instance
 sys = System("MAIN")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Use the nets
-Component(
-    name = "chip",
-    type = "ic",
-    pin_defs = {"VCC": "1", "GND": "2", "DATA": "3"},
-    footprint = "QFN:16",
+Resistor(
+    name = "data_load",
+    value = "1kohm",
+    package = "0402",
     skip_bom = True,
-    pins = {
-        "VCC": sys.power.vcc,
-        "GND": sys.power.gnd,
-        "DATA": sys.data,
-    },
+    P1 = sys.data,
+    P2 = sys.power.gnd,
+)
+
+Resistor(
+    name = "power_load",
+    value = "1kohm",
+    package = "0402",
+    skip_bom = True,
+    P1 = sys.power.vcc,
+    P2 = sys.power.gnd,
 )
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-    if !result.diagnostics.is_empty() {
-        eprintln!("Diagnostics: {:?}", result.diagnostics);
-    }
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-
-    let netlist = result.output.unwrap();
-    println!("netlist:\n{netlist}");
+    let netlist = expect_netlist(env.eval_netlist("test.zen"));
     assert!(
         netlist.contains("MAIN_power_VCC"),
         "Should contain MAIN_power_VCC net"
@@ -176,30 +165,24 @@ fn test_interface_template_without_name() {
 MyIf = interface(
     test = Net()  # No name specified
 )
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Create instance without prefix
 instance = MyIf()
 
 # Use the net
-Component(
+Resistor(
     name = "component",
-    type = "test",
-    pin_defs = {"P1": "1"},
-    footprint = "TEST:FP",
+    value = "1kohm",
+    package = "0402",
     skip_bom = True,
-    pins = {"P1": instance.test},
+    P1 = instance.test,
+    P2 = Net("GND"),
 )
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-    if !result.diagnostics.is_empty() {
-        eprintln!("Diagnostics: {:?}", result.diagnostics);
-    }
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-    let netlist = result.output.unwrap();
-    println!("netlist:\n{netlist}");
+    expect_netlist(env.eval_netlist("test.zen"));
 }
 
 #[test]
@@ -215,33 +198,31 @@ MyIf = interface(test = Net("SHARED"))
 # Create two instances - should have different net IDs
 inst1 = MyIf("A")
 inst2 = MyIf("B")
+gnd = Net("GND")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Use both nets
-Component(
+Resistor(
     name = "comp1",
-    type = "test",
-    pin_defs = {"P1": "1"},
-    footprint = "TEST:FP",
+    value = "1kohm",
+    package = "0402",
     skip_bom = True,
-    pins = {"P1": inst1.test},
+    P1 = inst1.test,
+    P2 = gnd,
 )
 
-Component(
+Resistor(
     name = "comp2",
-    type = "test",
-    pin_defs = {"P1": "1"},
-    footprint = "TEST:FP",
+    value = "1kohm",
+    package = "0402",
     skip_bom = True,
-    pins = {"P1": inst2.test},
+    P1 = inst2.test,
+    P2 = gnd,
 )
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-
-    let netlist = result.output.unwrap();
+    let netlist = expect_netlist(env.eval_netlist("test.zen"));
     // For single-net interfaces, the instance name becomes the net name directly
     assert!(
         netlist.contains("A"),

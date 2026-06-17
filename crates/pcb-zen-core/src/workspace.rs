@@ -8,14 +8,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use semver::Version;
-
 use crate::FileProvider;
 use crate::config::{
-    KicadLibraryConfig, PcbToml, WorkspaceConfig, find_workspace_root, parse_pcb_version,
-    pcb_version_from_cargo, pcb_version_is_older, stdlib_pinned_kicad_library,
+    PcbToml, WorkspaceConfig, find_workspace_root, parse_pcb_version, pcb_version_from_cargo,
+    pcb_version_is_older,
 };
-use crate::kicad_library::validate_kicad_library_config;
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
     *value == T::default()
@@ -189,28 +186,6 @@ impl WorkspaceInfo {
             .as_ref()
             .and_then(|c| c.workspace.clone())
             .unwrap_or_default()
-    }
-
-    /// Concrete versions for stdlib's implicit managed KiCad asset dependencies.
-    pub fn stdlib_asset_dep_versions(&self) -> BTreeMap<String, Version> {
-        let entry = stdlib_pinned_kicad_library();
-        let version = entry.version.clone();
-        std::iter::once(entry.symbols)
-            .chain(std::iter::once(entry.footprints))
-            .chain(entry.models.into_values())
-            .map(|repo| (repo, version.clone()))
-            .collect()
-    }
-
-    /// Get configured `[[workspace.kicad_library]]` entries.
-    ///
-    /// Falls back to default KiCad library settings when the workspace section is absent.
-    pub fn kicad_library_entries(&self) -> Vec<KicadLibraryConfig> {
-        self.config
-            .as_ref()
-            .and_then(|c| c.workspace.as_ref())
-            .map(|w| w.kicad_library.clone())
-            .unwrap_or_else(|| WorkspaceConfig::default().kicad_library)
     }
 
     /// Iterate all manifest configs in the workspace (root first, then packages).
@@ -477,14 +452,6 @@ pub fn get_workspace_info<F: FileProvider>(
         validate_workspace_pcb_version(cfg, src)?;
     }
 
-    if let Some(cfg) = &config
-        && let Some(workspace) = cfg.workspace.as_ref()
-    {
-        for entry in &workspace.kicad_library {
-            validate_kicad_library_config(entry)?;
-        }
-    }
-
     let workspace_config = config
         .as_ref()
         .and_then(|c| c.workspace.clone())
@@ -602,59 +569,9 @@ pub fn get_workspace_info<F: FileProvider>(
 mod tests {
     use super::*;
     use crate::InMemoryFileProvider;
-    use crate::config::{
-        DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE, parse_pcb_version, pcb_version_from_cargo,
-    };
+    use crate::config::{parse_pcb_version, pcb_version_from_cargo};
     use std::collections::HashMap;
     use std::path::Path;
-
-    #[test]
-    fn test_rejects_invalid_kicad_library_version() {
-        let files = HashMap::from([(
-            "/repo/pcb.toml".to_string(),
-            r#"
-[workspace]
-pcb-version = "0.3"
-
-[[workspace.kicad_library]]
-version = "9"
-symbols = "gitlab.com/kicad/libraries/kicad-symbols"
-footprints = "gitlab.com/kicad/libraries/kicad-footprints"
-"#
-            .to_string(),
-        )]);
-        let provider = InMemoryFileProvider::new(files);
-
-        get_workspace_info(&provider, Path::new("/repo"))
-            .expect_err("expected invalid [[workspace.kicad_library]].version to fail parse");
-    }
-
-    #[test]
-    fn test_kicad_library_defaults_apply_without_workspace_section() {
-        let files = HashMap::from([(
-            "/repo/pcb.toml".to_string(),
-            r#"
-[dependencies]
-"github.com/diodeinc/stdlib" = "0.5.11"
-"#
-            .to_string(),
-        )]);
-        let provider = InMemoryFileProvider::new(files);
-
-        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
-        let entries = info.kicad_library_entries();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(
-            entries[0].http_mirror.as_deref(),
-            Some(DEFAULT_KICAD_HTTP_MIRROR_TEMPLATE)
-        );
-        assert_eq!(entries[1].version, Version::new(10, 0, 3));
-        assert_eq!(
-            info.stdlib_asset_dep_versions()
-                .get("gitlab.com/kicad/libraries/kicad-symbols"),
-            Some(&Version::new(10, 0, 3))
-        );
-    }
 
     #[test]
     fn test_package_level_workspace_section_is_discovery_error() {
@@ -672,11 +589,6 @@ pcb-version = "0.3"
                 r#"
 [workspace]
 pcb-version = "0.3"
-
-[[workspace.kicad_library]]
-version = "9.0.3"
-symbols = "gitlab.com/kicad/libraries/kicad-symbols"
-footprints = "gitlab.com/kicad/libraries/kicad-footprints"
 "#
                 .to_string(),
             ),

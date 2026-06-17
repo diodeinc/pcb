@@ -24,6 +24,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb migrate` now upgrades workspace `pcb-version` after successful latest-toolchain migrations.
 - Added `[workspace.bom] strict = true` to require exact MPN matching when fetching BOM availability.
 - `pcb publish` release metadata now records strict workspace BOM matching when enabled.
+- Bundled selected KiCad library assets into stdlib, including embedded footprint STEP models; `@kicad-symbols` and `@kicad-footprints` now resolve to those bundled assets.
+- Legacy `gitlab.com/kicad/libraries/*` manifest dependencies are ignored during resolution because stdlib carries the referenced KiCad assets.
 - Updated stdlib generics to use KiCad 10.0.3 symbols and footprints, while keeping `Crystal()` compatible with KiCad 9 four-pin symbols.
 - `pcb publish` now bundles only referenced KiCad split-symbol files instead of whole split-library directories.
 - Added `pcb +local ...` to run the local toolchain installed by `install.sh --local`.

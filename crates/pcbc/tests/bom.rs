@@ -96,7 +96,7 @@ P2 = Net()
 # Normal resistor - should appear in BOM
 Component(
     name = "normal",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
@@ -105,7 +105,7 @@ Component(
 # Component with skip_bom kwarg - should NOT appear in BOM
 Component(
     name = "skip_bom_kwarg",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     skip_bom = True,
@@ -114,7 +114,7 @@ Component(
 # Component with skip_bom kwarg - should NOT appear in BOM
 Component(
     name = "skip_bom_kwarg_2",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     skip_bom = True,
@@ -123,7 +123,7 @@ Component(
 # Normal resistor - should appear in BOM
 Component(
     name = "normal2",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = Part(mpn = "RC0603FR-0710KL", manufacturer = "Yageo"),
@@ -142,7 +142,7 @@ P2 = Net()
 # Normal component - should appear in BOM with dnp omitted (false)
 Component(
     name = "normal",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
@@ -151,7 +151,7 @@ Component(
 # DNP component (via dnp kwarg) - should appear in BOM with dnp=true
 Component(
     name = "dnp_kwarg_1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = Part(mpn = "RC0603FR-0710KL", manufacturer = "Yageo"),
@@ -161,7 +161,7 @@ Component(
 # DNP component (via dnp kwarg) - should appear in BOM with dnp=true
 Component(
     name = "dnp_kwarg_2",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = Part(mpn = "RC0603FR-074K7L", manufacturer = "Yageo"),
@@ -171,7 +171,7 @@ Component(
 # Component with both DNP and skip_bom - should NOT appear in BOM (skip_bom wins)
 Component(
     name = "dnp_and_skip_bom",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = Part(mpn = "RC0603FR-07100KL", manufacturer = "Yageo"),
@@ -206,10 +206,6 @@ Capacitor(name = "C2", value = "10uF", package = "0805", P1 = vcc, P2 = gnd)
 const WORKSPACE_TOML: &str = r#"
 [workspace]
 pcb-version = "0.4"
-
-[dependencies]
-"gitlab.com/kicad/libraries/kicad-symbols" = "10.0.3"
-"gitlab.com/kicad/libraries/kicad-footprints" = "10.0.3"
 "#;
 
 #[test]

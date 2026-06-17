@@ -10,9 +10,6 @@ use ignore::WalkBuilder;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::file_extensions;
 use pcb_zen_core::is_stdlib_module_path;
-use pcb_zen_core::kicad_library::{
-    KicadRepoMatch, effective_kicad_library_for_repo, match_kicad_managed_repo,
-};
 use pcb_zen_core::resolution::{
     FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
     ResolutionResult, selected_remote_from_hydrated_manifest,
@@ -184,7 +181,6 @@ impl FrozenResolutionBuilder {
         self.selected_remote = selected_remote_from_hydrated_manifest(&self.workspace, package_url)
             .with_context(|| format!("while reading resolved closure for {}", package_url))?;
 
-        add_stdlib_selected_remote(&self.workspace, &mut self.selected_remote);
         self.materialize_selected_remote()?;
         self.packages.clear();
 
@@ -314,66 +310,15 @@ impl FrozenResolutionBuilder {
             });
         }
 
-        self.add_kicad_sibling_deps(&mut resolved, queue)?;
-
         Ok(resolved)
     }
 
-    fn add_kicad_sibling_deps(
-        &mut self,
-        resolved: &mut BTreeMap<String, PathBuf>,
-        queue: &mut VecDeque<PackageNode>,
-    ) -> Result<()> {
-        let kicad_entries = self.workspace.kicad_library_entries();
-        let resolved_kicad_repos: Vec<_> = resolved
-            .iter()
-            .filter_map(|(repo, root)| {
-                let version = root.file_name().and_then(|name| name.to_str())?;
-                let version = Version::parse(version).ok()?;
-                effective_kicad_library_for_repo(&kicad_entries, repo, &version)
-                    .map(|entry| (entry, version))
-            })
-            .collect();
-
-        for (entry, version) in resolved_kicad_repos {
-            for sibling_repo in entry.repo_urls() {
-                if resolved.contains_key(sibling_repo) {
-                    continue;
-                }
-
-                let dep_id = ResolvedDepId::for_version(sibling_repo.to_string(), &version);
-                let selected_version =
-                    self.selected_remote.get(&dep_id).cloned().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Resolved closure is missing {}@{} required by KiCad library expansion",
-                            dep_id.path,
-                            dep_id.lane
-                        )
-                    })?;
-                let dep_root = self.remote_package_root(sibling_repo, &selected_version)?;
-                resolved.insert(sibling_repo.to_string(), canonicalize(&dep_root));
-                queue.push_back(PackageNode::Remote {
-                    dep_id,
-                    version: selected_version,
-                });
-            }
-        }
-
-        Ok(())
-    }
-
     fn add_stdlib_package(&mut self) -> Result<()> {
-        let mut deps = BTreeMap::new();
-        for (repo, version) in self.workspace.stdlib_asset_dep_versions() {
-            let root = self.remote_package_root(&repo, &version)?;
-            deps.insert(repo, canonicalize(&root));
-        }
-
         self.packages.insert(
             canonicalize(&self.workspace.workspace_stdlib_dir()),
             FrozenPackage {
                 identity: FrozenPackageIdentity::Stdlib,
-                deps,
+                deps: BTreeMap::new(),
                 parts: Vec::new(),
             },
         );
@@ -423,8 +368,7 @@ impl FrozenResolutionBuilder {
 
         let cache_root =
             package_version_root(self.workspace.workspace_cache_dir(), module_path, version);
-        let managed_kicad = self.is_managed_kicad_dep(module_path, version);
-        if cache_root.join("pcb.toml").exists() || managed_kicad && cache_root.exists() {
+        if cache_root.join("pcb.toml").exists() {
             self.remote_roots.insert(key, cache_root.clone());
             return Ok(cache_root);
         }
@@ -437,18 +381,9 @@ impl FrozenResolutionBuilder {
             );
         }
 
-        if !managed_kicad {
-            ensure_package_manifest_in_cache(module_path, version, &self.cache_index)?;
-        }
+        ensure_package_manifest_in_cache(module_path, version, &self.cache_index)?;
         self.remote_roots.insert(key, cache_root.clone());
         Ok(cache_root)
-    }
-
-    fn is_managed_kicad_dep(&self, path: &str, version: &Version) -> bool {
-        matches!(
-            match_kicad_managed_repo(&self.workspace.kicad_library_entries(), path, version),
-            KicadRepoMatch::SelectorMatched
-        )
     }
 }
 
@@ -496,19 +431,4 @@ fn local_path_dependency_root(package_root: &Path, spec: &DependencySpec) -> Opt
         return None;
     };
     detail.path.as_ref().map(|path| package_root.join(path))
-}
-
-fn add_stdlib_selected_remote(
-    workspace: &WorkspaceInfo,
-    selected_remote: &mut BTreeMap<ResolvedDepId, Version>,
-) {
-    for (repo, version) in workspace.stdlib_asset_dep_versions() {
-        let dep_id = ResolvedDepId::for_version(repo, &version);
-        if selected_remote
-            .get(&dep_id)
-            .is_none_or(|selected| version > *selected)
-        {
-            selected_remote.insert(dep_id, version);
-        }
-    }
 }

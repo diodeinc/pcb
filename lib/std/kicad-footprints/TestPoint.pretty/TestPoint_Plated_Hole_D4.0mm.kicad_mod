@@ -1,0 +1,100 @@
+(footprint "TestPoint_Plated_Hole_D4.0mm"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(descr "Plated Hole as test Point, diameter 4.0mm")
+	(tags "test point plated hole")
+	(property "Reference" "REF**"
+		(at 0 -3.548 0)
+		(layer "F.SilkS")
+		(uuid "12d6bf64-2ee5-43b6-a79b-fd0d4dea094b")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "TestPoint_Plated_Hole_D4.0mm"
+		(at 0 3.55 0)
+		(layer "F.Fab")
+		(uuid "4127ddc5-0346-4bc1-bbb5-8de02434e066")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "40c91fe7-bb16-4545-b674-8a872b5d08a9")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(unlocked yes)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "ac098a98-ccc3-4123-b18f-f8f70ea66804")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr exclude_from_pos_files exclude_from_bom)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_circle
+		(center 0 0)
+		(end 0 2.75)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.SilkS")
+		(uuid "3f5a760f-cced-404f-8f44-0e95ac6b24ec")
+	)
+	(fp_circle
+		(center 0 0)
+		(end 3 0)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "e352db1d-edbe-44ca-9221-b82854b57dcd")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 -3.55 0)
+		(layer "F.Fab")
+		(uuid "c33ee9d1-41d3-42fc-b796-222811aceb4e")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" thru_hole circle
+		(at 0 0)
+		(size 5 5)
+		(drill 4)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "e7f0837b-66ed-4ca0-8cad-53cea8e84e78")
+	)
+	(embedded_fonts no)
+)

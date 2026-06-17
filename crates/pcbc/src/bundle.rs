@@ -1,11 +1,8 @@
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use pcb_zen::{copy_dir_all, git};
-use pcb_zen_core::kicad_library::{
-    KICAD_PARTS_INDEX_FILE, KicadRepoMatch, match_kicad_managed_repo,
-};
 use pcb_zen_core::resolution::{FrozenPackageIdentity, FrozenResolutionMap, ResolutionResult};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info_span, instrument};
@@ -27,7 +24,6 @@ pub(crate) struct SourceBundlePlan<'a> {
     pub resolution: &'a ResolutionResult,
     pub root_package_url: Option<&'a str>,
     pub staged_src: &'a Path,
-    pub resolved_paths: &'a [PathBuf],
 }
 
 #[instrument(name = "write_bundle_metadata", skip_all)]
@@ -65,7 +61,6 @@ fn stage_frozen_source_bundle(
     }
 
     let excluded_roots = source_bundle_excluded_roots(workspace_info);
-    let mut kicad_roots = BTreeMap::new();
 
     for (root, package) in &frozen.packages {
         match &package.identity {
@@ -74,45 +69,15 @@ fn stage_frozen_source_bundle(
                 copy_dir_all(root, &plan.staged_src.join(rel_path), &excluded_roots)?;
             }
             FrozenPackageIdentity::Remote { dep_id, version } => {
-                if is_managed_kicad_repo(workspace_info, &dep_id.path, version) {
-                    register_kicad_root(
-                        plan.staged_src,
-                        &mut kicad_roots,
-                        root,
-                        &dep_id.path,
-                        version,
-                    )?;
-                } else {
-                    let dst = plan
-                        .staged_src
-                        .join("vendor")
-                        .join(&dep_id.path)
-                        .join(version.to_string());
-                    copy_dir_all(root, &dst, &HashSet::new())?;
-                }
+                let dst = plan
+                    .staged_src
+                    .join("vendor")
+                    .join(&dep_id.path)
+                    .join(version.to_string());
+                copy_dir_all(root, &dst, &HashSet::new())?;
             }
             FrozenPackageIdentity::Stdlib => {}
         }
-    }
-
-    for package in frozen.packages.values() {
-        for (repo, root) in &package.deps {
-            let Some(version_str) = root.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            let Ok(version) = semver::Version::parse(version_str) else {
-                continue;
-            };
-            if !is_managed_kicad_repo(workspace_info, repo, &version) {
-                continue;
-            }
-
-            register_kicad_root(plan.staged_src, &mut kicad_roots, root, repo, &version)?;
-        }
-    }
-
-    for resolved_path in plan.resolved_paths {
-        stage_kicad_resolved_file(plan.staged_src, &kicad_roots, resolved_path)?;
     }
 
     Ok(())
@@ -176,111 +141,6 @@ fn workspace_package_rel_path(
         return Ok(PathBuf::new());
     }
     bail!("Unknown workspace package {}", package_url)
-}
-
-fn is_managed_kicad_repo(
-    workspace_info: &pcb_zen::WorkspaceInfo,
-    module_path: &str,
-    version: &semver::Version,
-) -> bool {
-    matches!(
-        match_kicad_managed_repo(
-            &workspace_info.kicad_library_entries(),
-            module_path,
-            version
-        ),
-        KicadRepoMatch::SelectorMatched
-    )
-}
-
-fn register_kicad_root(
-    staged_src: &Path,
-    kicad_roots: &mut BTreeMap<PathBuf, (String, String)>,
-    root: &Path,
-    repo: &str,
-    version: &semver::Version,
-) -> Result<()> {
-    let version = version.to_string();
-    fs::create_dir_all(staged_src.join("vendor").join(repo).join(&version))?;
-    kicad_roots
-        .entry(root.to_path_buf())
-        .or_insert_with(|| (repo.to_string(), version));
-    Ok(())
-}
-
-fn stage_kicad_resolved_file(
-    staged_src: &Path,
-    kicad_roots: &BTreeMap<PathBuf, (String, String)>,
-    resolved_path: &Path,
-) -> Result<()> {
-    let Some((dep_root, (repo, version))) = kicad_roots
-        .iter()
-        .filter(|(root, _)| resolved_path.starts_with(root))
-        .max_by_key(|(root, _)| root.as_os_str().len())
-    else {
-        return Ok(());
-    };
-
-    let Ok(rel_path) = resolved_path.strip_prefix(dep_root) else {
-        return Ok(());
-    };
-    if rel_path.as_os_str().is_empty() {
-        return Ok(());
-    }
-    if is_split_symbol_library_dir(resolved_path) {
-        return Ok(());
-    }
-    if !resolved_path.exists() {
-        log::warn!(
-            "Skipping missing referenced library path during source bundle staging: {}",
-            resolved_path.display()
-        );
-        return Ok(());
-    }
-
-    copy_bundle_path(
-        resolved_path,
-        &staged_src
-            .join("vendor")
-            .join(repo)
-            .join(version)
-            .join(rel_path),
-    )?;
-
-    let parts_index = dep_root.join(KICAD_PARTS_INDEX_FILE);
-    if parts_index.exists() {
-        copy_bundle_path(
-            &parts_index,
-            &staged_src
-                .join("vendor")
-                .join(repo)
-                .join(version)
-                .join(KICAD_PARTS_INDEX_FILE),
-        )?;
-    }
-
-    Ok(())
-}
-
-fn is_split_symbol_library_dir(path: &Path) -> bool {
-    path.extension().and_then(|ext| ext.to_str()) == Some("kicad_symdir")
-}
-
-fn copy_bundle_path(src: &Path, dst: &Path) -> Result<()> {
-    if src == dst || dst.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let copy_result: Result<()> = if src.is_dir() {
-        copy_dir_all(src, dst, &HashSet::new())
-    } else {
-        fs::copy(src, dst).map(|_| ()).map_err(Into::into)
-    };
-
-    copy_result.with_context(|| format!("Failed to copy {} to {}", src.display(), dst.display()))
 }
 
 fn create_metadata_json(input: &MetadataInput<'_>) -> serde_json::Value {

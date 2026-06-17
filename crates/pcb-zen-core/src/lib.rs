@@ -12,7 +12,6 @@ pub mod diagnostics;
 pub mod erc;
 mod file_provider;
 pub mod graph;
-pub mod kicad_library;
 pub mod lang;
 pub mod load_spec;
 mod moved;
@@ -71,6 +70,21 @@ mod version_tests {
 
 pub fn is_stdlib_module_path(path: &str) -> bool {
     path == STDLIB_MODULE_PATH
+}
+
+const KICAD_LIBRARY_PACKAGES: &[&str] = &[
+    "gitlab.com/kicad/libraries/kicad-symbols",
+    "gitlab.com/kicad/libraries/kicad-footprints",
+    "gitlab.com/kicad/libraries/kicad-packages3D",
+];
+
+pub fn is_kicad_library_package(path: &str) -> bool {
+    KICAD_LIBRARY_PACKAGES.contains(&path)
+}
+
+pub fn is_kicad_library_dependency_key(key: &str) -> bool {
+    let path = key.rsplit_once('@').map_or(key, |(path, _)| path);
+    is_kicad_library_package(path)
 }
 
 /// Return the workspace-local stdlib root.

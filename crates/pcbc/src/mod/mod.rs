@@ -293,14 +293,6 @@ fn is_remote_dependency(
         && !workspace.packages.contains_key(module_path)
         && workspace.workspace_base_url().as_deref() != Some(module_path)
         && !matches!(spec, DependencySpec::Detailed(detail) if detail.path.is_some())
-        && !is_configured_kicad_repo(workspace, module_path)
-}
-
-pub(crate) fn is_configured_kicad_repo(workspace: &WorkspaceInfo, module_path: &str) -> bool {
-    workspace
-        .kicad_library_entries()
-        .iter()
-        .any(|entry| entry.repo_urls().any(|repo| repo == module_path))
 }
 
 fn parse_download_dependency(raw: &str) -> Result<(String, semver::Version)> {

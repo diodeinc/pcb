@@ -9,7 +9,6 @@ use ignore::WalkBuilder;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::FileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
-use pcb_zen_core::kicad_library::kicad_dependency_aliases;
 use pcb_zen_core::workspace::package_url_covers;
 
 #[derive(Debug, Default, Clone)]
@@ -27,9 +26,6 @@ pub(crate) fn scan_package_direct_deps(
     index: &CacheIndex,
     offline: bool,
 ) -> Result<ScannedDirectDeps> {
-    let kicad_entries = workspace_info.kicad_library_entries();
-    let kicad_aliases = kicad_dependency_aliases(&kicad_entries);
-    let configured_kicad_versions = workspace_info.stdlib_asset_dep_versions();
     let file_provider = DefaultFileProvider::new();
     let mut scanned = ScannedDirectDeps::default();
 
@@ -39,19 +35,6 @@ pub(crate) fn scan_package_direct_deps(
             .with_context(|| format!("Failed to read {}", zen_path.display()))?;
         let extracted = extract_imports(&content)
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", zen_path.display()))?;
-
-        for alias in extracted.aliases {
-            if let Some(repo_url) = kicad_aliases.get(&alias) {
-                add_remote_dep(
-                    &mut scanned.remote,
-                    repo_url,
-                    current_config,
-                    &configured_kicad_versions,
-                    index,
-                    offline,
-                )?;
-            }
-        }
 
         for url in extracted.urls {
             if let Some(workspace_package_url) = workspace_package_for_url(workspace_info, &url) {
@@ -67,14 +50,7 @@ pub(crate) fn scan_package_direct_deps(
                 continue;
             }
 
-            add_remote_dep(
-                &mut scanned.remote,
-                &url,
-                current_config,
-                &configured_kicad_versions,
-                index,
-                offline,
-            )?;
+            add_remote_dep(&mut scanned.remote, &url, current_config, index, offline)?;
         }
 
         for rel_path in extracted.relative_paths {
@@ -148,16 +124,10 @@ fn add_remote_dep(
     remote: &mut BTreeMap<String, DependencySpec>,
     url: &str,
     current_config: &PcbToml,
-    configured_kicad_versions: &BTreeMap<String, semver::Version>,
     index: &CacheIndex,
     offline: bool,
 ) -> Result<()> {
     if let Some((module_path, spec)) = existing_manifest_dep(url, current_config) {
-        remote.entry(module_path).or_insert(spec);
-        return Ok(());
-    }
-
-    if let Some((module_path, spec)) = resolve_kicad_url(url, configured_kicad_versions) {
         remote.entry(module_path).or_insert(spec);
         return Ok(());
     }
@@ -199,16 +169,4 @@ fn workspace_package_for_url<'a>(
         .filter(|package_url| package_url_covers(package_url, url))
         .max_by_key(|package_url| package_url.len())
         .map(|package_url| package_url.as_str())
-}
-
-fn resolve_kicad_url(
-    url: &str,
-    configured_kicad_versions: &BTreeMap<String, semver::Version>,
-) -> Option<(String, DependencySpec)> {
-    configured_kicad_versions
-        .iter()
-        .find_map(|(repo, version)| {
-            package_url_covers(repo, url)
-                .then(|| (repo.clone(), DependencySpec::Version(version.to_string())))
-        })
 }

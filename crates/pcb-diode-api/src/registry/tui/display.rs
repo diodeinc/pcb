@@ -173,11 +173,7 @@ pub struct KicadSymbolDisplay {
 
 impl KicadSymbolDisplay {
     pub fn from_hit(hit: &SearchHit) -> Self {
-        let path = hit
-            .url
-            .strip_prefix("@kicad-symbols/")
-            .unwrap_or(&hit.url)
-            .replace(".kicad_sym:", "/");
+        let path = hit.url.replace(".kicad_sym:", "/");
 
         let mut line2_parts = Vec::new();
         if let Some(mpn) = hit.mpn.as_deref() {

@@ -11,14 +11,15 @@ fn interface_net_template_basic() {
 # Basic interface with net template
 MyInterface = interface(test = Net("MYTEST"))
 instance = MyInterface("PREFIX")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Create component to generate netlist
-Component(
+Resistor(
     name = "R1",
-    type = "resistor",
-    pin_defs = {"1": "1", "2": "2"},
-    footprint = "SMD:0805",
-    pins = {"1": instance.test, "2": Net("GND")},
+    value = "1kohm",
+    package = "0402",
+    P1 = instance.test,
+    P2 = Net("GND"),
 )
 "#,
     );
@@ -43,32 +44,39 @@ Power = interface(
 # Create instances
 pwr1 = Power("MCU")
 pwr2 = Power("SENSOR")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Create components
-Component(
-    name = "U1",
-    type = "mcu",
-    pin_defs = {"VCC": "1", "GND": "2", "EN": "3"},
-    footprint = "QFN:32",
-    part = Part(mpn = "mcu", manufacturer = "TEST"),
-    pins = {
-        "VCC": pwr1.vcc,
-        "GND": pwr1.gnd,
-        "EN": pwr1.enable,
-    }
+Resistor(
+    name = "MCU_PWR",
+    value = "1kohm",
+    package = "0402",
+    P1 = pwr1.vcc,
+    P2 = pwr1.gnd,
 )
 
-Component(
-    name = "U2",
-    type = "sensor",
-    pin_defs = {"VDD": "1", "VSS": "2", "ENABLE": "3"},
-    footprint = "SOT:23-6",
-    part = Part(mpn = "sensor", manufacturer = "TEST"),
-    pins = {
-        "VDD": pwr2.vcc,
-        "VSS": pwr2.gnd,
-        "ENABLE": pwr2.enable,
-    }
+Resistor(
+    name = "MCU_EN",
+    value = "10kohm",
+    package = "0402",
+    P1 = pwr1.enable,
+    P2 = pwr1.gnd,
+)
+
+Resistor(
+    name = "SENSOR_PWR",
+    value = "1kohm",
+    package = "0402",
+    P1 = pwr2.vcc,
+    P2 = pwr2.gnd,
+)
+
+Resistor(
+    name = "SENSOR_EN",
+    value = "10kohm",
+    package = "0402",
+    P1 = pwr2.enable,
+    P2 = pwr2.gnd,
 )
 "#,
     );
@@ -101,20 +109,31 @@ Device = interface(
 
 # Create device instance
 dev = Device("PORT1")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Wire up components
-Component(
-    name = "J1",
-    type = "usb_connector",
-    pin_defs = {"VBUS": "1", "D+": "2", "D-": "3", "GND": "4"},
-    footprint = "USB:TYPE-C",
-    part = Part(mpn = "usb_connector", manufacturer = "TEST"),
-    pins = {
-        "VBUS": dev.power.vcc,
-        "D+": dev.data_p,
-        "D-": dev.data_n,
-        "GND": dev.power.gnd,
-    }
+Resistor(
+    name = "VBUS_LOAD",
+    value = "1kohm",
+    package = "0402",
+    P1 = dev.power.vcc,
+    P2 = dev.power.gnd,
+)
+
+Resistor(
+    name = "DP_LOAD",
+    value = "1kohm",
+    package = "0402",
+    P1 = dev.data_p,
+    P2 = dev.power.gnd,
+)
+
+Resistor(
+    name = "DN_LOAD",
+    value = "1kohm",
+    package = "0402",
+    P1 = dev.data_n,
+    P2 = dev.power.gnd,
 )
 "#,
     );
@@ -139,32 +158,39 @@ SignalInterface = interface(
 # Create multiple instances
 bus1 = SignalInterface("CPU")
 bus2 = SignalInterface("MEM")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Connect them
-Component(
-    name = "CPU",
-    type = "processor",
-    pin_defs = {"CLK": "1", "DATA": "2", "VALID": "3"},
-    footprint = "BGA:256",
-    part = Part(mpn = "processor", manufacturer = "TEST"),
-    pins = {
-        "CLK": bus1.clk,
-        "DATA": bus1.data,
-        "VALID": bus1.valid,
-    }
+Resistor(
+    name = "CPU_CLK_DATA",
+    value = "1kohm",
+    package = "0402",
+    P1 = bus1.clk,
+    P2 = bus1.data,
 )
 
-Component(
-    name = "MEM",
-    type = "memory",
-    pin_defs = {"CLK": "1", "DATA": "2", "VALID": "3"},
-    footprint = "TSOP:48",
-    part = Part(mpn = "memory", manufacturer = "TEST"),
-    pins = {
-        "CLK": bus2.clk,
-        "DATA": bus2.data,
-        "VALID": bus2.valid,
-    }
+Resistor(
+    name = "CPU_VALID_DATA",
+    value = "1kohm",
+    package = "0402",
+    P1 = bus1.valid,
+    P2 = bus1.data,
+)
+
+Resistor(
+    name = "MEM_CLK_DATA",
+    value = "1kohm",
+    package = "0402",
+    P1 = bus2.clk,
+    P2 = bus2.data,
+)
+
+Resistor(
+    name = "MEM_VALID_DATA",
+    value = "1kohm",
+    package = "0402",
+    P1 = bus2.valid,
+    P2 = bus2.data,
 )
 "#,
     );
@@ -195,27 +221,31 @@ MixedInterface = interface(
 
 # Create instance
 mixed = MixedInterface("CHIP")
+Resistor = Module("@stdlib/generics/Resistor.zen")
 
 # Use all the nets
-Component(
-    name = "IC1",
-    type = "asic",
-    pin_defs = {
-        "VDD": "1",
-        "VSS": "2",
-        "SIG": "3",
-        "EN": "4",
-        "RST": "5"
-    },
-    footprint = "QFN:48",
-    part = Part(mpn = "asic", manufacturer = "TEST"),
-    pins = {
-        "VDD": mixed.power,
-        "VSS": mixed.ground,
-        "SIG": mixed.signal,
-        "EN": mixed.control.enable,
-        "RST": mixed.control.reset,
-    }
+Resistor(
+    name = "POWER_LOAD",
+    value = "1kohm",
+    package = "0402",
+    P1 = mixed.power,
+    P2 = mixed.ground,
+)
+
+Resistor(
+    name = "SIGNAL_LOAD",
+    value = "1kohm",
+    package = "0402",
+    P1 = mixed.signal,
+    P2 = mixed.ground,
+)
+
+Resistor(
+    name = "CONTROL_LOAD",
+    value = "1kohm",
+    package = "0402",
+    P1 = mixed.control.enable,
+    P2 = mixed.control.reset,
 )
 "#,
     );

@@ -45,7 +45,7 @@ expression: sb.snapshot_dir(&staging_dir)
     "user": "<USER>"
   }
 }
-=== netlist.json <76134 bytes, sha256: 8a06b3e>
+=== netlist.json <75030 bytes, sha256: 0ee3f0f>
 === src/boards/DescBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
@@ -91,6 +91,7 @@ name = "DescBoard"
 path = "DescBoard.zen"
 description = "A test board with a description"
 === src/pcb.toml
+
 [workspace]
-name = "test_workspace"
 pcb-version = "0.4"
+name = "test_workspace"

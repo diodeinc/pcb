@@ -31,7 +31,7 @@ Component(
         "OE": Net("OE"),
     },
     symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
-    footprint = "SMD:0805",
+    footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
     properties = {"CustomProp": "Value123"},
 )
 "#,

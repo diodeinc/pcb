@@ -40,7 +40,7 @@ Component(
     name = "R1",
     prefix = "R",
     part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = "SMD:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = { "P1": "1", "P2": "2" },
     pins = { "P1": VIN_NET, "P2": GND_NET },
 )
@@ -49,7 +49,7 @@ Component(
     name = "R2",
     prefix = "R",
     part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = "SMD:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = { "P1": "1", "P2": "2" },
     pins = { "P1": INTERNAL, "P2": GND_NET },
 )

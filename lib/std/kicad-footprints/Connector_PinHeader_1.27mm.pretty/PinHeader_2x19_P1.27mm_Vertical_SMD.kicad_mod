@@ -1,0 +1,1604 @@
+(footprint "PinHeader_2x19_P1.27mm_Vertical_SMD"
+	(version 20260206)
+	(generator "kicad-footprint-generator")
+	(layer "F.Cu")
+	(descr "surface-mounted straight pin header, 2x19, 1.27mm pitch, double rows")
+	(tags "Surface mounted pin header SMD 2x19 1.27mm double row")
+	(property "Reference" "REF**"
+		(at 0 -13.175 0)
+		(layer "F.SilkS")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "PinHeader_2x19_P1.27mm_Vertical_SMD"
+		(at 0 13.175 0)
+		(layer "F.Fab")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "KiLib_Generator" "connector/pin_header_socket"
+		(at 0 0 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -3.09 -12.11)
+		(end -1.815 -12.11)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_line
+		(start -1.815 -12.175)
+		(end -1.815 -12.11)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_line
+		(start -1.815 -12.175)
+		(end 1.815 -12.175)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_line
+		(start -1.815 12.11)
+		(end -1.815 12.175)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_line
+		(start -1.815 12.175)
+		(end 1.815 12.175)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_line
+		(start 1.815 -12.175)
+		(end 1.815 -12.11)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_line
+		(start 1.815 12.11)
+		(end 1.815 12.175)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+	)
+	(fp_rect
+		(start -4.29 -12.57)
+		(end 4.29 12.57)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+	)
+	(fp_line
+		(start -2.75 -11.63)
+		(end -2.75 -11.23)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -11.23)
+		(end -1.705 -11.23)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -10.36)
+		(end -2.75 -9.96)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -9.96)
+		(end -1.705 -9.96)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -9.09)
+		(end -2.75 -8.69)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -8.69)
+		(end -1.705 -8.69)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -7.82)
+		(end -2.75 -7.42)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -7.42)
+		(end -1.705 -7.42)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -6.55)
+		(end -2.75 -6.15)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -6.15)
+		(end -1.705 -6.15)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -5.28)
+		(end -2.75 -4.88)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -4.88)
+		(end -1.705 -4.88)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -4.01)
+		(end -2.75 -3.61)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -3.61)
+		(end -1.705 -3.61)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -2.74)
+		(end -2.75 -2.34)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -2.34)
+		(end -1.705 -2.34)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -1.47)
+		(end -2.75 -1.07)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -1.07)
+		(end -1.705 -1.07)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 -0.2)
+		(end -2.75 0.2)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 0.2)
+		(end -1.705 0.2)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 1.07)
+		(end -2.75 1.47)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 1.47)
+		(end -1.705 1.47)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 2.34)
+		(end -2.75 2.74)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 2.74)
+		(end -1.705 2.74)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 3.61)
+		(end -2.75 4.01)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 4.01)
+		(end -1.705 4.01)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 4.88)
+		(end -2.75 5.28)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 5.28)
+		(end -1.705 5.28)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 6.15)
+		(end -2.75 6.55)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 6.55)
+		(end -1.705 6.55)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 7.42)
+		(end -2.75 7.82)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 7.82)
+		(end -1.705 7.82)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 8.69)
+		(end -2.75 9.09)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 9.09)
+		(end -1.705 9.09)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 9.96)
+		(end -2.75 10.36)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 10.36)
+		(end -1.705 10.36)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 11.23)
+		(end -2.75 11.63)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -2.75 11.63)
+		(end -1.705 11.63)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -11.63)
+		(end -2.75 -11.63)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -11.63)
+		(end -1.27 -12.065)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -10.36)
+		(end -2.75 -10.36)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -9.09)
+		(end -2.75 -9.09)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -7.82)
+		(end -2.75 -7.82)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -6.55)
+		(end -2.75 -6.55)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -5.28)
+		(end -2.75 -5.28)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -4.01)
+		(end -2.75 -4.01)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -2.74)
+		(end -2.75 -2.74)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -1.47)
+		(end -2.75 -1.47)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 -0.2)
+		(end -2.75 -0.2)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 1.07)
+		(end -2.75 1.07)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 2.34)
+		(end -2.75 2.34)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 3.61)
+		(end -2.75 3.61)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 4.88)
+		(end -2.75 4.88)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 6.15)
+		(end -2.75 6.15)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 7.42)
+		(end -2.75 7.42)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 8.69)
+		(end -2.75 8.69)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 9.96)
+		(end -2.75 9.96)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 11.23)
+		(end -2.75 11.23)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.705 12.065)
+		(end -1.705 -11.63)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start -1.27 -12.065)
+		(end 1.705 -12.065)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -12.065)
+		(end 1.705 12.065)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -11.63)
+		(end 2.75 -11.63)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -10.36)
+		(end 2.75 -10.36)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -9.09)
+		(end 2.75 -9.09)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -7.82)
+		(end 2.75 -7.82)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -6.55)
+		(end 2.75 -6.55)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -5.28)
+		(end 2.75 -5.28)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -4.01)
+		(end 2.75 -4.01)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -2.74)
+		(end 2.75 -2.74)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -1.47)
+		(end 2.75 -1.47)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 -0.2)
+		(end 2.75 -0.2)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 1.07)
+		(end 2.75 1.07)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 2.34)
+		(end 2.75 2.34)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 3.61)
+		(end 2.75 3.61)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 4.88)
+		(end 2.75 4.88)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 6.15)
+		(end 2.75 6.15)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 7.42)
+		(end 2.75 7.42)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 8.69)
+		(end 2.75 8.69)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 9.96)
+		(end 2.75 9.96)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 11.23)
+		(end 2.75 11.23)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 1.705 12.065)
+		(end -1.705 12.065)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -11.63)
+		(end 2.75 -11.23)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -11.23)
+		(end 1.705 -11.23)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -10.36)
+		(end 2.75 -9.96)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -9.96)
+		(end 1.705 -9.96)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -9.09)
+		(end 2.75 -8.69)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -8.69)
+		(end 1.705 -8.69)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -7.82)
+		(end 2.75 -7.42)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -7.42)
+		(end 1.705 -7.42)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -6.55)
+		(end 2.75 -6.15)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -6.15)
+		(end 1.705 -6.15)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -5.28)
+		(end 2.75 -4.88)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -4.88)
+		(end 1.705 -4.88)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -4.01)
+		(end 2.75 -3.61)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -3.61)
+		(end 1.705 -3.61)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -2.74)
+		(end 2.75 -2.34)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -2.34)
+		(end 1.705 -2.34)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -1.47)
+		(end 2.75 -1.07)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -1.07)
+		(end 1.705 -1.07)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 -0.2)
+		(end 2.75 0.2)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 0.2)
+		(end 1.705 0.2)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 1.07)
+		(end 2.75 1.47)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 1.47)
+		(end 1.705 1.47)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 2.34)
+		(end 2.75 2.74)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 2.74)
+		(end 1.705 2.74)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 3.61)
+		(end 2.75 4.01)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 4.01)
+		(end 1.705 4.01)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 4.88)
+		(end 2.75 5.28)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 5.28)
+		(end 1.705 5.28)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 6.15)
+		(end 2.75 6.55)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 6.55)
+		(end 1.705 6.55)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 7.42)
+		(end 2.75 7.82)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 7.82)
+		(end 1.705 7.82)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 8.69)
+		(end 2.75 9.09)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 9.09)
+		(end 1.705 9.09)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 9.96)
+		(end 2.75 10.36)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 10.36)
+		(end 1.705 10.36)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 11.23)
+		(end 2.75 11.63)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_line
+		(start 2.75 11.63)
+		(end 1.705 11.63)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(layer "F.Fab")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 0 90)
+		(layer "F.Fab")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" smd rect
+		(at -1.95 -11.43)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "2" smd rect
+		(at 1.95 -11.43)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "3" smd rect
+		(at -1.95 -10.16)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "4" smd rect
+		(at 1.95 -10.16)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "5" smd rect
+		(at -1.95 -8.89)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "6" smd rect
+		(at 1.95 -8.89)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "7" smd rect
+		(at -1.95 -7.62)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "8" smd rect
+		(at 1.95 -7.62)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "9" smd rect
+		(at -1.95 -6.35)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "10" smd rect
+		(at 1.95 -6.35)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "11" smd rect
+		(at -1.95 -5.08)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "12" smd rect
+		(at 1.95 -5.08)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "13" smd rect
+		(at -1.95 -3.81)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "14" smd rect
+		(at 1.95 -3.81)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "15" smd rect
+		(at -1.95 -2.54)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "16" smd rect
+		(at 1.95 -2.54)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "17" smd rect
+		(at -1.95 -1.27)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "18" smd rect
+		(at 1.95 -1.27)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "19" smd rect
+		(at -1.95 0)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "20" smd rect
+		(at 1.95 0)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "21" smd rect
+		(at -1.95 1.27)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "22" smd rect
+		(at 1.95 1.27)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "23" smd rect
+		(at -1.95 2.54)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "24" smd rect
+		(at 1.95 2.54)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "25" smd rect
+		(at -1.95 3.81)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "26" smd rect
+		(at 1.95 3.81)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "27" smd rect
+		(at -1.95 5.08)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "28" smd rect
+		(at 1.95 5.08)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "29" smd rect
+		(at -1.95 6.35)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "30" smd rect
+		(at 1.95 6.35)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "31" smd rect
+		(at -1.95 7.62)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "32" smd rect
+		(at 1.95 7.62)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "33" smd rect
+		(at -1.95 8.89)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "34" smd rect
+		(at 1.95 8.89)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "35" smd rect
+		(at -1.95 10.16)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "36" smd rect
+		(at 1.95 10.16)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "37" smd rect
+		(at -1.95 11.43)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(pad "38" smd rect
+		(at 1.95 11.43)
+		(size 2.4 0.74)
+		(layers "F.Cu" "F.Mask" "F.Paste")
+	)
+	(embedded_fonts no)
+	(embedded_files
+		(file
+			(name PinHeader_2x19_P1.27mm_Vertical_SMD.step)
+			(type model)
+			(data |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|
+			)
+			(checksum "D176CBF8A6BD1D48900C7DDA12EB5DD8")
+		)
+	)
+	(model "kicad-embed://PinHeader_2x19_P1.27mm_Vertical_SMD.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)

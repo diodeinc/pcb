@@ -35,23 +35,20 @@ P2 = io(Net)
 
 
 def _symbol(package: Package):
-    return {
-        "library": "@kicad-symbols/Device.kicad_sym",
-        "name": "FerriteBead",
-    }
+    return "../kicad-symbols/Device.kicad_symdir/FerriteBead.kicad_sym"
 
 
 def _footprint(package: Package) -> str:
     """Returns the resistor SMD footprint for the ferrite bead based on the package."""
     resistor_footprints = {
-        Package("0201"): "@kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod",
-        Package("0402"): "@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
-        Package("0603"): "@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
-        Package("0805"): "@kicad-footprints/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
-        Package("1206"): "@kicad-footprints/Resistor_SMD.pretty/R_1206_3216Metric.kicad_mod",
-        Package("1210"): "@kicad-footprints/Resistor_SMD.pretty/R_1210_3225Metric.kicad_mod",
-        Package("2010"): "@kicad-footprints/Resistor_SMD.pretty/R_2010_5025Metric.kicad_mod",
-        Package("2512"): "@kicad-footprints/Resistor_SMD.pretty/R_2512_6332Metric.kicad_mod",
+        Package("0201"): "../kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod",
+        Package("0402"): "../kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
+        Package("0603"): "../kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
+        Package("0805"): "../kicad-footprints/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
+        Package("1206"): "../kicad-footprints/Resistor_SMD.pretty/R_1206_3216Metric.kicad_mod",
+        Package("1210"): "../kicad-footprints/Resistor_SMD.pretty/R_1210_3225Metric.kicad_mod",
+        Package("2010"): "../kicad-footprints/Resistor_SMD.pretty/R_2010_5025Metric.kicad_mod",
+        Package("2512"): "../kicad-footprints/Resistor_SMD.pretty/R_2512_6332Metric.kicad_mod",
     }
 
     if package not in resistor_footprints:
@@ -93,7 +90,7 @@ def _spice_args(impedance, frequency, dcr):
 Component(
     name="FB",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
-    symbol=Symbol(**_symbol(package)),
+    symbol=Symbol(_symbol(package)),
     footprint=File(_footprint(package)),
     prefix="FB",
     pins={
