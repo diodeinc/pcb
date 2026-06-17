@@ -62,7 +62,7 @@ P1 = io(Net)
 
 
 def _symbol(variant: Variant):
-    return "../kicad-symbols/Connector.kicad_symdir/TestPoint.kicad_sym"
+    return "../kicad-symbols/Connector.kicad_symdir/TestPoint_Small.kicad_sym"
 
 
 def _footprint(variant):

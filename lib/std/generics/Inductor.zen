@@ -28,7 +28,7 @@ P2 = io(Net)
 
 
 def _symbol(package: Package):
-    return "../kicad-symbols/Device.kicad_symdir/L.kicad_sym"
+    return "../kicad-symbols/Device.kicad_symdir/L_Small.kicad_sym"
 
 
 def _footprint(package: Package) -> str:

@@ -65,8 +65,8 @@ def _footprint(package: Package) -> str:
 
 def _symbol_name(direction: Direction) -> str:
     if direction == Direction("Bidirectional"):
-        return "D_TVS"
-    return "D_Zener"
+        return "D_TVS_Small"
+    return "D_Zener_Small"
 
 
 def _symbol(direction: Direction) -> str:

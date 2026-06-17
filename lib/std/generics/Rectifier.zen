@@ -47,8 +47,8 @@ K = io(Net)
 
 def _symbol_name(technology: Technology) -> str:
     if technology == Technology("Schottky"):
-        return "D_Schottky"
-    return "D"
+        return "D_Schottky_Small"
+    return "D_Small"
 
 
 def _symbol(technology: Technology) -> str:
