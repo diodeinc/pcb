@@ -20,6 +20,7 @@ use crate::lang::{
 use super::context::ContextValue;
 use super::interface::{
     FrozenInterfaceValue, InstancePrefix, InterfaceValue, instantiate_interface,
+    unregister_template_owned_nets,
 };
 use super::module::{
     DeclarationSite, MissingInputError, ParameterMetadataInput, current_declaration_site,
@@ -580,8 +581,7 @@ impl<'v> IoTemplateValue<'v> {
 
     fn unregister(self, ctx: &ContextValue) {
         match self {
-            Self::Net(value) => unregister_net_template(value, ctx),
-            Self::Interface(value) => unregister_interface_template(value, ctx),
+            Self::Net(value) | Self::Interface(value) => unregister_template_owned_nets(value, ctx),
         }
     }
 
@@ -618,31 +618,6 @@ impl<'v> IoTemplateValue<'v> {
                 eval.heap(),
                 eval,
             ),
-        }
-    }
-}
-
-fn unregister_net_template<'v>(value: Value<'v>, ctx: &ContextValue) {
-    if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
-        ctx.unregister_net(net.id());
-    } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
-        ctx.unregister_net(net.id());
-    }
-}
-
-fn unregister_interface_template<'v>(value: Value<'v>, ctx: &ContextValue) {
-    if let Some(interface) = value.downcast_ref::<InterfaceValue<'v>>() {
-        for (_field_name, field_value) in interface.fields().iter() {
-            if let Some(template) = IoTemplateValue::from_value(field_value.to_value()) {
-                template.unregister(ctx);
-            }
-        }
-    }
-    if let Some(interface) = value.downcast_ref::<FrozenInterfaceValue>() {
-        for (_field_name, field_value) in interface.fields().iter() {
-            if let Some(template) = IoTemplateValue::from_value(field_value.to_value()) {
-                template.unregister(ctx);
-            }
         }
     }
 }

@@ -246,7 +246,13 @@ impl<V> NetValueGen<V> {
 }
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
-    fn alloc_clone(&self, heap: Heap<'v>, net_id: NetId, type_name: String) -> Value<'v> {
+    fn alloc_clone(
+        &self,
+        heap: Heap<'v>,
+        net_id: NetId,
+        type_name: String,
+        derived_from_base_net: bool,
+    ) -> Value<'v> {
         let properties: SmallMap<String, Value<'v>> = self
             .properties
             .iter()
@@ -259,7 +265,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             template_name: self.template_name.clone(),
             original_name: self.original_name_opt().map(str::to_owned),
             assignment_inferable: self.assignment_inferable,
-            derived_from_base_net: self.derived_from_base_net,
+            derived_from_base_net,
             was_bound: Self::clone_once_lock(&self.was_bound),
             inferred_name: Self::clone_once_lock(&self.inferred_name),
             declaration_path: self.declaration_path.clone(),
@@ -371,20 +377,33 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         self.was_bound.get().is_some()
     }
 
-    pub(crate) fn skips_implicit_checks(&self) -> bool {
+    pub(crate) fn is_external_reference(&self) -> bool {
         self.derived_from_base_net() || self.was_bound()
+    }
+
+    pub(crate) fn is_template_owned(&self) -> bool {
+        !self.is_external_reference()
+    }
+
+    pub(crate) fn skips_implicit_checks(&self) -> bool {
+        self.is_external_reference()
     }
 
     /// Create a new net with the same fields but a fresh net ID.
     /// This avoids deep copying - properties are shared via Value references.
     pub fn with_new_id(&self, heap: Heap<'v>) -> Value<'v> {
-        self.alloc_clone(heap, generate_net_id(), self.type_name.clone())
+        self.alloc_clone(
+            heap,
+            generate_net_id(),
+            self.type_name.clone(),
+            self.derived_from_base_net,
+        )
     }
 
     /// Create a new net with the same ID/name/properties but a different type name.
     /// Used for casting between net types (e.g., Power -> Net).
     pub fn with_net_type(&self, new_type_name: &str, heap: Heap<'v>) -> Value<'v> {
-        self.alloc_clone(heap, self.net_id, new_type_name.to_string())
+        self.alloc_clone(heap, self.net_id, new_type_name.to_string(), true)
     }
 
     /// Create a new net with identical runtime identity but updated declaration metadata.
