@@ -1,5 +1,15 @@
 mod common;
 use common::TestProject;
+use pcb_zen_core::WithDiagnostics;
+
+fn expect_netlist(result: WithDiagnostics<String>) -> String {
+    assert!(
+        result.diagnostics.is_empty(),
+        "unexpected diagnostics: {:?}",
+        result.diagnostics
+    );
+    result.output.expect("expected netlist output")
+}
 
 #[test]
 fn test_interface_with_net_template() {
@@ -25,15 +35,9 @@ Resistor(
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-
-    // Check that evaluation succeeded
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-
     // The netlist output should contain our net with the proper name
     // For single-net interfaces, the instance name becomes the net name directly
-    let netlist = result.output.unwrap();
+    let netlist = expect_netlist(env.eval_netlist("test.zen"));
     assert!(
         netlist.contains("PREFIX"),
         "Should contain PREFIX net (single-net interface uses instance name directly)"
@@ -79,15 +83,7 @@ Resistor(
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-    if !result.diagnostics.is_empty() {
-        eprintln!("Diagnostics: {:?}", result.diagnostics);
-    }
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-
-    let netlist = result.output.unwrap();
-    println!("netlist:\n{netlist}");
+    let netlist = expect_netlist(env.eval_netlist("test.zen"));
     assert!(netlist.contains("MCU_3V3"), "Should contain MCU_3V3 net");
     assert!(netlist.contains("MCU_GND"), "Should contain MCU_GND net");
     assert!(
@@ -143,15 +139,7 @@ Resistor(
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-    if !result.diagnostics.is_empty() {
-        eprintln!("Diagnostics: {:?}", result.diagnostics);
-    }
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-
-    let netlist = result.output.unwrap();
-    println!("netlist:\n{netlist}");
+    let netlist = expect_netlist(env.eval_netlist("test.zen"));
     assert!(
         netlist.contains("MAIN_power_VCC"),
         "Should contain MAIN_power_VCC net"
@@ -194,14 +182,7 @@ Resistor(
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-    if !result.diagnostics.is_empty() {
-        eprintln!("Diagnostics: {:?}", result.diagnostics);
-    }
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-    let netlist = result.output.unwrap();
-    println!("netlist:\n{netlist}");
+    expect_netlist(env.eval_netlist("test.zen"));
 }
 
 #[test]
@@ -241,14 +222,7 @@ Resistor(
 "#,
     );
 
-    let result = env.eval_netlist("test.zen");
-    if !result.diagnostics.is_empty() {
-        eprintln!("Diagnostics: {:?}", result.diagnostics);
-    }
-    assert!(result.output.is_some(), "Should produce output");
-    assert!(result.diagnostics.is_empty(), "Should have no errors");
-
-    let netlist = result.output.unwrap();
+    let netlist = expect_netlist(env.eval_netlist("test.zen"));
     // For single-net interfaces, the instance name becomes the net name directly
     assert!(
         netlist.contains("A"),
