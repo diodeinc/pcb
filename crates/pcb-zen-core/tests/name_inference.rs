@@ -24,6 +24,46 @@ fn redundancy_advice_count(diagnostics: &pcb_zen_core::Diagnostics, body_substri
 
 #[test]
 #[cfg(not(target_os = "windows"))]
+fn io_interface_template_preserves_borrowed_net_name() {
+    let result = eval_ok(
+        r#"
+load("@stdlib/interfaces.zen", "Ground", "I2c")
+
+GND = io(Ground())
+I2C_TARGET = io(I2c(SDA=GND, SCL=GND), optional=True)
+
+Component(
+    name = "U1",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": I2C_TARGET.SDA, "P2": GND},
+    skip_bom = True,
+)
+"#,
+    );
+
+    let eval_output = result.output.expect("expected eval output");
+    let sch_result = eval_output.to_schematic_with_diagnostics();
+    assert!(
+        !sch_result.diagnostics.has_errors(),
+        "schematic conversion failed: {:?}",
+        sch_result.diagnostics
+    );
+
+    let schematic = sch_result.output.expect("expected schematic");
+    let mut ground_like_nets = schematic
+        .nets
+        .keys()
+        .filter(|name| name.as_str() == "GND" || name.ends_with(".GND"))
+        .cloned()
+        .collect::<Vec<_>>();
+    ground_like_nets.sort();
+
+    assert_eq!(ground_like_nets, vec!["GND".to_string()]);
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
 fn infers_direct_net_names_from_assignment() {
     let result = eval_ok(
         r#"
