@@ -45,8 +45,19 @@ def _footprint(package: Package) -> str:
     return kicad_footprints[package]
 
 
-def _symbol(_package: Package):
-    return "../kicad-symbols/Device.kicad_symdir/LED_Small_Filled.kicad_sym"
+def _symbol_name(color: Color):
+    color_symbols = {
+        Color("red"): "LED_Small_Filled_Red",
+        Color("green"): "LED_Small_Filled_Green",
+        Color("blue"): "LED_Small_Filled_Blue",
+        Color("yellow"): "LED_Small_Filled_Yellow",
+        Color("white"): "LED_Small_Filled_White",
+        Color("amber"): "LED_Small_Filled_Amber",
+        Color("orange"): "LED_Small_Filled_Orange",
+        Color("pink"): "LED_Small_Filled_Pink",
+        Color("uv"): "LED_Small_Filled_UV",
+    }
+    return color_symbols.get(color, "LED_Small_Filled")
 
 
 def _value(color: Color, package: Package) -> str:
@@ -107,7 +118,7 @@ def _spice_args(color: Color, forward_voltage, forward_current):
 Component(
     name="LED",
     part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
-    symbol=Symbol(_symbol(package)),
+    symbol=Symbol(library="../kicad-symbols/Device.kicad_symdir/LED_Small_Filled.kicad_sym", name=_symbol_name(color)),
     footprint=File(_footprint(package)),
     prefix="D",
     spice_model=SpiceModel(
