@@ -19,7 +19,9 @@ use semver::Version;
 use crate::FileProvider;
 use crate::config::{DependencyDetail, DependencySpec, ManifestPart, PcbToml};
 use crate::workspace::{LOCAL_WORKSPACE_ROOT_URL, WorkspaceInfo, package_url_covers};
-use crate::{STDLIB_MODULE_PATH, is_stdlib_module_path, parse_relaxed_version};
+use crate::{
+    STDLIB_MODULE_PATH, is_kicad_library_package, is_stdlib_module_path, parse_relaxed_version,
+};
 
 /// Stable identity for package-local evaluation state.
 ///
@@ -556,6 +558,9 @@ fn selected_remote_from_manifest(
 
     for (raw_key, spec) in &config.dependencies.indirect {
         let dep_id = parse_lane_qualified_key(raw_key)?;
+        if is_kicad_library_package(&dep_id.path) {
+            continue;
+        }
         let version = exact_manifest_version(raw_key, spec)?;
         let expected_lane = compatibility_lane(&version);
         if dep_id.lane != expected_lane {
@@ -578,6 +583,7 @@ fn is_remote_manifest_dependency(
     spec: &DependencySpec,
 ) -> bool {
     !is_stdlib_module_path(dep_url)
+        && !is_kicad_library_package(dep_url)
         && !workspace
             .packages
             .keys()

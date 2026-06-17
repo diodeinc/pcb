@@ -81,6 +81,11 @@ pub(crate) fn load_manifest_for_module_version(
             .dependencies
             .indirect
             .into_iter()
+            .filter(|(raw_key, _)| {
+                raw_key
+                    .rsplit_once('@')
+                    .is_none_or(|(path, _)| !pcb_zen_core::is_kicad_library_package(path))
+            })
             .map(|(raw_key, spec)| parse_indirect_dependency(&raw_key, spec))
             .collect::<Result<BTreeMap<_, _>>>()?
     } else {
@@ -88,7 +93,12 @@ pub(crate) fn load_manifest_for_module_version(
     };
 
     Ok(ManifestRequirements {
-        direct: manifest.dependencies.direct,
+        direct: manifest
+            .dependencies
+            .direct
+            .into_iter()
+            .filter(|(path, _)| !pcb_zen_core::is_kicad_library_package(path))
+            .collect(),
         indirect,
         parts: manifest.parts,
     })

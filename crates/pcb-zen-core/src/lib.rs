@@ -72,6 +72,15 @@ pub fn is_stdlib_module_path(path: &str) -> bool {
     path == STDLIB_MODULE_PATH
 }
 
+pub fn is_kicad_library_package(path: &str) -> bool {
+    matches!(
+        path,
+        "gitlab.com/kicad/libraries/kicad-symbols"
+            | "gitlab.com/kicad/libraries/kicad-footprints"
+            | "gitlab.com/kicad/libraries/kicad-packages3D"
+    )
+}
+
 /// Return the workspace-local stdlib root.
 ///
 /// The resulting path is `<workspace_root>/.pcb/stdlib`.
