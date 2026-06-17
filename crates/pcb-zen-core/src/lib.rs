@@ -72,13 +72,19 @@ pub fn is_stdlib_module_path(path: &str) -> bool {
     path == STDLIB_MODULE_PATH
 }
 
+const KICAD_LIBRARY_PACKAGES: &[&str] = &[
+    "gitlab.com/kicad/libraries/kicad-symbols",
+    "gitlab.com/kicad/libraries/kicad-footprints",
+    "gitlab.com/kicad/libraries/kicad-packages3D",
+];
+
 pub fn is_kicad_library_package(path: &str) -> bool {
-    matches!(
-        path,
-        "gitlab.com/kicad/libraries/kicad-symbols"
-            | "gitlab.com/kicad/libraries/kicad-footprints"
-            | "gitlab.com/kicad/libraries/kicad-packages3D"
-    )
+    KICAD_LIBRARY_PACKAGES.contains(&path)
+}
+
+pub fn is_kicad_library_dependency_key(key: &str) -> bool {
+    let path = key.rsplit_once('@').map_or(key, |(path, _)| path);
+    is_kicad_library_package(path)
 }
 
 /// Return the workspace-local stdlib root.

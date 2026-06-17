@@ -63,6 +63,13 @@ impl DependencyTable {
     pub fn is_empty(&self) -> bool {
         self.direct.is_empty() && self.indirect.is_empty()
     }
+
+    fn remove_kicad_library_dependencies(&mut self) {
+        self.direct
+            .retain(|path, _| !crate::is_kicad_library_package(path));
+        self.indirect
+            .retain(|key, _| !crate::is_kicad_library_dependency_key(key));
+    }
 }
 
 /// Parse a `pcb-version` string into its `(major, minor)` pair.
@@ -104,7 +111,8 @@ pub fn pcb_version_is_older(current: &str, required: &str) -> Option<bool> {
 }
 
 impl PcbToml {
-    fn finish_parse(self) -> Result<Self> {
+    fn finish_parse(mut self) -> Result<Self> {
+        self.dependencies.remove_kicad_library_dependencies();
         self.validate_pcb_version()?;
         Ok(self)
     }

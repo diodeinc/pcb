@@ -49,7 +49,10 @@ pub struct KicadSymbol {
 
 impl KicadSymbol {
     pub fn path(&self) -> String {
-        format!("{}.kicad_sym:{}", self.symbol_library, self.symbol_name)
+        format!(
+            "@stdlib/kicad-symbols/{}.kicad_sym:{}",
+            self.symbol_library, self.symbol_name
+        )
     }
 
     pub fn clipboard_url(&self) -> String {
