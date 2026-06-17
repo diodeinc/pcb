@@ -96,14 +96,14 @@ snapshot_eval!(net_duplicate_names_error, {
 
         Component(
             name = "U1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"EN": "1"},
             pins = {"EN": en1},
         )
 
         Component(
             name = "U2",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"EN": "1"},
             pins = {"EN": en2},
         )
@@ -342,7 +342,7 @@ snapshot_eval!(net_type_cast_preserves_name_across_modules, {
         Component(
             name = "R",
             prefix = "R",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"P1": "1", "P2": "2"},
             pins = {"P1": P1, "P2": P2},
             type = "resistor",
@@ -443,7 +443,7 @@ snapshot_eval!(not_connected_promotes_to_power, {
 
         Component(
             name = "R1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1"},
             pins = {"1": vcc},
         )
@@ -473,7 +473,7 @@ snapshot_eval!(not_connected_promotes_to_ground, {
 
         Component(
             name = "R1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1"},
             pins = {"1": gnd},
         )
@@ -500,7 +500,7 @@ snapshot_eval!(not_connected_promotes_to_net, {
 
         Component(
             name = "R1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1"},
             pins = {"1": sig},
         )
@@ -530,7 +530,7 @@ snapshot_eval!(not_connected_promotes_to_custom_type, {
 
         Component(
             name = "R1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1"},
             pins = {"1": gpio},
         )
@@ -559,7 +559,7 @@ snapshot_eval!(net_cannot_promote_to_not_connected, {
 
         Component(
             name = "R1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1"},
             pins = {"1": nc},
         )
@@ -585,7 +585,7 @@ snapshot_eval!(power_cannot_promote_to_not_connected, {
 
         Component(
             name = "R1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1"},
             pins = {"1": nc},
         )
@@ -613,7 +613,7 @@ snapshot_eval!(ground_cannot_promote_to_not_connected, {
 
         Component(
             name = "R1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1"},
             pins = {"1": nc},
         )
@@ -641,7 +641,7 @@ snapshot_eval!(io_default_not_connected_promotes_to_net, {
 
         Component(
             name = "R1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1"},
             pins = {"1": MH},
         )

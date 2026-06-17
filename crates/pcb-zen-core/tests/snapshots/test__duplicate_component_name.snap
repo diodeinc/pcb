@@ -12,7 +12,7 @@ Warning: test.zen:17:1-22:2 Duplicate child name 'R1': a component with this nam
             FrozenValue(
                 Component {
                     name: "R1",
-                    footprint: "SMD:0402",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "1": FrozenValue(
@@ -42,7 +42,7 @@ Warning: test.zen:17:1-22:2 Duplicate child name 'R1': a component with this nam
             FrozenValue(
                 Component {
                     name: "R1",
-                    footprint: "SMD:0402",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "1": FrozenValue(

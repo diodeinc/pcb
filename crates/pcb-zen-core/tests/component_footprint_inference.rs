@@ -128,7 +128,7 @@ fn explicit_footprint_takes_precedence_over_symbol_footprint_property() {
 Net = builtin.net_type("Net")
 Component(
     name = "U1",
-    footprint = "TEST:FP",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     symbol = Symbol(library = "Part.kicad_sym", name = "Part"),
     pins = {"P": Net("N")},
 )

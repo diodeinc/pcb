@@ -12,7 +12,7 @@ expression: output
                 Component {
                     name: "test",
                     type: "test_component",
-                    footprint: "TEST:FP",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "1": FrozenValue(

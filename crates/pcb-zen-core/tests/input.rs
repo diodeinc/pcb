@@ -49,7 +49,7 @@ snapshot_eval!(io_template_enforces_voltage_compatibility, {
 
         Component(
             name = "U1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"VDD": "1"},
             pins = {"VDD": VDD},
         )
@@ -118,7 +118,7 @@ fn io_bound_template_skips_implicit_checks() {
 
                 Component(
                     name = "U1",
-                    footprint = "TEST:0402",
+                    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                     pin_defs = {"VDD": "1"},
                     pins = {"VDD": VDD},
                 )
@@ -164,7 +164,7 @@ fn io_derived_template_skips_implicit_checks() {
 
                 Component(
                     name = "U1",
-                    footprint = "TEST:0402",
+                    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                     pin_defs = {"VIN": "1", "EN": "2"},
                     pins = {"VIN": VIN, "EN": EN},
                 )
@@ -211,7 +211,7 @@ fn io_template_implicit_check_warning_preserves_child_instantiation() {
 
                 Component(
                     name = "U1",
-                    footprint = "TEST:0402",
+                    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                     pin_defs = {"VDD": "1"},
                     pins = {"VDD": VDD},
                 )
@@ -301,7 +301,7 @@ fn io_generated_net_warning_uses_io_declaration_span() {
 
         Component(
             name = "U1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             symbol = symbol,
             pins = {
                 "VCC": VDD,
@@ -341,7 +341,7 @@ snapshot_eval!(config_optional_false_missing_emits_error_diagnostic, {
 
         Component(
             name = "D1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"A": "1", "K": "2"},
             pins = {"A": Net("VCC"), "K": Net("GND")},
             properties = {"color": led_color},
@@ -360,7 +360,7 @@ snapshot_eval!(io_config, {
 
         Component(
             name = "comp0",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"V": "1"},
             pins = {"V": pwr},
         )
@@ -383,7 +383,7 @@ snapshot_eval!(missing_required_io_config, {
 
         Component(
             name = "comp0",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"V": "1"},
             pins = {"V": pwr},
         )
@@ -409,7 +409,7 @@ snapshot_eval!(optional_io_config, {
 
         Component(
             name = "comp0",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"V": "1"},
             pins = {"V": Net("INTERNAL_V")},
         )
@@ -482,7 +482,7 @@ fn io_named_checks() {
 
                 Component(
                     name = "comp0",
-                    footprint = "TEST:0402",
+                    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                     pin_defs = {"V": "1"},
                     pins = {"V": pwr},
                 )
@@ -553,7 +553,7 @@ fn config_name_infers_from_assignment() {
 
                 Component(
                     name = "R1",
-                    footprint = "TEST:0402",
+                    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                     pin_defs = {"P": "1"},
                     pins = {"P": Net("SIG")},
                     description = description,
@@ -606,7 +606,7 @@ fn inferred_config_values_work_in_component_kwargs() {
 
             Component(
                 name = "R1",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"P": "1"},
                 pins = {"P": Net("SIG")},
                 description = description,
@@ -650,7 +650,7 @@ fn io_name_infers_from_assignment() {
 
                 Component(
                     name = "R1",
-                    footprint = "TEST:0402",
+                    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                     pin_defs = {"P": "1"},
                     pins = {"P": SIG},
                 )
@@ -905,7 +905,7 @@ fn unused_io_warns_only_for_unconnected_ports() {
 
                 Component(
                     name = "LOAD",
-                    footprint = "TEST:0402",
+                    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                     pin_defs = {"P": "1"},
                     skip_bom = True,
                     pins = {"P": VIN},
@@ -927,7 +927,7 @@ fn unused_io_warns_only_for_unconnected_ports() {
 
                 Component(
                     name = "TAP",
-                    footprint = "TEST:0402",
+                    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                     pin_defs = {"P": "1"},
                     skip_bom = True,
                     pins = {"P": BUS.DATA},
@@ -1039,7 +1039,7 @@ fn errors_for_unspecified_non_generic_bom_component() {
             Component(
                 name = "U1",
                 prefix = "U",
-                footprint = "TEST:QFN",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"VDD": "1", "GND": "2"},
                 pins = {"VDD": vcc, "GND": gnd},
             )
@@ -1047,7 +1047,7 @@ fn errors_for_unspecified_non_generic_bom_component() {
             Component(
                 name = "R1",
                 prefix = "R",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"1": "1", "2": "2"},
                 pins = {"1": vcc, "2": gnd},
                 type = "resistor",
@@ -1057,7 +1057,7 @@ fn errors_for_unspecified_non_generic_bom_component() {
             Component(
                 name = "U2",
                 prefix = "U",
-                footprint = "TEST:QFN",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"VDD": "1", "GND": "2"},
                 pins = {"VDD": vcc, "GND": gnd},
                 part = builtin.Part(mpn = "PART-123", manufacturer = "ACME"),
@@ -1100,7 +1100,7 @@ fn errors_for_typed_components_without_house_bom_matching() {
             Component(
                 name = "TH1",
                 prefix = "TH",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"1": "1", "2": "2"},
                 pins = {"1": vcc, "2": gnd},
                 type = "thermistor",
@@ -1109,7 +1109,7 @@ fn errors_for_typed_components_without_house_bom_matching() {
             Component(
                 name = "J1",
                 prefix = "J",
-                footprint = "TEST:HDR",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"1": "1", "2": "2"},
                 pins = {"1": vcc, "2": gnd},
                 type = "connector",
@@ -1119,7 +1119,7 @@ fn errors_for_typed_components_without_house_bom_matching() {
             Component(
                 name = "J2",
                 prefix = "J",
-                footprint = "TEST:TBLOCK",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"1": "1", "2": "2"},
                 pins = {"1": vcc, "2": gnd},
                 type = "connector",
@@ -1129,7 +1129,7 @@ fn errors_for_typed_components_without_house_bom_matching() {
             Component(
                 name = "X1",
                 prefix = "X",
-                footprint = "TEST:OTHER",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"1": "1", "2": "2"},
                 pins = {"1": vcc, "2": gnd},
                 type = "connector",
@@ -1196,7 +1196,7 @@ fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
             Component(
                 name = "R1",
                 prefix = "R",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"1": "1", "2": "2"},
                 pins = {"1": vcc, "2": gnd},
                 mpn = "RC0603FR-071KL",
@@ -1205,7 +1205,7 @@ fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
             Component(
                 name = "R2",
                 prefix = "R",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"1": "1", "2": "2"},
                 pins = {"1": vcc, "2": gnd},
                 manufacturer = "Yageo",
@@ -1214,7 +1214,7 @@ fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
             Component(
                 name = "R3",
                 prefix = "R",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"1": "1", "2": "2"},
                 pins = {"1": vcc, "2": gnd},
                 type = "resistor",
@@ -1353,7 +1353,7 @@ snapshot_eval!(config_types, {
             name = "test",
             type = "test_component",
             pin_defs = {"1": "1"},
-            footprint = "TEST:FP",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pins = {"1": Net("TEST")},
         )
     "#
@@ -1367,7 +1367,7 @@ snapshot_eval!(implicit_enum_conversion, {
 
         Component(
             name = "comp0",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = { "V": "1" },
             pins = { "V": Net("VCC") },
         )
@@ -1409,7 +1409,7 @@ snapshot_eval!(interface_net_template_basic, {
             name = "R1",
             type = "resistor",
             pin_defs = {"1": "1", "2": "2"},
-            footprint = "SMD:0805",
+            footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
             pins = {"1": instance.test, "2": Net("GND")},
         )
     "#
@@ -1430,7 +1430,7 @@ snapshot_eval!(interface_multiple_net_templates, {
             name = "U1",
             type = "mcu",
             pin_defs = {"VCC": "1", "GND": "2", "EN": "3"},
-            footprint = "QFN:32",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pins = {
                 "VCC": pwr1.vcc,
                 "GND": pwr1.gnd,
@@ -1442,7 +1442,7 @@ snapshot_eval!(interface_multiple_net_templates, {
             name = "U2",
             type = "sensor",
             pin_defs = {"VDD": "1", "VSS": "2", "ENABLE": "3"},
-            footprint = "SOT:23-6",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pins = {
                 "VDD": pwr2.vcc,
                 "VSS": pwr2.gnd,
@@ -1478,7 +1478,7 @@ snapshot_eval!(interface_nested_template, {
             name = "J1",
             type = "usb_connector",
             pin_defs = {"VBUS": "1", "D+": "2", "D-": "3", "GND": "4"},
-            footprint = "USB:TYPE-C",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pins = {
                 "VBUS": dev.power.vcc,
                 "D+": dev.data_p,
@@ -1519,7 +1519,7 @@ snapshot_eval!(interface_mixed_templates_and_types, {
                 "EN": "4",
                 "RST": "5"
             },
-            footprint = "QFN:48",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pins = {
                 "VDD": mixed.power,
                 "VSS": mixed.ground,
@@ -1562,7 +1562,7 @@ snapshot_eval!(io_config_with_help_text, {
         # Add a component to make the module valid
         Component(
             name = "test",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"PWR": "1", "GND": "2"},
             pins = {"PWR": power, "GND": Net("GND")},
         )
@@ -1718,7 +1718,7 @@ fn io_direction_appears_in_signature() {
 
             Component(
                 name = "test",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"IN": "1", "OUT": "2", "IO": "3"},
                 pins = {"IN": VIN, "OUT": VOUT, "IO": BIDIR},
             )
@@ -1787,7 +1787,7 @@ fn input_output_set_direction_metadata() {
 
             Component(
                 name = "test",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"IN": "1", "OUT": "2"},
                 pins = {"IN": VIN, "OUT": VOUT},
             )
@@ -1828,7 +1828,7 @@ fn builtin_io_available_directly() {
 
             Component(
                 name = "test",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"IN": "1", "OUT": "2"},
                 pins = {"IN": VIN, "OUT": VOUT},
             )
@@ -1923,7 +1923,7 @@ fn prelude_injects_io_helpers_from_stdlib() {
 
             Component(
                 name = "test",
-                footprint = "TEST:0402",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
                 pin_defs = {"IN": "1", "OUT": "2", "G": "3"},
                 pins = {"IN": VIN, "OUT": VOUT, "G": GND},
             )

@@ -1,5 +1,6 @@
 ---
 source: crates/pcb-zen/tests/test.rs
+assertion_line: 49
 expression: snapshot_output
 ---
 (export (version "E")
@@ -8,13 +9,17 @@ expression: snapshot_output
     (date "")
     (tool "pcb"))
   (components
-    (comp (ref "U1")
+    (comp (ref "C1")
       (value "capacitor")
-      (footprint "SMD:0805")
+      (footprint "stdlib_kicad-footprints_Capacitor_SMD:C_0805_2012Metric")
       (libsource (lib "lib") (part "capacitor") (description "unknown"))
-      (sheetpath (names "Test.MyComponent.capacitor") (tstamps "71dc92e1-05f7-5aa9-9ffa-4b281f38f62d"))
-      (tstamps "71dc92e1-05f7-5aa9-9ffa-4b281f38f62d")
-      (property (name "Reference") (value "U1"))
+      (sheetpath (names "Test.MyComponent.capacitor.C") (tstamps "2792cb21-213d-5a61-9661-44e29404f9ad"))
+      (tstamps "2792cb21-213d-5a61-9661-44e29404f9ad")
+      (property (name "Reference") (value "C1"))
+      (property (name "capacitance") (value "100nF"))
+      (property (name "description") (value "100nF"))
+      (property (name "package") (value "0805"))
+      (property (name "value") (value "100nF"))
     )
   )
   (libparts
@@ -24,17 +29,17 @@ expression: snapshot_output
       (footprints
         (fp "*"))
       (pins
-        (pin (num "1") (name "P1") (type "stereo"))
-        (pin (num "2") (name "P2") (type "stereo"))
+        (pin (num "1") (name "1") (type "stereo"))
+        (pin (num "2") (name "2") (type "stereo"))
       )
     )
   )
   (nets
     (net (code "1") (name "Test.INTERFACE_p1")
-      (node (ref "U1") (pin "1") (pintype "stereo"))
+      (node (ref "C1") (pin "1") (pintype "stereo"))
     )
     (net (code "2") (name "Test.INTERFACE_p2")
-      (node (ref "U1") (pin "2") (pintype "stereo"))
+      (node (ref "C1") (pin "2") (pintype "stereo"))
     )
   )
 )

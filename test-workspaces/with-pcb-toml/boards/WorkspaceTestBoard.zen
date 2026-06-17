@@ -41,7 +41,7 @@ LedIndicatorModule(
 # Direct component using typed part + alternatives metadata.
 Component(
     name="R_PART_DEMO",
-    footprint="Resistor_SMD:R_0603_1005Metric",
+    footprint=File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs={"1": "1", "2": "2"},
     pins={"1": filtered_vcc, "2": part_demo_net},
     part=Part(

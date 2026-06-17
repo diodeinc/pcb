@@ -27,7 +27,7 @@ nc = NotConnected("NC_PIN")
 Component(
     name = "R1",
     prefix = "R",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"P2": "2"},
     pins = {"P2": nc},
 )
@@ -35,7 +35,7 @@ Component(
 Component(
     name = "R2",
     prefix = "R",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"P2": "2"},
     pins = {"P2": nc},
 )
@@ -87,7 +87,7 @@ nc = NotConnected()
 Component(
     name = "U1",
     prefix = "U",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     symbol = Symbol(
         definition = [
             ("GND", ["5", "17"]),
@@ -127,7 +127,7 @@ nc = NotConnected()
 Component(
     name = "R1",
     prefix = "R",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"P2": "2"},
     pins = {"P2": nc},
 )
@@ -141,7 +141,7 @@ nc = NotConnected()
 Component(
     name = "R1",
     prefix = "R",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"P2": "2"},
     pins = {"P2": nc},
 )

@@ -11,7 +11,7 @@ expression: snapshot_output
   (components
     (comp (ref "U1")
       (value "TEST")
-      (footprint "SMD:0805")
+      (footprint "stdlib_kicad-footprints_Capacitor_SMD:C_0805_2012Metric")
       (libsource (lib "lib") (part "TEST") (description "unknown"))
       (sheetpath (names "NB3N551DG") (tstamps "6c73e1fb-8e95-5677-97d9-7dce42ba86d2"))
       (tstamps "6c73e1fb-8e95-5677-97d9-7dce42ba86d2")

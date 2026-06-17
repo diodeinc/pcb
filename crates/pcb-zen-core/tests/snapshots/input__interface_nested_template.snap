@@ -12,7 +12,7 @@ expression: output
                 Component {
                     name: "J1",
                     type: "usb_connector",
-                    footprint: "USB:TYPE-C",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "D+": FrozenValue(

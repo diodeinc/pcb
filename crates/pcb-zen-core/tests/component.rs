@@ -55,7 +55,7 @@ const EXPLICIT_JUMPER_SYMBOL: &str = r#"(kicad_symbol_lib
   (generator "test")
   (symbol "ExplicitJumper"
     (property "Reference" "JP")
-    (property "Footprint" "Jumper:SolderJumper")
+    (property "Footprint" File("@kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"))
     (jumper_pin_groups ("1" "3"))
     (symbol "ExplicitJumper_1_1"
       (pin passive line (at 0 0 0) (length 2.54) (name "A") (number "1"))
@@ -73,7 +73,7 @@ P2 = Net()
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     datasheet = "component.pdf",
@@ -110,7 +110,7 @@ builtin.add_component_modifier(match_part)
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
 )
@@ -211,7 +211,7 @@ builtin.add_component_modifier(match_part)
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = builtin.Part(
@@ -242,7 +242,7 @@ snapshot_eval!(component_properties, {
                 "OE": Net("OE"),
             },
             symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
-            footprint = "SMD:0805",
+            footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
             properties = {"CustomProp": "Value123"},
         )
     "#
@@ -304,7 +304,7 @@ shared = Net("SHARED")
 
 Component(
     name = "JP1",
-    footprint = "Jumper:SolderJumper",
+    footprint = File("@kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"),
     symbol = Symbol(library = "explicit_jumper.kicad_sym", name = "ExplicitJumper"),
     pins = {"A": shared},
 )
@@ -332,7 +332,7 @@ fn component_explicit_jumper_group_conflicting_nets_error() {
             r#"
 Component(
     name = "JP1",
-    footprint = "Jumper:SolderJumper",
+    footprint = File("@kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod"),
     symbol = Symbol(library = "explicit_jumper.kicad_sym", name = "ExplicitJumper"),
     pins = {"A": Net("LEFT"), "B": Net("RIGHT")},
 )
@@ -1271,7 +1271,7 @@ symbol = Symbol(library = "nc_pin.kicad_sym")
 
 Component(
     name = "U1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     symbol = symbol,
     pins = {
         "NC": Net("SIG"),
@@ -1325,7 +1325,7 @@ symbol = Symbol(library = "nc_pin.kicad_sym")
 
 Component(
     name = "U1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     symbol = symbol,
     pins = {
         "NC": NotConnected(),
@@ -1378,7 +1378,7 @@ symbol = Symbol(library = "nc_pin.kicad_sym")
 
 Component(
     name = "U1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     symbol = symbol,
     pins = {},
 )
@@ -1423,7 +1423,7 @@ symbol = Symbol(library = "power_pin.kicad_sym")
 
 Component(
     name = "U1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     symbol = symbol,
     pins = {
         "VCC": Net("VCC"),
@@ -1476,7 +1476,7 @@ symbol = Symbol(library = "alt_pin.kicad_sym")
 
 Component(
     name = "U1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     symbol = symbol,
     pins = {
         "PIO1": Net("SIG"),
@@ -1644,7 +1644,7 @@ P2 = Net()
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     properties = {
@@ -1722,7 +1722,7 @@ P2 = Net()
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = builtin.Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
@@ -1762,7 +1762,7 @@ P2 = Net()
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     mpn = "RC0603FR-071KL",
@@ -1803,7 +1803,7 @@ P2 = Net()
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     mpn = "",
@@ -1845,7 +1845,7 @@ P2 = Net()
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = builtin.Part(mpn = "RC0603FR-071KL", manufacturer = "Yageo"),
@@ -1878,7 +1878,7 @@ P2 = Net()
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     properties = {"do_not_populate": True},

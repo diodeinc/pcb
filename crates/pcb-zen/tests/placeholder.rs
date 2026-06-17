@@ -16,7 +16,7 @@ baud = config(int)
 Component(
     name = "comp0",
     part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {
         "V": "1",
     },
@@ -54,7 +54,7 @@ pwr = io(Net, optional = True)
 Component(
     name = "comp0",
     part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"V": "1"},
     pins = {"V": pwr},
 )

@@ -22,7 +22,7 @@ Created Ground: GND
                 Component {
                     name: "R",
                     type: "resistor",
-                    footprint: "TEST:0402",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "R",
                     connections: {
                         "P1": FrozenValue(

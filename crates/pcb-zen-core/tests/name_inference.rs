@@ -54,7 +54,7 @@ fn unassigned_regular_net_errors() {
         "test.zen".to_string(),
         r#"Component(
     name = "U1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"P1": "1"},
     pins = {"P1": Net()},
     skip_bom = True,

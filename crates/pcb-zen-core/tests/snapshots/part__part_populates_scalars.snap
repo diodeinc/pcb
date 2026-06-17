@@ -11,7 +11,7 @@ expression: output
   (components
     (comp (ref "U1")
       (value "PART-A")
-      (footprint "Resistor_SMD:R_0603_1005Metric")
+      (footprint "stdlib_kicad-footprints_Resistor_SMD:R_0603_1608Metric")
       (libsource (lib "lib") (part "PART-A") (description "unknown"))
       (sheetpath (names "R1") (tstamps "993684ed-29bc-53ba-bc0d-39d7d84da9bd"))
       (tstamps "993684ed-29bc-53ba-bc0d-39d7d84da9bd")

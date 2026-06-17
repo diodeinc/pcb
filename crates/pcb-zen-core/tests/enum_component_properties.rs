@@ -8,7 +8,7 @@ snapshot_eval!(enum_property_conversion, {
 
         Component(
             name = "U1",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = { "IN": "1", "OUT": "2" },
             pins = { "IN": Net("INPUT"), "OUT": Net("OUTPUT") },
             properties = {
@@ -27,7 +27,7 @@ snapshot_eval!(enum_list_property_conversion, {
 
         Component(
             name = "U2",
-            footprint = "TEST:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = { "IN": "1" },
             pins = { "IN": Net("INPUT") },
             properties = {

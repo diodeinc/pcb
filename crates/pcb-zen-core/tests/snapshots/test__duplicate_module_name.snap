@@ -16,7 +16,7 @@ Warning: test.zen:11:1-19 Duplicate child name 'sub1': a module with this name a
             FrozenValue(
                 Component {
                     name: "R1",
-                    footprint: "SMD:0402",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "1": FrozenValue(

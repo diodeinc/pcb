@@ -10,13 +10,14 @@ fn test_net_passing() {
         r#"
 ComponentInterface = interface(p1 = Net, p2 = Net)
 component_input = io(ComponentInterface)
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
 
-Component(
+Capacitor(
     name = "capacitor",
-    type = "capacitor",
-    pin_defs = { "P1": "1", "P2": "2" },
-    footprint = "SMD:0805",
-    pins = { "P1": component_input.p1, "P2": component_input.p2 },
+    value = "100nF",
+    package = "0805",
+    P1 = component_input.p1,
+    P2 = component_input.p2,
 )
         "#,
     );
@@ -93,7 +94,7 @@ Component(
         "Q1": Net("Q1"),
     },
     symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
-    footprint = "SMD:0805",
+    footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
 )
 "#,
     );
@@ -130,7 +131,7 @@ Component(
         "INVALID": Net("X"),
     },
     symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
-    footprint = "SMD:0805",
+    footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
 )
 "#,
     );
@@ -145,18 +146,16 @@ fn test_nested_components() {
     env.add_files_from_blob(
         r#"
 # --- Component.zen
-Component(
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+Capacitor(
     name = "Component",
-    pin_defs = {
-        "P1": "1",
-        "P2": "2",
-    },
-    pins = {
-        "P1": Net("P1"),
-        "P2": Net("P2"),
-    },
-    footprint = "SMD:0805",
-    part = Part(mpn = "TEST", manufacturer = "TEST"),
+    value = "100nF",
+    package = "0805",
+    mpn = "TEST",
+    manufacturer = "TEST",
+    P1 = Net("P1"),
+    P2 = Net("P2"),
 )
 
 # --- Module.zen
@@ -185,17 +184,17 @@ fn test_net_name_deduplication() {
     env.add_files_from_blob(
         r#"
 # --- MyModule.zen
+Resistor = Module("@stdlib/generics/Resistor.zen")
 _internal_net = Net("INTERNAL")
-Component(
+
+Resistor(
     name = "Component",
-    pin_defs = {
-        "P1": "1",
-    },
-    pins = {
-        "P1": _internal_net,
-    },
-    footprint = "SMD:0805",
-    part = Part(mpn = "TEST", manufacturer = "TEST"),
+    value = "1kohm",
+    package = "0402",
+    mpn = "TEST",
+    manufacturer = "TEST",
+    P1 = _internal_net,
+    P2 = Net("GND"),
 )
 
 # --- Top.zen

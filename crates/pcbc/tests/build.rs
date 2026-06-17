@@ -707,7 +707,7 @@ fn test_inline_manifest_unnamed_net_error() {
 
 Component(
     name = "U1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"P1": "1"},
     pins = {"P1": Net()},
     part = Part(mpn = "TEST", manufacturer = "TEST"),

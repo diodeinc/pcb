@@ -12,7 +12,7 @@ expression: output
                 Component {
                     name: "U1",
                     type: "mcu",
-                    footprint: "QFN:32",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "EN": FrozenValue(
@@ -50,7 +50,7 @@ expression: output
                 Component {
                     name: "U2",
                     type: "sensor",
-                    footprint: "SOT:23-6",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "ENABLE": FrozenValue(

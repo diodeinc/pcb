@@ -17,7 +17,7 @@ Warning: /Module.zen:7:7-47 Input 'VDD' voltage 5V is not within template voltag
             FrozenValue(
                 Component {
                     name: "U1",
-                    footprint: "TEST:0402",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "VDD": FrozenValue(

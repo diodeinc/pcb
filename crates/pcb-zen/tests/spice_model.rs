@@ -314,7 +314,7 @@ P2 = io("P2", Net)
 Component(
     name = "R",
     symbol = Symbol(library = "myresistor.kicad_sym"),
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     prefix = "R",
     skip_bom = True,
     pins = {

@@ -30,6 +30,27 @@ fn stdlib_power_symbol_files(workspace_root: &Path) -> HashMap<String, String> {
     ])
 }
 
+fn stdlib_footprint_files(workspace_root: &Path) -> HashMap<String, String> {
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/std");
+    let target_root = pcb_zen_core::workspace_stdlib_root(workspace_root);
+    [
+        "kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
+        "kicad-footprints/Jumper.pretty/SolderJumper-2_P1.3mm_Open_Pad1.0x1.5mm.kicad_mod",
+        "kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
+        "kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
+    ]
+    .into_iter()
+    .map(|rel| {
+        let contents = std::fs::read_to_string(source_root.join(rel))
+            .unwrap_or_else(|err| panic!("failed to read stdlib test footprint {rel}: {err}"));
+        (
+            target_root.join(rel).to_string_lossy().into_owned(),
+            contents,
+        )
+    })
+    .collect()
+}
+
 /// Return stdlib `.zen` files keyed by their absolute in-memory path
 /// (e.g. `"/.pcb/stdlib/interfaces.zen"` or `"/workspace/.pcb/stdlib/interfaces.zen"`).
 /// Also includes the minimal symbol files needed by stdlib prelude defaults.
@@ -44,6 +65,7 @@ pub fn stdlib_test_files_at(workspace_root: &Path) -> HashMap<String, String> {
             )
         })
         .chain(stdlib_power_symbol_files(workspace_root))
+        .chain(stdlib_footprint_files(workspace_root))
         .collect()
 }
 

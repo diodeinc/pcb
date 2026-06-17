@@ -10,7 +10,7 @@ expression: output
             FrozenValue(
                 Component {
                     name: "U1",
-                    footprint: "SMD:0805",
+                    footprint: "package://stdlib/kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "GND": FrozenValue(

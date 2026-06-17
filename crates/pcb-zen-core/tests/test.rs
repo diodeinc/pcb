@@ -10,7 +10,7 @@ snapshot_eval!(net_passing, {
             name = "capacitor",
             type = "capacitor",
             pin_defs = { "P1": "1", "P2": "2" },
-            footprint = "SMD:0805",
+            footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
             pins = { "P1": component_input.p1, "P2": component_input.p2 },
         )
     "#,
@@ -57,7 +57,7 @@ snapshot_eval!(missing_pins_should_error, {
                 "Q1": Net("Q1"),
             },
             symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
-            footprint = "SMD:0805",
+            footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
         )
     "#
 });
@@ -80,7 +80,7 @@ snapshot_eval!(unknown_pin_should_error, {
                 "INVALID": Net("X"),
             },
             symbol = Symbol(library = "C146731.kicad_sym", name = "NB3N551DG"),
-            footprint = "SMD:0805",
+            footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
         )
     "#
 });
@@ -97,7 +97,7 @@ snapshot_eval!(nested_components, {
                 "P1": Net("P1"),
                 "P2": Net("P2"),
             },
-            footprint = "SMD:0805",
+            footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
         )
     "#,
     "Module.zen" => r#"
@@ -127,7 +127,7 @@ snapshot_eval!(net_name_deduplication, {
             pins = {
                 "P1": _internal_net,
             },
-            footprint = "SMD:0805",
+            footprint = File("@kicad-footprints/Capacitor_SMD.pretty/C_0805_2012Metric.kicad_mod"),
         )
     "#,
     "Top.zen" => r#"
@@ -146,7 +146,7 @@ snapshot_eval!(duplicate_component_name, {
         # First component named "R1"
         Component(
             name = "R1",
-            footprint = "SMD:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": vcc, "2": gnd}
         )
@@ -154,7 +154,7 @@ snapshot_eval!(duplicate_component_name, {
         # Second component with the same name "R1" - should warn
         Component(
             name = "R1",
-            footprint = "SMD:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": vcc, "2": gnd}
         )
@@ -168,7 +168,7 @@ snapshot_eval!(duplicate_module_name, {
 
         Component(
             name = "R1",
-            footprint = "SMD:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": vcc, "2": gnd}
         )
@@ -191,7 +191,7 @@ snapshot_eval!(duplicate_module_component_collision, {
 
         Component(
             name = "R1",
-            footprint = "SMD:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": vcc, "2": gnd}
         )
@@ -205,7 +205,7 @@ snapshot_eval!(duplicate_module_component_collision, {
         # Component named "widget"
         Component(
             name = "widget",
-            footprint = "SMD:0402",
+            footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
             pin_defs = {"1": "1", "2": "2"},
             pins = {"1": vcc, "2": gnd}
         )
@@ -229,14 +229,14 @@ gnd = Net(name = "GND")
 
 Component(
     name = "R1",
-    footprint = "SMD:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": vcc, "2": gnd}
 )
 
 Component(
     name = "R1",
-    footprint = "SMD:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": vcc, "2": gnd}
 )

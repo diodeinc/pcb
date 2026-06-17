@@ -11,7 +11,7 @@ expression: output
             FrozenValue(
                 Component {
                     name: "U1",
-                    footprint: "TEST:0402",
+                    footprint: "package://stdlib/kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
                     prefix: "U",
                     connections: {
                         "IN": FrozenValue(

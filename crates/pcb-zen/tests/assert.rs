@@ -31,7 +31,7 @@ check(True, "all good")
 Component(
     name = "comp0",
     part = Part(mpn = "TEST", manufacturer = "TEST"),
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"P": "1"},
     pins = {"P": Net("P")},
 )

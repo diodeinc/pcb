@@ -69,7 +69,7 @@ P2 = Net()
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
     part = Part(
@@ -154,7 +154,7 @@ builtin.add_component_modifier(mutate)
 
 Component(
     name = "R1",
-    footprint = "Resistor_SMD:R_0603_1005Metric",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     pins = {"1": P1, "2": P2},
 )
@@ -206,7 +206,7 @@ BIDIR = io(Net)
 
 Component(
     name = "U",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"IN": "1", "OUT": "2", "IO": "3"},
     pins = {"IN": VIN, "OUT": VOUT, "IO": BIDIR},
     skip_bom = True,

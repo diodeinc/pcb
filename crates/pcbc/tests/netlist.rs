@@ -339,7 +339,7 @@ vcc = io(Power)
 
 Component(
     name = "R1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"1": "1"},
     skip_bom = True,
     pins = {"1": vcc},
@@ -366,7 +366,7 @@ GND = io("GND", Net)
 
 Component(
     name = "R1",
-    footprint = "TEST:0402",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
     pin_defs = {"1": "1", "2": "2"},
     skip_bom = True,
     pins = {"1": IN_GD, "2": GND},
