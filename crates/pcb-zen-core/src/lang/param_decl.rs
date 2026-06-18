@@ -28,7 +28,9 @@ use super::module::{
     normalize_config_default, record_parameter_metadata, run_checks, validate_allowed_config_value,
     validate_or_convert,
 };
-use super::net::{FrozenNetValue, NetType, NetValue};
+use super::net::{
+    FrozenNetType, FrozenNetValue, NetInstantiateOptions, NetType, NetTypeGen, NetValue,
+};
 
 #[derive(Debug, Clone, Trace, Allocative)]
 struct DeclArgs<'v> {
@@ -490,6 +492,7 @@ fn resolve_io<'v>(
 
     let (value, metadata_default) = if let Some(provided) = eval.request_input(name)? {
         let converted = validate_or_convert(name, provided, normalized.typ, eval)?;
+        let converted = register_provided_io_net(name, converted, normalized.typ, eval)?;
         for failure in run_implicit_checks(name, &normalized.implicit_checks, converted) {
             eval.add_diagnostic(implicit_check_diag(failure, declaration_site));
         }
@@ -753,6 +756,56 @@ fn normalize_io_args<'v>(
             .map(IoTemplateValue::derive_implicit_checks)
             .unwrap_or_default(),
     })
+}
+
+fn register_provided_io_net<'v>(
+    name: &str,
+    value: Value<'v>,
+    typ: Value<'v>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<Value<'v>> {
+    if let Some(net_type) = typ.downcast_ref::<NetType>() {
+        return register_provided_io_net_type(name, value, net_type, eval);
+    }
+
+    if let Some(net_type) = typ.downcast_ref::<FrozenNetType>() {
+        return register_provided_io_net_type(name, value, net_type, eval);
+    }
+
+    Ok(value)
+}
+
+fn register_provided_io_net_type<'v, V: ValueLike<'v>>(
+    name: &str,
+    value: Value<'v>,
+    net_type: &NetTypeGen<V>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<Value<'v>> {
+    let value = if value.downcast_ref::<NetValue<'v>>().is_some() {
+        value
+    } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+        net.with_net_type(&net_type.type_name, eval.heap())
+    } else {
+        return Ok(value);
+    };
+
+    let net = value
+        .downcast_ref::<NetValue<'v>>()
+        .expect("materialized net should be allocated on the current heap");
+    if !net.name().is_empty() {
+        return Ok(value);
+    }
+
+    net_type.instantiate(
+        Some(net),
+        (net_type.type_name != "NotConnected").then(|| name.to_owned()),
+        SmallMap::new(),
+        NetInstantiateOptions {
+            should_register: true,
+            assignment_inferable: false,
+        },
+        eval,
+    )
 }
 
 fn instantiate_net_template<'v>(

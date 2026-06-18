@@ -113,6 +113,128 @@ Component(
 
 #[test]
 #[cfg(not(target_os = "windows"))]
+fn omitted_no_connect_pin_converts_to_not_connected_net() {
+    let mut files = std::collections::HashMap::new();
+    files.insert(
+        "nc_pin.kicad_sym".to_string(),
+        r#"(kicad_symbol_lib
+  (version 20211014)
+  (generator "test")
+  (symbol "NcPin"
+    (property "Reference" "U")
+    (symbol "NcPin_0_1"
+      (pin no_connect line
+        (at 0 0 0)
+        (length 2.54)
+        (name "NC")
+        (number "1")
+      )
+    )
+  )
+)"#
+        .to_string(),
+    );
+    files.insert(
+        "test.zen".to_string(),
+        r#"
+symbol = Symbol(library = "nc_pin.kicad_sym")
+
+Component(
+    name = "U1",
+    prefix = "U",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+    symbol = symbol,
+    skip_bom = True,
+    pins = {},
+)
+"#
+        .to_string(),
+    );
+
+    let result = eval_to_schematic(files, "test.zen");
+    assert!(
+        result.is_success(),
+        "expected schematic output, got diagnostics: {:?}",
+        result.diagnostics
+    );
+    let schematic = result.output.expect("expected schematic output");
+    assert!(!schematic.nets.contains_key(""));
+    assert!(schematic.nets.values().any(|net| {
+        net.kind == "NotConnected"
+            && net.ports.iter().any(|port| {
+                port.instance_path
+                    .ends_with(&["U1".to_string(), "NC".to_string()])
+            })
+    }));
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn net_wrapped_not_connected_io_is_regular_net() {
+    for _ in 0..64 {
+        let mut files = std::collections::HashMap::new();
+        files.insert(
+            "test.zen".to_string(),
+            r#"
+NotConnected = builtin.net_type("NotConnected")
+Net = builtin.net_type("Net")
+io = builtin.io
+
+PGFB = io(Net(NotConnected()), optional=True)
+VIN = Net("VIN")
+
+Component(
+    name = "IC1",
+    prefix = "IC",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+    pin_defs = {"PGFB": "1"},
+    pins = {"PGFB": PGFB},
+)
+
+Component(
+    name = "R_PGFB",
+    prefix = "R",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": PGFB, "P2": VIN},
+)
+"#
+            .to_string(),
+        );
+
+        let mut result = eval_to_schematic(files, "test.zen");
+        SortPass.apply(&mut result.diagnostics);
+        let warnings = result.diagnostics.warnings();
+        assert!(
+            warnings
+                .iter()
+                .all(|w| !w.body.contains("NotConnected net connects to")),
+            "did not expect multi-port NotConnected warning, got: {:?}",
+            warnings
+        );
+
+        let schematic = result.output.unwrap_or_else(|| {
+            panic!(
+                "expected schematic output, got diagnostics: {:?}",
+                result.diagnostics
+            )
+        });
+        let pgfb = schematic.nets.get("PGFB").unwrap_or_else(|| {
+            panic!(
+                "expected PGFB net, got: {:?}",
+                schematic
+                    .nets
+                    .iter()
+                    .map(|(name, net)| (name.clone(), net.kind.clone()))
+                    .collect::<Vec<_>>()
+            )
+        });
+        assert_eq!(pgfb.kind, "Net");
+    }
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
 fn not_connected_auto_names_are_stable_by_port() {
     // Two programs that only differ in where unrelated nets are created.
     // The NotConnected net connected to R1.P2 should get a stable, port-derived name.

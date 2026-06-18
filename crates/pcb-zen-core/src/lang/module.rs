@@ -57,7 +57,10 @@ macro_rules! downcast_frozen_module {
     };
 }
 
-use super::net::{FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id};
+use super::net::{
+    FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id,
+    merge_canonical_net_type_name, net_type_requires_name,
+};
 use crate::lang::context::FrozenContextValue;
 use starlark::errors::EvalMessage;
 
@@ -65,8 +68,8 @@ use starlark::errors::EvalMessage;
 #[derive(Clone, Debug, Trace, Allocative, Freeze)]
 pub struct IntroducedNet {
     pub name: IntroducedNetName,
-    /// The net type name (e.g., "Net", "Power", "Ground", "NotConnected")
-    pub net_type: String,
+    /// Canonical kind evidence, if this module introduced any.
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Trace, Allocative, Freeze)]
@@ -765,47 +768,108 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             .filter_map(move |child| child.downcast_ref::<FrozenTestBenchValue>())
     }
 
+    fn record_net_name(
+        &mut self,
+        id: NetId,
+        base_name: &str,
+        assignment_inferable: bool,
+        net_type: &str,
+    ) -> anyhow::Result<()> {
+        if !net_type_requires_name(net_type) {
+            return Ok(());
+        }
+
+        if assignment_inferable {
+            return Ok(());
+        }
+
+        if base_name.trim().is_empty() {
+            anyhow::bail!("Net is unnamed");
+        }
+
+        if let Some(existing_id) = self.net_name_to_id.get(base_name)
+            && *existing_id != id
+        {
+            anyhow::bail!("Duplicate net name: {base_name}");
+        }
+
+        self.net_name_to_id.insert(base_name.to_string(), id);
+        Ok(())
+    }
+
+    fn registration_name(base_name: &str, assignment_inferable: bool) -> IntroducedNetName {
+        if assignment_inferable {
+            IntroducedNetName::PendingInference(base_name.to_string())
+        } else if base_name.trim().is_empty() {
+            IntroducedNetName::Unnamed
+        } else {
+            IntroducedNetName::Named(base_name.to_string())
+        }
+    }
+
     /// Record that this module introduced a net with `id` and `local_name`.
     pub fn register_net(
         &mut self,
         id: NetId,
         local_name: String,
         assignment_inferable: bool,
-        net_type: String,
+        observed_kind: String,
     ) -> anyhow::Result<String> {
-        // If this id was already registered, keep the first assignment (idempotent)
-        if let Some(info) = self.introduced_nets.get(&id) {
-            return Ok(info.name.as_str().to_string());
-        }
-
         let base_name = local_name;
-        let regular_net = net_type != "NotConnected";
 
-        if regular_net && !assignment_inferable && base_name.trim().is_empty() {
-            anyhow::bail!("Net is unnamed");
+        if let Some(existing) = self.introduced_nets.get(&id).cloned() {
+            let mut merged_kind = existing.kind.clone();
+            merge_canonical_net_type_name(&mut merged_kind, &observed_kind);
+
+            let has_name_evidence = assignment_inferable || !base_name.trim().is_empty();
+            if merged_kind == existing.kind && !has_name_evidence {
+                return Ok(existing.name.as_str().to_string());
+            }
+
+            let (name, returned_name) = if has_name_evidence {
+                self.record_net_name(
+                    id,
+                    &base_name,
+                    assignment_inferable,
+                    merged_kind.as_deref().unwrap_or("Net"),
+                )?;
+                (
+                    Self::registration_name(&base_name, assignment_inferable),
+                    base_name,
+                )
+            } else if existing.name.as_str().is_empty() {
+                return Ok(existing.name.as_str().to_string());
+            } else {
+                self.record_net_name(
+                    id,
+                    existing.name.as_str(),
+                    false,
+                    merged_kind.as_deref().unwrap_or("Net"),
+                )?;
+                (existing.name.clone(), existing.name.as_str().to_string())
+            };
+
+            self.introduced_nets.insert(
+                id,
+                IntroducedNet {
+                    name,
+                    kind: merged_kind,
+                },
+            );
+            return Ok(returned_name);
         }
 
-        let name = if assignment_inferable {
-            IntroducedNetName::PendingInference(base_name.clone())
-        } else if base_name.trim().is_empty() {
-            IntroducedNetName::Unnamed
-        } else {
-            IntroducedNetName::Named(base_name.clone())
-        };
-
-        if !assignment_inferable
-            && regular_net
-            && let Some(existing_id) = self.net_name_to_id.get(&base_name)
-            && *existing_id != id
-        {
-            anyhow::bail!("Duplicate net name: {base_name}");
-        }
-
-        if regular_net && !assignment_inferable && !base_name.trim().is_empty() {
-            self.net_name_to_id.insert(base_name.clone(), id);
-        }
+        let mut kind = None;
+        merge_canonical_net_type_name(&mut kind, &observed_kind);
+        self.record_net_name(
+            id,
+            &base_name,
+            assignment_inferable,
+            kind.as_deref().unwrap_or("Net"),
+        )?;
+        let name = Self::registration_name(&base_name, assignment_inferable);
         self.introduced_nets
-            .insert(id, IntroducedNet { name, net_type });
+            .insert(id, IntroducedNet { name, kind });
         Ok(base_name)
     }
 
@@ -820,27 +884,17 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             return Ok(existing.name.as_str().to_string());
         }
 
-        let regular_net = existing.net_type != "NotConnected";
-
-        if regular_net && inferred_name.trim().is_empty() {
-            anyhow::bail!("Net is unnamed");
-        }
-
-        if regular_net
-            && let Some(existing_id) = self.net_name_to_id.get(&inferred_name)
-            && *existing_id != id
-        {
-            anyhow::bail!("Duplicate net name: {inferred_name}");
-        }
-
-        if regular_net && !inferred_name.trim().is_empty() {
-            self.net_name_to_id.insert(inferred_name.clone(), id);
-        }
+        self.record_net_name(
+            id,
+            &inferred_name,
+            false,
+            existing.kind.as_deref().unwrap_or("Net"),
+        )?;
         self.introduced_nets.insert(
             id,
             IntroducedNet {
                 name: IntroducedNetName::Named(inferred_name.clone()),
-                net_type: existing.net_type,
+                kind: existing.kind,
             },
         );
 
@@ -1302,7 +1356,7 @@ fn validate_type<'v>(
         return Ok(());
     }
 
-    // NetType validation with asymmetric conversion rules
+    // Net compatibility is handled by typed-view conversion.
     if let Some(expected_type_name) = typ
         .downcast_ref::<NetType>()
         .map(|nt| &nt.type_name)
@@ -1321,14 +1375,10 @@ fn validate_type<'v>(
             });
 
         if let Some(actual_type_name) = actual_type_name {
-            // Only allow exact type match - conversion will be handled by try_net_conversion
             if expected_type_name == actual_type_name {
                 return Ok(());
             }
 
-            // Type mismatch - fail validation
-            // Note: If expected is "Net" and actual is different (e.g., "Power"),
-            // this will fail here and try_net_conversion will handle the conversion
             anyhow::bail!(
                 "Input '{name}' has wrong net type: expected {expected_type_name}, got {actual_type_name}"
             );
