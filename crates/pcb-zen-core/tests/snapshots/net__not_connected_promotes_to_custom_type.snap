@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
-assertion_line: 500
+assertion_line: 521
 expression: output
 ---
 NotConnected promotes to Gpio: success
@@ -21,7 +21,7 @@ NotConnected promotes to Gpio: success
                     connections: {
                         "1": FrozenValue(
                             Net {
-                                name: "",
+                                name: "gpio",
                                 id: "<ID>",
                             },
                         ),

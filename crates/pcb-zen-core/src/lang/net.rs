@@ -34,11 +34,12 @@ use super::validation::validate_identifier_name;
 
 pub type NetId = u64;
 
-// Net-kind semantics:
-// - compatibility may create typed views for IO/type checking, but views never set canonical kind
-// - canonical observations merge only from declarations/type constructors: empty accepts any kind,
-//   NotConnected may upgrade to a concrete kind, concrete kinds stay concrete
-// - only NotConnected may remain unnamed; all other canonical kinds need a name
+// Net kind semantics:
+// - Net values have a current runtime kind used for type checks and casts.
+// - Each registration/port observation merges that kind into the net id's canonical kind.
+// - Canonical kind merge is monotonic: empty accepts any kind, NotConnected upgrades to
+//   concrete, and concrete kinds stay concrete.
+// - Only NotConnected may remain unnamed; all other canonical kinds need a name.
 fn is_concrete_net_type_name(kind: &str) -> bool {
     !kind.is_empty() && kind != "NotConnected"
 }
@@ -66,12 +67,11 @@ pub(crate) fn net_type_requires_name(kind: &str) -> bool {
     kind != "NotConnected"
 }
 
-pub(crate) fn merge_canonical_net_type_name(current: &mut String, observed: &str) {
-    if current.is_empty()
-        || (current.as_str() == "NotConnected" && is_concrete_net_type_name(observed))
+pub(crate) fn merge_canonical_net_type_name(current: &mut Option<String>, observed: &str) {
+    if current.is_none()
+        || (current.as_deref() == Some("NotConnected") && is_concrete_net_type_name(observed))
     {
-        current.clear();
-        current.push_str(observed);
+        *current = Some(observed.to_string());
     }
 }
 
@@ -81,26 +81,26 @@ mod net_type_merge_tests {
 
     #[test]
     fn merge_canonical_net_type_name_promotes_only_empty_or_not_connected() {
-        let mut kind = String::new();
+        let mut kind = None;
         for (observed, expected) in [
-            ("NotConnected", "NotConnected"),
-            ("Net", "Net"),
-            ("Power", "Net"),
-            ("Net", "Net"),
-            ("NotConnected", "Net"),
+            ("NotConnected", Some("NotConnected")),
+            ("Net", Some("Net")),
+            ("Power", Some("Net")),
+            ("Net", Some("Net")),
+            ("NotConnected", Some("Net")),
         ] {
             merge_canonical_net_type_name(&mut kind, observed);
-            assert_eq!(kind, expected);
+            assert_eq!(kind.as_deref(), expected);
         }
 
-        let mut kind = String::new();
+        let mut kind = None;
         for (observed, expected) in [
-            ("Power", "Power"),
-            ("NotConnected", "Power"),
-            ("Net", "Power"),
+            ("Power", Some("Power")),
+            ("NotConnected", Some("Power")),
+            ("Net", Some("Power")),
         ] {
             merge_canonical_net_type_name(&mut kind, observed);
-            assert_eq!(kind, expected);
+            assert_eq!(kind.as_deref(), expected);
         }
     }
 
@@ -187,9 +187,6 @@ pub struct NetValueGen<V> {
     /// Whether this net may adopt an assigned variable name after construction.
     #[serde(skip, default)]
     pub(crate) assignment_inferable: bool,
-    /// Whether this net was constructed from another net value.
-    #[serde(skip, default)]
-    pub(crate) derived_from_base_net: bool,
     /// Whether this net value has been bound to a variable.
     #[serde(skip, default)]
     #[freeze(identity)]
@@ -333,13 +330,7 @@ impl<V> NetValueGen<V> {
 }
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
-    fn alloc_clone(
-        &self,
-        heap: Heap<'v>,
-        net_id: NetId,
-        type_name: String,
-        derived_from_base_net: bool,
-    ) -> Value<'v> {
+    fn alloc_clone(&self, heap: Heap<'v>, net_id: NetId, type_name: String) -> Value<'v> {
         let properties: SmallMap<String, Value<'v>> = self
             .properties
             .iter()
@@ -352,7 +343,6 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             template_name: self.template_name.clone(),
             original_name: self.original_name_opt().map(str::to_owned),
             assignment_inferable: self.assignment_inferable,
-            derived_from_base_net,
             was_bound: Self::clone_once_lock(&self.was_bound),
             inferred_name: Self::clone_once_lock(&self.inferred_name),
             declaration_path: self.declaration_path.clone(),
@@ -398,7 +388,6 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             template_name: None,
             original_name: None,
             assignment_inferable: false,
-            derived_from_base_net: false,
             was_bound: OnceLock::new(),
             inferred_name: OnceLock::new(),
             declaration_path: String::new(),
@@ -456,20 +445,16 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         self.template_name.as_deref()
     }
 
-    pub(crate) fn derived_from_base_net(&self) -> bool {
-        self.derived_from_base_net
-    }
-
     pub(crate) fn was_bound(&self) -> bool {
         self.was_bound.get().is_some()
     }
 
     pub(crate) fn is_external_reference(&self) -> bool {
-        self.derived_from_base_net() || self.was_bound()
+        self.was_bound()
     }
 
     pub(crate) fn is_template_owned(&self) -> bool {
-        !self.is_external_reference()
+        !self.was_bound()
     }
 
     pub(crate) fn skips_implicit_checks(&self) -> bool {
@@ -479,17 +464,12 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Create a new net with the same fields but a fresh net ID.
     /// This avoids deep copying - properties are shared via Value references.
     pub fn with_new_id(&self, heap: Heap<'v>) -> Value<'v> {
-        self.alloc_clone(
-            heap,
-            generate_net_id(),
-            self.type_name.clone(),
-            self.derived_from_base_net,
-        )
+        self.alloc_clone(heap, generate_net_id(), self.type_name.clone())
     }
 
     /// Create a typed compatibility view with the same identity and properties.
     pub fn with_net_type(&self, new_type_name: &str, heap: Heap<'v>) -> Value<'v> {
-        self.alloc_clone(heap, self.net_id, new_type_name.to_string(), true)
+        self.alloc_clone(heap, self.net_id, new_type_name.to_string())
     }
 
     /// Create a new net with identical runtime identity but updated declaration metadata.
@@ -511,7 +491,6 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             template_name: self.template_name.clone(),
             original_name: self.original_name_opt().map(str::to_owned),
             assignment_inferable: self.assignment_inferable,
-            derived_from_base_net: self.derived_from_base_net,
             was_bound: Self::clone_once_lock(&self.was_bound),
             inferred_name: Self::clone_once_lock(&self.inferred_name),
             declaration_path: declaration_path.into(),
@@ -743,6 +722,9 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
         }
 
         let net_name = runtime_name.unwrap_or_default();
+        let was_bound = base_net
+            .map(|net| net.cloned_bound_marker())
+            .unwrap_or_default();
         let final_name = if options.should_register {
             eval.module()
                 .extra_value()
@@ -763,8 +745,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             template_name,
             original_name,
             assignment_inferable,
-            derived_from_base_net: base_net.is_some(),
-            was_bound: OnceLock::new(),
+            was_bound,
             inferred_name: OnceLock::new(),
             declaration_path,
             declaration_span,

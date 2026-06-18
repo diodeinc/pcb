@@ -68,8 +68,8 @@ use starlark::errors::EvalMessage;
 #[derive(Clone, Debug, Trace, Allocative, Freeze)]
 pub struct IntroducedNet {
     pub name: IntroducedNetName,
-    /// The net type name (e.g., "Net", "Power", "Ground", "NotConnected")
-    pub net_type: String,
+    /// Canonical kind evidence, if this module introduced any.
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Trace, Allocative, Freeze)]
@@ -813,20 +813,26 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         id: NetId,
         local_name: String,
         assignment_inferable: bool,
-        net_type: String,
+        observed_kind: String,
     ) -> anyhow::Result<String> {
         let base_name = local_name;
 
         if let Some(existing) = self.introduced_nets.get(&id).cloned() {
-            let mut merged_type = existing.net_type.clone();
-            merge_canonical_net_type_name(&mut merged_type, &net_type);
-            if merged_type == existing.net_type {
+            let mut merged_kind = existing.kind.clone();
+            merge_canonical_net_type_name(&mut merged_kind, &observed_kind);
+
+            let has_name_evidence = assignment_inferable || !base_name.trim().is_empty();
+            if merged_kind == existing.kind && !has_name_evidence {
                 return Ok(existing.name.as_str().to_string());
             }
 
-            let has_name_evidence = assignment_inferable || !base_name.trim().is_empty();
             let (name, returned_name) = if has_name_evidence {
-                self.record_net_name(id, &base_name, assignment_inferable, &merged_type)?;
+                self.record_net_name(
+                    id,
+                    &base_name,
+                    assignment_inferable,
+                    merged_kind.as_deref().unwrap_or("Net"),
+                )?;
                 (
                     Self::registration_name(&base_name, assignment_inferable),
                     base_name,
@@ -834,7 +840,12 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             } else if existing.name.as_str().is_empty() {
                 return Ok(existing.name.as_str().to_string());
             } else {
-                self.record_net_name(id, existing.name.as_str(), false, &merged_type)?;
+                self.record_net_name(
+                    id,
+                    existing.name.as_str(),
+                    false,
+                    merged_kind.as_deref().unwrap_or("Net"),
+                )?;
                 (existing.name.clone(), existing.name.as_str().to_string())
             };
 
@@ -842,16 +853,23 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 id,
                 IntroducedNet {
                     name,
-                    net_type: merged_type,
+                    kind: merged_kind,
                 },
             );
             return Ok(returned_name);
         }
 
-        self.record_net_name(id, &base_name, assignment_inferable, &net_type)?;
+        let mut kind = None;
+        merge_canonical_net_type_name(&mut kind, &observed_kind);
+        self.record_net_name(
+            id,
+            &base_name,
+            assignment_inferable,
+            kind.as_deref().unwrap_or("Net"),
+        )?;
         let name = Self::registration_name(&base_name, assignment_inferable);
         self.introduced_nets
-            .insert(id, IntroducedNet { name, net_type });
+            .insert(id, IntroducedNet { name, kind });
         Ok(base_name)
     }
 
@@ -866,12 +884,17 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             return Ok(existing.name.as_str().to_string());
         }
 
-        self.record_net_name(id, &inferred_name, false, &existing.net_type)?;
+        self.record_net_name(
+            id,
+            &inferred_name,
+            false,
+            existing.kind.as_deref().unwrap_or("Net"),
+        )?;
         self.introduced_nets.insert(
             id,
             IntroducedNet {
                 name: IntroducedNetName::Named(inferred_name.clone()),
-                net_type: existing.net_type,
+                kind: existing.kind,
             },
         );
 

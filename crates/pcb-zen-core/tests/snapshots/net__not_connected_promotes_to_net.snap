@@ -1,6 +1,6 @@
 ---
 source: crates/pcb-zen-core/tests/net.rs
-assertion_line: 473
+assertion_line: 494
 expression: output
 ---
 NotConnected promotes to Net: success
@@ -21,7 +21,7 @@ NotConnected promotes to Net: success
                     connections: {
                         "1": FrozenValue(
                             Net {
-                                name: "",
+                                name: "sig",
                                 id: "<ID>",
                             },
                         ),

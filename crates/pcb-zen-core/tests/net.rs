@@ -755,6 +755,14 @@ fn net_constructor_positional_cast_preserves_behavior() {
             other_net = Net("SIG")
             power = Power(other_net)
 
+            Component(
+                name = "U1",
+                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+                pin_defs = {"P1": "1"},
+                pins = {"P1": power},
+                skip_bom = True,
+            )
+
             check(power.name == "SIG", "positional cast should preserve the base net name")
         "#
         .to_string(),
@@ -765,4 +773,14 @@ fn net_constructor_positional_cast_preserves_behavior() {
         "did not expect errors, got: {:?}",
         result.diagnostics
     );
+
+    let eval_output = result.output.expect("expected eval output");
+    let sch_result = eval_output.to_schematic_with_diagnostics();
+    assert!(
+        !sch_result.diagnostics.has_errors(),
+        "schematic conversion failed: {:?}",
+        sch_result.diagnostics
+    );
+    let schematic = sch_result.output.expect("expected schematic output");
+    assert_eq!(schematic.nets["SIG"].kind, "Net");
 }

@@ -1548,7 +1548,7 @@ impl EvalContext {
                         .expect("extra value should be a FrozenContextValue");
 
                     for (_id, net_info) in extra.module.introduced_nets() {
-                        if net_info.net_type != "NotConnected"
+                        if net_info.kind.as_deref() != Some("NotConnected")
                             && net_info.name.is_pending_inference()
                         {
                             diagnostics.push(anyhow!("Net is unnamed").into());

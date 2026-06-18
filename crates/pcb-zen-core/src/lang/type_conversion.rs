@@ -33,7 +33,7 @@ fn try_function_conversion<'v>(
     }
 }
 
-/// Return a typed compatibility view of a net without changing its canonical kind.
+/// Return a typed compatibility view of a net, preserving identity for canonical kind merge.
 pub(crate) fn try_net_conversion<'v>(
     value: Value<'v>,
     expected_typ: Value<'v>,

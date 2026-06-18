@@ -34,8 +34,12 @@ struct NetInfo {
     ports: Vec<InstanceRef>,
     /// Aggregated properties for this net.
     properties: HashMap<String, AttributeValue>,
-    /// Canonical Starlark net type name (e.g. "Net", "Power", "Ground", "NotConnected").
-    type_name: String,
+    /// Canonical Starlark net kind, if observed.
+    kind: Option<String>,
+}
+
+fn net_kind_requires_name(kind: Option<&str>) -> bool {
+    kind.is_none_or(net_type_requires_name)
 }
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
@@ -265,11 +269,11 @@ impl ModuleConverter {
 
         // Create Net objects directly using the accumulated NetInfo.
         for (net_id, net_info) in &self.net_to_info {
-            if net_info.type_name == "NotConnected" && net_info.ports.is_empty() {
+            if net_info.kind.as_deref() == Some("NotConnected") && net_info.ports.is_empty() {
                 continue;
             }
 
-            if net_type_requires_name(&net_info.type_name) && net_info.name.is_none() {
+            if net_kind_requires_name(net_info.kind.as_deref()) && net_info.name.is_none() {
                 let mut diagnostics = Diagnostics::default();
                 diagnostics.push(Diagnostic::new(
                     "Net is unnamed",
@@ -281,12 +285,7 @@ impl ModuleConverter {
                     diagnostics,
                 };
             }
-            // Use the recorded type_name as the kind string if present, otherwise default.
-            let net_kind = if net_info.type_name.is_empty() {
-                "Net".to_string()
-            } else {
-                net_info.type_name.clone()
-            };
+            let net_kind = net_info.kind.clone().unwrap_or_else(|| "Net".to_string());
             let net_name = net_info.name.clone().unwrap_or_else(|| {
                 debug_assert_eq!(net_kind, "NotConnected");
                 String::new()
@@ -326,7 +325,7 @@ impl ModuleConverter {
                     .get(&net_id)
                     .expect("NetInfo must exist for model net");
                 let name = net_info.name.clone().unwrap_or_else(|| {
-                    debug_assert_eq!(net_info.type_name, "NotConnected");
+                    debug_assert_eq!(net_info.kind.as_deref(), Some("NotConnected"));
                     String::new()
                 });
                 net_names.push(AttributeValue::String(name));
@@ -641,7 +640,9 @@ impl ModuleConverter {
             }
 
             let info = self.net_info_mut(*net_id);
-            merge_canonical_net_type_name(&mut info.type_name, &introduced_net.net_type);
+            if let Some(kind) = introduced_net.kind.as_deref() {
+                merge_canonical_net_type_name(&mut info.kind, kind);
+            }
         }
 
         // Add direct child components
@@ -664,13 +665,10 @@ impl ModuleConverter {
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
         net_info.ports.push(instance_ref.clone());
-        // Derived values are typed views; unintroduced canonical nets still seed kind here.
-        if !net.derived_from_base_net() {
-            merge_canonical_net_type_name(&mut net_info.type_name, net.net_type_name());
-        }
+        merge_canonical_net_type_name(&mut net_info.kind, net.net_type_name());
 
         // For unnamed NotConnected nets, use a stable port-derived name when possible.
-        if net_info.type_name == "NotConnected"
+        if net_info.kind.as_deref() == Some("NotConnected")
             && net.original_name_opt().is_none()
             && net_info.ports.len() == 1
         {
