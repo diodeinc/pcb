@@ -57,7 +57,9 @@ macro_rules! downcast_frozen_module {
     };
 }
 
-use super::net::{FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id};
+use super::net::{
+    FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id, merge_net_type_name,
+};
 use crate::lang::context::FrozenContextValue;
 use starlark::errors::EvalMessage;
 
@@ -765,6 +767,53 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             .filter_map(move |child| child.downcast_ref::<FrozenTestBenchValue>())
     }
 
+    fn validate_net_registration_name(
+        &self,
+        id: NetId,
+        base_name: &str,
+        assignment_inferable: bool,
+        net_type: &str,
+    ) -> anyhow::Result<()> {
+        if net_type == "NotConnected" {
+            return Ok(());
+        }
+
+        if !assignment_inferable && base_name.trim().is_empty() {
+            anyhow::bail!("Net is unnamed");
+        }
+
+        if !assignment_inferable
+            && let Some(existing_id) = self.net_name_to_id.get(base_name)
+            && *existing_id != id
+        {
+            anyhow::bail!("Duplicate net name: {base_name}");
+        }
+
+        Ok(())
+    }
+
+    fn registration_name(base_name: &str, assignment_inferable: bool) -> IntroducedNetName {
+        if assignment_inferable {
+            IntroducedNetName::PendingInference(base_name.to_string())
+        } else if base_name.trim().is_empty() {
+            IntroducedNetName::Unnamed
+        } else {
+            IntroducedNetName::Named(base_name.to_string())
+        }
+    }
+
+    fn remember_registered_net_name(
+        &mut self,
+        id: NetId,
+        base_name: &str,
+        assignment_inferable: bool,
+        net_type: &str,
+    ) {
+        if net_type != "NotConnected" && !assignment_inferable && !base_name.trim().is_empty() {
+            self.net_name_to_id.insert(base_name.to_string(), id);
+        }
+    }
+
     /// Record that this module introduced a net with `id` and `local_name`.
     pub fn register_net(
         &mut self,
@@ -773,37 +822,52 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         assignment_inferable: bool,
         net_type: String,
     ) -> anyhow::Result<String> {
-        // If this id was already registered, keep the first assignment (idempotent)
-        if let Some(info) = self.introduced_nets.get(&id) {
-            return Ok(info.name.as_str().to_string());
-        }
-
         let base_name = local_name;
-        let regular_net = net_type != "NotConnected";
 
-        if regular_net && !assignment_inferable && base_name.trim().is_empty() {
-            anyhow::bail!("Net is unnamed");
+        if let Some(existing) = self.introduced_nets.get(&id).cloned() {
+            let mut merged_type = existing.net_type.clone();
+            merge_net_type_name(&mut merged_type, &net_type);
+            if merged_type == existing.net_type {
+                return Ok(existing.name.as_str().to_string());
+            }
+
+            let has_name_evidence = assignment_inferable || !base_name.trim().is_empty();
+            let (name, returned_name) = if has_name_evidence {
+                self.validate_net_registration_name(
+                    id,
+                    &base_name,
+                    assignment_inferable,
+                    &merged_type,
+                )?;
+                self.remember_registered_net_name(
+                    id,
+                    &base_name,
+                    assignment_inferable,
+                    &merged_type,
+                );
+                (
+                    Self::registration_name(&base_name, assignment_inferable),
+                    base_name,
+                )
+            } else if existing.name.as_str().is_empty() {
+                return Ok(existing.name.as_str().to_string());
+            } else {
+                (existing.name.clone(), existing.name.as_str().to_string())
+            };
+
+            self.introduced_nets.insert(
+                id,
+                IntroducedNet {
+                    name,
+                    net_type: merged_type,
+                },
+            );
+            return Ok(returned_name);
         }
 
-        let name = if assignment_inferable {
-            IntroducedNetName::PendingInference(base_name.clone())
-        } else if base_name.trim().is_empty() {
-            IntroducedNetName::Unnamed
-        } else {
-            IntroducedNetName::Named(base_name.clone())
-        };
-
-        if !assignment_inferable
-            && regular_net
-            && let Some(existing_id) = self.net_name_to_id.get(&base_name)
-            && *existing_id != id
-        {
-            anyhow::bail!("Duplicate net name: {base_name}");
-        }
-
-        if regular_net && !assignment_inferable && !base_name.trim().is_empty() {
-            self.net_name_to_id.insert(base_name.clone(), id);
-        }
+        self.validate_net_registration_name(id, &base_name, assignment_inferable, &net_type)?;
+        let name = Self::registration_name(&base_name, assignment_inferable);
+        self.remember_registered_net_name(id, &base_name, assignment_inferable, &net_type);
         self.introduced_nets
             .insert(id, IntroducedNet { name, net_type });
         Ok(base_name)
@@ -820,22 +884,8 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             return Ok(existing.name.as_str().to_string());
         }
 
-        let regular_net = existing.net_type != "NotConnected";
-
-        if regular_net && inferred_name.trim().is_empty() {
-            anyhow::bail!("Net is unnamed");
-        }
-
-        if regular_net
-            && let Some(existing_id) = self.net_name_to_id.get(&inferred_name)
-            && *existing_id != id
-        {
-            anyhow::bail!("Duplicate net name: {inferred_name}");
-        }
-
-        if regular_net && !inferred_name.trim().is_empty() {
-            self.net_name_to_id.insert(inferred_name.clone(), id);
-        }
+        self.validate_net_registration_name(id, &inferred_name, false, &existing.net_type)?;
+        self.remember_registered_net_name(id, &inferred_name, false, &existing.net_type);
         self.introduced_nets.insert(
             id,
             IntroducedNet {

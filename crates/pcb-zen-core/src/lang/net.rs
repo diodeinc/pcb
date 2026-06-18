@@ -34,6 +34,47 @@ use super::validation::validate_identifier_name;
 
 pub type NetId = u64;
 
+fn is_concrete_net_type_name(kind: &str) -> bool {
+    !kind.is_empty() && kind != "NotConnected"
+}
+
+pub(crate) fn merge_net_type_name(current: &mut String, observed: &str) {
+    if current.is_empty()
+        || (current.as_str() == "NotConnected" && is_concrete_net_type_name(observed))
+    {
+        current.clear();
+        current.push_str(observed);
+    }
+}
+
+#[cfg(test)]
+mod net_type_merge_tests {
+    use super::merge_net_type_name;
+
+    #[test]
+    fn merge_net_type_name_promotes_only_empty_or_not_connected() {
+        let mut kind = String::new();
+        merge_net_type_name(&mut kind, "NotConnected");
+        assert_eq!(kind, "NotConnected");
+        merge_net_type_name(&mut kind, "Net");
+        assert_eq!(kind, "Net");
+        merge_net_type_name(&mut kind, "Power");
+        assert_eq!(kind, "Net");
+        merge_net_type_name(&mut kind, "Net");
+        assert_eq!(kind, "Net");
+        merge_net_type_name(&mut kind, "NotConnected");
+        assert_eq!(kind, "Net");
+
+        let mut kind = String::new();
+        merge_net_type_name(&mut kind, "Power");
+        assert_eq!(kind, "Power");
+        merge_net_type_name(&mut kind, "NotConnected");
+        assert_eq!(kind, "Power");
+        merge_net_type_name(&mut kind, "Net");
+        assert_eq!(kind, "Power");
+    }
+}
+
 /// Global atomic counter for net IDs. Must be global (not thread-local) to ensure
 /// unique IDs across all threads when using parallel evaluation (rayon).
 static NEXT_NET_ID: AtomicU64 = AtomicU64::new(1);
