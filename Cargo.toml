@@ -20,8 +20,6 @@ pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5
 ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
 ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
 
-gltfpack-sys = "0.1.2"
-
 mimalloc = "0.1"
 
 similar = "3"

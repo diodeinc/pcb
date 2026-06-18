@@ -69,7 +69,6 @@ ctrlc = { workspace = true }
 reqwest = { workspace = true }
 termimad = { workspace = true }
 syntect = { workspace = true }
-gltfpack-sys = { workspace = true }
 thiserror = { workspace = true }
 minijinja = { workspace = true }
 tracing = { workspace = true }

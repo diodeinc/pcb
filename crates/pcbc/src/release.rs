@@ -1259,16 +1259,6 @@ fn generate_glb_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         }
     }
 
-    // Optimize GLB file with gltfpack
-    match gltfpack_sys::compress(&glb_path, &glb_path) {
-        Ok(()) => {
-            debug!("GLB file optimized successfully with gltfpack");
-        }
-        Err(code) => {
-            warn!("gltfpack failed with error code: {code}, skipping optimization");
-        }
-    }
-
     Ok(())
 }
 
