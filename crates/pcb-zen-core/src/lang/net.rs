@@ -34,11 +34,39 @@ use super::validation::validate_identifier_name;
 
 pub type NetId = u64;
 
+// Net-kind semantics:
+// - compatibility may create typed views for IO/type checking, but views never set canonical kind
+// - canonical observations merge only from declarations/type constructors: empty accepts any kind,
+//   NotConnected may upgrade to a concrete kind, concrete kinds stay concrete
+// - only NotConnected may remain unnamed; all other canonical kinds need a name
 fn is_concrete_net_type_name(kind: &str) -> bool {
     !kind.is_empty() && kind != "NotConnected"
 }
 
-pub(crate) fn merge_net_type_name(current: &mut String, observed: &str) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NetTypeCompatibility<'a> {
+    Exact,
+    View(&'a str),
+    Incompatible,
+}
+
+pub(crate) fn net_type_compatibility<'a>(
+    actual: &'a str,
+    expected: &'a str,
+) -> NetTypeCompatibility<'a> {
+    match (actual, expected) {
+        (a, e) if a == e => NetTypeCompatibility::Exact,
+        ("NotConnected", expected) => NetTypeCompatibility::View(expected),
+        (_, "Net") => NetTypeCompatibility::View("Net"),
+        _ => NetTypeCompatibility::Incompatible,
+    }
+}
+
+pub(crate) fn net_type_requires_name(kind: &str) -> bool {
+    kind != "NotConnected"
+}
+
+pub(crate) fn merge_canonical_net_type_name(current: &mut String, observed: &str) {
     if current.is_empty()
         || (current.as_str() == "NotConnected" && is_concrete_net_type_name(observed))
     {
@@ -49,29 +77,47 @@ pub(crate) fn merge_net_type_name(current: &mut String, observed: &str) {
 
 #[cfg(test)]
 mod net_type_merge_tests {
-    use super::merge_net_type_name;
+    use super::{NetTypeCompatibility, merge_canonical_net_type_name, net_type_compatibility};
 
     #[test]
-    fn merge_net_type_name_promotes_only_empty_or_not_connected() {
+    fn merge_canonical_net_type_name_promotes_only_empty_or_not_connected() {
         let mut kind = String::new();
-        merge_net_type_name(&mut kind, "NotConnected");
-        assert_eq!(kind, "NotConnected");
-        merge_net_type_name(&mut kind, "Net");
-        assert_eq!(kind, "Net");
-        merge_net_type_name(&mut kind, "Power");
-        assert_eq!(kind, "Net");
-        merge_net_type_name(&mut kind, "Net");
-        assert_eq!(kind, "Net");
-        merge_net_type_name(&mut kind, "NotConnected");
-        assert_eq!(kind, "Net");
+        for (observed, expected) in [
+            ("NotConnected", "NotConnected"),
+            ("Net", "Net"),
+            ("Power", "Net"),
+            ("Net", "Net"),
+            ("NotConnected", "Net"),
+        ] {
+            merge_canonical_net_type_name(&mut kind, observed);
+            assert_eq!(kind, expected);
+        }
 
         let mut kind = String::new();
-        merge_net_type_name(&mut kind, "Power");
-        assert_eq!(kind, "Power");
-        merge_net_type_name(&mut kind, "NotConnected");
-        assert_eq!(kind, "Power");
-        merge_net_type_name(&mut kind, "Net");
-        assert_eq!(kind, "Power");
+        for (observed, expected) in [
+            ("Power", "Power"),
+            ("NotConnected", "Power"),
+            ("Net", "Power"),
+        ] {
+            merge_canonical_net_type_name(&mut kind, observed);
+            assert_eq!(kind, expected);
+        }
+    }
+
+    #[test]
+    fn net_type_compatibility_is_not_canonical_promotion() {
+        for (actual, expected, compatibility) in [
+            ("NotConnected", "Power", NetTypeCompatibility::View("Power")),
+            ("NotConnected", "Net", NetTypeCompatibility::View("Net")),
+            ("Power", "Net", NetTypeCompatibility::View("Net")),
+            ("Ground", "Net", NetTypeCompatibility::View("Net")),
+            ("Power", "Power", NetTypeCompatibility::Exact),
+            ("Net", "Power", NetTypeCompatibility::Incompatible),
+            ("Power", "NotConnected", NetTypeCompatibility::Incompatible),
+            ("Ground", "Power", NetTypeCompatibility::Incompatible),
+        ] {
+            assert_eq!(net_type_compatibility(actual, expected), compatibility);
+        }
     }
 }
 
@@ -441,8 +487,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
         )
     }
 
-    /// Create a new net with the same ID/name/properties but a different type name.
-    /// Used for casting between net types (e.g., Power -> Net).
+    /// Create a typed compatibility view with the same identity and properties.
     pub fn with_net_type(&self, new_type_name: &str, heap: Heap<'v>) -> Value<'v> {
         self.alloc_clone(heap, self.net_id, new_type_name.to_string(), true)
     }

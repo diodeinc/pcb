@@ -2,7 +2,7 @@ use crate::lang::r#enum::EnumValue;
 use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::io_direction::IoDirection;
 use crate::lang::module::{ModulePath, find_moved_span};
-use crate::lang::net::merge_net_type_name;
+use crate::lang::net::{merge_canonical_net_type_name, net_type_requires_name};
 use crate::lang::part::PartValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
@@ -269,7 +269,7 @@ impl ModuleConverter {
                 continue;
             }
 
-            if net_info.type_name != "NotConnected" && net_info.name.is_none() {
+            if net_type_requires_name(&net_info.type_name) && net_info.name.is_none() {
                 let mut diagnostics = Diagnostics::default();
                 diagnostics.push(Diagnostic::new(
                     "Net is unnamed",
@@ -641,7 +641,7 @@ impl ModuleConverter {
             }
 
             let info = self.net_info_mut(*net_id);
-            merge_net_type_name(&mut info.type_name, &introduced_net.net_type);
+            merge_canonical_net_type_name(&mut info.type_name, &introduced_net.net_type);
         }
 
         // Add direct child components
@@ -664,7 +664,6 @@ impl ModuleConverter {
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
         net_info.ports.push(instance_ref.clone());
-        merge_net_type_name(&mut net_info.type_name, net.net_type_name());
 
         // For unnamed NotConnected nets, use a stable port-derived name when possible.
         if net_info.type_name == "NotConnected"

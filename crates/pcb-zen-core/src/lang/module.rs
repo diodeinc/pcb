@@ -58,7 +58,8 @@ macro_rules! downcast_frozen_module {
 }
 
 use super::net::{
-    FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id, merge_net_type_name,
+    FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id,
+    merge_canonical_net_type_name, net_type_requires_name,
 };
 use crate::lang::context::FrozenContextValue;
 use starlark::errors::EvalMessage;
@@ -767,28 +768,32 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             .filter_map(move |child| child.downcast_ref::<FrozenTestBenchValue>())
     }
 
-    fn validate_net_registration_name(
-        &self,
+    fn record_net_name(
+        &mut self,
         id: NetId,
         base_name: &str,
         assignment_inferable: bool,
         net_type: &str,
     ) -> anyhow::Result<()> {
-        if net_type == "NotConnected" {
+        if !net_type_requires_name(net_type) {
             return Ok(());
         }
 
-        if !assignment_inferable && base_name.trim().is_empty() {
+        if assignment_inferable {
+            return Ok(());
+        }
+
+        if base_name.trim().is_empty() {
             anyhow::bail!("Net is unnamed");
         }
 
-        if !assignment_inferable
-            && let Some(existing_id) = self.net_name_to_id.get(base_name)
+        if let Some(existing_id) = self.net_name_to_id.get(base_name)
             && *existing_id != id
         {
             anyhow::bail!("Duplicate net name: {base_name}");
         }
 
+        self.net_name_to_id.insert(base_name.to_string(), id);
         Ok(())
     }
 
@@ -799,18 +804,6 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             IntroducedNetName::Unnamed
         } else {
             IntroducedNetName::Named(base_name.to_string())
-        }
-    }
-
-    fn remember_registered_net_name(
-        &mut self,
-        id: NetId,
-        base_name: &str,
-        assignment_inferable: bool,
-        net_type: &str,
-    ) {
-        if net_type != "NotConnected" && !assignment_inferable && !base_name.trim().is_empty() {
-            self.net_name_to_id.insert(base_name.to_string(), id);
         }
     }
 
@@ -826,25 +819,14 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
 
         if let Some(existing) = self.introduced_nets.get(&id).cloned() {
             let mut merged_type = existing.net_type.clone();
-            merge_net_type_name(&mut merged_type, &net_type);
+            merge_canonical_net_type_name(&mut merged_type, &net_type);
             if merged_type == existing.net_type {
                 return Ok(existing.name.as_str().to_string());
             }
 
             let has_name_evidence = assignment_inferable || !base_name.trim().is_empty();
             let (name, returned_name) = if has_name_evidence {
-                self.validate_net_registration_name(
-                    id,
-                    &base_name,
-                    assignment_inferable,
-                    &merged_type,
-                )?;
-                self.remember_registered_net_name(
-                    id,
-                    &base_name,
-                    assignment_inferable,
-                    &merged_type,
-                );
+                self.record_net_name(id, &base_name, assignment_inferable, &merged_type)?;
                 (
                     Self::registration_name(&base_name, assignment_inferable),
                     base_name,
@@ -852,6 +834,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             } else if existing.name.as_str().is_empty() {
                 return Ok(existing.name.as_str().to_string());
             } else {
+                self.record_net_name(id, existing.name.as_str(), false, &merged_type)?;
                 (existing.name.clone(), existing.name.as_str().to_string())
             };
 
@@ -865,9 +848,8 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             return Ok(returned_name);
         }
 
-        self.validate_net_registration_name(id, &base_name, assignment_inferable, &net_type)?;
+        self.record_net_name(id, &base_name, assignment_inferable, &net_type)?;
         let name = Self::registration_name(&base_name, assignment_inferable);
-        self.remember_registered_net_name(id, &base_name, assignment_inferable, &net_type);
         self.introduced_nets
             .insert(id, IntroducedNet { name, net_type });
         Ok(base_name)
@@ -884,8 +866,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             return Ok(existing.name.as_str().to_string());
         }
 
-        self.validate_net_registration_name(id, &inferred_name, false, &existing.net_type)?;
-        self.remember_registered_net_name(id, &inferred_name, false, &existing.net_type);
+        self.record_net_name(id, &inferred_name, false, &existing.net_type)?;
         self.introduced_nets.insert(
             id,
             IntroducedNet {
@@ -1352,7 +1333,7 @@ fn validate_type<'v>(
         return Ok(());
     }
 
-    // NetType validation with asymmetric conversion rules
+    // Net compatibility is handled by typed-view conversion.
     if let Some(expected_type_name) = typ
         .downcast_ref::<NetType>()
         .map(|nt| &nt.type_name)
@@ -1371,14 +1352,10 @@ fn validate_type<'v>(
             });
 
         if let Some(actual_type_name) = actual_type_name {
-            // Only allow exact type match - conversion will be handled by try_net_conversion
             if expected_type_name == actual_type_name {
                 return Ok(());
             }
 
-            // Type mismatch - fail validation
-            // Note: If expected is "Net" and actual is different (e.g., "Power"),
-            // this will fail here and try_net_conversion will handle the conversion
             anyhow::bail!(
                 "Input '{name}' has wrong net type: expected {expected_type_name}, got {actual_type_name}"
             );
