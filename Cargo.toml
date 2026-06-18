@@ -96,7 +96,7 @@ console_log = "1.0.0"
 crossterm = "0.29"
 ctrlc = { version = "3.4", features = ["termination"] }
 ratatui = "0.30"
-ratatui-image = { version = "10.0", default-features = false, features = ["image-defaults", "crossterm"] }
+ratatui-image = { version = "10.0", default-features = false, features = ["crossterm"] }
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 csv = "1.4"
@@ -115,7 +115,7 @@ pathdiff = "0.2"
 petgraph = "0.8"
 rayon = "1.10"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "charset", "http2", "json", "multipart", "rustls", "system-proxy"] }
-ureq = { version = "3", default-features = false, features = ["native-tls"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 rand = "0.8"
 serde-wasm-bindgen = "0.6"
 serde_yaml = "0.9"
