@@ -664,6 +664,10 @@ impl ModuleConverter {
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
         net_info.ports.push(instance_ref.clone());
+        // Derived values are typed views; unintroduced canonical nets still seed kind here.
+        if !net.derived_from_base_net() {
+            merge_canonical_net_type_name(&mut net_info.type_name, net.net_type_name());
+        }
 
         // For unnamed NotConnected nets, use a stable port-derived name when possible.
         if net_info.type_name == "NotConnected"
