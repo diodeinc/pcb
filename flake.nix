@@ -17,18 +17,21 @@
       ];
       forAllSystems = lib.genAttrs systems;
       workspaceCargo = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      pkgsFor =
+        system:
+        import nixpkgs {
+          inherit system;
+          config.problems.handlers =
+            lib.optionalAttrs (lib.hasSuffix "-darwin" system)
+              {
+                kicad-base.broken = "warn";
+              };
+        };
 
       packageFor =
         system:
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            config.problems.handlers =
-              lib.optionalAttrs (lib.hasSuffix "-darwin" system)
-                {
-                  kicad-base.broken = "warn";
-                };
-          };
+          pkgs = pkgsFor system;
           craneLib = crane.mkLib pkgs;
 
           src = lib.fileset.toSource {
@@ -73,6 +76,12 @@
           // {
             inherit cargoArtifacts;
 
+            postInstall = ''
+              mkdir -p "$out/lib"
+              cp -R ${src}/lib/std "$out/lib/std"
+              chmod -R u+w "$out/lib/std"
+            '';
+
             postFixup = ''
               for binary in pcb pcbc; do
                 wrapProgram "$out/bin/$binary" \
@@ -105,6 +114,20 @@
         {
           default = pcb;
           inherit pcb pcbc;
+        }
+      );
+
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+          pcbc = self.packages.${system}.pcbc;
+        in
+        {
+          pcbc-stdlib-installed = pkgs.runCommand "pcbc-stdlib-installed" { } ''
+            test -f "${pcbc}/lib/std/pcb.toml"
+            touch "$out"
+          '';
         }
       );
 
