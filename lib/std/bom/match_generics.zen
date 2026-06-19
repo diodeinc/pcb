@@ -1006,7 +1006,7 @@ HOUSE_TVS_BY_PKG = {
         tvs(
             "5.3V",
             "13V",
-            None,
+            "20W",
             "SP3022-01ETG-NM",
             "Littelfuse Inc.",
             "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sp3022-01etg-nm-datasheet?assetguid=60969493-fae9-418a-91ac-bc92d273bb80",

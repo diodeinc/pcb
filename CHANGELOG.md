@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Net kind merging now promotes empty or `NotConnected` placeholders to observed concrete kinds.
+- Stdlib TVS matching now includes the `SP3022-01ETG-NM` SOD-882 peak pulse power rating.
 
 ## [0.4.0] - 2026-06-17
 
