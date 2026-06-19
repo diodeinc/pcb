@@ -26,8 +26,6 @@ const excludedArtifacts = [
   'ipc2581',
   'step',
   'vrml',
-  'glb',
-  'svg',
 ]
 
 function usage() {

@@ -36,8 +36,6 @@ pub enum ArtifactType {
     Ipc2581,
     Step,
     Vrml,
-    Glb,
-    Svg,
 }
 
 impl ArtifactType {
@@ -53,8 +51,6 @@ impl ArtifactType {
             ArtifactType::Ipc2581 => "Generating IPC-2581 file",
             ArtifactType::Step => "Generating STEP model",
             ArtifactType::Vrml => "Generating VRML model",
-            ArtifactType::Glb => "Generating GLB model",
-            ArtifactType::Svg => "Generating SVG rendering",
         }
     }
 
@@ -70,8 +66,6 @@ impl ArtifactType {
             ArtifactType::Ipc2581 => generate_ipc2581,
             ArtifactType::Step => generate_step_model,
             ArtifactType::Vrml => generate_vrml_model,
-            ArtifactType::Glb => generate_glb_model,
-            ArtifactType::Svg => generate_svg_rendering,
         }
     }
 
@@ -163,7 +157,6 @@ const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
     ArtifactType::Ipc2581,
     ArtifactType::Step,
     ArtifactType::Vrml,
-    ArtifactType::Svg,
 ];
 
 const ODB_EXPORT_PRECISION: &str = "4";
@@ -1213,99 +1206,6 @@ fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
             warn!("KiCad CLI reported error but VRML file was created: {e}");
         } else {
             return Err(e).context("Failed to generate VRML model");
-        }
-    }
-
-    Ok(())
-}
-
-/// Generate GLB model
-fn generate_glb_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    let models_dir = info.staging_dir.join("3d");
-    fs::create_dir_all(&models_dir)?;
-
-    let kicad_pcb_path = info
-        .staged_pcb_path()
-        .context("No layout directory for GLB model generation")?;
-
-    // Create a temp file to capture and discard verbose KiCad output
-    let devnull = tempfile::tempfile()?;
-
-    // Generate GLB model - KiCad CLI has platform-specific exit code issues
-    let glb_path = models_dir.join("model.glb");
-    let glb_result = KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("glb")
-        .arg("--output")
-        .arg(glb_path.to_string_lossy())
-        .arg("--subst-models")
-        .arg("--force")
-        .arg("--no-dnp")
-        // FIXME: kicad-imported projects have unspecified footprints, so allow these temporarily
-        // .arg("--no-unspecified")
-        .arg("--include-pads")
-        .arg("--include-silkscreen")
-        .arg(kicad_pcb_path.to_string_lossy())
-        .log_file(devnull)
-        .suppress_error_output(true)
-        .run();
-
-    if let Err(e) = glb_result {
-        if glb_path.exists() {
-            warn!("KiCad CLI reported error but GLB file was created: {e}");
-        } else {
-            return Err(e).context("Failed to generate GLB model");
-        }
-    }
-
-    // Optimize GLB file with gltfpack
-    match gltfpack_sys::compress(&glb_path, &glb_path) {
-        Ok(()) => {
-            debug!("GLB file optimized successfully with gltfpack");
-        }
-        Err(code) => {
-            warn!("gltfpack failed with error code: {code}, skipping optimization");
-        }
-    }
-
-    Ok(())
-}
-
-/// Generate SVG rendering
-fn generate_svg_rendering(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    let models_dir = info.staging_dir.join("3d");
-    fs::create_dir_all(&models_dir)?;
-
-    let kicad_pcb_path = info
-        .staged_pcb_path()
-        .context("No layout directory for SVG rendering")?;
-
-    // Create a temp file to capture and discard verbose KiCad output
-    let devnull = tempfile::tempfile()?;
-
-    // Generate SVG rendering - KiCad CLI has platform-specific exit code issues
-    let svg_path = models_dir.join("model.svg");
-    let svg_result = KiCadCliBuilder::new()
-        .command("pcb")
-        .subcommand("export")
-        .subcommand("svg")
-        .arg("--output")
-        .arg(svg_path.to_string_lossy())
-        .arg("--layers")
-        .arg("F.Cu,B.Cu,F.SilkS,B.SilkS,F.Mask,B.Mask,Edge.Cuts")
-        .arg("--page-size-mode")
-        .arg("2") // Board area only
-        .arg(kicad_pcb_path.to_string_lossy())
-        .log_file(devnull)
-        .suppress_error_output(true)
-        .run();
-
-    if let Err(e) = svg_result {
-        if svg_path.exists() {
-            warn!("KiCad CLI reported error but SVG file was created: {e}");
-        } else {
-            return Err(e).context("Failed to generate SVG rendering");
         }
     }
 

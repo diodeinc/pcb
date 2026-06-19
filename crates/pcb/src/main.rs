@@ -839,7 +839,7 @@ fn http_client(timeout: Duration) -> Result<ureq::Agent> {
     Ok(ureq::Agent::config_builder()
         .tls_config(
             ureq::tls::TlsConfig::builder()
-                .provider(ureq::tls::TlsProvider::NativeTls)
+                .provider(ureq::tls::TlsProvider::Rustls)
                 .build(),
         )
         .timeout_global(Some(timeout))

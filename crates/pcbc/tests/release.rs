@@ -137,10 +137,6 @@ fn source_only_args(board_zen: &str) -> Vec<&str> {
         "step",
         "--exclude",
         "vrml",
-        "--exclude",
-        "glb",
-        "--exclude",
-        "svg",
     ]
 }
 
