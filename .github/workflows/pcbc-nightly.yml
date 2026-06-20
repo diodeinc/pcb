@@ -94,7 +94,11 @@ jobs:
             runner: macos-15-large
           - target: aarch64-unknown-linux-gnu
             runner: ubicloud-standard-16-arm
+          - target: aarch64-unknown-linux-musl
+            runner: ubicloud-standard-16-arm
           - target: x86_64-unknown-linux-gnu
+            runner: ubicloud-standard-16
+          - target: x86_64-unknown-linux-musl
             runner: ubicloud-standard-16
           - target: x86_64-pc-windows-msvc
             runner: diode-windows
@@ -117,8 +121,25 @@ jobs:
           toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
           target: ${{ matrix.target }}
 
+      - name: Install Linux musl build dependencies
+        if: contains(matrix.target, 'linux-musl')
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools musl-dev
+
       - name: Build
-        run: cargo build --profile dist -p pcbc --bin pcbc --target ${{ matrix.target }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" == *linux-musl ]]; then
+            export CC=musl-gcc
+            export RUSTFLAGS="-C linker=musl-gcc"
+            export CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
+          fi
+          cargo build --profile dist -p pcbc --bin pcbc --target "$TARGET"
 
       - name: Prepare artifacts
         shell: bash
