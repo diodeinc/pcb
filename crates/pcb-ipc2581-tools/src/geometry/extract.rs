@@ -106,6 +106,136 @@ enum PrimitivePaint {
     Void,
 }
 
+fn populate_ipc_specs(doc: &mut GeometryDocument, ipc: &Ipc2581) {
+    let Some(ecad) = ipc.ecad() else {
+        return;
+    };
+
+    doc.specs.clear();
+    doc.spec_items.clear();
+    doc.spec_properties.clear();
+
+    let mut specs = ecad.cad_header.specs.values().collect::<Vec<_>>();
+    specs.sort_by(|left, right| ipc.resolve(left.name).cmp(ipc.resolve(right.name)));
+
+    for spec in specs {
+        let item_start = doc.spec_items.len() as u32;
+        for item in &spec.items {
+            let property_start = doc.spec_properties.len() as u32;
+            doc.spec_properties
+                .extend(item.properties.iter().map(|property| IpcSpecProperty {
+                    value: property.value,
+                    text: property.text,
+                    unit: property.unit,
+                    plus_tol: property.plus_tol,
+                    minus_tol: property.minus_tol,
+                    tol_percent: property.tol_percent,
+                }));
+            doc.spec_items.push(IpcSpecItem {
+                element: item.element,
+                kind: map_spec_item_kind(item.kind),
+                item_type: item.item_type,
+                comment: item.comment,
+                property_start,
+                property_count: doc.spec_properties.len() as u32 - property_start,
+            });
+        }
+        doc.specs.push(IpcSpec {
+            name: spec.name,
+            item_start,
+            item_count: doc.spec_items.len() as u32 - item_start,
+        });
+    }
+}
+
+fn map_spec_item_kind(kind: ipc2581::types::ecad::SpecItemKind) -> IpcSpecItemKind {
+    match kind {
+        ipc2581::types::ecad::SpecItemKind::General => IpcSpecItemKind::General,
+        ipc2581::types::ecad::SpecItemKind::Dielectric => IpcSpecItemKind::Dielectric,
+        ipc2581::types::ecad::SpecItemKind::Conductor => IpcSpecItemKind::Conductor,
+        ipc2581::types::ecad::SpecItemKind::SurfaceFinish => IpcSpecItemKind::SurfaceFinish,
+        ipc2581::types::ecad::SpecItemKind::VCut => IpcSpecItemKind::VCut,
+        ipc2581::types::ecad::SpecItemKind::Other => IpcSpecItemKind::Other,
+    }
+}
+
+fn push_spec_refs(doc: &mut GeometryDocument, spec_refs: &[Symbol]) -> (u32, u32) {
+    let start = doc.spec_refs.len() as u32;
+    doc.spec_refs
+        .extend(spec_refs.iter().copied().map(|spec| IpcSpecRef { spec }));
+    (start, doc.spec_refs.len() as u32 - start)
+}
+
+fn push_feature_set_record(
+    doc: &mut GeometryDocument,
+    layer: u32,
+    source_set_index: u32,
+    set: &ipc2581::types::FeatureSet,
+    polarity: GeometryPolarity,
+) -> u32 {
+    let (spec_ref_start, spec_ref_count) = push_spec_refs(doc, &set.spec_refs);
+    let set_id = doc.feature_sets.len() as u32;
+    doc.feature_sets.push(GeometryFeatureSet {
+        layer,
+        source_set_index,
+        net: set.net,
+        polarity,
+        spec_ref_start,
+        spec_ref_count,
+        feature_start: doc.features.len() as u32,
+        feature_count: 0,
+        bbox: BBox::empty(),
+    });
+    set_id
+}
+
+fn push_extracted_feature(
+    doc: &mut GeometryDocument,
+    set_id: u32,
+    source_layer_ref: Symbol,
+    mut feature: GeometryFeature,
+    layer_bbox: &mut BBox,
+) {
+    feature.source_layer_ref = Some(source_layer_ref);
+    feature.set = Some(set_id);
+    let bbox = feature.bbox;
+    *layer_bbox = layer_bbox.union(bbox);
+    let set = &mut doc.feature_sets[set_id as usize];
+    set.bbox = set.bbox.union(bbox);
+    set.feature_count += 1;
+    doc.features.push(feature);
+}
+
+fn semantic_for_feature(
+    layer_function: LayerFunction,
+    feature: &GeometryFeature,
+) -> FeatureSemantic {
+    if matches!(feature.semantic, FeatureSemantic::Fiducial(_)) {
+        return feature.semantic;
+    }
+
+    match layer_function {
+        LayerFunction::VCut => FeatureSemantic::VCut,
+        LayerFunction::Score => FeatureSemantic::Score,
+        LayerFunction::Rout => FeatureSemantic::Route,
+        LayerFunction::BoardOutline => FeatureSemantic::BoardOutline,
+        _ => semantic_for_bucket(feature.bucket),
+    }
+}
+
+fn semantic_for_bucket(bucket: FeatureBucket) -> FeatureSemantic {
+    match bucket {
+        FeatureBucket::Smd => FeatureSemantic::SmdPad,
+        FeatureBucket::Pth => FeatureSemantic::ComponentPad,
+        FeatureBucket::Via => FeatureSemantic::ViaPad,
+        FeatureBucket::Trace | FeatureBucket::Fill => FeatureSemantic::CopperConductor,
+        FeatureBucket::Fiducial
+        | FeatureBucket::Cutout
+        | FeatureBucket::Thermal
+        | FeatureBucket::Antipad => FeatureSemantic::Other,
+    }
+}
+
 pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
     extract_layer_with_options(ipc, layer_name, &LayerExtractionOptions::default())
 }
@@ -153,6 +283,7 @@ pub fn extract_layer_for_layout_target(
             append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
         }
     }
+    populate_ipc_specs(&mut doc, ipc);
     pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
 }
@@ -190,6 +321,7 @@ pub fn extract_layer_with_options(
             append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
         }
     }
+    populate_ipc_specs(&mut doc, ipc);
     pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
 }
@@ -261,6 +393,7 @@ pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
         .context("IPC-2581 ECAD section has no Step")?;
     let mut doc = GeometryDocument::new();
     append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?;
+    populate_ipc_specs(&mut doc, ipc);
     pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
 }
@@ -275,6 +408,7 @@ fn extract_panel_layer(
 ) -> Result<GeometryDocument> {
     let mut doc = GeometryDocument::new();
     let feature_start = doc.features.len() as u32;
+    let set_start = doc.feature_sets.len() as u32;
     let mut layer_bbox = BBox::empty();
     let mut append_state = LayerAppendState::default();
 
@@ -315,10 +449,16 @@ fn extract_panel_layer(
     }
 
     let feature_count = doc.features.len() as u32 - feature_start;
+    let set_count = doc.feature_sets.len() as u32 - set_start;
+    let (spec_ref_start, spec_ref_count) = push_spec_refs(&mut doc, &layer.spec_refs);
     doc.layers.push(GeometryLayer {
         name: layer_name.to_string(),
         source_layer_ref: layer.name,
         layer_function: layer.layer_function,
+        spec_ref_start,
+        spec_ref_count,
+        set_start,
+        set_count,
         feature_start,
         feature_count,
         bbox: layer_bbox,
@@ -364,6 +504,22 @@ fn extract_step_layer(
 
     let mut doc = GeometryDocument::new();
     let feature_start = doc.features.len() as u32;
+    let set_start = doc.feature_sets.len() as u32;
+    let (spec_ref_start, spec_ref_count) = push_spec_refs(&mut doc, &layer.spec_refs);
+    let layer_index = doc.layers.len() as u32;
+    doc.layers.push(GeometryLayer {
+        name: layer_name.to_string(),
+        source_layer_ref: layer.name,
+        layer_function: layer.layer_function,
+        spec_ref_start,
+        spec_ref_count,
+        set_start,
+        set_count: 0,
+        feature_start,
+        feature_count: 0,
+        bbox: BBox::empty(),
+    });
+
     let mut layer_bbox = BBox::empty();
     let layer_polarity = map_polarity(layer.polarity.unwrap_or(Polarity::Positive));
 
@@ -374,6 +530,8 @@ fn extract_step_layer(
     {
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
+            let set_id =
+                push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
 
             for (feature_index, set_feature) in set.features.iter().enumerate() {
                 let source = SourceRef {
@@ -384,6 +542,9 @@ fn extract_step_layer(
                     SetFeature::Pad(pad) => extract_pad(
                         &context, layer.name, set.net, polarity, source, pad, &mut doc,
                     )?,
+                    SetFeature::Fiducial(fiducial) => {
+                        extract_fiducial(&context, set.net, polarity, source, fiducial, &mut doc)?
+                    }
                     SetFeature::Trace(trace) => {
                         extract_trace(&context, set.net, polarity, source, trace, &mut doc)
                     }
@@ -421,9 +582,14 @@ fn extract_step_layer(
                 };
 
                 if let Some(mut feature) = feature {
-                    feature.source_layer_ref = Some(layer_feature.layer_ref);
-                    layer_bbox = layer_bbox.union(feature.bbox);
-                    doc.features.push(feature);
+                    feature.semantic = semantic_for_feature(layer.layer_function, &feature);
+                    push_extracted_feature(
+                        &mut doc,
+                        set_id,
+                        layer_feature.layer_ref,
+                        feature,
+                        &mut layer_bbox,
+                    );
                 }
             }
         }
@@ -437,13 +603,16 @@ fn extract_step_layer(
             continue;
         };
         let is_drill_layer = source_layer.layer_function == LayerFunction::Drill;
-        let is_routing_layer = source_layer.layer_function == LayerFunction::Rout;
+        let is_fabrication_layer = source_layer.layer_function.is_fabrication();
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
+            let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
+            let mut emitted = Vec::new();
+
             if is_drill_layer && layer_span_applies_to_layer(source_layer, layer, layers) {
                 for (feature_index, set_feature) in set.features.iter().enumerate() {
                     if let SetFeature::Hole(hole) = set_feature {
-                        let mut feature = extract_hole(
+                        let feature = extract_hole(
                             SourceRef {
                                 set_index: set_index as u32,
                                 feature_index: feature_index as u32,
@@ -451,19 +620,17 @@ fn extract_step_layer(
                             hole,
                             &mut doc,
                         );
-                        feature.source_layer_ref = Some(layer_feature.layer_ref);
-                        layer_bbox = layer_bbox.union(feature.bbox);
-                        doc.features.push(feature);
+                        emitted.push(feature);
                     }
                 }
             }
 
-            if is_drill_layer || is_routing_layer {
+            if is_fabrication_layer {
                 for (feature_index, set_feature) in set.features.iter().enumerate() {
                     if let SetFeature::Slot(slot) = set_feature
                         && slot_applies_to_layer(source_layer, layer, layers, slot)
                     {
-                        let mut feature = extract_slot(
+                        let feature = extract_slot(
                             &context,
                             SourceRef {
                                 set_index: set_index as u32,
@@ -472,24 +639,32 @@ fn extract_step_layer(
                             slot,
                             &mut doc,
                         )?;
-                        feature.source_layer_ref = Some(layer_feature.layer_ref);
-                        layer_bbox = layer_bbox.union(feature.bbox);
-                        doc.features.push(feature);
+                        emitted.push(feature);
                     }
+                }
+            }
+
+            if !emitted.is_empty() {
+                let set_id =
+                    push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
+                for mut feature in emitted {
+                    feature.semantic = semantic_for_feature(source_layer.layer_function, &feature);
+                    push_extracted_feature(
+                        &mut doc,
+                        set_id,
+                        layer_feature.layer_ref,
+                        feature,
+                        &mut layer_bbox,
+                    );
                 }
             }
         }
     }
 
-    let feature_count = doc.features.len() as u32 - feature_start;
-    doc.layers.push(GeometryLayer {
-        name: layer_name.to_string(),
-        source_layer_ref: layer.name,
-        layer_function: layer.layer_function,
-        feature_start,
-        feature_count,
-        bbox: layer_bbox,
-    });
+    let layer = &mut doc.layers[layer_index as usize];
+    layer.feature_count = doc.features.len() as u32 - feature_start;
+    layer.set_count = doc.feature_sets.len() as u32 - set_start;
+    layer.bbox = layer_bbox;
 
     Ok(doc)
 }
@@ -534,23 +709,16 @@ impl LayerAppendState {
 fn source_layer_set_span(source: &GeometryDocument, layer_index: usize) -> Result<u32> {
     let layer = &source.layers[layer_index];
     let mut span = 0;
-    for feature in source_layer_features(source, layer) {
-        let set_end = feature
-            .source
-            .set_index
+    for set in
+        &source.feature_sets[layer.set_start as usize..(layer.set_start + layer.set_count) as usize]
+    {
+        let set_end = set
+            .source_set_index
             .checked_add(1)
             .context("Source feature set index overflow")?;
         span = span.max(set_end);
     }
     Ok(span)
-}
-
-fn source_layer_features<'a>(
-    source: &'a GeometryDocument,
-    layer: &GeometryLayer,
-) -> &'a [GeometryFeature] {
-    &source.features
-        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
 }
 
 fn append_transformed_layer(
@@ -563,29 +731,71 @@ fn append_transformed_layer(
     let layer = &source.layers[layer_index];
     let mut layer_bbox = BBox::empty();
 
-    for feature in source_layer_features(source, layer) {
-        let path_start = target.paths.len() as u32;
-        for path in &source.paths
-            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
-        {
-            append_transformed_path(target, source, path, transform);
-        }
-        let path_count = target.paths.len() as u32 - path_start;
-        let bbox = paths_bbox(target, path_start, path_count);
+    for source_set_index in layer.set_start..layer.set_start + layer.set_count {
+        let source_set = &source.feature_sets[source_set_index as usize];
+        let spec_ref_start = target.spec_refs.len() as u32;
+        target.spec_refs.extend(
+            source.spec_refs[source_set.spec_ref_start as usize
+                ..(source_set.spec_ref_start + source_set.spec_ref_count) as usize]
+                .iter()
+                .cloned(),
+        );
+        let target_set = target.feature_sets.len() as u32;
+        target.feature_sets.push(GeometryFeatureSet {
+            layer: 0,
+            source_set_index: source_set
+                .source_set_index
+                .checked_add(source_set_offset)
+                .context("Panel source feature set index overflow")?,
+            net: source_set.net,
+            polarity: source_set.polarity,
+            spec_ref_start,
+            spec_ref_count: target.spec_refs.len() as u32 - spec_ref_start,
+            feature_start: target.features.len() as u32,
+            feature_count: 0,
+            bbox: BBox::empty(),
+        });
 
-        let mut feature = feature.clone();
-        feature.transform = transform.concat(feature.transform);
-        feature.bbox = bbox;
-        feature.path_start = path_start;
-        feature.path_count = path_count;
-        feature.center = transform.transform_point(feature.center);
-        feature.source.set_index = feature
-            .source
-            .set_index
-            .checked_add(source_set_offset)
-            .context("Panel source feature set index overflow")?;
-        target.features.push(feature);
-        layer_bbox = layer_bbox.union(bbox);
+        for feature in &source.features[source_set.feature_start as usize
+            ..(source_set.feature_start + source_set.feature_count) as usize]
+        {
+            let path_start = target.paths.len() as u32;
+            for path in &source.paths
+                [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+            {
+                append_transformed_path(target, source, path, transform);
+            }
+            let path_count = target.paths.len() as u32 - path_start;
+            let bbox = paths_bbox(target, path_start, path_count);
+
+            let mut feature = feature.clone();
+            feature.transform = transform.concat(feature.transform);
+            feature.bbox = bbox;
+            feature.path_start = path_start;
+            feature.path_count = path_count;
+            feature.center = transform.transform_point(feature.center);
+            feature.set = Some(target_set);
+            feature.source.set_index = feature
+                .source
+                .set_index
+                .checked_add(source_set_offset)
+                .context("Panel source feature set index overflow")?;
+            if feature.pin_ref_count > 0 {
+                let pin_ref_start = target.pin_refs.len() as u32;
+                target.pin_refs.extend(
+                    source.pin_refs[feature.pin_ref_start as usize
+                        ..(feature.pin_ref_start + feature.pin_ref_count) as usize]
+                        .iter()
+                        .cloned(),
+                );
+                feature.pin_ref_start = pin_ref_start;
+            }
+            target.features.push(feature);
+            let target_set_record = &mut target.feature_sets[target_set as usize];
+            target_set_record.feature_count += 1;
+            target_set_record.bbox = target_set_record.bbox.union(bbox);
+            layer_bbox = layer_bbox.union(bbox);
+        }
     }
 
     Ok(layer_bbox)
@@ -1152,6 +1362,101 @@ fn extract_feature_primitive(
     feature.path_count = path_count;
     feature.flags.lowered_to_paths = true;
     Ok(Some(feature))
+}
+
+fn extract_fiducial(
+    context: &ExtractContext<'_>,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    fiducial: &ipc2581::types::ecad::Fiducial,
+    doc: &mut GeometryDocument,
+) -> Result<Option<GeometryFeature>> {
+    let xform = fiducial.xform.unwrap_or_default();
+    let offset = Affine2::transform_vector(
+        xform.rotation,
+        xform.mirror,
+        xform.scale,
+        Point::new(xform.x_offset, xform.y_offset),
+    );
+    let center = Point::new(
+        fiducial.location.x + offset.x,
+        fiducial.location.y + offset.y,
+    );
+    let transform = Affine2::placement(center, xform.rotation, xform.mirror, xform.scale);
+
+    let path_start = doc.paths.len() as u32;
+    let (paint, primitive_ref) = match &fiducial.shape {
+        ipc2581::types::ecad::FiducialShape::Primitive(primitive) => (
+            lower_standard_primitive(context, doc, primitive, transform, FeatureBucket::Fiducial)?,
+            None,
+        ),
+        ipc2581::types::ecad::FiducialShape::StandardPrimitiveRef(primitive_ref) => {
+            let Some(primitive) = context.standard_primitives.get(primitive_ref).copied() else {
+                doc.warn(format!(
+                    "Skipping fiducial because standard primitive '{}' is missing",
+                    context.ipc.resolve(*primitive_ref)
+                ));
+                return Ok(None);
+            };
+            (
+                lower_standard_primitive(
+                    context,
+                    doc,
+                    primitive,
+                    transform,
+                    FeatureBucket::Fiducial,
+                )?,
+                Some(*primitive_ref),
+            )
+        }
+    };
+
+    let path_count = doc.paths.len() as u32 - path_start;
+    if path_count == 0 {
+        return Ok(None);
+    }
+
+    let mut feature = GeometryFeature::new(
+        FeatureKind::Primitive,
+        FeatureBucket::Fiducial,
+        if paint == PrimitivePaint::Void {
+            GeometryPolarity::Negative
+        } else {
+            polarity
+        },
+    );
+    feature.net = net;
+    feature.source = source;
+    feature.semantic = FeatureSemantic::Fiducial(map_fiducial_kind(fiducial.kind));
+    feature.transform = transform;
+    feature.bbox = paths_bbox(doc, path_start, path_count);
+    feature.path_start = path_start;
+    feature.path_count = path_count;
+    feature.center = center;
+    feature.rotation_degrees = xform.rotation;
+    feature.scale = xform.scale;
+    feature.primitive_ref = primitive_ref;
+    feature.flags.lowered_to_paths = true;
+    if let Some(pin_ref) = &fiducial.pin_ref {
+        feature.pin_ref_start = doc.pin_refs.len() as u32;
+        doc.pin_refs.push(IpcPinRef {
+            component_ref: pin_ref.component_ref,
+            pin: pin_ref.pin,
+            title: pin_ref.title,
+        });
+        feature.pin_ref_count = 1;
+    }
+    Ok(Some(feature))
+}
+
+fn map_fiducial_kind(kind: ipc2581::types::ecad::FiducialKind) -> FiducialKind {
+    match kind {
+        ipc2581::types::ecad::FiducialKind::BadBoardMark => FiducialKind::BadBoard,
+        ipc2581::types::ecad::FiducialKind::Global => FiducialKind::Global,
+        ipc2581::types::ecad::FiducialKind::GoodPanelMark => FiducialKind::GoodPanel,
+        ipc2581::types::ecad::FiducialKind::Local => FiducialKind::Local,
+    }
 }
 
 fn extract_trace(
@@ -2545,6 +2850,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn carries_spec_refs_fiducials_and_vcut_semantics() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="Panel"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="VCUT"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER">
+      <Spec name="VCut_1">
+        <V_Cut type="ANGLE">
+          <Property value="90" unit="DEGREES"/>
+        </V_Cut>
+      </Spec>
+    </CadHeader>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE">
+        <SpecRef id="VCut_1"/>
+      </Layer>
+      <Layer name="VCUT" layerFunction="V_CUT" side="ALL" polarity="POSITIVE">
+        <SpecRef id="VCut_1"/>
+      </Layer>
+      <Step name="Panel" type="PALLET">
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <SpecRef id="VCut_1"/>
+            <GlobalFiducial>
+              <Location x="1" y="2"/>
+              <Circle diameter="1"/>
+              <PinRef componentRef="U1" pin="1"/>
+            </GlobalFiducial>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="VCUT">
+          <Set>
+            <SpecRef id="VCut_1"/>
+            <Features>
+              <Line startX="0" startY="5" endX="10" endY="5">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let top = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::Panel).unwrap();
+        assert_eq!(top.specs.len(), 1);
+        assert_eq!(top.layers[0].spec_ref_count, 1);
+        assert_eq!(top.feature_sets.len(), 1);
+        assert_eq!(top.feature_sets[0].spec_ref_count, 1);
+        assert_eq!(top.features[0].bucket, FeatureBucket::Fiducial);
+        assert_eq!(
+            top.features[0].semantic,
+            FeatureSemantic::Fiducial(FiducialKind::Global)
+        );
+        assert_eq!(top.features[0].pin_ref_count, 1);
+        assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
+
+        let vcut = extract_layer_for_layout_target(&ipc, "VCUT", LayoutTarget::Panel).unwrap();
+        assert_eq!(vcut.layers[0].spec_ref_count, 1);
+        assert_eq!(vcut.feature_sets[0].spec_ref_count, 1);
+        assert_eq!(vcut.features[0].semantic, FeatureSemantic::VCut);
+    }
+
+    #[test]
     fn lowers_moire_as_rings_and_crosshair() {
         let mut doc = GeometryDocument::new();
 
@@ -3162,6 +3540,7 @@ mod tests {
             side: None,
             polarity: None,
             span,
+            spec_refs: Vec::new(),
             profile: None,
         }
     }

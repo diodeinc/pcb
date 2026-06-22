@@ -8,7 +8,13 @@ pub struct GeometryDocument<Symbol, LayerFunction> {
     pub layers: Vec<GeometryLayer<Symbol, LayerFunction>>,
     pub profiles: Vec<StepProfile>,
     pub profile_cutouts: Vec<StepProfileCutout>,
+    pub specs: Vec<IpcSpec<Symbol>>,
+    pub spec_items: Vec<IpcSpecItem<Symbol>>,
+    pub spec_properties: Vec<IpcSpecProperty<Symbol>>,
+    pub spec_refs: Vec<IpcSpecRef<Symbol>>,
+    pub feature_sets: Vec<GeometryFeatureSet<Symbol>>,
     pub features: Vec<GeometryFeature<Symbol>>,
+    pub pin_refs: Vec<IpcPinRef<Symbol>>,
     pub paths: Vec<GeometryPath>,
     pub contours: Vec<GeometryContour>,
     pub path_cmds: Vec<PathCmd>,
@@ -90,7 +96,13 @@ impl<Symbol, LayerFunction> Default for GeometryDocument<Symbol, LayerFunction> 
             layers: Vec::new(),
             profiles: Vec::new(),
             profile_cutouts: Vec::new(),
+            specs: Vec::new(),
+            spec_items: Vec::new(),
+            spec_properties: Vec::new(),
+            spec_refs: Vec::new(),
+            feature_sets: Vec::new(),
             features: Vec::new(),
+            pin_refs: Vec::new(),
             paths: Vec::new(),
             contours: Vec::new(),
             path_cmds: Vec::new(),
@@ -743,10 +755,69 @@ pub struct StepProfileCutout {
 }
 
 #[derive(Debug, Clone)]
+pub struct IpcSpec<Symbol> {
+    pub name: Symbol,
+    pub item_start: u32,
+    pub item_count: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcSpecItem<Symbol> {
+    pub element: Symbol,
+    pub kind: IpcSpecItemKind,
+    pub item_type: Option<Symbol>,
+    pub comment: Option<Symbol>,
+    pub property_start: u32,
+    pub property_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpcSpecItemKind {
+    General,
+    Dielectric,
+    Conductor,
+    SurfaceFinish,
+    VCut,
+    Other,
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcSpecProperty<Symbol> {
+    pub value: Option<f64>,
+    pub text: Option<Symbol>,
+    pub unit: Option<Symbol>,
+    pub plus_tol: Option<f64>,
+    pub minus_tol: Option<f64>,
+    pub tol_percent: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcSpecRef<Symbol> {
+    pub spec: Symbol,
+}
+
+#[derive(Debug, Clone)]
+pub struct GeometryFeatureSet<Symbol> {
+    pub layer: u32,
+    pub source_set_index: u32,
+    pub net: Option<Symbol>,
+    pub polarity: GeometryPolarity,
+    pub spec_ref_start: u32,
+    pub spec_ref_count: u32,
+    pub feature_start: u32,
+    pub feature_count: u32,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone)]
 pub struct GeometryLayer<Symbol, LayerFunction> {
     pub name: String,
     pub source_layer_ref: Symbol,
     pub layer_function: LayerFunction,
+    pub spec_ref_start: u32,
+    pub spec_ref_count: u32,
+    pub set_start: u32,
+    pub set_count: u32,
     pub feature_start: u32,
     pub feature_count: u32,
     pub bbox: BBox,
@@ -759,7 +830,9 @@ pub struct GeometryFeature<Symbol> {
     pub polarity: GeometryPolarity,
     pub net: Option<Symbol>,
     pub source_layer_ref: Option<Symbol>,
+    pub set: Option<u32>,
     pub source: SourceRef,
+    pub semantic: FeatureSemantic,
     pub transform: Affine2,
     pub bbox: BBox,
     pub path_start: u32,
@@ -779,6 +852,8 @@ pub struct GeometryFeature<Symbol> {
     pub fill_rule: FillRule,
     pub padstack_ref: Option<Symbol>,
     pub primitive_ref: Option<Symbol>,
+    pub pin_ref_start: u32,
+    pub pin_ref_count: u32,
     pub flags: FeatureFlags,
 }
 
@@ -790,7 +865,9 @@ impl<Symbol> GeometryFeature<Symbol> {
             polarity,
             net: None,
             source_layer_ref: None,
+            set: None,
             source: SourceRef::default(),
+            semantic: FeatureSemantic::None,
             transform: Affine2::identity(),
             bbox: BBox::empty(),
             path_start: 0,
@@ -808,9 +885,18 @@ impl<Symbol> GeometryFeature<Symbol> {
             fill_rule: FillRule::NonZero,
             padstack_ref: None,
             primitive_ref: None,
+            pin_ref_start: 0,
+            pin_ref_count: 0,
             flags: FeatureFlags::default(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcPinRef<Symbol> {
+    pub component_ref: Option<Symbol>,
+    pub pin: Symbol,
+    pub title: Option<Symbol>,
 }
 
 #[derive(Debug, Clone)]
@@ -891,11 +977,36 @@ pub enum FeatureBucket {
     Smd,
     Pth,
     Via,
+    Fiducial,
     Trace,
     Fill,
     Cutout,
     Thermal,
     Antipad,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureSemantic {
+    None,
+    CopperConductor,
+    SmdPad,
+    ComponentPad,
+    ViaPad,
+    Fiducial(FiducialKind),
+    VCut,
+    Score,
+    Route,
+    BoardOutline,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FiducialKind {
+    Local,
+    Global,
+    Panel,
+    BadBoard,
+    GoodPanel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

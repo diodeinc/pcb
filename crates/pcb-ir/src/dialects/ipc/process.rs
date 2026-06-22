@@ -190,6 +190,10 @@ pub fn normalize_bounds<S, L>(doc: &mut GeometryDocument<S, L>) {
         doc.features[feature_index].bbox = feature_bbox(doc, feature_index);
     }
 
+    for set_index in 0..doc.feature_sets.len() {
+        doc.feature_sets[set_index].bbox = feature_set_bbox(doc, set_index);
+    }
+
     for layer_index in 0..doc.layers.len() {
         doc.layers[layer_index].bbox = layer_bbox(doc, layer_index);
     }
@@ -230,6 +234,31 @@ fn layout_step_repeats_bbox<S, L>(doc: &GeometryDocument<S, L>, step_index: u32)
         .fold(BBox::empty(), BBox::union)
 }
 
+fn feature_set_bbox<S, L>(doc: &GeometryDocument<S, L>, set_index: usize) -> BBox {
+    let set_id = set_index as u32;
+    let linked_bbox = doc
+        .features
+        .iter()
+        .filter(|feature| feature.set == Some(set_id))
+        .map(|feature| feature.bbox)
+        .fold(BBox::empty(), BBox::union);
+    if !linked_bbox.is_empty() {
+        return linked_bbox;
+    }
+
+    let set = &doc.feature_sets[set_index];
+    let start = set.feature_start as usize;
+    let end = (set.feature_start + set.feature_count).min(doc.features.len() as u32) as usize;
+    if start >= end {
+        return BBox::empty();
+    }
+
+    doc.features[start..end]
+        .iter()
+        .map(|feature| feature.bbox)
+        .fold(BBox::empty(), BBox::union)
+}
+
 pub fn compose_feature_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
@@ -262,7 +291,7 @@ pub fn outline_stroked_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
         let feature = doc.features[feature_index].clone();
-        if feature.bucket != FeatureBucket::Trace {
+        if !is_copper_trace_feature(&feature) {
             continue;
         }
 
@@ -297,7 +326,7 @@ pub fn union_feature_filled_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>)
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
         let feature = doc.features[feature_index].clone();
-        if feature.bucket != FeatureBucket::Trace {
+        if !is_copper_trace_feature(&feature) {
             continue;
         }
 
@@ -343,9 +372,7 @@ where
         for feature_index in layer.feature_start..layer.feature_start + layer.feature_count {
             let feature_index = feature_index as usize;
             let feature = &doc.features[feature_index];
-            if feature.bucket != FeatureBucket::Trace
-                || feature.polarity != GeometryPolarity::Positive
-            {
+            if !is_copper_trace_feature(feature) || feature.polarity != GeometryPolarity::Positive {
                 continue;
             }
 
@@ -403,6 +430,14 @@ where
             }
         }
     }
+}
+
+fn is_copper_trace_feature<S>(feature: &GeometryFeature<S>) -> bool {
+    feature.bucket == FeatureBucket::Trace
+        && matches!(
+            feature.semantic,
+            FeatureSemantic::None | FeatureSemantic::CopperConductor
+        )
 }
 
 pub fn resolve_set_voids<S: Clone, L: Clone>(doc: &mut GeometryDocument<S, L>) {
@@ -768,6 +803,10 @@ mod tests {
             name: "TOP".to_string(),
             source_layer_ref: 0,
             layer_function: (),
+            spec_ref_start: 0,
+            spec_ref_count: 0,
+            set_start: 0,
+            set_count: 0,
             feature_start: 0,
             feature_count: 1,
             bbox: BBox::empty(),
@@ -1032,6 +1071,10 @@ mod tests {
             name: "F.Cu".to_string(),
             source_layer_ref: 100,
             layer_function: (),
+            spec_ref_start: 0,
+            spec_ref_count: 0,
+            set_start: 0,
+            set_count: 0,
             feature_start,
             feature_count,
             bbox: BBox::empty(),
