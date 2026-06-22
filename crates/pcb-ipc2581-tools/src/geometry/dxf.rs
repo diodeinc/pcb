@@ -1,7 +1,10 @@
 use std::fmt::Write;
 
 use pcb_ir::common::Point;
-use pcb_ir::dialects::ipc::{GeometryDocument, PathCmd, PathOp, render_profiles};
+use pcb_ir::dialects::ipc::{
+    GeometryDocument, PathCmd, PathOp, ProfileSet, profile_occurrences_for,
+    transformed_path_payloads,
+};
 
 const OUTLINE_LAYER: &str = "BOARD_OUTLINE";
 const EPSILON: f64 = 1e-9;
@@ -13,20 +16,25 @@ struct DxfVertex {
     bulge: f64,
 }
 
-/// Render physical IPC profile geometry as an ASCII DXF outline in millimeters.
-pub fn render_profiles_dxf<Symbol, LayerFunction>(
+pub fn render_profile_set_dxf<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
+    profile_set: ProfileSet,
 ) -> String {
     let mut dxf = String::new();
     write_header(&mut dxf);
     write_tables(&mut dxf);
     write_entities_start(&mut dxf);
-    for profile in render_profiles(doc) {
-        write_path(&mut dxf, doc, profile.outer_path);
-        for cutout in &doc.profile_cutouts
-            [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
+    for occurrence in profile_occurrences_for(doc, profile_set) {
+        write_path(
+            &mut dxf,
+            doc,
+            occurrence.profile.outer_path,
+            occurrence.transform,
+        );
+        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
+            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
         {
-            write_path(&mut dxf, doc, cutout.path);
+            write_path(&mut dxf, doc, cutout.path, occurrence.transform);
         }
     }
     write_footer(&mut dxf);
@@ -59,14 +67,10 @@ fn write_path<Symbol, LayerFunction>(
     dxf: &mut String,
     doc: &GeometryDocument<Symbol, LayerFunction>,
     path_index: u32,
+    transform: pcb_ir::common::Affine2,
 ) {
-    let path = &doc.paths[path_index as usize];
-    for contour in &doc.contours
-        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
-    {
-        let cmds = &doc.path_cmds
-            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
-        write_polyline(dxf, &contour_vertices(cmds));
+    for payload in transformed_path_payloads(doc, path_index, transform) {
+        write_polyline(dxf, &contour_vertices(&payload.cmds));
     }
 }
 
@@ -234,7 +238,7 @@ mod tests {
     fn renders_profile_ir_as_mm_dxf_with_closed_outline_layer() {
         let doc = rect_profile_doc();
 
-        let dxf = render_profiles_dxf(&doc);
+        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines);
 
         assert!(dxf.contains("9\n$INSUNITS\n70\n4\n"));
         assert!(dxf.contains("2\nBOARD_OUTLINE\n"));
@@ -262,7 +266,7 @@ mod tests {
             bbox: BBox::empty(),
         });
 
-        let dxf = render_profiles_dxf(&doc);
+        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines);
 
         assert!(dxf.contains("42\n1\n"));
     }

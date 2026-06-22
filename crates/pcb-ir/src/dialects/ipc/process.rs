@@ -155,10 +155,12 @@ pub fn normalize_bounds<S, L>(doc: &mut GeometryDocument<S, L>) {
     }
 
     for instance_index in 0..doc.layout.instances.len() {
-        let profile_start = doc.layout.instances[instance_index].profile_start;
-        let profile_count = doc.layout.instances[instance_index].profile_count;
+        let step_index = doc.layout.instances[instance_index].child_step;
+        let profile_start = doc.layout.steps[step_index as usize].profile_start;
+        let profile_count = doc.layout.steps[step_index as usize].profile_count;
+        let transform = doc.layout.instances[instance_index].transform;
         doc.layout.instances[instance_index].bbox =
-            profiles_range_bbox(doc, profile_start, profile_count);
+            transformed_profiles_range_bbox(doc, profile_start, profile_count, transform);
     }
 
     for repeat_index in (0..doc.layout.repeats.len()).rev() {
@@ -197,6 +199,18 @@ fn profiles_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, count: u3
     doc.profiles[start as usize..(start + count) as usize]
         .iter()
         .map(|profile| profile.bbox)
+        .fold(BBox::empty(), BBox::union)
+}
+
+fn transformed_profiles_range_bbox<S, L>(
+    doc: &GeometryDocument<S, L>,
+    start: u32,
+    count: u32,
+    transform: Affine2,
+) -> BBox {
+    doc.profiles[start as usize..(start + count) as usize]
+        .iter()
+        .map(|profile| transformed_path_bbox(doc, profile.outer_path, transform))
         .fold(BBox::empty(), BBox::union)
 }
 

@@ -73,7 +73,6 @@ struct LayoutInstanceSpec {
     repeat_count_y: u32,
     repeat_pitch_x: f64,
     repeat_pitch_y: f64,
-    profiles: ProfileRange,
 }
 
 struct ExtractContext<'a> {
@@ -501,7 +500,7 @@ fn append_layout_geometry(
 
 fn append_step_only_layout_geometry(doc: &mut GeometryDocument, primary_step: &Step) {
     if is_panel_step(primary_step) {
-        let profiles = append_step_profile(doc, primary_step, Affine2::identity());
+        let profiles = append_step_profile(doc, primary_step);
         let step = push_or_update_layout_step(doc, primary_step, profiles);
         doc.layout.root_step = Some(step);
     } else if is_board_step(primary_step) {
@@ -515,7 +514,7 @@ fn append_panel_geometry(
     steps: &[Step],
     panel_step: &Step,
 ) -> Result<()> {
-    let panel_profiles = append_step_profile(doc, panel_step, Affine2::identity());
+    let panel_profiles = append_step_profile(doc, panel_step);
     let root_layout_step = push_or_update_layout_step(doc, panel_step, panel_profiles);
     doc.layout.root_step = Some(root_layout_step);
     let context = LayoutBuildContext { ipc, steps };
@@ -572,7 +571,6 @@ fn append_layout_repeats(
                 let transform = parent
                     .transform
                     .concat(step_repeat_transform(repeat, ix, iy));
-                let profiles = append_step_profile(doc, source_step, transform);
                 let layout_instance = push_layout_instance(
                     doc,
                     LayoutInstanceSpec {
@@ -588,7 +586,6 @@ fn append_layout_repeats(
                         repeat_count_y: repeat.ny,
                         repeat_pitch_x: repeat.dx,
                         repeat_pitch_y: repeat.dy,
-                        profiles,
                     },
                 );
                 if is_panel_step(source_step) {
@@ -627,7 +624,7 @@ fn ensure_layout_step_for_step(doc: &mut GeometryDocument, step: &Step) -> u32 {
         return index as u32;
     }
 
-    let profiles = append_step_profile(doc, step, Affine2::identity());
+    let profiles = append_step_profile(doc, step);
     push_or_update_layout_step(doc, step, profiles)
 }
 
@@ -717,9 +714,7 @@ fn push_layout_instance(doc: &mut GeometryDocument, spec: LayoutInstanceSpec) ->
         repeat_count_y: spec.repeat_count_y,
         repeat_pitch_x: spec.repeat_pitch_x,
         repeat_pitch_y: spec.repeat_pitch_y,
-        profile_start: spec.profiles.start,
-        profile_count: spec.profiles.count,
-        bbox: spec.profiles.bbox,
+        bbox: BBox::empty(),
     });
     instance_index
 }
@@ -1209,11 +1204,7 @@ fn extract_polygon(
     feature
 }
 
-fn append_step_profile(
-    doc: &mut GeometryDocument,
-    step: &Step,
-    transform: Affine2,
-) -> ProfileRange {
+fn append_step_profile(doc: &mut GeometryDocument, step: &Step) -> ProfileRange {
     let start = doc.profiles.len() as u32;
     let Some(profile) = &step.profile else {
         return ProfileRange {
@@ -1223,10 +1214,10 @@ fn append_step_profile(
         };
     };
 
-    let outer_path = push_profile_polygon(doc, &profile.polygon, transform);
+    let outer_path = push_profile_polygon(doc, &profile.polygon);
     let cutout_start = doc.profile_cutouts.len() as u32;
     for cutout in &profile.cutouts {
-        let path = push_profile_polygon(doc, cutout, transform);
+        let path = push_profile_polygon(doc, cutout);
         doc.profile_cutouts.push(StepProfileCutout {
             path,
             bbox: doc.paths[path as usize].bbox,
@@ -1247,12 +1238,8 @@ fn append_step_profile(
     }
 }
 
-fn push_profile_polygon(
-    doc: &mut GeometryDocument,
-    polygon: &ipc2581::types::Polygon,
-    transform: Affine2,
-) -> u32 {
-    let (bbox, cmds) = polygon_contour(polygon, transform);
+fn push_profile_polygon(doc: &mut GeometryDocument, polygon: &ipc2581::types::Polygon) -> u32 {
+    let (bbox, cmds) = polygon_contour(polygon, Affine2::identity());
     doc.push_path(GeometryPath::unpainted(bbox), cmds)
 }
 
@@ -2279,48 +2266,7 @@ fn transform_path_cmds(
     cmds: impl IntoIterator<Item = PathCmd>,
     transform: Affine2,
 ) -> (BBox, Vec<PathCmd>) {
-    let mut bbox = BBox::empty();
-    let mut current = Point::default();
-    let mut transformed_cmds = Vec::new();
-
-    for cmd in cmds {
-        let start = current;
-        let mut transformed = cmd;
-        transformed.p0 = transform.transform_point(cmd.p0);
-        transformed.p1 = transform.transform_point(cmd.p1);
-        if cmd.op != PathOp::ArcTo {
-            transformed.p2 = transform.transform_point(cmd.p2);
-        } else if transform.determinant() < 0.0 {
-            transformed.clockwise = !cmd.clockwise;
-        }
-
-        match cmd.op {
-            PathOp::MoveTo | PathOp::LineTo => {
-                current = cmd.p0;
-                bbox.include_point(transformed.p0);
-            }
-            PathOp::ArcTo => {
-                bbox.include_circular_arc(
-                    transform.transform_point(start),
-                    transformed.p0,
-                    transformed.p1,
-                    transformed.clockwise,
-                );
-                current = cmd.p0;
-            }
-            PathOp::CubicTo => {
-                bbox.include_point(transformed.p0);
-                bbox.include_point(transformed.p1);
-                bbox.include_point(transformed.p2);
-                current = cmd.p2;
-            }
-            PathOp::Close => {}
-        }
-
-        transformed_cmds.push(transformed);
-    }
-
-    (bbox, transformed_cmds)
+    pcb_ir::dialects::path::transform_cmds(cmds, transform)
 }
 
 fn push_donut_path(
@@ -2877,7 +2823,38 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
             .expect("synthetic nested panel fixture should parse");
         let doc = extract_layout(&ipc).expect("layout should extract");
+        let fabrication_profiles = profile_occurrences_for(&doc, ProfileSet::FabricationOutlines);
+        let layout_boundaries = profile_occurrences_for(&doc, ProfileSet::LayoutBoundaries);
 
+        assert_eq!(doc.profiles.len(), 3);
+        assert_eq!(fabrication_profiles.len(), 5);
+        assert_eq!(layout_boundaries.len(), 7);
+        assert_eq!(
+            fabrication_profiles
+                .iter()
+                .filter(|profile| profile.role == ProfileOccurrenceRole::RootPanel)
+                .count(),
+            1
+        );
+        assert_eq!(
+            fabrication_profiles
+                .iter()
+                .filter(|profile| profile.role == ProfileOccurrenceRole::BoardInstance)
+                .count(),
+            4
+        );
+        assert!(
+            fabrication_profiles
+                .iter()
+                .all(|profile| profile.role != ProfileOccurrenceRole::PanelInstance)
+        );
+        assert_eq!(
+            layout_boundaries
+                .iter()
+                .filter(|profile| profile.role == ProfileOccurrenceRole::PanelInstance)
+                .count(),
+            2
+        );
         assert_eq!(doc.layout.steps.len(), 3);
         assert_eq!(doc.layout.repeats.len(), 3);
         assert_eq!(doc.layout.instances.len(), 6);

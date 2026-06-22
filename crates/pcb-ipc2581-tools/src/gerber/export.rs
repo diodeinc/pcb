@@ -296,12 +296,27 @@ fn profile_artwork_from_profiles(
         bbox: BBox::empty(),
         meta: vec!["Profile".into(), "NP".into()],
     });
-    for profile in pcb_ir::dialects::ipc::render_profiles(doc) {
-        push_profile_artwork_object(&mut artwork, artwork_layer, doc, profile.outer_path);
-        for cutout in &doc.profile_cutouts
-            [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
+    for occurrence in pcb_ir::dialects::ipc::profile_occurrences_for(
+        doc,
+        pcb_ir::dialects::ipc::ProfileSet::FabricationOutlines,
+    ) {
+        push_profile_artwork_object(
+            &mut artwork,
+            artwork_layer,
+            doc,
+            occurrence.profile.outer_path,
+            occurrence.transform,
+        );
+        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
+            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
         {
-            push_profile_artwork_object(&mut artwork, artwork_layer, doc, cutout.path);
+            push_profile_artwork_object(
+                &mut artwork,
+                artwork_layer,
+                doc,
+                cutout.path,
+                occurrence.transform,
+            );
         }
     }
     Ok(artwork)
@@ -376,10 +391,13 @@ fn push_profile_artwork_object(
     artwork_layer: u32,
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
     path_index: u32,
+    transform: pcb_ir::common::Affine2,
 ) {
-    let path = &doc.paths[path_index as usize];
     let artwork_path = ArtworkPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round);
-    let path_id = push_artwork_path(artwork, artwork_path, doc, path);
+    let path_id = artwork.push_path(
+        artwork_path,
+        pcb_ir::dialects::ipc::transformed_path_payloads(doc, path_index, transform),
+    );
     artwork.push_object(
         artwork_layer,
         ArtworkObject {

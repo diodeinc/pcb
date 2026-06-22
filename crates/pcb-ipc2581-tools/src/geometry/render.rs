@@ -1,6 +1,7 @@
 use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
 use pcb_ir::common::{LayerRole, Side};
+use pcb_ir::dialects::ipc::ProfileSet;
 use pcb_ir::dialects::mask::MaskDocument;
 
 type GeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<Symbol, LayerFunction>;
@@ -48,11 +49,12 @@ pub fn layer_mask(
 ) -> MaskDocument<LayerFunction> {
     let layer = &geometry.layers[0];
     let geom = if include_profiles {
-        pcb_ir::dialects::ipc::lower_layer_with_profiles_to_geom(
+        pcb_ir::dialects::ipc::lower_layer_with_profile_set_to_geom(
             geometry,
             0,
             layer_role(layer.layer_function),
             Side::None,
+            ProfileSet::LayoutBoundaries,
         )
     } else {
         pcb_ir::dialects::ipc::lower_layer_to_geom(
