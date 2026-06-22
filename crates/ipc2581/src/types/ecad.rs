@@ -20,6 +20,8 @@ pub struct CadHeader {
 #[derive(Debug, Clone)]
 pub struct Spec {
     pub name: Symbol,
+    /// Typed child elements exactly as carried by the IPC Spec payload.
+    pub items: Vec<SpecItem>,
     pub material: Option<Symbol>,
     pub dielectric_constant: Option<f64>,
     pub loss_tangent: Option<f64>,
@@ -33,6 +35,36 @@ pub struct Spec {
     pub color_term: Option<Symbol>,
     /// RGB color specified via Color element (r, g, b values 0-255)
     pub color_rgb: Option<(u8, u8, u8)>,
+}
+
+/// A child item inside a CadHeader Spec.
+#[derive(Debug, Clone)]
+pub struct SpecItem {
+    pub element: Symbol,
+    pub kind: SpecItemKind,
+    pub item_type: Option<Symbol>,
+    pub comment: Option<Symbol>,
+    pub properties: Vec<SpecProperty>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecItemKind {
+    General,
+    Dielectric,
+    Conductor,
+    SurfaceFinish,
+    VCut,
+    Other,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpecProperty {
+    pub value: Option<f64>,
+    pub text: Option<Symbol>,
+    pub unit: Option<Symbol>,
+    pub plus_tol: Option<f64>,
+    pub minus_tol: Option<f64>,
+    pub tol_percent: Option<bool>,
 }
 
 /// Ecad section containing CadHeader and CadData
@@ -206,8 +238,9 @@ pub struct LogicalNet {
 /// PinRef references a component pin
 #[derive(Debug, Clone)]
 pub struct PinRef {
-    pub component_ref: Symbol,
+    pub component_ref: Option<Symbol>,
     pub pin: Symbol,
+    pub title: Option<Symbol>,
 }
 
 /// PhyNetGroup contains physical net routing data
@@ -224,6 +257,7 @@ pub struct Layer {
     pub side: Option<Side>,
     pub polarity: Option<Polarity>,
     pub span: Option<LayerSpan>,
+    pub spec_refs: Vec<Symbol>,
     pub profile: Option<Profile>, // Layer-specific outline (for rigid-flex)
 }
 
@@ -246,10 +280,12 @@ pub struct FeatureSet {
     pub net: Option<Symbol>,      // Net name from Set element
     pub geometry: Option<Symbol>, // Reference to PadStackDef or other geometry definition
     pub polarity: Option<Polarity>,
+    pub spec_refs: Vec<Symbol>,
     pub features: Vec<SetFeature>,
     pub holes: Vec<Hole>,
     pub slots: Vec<Slot>,
     pub pads: Vec<Pad>,
+    pub fiducials: Vec<Fiducial>,
     pub traces: Vec<Trace>,
     pub polygons: Vec<super::Polygon>, // Copper pours from Features
     pub lines: Vec<Line>,              // Trace lines from Features > UserSpecial > Line
@@ -263,6 +299,7 @@ pub enum SetFeature {
     Hole(Hole),
     Slot(Slot),
     Pad(Pad),
+    Fiducial(Fiducial),
     Trace(Trace),
     Polygon(super::Polygon),
     Line(Line),
@@ -270,6 +307,30 @@ pub enum SetFeature {
     Polyline(FeaturePolyline),
     StandardPrimitiveRef(FeaturePrimitiveRef),
     UserPrimitiveRef(FeaturePrimitiveRef),
+}
+
+/// IPC fiducial and panel mark feature carried by a Set.
+#[derive(Debug, Clone)]
+pub struct Fiducial {
+    pub kind: FiducialKind,
+    pub location: super::Location,
+    pub xform: Option<super::Xform>,
+    pub shape: FiducialShape,
+    pub pin_ref: Option<PinRef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FiducialKind {
+    BadBoardMark,
+    Global,
+    GoodPanelMark,
+    Local,
+}
+
+#[derive(Debug, Clone)]
+pub enum FiducialShape {
+    Primitive(super::StandardPrimitive),
+    StandardPrimitiveRef(Symbol),
 }
 
 /// NonstandardAttribute from Set elements

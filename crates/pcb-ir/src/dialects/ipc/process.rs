@@ -43,7 +43,7 @@ pub fn prune_unpainted_paths<S, L>(doc: &mut GeometryDocument<S, L>) {
         feature.path_count = path_count;
     }
 
-    // Board profiles are physical geometry, not painted layer features, and are
+    // Step profiles are physical geometry, not painted layer features, and are
     // intentionally allowed to use unpainted paths.
 }
 
@@ -154,37 +154,44 @@ pub fn normalize_bounds<S, L>(doc: &mut GeometryDocument<S, L>) {
         doc.profiles[profile_index].bbox = doc.paths[outer_path as usize].bbox;
     }
 
-    for board_index in 0..doc.boards.len() {
-        let profile_start = doc.boards[board_index].profile_start;
-        let profile_count = doc.boards[board_index].profile_count;
-        doc.boards[board_index].bbox = profiles_range_bbox(doc, profile_start, profile_count);
+    for instance_index in 0..doc.layout.instances.len() {
+        let step_index = doc.layout.instances[instance_index].child_step;
+        let profile_start = doc.layout.steps[step_index as usize].profile_start;
+        let profile_count = doc.layout.steps[step_index as usize].profile_count;
+        let transform = doc.layout.instances[instance_index].transform;
+        doc.layout.instances[instance_index].bbox =
+            transformed_profiles_range_bbox(doc, profile_start, profile_count, transform);
     }
 
-    for instance_index in 0..doc.board_instances.len() {
-        let profile_start = doc.board_instances[instance_index].profile_start;
-        let profile_count = doc.board_instances[instance_index].profile_count;
-        doc.board_instances[instance_index].bbox =
-            profiles_range_bbox(doc, profile_start, profile_count);
+    for repeat_index in (0..doc.layout.repeats.len()).rev() {
+        let instance_start = doc.layout.repeats[repeat_index].instance_start;
+        let instance_count = doc.layout.repeats[repeat_index].instance_count;
+        let bbox = layout_instances_range_bbox(doc, instance_start, instance_count);
+        doc.layout.repeats[repeat_index].bbox = bbox;
+        if let Some(parent_instance) = doc.layout.repeats[repeat_index].parent_instance {
+            let instance_bbox = doc.layout.instances[parent_instance as usize].bbox;
+            doc.layout.instances[parent_instance as usize].bbox = instance_bbox.union(bbox);
+        }
     }
 
-    for panel_index in 0..doc.panels.len() {
-        let profile_start = doc.panels[panel_index].profile_start;
-        let profile_count = doc.panels[panel_index].profile_count;
-        let instance_start = doc.panels[panel_index].board_instance_start;
-        let instance_count = doc.panels[panel_index].board_instance_count;
+    for step_index in 0..doc.layout.steps.len() {
+        let profile_start = doc.layout.steps[step_index].profile_start;
+        let profile_count = doc.layout.steps[step_index].profile_count;
         let profile_bbox = profiles_range_bbox(doc, profile_start, profile_count);
-        let instance_bbox = board_instances_range_bbox(doc, instance_start, instance_count);
-        doc.panels[panel_index].profile_bbox = profile_bbox;
-        doc.panels[panel_index].instance_bbox = instance_bbox;
-        doc.panels[panel_index].bbox = if !profile_bbox.is_empty() {
+        let repeat_bbox = layout_step_repeats_bbox(doc, step_index as u32);
+        doc.layout.steps[step_index].bbox = if !profile_bbox.is_empty() {
             profile_bbox
         } else {
-            instance_bbox
+            repeat_bbox
         };
     }
 
     for feature_index in 0..doc.features.len() {
         doc.features[feature_index].bbox = feature_bbox(doc, feature_index);
+    }
+
+    for set_index in 0..doc.feature_sets.len() {
+        doc.feature_sets[set_index].bbox = feature_set_bbox(doc, set_index);
     }
 
     for layer_index in 0..doc.layers.len() {
@@ -199,10 +206,56 @@ fn profiles_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, count: u3
         .fold(BBox::empty(), BBox::union)
 }
 
-fn board_instances_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, count: u32) -> BBox {
-    doc.board_instances[start as usize..(start + count) as usize]
+fn transformed_profiles_range_bbox<S, L>(
+    doc: &GeometryDocument<S, L>,
+    start: u32,
+    count: u32,
+    transform: Affine2,
+) -> BBox {
+    doc.profiles[start as usize..(start + count) as usize]
+        .iter()
+        .map(|profile| transformed_path_bbox(doc, profile.outer_path, transform))
+        .fold(BBox::empty(), BBox::union)
+}
+
+fn layout_instances_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, count: u32) -> BBox {
+    doc.layout.instances[start as usize..(start + count) as usize]
         .iter()
         .map(|instance| instance.bbox)
+        .fold(BBox::empty(), BBox::union)
+}
+
+fn layout_step_repeats_bbox<S, L>(doc: &GeometryDocument<S, L>, step_index: u32) -> BBox {
+    doc.layout
+        .repeats
+        .iter()
+        .filter(|repeat| repeat.parent_step == step_index && repeat.parent_instance.is_none())
+        .map(|repeat| repeat.bbox)
+        .fold(BBox::empty(), BBox::union)
+}
+
+fn feature_set_bbox<S, L>(doc: &GeometryDocument<S, L>, set_index: usize) -> BBox {
+    let set_id = set_index as u32;
+    let linked_bbox = doc
+        .features
+        .iter()
+        .filter(|feature| feature.set == Some(set_id))
+        .map(|feature| feature.bbox)
+        .fold(BBox::empty(), BBox::union);
+    if !linked_bbox.is_empty() {
+        return linked_bbox;
+    }
+
+    let set = &doc.feature_sets[set_index];
+    let start = set.feature_start as usize;
+    let end = (set.feature_start + set.feature_count).min(doc.features.len() as u32) as usize;
+    if start >= end {
+        return BBox::empty();
+    }
+
+    doc.features[start..end]
+        .iter()
+        .map(|feature| feature.bbox)
         .fold(BBox::empty(), BBox::union)
 }
 
@@ -238,7 +291,7 @@ pub fn outline_stroked_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
         let feature = doc.features[feature_index].clone();
-        if feature.bucket != FeatureBucket::Trace {
+        if !is_copper_trace_feature(&feature) {
             continue;
         }
 
@@ -273,7 +326,7 @@ pub fn union_feature_filled_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>)
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
         let feature = doc.features[feature_index].clone();
-        if feature.bucket != FeatureBucket::Trace {
+        if !is_copper_trace_feature(&feature) {
             continue;
         }
 
@@ -319,9 +372,7 @@ where
         for feature_index in layer.feature_start..layer.feature_start + layer.feature_count {
             let feature_index = feature_index as usize;
             let feature = &doc.features[feature_index];
-            if feature.bucket != FeatureBucket::Trace
-                || feature.polarity != GeometryPolarity::Positive
-            {
+            if !is_copper_trace_feature(feature) || feature.polarity != GeometryPolarity::Positive {
                 continue;
             }
 
@@ -379,6 +430,14 @@ where
             }
         }
     }
+}
+
+fn is_copper_trace_feature<S>(feature: &GeometryFeature<S>) -> bool {
+    feature.bucket == FeatureBucket::Trace
+        && matches!(
+            feature.semantic,
+            FeatureSemantic::None | FeatureSemantic::CopperConductor
+        )
 }
 
 pub fn resolve_set_voids<S: Clone, L: Clone>(doc: &mut GeometryDocument<S, L>) {
@@ -699,7 +758,7 @@ mod tests {
 
     #[test]
     fn composes_compatible_stroked_feature_paths() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         let bbox = BBox {
             min: Point::new(0.0, 0.0),
             max: Point::new(10.0, 0.0),
@@ -739,11 +798,15 @@ mod tests {
 
     #[test]
     fn process_prunes_unpainted_feature_paths_and_preserves_profile_paths() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.layers.push(GeometryLayer {
             name: "TOP".to_string(),
             source_layer_ref: 0,
             layer_function: (),
+            spec_ref_start: 0,
+            spec_ref_count: 0,
+            set_start: 0,
+            set_count: 0,
             feature_start: 0,
             feature_count: 1,
             bbox: BBox::empty(),
@@ -780,14 +843,11 @@ mod tests {
                 PathCmd::line_to(Point::new(1.0, 1.0)),
             ],
         );
-        doc.profile_cutouts.push(BoardProfileCutout {
+        doc.profile_cutouts.push(StepProfileCutout {
             path: cutout_path,
             bbox: BBox::empty(),
         });
-        doc.profiles.push(BoardProfile {
-            kind: BoardProfileKind::BoardDefinition,
-            source_step_ref: 0,
-            transform: Affine2::identity(),
+        doc.profiles.push(StepProfile {
             outer_path: outer_profile_path,
             cutout_start: 0,
             cutout_count: 1,
@@ -809,7 +869,7 @@ mod tests {
 
     #[test]
     fn coalesces_related_trace_features_inside_one_source_set() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
             rect_cmds(0.0, 0.0, 2.0, 1.0),
@@ -878,7 +938,7 @@ mod tests {
 
     #[test]
     fn resolves_negative_polarity_as_layer_subtraction() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
             rect_cmds(0.0, 0.0, 4.0, 4.0),
@@ -920,7 +980,7 @@ mod tests {
 
     #[test]
     fn subtracts_cutouts_after_trace_union() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.push_path(
             GeometryPath::stroked(1.0, LineCap::Round, BBox::empty()),
             [
@@ -963,7 +1023,7 @@ mod tests {
 
     #[test]
     fn flattens_processed_layer_features_to_single_mask() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
             rect_cmds(0.0, 0.0, 2.0, 1.0),
@@ -1011,6 +1071,10 @@ mod tests {
             name: "F.Cu".to_string(),
             source_layer_ref: 100,
             layer_function: (),
+            spec_ref_start: 0,
+            spec_ref_count: 0,
+            set_start: 0,
+            set_count: 0,
             feature_start,
             feature_count,
             bbox: BBox::empty(),

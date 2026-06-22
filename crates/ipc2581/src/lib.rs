@@ -290,6 +290,71 @@ mod tests {
     }
 
     #[test]
+    fn preserves_vcut_specs_spec_refs_and_fiducials() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER">
+      <Spec name="VCut_1">
+        <V_Cut type="ANGLE">
+          <Property value="90" unit="DEGREES" plusTol="5" minusTol="5" tolPercent="true"/>
+        </V_Cut>
+        <V_Cut type="THICKNESS_REMAINING">
+          <Property value="0.5" unit="MM" plusTol="0.1" minusTol="0.1"/>
+        </V_Cut>
+      </Spec>
+    </CadHeader>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL">
+        <SpecRef id="VCut_1"/>
+      </Layer>
+      <Step name="Panel" type="PALLET">
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <SpecRef id="VCut_1"/>
+            <GlobalFiducial>
+              <Location x="1" y="2"/>
+              <Circle diameter="1"/>
+            </GlobalFiducial>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
+        let ecad = doc.ecad().unwrap();
+        let spec = ecad
+            .cad_header
+            .specs
+            .get(&doc.interner().get("VCut_1").unwrap())
+            .unwrap();
+        assert_eq!(spec.items.len(), 2);
+        assert_eq!(spec.items[0].kind, ecad::SpecItemKind::VCut);
+        assert_eq!(doc.resolve(spec.items[0].item_type.unwrap()), "ANGLE");
+        assert_eq!(spec.items[0].properties[0].value, Some(90.0));
+        assert_eq!(spec.items[0].properties[0].tol_percent, Some(true));
+
+        let layer = &ecad.cad_data.layers[0];
+        assert_eq!(doc.resolve(layer.spec_refs[0]), "VCut_1");
+
+        let set = &ecad.cad_data.steps[0].layer_features[0].sets[0];
+        assert_eq!(doc.resolve(set.spec_refs[0]), "VCut_1");
+        assert_eq!(set.fiducials.len(), 1);
+        assert!(matches!(
+            set.features[0],
+            ecad::SetFeature::Fiducial(ecad::Fiducial {
+                kind: ecad::FiducialKind::Global,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn preserves_set_feature_source_order() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

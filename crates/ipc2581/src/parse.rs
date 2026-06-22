@@ -1284,9 +1284,11 @@ impl<'a> Parser<'a> {
         let mut copper_weight_oz = None;
         let mut color_term = None;
         let mut color_rgb = None;
+        let mut items = Vec::new();
 
         // Parse child elements for material and dielectric properties
         for child in self.element_children(node) {
+            items.push(self.parse_spec_item(&child));
             match self.name(&child) {
                 "General" if self.attr(&child, "type") == Some("MATERIAL") => {
                     // Look for Property, ColorTerm, and Color elements
@@ -1368,6 +1370,7 @@ impl<'a> Parser<'a> {
 
         Ok(ecad::Spec {
             name,
+            items,
             material,
             dielectric_constant,
             loss_tangent,
@@ -1377,6 +1380,46 @@ impl<'a> Parser<'a> {
             color_term,
             color_rgb,
         })
+    }
+
+    fn parse_spec_item(&mut self, node: &Node) -> ecad::SpecItem {
+        let element_name = self.name(node).to_string();
+        let element = self.interner.intern(&element_name);
+        let item_type = self.attr(node, "type").map(|s| self.interner.intern(s));
+        let comment = self.attr(node, "comment").map(|s| self.interner.intern(s));
+        let property_nodes = self
+            .element_children(node)
+            .filter(|child| self.name(child) == "Property")
+            .collect::<Vec<_>>();
+        let properties = property_nodes
+            .into_iter()
+            .map(|child| self.parse_spec_property(&child))
+            .collect();
+
+        ecad::SpecItem {
+            element,
+            kind: spec_item_kind(&element_name),
+            item_type,
+            comment,
+            properties,
+        }
+    }
+
+    fn parse_spec_property(&mut self, node: &Node) -> ecad::SpecProperty {
+        ecad::SpecProperty {
+            value: self
+                .attr(node, "value")
+                .and_then(|value| value.parse::<f64>().ok()),
+            text: self.attr(node, "text").map(|s| self.interner.intern(s)),
+            unit: self.attr(node, "unit").map(|s| self.interner.intern(s)),
+            plus_tol: self
+                .attr(node, "plusTol")
+                .and_then(|value| value.parse::<f64>().ok()),
+            minus_tol: self
+                .attr(node, "minusTol")
+                .and_then(|value| value.parse::<f64>().ok()),
+            tol_percent: self.attr(node, "tolPercent").and_then(parse_optional_bool),
+        }
     }
 
     fn parse_surface_finish(&mut self, node: &Node) -> Result<ecad::SurfaceFinish> {
@@ -1828,9 +1871,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_pin_ref(&mut self, node: &Node) -> Result<PinRef> {
-        let component_ref = self.required_attr(node, "componentRef", "PinRef")?;
+        let component_ref = self
+            .attr(node, "componentRef")
+            .map(|s| self.interner.intern(s));
         let pin = self.required_attr(node, "pin", "PinRef")?;
-        Ok(PinRef { component_ref, pin })
+        let title = self.attr(node, "title").map(|s| self.interner.intern(s));
+        Ok(PinRef {
+            component_ref,
+            pin,
+            title,
+        })
     }
 
     fn parse_phy_net_group(&mut self, node: &Node) -> Result<PhyNetGroup> {
@@ -1855,8 +1905,14 @@ impl<'a> Parser<'a> {
 
         let mut span = None;
         let mut profile = None;
+        let mut spec_refs = Vec::new();
         for child in self.element_children(node) {
             match self.name(&child) {
+                "SpecRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        spec_refs.push(self.interner.intern(id));
+                    }
+                }
                 "Span" => {
                     span = Some(ecad::LayerSpan {
                         from_layer: self
@@ -1880,6 +1936,7 @@ impl<'a> Parser<'a> {
             side,
             polarity,
             span,
+            spec_refs,
             profile,
         })
     }
@@ -1913,15 +1970,22 @@ impl<'a> Parser<'a> {
         let mut holes = Vec::new();
         let mut slots = Vec::new();
         let mut pads = Vec::new();
+        let mut fiducials = Vec::new();
         let mut traces = Vec::new();
         let mut polygons = Vec::new();
         let mut lines = Vec::new();
         let mut polylines = Vec::new();
         let mut features = Vec::new();
+        let mut spec_refs = Vec::new();
         let mut nonstandard_attributes = Vec::new();
 
         for child in self.element_children(node) {
             match self.name(&child) {
+                "SpecRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        spec_refs.push(self.interner.intern(id));
+                    }
+                }
                 "Hole" => {
                     let hole = self.parse_hole(&child)?;
                     features.push(ecad::SetFeature::Hole(hole.clone()));
@@ -1937,6 +2001,11 @@ impl<'a> Parser<'a> {
                     features.push(ecad::SetFeature::Pad(pad.clone()));
                     pads.push(pad);
                 }
+                "BadBoardMark" | "GlobalFiducial" | "GoodPanelMark" | "LocalFiducial" => {
+                    let fiducial = self.parse_fiducial(&child)?;
+                    features.push(ecad::SetFeature::Fiducial(fiducial.clone()));
+                    fiducials.push(fiducial);
+                }
                 "Polyline" => {
                     let trace = self.parse_trace(&child)?;
                     features.push(ecad::SetFeature::Trace(trace.clone()));
@@ -1949,6 +2018,9 @@ impl<'a> Parser<'a> {
                             ecad::SetFeature::Line(line) => lines.push(line.clone()),
                             ecad::SetFeature::Polyline(polyline) => {
                                 polylines.push(polyline.clone())
+                            }
+                            ecad::SetFeature::Fiducial(fiducial) => {
+                                fiducials.push(fiducial.clone())
                             }
                             ecad::SetFeature::Arc(_)
                             | ecad::SetFeature::StandardPrimitiveRef(_)
@@ -1971,10 +2043,12 @@ impl<'a> Parser<'a> {
             net,
             geometry,
             polarity,
+            spec_refs,
             features,
             holes,
             slots,
             pads,
+            fiducials,
             traces,
             polygons,
             lines,
@@ -1992,6 +2066,60 @@ impl<'a> Parser<'a> {
             name,
             value,
             attr_type,
+        })
+    }
+
+    fn parse_fiducial(&mut self, node: &Node) -> Result<ecad::Fiducial> {
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        let kind = match self.name(node) {
+            "BadBoardMark" => ecad::FiducialKind::BadBoardMark,
+            "GlobalFiducial" => ecad::FiducialKind::Global,
+            "GoodPanelMark" => ecad::FiducialKind::GoodPanelMark,
+            "LocalFiducial" => ecad::FiducialKind::Local,
+            name => {
+                return Err(Ipc2581Error::InvalidStructure(format!(
+                    "Unknown fiducial element: {name}"
+                )));
+            }
+        };
+
+        let mut location = None;
+        let mut xform = None;
+        let mut shape = None;
+        let mut pin_ref = None;
+
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "Xform" => xform = Some(self.parse_xform(&child)),
+                "Location" => {
+                    location = Some(Location {
+                        x: self.parse_f64_attr_with_units(&child, "x", "Location", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "y", "Location", units)?,
+                    });
+                }
+                "PinRef" => pin_ref = Some(self.parse_pin_ref(&child)?),
+                "StandardPrimitiveRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        shape = Some(ecad::FiducialShape::StandardPrimitiveRef(
+                            self.interner.intern(id),
+                        ));
+                    }
+                }
+                name if is_standard_primitive_name(name) => {
+                    shape = Some(ecad::FiducialShape::Primitive(
+                        self.parse_standard_primitive(&child, units)?,
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(ecad::Fiducial {
+            kind,
+            location: location.ok_or(Ipc2581Error::MissingElement("Location"))?,
+            xform,
+            shape: shape.ok_or(Ipc2581Error::MissingElement("StandardShape"))?,
+            pin_ref,
         })
     }
 
@@ -3089,6 +3217,47 @@ fn has_z_axis_dim(doc: &Document, node: &Node) -> bool {
                             matches!(grandchild_name, "MaterialCut" | "MaterialLeft")
                         }))
         })
+}
+
+fn parse_optional_bool(value: &str) -> Option<bool> {
+    match value {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn spec_item_kind(element: &str) -> ecad::SpecItemKind {
+    match element {
+        "General" => ecad::SpecItemKind::General,
+        "Dielectric" => ecad::SpecItemKind::Dielectric,
+        "Conductor" => ecad::SpecItemKind::Conductor,
+        "SurfaceFinish" => ecad::SpecItemKind::SurfaceFinish,
+        "V_Cut" => ecad::SpecItemKind::VCut,
+        _ => ecad::SpecItemKind::Other,
+    }
+}
+
+fn is_standard_primitive_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Butterfly"
+            | "Circle"
+            | "Contour"
+            | "Diamond"
+            | "Donut"
+            | "Ellipse"
+            | "Hexagon"
+            | "Moire"
+            | "Octagon"
+            | "Oval"
+            | "RectCenter"
+            | "RectCham"
+            | "RectCorner"
+            | "RectRound"
+            | "Thermal"
+            | "Triangle"
+    )
 }
 
 #[cfg(test)]

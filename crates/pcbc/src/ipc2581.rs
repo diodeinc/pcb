@@ -2,7 +2,7 @@ use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
-    OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, gerber, utils,
+    LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, gerber, utils,
 };
 
 #[derive(Args)]
@@ -61,11 +61,14 @@ enum Commands {
         #[arg(short, long, default_value = "mm")]
         units: UnitFormat,
     },
-    /// Export the board outline as a KiCad-importable DXF
+    /// Export IPC-2581 outlines as a KiCad-importable DXF
     Outline {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
+        /// Layout target to export
+        #[arg(long, default_value = "board")]
+        layout_target: LayoutTarget,
         /// Output DXF file path
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
@@ -84,6 +87,9 @@ enum Commands {
         /// Render format. Auto infers SVG/PNG from the output extension or uses terminal graphics.
         #[arg(short, long, default_value = "auto")]
         format: RenderFormat,
+        /// Layout target to render
+        #[arg(long, default_value = "layout")]
+        layout_target: LayoutTarget,
         /// Flatten the layer into a single Gerber-style mask before rendering.
         #[arg(long)]
         flat: bool,
@@ -93,6 +99,9 @@ enum Commands {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
+        /// Layout target to export. Gerber supports board or panel.
+        #[arg(long, default_value = "board")]
+        layout_target: LayoutTarget,
         /// Output directory for generated Gerber files
         #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
         output: PathBuf,
@@ -147,14 +156,23 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             output,
             units,
         } => commands::html_export::execute(&file, output.as_deref(), units),
-        Commands::Outline { file, output } => {
-            commands::outline::execute(&file, &commands::outline::OutlineOptions { output })
-        }
+        Commands::Outline {
+            file,
+            layout_target,
+            output,
+        } => commands::outline::execute(
+            &file,
+            &commands::outline::OutlineOptions {
+                output,
+                layout_target,
+            },
+        ),
         Commands::Render {
             file,
             layer,
             output,
             format,
+            layout_target,
             flat,
         } => commands::render::execute(
             &file,
@@ -162,11 +180,22 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 layer,
                 output,
                 format,
+                layout_target,
                 flat,
             },
         ),
-        Commands::Gerber { file, output } => {
-            let set = gerber::execute_file(&file, &output)?;
+        Commands::Gerber {
+            file,
+            layout_target,
+            output,
+        } => {
+            let set = gerber::execute_file_with_options(
+                &file,
+                &gerber::GerberExportOptions {
+                    output_dir: output.clone(),
+                    layout_target,
+                },
+            )?;
             println!(
                 "✓ IPC-2581 exported {} Gerber X2 file(s) to {}",
                 set.files.len(),

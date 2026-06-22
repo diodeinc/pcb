@@ -206,6 +206,54 @@ pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
     bbox
 }
 
+pub fn transform_cmds(
+    cmds: impl IntoIterator<Item = PathCmd>,
+    transform: Affine2,
+) -> (BBox, Vec<PathCmd>) {
+    let mut bbox = BBox::empty();
+    let mut current = Point::default();
+    let mut transformed_cmds = Vec::new();
+
+    for cmd in cmds {
+        let start = current;
+        let mut transformed = cmd;
+        transformed.p0 = transform.transform_point(cmd.p0);
+        transformed.p1 = transform.transform_point(cmd.p1);
+        if cmd.op != PathOp::ArcTo {
+            transformed.p2 = transform.transform_point(cmd.p2);
+        } else if transform.determinant() < 0.0 {
+            transformed.clockwise = !cmd.clockwise;
+        }
+
+        match cmd.op {
+            PathOp::MoveTo | PathOp::LineTo => {
+                current = cmd.p0;
+                bbox.include_point(transformed.p0);
+            }
+            PathOp::ArcTo => {
+                bbox.include_circular_arc(
+                    transform.transform_point(start),
+                    transformed.p0,
+                    transformed.p1,
+                    transformed.clockwise,
+                );
+                current = cmd.p0;
+            }
+            PathOp::CubicTo => {
+                bbox.include_point(transformed.p0);
+                bbox.include_point(transformed.p1);
+                bbox.include_point(transformed.p2);
+                current = cmd.p2;
+            }
+            PathOp::Close => {}
+        }
+
+        transformed_cmds.push(transformed);
+    }
+
+    (bbox, transformed_cmds)
+}
+
 pub fn outline_stroke(
     payloads: &[PathPayload],
     width: f64,

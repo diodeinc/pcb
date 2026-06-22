@@ -5,17 +5,20 @@ use gerberx2::{GerberLayer, write_layer};
 use ipc2581::Ipc2581;
 use ipc2581::types::{LayerFunction, Side, ecad::Layer};
 
-use super::artwork::{ArtworkLayer, ObjectAttributes};
+use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 use super::lower::lower_artwork_layer;
-use crate::{geometry, ipc2581 as ipc};
+use crate::{LayoutTarget, geometry, ipc2581 as ipc};
 use pcb_ir::common::{BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Unit};
 use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkObject, ArtworkPath};
-use pcb_ir::dialects::ipc::{FeatureBucket, GeometryPath};
+use pcb_ir::dialects::ipc::{
+    FeatureBucket, FeatureSemantic, FiducialKind, GeometryFeature, GeometryPath,
+};
 use pcb_ir::dialects::path as common_path;
 
 #[derive(Debug, Clone)]
 pub struct GerberExportOptions {
     pub output_dir: PathBuf,
+    pub layout_target: LayoutTarget,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +34,10 @@ pub struct GerberExportFile {
 }
 
 pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<GerberExportSet> {
+    if options.layout_target == LayoutTarget::Layout {
+        bail!("Gerber export does not support --layout-target layout; use board or panel");
+    }
+
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut files = Vec::new();
     let mut first_doc = None;
@@ -39,18 +46,20 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
     for plan in &plans {
         let source_layer = plan.layer;
         let layer_name = ipc.resolve(source_layer.name);
-        let mut doc = geometry::extract_layer(ipc, layer_name)
-            .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
+        let mut doc =
+            geometry::extract_layer_for_layout_target(ipc, layer_name, options.layout_target)
+                .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::process_document(&mut doc);
         if first_doc.is_none() {
             first_doc = Some(doc.clone());
         }
+        let part = gerber_part_for_doc(&doc);
         let artwork = artwork_from_processed_layer(
             ipc,
             &doc,
             0,
             plan.role.ir_role(),
-            plan.file_function.clone(),
+            layer_attributes(plan.file_function.clone(), part),
         )?;
         let layer = lower_artwork_layer(&artwork)?;
         let contents = write_layer(&layer)?;
@@ -62,7 +71,7 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
     }
 
     if let Some(doc) = first_doc {
-        let profile = profile_artwork_from_profiles(&doc)?;
+        let profile = profile_artwork_from_profiles(&doc, options.layout_target)?;
         if !profile.objects.is_empty() {
             let layer = lower_artwork_layer(&profile)?;
             let contents = write_layer(&layer)?;
@@ -108,6 +117,8 @@ enum GerberLayerRole {
     Soldermask,
     Legend,
     Profile,
+    Vcut,
+    Score,
 }
 
 fn export_layer_plans(layers: &[Layer]) -> Vec<ExportLayerPlan<'_>> {
@@ -149,6 +160,8 @@ fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
         LayerFunction::Soldermask => Some(GerberLayerRole::Soldermask),
         LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),
         LayerFunction::Rout | LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
+        LayerFunction::VCut => Some(GerberLayerRole::Vcut),
+        LayerFunction::Score => Some(GerberLayerRole::Score),
         _ => None,
     }
 }
@@ -160,7 +173,9 @@ impl GerberLayerRole {
             GerberLayerRole::Paste => LayerRole::Paste,
             GerberLayerRole::Soldermask => LayerRole::Soldermask,
             GerberLayerRole::Legend => LayerRole::Legend,
-            GerberLayerRole::Profile => LayerRole::Profile,
+            GerberLayerRole::Profile | GerberLayerRole::Vcut | GerberLayerRole::Score => {
+                LayerRole::Profile
+            }
         }
     }
 }
@@ -207,6 +222,61 @@ fn layer_output(
             "Edge_Cuts.gm1".to_string(),
             vec!["Profile".into(), "NP".into()],
         ),
+        GerberLayerRole::Vcut => fabrication_line_layer_output("V_Cut.gbr", &["Vcut"], side),
+        GerberLayerRole::Score => {
+            fabrication_line_layer_output("Score.gbr", &["Other", "Score"], side)
+        }
+    }
+}
+
+fn fabrication_line_layer_output(
+    filename: &str,
+    function: &[&str],
+    side: Option<Side>,
+) -> (String, Vec<String>) {
+    let mut file_function = function
+        .iter()
+        .map(|field| (*field).to_string())
+        .collect::<Vec<_>>();
+    match side {
+        Some(Side::Top) => file_function.push("Top".to_string()),
+        Some(Side::Bottom) => file_function.push("Bot".to_string()),
+        Some(Side::Both) | Some(Side::All) => file_function.push("Top/Bot".to_string()),
+        _ => {}
+    }
+    (filename.to_string(), file_function)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GerberPart {
+    Single,
+    Array,
+}
+
+impl GerberPart {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "Single",
+            Self::Array => "Array",
+        }
+    }
+}
+
+fn gerber_part_for_doc(
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+) -> GerberPart {
+    if pcb_ir::dialects::ipc::root_panel_step(doc).is_some() {
+        GerberPart::Array
+    } else {
+        GerberPart::Single
+    }
+}
+
+fn layer_attributes(file_function: Vec<String>, part: GerberPart) -> LayerAttributes {
+    LayerAttributes {
+        file_function,
+        part: Some(vec![part.as_str().to_string()]),
+        file_polarity: None,
     }
 }
 
@@ -245,7 +315,7 @@ fn artwork_from_processed_layer(
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
     layer_index: usize,
     role: LayerRole,
-    file_function: Vec<String>,
+    meta: LayerAttributes,
 ) -> Result<ArtworkLayer> {
     let layer = &doc.layers[layer_index];
     let mut artwork = ArtworkLayer::new(Unit::Millimeter);
@@ -256,7 +326,7 @@ fn artwork_from_processed_layer(
         object_start: 0,
         object_count: 0,
         bbox: layer.bbox,
-        meta: file_function,
+        meta,
     });
     for feature in &doc.features
         [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
@@ -264,16 +334,13 @@ fn artwork_from_processed_layer(
         for path in &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         {
-            let aperture_function = path
-                .flags
-                .stroked
-                .then(|| aperture_function(feature.bucket).to_string());
+            let aperture_function = path.flags.stroked.then(|| aperture_function(feature));
             push_artwork_object(
                 &mut artwork,
                 artwork_layer,
                 doc,
                 path,
-                object_attributes(ipc, feature.net, aperture_function),
+                object_attributes(ipc, doc, feature, aperture_function),
                 &layer.name,
             )?;
         }
@@ -285,6 +352,7 @@ const PROFILE_STROKE_WIDTH: f64 = 0.1;
 
 fn profile_artwork_from_profiles(
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    layout_target: LayoutTarget,
 ) -> Result<ArtworkLayer> {
     let mut artwork = ArtworkLayer::new(Unit::Millimeter);
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
@@ -294,14 +362,31 @@ fn profile_artwork_from_profiles(
         object_start: 0,
         object_count: 0,
         bbox: BBox::empty(),
-        meta: vec!["Profile".into(), "NP".into()],
+        meta: layer_attributes(
+            vec!["Profile".into(), "NP".into()],
+            gerber_part_for_doc(doc),
+        ),
     });
-    for profile in pcb_ir::dialects::ipc::render_profiles(doc) {
-        push_profile_artwork_object(&mut artwork, artwork_layer, doc, profile.outer_path);
-        for cutout in &doc.profile_cutouts
-            [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
+    for occurrence in
+        pcb_ir::dialects::ipc::profile_occurrences_for(doc, layout_target.profile_set())
+    {
+        push_profile_artwork_object(
+            &mut artwork,
+            artwork_layer,
+            doc,
+            occurrence.profile.outer_path,
+            occurrence.transform,
+        );
+        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
+            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
         {
-            push_profile_artwork_object(&mut artwork, artwork_layer, doc, cutout.path);
+            push_profile_artwork_object(
+                &mut artwork,
+                artwork_layer,
+                doc,
+                cutout.path,
+                occurrence.transform,
+            );
         }
     }
     Ok(artwork)
@@ -309,25 +394,52 @@ fn profile_artwork_from_profiles(
 
 fn object_attributes(
     ipc: &Ipc2581,
-    net: Option<ipc2581::Symbol>,
-    aperture_function: Option<String>,
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    feature: &GeometryFeature<ipc2581::Symbol>,
+    aperture_function: Option<Vec<String>>,
 ) -> ObjectAttributes {
+    let pin_ref = (feature.pin_ref_count > 0)
+        .then(|| doc.pin_refs.get(feature.pin_ref_start as usize))
+        .flatten();
     ObjectAttributes {
         aperture_function,
-        net: net.map(|symbol| ipc.resolve(symbol).to_string()),
+        net: feature.net.map(|symbol| ipc.resolve(symbol).to_string()),
+        component: pin_ref
+            .and_then(|pin_ref| pin_ref.component_ref)
+            .map(|symbol| ipc.resolve(symbol).to_string()),
+        pin: pin_ref.map(|pin_ref| ipc.resolve(pin_ref.pin).to_string()),
     }
 }
 
-fn aperture_function(bucket: FeatureBucket) -> &'static str {
-    match bucket {
-        FeatureBucket::Smd => "SMDPad",
-        FeatureBucket::Pth => "ComponentPad",
-        FeatureBucket::Via => "ViaPad",
-        FeatureBucket::Trace => "Conductor",
-        FeatureBucket::Fill => "Conductor",
-        FeatureBucket::Cutout => "Other",
-        FeatureBucket::Thermal => "ThermalRelief",
-        FeatureBucket::Antipad => "AntiPad",
+fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> {
+    match feature.semantic {
+        FeatureSemantic::Fiducial(kind) => {
+            let kind = match kind {
+                FiducialKind::Local => "Local",
+                FiducialKind::Global => "Global",
+                FiducialKind::Panel | FiducialKind::GoodPanel => "Panel",
+                FiducialKind::BadBoard => {
+                    return vec!["Other".to_string(), "BadBoardMark".to_string()];
+                }
+            };
+            vec!["FiducialPad".to_string(), kind.to_string()]
+        }
+        FeatureSemantic::SmdPad => vec!["SMDPad".to_string()],
+        FeatureSemantic::ComponentPad => vec!["ComponentPad".to_string()],
+        FeatureSemantic::ViaPad => vec!["ViaPad".to_string()],
+        FeatureSemantic::VCut => vec!["Other".to_string(), "Vcut".to_string()],
+        FeatureSemantic::Score => vec!["Other".to_string(), "Score".to_string()],
+        FeatureSemantic::Route | FeatureSemantic::BoardOutline => vec!["Profile".to_string()],
+        _ => match feature.bucket {
+            FeatureBucket::Smd => vec!["SMDPad".to_string()],
+            FeatureBucket::Pth => vec!["ComponentPad".to_string()],
+            FeatureBucket::Via => vec!["ViaPad".to_string()],
+            FeatureBucket::Fiducial => vec!["FiducialPad".to_string()],
+            FeatureBucket::Trace | FeatureBucket::Fill => vec!["Conductor".to_string()],
+            FeatureBucket::Cutout => vec!["Other".to_string()],
+            FeatureBucket::Thermal => vec!["ThermalRelief".to_string()],
+            FeatureBucket::Antipad => vec!["AntiPad".to_string()],
+        },
     }
 }
 
@@ -376,10 +488,13 @@ fn push_profile_artwork_object(
     artwork_layer: u32,
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
     path_index: u32,
+    transform: pcb_ir::common::Affine2,
 ) {
-    let path = &doc.paths[path_index as usize];
     let artwork_path = ArtworkPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round);
-    let path_id = push_artwork_path(artwork, artwork_path, doc, path);
+    let path_id = artwork.push_path(
+        artwork_path,
+        pcb_ir::dialects::ipc::transformed_path_payloads(doc, path_index, transform),
+    );
     artwork.push_object(
         artwork_layer,
         ArtworkObject {
@@ -388,8 +503,10 @@ fn push_profile_artwork_object(
             net: None,
             bbox: artwork.paths[path_id as usize].bbox,
             meta: ObjectAttributes {
-                aperture_function: Some("Profile".to_string()),
+                aperture_function: Some(vec!["Profile".to_string()]),
                 net: None,
+                component: None,
+                pin: None,
             },
         },
     );
@@ -411,14 +528,22 @@ fn artwork_contours(
 }
 
 pub fn execute_file(input_file: &Path, output_dir: &Path) -> Result<GerberExportSet> {
-    let content = crate::utils::file::load_ipc_file(input_file)?;
-    let ipc = ipc::Ipc2581::parse(&content)?;
-    export_gerber_x2(
-        &ipc,
+    execute_file_with_options(
+        input_file,
         &GerberExportOptions {
             output_dir: output_dir.to_path_buf(),
+            layout_target: LayoutTarget::Board,
         },
     )
+}
+
+pub fn execute_file_with_options(
+    input_file: &Path,
+    options: &GerberExportOptions,
+) -> Result<GerberExportSet> {
+    let content = crate::utils::file::load_ipc_file(input_file)?;
+    let ipc = ipc::Ipc2581::parse(&content)?;
+    export_gerber_x2(&ipc, options)
 }
 
 #[cfg(test)]
@@ -472,7 +597,14 @@ mod tests {
             std::env::temp_dir().join(format!("pcb-ipc-gerber-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&output_dir);
 
-        let set = export_gerber_x2(&ipc, &GerberExportOptions { output_dir }).unwrap();
+        let set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir,
+                layout_target: LayoutTarget::Board,
+            },
+        )
+        .unwrap();
 
         assert!(set.files.iter().any(|file| file.filename == "F_Cu.gtl"));
         assert!(set.files.iter().any(|file| file.filename == "profile.gbr"));
@@ -485,7 +617,178 @@ mod tests {
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
         assert!(copper.contents.contains("%TF.FileFunction,Copper,L1,Top*%"));
+        assert!(copper.contents.contains("%TF.Part,Single*%"));
         assert!(copper.contents.contains("%TO.N,N1*%"));
+
+        let panel_output_dir = std::env::temp_dir().join(format!(
+            "pcb-ipc-gerber-panel-target-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&panel_output_dir);
+        let panel_target_set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir: panel_output_dir,
+                layout_target: LayoutTarget::Panel,
+            },
+        )
+        .unwrap();
+
+        let panel_target_copper = panel_target_set
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert!(panel_target_copper.contents.contains("%TF.Part,Single*%"));
+        assert!(!panel_target_copper.contents.contains("%TF.Part,Array*%"));
+    }
+
+    #[test]
+    fn gerber_export_rejects_symbolic_layout_target() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let output_dir =
+            std::env::temp_dir().join(format!("pcb-ipc-gerber-layout-test-{}", std::process::id()));
+
+        let error = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir,
+                layout_target: LayoutTarget::Layout,
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Gerber export does not support --layout-target layout")
+        );
+    }
+
+    #[test]
+    fn gerber_export_carries_vcut_and_fiducial_x2_metadata() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="Panel"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="VCUT"/>
+    <LayerRef name="SCORE"/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="fidline">
+        <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+      </EntryLineDesc>
+    </DictionaryLineDesc>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER">
+      <Spec name="VCut_1">
+        <V_Cut type="ANGLE">
+          <Property value="90" unit="DEGREES"/>
+        </V_Cut>
+      </Spec>
+    </CadHeader>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="VCUT" layerFunction="V_CUT" side="ALL" polarity="POSITIVE">
+        <SpecRef id="VCut_1"/>
+      </Layer>
+      <Layer name="SCORE" layerFunction="SCORE" side="ALL" polarity="POSITIVE"/>
+      <Step name="Panel" type="PALLET">
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <GlobalFiducial>
+              <Location x="1" y="2"/>
+              <Circle diameter="1">
+                <FillDesc fillProperty="HOLLOW"/>
+                <LineDescRef id="fidline"/>
+              </Circle>
+              <PinRef componentRef="U1" pin="1"/>
+            </GlobalFiducial>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="VCUT">
+          <Set>
+            <Features>
+              <Line startX="0" startY="5" endX="10" endY="5">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="SCORE">
+          <Set>
+            <Features>
+              <Line startX="0" startY="7" endX="10" endY="7">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let output_dir =
+            std::env::temp_dir().join(format!("pcb-ipc-gerber-x2-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir,
+                layout_target: LayoutTarget::Panel,
+            },
+        )
+        .unwrap();
+
+        let top = set
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert!(top.contents.contains("%TF.Part,Array*%"));
+        assert!(
+            top.contents
+                .contains("%TA.AperFunction,FiducialPad,Global*%")
+        );
+        assert!(top.contents.contains("%TO.C,U1*%"));
+        assert!(top.contents.contains("%TO.P,U1,1*%"));
+
+        let vcut = set
+            .files
+            .iter()
+            .find(|file| file.filename == "V_Cut.gbr")
+            .unwrap();
+        assert!(vcut.contents.contains("%TF.FileFunction,Vcut,Top/Bot*%"));
+        assert!(vcut.contents.contains("%TF.Part,Array*%"));
+        assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
+
+        let score = set
+            .files
+            .iter()
+            .find(|file| file.filename == "Score.gbr")
+            .unwrap();
+        assert!(
+            score
+                .contents
+                .contains("%TF.FileFunction,Other,Score,Top/Bot*%")
+        );
+        assert!(score.contents.contains("%TF.Part,Array*%"));
+        assert!(score.contents.contains("%TA.AperFunction,Other,Score*%"));
+        assert!(!score.contents.contains("Vcut"));
     }
 
     #[test]
@@ -501,6 +804,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output_dir: output_dir.clone(),
+                layout_target: LayoutTarget::Board,
             },
         )
         .unwrap();

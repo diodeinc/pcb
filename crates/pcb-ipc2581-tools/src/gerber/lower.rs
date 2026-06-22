@@ -10,12 +10,12 @@ use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkPath};
 use pcb_ir::dialects::gerber::Polarity;
 use pcb_ir::dialects::path::{PathCmd, PathOp};
 
-use super::artwork::{ArtworkLayer, ObjectAttributes};
+use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 
 pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
     let mut apertures = ApertureTable::default();
     let mut objects = Vec::new();
-    let file_function = layer
+    let layer_attributes = layer
         .layers
         .first()
         .map(|layer| layer.meta.clone())
@@ -33,14 +33,13 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
             }),
             ArtworkGeometry::Stroke { path } => {
                 let artwork_path = &layer.paths[path as usize];
-                let aperture = apertures.circle(
-                    artwork_path.stroke_width,
-                    object
-                        .meta
-                        .aperture_function
-                        .as_deref()
-                        .unwrap_or("Conductor"),
-                )?;
+                let default_function = vec!["Conductor".to_string()];
+                let aperture_function = object
+                    .meta
+                    .aperture_function
+                    .as_deref()
+                    .unwrap_or(default_function.as_slice());
+                let aperture = apertures.circle(artwork_path.stroke_width, aperture_function)?;
                 for contour in path_contours(layer, artwork_path) {
                     for segment in contour_segments(&contour.cmds)? {
                         objects.push(WriterObject {
@@ -79,10 +78,7 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
     }
 
     Ok(GerberLayer {
-        file_attributes: vec![AttributeValue::new(
-            ".FileFunction",
-            file_function.iter().cloned(),
-        )],
+        file_attributes: lower_layer_attributes(&layer_attributes),
         apertures: apertures.into_apertures(),
         objects,
         ..GerberLayer::default()
@@ -99,17 +95,17 @@ struct ApertureTable {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ApertureKey {
     diameter_nm: i64,
-    function: String,
+    function: Vec<String>,
 }
 
 impl ApertureTable {
-    fn circle(&mut self, diameter: f64, function: &str) -> Result<i32> {
+    fn circle(&mut self, diameter: f64, function: &[String]) -> Result<i32> {
         if diameter <= 0.0 {
             bail!("cannot export non-positive Gerber stroke aperture diameter {diameter}");
         }
         let key = ApertureKey {
             diameter_nm: quantize_mm(diameter),
-            function: function.to_string(),
+            function: function.to_vec(),
         };
         if let Some(code) = self.by_key.get(&key) {
             return Ok(*code);
@@ -128,7 +124,10 @@ impl ApertureTable {
                 diameter,
                 hole_diameter: None,
             },
-            attributes: vec![AttributeValue::new(".AperFunction", [function.to_string()])],
+            attributes: vec![AttributeValue::new(
+                ".AperFunction",
+                function.iter().cloned(),
+            )],
         });
         Ok(code)
     }
@@ -136,6 +135,23 @@ impl ApertureTable {
     fn into_apertures(self) -> Vec<WriterAperture> {
         self.apertures
     }
+}
+
+fn lower_layer_attributes(attributes: &LayerAttributes) -> Vec<AttributeValue> {
+    let mut values = vec![AttributeValue::new(
+        ".FileFunction",
+        attributes.file_function.iter().cloned(),
+    )];
+    if let Some(part) = &attributes.part {
+        values.push(AttributeValue::new(".Part", part.iter().cloned()));
+    }
+    if let Some(file_polarity) = &attributes.file_polarity {
+        values.push(AttributeValue::new(
+            ".FilePolarity",
+            [file_polarity.clone()],
+        ));
+    }
+    values
 }
 
 fn lower_region_contours(layer: &ArtworkLayer, path: u32) -> Result<Vec<Contour>> {
@@ -260,11 +276,26 @@ fn contour_segments(cmds: &[PathCmd]) -> Result<Vec<Segment>> {
 }
 
 fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue> {
-    attributes
-        .net
-        .as_ref()
-        .map(|net| vec![AttributeValue::new(".N", [sanitize_attribute_field(net)])])
-        .unwrap_or_default()
+    let mut values = Vec::new();
+    if let Some(component) = &attributes.component {
+        values.push(AttributeValue::new(
+            ".C",
+            [sanitize_attribute_field(component)],
+        ));
+    }
+    if let (Some(component), Some(pin)) = (&attributes.component, &attributes.pin) {
+        values.push(AttributeValue::new(
+            ".P",
+            [
+                sanitize_attribute_field(component),
+                sanitize_attribute_field(pin),
+            ],
+        ));
+    }
+    if let Some(net) = &attributes.net {
+        values.push(AttributeValue::new(".N", [sanitize_attribute_field(net)]));
+    }
+    values
 }
 
 fn lower_polarity(paint: PaintPolarity) -> Polarity {
@@ -312,9 +343,38 @@ mod tests {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
             net: Some("PWR_RST*,A%B".to_string()),
+            component: None,
+            pin: None,
         });
 
         assert_eq!(attributes[0].name, ".N");
         assert_eq!(attributes[0].fields, ["PWR_RST__A_B"]);
+    }
+
+    #[test]
+    fn lowers_pin_attribute_with_component_context() {
+        let attributes = lower_object_attributes(&ObjectAttributes {
+            aperture_function: None,
+            net: None,
+            component: Some("U1".to_string()),
+            pin: Some("1".to_string()),
+        });
+
+        assert_eq!(attributes[0].name, ".C");
+        assert_eq!(attributes[0].fields, ["U1"]);
+        assert_eq!(attributes[1].name, ".P");
+        assert_eq!(attributes[1].fields, ["U1", "1"]);
+    }
+
+    #[test]
+    fn skips_pin_attribute_without_component_context() {
+        let attributes = lower_object_attributes(&ObjectAttributes {
+            aperture_function: None,
+            net: None,
+            component: None,
+            pin: Some("1".to_string()),
+        });
+
+        assert!(attributes.is_empty());
     }
 }

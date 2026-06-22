@@ -4,14 +4,17 @@ use crate::dialects::{geom, path as common_path};
 
 #[derive(Debug, Clone)]
 pub struct GeometryDocument<Symbol, LayerFunction> {
-    pub board_name: String,
+    pub layout: LayoutGraph<Symbol>,
     pub layers: Vec<GeometryLayer<Symbol, LayerFunction>>,
-    pub boards: Vec<BoardGeometry<Symbol>>,
-    pub panels: Vec<PanelGeometry<Symbol>>,
-    pub board_instances: Vec<BoardInstance<Symbol>>,
-    pub profiles: Vec<BoardProfile<Symbol>>,
-    pub profile_cutouts: Vec<BoardProfileCutout>,
+    pub profiles: Vec<StepProfile>,
+    pub profile_cutouts: Vec<StepProfileCutout>,
+    pub specs: Vec<IpcSpec<Symbol>>,
+    pub spec_items: Vec<IpcSpecItem<Symbol>>,
+    pub spec_properties: Vec<IpcSpecProperty<Symbol>>,
+    pub spec_refs: Vec<IpcSpecRef<Symbol>>,
+    pub feature_sets: Vec<GeometryFeatureSet<Symbol>>,
     pub features: Vec<GeometryFeature<Symbol>>,
+    pub pin_refs: Vec<IpcPinRef<Symbol>>,
     pub paths: Vec<GeometryPath>,
     pub contours: Vec<GeometryContour>,
     pub path_cmds: Vec<PathCmd>,
@@ -19,21 +22,8 @@ pub struct GeometryDocument<Symbol, LayerFunction> {
 }
 
 impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
-    pub fn new(board_name: String) -> Self {
-        Self {
-            board_name,
-            layers: Vec::new(),
-            boards: Vec::new(),
-            panels: Vec::new(),
-            board_instances: Vec::new(),
-            profiles: Vec::new(),
-            profile_cutouts: Vec::new(),
-            features: Vec::new(),
-            paths: Vec::new(),
-            contours: Vec::new(),
-            path_cmds: Vec::new(),
-            diagnostics: Vec::new(),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn push_path(
@@ -99,33 +89,366 @@ impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
     }
 }
 
-const PROFILE_STROKE_WIDTH: f64 = 0.1;
-
-pub fn profiles_bbox<Symbol, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-) -> Option<BBox> {
-    render_profiles(doc)
-        .map(|profile| profile.bbox)
-        .reduce(BBox::union)
-        .filter(|bbox| !bbox.is_empty())
+impl<Symbol, LayerFunction> Default for GeometryDocument<Symbol, LayerFunction> {
+    fn default() -> Self {
+        Self {
+            layout: LayoutGraph::new(),
+            layers: Vec::new(),
+            profiles: Vec::new(),
+            profile_cutouts: Vec::new(),
+            specs: Vec::new(),
+            spec_items: Vec::new(),
+            spec_properties: Vec::new(),
+            spec_refs: Vec::new(),
+            feature_sets: Vec::new(),
+            features: Vec::new(),
+            pin_refs: Vec::new(),
+            paths: Vec::new(),
+            contours: Vec::new(),
+            path_cmds: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
 }
+
+const PROFILE_STROKE_WIDTH: f64 = 0.1;
 
 pub fn board_bbox<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
 ) -> Option<BBox> {
-    doc.boards
-        .iter()
-        .map(|board| board.bbox)
+    layout_steps_by_kind(doc, LayoutStepKind::Board)
+        .map(|(_, step)| step.bbox)
         .find(|bbox| !bbox.is_empty())
 }
 
 pub fn panel_bbox<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
 ) -> Option<BBox> {
-    doc.panels
+    root_panel_step(doc)
+        .map(|(_, step)| step.bbox)
+        .filter(|bbox| !bbox.is_empty())
+        .or_else(|| {
+            layout_steps_by_kind(doc, LayoutStepKind::Panel)
+                .map(|(_, step)| step.bbox)
+                .find(|bbox| !bbox.is_empty())
+        })
+}
+
+pub fn root_step<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Option<(u32, &LayoutStep<Symbol>)> {
+    let index = doc.layout.root_step?;
+    doc.layout
+        .steps
+        .get(index as usize)
+        .map(|step| (index, step))
+}
+
+pub fn root_panel_step<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Option<(u32, &LayoutStep<Symbol>)> {
+    root_step(doc).filter(|(_, step)| step.kind == LayoutStepKind::Panel)
+}
+
+pub fn layout_steps_by_kind<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    kind: LayoutStepKind,
+) -> impl Iterator<Item = (u32, &LayoutStep<Symbol>)> {
+    doc.layout
+        .steps
         .iter()
-        .map(|panel| panel.bbox)
-        .find(|bbox| !bbox.is_empty())
+        .enumerate()
+        .filter_map(move |(index, step)| (step.kind == kind).then_some((index as u32, step)))
+}
+
+pub fn layout_instances_by_kind<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    kind: LayoutStepKind,
+) -> impl Iterator<Item = (u32, &LayoutInstance<Symbol>)> {
+    doc.layout
+        .instances
+        .iter()
+        .enumerate()
+        .filter_map(move |(index, instance)| {
+            let step = doc.layout.steps.get(instance.child_step as usize)?;
+            (step.kind == kind).then_some((index as u32, instance))
+        })
+}
+
+pub fn layout_child_repeats<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    parent_step: u32,
+    parent_instance: Option<u32>,
+) -> impl Iterator<Item = (u32, &LayoutRepeat<Symbol>)> {
+    doc.layout
+        .repeats
+        .iter()
+        .enumerate()
+        .filter_map(move |(index, repeat)| {
+            (repeat.parent_step == parent_step && repeat.parent_instance == parent_instance)
+                .then_some((index as u32, repeat))
+        })
+}
+
+pub fn layout_repeat_instances<'a, Symbol, LayerFunction>(
+    doc: &'a GeometryDocument<Symbol, LayerFunction>,
+    repeat: &LayoutRepeat<Symbol>,
+) -> impl Iterator<Item = (u32, &'a LayoutInstance<Symbol>)> {
+    let start = repeat.instance_start;
+    let end = repeat.instance_start + repeat.instance_count;
+    (start..end).filter_map(move |index| {
+        doc.layout
+            .instances
+            .get(index as usize)
+            .map(|instance| (index, instance))
+    })
+}
+
+pub fn board_step_count<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> usize {
+    layout_steps_by_kind(doc, LayoutStepKind::Board).count()
+}
+
+pub fn board_instance_count<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> usize {
+    layout_instances_by_kind(doc, LayoutStepKind::Board).count()
+}
+
+pub fn panel_step_count<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> usize {
+    layout_steps_by_kind(doc, LayoutStepKind::Panel).count()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileSet {
+    /// The canonical board step profile only.
+    BoardOutlines,
+    /// Physical outlines for manufacturing exports.
+    ///
+    /// For a panel root, this means the root panel profile plus final board
+    /// instance profiles. Nested panel boundaries are intentionally excluded.
+    FabricationOutlines,
+    /// Every placed profile boundary in the layout graph, including nested
+    /// panel/subpanel boundaries.
+    LayoutBoundaries,
+    /// Only the root step profile.
+    RootOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileOccurrenceRole {
+    Unplaced,
+    RootBoard,
+    RootPanel,
+    RootStep,
+    BoardDefinition,
+    BoardInstance,
+    PanelInstance,
+    StepInstance,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProfileOccurrence<'a> {
+    pub profile_index: u32,
+    pub profile: &'a StepProfile,
+    pub step: Option<u32>,
+    pub instance: Option<u32>,
+    pub transform: Affine2,
+    pub role: ProfileOccurrenceRole,
+    pub depth: u32,
+}
+
+fn profile_range_indices(start: u32, count: u32) -> impl Iterator<Item = u32> {
+    start..start + count
+}
+
+pub fn profile_occurrences_for<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    profile_set: ProfileSet,
+) -> Vec<ProfileOccurrence<'_>> {
+    if profile_set == ProfileSet::BoardOutlines {
+        return board_profile_occurrences(doc);
+    }
+
+    let Some((root_index, root)) = root_step(doc) else {
+        return doc
+            .profiles
+            .iter()
+            .enumerate()
+            .map(|(profile_index, profile)| ProfileOccurrence {
+                profile_index: profile_index as u32,
+                profile,
+                step: None,
+                instance: None,
+                transform: Affine2::identity(),
+                role: ProfileOccurrenceRole::Unplaced,
+                depth: 0,
+            })
+            .collect();
+    };
+
+    let mut occurrences = Vec::new();
+    push_profile_occurrences(
+        &mut occurrences,
+        doc,
+        ProfileOccurrenceSpec {
+            start: root.profile_start,
+            count: root.profile_count,
+            step: Some(root_index),
+            instance: None,
+            transform: Affine2::identity(),
+            role: root_profile_role(root.kind),
+            depth: 0,
+        },
+    );
+
+    if profile_set == ProfileSet::RootOnly {
+        return occurrences;
+    }
+
+    for (instance_index, instance) in doc.layout.instances.iter().enumerate() {
+        let Some(step) = doc.layout.steps.get(instance.child_step as usize) else {
+            continue;
+        };
+        if !include_instance_profiles(profile_set, root.kind, step.kind) {
+            continue;
+        }
+
+        push_profile_occurrences(
+            &mut occurrences,
+            doc,
+            ProfileOccurrenceSpec {
+                start: step.profile_start,
+                count: step.profile_count,
+                step: Some(instance.child_step),
+                instance: Some(instance_index as u32),
+                transform: instance.transform,
+                role: instance_profile_role(step.kind),
+                depth: instance_depth(doc, instance_index as u32),
+            },
+        );
+    }
+    occurrences
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProfileOccurrenceSpec {
+    start: u32,
+    count: u32,
+    step: Option<u32>,
+    instance: Option<u32>,
+    transform: Affine2,
+    role: ProfileOccurrenceRole,
+    depth: u32,
+}
+
+fn push_profile_occurrences<'a, Symbol, LayerFunction>(
+    occurrences: &mut Vec<ProfileOccurrence<'a>>,
+    doc: &'a GeometryDocument<Symbol, LayerFunction>,
+    spec: ProfileOccurrenceSpec,
+) {
+    for profile_index in profile_range_indices(spec.start, spec.count) {
+        let Some(profile) = doc.profiles.get(profile_index as usize) else {
+            continue;
+        };
+        occurrences.push(ProfileOccurrence {
+            profile_index,
+            profile,
+            step: spec.step,
+            instance: spec.instance,
+            transform: spec.transform,
+            role: spec.role,
+            depth: spec.depth,
+        });
+    }
+}
+
+fn include_instance_profiles(
+    profile_set: ProfileSet,
+    root_kind: LayoutStepKind,
+    child_kind: LayoutStepKind,
+) -> bool {
+    match profile_set {
+        ProfileSet::FabricationOutlines => {
+            root_kind == LayoutStepKind::Panel && child_kind == LayoutStepKind::Board
+        }
+        ProfileSet::LayoutBoundaries => true,
+        ProfileSet::BoardOutlines | ProfileSet::RootOnly => false,
+    }
+}
+
+fn board_profile_occurrences<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Vec<ProfileOccurrence<'_>> {
+    let Some((step_index, step)) = layout_steps_by_kind(doc, LayoutStepKind::Board).next() else {
+        return Vec::new();
+    };
+    let role = if root_step(doc).is_some_and(|(root_index, _)| root_index == step_index) {
+        ProfileOccurrenceRole::RootBoard
+    } else {
+        ProfileOccurrenceRole::BoardDefinition
+    };
+    let mut occurrences = Vec::new();
+    push_profile_occurrences(
+        &mut occurrences,
+        doc,
+        ProfileOccurrenceSpec {
+            start: step.profile_start,
+            count: step.profile_count,
+            step: Some(step_index),
+            instance: None,
+            transform: Affine2::identity(),
+            role,
+            depth: 0,
+        },
+    );
+    occurrences
+}
+
+fn root_profile_role(kind: LayoutStepKind) -> ProfileOccurrenceRole {
+    match kind {
+        LayoutStepKind::Board => ProfileOccurrenceRole::RootBoard,
+        LayoutStepKind::Panel => ProfileOccurrenceRole::RootPanel,
+        _ => ProfileOccurrenceRole::RootStep,
+    }
+}
+
+fn instance_profile_role(kind: LayoutStepKind) -> ProfileOccurrenceRole {
+    match kind {
+        LayoutStepKind::Board => ProfileOccurrenceRole::BoardInstance,
+        LayoutStepKind::Panel => ProfileOccurrenceRole::PanelInstance,
+        _ => ProfileOccurrenceRole::StepInstance,
+    }
+}
+
+fn instance_depth<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    instance_index: u32,
+) -> u32 {
+    let mut depth = 1;
+    let mut remaining = doc.layout.instances.len();
+    let mut parent = doc
+        .layout
+        .instances
+        .get(instance_index as usize)
+        .and_then(|instance| instance.parent_instance);
+
+    while let Some(parent_index) = parent {
+        if remaining == 0 {
+            break;
+        }
+        remaining -= 1;
+        depth += 1;
+        parent = doc
+            .layout
+            .instances
+            .get(parent_index as usize)
+            .and_then(|instance| instance.parent_instance);
+    }
+    depth
 }
 
 pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
@@ -172,11 +495,12 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
     geom
 }
 
-pub fn lower_layer_with_profiles_to_geom<Symbol: Clone, LayerFunction: Clone>(
+pub fn lower_layer_with_profile_set_to_geom<Symbol: Clone, LayerFunction: Clone>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     layer_index: usize,
     role: LayerRole,
     side: Side,
+    profile_set: ProfileSet,
 ) -> geom::GeomDocument<LayerFunction, Option<Symbol>> {
     let mut geom = lower_layer_to_geom(doc, layer_index, role, side);
     let layer = &doc.layers[layer_index];
@@ -190,32 +514,28 @@ pub fn lower_layer_with_profiles_to_geom<Symbol: Clone, LayerFunction: Clone>(
         meta: layer.layer_function.clone(),
     });
 
-    for profile in render_profiles(doc) {
-        push_profile_path_to_geom(&mut geom, outline_layer, doc, profile.outer_path);
-        for cutout in &doc.profile_cutouts
-            [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
+    for occurrence in profile_occurrences_for(doc, profile_set) {
+        push_profile_path_to_geom(
+            &mut geom,
+            outline_layer,
+            doc,
+            occurrence.profile.outer_path,
+            occurrence.transform,
+        );
+        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
+            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
         {
-            push_profile_path_to_geom(&mut geom, outline_layer, doc, cutout.path);
+            push_profile_path_to_geom(
+                &mut geom,
+                outline_layer,
+                doc,
+                cutout.path,
+                occurrence.transform,
+            );
         }
     }
 
     geom
-}
-
-pub fn render_profiles<Symbol, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-) -> impl Iterator<Item = &BoardProfile<Symbol>> {
-    let has_panel = !doc.panels.is_empty();
-    doc.profiles.iter().filter(move |profile| {
-        if has_panel {
-            matches!(
-                profile.kind,
-                BoardProfileKind::PanelDefinition | BoardProfileKind::BoardInstance
-            )
-        } else {
-            matches!(profile.kind, BoardProfileKind::BoardDefinition)
-        }
-    })
 }
 
 fn push_profile_path_to_geom<Symbol, LayerFunction>(
@@ -223,22 +543,24 @@ fn push_profile_path_to_geom<Symbol, LayerFunction>(
     layer_id: u32,
     doc: &GeometryDocument<Symbol, LayerFunction>,
     path_index: u32,
+    transform: Affine2,
 ) {
-    let path = &doc.paths[path_index as usize];
+    let payloads = transformed_path_payloads(doc, path_index, transform);
     let path_id = geom.push_path(
         geom::GeomPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round),
-        path_payloads(doc, path),
+        payloads,
     );
+    let bbox = geom.paths[path_id as usize].bbox;
     geom.push_object(
         layer_id,
         geom::GeomObject {
             paint: PaintPolarity::Dark,
             path: path_id,
-            bbox: path.bbox,
+            bbox,
             meta: None,
         },
     );
-    geom.layers[layer_id as usize].bbox = geom.layers[layer_id as usize].bbox.union(path.bbox);
+    geom.layers[layer_id as usize].bbox = geom.layers[layer_id as usize].bbox.union(bbox);
 }
 
 fn lower_path_kind(path: &GeometryPath) -> Option<geom::GeomPath> {
@@ -270,6 +592,37 @@ fn path_payloads<Symbol, LayerFunction>(
         .collect()
 }
 
+pub fn transformed_path_payloads<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    path_index: u32,
+    transform: Affine2,
+) -> Vec<common_path::PathPayload> {
+    let path = &doc.paths[path_index as usize];
+    doc.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+        .iter()
+        .map(|contour| {
+            common_path::transform_cmds(
+                doc.path_cmds
+                    [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+                    .iter()
+                    .copied(),
+                transform,
+            )
+            .into()
+        })
+        .collect()
+}
+
+pub fn transformed_path_bbox<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    path_index: u32,
+    transform: Affine2,
+) -> BBox {
+    transformed_path_payloads(doc, path_index, transform)
+        .iter()
+        .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
+}
+
 fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
     match polarity {
         GeometryPolarity::Positive => PaintPolarity::Dark,
@@ -277,29 +630,104 @@ fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
     }
 }
 
+/// Canonical IPC layout graph.
+///
+/// IPC-2581 stores panelization as reusable `Step` definitions plus
+/// `StepRepeat` placements. This graph mirrors that model directly: `steps`
+/// are reusable definitions, `repeats` are compact placement edges, and
+/// `instances` are the materialized placements generated by each repeat.
+/// Flattened board or panel geometry is a derived export/rendering view, not
+/// independent IR state.
 #[derive(Debug, Clone)]
-pub struct BoardGeometry<Symbol> {
-    pub step_ref: Symbol,
+pub struct LayoutGraph<Symbol> {
+    /// Root step selected by IPC Content/StepRef or by parser fallback.
+    pub root_step: Option<u32>,
+    /// Reusable step definitions. Indices are referenced by repeats and instances.
+    pub steps: Vec<LayoutStep<Symbol>>,
+    /// Compact parent-to-child repeat records. Instances for one repeat are contiguous.
+    pub repeats: Vec<LayoutRepeat<Symbol>>,
+    /// Materialized placements. Nested panel children reference their parent instance.
+    pub instances: Vec<LayoutInstance<Symbol>>,
+}
+
+impl<Symbol> LayoutGraph<Symbol> {
+    pub fn new() -> Self {
+        Self {
+            root_step: None,
+            steps: Vec::new(),
+            repeats: Vec::new(),
+            instances: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.root_step.is_none()
+            && self.steps.is_empty()
+            && self.repeats.is_empty()
+            && self.instances.is_empty()
+    }
+}
+
+impl<Symbol> Default for LayoutGraph<Symbol> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Reusable IPC step definition.
+///
+/// A step owns its local profile/layer features. A board array is represented
+/// by a panel step with child board instances, not by duplicating board data.
+#[derive(Debug, Clone)]
+pub struct LayoutStep<Symbol> {
+    pub source_step_ref: Symbol,
+    pub kind: LayoutStepKind,
+    pub datum: Point,
     pub profile_start: u32,
     pub profile_count: u32,
     pub bbox: BBox,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutStepKind {
+    Board,
+    Panel,
+    Coupon,
+    Tooling,
+    Ic,
+    Unknown,
+}
+
+/// Compact placement edge from a parent step or parent instance to a child step.
 #[derive(Debug, Clone)]
-pub struct PanelGeometry<Symbol> {
-    pub step_ref: Symbol,
-    pub profile_start: u32,
-    pub profile_count: u32,
-    pub profile_bbox: BBox,
-    pub board_instance_start: u32,
-    pub board_instance_count: u32,
-    pub instance_bbox: BBox,
+pub struct LayoutRepeat<Symbol> {
+    pub parent_step: u32,
+    pub parent_instance: Option<u32>,
+    pub child_step: u32,
+    pub source_step_ref: Symbol,
+    pub x: f64,
+    pub y: f64,
+    pub nx: u32,
+    pub ny: u32,
+    pub dx: f64,
+    pub dy: f64,
+    pub angle: f64,
+    pub mirror: bool,
+    pub instance_start: u32,
+    pub instance_count: u32,
     pub bbox: BBox,
 }
 
+/// One materialized placement of a child step.
+///
+/// `transform` maps from the child step's local coordinate system into the
+/// root layout coordinate system. Repeated boards, subpanels, coupons, and
+/// tooling steps are all represented by this same structure.
 #[derive(Debug, Clone)]
-pub struct BoardInstance<Symbol> {
-    pub board_index: u32,
+pub struct LayoutInstance<Symbol> {
+    pub repeat: u32,
+    pub parent_instance: Option<u32>,
+    pub child_step: u32,
     pub source_step_ref: Symbol,
     pub parent_step_ref: Symbol,
     pub transform: Affine2,
@@ -309,23 +737,11 @@ pub struct BoardInstance<Symbol> {
     pub repeat_count_y: u32,
     pub repeat_pitch_x: f64,
     pub repeat_pitch_y: f64,
-    pub profile_start: u32,
-    pub profile_count: u32,
     pub bbox: BBox,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoardProfileKind {
-    BoardDefinition,
-    PanelDefinition,
-    BoardInstance,
-}
-
 #[derive(Debug, Clone)]
-pub struct BoardProfile<Symbol> {
-    pub kind: BoardProfileKind,
-    pub source_step_ref: Symbol,
-    pub transform: Affine2,
+pub struct StepProfile {
     pub outer_path: u32,
     pub cutout_start: u32,
     pub cutout_count: u32,
@@ -333,8 +749,63 @@ pub struct BoardProfile<Symbol> {
 }
 
 #[derive(Debug, Clone)]
-pub struct BoardProfileCutout {
+pub struct StepProfileCutout {
     pub path: u32,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcSpec<Symbol> {
+    pub name: Symbol,
+    pub item_start: u32,
+    pub item_count: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcSpecItem<Symbol> {
+    pub element: Symbol,
+    pub kind: IpcSpecItemKind,
+    pub item_type: Option<Symbol>,
+    pub comment: Option<Symbol>,
+    pub property_start: u32,
+    pub property_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpcSpecItemKind {
+    General,
+    Dielectric,
+    Conductor,
+    SurfaceFinish,
+    VCut,
+    Other,
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcSpecProperty<Symbol> {
+    pub value: Option<f64>,
+    pub text: Option<Symbol>,
+    pub unit: Option<Symbol>,
+    pub plus_tol: Option<f64>,
+    pub minus_tol: Option<f64>,
+    pub tol_percent: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcSpecRef<Symbol> {
+    pub spec: Symbol,
+}
+
+#[derive(Debug, Clone)]
+pub struct GeometryFeatureSet<Symbol> {
+    pub layer: u32,
+    pub source_set_index: u32,
+    pub net: Option<Symbol>,
+    pub polarity: GeometryPolarity,
+    pub spec_ref_start: u32,
+    pub spec_ref_count: u32,
+    pub feature_start: u32,
+    pub feature_count: u32,
     pub bbox: BBox,
 }
 
@@ -343,6 +814,10 @@ pub struct GeometryLayer<Symbol, LayerFunction> {
     pub name: String,
     pub source_layer_ref: Symbol,
     pub layer_function: LayerFunction,
+    pub spec_ref_start: u32,
+    pub spec_ref_count: u32,
+    pub set_start: u32,
+    pub set_count: u32,
     pub feature_start: u32,
     pub feature_count: u32,
     pub bbox: BBox,
@@ -355,7 +830,9 @@ pub struct GeometryFeature<Symbol> {
     pub polarity: GeometryPolarity,
     pub net: Option<Symbol>,
     pub source_layer_ref: Option<Symbol>,
+    pub set: Option<u32>,
     pub source: SourceRef,
+    pub semantic: FeatureSemantic,
     pub transform: Affine2,
     pub bbox: BBox,
     pub path_start: u32,
@@ -375,6 +852,8 @@ pub struct GeometryFeature<Symbol> {
     pub fill_rule: FillRule,
     pub padstack_ref: Option<Symbol>,
     pub primitive_ref: Option<Symbol>,
+    pub pin_ref_start: u32,
+    pub pin_ref_count: u32,
     pub flags: FeatureFlags,
 }
 
@@ -386,7 +865,9 @@ impl<Symbol> GeometryFeature<Symbol> {
             polarity,
             net: None,
             source_layer_ref: None,
+            set: None,
             source: SourceRef::default(),
+            semantic: FeatureSemantic::None,
             transform: Affine2::identity(),
             bbox: BBox::empty(),
             path_start: 0,
@@ -404,9 +885,18 @@ impl<Symbol> GeometryFeature<Symbol> {
             fill_rule: FillRule::NonZero,
             padstack_ref: None,
             primitive_ref: None,
+            pin_ref_start: 0,
+            pin_ref_count: 0,
             flags: FeatureFlags::default(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcPinRef<Symbol> {
+    pub component_ref: Option<Symbol>,
+    pub pin: Symbol,
+    pub title: Option<Symbol>,
 }
 
 #[derive(Debug, Clone)]
@@ -487,11 +977,36 @@ pub enum FeatureBucket {
     Smd,
     Pth,
     Via,
+    Fiducial,
     Trace,
     Fill,
     Cutout,
     Thermal,
     Antipad,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeatureSemantic {
+    None,
+    CopperConductor,
+    SmdPad,
+    ComponentPad,
+    ViaPad,
+    Fiducial(FiducialKind),
+    VCut,
+    Score,
+    Route,
+    BoardOutline,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FiducialKind {
+    Local,
+    Global,
+    Panel,
+    BadBoard,
+    GoodPanel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

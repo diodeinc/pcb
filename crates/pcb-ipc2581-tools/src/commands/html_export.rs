@@ -6,6 +6,7 @@ use ipc2581::types::ecad::Layer;
 use minijinja::{Environment, context};
 use serde::Serialize;
 
+use crate::LayoutTarget;
 use crate::UnitFormat;
 use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
 use crate::geometry;
@@ -100,11 +101,21 @@ struct BoardSummary {
     design_name: Option<String>,
     width: Option<String>,
     height: Option<String>,
+    panel: Option<PanelSummary>,
     thickness: Option<String>,
     copper_layers: Option<usize>,
     components: Option<usize>,
     nets: Option<usize>,
     drill_holes: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PanelSummary {
+    step_name: String,
+    width: Option<String>,
+    height: Option<String>,
+    board_count: usize,
+    board_instances: usize,
 }
 
 #[derive(Serialize)]
@@ -168,26 +179,34 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
     let design_name = accessor
         .primary_step()
         .map(|step| accessor.ipc().resolve(step.name).to_string());
+    let layout = accessor.board_layout_info();
 
-    let (width, height) = if let Some(dims) = accessor.board_dimensions() {
-        let (w, h) = match unit_format {
-            UnitFormat::Mm => (
-                format!("{:.2} mm", dims.width_mm()),
-                format!("{:.2} mm", dims.height_mm()),
-            ),
-            UnitFormat::Mil => (
-                format!("{:.1} mil", dims.width_mm() / 0.0254),
-                format!("{:.1} mil", dims.height_mm() / 0.0254),
-            ),
-            UnitFormat::Inch => (
-                format!("{:.3} in", dims.width_mm() / 25.4),
-                format!("{:.3} in", dims.height_mm() / 25.4),
-            ),
-        };
-        (Some(w), Some(h))
+    let (width, height) = if let Some(dims) = layout
+        .as_ref()
+        .and_then(|layout| layout.board_dimensions.as_ref())
+    {
+        formatted_dimensions(dims.width_mm(), dims.height_mm(), unit_format)
     } else {
         (None, None)
     };
+
+    let panel = layout
+        .as_ref()
+        .and_then(|layout| layout.panel.as_ref())
+        .map(|panel| {
+            let (width, height) = panel
+                .dimensions
+                .as_ref()
+                .map(|dims| formatted_dimensions(dims.width_mm(), dims.height_mm(), unit_format))
+                .unwrap_or((None, None));
+            PanelSummary {
+                step_name: panel.step_name.clone(),
+                width,
+                height,
+                board_count: panel.board_count,
+                board_instances: panel.board_instances,
+            }
+        });
 
     let thickness = if let Some(stackup) = accessor.stackup_details() {
         stackup.overall_thickness_mm.map(|t| match unit_format {
@@ -223,11 +242,33 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         design_name,
         width,
         height,
+        panel,
         thickness,
         copper_layers,
         components,
         nets,
         drill_holes,
+    }
+}
+
+fn formatted_dimensions(
+    width_mm: f64,
+    height_mm: f64,
+    unit_format: UnitFormat,
+) -> (Option<String>, Option<String>) {
+    match unit_format {
+        UnitFormat::Mm => (
+            Some(format!("{width_mm:.2} mm")),
+            Some(format!("{height_mm:.2} mm")),
+        ),
+        UnitFormat::Mil => (
+            Some(format!("{:.1} mil", width_mm / 0.0254)),
+            Some(format!("{:.1} mil", height_mm / 0.0254)),
+        ),
+        UnitFormat::Inch => (
+            Some(format!("{:.3} in", width_mm / 25.4)),
+            Some(format!("{:.3} in", height_mm / 25.4)),
+        ),
     }
 }
 
@@ -318,11 +359,15 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    match geometry::extract_layer(ipc, &name) {
+    match geometry::extract_layer_for_layout_target(ipc, &name, LayoutTarget::Layout) {
         Ok(mut geometry) => {
             rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
             pcb_ir::dialects::ipc::process::process_document(&mut geometry);
-            rendered.svg = Some(geometry::render::render_layer_svg(&geometry, true));
+            rendered.svg = Some(geometry::render::render_layer_svg(
+                &geometry,
+                true,
+                LayoutTarget::Layout.profile_set(),
+            ));
             if !geometry.diagnostics.is_empty() {
                 rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
             }
@@ -467,6 +512,9 @@ mod tests {
 
         assert!(design_row.contains(r#"<span class="summary-value">panel</span>"#));
         assert!(!design_row.contains(r#"<span class="summary-value">board</span>"#));
+        assert!(html.contains("Panel Step:"));
+        assert!(html.contains("Panel Boards:"));
+        assert!(html.contains("1 instance from 1 board step"));
     }
 
     #[test]

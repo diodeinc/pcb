@@ -21,7 +21,6 @@ impl BoardDimensions {
         }
     }
 
-    // Legacy accessors for backward compatibility
     pub fn width_mm(&self) -> f64 {
         self.width.mm()
     }
@@ -63,7 +62,6 @@ pub struct StackupInfo {
 }
 
 impl StackupInfo {
-    // Legacy accessor for backward compatibility
     pub fn overall_thickness_mm(&self) -> Option<f64> {
         self.thickness.map(|t| t.mm())
     }
@@ -72,14 +70,14 @@ impl StackupInfo {
 impl<'a> IpcAccessor<'a> {
     /// Extract board and panel geometry from canonical IPC layout IR.
     pub fn board_layout_info(&self) -> Option<BoardLayoutInfo> {
-        let doc = geometry::extract_profiles(self.ipc()).ok()?;
+        let doc = geometry::extract_layout(self.ipc()).ok()?;
         let board_dimensions =
             pcb_ir::dialects::ipc::board_bbox(&doc).and_then(dimensions_from_bbox);
-        let panel = doc.panels.first().map(|panel| PanelInfo {
-            step_name: self.ipc().resolve(panel.step_ref).to_string(),
-            board_count: doc.boards.len(),
-            board_instances: panel.board_instance_count as usize,
-            dimensions: dimensions_from_bbox(panel.bbox),
+        let panel = pcb_ir::dialects::ipc::root_panel_step(&doc).map(|(_, panel_step)| PanelInfo {
+            step_name: self.ipc().resolve(panel_step.source_step_ref).to_string(),
+            board_count: pcb_ir::dialects::ipc::board_step_count(&doc),
+            board_instances: pcb_ir::dialects::ipc::board_instance_count(&doc),
+            dimensions: pcb_ir::dialects::ipc::panel_bbox(&doc).and_then(dimensions_from_bbox),
         });
 
         if board_dimensions.is_none() && panel.is_none() {
