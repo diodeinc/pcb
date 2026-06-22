@@ -43,7 +43,7 @@ pub fn prune_unpainted_paths<S, L>(doc: &mut GeometryDocument<S, L>) {
         feature.path_count = path_count;
     }
 
-    // Board profiles are physical geometry, not painted layer features, and are
+    // Step profiles are physical geometry, not painted layer features, and are
     // intentionally allowed to use unpainted paths.
 }
 
@@ -154,35 +154,6 @@ pub fn normalize_bounds<S, L>(doc: &mut GeometryDocument<S, L>) {
         doc.profiles[profile_index].bbox = doc.paths[outer_path as usize].bbox;
     }
 
-    for board_index in 0..doc.boards.len() {
-        let profile_start = doc.boards[board_index].profile_start;
-        let profile_count = doc.boards[board_index].profile_count;
-        doc.boards[board_index].bbox = profiles_range_bbox(doc, profile_start, profile_count);
-    }
-
-    for instance_index in 0..doc.board_instances.len() {
-        let profile_start = doc.board_instances[instance_index].profile_start;
-        let profile_count = doc.board_instances[instance_index].profile_count;
-        doc.board_instances[instance_index].bbox =
-            profiles_range_bbox(doc, profile_start, profile_count);
-    }
-
-    for panel_index in 0..doc.panels.len() {
-        let profile_start = doc.panels[panel_index].profile_start;
-        let profile_count = doc.panels[panel_index].profile_count;
-        let instance_start = doc.panels[panel_index].board_instance_start;
-        let instance_count = doc.panels[panel_index].board_instance_count;
-        let profile_bbox = profiles_range_bbox(doc, profile_start, profile_count);
-        let instance_bbox = board_instances_range_bbox(doc, instance_start, instance_count);
-        doc.panels[panel_index].profile_bbox = profile_bbox;
-        doc.panels[panel_index].instance_bbox = instance_bbox;
-        doc.panels[panel_index].bbox = if !profile_bbox.is_empty() {
-            profile_bbox
-        } else {
-            instance_bbox
-        };
-    }
-
     for instance_index in 0..doc.layout.instances.len() {
         let profile_start = doc.layout.instances[instance_index].profile_start;
         let profile_count = doc.layout.instances[instance_index].profile_count;
@@ -226,13 +197,6 @@ fn profiles_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, count: u3
     doc.profiles[start as usize..(start + count) as usize]
         .iter()
         .map(|profile| profile.bbox)
-        .fold(BBox::empty(), BBox::union)
-}
-
-fn board_instances_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, count: u32) -> BBox {
-    doc.board_instances[start as usize..(start + count) as usize]
-        .iter()
-        .map(|instance| instance.bbox)
         .fold(BBox::empty(), BBox::union)
 }
 
@@ -826,12 +790,11 @@ mod tests {
                 PathCmd::line_to(Point::new(1.0, 1.0)),
             ],
         );
-        doc.profile_cutouts.push(BoardProfileCutout {
+        doc.profile_cutouts.push(StepProfileCutout {
             path: cutout_path,
             bbox: BBox::empty(),
         });
-        doc.profiles.push(BoardProfile {
-            kind: BoardProfileKind::BoardDefinition,
+        doc.profiles.push(StepProfile {
             source_step_ref: 0,
             transform: Affine2::identity(),
             outer_path: outer_profile_path,

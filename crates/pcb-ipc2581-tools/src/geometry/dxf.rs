@@ -228,7 +228,7 @@ fn fmt_num(value: f64) -> String {
 mod tests {
     use super::*;
     use pcb_ir::common::{Affine2, BBox};
-    use pcb_ir::dialects::ipc::{BoardProfile, BoardProfileCutout, BoardProfileKind, GeometryPath};
+    use pcb_ir::dialects::ipc::{GeometryPath, StepProfile, StepProfileCutout};
 
     #[test]
     fn renders_profile_ir_as_mm_dxf_with_closed_outline_layer() {
@@ -255,8 +255,7 @@ mod tests {
                 PathCmd::close(),
             ],
         );
-        doc.profiles.push(BoardProfile {
-            kind: BoardProfileKind::BoardDefinition,
+        doc.profiles.push(StepProfile {
             source_step_ref: 0,
             transform: Affine2::identity(),
             outer_path: path,
@@ -292,12 +291,11 @@ mod tests {
                 PathCmd::close(),
             ],
         );
-        doc.profile_cutouts.push(BoardProfileCutout {
+        doc.profile_cutouts.push(StepProfileCutout {
             path: cutout_path,
             bbox: BBox::empty(),
         });
-        doc.profiles.push(BoardProfile {
-            kind: BoardProfileKind::BoardDefinition,
+        doc.profiles.push(StepProfile {
             source_step_ref: 0,
             transform: Affine2::identity(),
             outer_path,

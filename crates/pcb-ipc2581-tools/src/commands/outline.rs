@@ -71,9 +71,9 @@ mod tests {
 
         let profiles = geometry::extract_profiles(&ipc).unwrap();
 
-        assert_eq!(profiles.boards.len(), 1);
-        assert_eq!(profiles.panels.len(), 1);
-        assert_eq!(profiles.board_instances.len(), 1);
+        assert_eq!(pcb_ir::dialects::ipc::board_step_count(&profiles), 1);
+        assert_eq!(pcb_ir::dialects::ipc::panel_step_count(&profiles), 1);
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&profiles), 1);
         assert_eq!(profiles.profiles.len(), 2);
         assert_eq!(pcb_ir::dialects::ipc::render_profiles(&profiles).count(), 1);
     }

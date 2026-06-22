@@ -75,11 +75,11 @@ impl<'a> IpcAccessor<'a> {
         let doc = geometry::extract_profiles(self.ipc()).ok()?;
         let board_dimensions =
             pcb_ir::dialects::ipc::board_bbox(&doc).and_then(dimensions_from_bbox);
-        let panel = doc.panels.first().map(|panel| PanelInfo {
-            step_name: self.ipc().resolve(panel.step_ref).to_string(),
-            board_count: doc.boards.len(),
-            board_instances: panel.board_instance_count as usize,
-            dimensions: dimensions_from_bbox(panel.bbox),
+        let panel = pcb_ir::dialects::ipc::root_panel_step(&doc).map(|(_, panel_step)| PanelInfo {
+            step_name: self.ipc().resolve(panel_step.source_step_ref).to_string(),
+            board_count: pcb_ir::dialects::ipc::board_step_count(&doc),
+            board_instances: pcb_ir::dialects::ipc::board_instance_count(&doc),
+            dimensions: pcb_ir::dialects::ipc::panel_bbox(&doc).and_then(dimensions_from_bbox),
         });
 
         if board_dimensions.is_none() && panel.is_none() {

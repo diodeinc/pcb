@@ -46,6 +46,36 @@ struct ProfileRange {
     bbox: BBox,
 }
 
+struct LayoutBuildContext<'a> {
+    ipc: &'a Ipc2581,
+    steps: &'a [Step],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LayoutParent<'a> {
+    step: &'a Step,
+    transform: Affine2,
+    layout_step: u32,
+    instance: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LayoutInstanceSpec {
+    repeat: u32,
+    parent_instance: Option<u32>,
+    child_step: u32,
+    source_step_ref: Symbol,
+    parent_step_ref: Symbol,
+    transform: Affine2,
+    repeat_index_x: u32,
+    repeat_index_y: u32,
+    repeat_count_x: u32,
+    repeat_count_y: u32,
+    repeat_pitch_x: f64,
+    repeat_pitch_y: f64,
+    profiles: ProfileRange,
+}
+
 struct ExtractContext<'a> {
     ipc: &'a Ipc2581,
     padstacks: HashMap<Symbol, &'a ipc2581::types::PadStackDef>,
@@ -475,24 +505,9 @@ fn append_layout_geometry(
 
 fn append_step_only_layout_geometry(doc: &mut GeometryDocument, primary_step: &Step) {
     if is_panel_step(primary_step) {
-        let profiles = append_step_profile(
-            doc,
-            primary_step,
-            Affine2::identity(),
-            BoardProfileKind::PanelDefinition,
-        );
+        let profiles = append_step_profile(doc, primary_step, Affine2::identity());
         let step = push_or_update_layout_step(doc, primary_step, profiles);
         doc.layout.root_step = Some(step);
-        doc.panels.push(PanelGeometry {
-            step_ref: primary_step.name,
-            profile_start: profiles.start,
-            profile_count: profiles.count,
-            profile_bbox: profiles.bbox,
-            board_instance_start: doc.board_instances.len() as u32,
-            board_instance_count: 0,
-            instance_bbox: BBox::empty(),
-            bbox: profiles.bbox,
-        });
     } else if is_board_step(primary_step) {
         doc.layout.root_step = Some(ensure_layout_step_for_step(doc, primary_step));
     }
@@ -504,81 +519,52 @@ fn append_panel_geometry(
     steps: &[Step],
     panel_step: &Step,
 ) -> Result<()> {
-    let panel_profiles = append_step_profile(
-        doc,
-        panel_step,
-        Affine2::identity(),
-        BoardProfileKind::PanelDefinition,
-    );
+    let panel_profiles = append_step_profile(doc, panel_step, Affine2::identity());
     let root_layout_step = push_or_update_layout_step(doc, panel_step, panel_profiles);
     doc.layout.root_step = Some(root_layout_step);
-    let board_instance_start = doc.board_instances.len() as u32;
-    let mut stack = vec![panel_step.name];
-    append_board_instances_from_repeats(
-        doc,
-        ipc,
-        steps,
-        panel_step,
-        Affine2::identity(),
-        &mut stack,
-        root_layout_step,
-        None,
-    )?;
-    let board_instance_count = doc.board_instances.len() as u32 - board_instance_start;
-    let instance_bbox = board_instances_bbox(doc, board_instance_start, board_instance_count);
-    let bbox = if !panel_profiles.bbox.is_empty() {
-        panel_profiles.bbox
-    } else {
-        instance_bbox
+    let context = LayoutBuildContext { ipc, steps };
+    let parent = LayoutParent {
+        step: panel_step,
+        transform: Affine2::identity(),
+        layout_step: root_layout_step,
+        instance: None,
     };
-
-    doc.panels.push(PanelGeometry {
-        step_ref: panel_step.name,
-        profile_start: panel_profiles.start,
-        profile_count: panel_profiles.count,
-        profile_bbox: panel_profiles.bbox,
-        board_instance_start,
-        board_instance_count,
-        instance_bbox,
-        bbox,
-    });
+    let mut stack = vec![panel_step.name];
+    append_layout_repeats(doc, &context, parent, &mut stack)?;
 
     Ok(())
 }
 
-fn append_board_instances_from_repeats(
+fn append_layout_repeats(
     doc: &mut GeometryDocument,
-    ipc: &Ipc2581,
-    steps: &[Step],
-    parent_step: &Step,
-    parent_transform: Affine2,
+    context: &LayoutBuildContext<'_>,
+    parent: LayoutParent<'_>,
     stack: &mut Vec<Symbol>,
-    parent_layout_step: u32,
-    parent_instance: Option<u32>,
 ) -> Result<()> {
-    for repeat in &parent_step.step_repeats {
-        let source_step = steps
+    for repeat in &parent.step.step_repeats {
+        let source_step = context
+            .steps
             .iter()
             .find(|step| step.name == repeat.step_ref)
             .with_context(|| {
                 format!(
                     "StepRepeat references unknown Step '{}'",
-                    ipc.resolve(repeat.step_ref)
+                    context.ipc.resolve(repeat.step_ref)
                 )
             })?;
 
         if stack.contains(&source_step.name) {
             bail!(
                 "StepRepeat cycle references Step '{}'",
-                ipc.resolve(source_step.name)
+                context.ipc.resolve(source_step.name)
             );
         }
 
         let child_layout_step = ensure_layout_step_for_step(doc, source_step);
         let layout_repeat = push_layout_repeat(
             doc,
-            parent_layout_step,
-            parent_instance,
+            parent.layout_step,
+            parent.instance,
             child_layout_step,
             source_step.name,
             repeat,
@@ -587,147 +573,52 @@ fn append_board_instances_from_repeats(
         let mut pending_panel_instances = Vec::new();
         for iy in 0..repeat.ny {
             for ix in 0..repeat.nx {
-                let transform = parent_transform.concat(step_repeat_transform(repeat, ix, iy));
+                let transform = parent
+                    .transform
+                    .concat(step_repeat_transform(repeat, ix, iy));
+                let profiles = append_step_profile(doc, source_step, transform);
+                let layout_instance = push_layout_instance(
+                    doc,
+                    LayoutInstanceSpec {
+                        repeat: layout_repeat,
+                        parent_instance: parent.instance,
+                        child_step: child_layout_step,
+                        source_step_ref: source_step.name,
+                        parent_step_ref: parent.step.name,
+                        transform,
+                        repeat_index_x: ix,
+                        repeat_index_y: iy,
+                        repeat_count_x: repeat.nx,
+                        repeat_count_y: repeat.ny,
+                        repeat_pitch_x: repeat.dx,
+                        repeat_pitch_y: repeat.dy,
+                        profiles,
+                    },
+                );
                 if is_panel_step(source_step) {
-                    let profiles = append_step_profile(
-                        doc,
-                        source_step,
-                        transform,
-                        BoardProfileKind::PanelInstance,
-                    );
-                    let layout_instance = push_layout_instance(
-                        doc,
-                        layout_repeat,
-                        parent_instance,
-                        child_layout_step,
-                        source_step.name,
-                        parent_step.name,
-                        repeat,
-                        ix,
-                        iy,
-                        transform,
-                        profiles,
-                    );
                     pending_panel_instances.push((source_step, transform, layout_instance));
-                } else if is_board_step(source_step) {
-                    let profiles = append_board_instance(
-                        doc,
-                        parent_step,
-                        source_step,
-                        repeat,
-                        ix,
-                        iy,
-                        transform,
-                    );
-                    push_layout_instance(
-                        doc,
-                        layout_repeat,
-                        parent_instance,
-                        child_layout_step,
-                        source_step.name,
-                        parent_step.name,
-                        repeat,
-                        ix,
-                        iy,
-                        transform,
-                        profiles,
-                    );
-                } else {
-                    let profiles = append_step_profile(
-                        doc,
-                        source_step,
-                        transform,
-                        BoardProfileKind::StepInstance,
-                    );
-                    push_layout_instance(
-                        doc,
-                        layout_repeat,
-                        parent_instance,
-                        child_layout_step,
-                        source_step.name,
-                        parent_step.name,
-                        repeat,
-                        ix,
-                        iy,
-                        transform,
-                        profiles,
-                    );
                 }
             }
         }
 
         for (source_step, transform, layout_instance) in pending_panel_instances {
             stack.push(source_step.name);
-            append_board_instances_from_repeats(
+            append_layout_repeats(
                 doc,
-                ipc,
-                steps,
-                source_step,
-                transform,
+                context,
+                LayoutParent {
+                    step: source_step,
+                    transform,
+                    layout_step: child_layout_step,
+                    instance: Some(layout_instance),
+                },
                 stack,
-                child_layout_step,
-                Some(layout_instance),
             )?;
             stack.pop();
         }
     }
 
     Ok(())
-}
-
-fn append_board_instance(
-    doc: &mut GeometryDocument,
-    parent_step: &Step,
-    board_step: &Step,
-    repeat: &StepRepeat,
-    ix: u32,
-    iy: u32,
-    transform: Affine2,
-) -> ProfileRange {
-    let board_index = ensure_board_geometry(doc, board_step);
-    let profiles = append_step_profile(doc, board_step, transform, BoardProfileKind::BoardInstance);
-
-    doc.board_instances.push(BoardInstance {
-        board_index,
-        source_step_ref: board_step.name,
-        parent_step_ref: parent_step.name,
-        transform,
-        repeat_index_x: ix,
-        repeat_index_y: iy,
-        repeat_count_x: repeat.nx,
-        repeat_count_y: repeat.ny,
-        repeat_pitch_x: repeat.dx,
-        repeat_pitch_y: repeat.dy,
-        profile_start: profiles.start,
-        profile_count: profiles.count,
-        bbox: profiles.bbox,
-    });
-    profiles
-}
-
-fn ensure_board_geometry(doc: &mut GeometryDocument, step: &Step) -> u32 {
-    if let Some(index) = doc
-        .boards
-        .iter()
-        .position(|board| board.step_ref == step.name)
-    {
-        return index as u32;
-    }
-
-    let profiles = append_step_profile(
-        doc,
-        step,
-        Affine2::identity(),
-        BoardProfileKind::BoardDefinition,
-    );
-    let board_index = doc.boards.len() as u32;
-    doc.boards.push(BoardGeometry {
-        step_ref: step.name,
-        profile_start: profiles.start,
-        profile_count: profiles.count,
-        bbox: profiles.bbox,
-    });
-    board_index
 }
 
 fn ensure_layout_step_for_step(doc: &mut GeometryDocument, step: &Step) -> u32 {
@@ -740,26 +631,7 @@ fn ensure_layout_step_for_step(doc: &mut GeometryDocument, step: &Step) -> u32 {
         return index as u32;
     }
 
-    if is_board_step(step) {
-        let board_index = ensure_board_geometry(doc, step);
-        let board = &doc.boards[board_index as usize];
-        return push_or_update_layout_step(
-            doc,
-            step,
-            ProfileRange {
-                start: board.profile_start,
-                count: board.profile_count,
-                bbox: board.bbox,
-            },
-        );
-    }
-
-    let profiles = append_step_profile(
-        doc,
-        step,
-        Affine2::identity(),
-        BoardProfileKind::StepDefinition,
-    );
+    let profiles = append_step_profile(doc, step, Affine2::identity());
     push_or_update_layout_step(doc, step, profiles)
 }
 
@@ -828,42 +700,30 @@ fn push_layout_repeat(
     repeat_index
 }
 
-fn push_layout_instance(
-    doc: &mut GeometryDocument,
-    repeat_index: u32,
-    parent_instance: Option<u32>,
-    child_step: u32,
-    source_step_ref: Symbol,
-    parent_step_ref: Symbol,
-    repeat: &StepRepeat,
-    ix: u32,
-    iy: u32,
-    transform: Affine2,
-    profiles: ProfileRange,
-) -> u32 {
+fn push_layout_instance(doc: &mut GeometryDocument, spec: LayoutInstanceSpec) -> u32 {
     let instance_index = doc.layout.instances.len() as u32;
-    let repeat_record = &mut doc.layout.repeats[repeat_index as usize];
+    let repeat_record = &mut doc.layout.repeats[spec.repeat as usize];
     if repeat_record.instance_count == 0 {
         repeat_record.instance_start = instance_index;
     }
     repeat_record.instance_count += 1;
 
     doc.layout.instances.push(LayoutInstance {
-        repeat: repeat_index,
-        parent_instance,
-        child_step,
-        source_step_ref,
-        parent_step_ref,
-        transform,
-        repeat_index_x: ix,
-        repeat_index_y: iy,
-        repeat_count_x: repeat.nx,
-        repeat_count_y: repeat.ny,
-        repeat_pitch_x: repeat.dx,
-        repeat_pitch_y: repeat.dy,
-        profile_start: profiles.start,
-        profile_count: profiles.count,
-        bbox: profiles.bbox,
+        repeat: spec.repeat,
+        parent_instance: spec.parent_instance,
+        child_step: spec.child_step,
+        source_step_ref: spec.source_step_ref,
+        parent_step_ref: spec.parent_step_ref,
+        transform: spec.transform,
+        repeat_index_x: spec.repeat_index_x,
+        repeat_index_y: spec.repeat_index_y,
+        repeat_count_x: spec.repeat_count_x,
+        repeat_count_y: spec.repeat_count_y,
+        repeat_pitch_x: spec.repeat_pitch_x,
+        repeat_pitch_y: spec.repeat_pitch_y,
+        profile_start: spec.profiles.start,
+        profile_count: spec.profiles.count,
+        bbox: spec.profiles.bbox,
     });
     instance_index
 }
@@ -876,13 +736,6 @@ fn layout_step_kind(step: &Step) -> LayoutStepKind {
         None if !step.step_repeats.is_empty() => LayoutStepKind::Panel,
         None => LayoutStepKind::Board,
     }
-}
-
-fn board_instances_bbox(doc: &GeometryDocument, start: u32, count: u32) -> BBox {
-    doc.board_instances[start as usize..(start + count) as usize]
-        .iter()
-        .map(|instance| instance.bbox)
-        .fold(BBox::empty(), BBox::union)
 }
 
 fn is_panel_step(step: &Step) -> bool {
@@ -1364,7 +1217,6 @@ fn append_step_profile(
     doc: &mut GeometryDocument,
     step: &Step,
     transform: Affine2,
-    kind: BoardProfileKind,
 ) -> ProfileRange {
     let start = doc.profiles.len() as u32;
     let Some(profile) = &step.profile else {
@@ -1379,15 +1231,14 @@ fn append_step_profile(
     let cutout_start = doc.profile_cutouts.len() as u32;
     for cutout in &profile.cutouts {
         let path = push_profile_polygon(doc, cutout, transform);
-        doc.profile_cutouts.push(BoardProfileCutout {
+        doc.profile_cutouts.push(StepProfileCutout {
             path,
             bbox: doc.paths[path as usize].bbox,
         });
     }
     let cutout_count = doc.profile_cutouts.len() as u32 - cutout_start;
     let bbox = doc.paths[outer_path as usize].bbox;
-    doc.profiles.push(BoardProfile {
-        kind,
+    doc.profiles.push(StepProfile {
         source_step_ref: step.name,
         transform,
         outer_path,
@@ -2939,18 +2790,20 @@ mod tests {
         assert_eq!(features[2].source.set_index, 2);
         assert_eq!(layer.bbox.min, Point::new(11.5, 4.5));
         assert_eq!(layer.bbox.max, Point::new(40.5, 23.5));
-        assert_eq!(doc.boards.len(), 1);
-        assert_eq!(doc.panels.len(), 1);
-        assert_eq!(doc.board_instances.len(), 2);
-        assert_eq!(doc.boards[0].bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(doc.boards[0].bbox.max, Point::new(10.0, 5.0));
-        assert_eq!(doc.panels[0].profile_bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(doc.panels[0].profile_bbox.max, Point::new(100.0, 80.0));
-        assert_eq!(doc.panels[0].board_instance_count, 2);
-        assert_eq!(doc.board_instances[0].bbox.min, Point::new(10.0, 20.0));
-        assert_eq!(doc.board_instances[0].bbox.max, Point::new(20.0, 25.0));
-        assert_eq!(doc.board_instances[1].bbox.min, Point::new(25.0, 20.0));
-        assert_eq!(doc.board_instances[1].bbox.max, Point::new(35.0, 25.0));
+        assert_eq!(board_step_count(&doc), 1);
+        assert_eq!(panel_step_count(&doc), 1);
+        assert_eq!(board_instance_count(&doc), 2);
+        assert_eq!(board_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
+        assert_eq!(board_bbox(&doc).unwrap().max, Point::new(10.0, 5.0));
+        assert_eq!(panel_profile_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
+        assert_eq!(
+            panel_profile_bbox(&doc).unwrap().max,
+            Point::new(100.0, 80.0)
+        );
+        assert_eq!(doc.layout.instances[0].bbox.min, Point::new(10.0, 20.0));
+        assert_eq!(doc.layout.instances[0].bbox.max, Point::new(20.0, 25.0));
+        assert_eq!(doc.layout.instances[1].bbox.min, Point::new(25.0, 20.0));
+        assert_eq!(doc.layout.instances[1].bbox.max, Point::new(35.0, 25.0));
         assert_eq!(doc.layout.steps.len(), 2);
         assert_eq!(doc.layout.repeats.len(), 1);
         assert_eq!(doc.layout.instances.len(), 2);
@@ -2985,7 +2838,7 @@ mod tests {
         assert_eq!(doc.layout.steps.len(), 2);
         assert_eq!(doc.layout.repeats.len(), 1);
         assert_eq!(doc.layout.instances.len(), 2);
-        assert_eq!(doc.board_instances.len(), 2);
+        assert_eq!(board_instance_count(&doc), 2);
     }
 
     #[test]
@@ -3008,8 +2861,8 @@ mod tests {
         assert_eq!(doc.layout.steps.len(), 1);
         assert!(doc.layout.repeats.is_empty());
         assert!(doc.layout.instances.is_empty());
-        assert!(doc.board_instances.is_empty());
-        assert_eq!(doc.panels[0].board_instance_count, 0);
+        assert_eq!(board_instance_count(&doc), 0);
+        assert_eq!(panel_step_count(&doc), 1);
     }
 
     #[test]
@@ -3023,8 +2876,8 @@ mod tests {
         assert_eq!(doc.layout.steps.len(), 2);
         assert_eq!(doc.layout.repeats.len(), 1);
         assert_eq!(doc.layout.instances.len(), 2);
-        assert_eq!(doc.panels.len(), 1);
-        assert_eq!(doc.board_instances.len(), 2);
+        assert_eq!(panel_step_count(&doc), 1);
+        assert_eq!(board_instance_count(&doc), 2);
     }
 
     #[test]
@@ -3036,7 +2889,7 @@ mod tests {
         assert_eq!(doc.layout.steps.len(), 3);
         assert_eq!(doc.layout.repeats.len(), 3);
         assert_eq!(doc.layout.instances.len(), 6);
-        assert_eq!(doc.board_instances.len(), 4);
+        assert_eq!(board_instance_count(&doc), 4);
         assert_eq!(doc.layout.repeats[0].instance_start, 0);
         assert_eq!(doc.layout.repeats[0].instance_count, 2);
         assert_eq!(doc.layout.repeats[1].instance_start, 2);
@@ -3093,14 +2946,13 @@ mod tests {
 
         assert_eq!(doc.profiles.len(), 1);
         assert_eq!(doc.profile_cutouts.len(), 1);
-        assert_eq!(doc.boards.len(), 1);
-        assert!(doc.panels.is_empty());
-        assert!(doc.board_instances.is_empty());
-        assert_eq!(doc.profiles[0].kind, BoardProfileKind::BoardDefinition);
-        assert_eq!(doc.boards[0].profile_start, 0);
-        assert_eq!(doc.boards[0].profile_count, 1);
-        assert_eq!(doc.boards[0].bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(doc.boards[0].bbox.max, Point::new(20.0, 10.0));
+        assert_eq!(board_step_count(&doc), 1);
+        assert_eq!(panel_step_count(&doc), 0);
+        assert_eq!(board_instance_count(&doc), 0);
+        assert_eq!(doc.layout.steps[0].profile_start, 0);
+        assert_eq!(doc.layout.steps[0].profile_count, 1);
+        assert_eq!(board_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
+        assert_eq!(board_bbox(&doc).unwrap().max, Point::new(20.0, 10.0));
         assert_eq!(doc.profiles[0].bbox.min, Point::new(0.0, 0.0));
         assert_eq!(doc.profiles[0].bbox.max, Point::new(20.0, 10.0));
         assert!(doc.layers[0].bbox.is_empty());
