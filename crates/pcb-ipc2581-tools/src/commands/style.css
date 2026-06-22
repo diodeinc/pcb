@@ -78,7 +78,7 @@ h3 {
     gap: 6px;
 }
 
-.panel-overview {
+.array-overview {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -90,7 +90,7 @@ h3 {
     max-height: min(520px, 70vh);
 }
 
-.panel-overview svg {
+.array-overview svg {
     display: block;
     width: auto;
     height: auto;

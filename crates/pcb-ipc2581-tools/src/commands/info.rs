@@ -172,7 +172,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     if let Some(panel) = layout.as_ref().and_then(|layout| layout.panel.as_ref()) {
         if let Some(dimensions) = panel.dimensions.as_ref() {
             summary_table.add_row(vec![
-                Cell::new("Panel Size").fg(Color::Cyan),
+                Cell::new("Array Size").fg(Color::Cyan),
                 Cell::new(units::format_board_size(
                     dimensions.width_mm(),
                     dimensions.height_mm(),
@@ -181,7 +181,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
             ]);
         }
         summary_table.add_row(vec![
-            Cell::new("Panel Boards").fg(Color::Cyan),
+            Cell::new("Array Boards").fg(Color::Cyan),
             Cell::new(format!(
                 "{} instance{}",
                 panel.board_instances,
@@ -190,7 +190,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         ]);
         if let Some(grid) = panel.grid.as_ref() {
             summary_table.add_row(vec![
-                Cell::new("Panel Grid").fg(Color::Cyan),
+                Cell::new("Array Grid").fg(Color::Cyan),
                 Cell::new(format!("{} x {}", grid.columns, grid.rows)),
             ]);
             if let Some(spacing) = grid.column_spacing {
@@ -625,13 +625,13 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
     }
 
     if let Some(panel) = layout.as_ref().and_then(|layout| layout.panel.as_ref()) {
-        info["panel"] = json!({
+        info["board_array"] = json!({
             "step_name": panel.step_name,
             "board_count": panel.board_count,
             "board_instances": panel.board_instances,
         });
         if let Some(grid) = panel.grid.as_ref() {
-            info["panel"]["grid"] = json!({
+            info["board_array"]["grid"] = json!({
                 "columns": grid.columns,
                 "rows": grid.rows,
                 "board_width_mm": grid.board_width.mm(),
@@ -644,7 +644,7 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
             });
         }
         if let Some(dimensions) = panel.dimensions.as_ref() {
-            info["panel_dimensions"] = json!({
+            info["board_array"]["dimensions"] = json!({
                 "width_mm": dimensions.width_mm(),
                 "height_mm": dimensions.height_mm(),
                 "width_inch": dimensions.width_inch(),

@@ -39,7 +39,7 @@ enum Commands {
         #[command(subcommand)]
         command: EditCommands,
     },
-    /// Create and inspect IPC-2581 panel data
+    /// Create and inspect IPC-2581 board array data
     Panel {
         #[command(subcommand)]
         command: PanelCommands,
@@ -131,7 +131,7 @@ enum EditCommands {
 
 #[derive(Subcommand)]
 enum PanelCommands {
-    /// Create a rectangular board array panel. Generated panel size must be 70-260 mm per side.
+    /// Create a rectangular board array. Generated array size must be 70-260 mm per side.
     Create {
         /// Input IPC-2581 XML file
         #[arg(value_hint = clap::ValueHint::FilePath)]
@@ -191,7 +191,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             } => commands::panel::execute(
                 &input,
                 &output,
-                &commands::panel::PanelCreateOptions {
+                &commands::panel::BoardArrayCreateOptions {
                     columns,
                     rows,
                     column_spacing_mm: column_spacing,

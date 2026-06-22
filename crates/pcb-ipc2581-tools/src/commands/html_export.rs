@@ -101,7 +101,7 @@ struct BoardSummary {
     design_name: Option<String>,
     width: Option<String>,
     height: Option<String>,
-    panel: Option<PanelSummary>,
+    board_array: Option<BoardArraySummary>,
     thickness: Option<String>,
     copper_layers: Option<usize>,
     components: Option<usize>,
@@ -110,18 +110,18 @@ struct BoardSummary {
 }
 
 #[derive(Serialize)]
-struct PanelSummary {
+struct BoardArraySummary {
     step_name: String,
     width: Option<String>,
     height: Option<String>,
     board_count: usize,
     board_instances: usize,
-    grid: Option<PanelGridSummary>,
+    grid: Option<BoardArrayGridSummary>,
     overview_svg: Option<String>,
 }
 
 #[derive(Serialize)]
-struct PanelGridSummary {
+struct BoardArrayGridSummary {
     columns: u32,
     rows: u32,
     column_spacing: Option<String>,
@@ -189,7 +189,7 @@ struct Color {
 fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> BoardSummary {
     let design_name = board_design_name(accessor);
     let layout = accessor.board_layout_info();
-    let panel_overview_svg = crate::panel::render_overview_svg(accessor);
+    let array_overview_svg = crate::panel::render_board_array_overview_svg(accessor);
 
     let (width, height) = if let Some(dims) = layout
         .as_ref()
@@ -200,7 +200,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         (None, None)
     };
 
-    let panel = layout
+    let board_array = layout
         .as_ref()
         .and_then(|layout| layout.panel.as_ref())
         .map(|panel| {
@@ -209,13 +209,13 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
                 .as_ref()
                 .map(|dims| formatted_dimensions(dims.width_mm(), dims.height_mm(), unit_format))
                 .unwrap_or((None, None));
-            PanelSummary {
+            BoardArraySummary {
                 step_name: panel.step_name.clone(),
                 width,
                 height,
                 board_count: panel.board_count,
                 board_instances: panel.board_instances,
-                grid: panel.grid.as_ref().map(|grid| PanelGridSummary {
+                grid: panel.grid.as_ref().map(|grid| BoardArrayGridSummary {
                     columns: grid.columns,
                     rows: grid.rows,
                     column_spacing: grid
@@ -228,7 +228,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
                         .edge_rail_width
                         .map(|width| format_length(width.mm(), unit_format)),
                 }),
-                overview_svg: panel_overview_svg,
+                overview_svg: array_overview_svg,
             }
         });
 
@@ -266,7 +266,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         design_name,
         width,
         height,
-        panel,
+        board_array,
         thickness,
         copper_layers,
         components,
@@ -540,7 +540,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn html_keeps_board_summary_separate_from_panel_summary() {
+    fn html_keeps_board_summary_separate_from_board_array_summary() {
         let ipc = ipc2581::Ipc2581::parse(panel_design_name_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
@@ -552,16 +552,16 @@ mod tests {
         assert!(design_row.contains(r#"<span class="summary-value">board</span>"#));
         assert!(!design_row.contains(r#"<span class="summary-value">panel</span>"#));
         let board_summary = html.find("<h2>Board Summary</h2>").unwrap();
-        let panel_summary = html.find("<h2>Panel Summary</h2>").unwrap();
+        let array_summary = html.find("<h2>Board Array Summary</h2>").unwrap();
         let file_info = html.find(r#"<div class="file-info">"#).unwrap();
-        assert!(board_summary < panel_summary);
-        assert!(panel_summary < file_info);
-        assert!(!html[board_summary..panel_summary].contains("Panel Step:"));
-        assert!(html.contains("Panel Step:"));
-        assert!(html.contains("Panel Boards:"));
+        assert!(board_summary < array_summary);
+        assert!(array_summary < file_info);
+        assert!(!html[board_summary..array_summary].contains("Array Step:"));
+        assert!(html.contains("Array Step:"));
+        assert!(html.contains("Array Boards:"));
         assert!(html.contains("1 instance from 1 board step"));
-        assert!(html.contains("Panel Grid:"));
-        assert!(html.contains("data-panel-overview='true'"));
+        assert!(html.contains("Array Grid:"));
+        assert!(html.contains("data-board-array-overview='true'"));
     }
 
     #[test]

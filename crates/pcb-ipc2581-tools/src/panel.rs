@@ -13,15 +13,15 @@ type GeometryDocument =
 const MIN_STROKE: f64 = 0.08;
 const POINT_EPSILON_MM: f64 = 1e-9;
 
-pub fn render_overview_svg(accessor: &IpcAccessor<'_>) -> Option<String> {
+pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Option<String> {
     let layout = accessor.board_layout_info()?;
     let panel = layout.panel.as_ref()?;
     let doc = crate::geometry::extract_layout(accessor.ipc()).ok()?;
     let vcut_paths = vcut_layer_paths(accessor, panel.dimensions.as_ref()?.height_mm());
-    render_panel_svg(panel, &doc, &vcut_paths)
+    render_board_array_svg(panel, &doc, &vcut_paths)
 }
 
-fn render_panel_svg(
+fn render_board_array_svg(
     panel: &PanelInfo,
     doc: &GeometryDocument,
     vcut_paths: &[String],
@@ -59,7 +59,7 @@ fn render_panel_svg(
     let mut svg = String::new();
     writeln!(
         svg,
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {} {}' role='img' data-panel-overview='true'>",
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {} {}' role='img' data-board-array-overview='true'>",
         fmt_num(panel_width),
         fmt_num(panel_height)
     )
@@ -68,7 +68,7 @@ fn render_panel_svg(
         svg,
         "  <title>{}</title>",
         escape_xml(&format!(
-            "Panel overview: {} columns by {} rows",
+            "Board array overview: {} columns by {} rows",
             grid.columns, grid.rows
         ))
     )
@@ -436,9 +436,9 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_overview_svg(&accessor).unwrap();
+        let svg = render_board_array_overview_svg(&accessor).unwrap();
 
-        assert!(svg.contains("data-panel-overview='true'"));
+        assert!(svg.contains("data-board-array-overview='true'"));
         assert!(svg.contains("viewBox='0 0 46 27'"));
         assert_eq!(svg.matches("class='board-outline'").count(), 3 * 2);
         assert!(svg.contains("fill='#f1f5f9'"));
@@ -506,7 +506,7 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_overview_svg(&accessor).unwrap();
+        let svg = render_board_array_overview_svg(&accessor).unwrap();
 
         assert_eq!(svg.matches("class='vcut-guide'").count(), 2);
         assert!(svg.contains("d='M6 27 L6 0'"));

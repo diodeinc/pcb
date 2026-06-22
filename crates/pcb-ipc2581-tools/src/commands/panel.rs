@@ -24,7 +24,7 @@ const VCUT_LAYER_BASE_NAME: &str = "V-Score";
 const VCUT_LINE_WIDTH_MM: f64 = 0.025;
 
 #[derive(Debug, Clone, PartialEq)]
-enum PanelCreateValidationError {
+enum BoardArrayCreateValidationError {
     U32Range {
         field: &'static str,
         value: u32,
@@ -42,12 +42,12 @@ enum PanelCreateValidationError {
         value: f64,
         min: f64,
     },
-    PanelDimensionMin {
+    ArrayDimensionMin {
         axis: &'static str,
         value: f64,
         min: f64,
     },
-    PanelDimensionMax {
+    ArrayDimensionMax {
         axis: &'static str,
         value: f64,
         max: f64,
@@ -59,7 +59,7 @@ enum PanelCreateValidationError {
     },
 }
 
-impl std::fmt::Display for PanelCreateValidationError {
+impl std::fmt::Display for BoardArrayCreateValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::U32Range {
@@ -86,15 +86,15 @@ impl std::fmt::Display for PanelCreateValidationError {
                 fmt_num(*min),
                 fmt_num(*value)
             ),
-            Self::PanelDimensionMin { axis, value, min } => write!(
+            Self::ArrayDimensionMin { axis, value, min } => write!(
                 f,
-                "panel {axis} must be at least {} mm; got {} mm",
+                "array {axis} must be at least {} mm; got {} mm",
                 fmt_num(*min),
                 fmt_num(*value)
             ),
-            Self::PanelDimensionMax { axis, value, max } => write!(
+            Self::ArrayDimensionMax { axis, value, max } => write!(
                 f,
-                "panel {axis} must be at most {} mm; got {} mm",
+                "array {axis} must be at most {} mm; got {} mm",
                 fmt_num(*max),
                 fmt_num(*value)
             ),
@@ -108,10 +108,10 @@ impl std::fmt::Display for PanelCreateValidationError {
     }
 }
 
-impl std::error::Error for PanelCreateValidationError {}
+impl std::error::Error for BoardArrayCreateValidationError {}
 
 #[derive(Debug, Clone)]
-pub struct PanelCreateOptions {
+pub struct BoardArrayCreateOptions {
     pub columns: u32,
     pub rows: u32,
     pub column_spacing_mm: f64,
@@ -120,8 +120,8 @@ pub struct PanelCreateOptions {
 }
 
 #[derive(Debug, Clone)]
-struct PanelSpec {
-    panel_name: String,
+struct BoardArraySpec {
+    array_name: String,
     board_name: String,
     content_step_refs: Vec<String>,
     content_layer_refs: Vec<String>,
@@ -131,8 +131,8 @@ struct PanelSpec {
     repeat_y_mm: f64,
     pitch_x_mm: f64,
     pitch_y_mm: f64,
-    panel_width_mm: f64,
-    panel_height_mm: f64,
+    array_width_mm: f64,
+    array_height_mm: f64,
     vcut_layer_name: Option<String>,
     vcut_lines: Vec<VcutLine>,
     units: Units,
@@ -146,29 +146,32 @@ struct VcutLine {
     end_y_mm: f64,
 }
 
-pub fn execute(input: &Path, output: &Path, options: &PanelCreateOptions) -> Result<()> {
+pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let updated_xml = create_panel_xml(&content, options)?;
+    let updated_xml = create_board_array_xml(&content, options)?;
     file_utils::save_ipc_file(output, &updated_xml)?;
-    eprintln!("✓ Created IPC-2581 panel at {}", output.display());
+    eprintln!("✓ Created IPC-2581 board array at {}", output.display());
     Ok(())
 }
 
-fn create_panel_xml(xml: &str, options: &PanelCreateOptions) -> Result<String> {
+fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let spec = build_panel_spec(&ipc, options)?;
+    let spec = build_board_array_spec(&ipc, options)?;
     let vcut_layer_xml = write_vcut_layer_xml(&spec)?;
-    let panel_step_xml = write_panel_step_xml(&spec)?;
+    let array_step_xml = write_array_step_xml(&spec)?;
     let xml = update_content_refs(xml, &spec.content_step_refs, &spec.content_layer_refs)?;
-    let xml = insert_panel_cad_data(&xml, vcut_layer_xml.as_deref(), &panel_step_xml)?;
-    let xml = crate::utils::history::append_file_revision(&xml, "Created panel array")?;
+    let xml = insert_array_cad_data(&xml, vcut_layer_xml.as_deref(), &array_step_xml)?;
+    let xml = crate::utils::history::append_file_revision(&xml, "Created board array")?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
-    Ipc2581::parse(&xml).context("Generated IPC-2581 panel XML did not parse")?;
+    Ipc2581::parse(&xml).context("Generated IPC-2581 board array XML did not parse")?;
     Ok(xml)
 }
 
-fn build_panel_spec(ipc: &Ipc2581, options: &PanelCreateOptions) -> Result<PanelSpec> {
+fn build_board_array_spec(
+    ipc: &Ipc2581,
+    options: &BoardArrayCreateOptions,
+) -> Result<BoardArraySpec> {
     validate_options(options)?;
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
@@ -176,7 +179,7 @@ fn build_panel_spec(ipc: &Ipc2581, options: &PanelCreateOptions) -> Result<Panel
         .context("IPC-2581 ECAD section has no Step")?;
 
     if is_panel_step(primary_step) {
-        bail!("primary IPC-2581 step is already a panel; panel create expects a board step");
+        bail!("primary IPC-2581 step is already a panel; board array create expects a board step");
     }
     if !is_board_step(primary_step) {
         bail!("primary IPC-2581 step is not a board step");
@@ -203,13 +206,13 @@ fn build_panel_spec(ipc: &Ipc2581, options: &PanelCreateOptions) -> Result<Panel
     let margin_y = options.row_spacing_mm + options.edge_rail_width_mm;
     let pitch_x = board_width + options.column_spacing_mm;
     let pitch_y = board_height + options.row_spacing_mm;
-    let panel_width = columns as f64 * board_width
+    let array_width = columns as f64 * board_width
         + (columns + 1) as f64 * options.column_spacing_mm
         + 2.0 * options.edge_rail_width_mm;
-    let panel_height = rows as f64 * board_height
+    let array_height = rows as f64 * board_height
         + (rows + 1) as f64 * options.row_spacing_mm
         + 2.0 * options.edge_rail_width_mm;
-    validate_panel_dimensions(panel_width, panel_height)?;
+    validate_array_dimensions(array_width, array_height)?;
 
     let board_name = ipc.resolve(root.source_step_ref).to_string();
     let existing_step_names = ecad
@@ -218,7 +221,7 @@ fn build_panel_spec(ipc: &Ipc2581, options: &PanelCreateOptions) -> Result<Panel
         .iter()
         .map(|step| ipc.resolve(step.name).to_string())
         .collect::<HashSet<_>>();
-    let panel_name = unique_name(&existing_step_names, "panel");
+    let array_name = unique_name(&existing_step_names, "array");
     let existing_layer_names = ecad
         .cad_data
         .layers
@@ -234,16 +237,16 @@ fn build_panel_spec(ipc: &Ipc2581, options: &PanelCreateOptions) -> Result<Panel
         margin_y_mm: margin_y,
         pitch_x_mm: pitch_x,
         pitch_y_mm: pitch_y,
-        panel_width_mm: panel_width,
-        panel_height_mm: panel_height,
+        array_width_mm: array_width,
+        array_height_mm: array_height,
     })?;
     let vcut_layer_name =
         (!vcut_lines.is_empty()).then(|| unique_name(&existing_layer_names, VCUT_LAYER_BASE_NAME));
 
-    Ok(PanelSpec {
-        panel_name: panel_name.clone(),
+    Ok(BoardArraySpec {
+        array_name: array_name.clone(),
         board_name: board_name.clone(),
-        content_step_refs: content_step_refs(ipc, &panel_name, &board_name),
+        content_step_refs: content_step_refs(ipc, &array_name, &board_name),
         content_layer_refs: content_layer_refs(ipc, vcut_layer_name.as_deref()),
         columns,
         rows,
@@ -251,15 +254,15 @@ fn build_panel_spec(ipc: &Ipc2581, options: &PanelCreateOptions) -> Result<Panel
         repeat_y_mm: margin_y - root.bbox.min.y,
         pitch_x_mm: if columns > 1 { pitch_x } else { 0.0 },
         pitch_y_mm: if rows > 1 { pitch_y } else { 0.0 },
-        panel_width_mm: panel_width,
-        panel_height_mm: panel_height,
+        array_width_mm: array_width,
+        array_height_mm: array_height,
         vcut_layer_name,
         vcut_lines,
         units: ecad.cad_header.units,
     })
 }
 
-fn validate_options(options: &PanelCreateOptions) -> Result<()> {
+fn validate_options(options: &BoardArrayCreateOptions) -> Result<()> {
     validate_u32_range("columns", options.columns, 1, 10)?;
     validate_u32_range("rows", options.rows, 1, 10)?;
     validate_mm_range("column spacing", options.column_spacing_mm, 0.0, 20.0)?;
@@ -283,7 +286,7 @@ fn validate_u32_range(field: &'static str, value: u32, min: u32, max: u32) -> Re
     if (min..=max).contains(&value) {
         Ok(())
     } else {
-        Err(PanelCreateValidationError::U32Range {
+        Err(BoardArrayCreateValidationError::U32Range {
             field,
             value,
             min,
@@ -297,7 +300,7 @@ fn validate_mm_range(field: &'static str, value: f64, min: f64, max: f64) -> Res
     if value.is_finite() && (min..=max).contains(&value) {
         Ok(())
     } else {
-        Err(PanelCreateValidationError::MmRange {
+        Err(BoardArrayCreateValidationError::MmRange {
             field,
             value,
             min,
@@ -311,25 +314,25 @@ fn validate_zero_or_min_mm(field: &'static str, value: f64, min: f64) -> Result<
     if value.abs() <= EPSILON || value + EPSILON >= min {
         Ok(())
     } else {
-        Err(PanelCreateValidationError::ZeroOrMinMm { field, value, min }.into())
+        Err(BoardArrayCreateValidationError::ZeroOrMinMm { field, value, min }.into())
     }
 }
 
-fn validate_panel_dimensions(width_mm: f64, height_mm: f64) -> Result<()> {
-    validate_panel_dimension("width", width_mm)?;
-    validate_panel_dimension("height", height_mm)
+fn validate_array_dimensions(width_mm: f64, height_mm: f64) -> Result<()> {
+    validate_array_dimension("width", width_mm)?;
+    validate_array_dimension("height", height_mm)
 }
 
-fn validate_panel_dimension(axis: &'static str, value: f64) -> Result<()> {
+fn validate_array_dimension(axis: &'static str, value: f64) -> Result<()> {
     if !value.is_finite() || value + EPSILON < MIN_PANEL_DIMENSION_MM {
-        Err(PanelCreateValidationError::PanelDimensionMin {
+        Err(BoardArrayCreateValidationError::ArrayDimensionMin {
             axis,
             value,
             min: MIN_PANEL_DIMENSION_MM,
         }
         .into())
     } else if value > MAX_PANEL_DIMENSION_MM + EPSILON {
-        Err(PanelCreateValidationError::PanelDimensionMax {
+        Err(BoardArrayCreateValidationError::ArrayDimensionMax {
             axis,
             value,
             max: MAX_PANEL_DIMENSION_MM,
@@ -361,9 +364,9 @@ fn unique_name(existing_names: &HashSet<String>, base: &str) -> String {
         .expect("unbounded name search should find an unused name")
 }
 
-fn content_step_refs(ipc: &Ipc2581, panel_name: &str, board_name: &str) -> Vec<String> {
-    let mut refs = vec![panel_name.to_string()];
-    let mut seen = HashSet::from([panel_name.to_string()]);
+fn content_step_refs(ipc: &Ipc2581, array_name: &str, board_name: &str) -> Vec<String> {
+    let mut refs = vec![array_name.to_string()];
+    let mut seen = HashSet::from([array_name.to_string()]);
     for step_ref in &ipc.content().step_refs {
         let name = ipc.resolve(*step_ref).to_string();
         if seen.insert(name.clone()) {
@@ -403,8 +406,8 @@ struct VcutLineSpec {
     margin_y_mm: f64,
     pitch_x_mm: f64,
     pitch_y_mm: f64,
-    panel_width_mm: f64,
-    panel_height_mm: f64,
+    array_width_mm: f64,
+    array_height_mm: f64,
 }
 
 fn vcut_lines(spec: VcutLineSpec) -> Result<Vec<VcutLine>> {
@@ -413,7 +416,7 @@ fn vcut_lines(spec: VcutLineSpec) -> Result<Vec<VcutLine>> {
         spec.margin_x_mm,
         spec.pitch_x_mm,
         spec.board_width_mm,
-        spec.panel_width_mm,
+        spec.array_width_mm,
     );
     validate_vcut_line_count("X", x_positions.len())?;
 
@@ -422,7 +425,7 @@ fn vcut_lines(spec: VcutLineSpec) -> Result<Vec<VcutLine>> {
         spec.margin_y_mm,
         spec.pitch_y_mm,
         spec.board_height_mm,
-        spec.panel_height_mm,
+        spec.array_height_mm,
     );
     validate_vcut_line_count("Y", y_positions.len())?;
 
@@ -432,14 +435,14 @@ fn vcut_lines(spec: VcutLineSpec) -> Result<Vec<VcutLine>> {
             start_x_mm: x,
             start_y_mm: 0.0,
             end_x_mm: x,
-            end_y_mm: spec.panel_height_mm,
+            end_y_mm: spec.array_height_mm,
         });
     }
     for y in y_positions {
         lines.push(VcutLine {
             start_x_mm: 0.0,
             start_y_mm: y,
-            end_x_mm: spec.panel_width_mm,
+            end_x_mm: spec.array_width_mm,
             end_y_mm: y,
         });
     }
@@ -450,7 +453,7 @@ fn validate_vcut_line_count(axis: &'static str, count: usize) -> Result<()> {
     if count <= MAX_VCUT_LINES_PER_AXIS {
         Ok(())
     } else {
-        Err(PanelCreateValidationError::VcutLineCount {
+        Err(BoardArrayCreateValidationError::VcutLineCount {
             axis,
             count,
             max: MAX_VCUT_LINES_PER_AXIS,
@@ -590,10 +593,10 @@ fn write_layer_refs(writer: &mut Writer<Cursor<Vec<u8>>>, layer_refs: &[String])
     Ok(())
 }
 
-fn insert_panel_cad_data(
+fn insert_array_cad_data(
     xml: &str,
     vcut_layer_xml: Option<&str>,
-    panel_step_xml: &str,
+    array_step_xml: &str,
 ) -> Result<String> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -631,7 +634,7 @@ fn insert_panel_cad_data(
                     write_raw_xml(&mut writer, vcut_layer_xml)?;
                     vcut_layer_inserted = true;
                 }
-                writer.get_mut().write_all(panel_step_xml.as_bytes())?;
+                writer.get_mut().write_all(array_step_xml.as_bytes())?;
                 writer.write_event(Event::End(e.to_owned()))?;
                 panel_step_inserted = true;
                 in_cad_data = false;
@@ -660,7 +663,7 @@ fn write_raw_xml(writer: &mut Writer<Cursor<Vec<u8>>>, xml: Option<&str>) -> Res
     Ok(())
 }
 
-fn write_vcut_layer_xml(spec: &PanelSpec) -> Result<Option<String>> {
+fn write_vcut_layer_xml(spec: &BoardArraySpec) -> Result<Option<String>> {
     let Some(layer_name) = spec.vcut_layer_name.as_ref() else {
         return Ok(None);
     };
@@ -674,11 +677,11 @@ fn write_vcut_layer_xml(spec: &PanelSpec) -> Result<Option<String>> {
     Ok(Some(String::from_utf8(writer.into_inner().into_inner())?))
 }
 
-fn write_panel_step_xml(spec: &PanelSpec) -> Result<String> {
+fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     let mut writer = Writer::new(Cursor::new(Vec::new()));
 
     let mut step = BytesStart::new("Step");
-    step.push_attribute(("name", spec.panel_name.as_str()));
+    step.push_attribute(("name", spec.array_name.as_str()));
     step.push_attribute(("type", "PALLET"));
     writer.write_event(Event::Start(step))?;
 
@@ -691,20 +694,20 @@ fn write_panel_step_xml(spec: &PanelSpec) -> Result<String> {
         &mut writer,
         "PolyStepSegment",
         0.0,
-        spec.panel_height_mm,
+        spec.array_height_mm,
         spec.units,
     )?;
     write_location_empty(
         &mut writer,
         "PolyStepSegment",
-        spec.panel_width_mm,
-        spec.panel_height_mm,
+        spec.array_width_mm,
+        spec.array_height_mm,
         spec.units,
     )?;
     write_location_empty(
         &mut writer,
         "PolyStepSegment",
-        spec.panel_width_mm,
+        spec.array_width_mm,
         0.0,
         spec.units,
     )?;
@@ -720,7 +723,10 @@ fn write_panel_step_xml(spec: &PanelSpec) -> Result<String> {
     Ok(String::from_utf8(writer.into_inner().into_inner())?)
 }
 
-fn write_vcut_layer_feature(writer: &mut Writer<Cursor<Vec<u8>>>, spec: &PanelSpec) -> Result<()> {
+fn write_vcut_layer_feature(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    spec: &BoardArraySpec,
+) -> Result<()> {
     let Some(layer_name) = spec.vcut_layer_name.as_ref() else {
         return Ok(());
     };
@@ -788,7 +794,7 @@ fn write_location_empty(
     Ok(())
 }
 
-fn write_step_repeat(writer: &mut Writer<Cursor<Vec<u8>>>, spec: &PanelSpec) -> Result<()> {
+fn write_step_repeat(writer: &mut Writer<Cursor<Vec<u8>>>, spec: &BoardArraySpec) -> Result<()> {
     let x = fmt_units(spec.repeat_x_mm, spec.units);
     let y = fmt_units(spec.repeat_y_mm, spec.units);
     let dx = fmt_units(spec.pitch_x_mm, spec.units);
@@ -840,9 +846,9 @@ mod tests {
 
     #[test]
     fn creates_rectangular_panel_step_from_board_bbox() {
-        let xml = create_panel_xml(
+        let xml = create_board_array_xml(
             board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
                 column_spacing_mm: 5.0,
@@ -852,13 +858,13 @@ mod tests {
         )
         .unwrap();
 
-        assert!(xml.contains(r#"<StepRef name="panel"/>"#));
+        assert!(xml.contains(r#"<StepRef name="array"/>"#));
         assert!(xml.contains(r#"<StepRef name="board"/>"#));
         assert!(xml.contains(r#"<LayerRef name="V-Score"/>"#));
         assert!(xml.contains(
             r#"<Layer name="V-Score" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>"#
         ));
-        assert!(xml.contains(r#"<Step name="panel" type="PALLET">"#));
+        assert!(xml.contains(r#"<Step name="array" type="PALLET">"#));
         assert!(xml.contains(
             r#"<StepRepeat stepRef="board" x="12" y="13" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
         ));
@@ -890,9 +896,9 @@ mod tests {
 
     #[test]
     fn created_panel_vcuts_flow_to_svg_and_gerber() {
-        let xml = create_panel_xml(
+        let xml = create_board_array_xml(
             board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
                 column_spacing_mm: 5.0,
@@ -904,7 +910,7 @@ mod tests {
         let ipc = Ipc2581::parse(&xml).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = crate::panel::render_overview_svg(&accessor).unwrap();
+        let svg = crate::panel::render_board_array_overview_svg(&accessor).unwrap();
         assert_eq!(svg.matches("class='vcut-guide'").count(), 24);
         assert!(!svg.contains("class='score-guide'"));
 
@@ -935,9 +941,9 @@ mod tests {
 
     #[test]
     fn writes_generated_panel_values_in_cad_header_units() {
-        let xml = create_panel_xml(
+        let xml = create_board_array_xml(
             board_fixture_inch(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
                 column_spacing_mm: 0.0,
@@ -956,9 +962,9 @@ mod tests {
 
     #[test]
     fn rejects_primary_panel_step() {
-        let error = create_panel_xml(
+        let error = create_board_array_xml(
             panel_fixture(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
                 column_spacing_mm: 0.0,
@@ -977,9 +983,9 @@ mod tests {
 
     #[test]
     fn validates_simple_api_ranges() {
-        let error = create_panel_xml(
+        let error = create_board_array_xml(
             board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 11,
                 rows: 1,
                 column_spacing_mm: 0.0,
@@ -998,9 +1004,9 @@ mod tests {
 
     #[test]
     fn rejects_small_spacing_and_edge_rail_width() {
-        let column_error = create_panel_xml(
+        let column_error = create_board_array_xml(
             board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
                 column_spacing_mm: 4.99,
@@ -1015,9 +1021,9 @@ mod tests {
                 .contains("column spacing must be 0 mm or at least 5 mm")
         );
 
-        let row_error = create_panel_xml(
+        let row_error = create_board_array_xml(
             board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 2,
                 column_spacing_mm: 0.0,
@@ -1032,9 +1038,9 @@ mod tests {
                 .contains("row spacing must be 0 mm or at least 5 mm")
         );
 
-        let rail_error = create_panel_xml(
+        let rail_error = create_board_array_xml(
             board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
                 column_spacing_mm: 0.0,
@@ -1061,8 +1067,8 @@ mod tests {
             margin_y_mm: 5.0,
             pitch_x_mm: 15.0,
             pitch_y_mm: 15.0,
-            panel_width_mm: 210.0,
-            panel_height_mm: 25.0,
+            array_width_mm: 210.0,
+            array_height_mm: 25.0,
         })
         .unwrap_err();
         assert!(
@@ -1080,8 +1086,8 @@ mod tests {
             margin_y_mm: 5.0,
             pitch_x_mm: 15.0,
             pitch_y_mm: 15.0,
-            panel_width_mm: 25.0,
-            panel_height_mm: 210.0,
+            array_width_mm: 25.0,
+            array_height_mm: 210.0,
         })
         .unwrap_err();
         assert!(
@@ -1092,10 +1098,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_panel_dimensions_outside_limits() {
-        let narrow_error = create_panel_xml(
+    fn rejects_array_dimensions_outside_limits() {
+        let narrow_error = create_board_array_xml(
             board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 3,
                 rows: 2,
                 column_spacing_mm: 5.0,
@@ -1107,12 +1113,12 @@ mod tests {
         assert!(
             narrow_error
                 .to_string()
-                .contains("panel width must be at least 70 mm; got 60 mm")
+                .contains("array width must be at least 70 mm; got 60 mm")
         );
 
-        let short_error = create_panel_xml(
+        let short_error = create_board_array_xml(
             board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 4,
                 rows: 2,
                 column_spacing_mm: 5.0,
@@ -1124,12 +1130,12 @@ mod tests {
         assert!(
             short_error
                 .to_string()
-                .contains("panel height must be at least 70 mm; got 45 mm")
+                .contains("array height must be at least 70 mm; got 45 mm")
         );
 
-        let wide_error = create_panel_xml(
+        let wide_error = create_board_array_xml(
             large_board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 1,
                 column_spacing_mm: 5.0,
@@ -1141,12 +1147,12 @@ mod tests {
         assert!(
             wide_error
                 .to_string()
-                .contains("panel width must be at most 260 mm; got 405 mm")
+                .contains("array width must be at most 260 mm; got 405 mm")
         );
 
-        let tall_error = create_panel_xml(
+        let tall_error = create_board_array_xml(
             large_board_fixture_mm(),
-            &PanelCreateOptions {
+            &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 6,
                 column_spacing_mm: 5.0,
@@ -1158,7 +1164,7 @@ mod tests {
         assert!(
             tall_error
                 .to_string()
-                .contains("panel height must be at most 260 mm; got 405 mm")
+                .contains("array height must be at most 260 mm; got 405 mm")
         );
     }
 

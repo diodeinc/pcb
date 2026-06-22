@@ -55,7 +55,7 @@ pub struct PanelInfo {
     pub grid: Option<PanelGridInfo>,
 }
 
-/// Best-effort summary of a simple rectangular board array panel.
+/// Best-effort summary of a simple rectangular board array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PanelGridInfo {
     pub columns: u32,
@@ -70,7 +70,7 @@ pub struct PanelGridInfo {
     pub margins: PanelMargins,
 }
 
-/// Distances from the tiled board array to the panel extents.
+/// Distances from the tiled board array to the array profile extents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PanelMargins {
     pub left: Length,
