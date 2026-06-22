@@ -709,7 +709,7 @@ mod tests {
 
     #[test]
     fn composes_compatible_stroked_feature_paths() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         let bbox = BBox {
             min: Point::new(0.0, 0.0),
             max: Point::new(10.0, 0.0),
@@ -749,7 +749,7 @@ mod tests {
 
     #[test]
     fn process_prunes_unpainted_feature_paths_and_preserves_profile_paths() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.layers.push(GeometryLayer {
             name: "TOP".to_string(),
             source_layer_ref: 0,
@@ -795,8 +795,6 @@ mod tests {
             bbox: BBox::empty(),
         });
         doc.profiles.push(StepProfile {
-            source_step_ref: 0,
-            transform: Affine2::identity(),
             outer_path: outer_profile_path,
             cutout_start: 0,
             cutout_count: 1,
@@ -818,7 +816,7 @@ mod tests {
 
     #[test]
     fn coalesces_related_trace_features_inside_one_source_set() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
             rect_cmds(0.0, 0.0, 2.0, 1.0),
@@ -887,7 +885,7 @@ mod tests {
 
     #[test]
     fn resolves_negative_polarity_as_layer_subtraction() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
             rect_cmds(0.0, 0.0, 4.0, 4.0),
@@ -929,7 +927,7 @@ mod tests {
 
     #[test]
     fn subtracts_cutouts_after_trace_union() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.push_path(
             GeometryPath::stroked(1.0, LineCap::Round, BBox::empty()),
             [
@@ -972,7 +970,7 @@ mod tests {
 
     #[test]
     fn flattens_processed_layer_features_to_single_mask() {
-        let mut doc = TestDoc::new("test".to_string());
+        let mut doc = TestDoc::new();
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
             rect_cmds(0.0, 0.0, 2.0, 1.0),

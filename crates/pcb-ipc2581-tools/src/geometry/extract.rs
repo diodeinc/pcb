@@ -151,14 +151,10 @@ pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let step = steps::primary_step(ipc, &ecad.cad_data.steps)
         .context("IPC-2581 ECAD section has no Step")?;
-    let mut doc = GeometryDocument::new(ipc.resolve(step.name).to_string());
+    let mut doc = GeometryDocument::new();
     append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?;
     pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
-}
-
-pub fn extract_profiles(ipc: &Ipc2581) -> Result<GeometryDocument> {
-    extract_layout(ipc)
 }
 
 fn extract_panel_layer(
@@ -169,7 +165,7 @@ fn extract_panel_layer(
     layer: &Layer,
     layer_name: &str,
 ) -> Result<GeometryDocument> {
-    let mut doc = GeometryDocument::new(ipc.resolve(panel.name).to_string());
+    let mut doc = GeometryDocument::new();
     let feature_start = doc.features.len() as u32;
     let mut layer_bbox = BBox::empty();
     let mut append_state = LayerAppendState::default();
@@ -258,7 +254,7 @@ fn extract_step_layer(
             .collect(),
     };
 
-    let mut doc = GeometryDocument::new(ipc.resolve(step.name).to_string());
+    let mut doc = GeometryDocument::new();
     let feature_start = doc.features.len() as u32;
     let mut layer_bbox = BBox::empty();
     let layer_polarity = map_polarity(layer.polarity.unwrap_or(Polarity::Positive));
@@ -1239,8 +1235,6 @@ fn append_step_profile(
     let cutout_count = doc.profile_cutouts.len() as u32 - cutout_start;
     let bbox = doc.paths[outer_path as usize].bbox;
     doc.profiles.push(StepProfile {
-        source_step_ref: step.name,
-        transform,
         outer_path,
         cutout_start,
         cutout_count,
@@ -2497,7 +2491,7 @@ mod tests {
 
     #[test]
     fn lowers_moire_as_rings_and_crosshair() {
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
 
         push_moire_path(
             &mut doc,
@@ -2550,7 +2544,7 @@ mod tests {
 
     #[test]
     fn lowers_trace_poly_step_curves_as_arcs() {
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
         let trace = ipc2581::types::Trace {
             line_desc_ref: None,
             points: vec![
@@ -2582,7 +2576,7 @@ mod tests {
 
     #[test]
     fn lowers_feature_poly_step_curves_as_arcs() {
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
         let polyline = ipc2581::types::ecad::FeaturePolyline {
             begin: ipc2581::types::Point { x: 1.0, y: 0.0 },
             steps: vec![PolyStep::Curve(ipc2581::types::PolyStepCurve {
@@ -2621,7 +2615,7 @@ mod tests {
 
     #[test]
     fn lowers_hollow_user_circle_as_stroked_path() {
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
         let primitive = UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
             shapes: vec![ipc2581::types::UserShape {
                 shape: UserShapeType::Circle(ipc2581::types::Circle { diameter: 1.4 }),
@@ -2684,7 +2678,7 @@ mod tests {
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
         let primitive = UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
             shapes: vec![
                 ipc2581::types::UserShape {
@@ -2723,7 +2717,7 @@ mod tests {
 
     #[test]
     fn lowers_butterfly_with_removed_quadrants() {
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
 
         push_butterfly_path(
             &mut doc,
@@ -2746,7 +2740,7 @@ mod tests {
 
     #[test]
     fn lowers_thermal_as_spokes_without_redundant_ring() {
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
 
         push_thermal_path(&mut doc, Affine2::identity(), 10.0, 6.0, 2.0, 4, 0.0);
 
@@ -2762,7 +2756,7 @@ mod tests {
 
     #[test]
     fn lowers_spokeless_thermal_as_donut() {
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
 
         push_thermal_path(&mut doc, Affine2::identity(), 10.0, 6.0, 2.0, 0, 0.0);
 
@@ -2780,7 +2774,8 @@ mod tests {
         let features = &doc.features
             [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
 
-        assert_eq!(doc.board_name, "panel");
+        let (_, root_step) = root_step(&doc).unwrap();
+        assert_eq!(root_step.kind, LayoutStepKind::Panel);
         assert_eq!(features.len(), 3);
         assert_eq!(features[0].center, Point::new(40.0, 5.0));
         assert_eq!(features[1].center, Point::new(12.0, 23.0));
@@ -2795,11 +2790,8 @@ mod tests {
         assert_eq!(board_instance_count(&doc), 2);
         assert_eq!(board_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
         assert_eq!(board_bbox(&doc).unwrap().max, Point::new(10.0, 5.0));
-        assert_eq!(panel_profile_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
-        assert_eq!(
-            panel_profile_bbox(&doc).unwrap().max,
-            Point::new(100.0, 80.0)
-        );
+        assert_eq!(panel_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
+        assert_eq!(panel_bbox(&doc).unwrap().max, Point::new(100.0, 80.0));
         assert_eq!(doc.layout.instances[0].bbox.min, Point::new(10.0, 20.0));
         assert_eq!(doc.layout.instances[0].bbox.max, Point::new(20.0, 25.0));
         assert_eq!(doc.layout.instances[1].bbox.min, Point::new(25.0, 20.0));
@@ -2966,7 +2958,7 @@ mod tests {
 
     #[test]
     fn chamfered_rect_respects_corner_flags() {
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
 
         push_chamfered_rect_path(
             &mut doc,

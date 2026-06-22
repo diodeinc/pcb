@@ -4,10 +4,9 @@ use crate::dialects::{geom, path as common_path};
 
 #[derive(Debug, Clone)]
 pub struct GeometryDocument<Symbol, LayerFunction> {
-    pub board_name: String,
     pub layout: LayoutGraph<Symbol>,
     pub layers: Vec<GeometryLayer<Symbol, LayerFunction>>,
-    pub profiles: Vec<StepProfile<Symbol>>,
+    pub profiles: Vec<StepProfile>,
     pub profile_cutouts: Vec<StepProfileCutout>,
     pub features: Vec<GeometryFeature<Symbol>>,
     pub paths: Vec<GeometryPath>,
@@ -17,19 +16,8 @@ pub struct GeometryDocument<Symbol, LayerFunction> {
 }
 
 impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
-    pub fn new(board_name: String) -> Self {
-        Self {
-            board_name,
-            layout: LayoutGraph::new(),
-            layers: Vec::new(),
-            profiles: Vec::new(),
-            profile_cutouts: Vec::new(),
-            features: Vec::new(),
-            paths: Vec::new(),
-            contours: Vec::new(),
-            path_cmds: Vec::new(),
-            diagnostics: Vec::new(),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn push_path(
@@ -95,16 +83,23 @@ impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
     }
 }
 
-const PROFILE_STROKE_WIDTH: f64 = 0.1;
-
-pub fn profiles_bbox<Symbol, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-) -> Option<BBox> {
-    render_profiles(doc)
-        .map(|profile| profile.bbox)
-        .reduce(BBox::union)
-        .filter(|bbox| !bbox.is_empty())
+impl<Symbol, LayerFunction> Default for GeometryDocument<Symbol, LayerFunction> {
+    fn default() -> Self {
+        Self {
+            layout: LayoutGraph::new(),
+            layers: Vec::new(),
+            profiles: Vec::new(),
+            profile_cutouts: Vec::new(),
+            features: Vec::new(),
+            paths: Vec::new(),
+            contours: Vec::new(),
+            path_cmds: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
 }
+
+const PROFILE_STROKE_WIDTH: f64 = 0.1;
 
 pub fn board_bbox<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
@@ -243,25 +238,6 @@ fn rendered_profile_indices<Symbol, LayerFunction>(
     indices
 }
 
-fn profile_range_bbox<Symbol, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-    start: u32,
-    count: u32,
-) -> BBox {
-    doc.profiles[start as usize..(start + count) as usize]
-        .iter()
-        .map(|profile| profile.bbox)
-        .fold(BBox::empty(), BBox::union)
-}
-
-pub fn panel_profile_bbox<Symbol, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-) -> Option<BBox> {
-    root_panel_step(doc)
-        .map(|(_, panel)| profile_range_bbox(doc, panel.profile_start, panel.profile_count))
-        .filter(|bbox| !bbox.is_empty())
-}
-
 pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     layer_index: usize,
@@ -338,7 +314,7 @@ pub fn lower_layer_with_profiles_to_geom<Symbol: Clone, LayerFunction: Clone>(
 
 pub fn render_profiles<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
-) -> impl Iterator<Item = &StepProfile<Symbol>> {
+) -> impl Iterator<Item = &StepProfile> {
     let indices = if has_panel_layout(doc) {
         rendered_profile_indices(doc)
     } else if let Some((_, root)) = root_step(doc) {
@@ -524,9 +500,7 @@ pub struct LayoutInstance<Symbol> {
 }
 
 #[derive(Debug, Clone)]
-pub struct StepProfile<Symbol> {
-    pub source_step_ref: Symbol,
-    pub transform: Affine2,
+pub struct StepProfile {
     pub outer_path: u32,
     pub cutout_start: u32,
     pub cutout_count: u32,

@@ -21,7 +21,6 @@ impl BoardDimensions {
         }
     }
 
-    // Legacy accessors for backward compatibility
     pub fn width_mm(&self) -> f64 {
         self.width.mm()
     }
@@ -63,7 +62,6 @@ pub struct StackupInfo {
 }
 
 impl StackupInfo {
-    // Legacy accessor for backward compatibility
     pub fn overall_thickness_mm(&self) -> Option<f64> {
         self.thickness.map(|t| t.mm())
     }
@@ -72,7 +70,7 @@ impl StackupInfo {
 impl<'a> IpcAccessor<'a> {
     /// Extract board and panel geometry from canonical IPC layout IR.
     pub fn board_layout_info(&self) -> Option<BoardLayoutInfo> {
-        let doc = geometry::extract_profiles(self.ipc()).ok()?;
+        let doc = geometry::extract_layout(self.ipc()).ok()?;
         let board_dimensions =
             pcb_ir::dialects::ipc::board_bbox(&doc).and_then(dimensions_from_bbox);
         let panel = pcb_ir::dialects::ipc::root_panel_step(&doc).map(|(_, panel_step)| PanelInfo {

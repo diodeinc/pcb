@@ -227,7 +227,7 @@ fn fmt_num(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcb_ir::common::{Affine2, BBox};
+    use pcb_ir::common::BBox;
     use pcb_ir::dialects::ipc::{GeometryPath, StepProfile, StepProfileCutout};
 
     #[test]
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn preserves_profile_arcs_as_lwpolyline_bulges() {
-        let mut doc = GeometryDocument::<u32, ()>::new("test".to_string());
+        let mut doc = GeometryDocument::<u32, ()>::new();
         let path = doc.push_path(
             GeometryPath::unpainted(BBox::empty()),
             [
@@ -256,8 +256,6 @@ mod tests {
             ],
         );
         doc.profiles.push(StepProfile {
-            source_step_ref: 0,
-            transform: Affine2::identity(),
             outer_path: path,
             cutout_start: 0,
             cutout_count: 0,
@@ -270,7 +268,7 @@ mod tests {
     }
 
     fn rect_profile_doc() -> GeometryDocument<u32, ()> {
-        let mut doc = GeometryDocument::new("test".to_string());
+        let mut doc = GeometryDocument::new();
         let outer_path = doc.push_path(
             GeometryPath::unpainted(BBox::empty()),
             [
@@ -296,8 +294,6 @@ mod tests {
             bbox: BBox::empty(),
         });
         doc.profiles.push(StepProfile {
-            source_step_ref: 0,
-            transform: Affine2::identity(),
             outer_path,
             cutout_start: 0,
             cutout_count: 1,

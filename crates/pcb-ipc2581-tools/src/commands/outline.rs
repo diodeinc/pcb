@@ -16,15 +16,15 @@ pub struct OutlineOptions {
 pub fn execute(input_file: &Path, options: &OutlineOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = Ipc2581::parse(&content)?;
-    let profiles = geometry::extract_profiles(&ipc)?;
-    if pcb_ir::dialects::ipc::render_profiles(&profiles)
+    let layout = geometry::extract_layout(&ipc)?;
+    if pcb_ir::dialects::ipc::render_profiles(&layout)
         .next()
         .is_none()
     {
         bail!("IPC-2581 primary step and repeated child steps have no board Profile outline");
     }
 
-    let dxf = geometry::dxf::render_profiles_dxf(&profiles);
+    let dxf = geometry::dxf::render_profiles_dxf(&layout);
     std::fs::write(&options.output, dxf)
         .with_context(|| format!("Failed to write DXF to {}", options.output.display()))?;
     println!(
@@ -69,12 +69,12 @@ mod tests {
         )
         .unwrap();
 
-        let profiles = geometry::extract_profiles(&ipc).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
 
-        assert_eq!(pcb_ir::dialects::ipc::board_step_count(&profiles), 1);
-        assert_eq!(pcb_ir::dialects::ipc::panel_step_count(&profiles), 1);
-        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&profiles), 1);
-        assert_eq!(profiles.profiles.len(), 2);
-        assert_eq!(pcb_ir::dialects::ipc::render_profiles(&profiles).count(), 1);
+        assert_eq!(pcb_ir::dialects::ipc::board_step_count(&layout), 1);
+        assert_eq!(pcb_ir::dialects::ipc::panel_step_count(&layout), 1);
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 1);
+        assert_eq!(layout.profiles.len(), 2);
+        assert_eq!(pcb_ir::dialects::ipc::render_profiles(&layout).count(), 1);
     }
 }
