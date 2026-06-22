@@ -21,6 +21,7 @@ const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const RELEASE_LIST_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const NIGHTLY_RELEASE_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+const SELF_UPDATE_REEXEC_ENV: &str = "PCB_SELF_UPDATE_REEXEC";
 
 enum ShimCommand {
     SelfUpdate,
@@ -1045,17 +1046,18 @@ fn toolchain_uninstall(raw: &str) -> Result<()> {
 
 fn self_update() -> Result<()> {
     let current_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
-    let mut updated_shim = None;
-    match fetch_latest_release() {
-        Ok(latest) if latest.version > current_version => {
-            let version = latest.version.clone();
-            install_shim_update(&latest)?;
-            updated_shim = Some(version);
+    if std::env::var_os(SELF_UPDATE_REEXEC_ENV).is_none() {
+        match fetch_latest_release() {
+            Ok(latest) if latest.version > current_version => {
+                let version = latest.version.clone();
+                let shim = install_shim_update(&latest)?;
+                reexec_self_update(&shim, &current_version, &version)?;
+            }
+            Ok(_) => {}
+            Err(err) => eprintln!(
+                "Warning: failed to check latest pcb shim release ({err}); continuing with pcbc updates"
+            ),
         }
-        Ok(_) => {}
-        Err(err) => eprintln!(
-            "Warning: failed to check latest pcb shim release ({err}); continuing with pcbc updates"
-        ),
     }
 
     let mut requests = BTreeSet::new();
@@ -1117,9 +1119,6 @@ fn self_update() -> Result<()> {
         eprintln!("Warning: failed to update installed nightly toolchain ({err})");
     }
 
-    if let Some(version) = updated_shim {
-        println!("Updated pcb {current_version} → {version}");
-    }
     Ok(())
 }
 
@@ -1162,9 +1161,11 @@ fn write_nightly_release_cache(release: &NightlyRelease) -> Result<()> {
     Ok(())
 }
 
-fn install_shim_update(latest: &LatestRelease) -> Result<()> {
+fn install_shim_update(latest: &LatestRelease) -> Result<PathBuf> {
     ensure_supported_target()?;
 
+    let installed_shim =
+        std::env::current_exe().context("failed to locate current pcb shim executable")?;
     let client = http_client(ARCHIVE_TIMEOUT)?;
     let temp = tempfile::tempdir()?;
     let mut download = None;
@@ -1188,7 +1189,29 @@ fn install_shim_update(latest: &LatestRelease) -> Result<()> {
     fs::write(&binary, bytes)?;
     copy_executable_permissions(&binary, &binary)?;
     self_replace::self_replace(binary)?;
-    Ok(())
+    Ok(installed_shim)
+}
+
+fn reexec_self_update(shim: &Path, from: &Version, to: &Version) -> Result<()> {
+    println!("Updated pcb {from} → {to}; continuing with updated shim");
+
+    let mut command = Command::new(shim);
+    command
+        .args(["self", "update"])
+        .env(SELF_UPDATE_REEXEC_ENV, "1");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = command.arg0("pcb").exec();
+        Err(err).with_context(|| format!("failed to exec updated shim {}", shim.display()))
+    }
+
+    #[cfg(not(unix))]
+    {
+        let status = command.status()?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
 }
 
 fn exec_toolchain(binary: &Path, args: &[OsString]) -> Result<()> {
