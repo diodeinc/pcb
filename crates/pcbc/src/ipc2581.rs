@@ -39,6 +39,11 @@ enum Commands {
         #[command(subcommand)]
         command: EditCommands,
     },
+    /// Create and inspect IPC-2581 panel data
+    Panel {
+        #[command(subcommand)]
+        command: PanelCommands,
+    },
     /// Export a filtered view of an IPC-2581 file for a specific mode
     View {
         /// Input IPC-2581 XML file
@@ -124,6 +129,34 @@ enum EditCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum PanelCommands {
+    /// Create a rectangular board array panel
+    Create {
+        /// Input IPC-2581 XML file
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        input: PathBuf,
+        /// Number of board columns
+        #[arg(long)]
+        columns: u32,
+        /// Number of board rows
+        #[arg(long)]
+        rows: u32,
+        /// Spacing between board columns, in millimeters
+        #[arg(long)]
+        column_spacing: f64,
+        /// Spacing between board rows, in millimeters
+        #[arg(long)]
+        row_spacing: f64,
+        /// Uniform edge rail width, in millimeters
+        #[arg(long)]
+        edge_rail_width: f64,
+        /// Output IPC-2581 XML file
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
+}
+
 pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
     utils::color::init_color();
 
@@ -145,6 +178,27 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 output,
                 ..
             } => commands::bom_edit::execute(&file, &rules, output.as_deref()),
+        },
+        Commands::Panel { command } => match command {
+            PanelCommands::Create {
+                input,
+                columns,
+                rows,
+                column_spacing,
+                row_spacing,
+                edge_rail_width,
+                output,
+            } => commands::panel::execute(
+                &input,
+                &output,
+                &commands::panel::PanelCreateOptions {
+                    columns,
+                    rows,
+                    column_spacing_mm: column_spacing,
+                    row_spacing_mm: row_spacing,
+                    edge_rail_width_mm: edge_rail_width,
+                },
+            ),
         },
         Commands::View {
             input,
