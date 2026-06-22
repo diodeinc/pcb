@@ -49,7 +49,7 @@ Create `blinky.zen`:
 ```python
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -113,7 +113,7 @@ Board repository `pcb.toml`:
 ```toml
 [workspace]
 repository = "github.com/myorg/MyBoard"
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [board]
 name = "MyBoard"
@@ -145,7 +145,7 @@ Registry `pcb.toml`:
 ```toml
 [workspace]
 repository = "github.com/myorg/registry"
-pcb-version = "0.3"
+pcb-version = "0.4"
 ```
 
 ## Common Commands

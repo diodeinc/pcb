@@ -580,7 +580,7 @@ mod tests {
                 "/repo/pcb.toml".to_string(),
                 r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#
                 .to_string(),
             ),
@@ -588,7 +588,7 @@ pcb-version = "0.3"
                 "/repo/boards/demo/pcb.toml".to_string(),
                 r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#
                 .to_string(),
             ),
@@ -611,7 +611,7 @@ pcb-version = "0.3"
                 "/repo/pcb.toml".to_string(),
                 r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#
                 .to_string(),
             ),
@@ -623,7 +623,7 @@ pcb-version = "0.3"
                 "/repo/boards/demo/.pcb/edit/github.com/example/dep/pcb.toml".to_string(),
                 r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#
                 .to_string(),
             ),
@@ -643,7 +643,7 @@ pcb-version = "0.3"
                 "/repo/pcb.toml".to_string(),
                 r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 exclude = ["modules/ignored/**"]
 "#
                 .to_string(),
@@ -658,7 +658,7 @@ exclude = ["modules/ignored/**"]
             ),
             (
                 "/repo/modules/ignored/nested/pcb.toml".to_string(),
-                "[workspace]\npcb-version = \"0.3\"\n".to_string(),
+                "[workspace]\npcb-version = \"0.4\"\n".to_string(),
             ),
         ]);
         let provider = InMemoryFileProvider::new(files);
@@ -675,7 +675,7 @@ exclude = ["modules/ignored/**"]
         let files = HashMap::from([
             (
                 "/repo/pcb.toml".to_string(),
-                "[workspace]\npcb-version = \"0.3\"\n".to_string(),
+                "[workspace]\npcb-version = \"0.4\"\n".to_string(),
             ),
             (
                 "/repo/a/b/c/d/e/f/g/h/pcb.toml".to_string(),
@@ -700,7 +700,7 @@ exclude = ["modules/ignored/**"]
             "/repo/pcb.toml".to_string(),
             r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [patch]
 stdlib = { path = "third_party/stdlib" }
@@ -722,7 +722,7 @@ stdlib = { path = "third_party/stdlib" }
             "/repo/pcb.toml".to_string(),
             r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [patch]
 "github.com/diodeinc/stdlib" = { path = "../stdlib-fork" }
@@ -745,7 +745,7 @@ pcb-version = "0.3"
                 "/repo/pcb.toml".to_string(),
                 r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 preferred = ["components/preferred-part"]
 "#
                 .to_string(),
