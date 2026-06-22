@@ -283,8 +283,14 @@ fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue>
             [sanitize_attribute_field(component)],
         ));
     }
-    if let Some(pin) = &attributes.pin {
-        values.push(AttributeValue::new(".P", [sanitize_attribute_field(pin)]));
+    if let (Some(component), Some(pin)) = (&attributes.component, &attributes.pin) {
+        values.push(AttributeValue::new(
+            ".P",
+            [
+                sanitize_attribute_field(component),
+                sanitize_attribute_field(pin),
+            ],
+        ));
     }
     if let Some(net) = &attributes.net {
         values.push(AttributeValue::new(".N", [sanitize_attribute_field(net)]));
@@ -343,5 +349,32 @@ mod tests {
 
         assert_eq!(attributes[0].name, ".N");
         assert_eq!(attributes[0].fields, ["PWR_RST__A_B"]);
+    }
+
+    #[test]
+    fn lowers_pin_attribute_with_component_context() {
+        let attributes = lower_object_attributes(&ObjectAttributes {
+            aperture_function: None,
+            net: None,
+            component: Some("U1".to_string()),
+            pin: Some("1".to_string()),
+        });
+
+        assert_eq!(attributes[0].name, ".C");
+        assert_eq!(attributes[0].fields, ["U1"]);
+        assert_eq!(attributes[1].name, ".P");
+        assert_eq!(attributes[1].fields, ["U1", "1"]);
+    }
+
+    #[test]
+    fn skips_pin_attribute_without_component_context() {
+        let attributes = lower_object_attributes(&ObjectAttributes {
+            aperture_function: None,
+            net: None,
+            component: None,
+            pin: Some("1".to_string()),
+        });
+
+        assert!(attributes.is_empty());
     }
 }

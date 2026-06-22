@@ -53,12 +53,13 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
         if first_doc.is_none() {
             first_doc = Some(doc.clone());
         }
+        let part = gerber_part_for_doc(&doc);
         let artwork = artwork_from_processed_layer(
             ipc,
             &doc,
             0,
             plan.role.ir_role(),
-            layer_attributes(plan.file_function.clone(), options.layout_target),
+            layer_attributes(plan.file_function.clone(), part),
         )?;
         let layer = lower_artwork_layer(&artwork)?;
         let contents = write_layer(&layer)?;
@@ -246,13 +247,35 @@ fn fabrication_line_layer_output(
     (filename.to_string(), file_function)
 }
 
-fn layer_attributes(file_function: Vec<String>, layout_target: LayoutTarget) -> LayerAttributes {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GerberPart {
+    Single,
+    Array,
+}
+
+impl GerberPart {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "Single",
+            Self::Array => "Array",
+        }
+    }
+}
+
+fn gerber_part_for_doc(
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+) -> GerberPart {
+    if pcb_ir::dialects::ipc::root_panel_step(doc).is_some() {
+        GerberPart::Array
+    } else {
+        GerberPart::Single
+    }
+}
+
+fn layer_attributes(file_function: Vec<String>, part: GerberPart) -> LayerAttributes {
     LayerAttributes {
         file_function,
-        part: Some(vec![match layout_target {
-            LayoutTarget::Board => "Single".to_string(),
-            LayoutTarget::Panel | LayoutTarget::Layout => "Array".to_string(),
-        }]),
+        part: Some(vec![part.as_str().to_string()]),
         file_polarity: None,
     }
 }
@@ -339,7 +362,10 @@ fn profile_artwork_from_profiles(
         object_start: 0,
         object_count: 0,
         bbox: BBox::empty(),
-        meta: layer_attributes(vec!["Profile".into(), "NP".into()], layout_target),
+        meta: layer_attributes(
+            vec!["Profile".into(), "NP".into()],
+            gerber_part_for_doc(doc),
+        ),
     });
     for occurrence in
         pcb_ir::dialects::ipc::profile_occurrences_for(doc, layout_target.profile_set())
@@ -591,7 +617,30 @@ mod tests {
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
         assert!(copper.contents.contains("%TF.FileFunction,Copper,L1,Top*%"));
+        assert!(copper.contents.contains("%TF.Part,Single*%"));
         assert!(copper.contents.contains("%TO.N,N1*%"));
+
+        let panel_output_dir = std::env::temp_dir().join(format!(
+            "pcb-ipc-gerber-panel-target-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&panel_output_dir);
+        let panel_target_set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir: panel_output_dir,
+                layout_target: LayoutTarget::Panel,
+            },
+        )
+        .unwrap();
+
+        let panel_target_copper = panel_target_set
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert!(panel_target_copper.contents.contains("%TF.Part,Single*%"));
+        assert!(!panel_target_copper.contents.contains("%TF.Part,Array*%"));
     }
 
     #[test]
@@ -716,7 +765,7 @@ mod tests {
                 .contains("%TA.AperFunction,FiducialPad,Global*%")
         );
         assert!(top.contents.contains("%TO.C,U1*%"));
-        assert!(top.contents.contains("%TO.P,1*%"));
+        assert!(top.contents.contains("%TO.P,U1,1*%"));
 
         let vcut = set
             .files
