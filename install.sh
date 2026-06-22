@@ -93,11 +93,12 @@ install_local() {
 }
 
 platform="$(uname -s)-$(uname -m)"
+download_targets=""
 case "$platform" in
-  Darwin-arm64) target="aarch64-apple-darwin"; data_dir="$HOME/Library/Application Support/pcb" ;;
-  Darwin-x86_64) target="x86_64-apple-darwin"; data_dir="$HOME/Library/Application Support/pcb" ;;
-  Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu"; data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pcb" ;;
-  Linux-x86_64) target="x86_64-unknown-linux-gnu"; data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pcb" ;;
+  Darwin-arm64) target="aarch64-apple-darwin"; download_targets="$target"; data_dir="$HOME/Library/Application Support/pcb" ;;
+  Darwin-x86_64) target="x86_64-apple-darwin"; download_targets="$target"; data_dir="$HOME/Library/Application Support/pcb" ;;
+  Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu"; download_targets="aarch64-unknown-linux-musl $target"; data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pcb" ;;
+  Linux-x86_64) target="x86_64-unknown-linux-gnu"; download_targets="x86_64-unknown-linux-musl $target"; data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pcb" ;;
   *) echo "unsupported platform: $platform" >&2; exit 1 ;;
 esac
 
@@ -112,17 +113,27 @@ json="$(curl -fsSL "$base_url/pcb-latest.json")"
 tag="$(printf '%s' "$json" | sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [ -n "$tag" ] || { echo "could not read latest pcb release" >&2; exit 1; }
 
-artifact="pcb-$target"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-curl -fsSL "$base_url/$tag/$artifact.sha256" -o "$tmp/pcb.sha256"
-if command -v zstd >/dev/null \
-  && curl -fsSL "$base_url/$tag/$artifact.zst" -o "$tmp/pcb.zst" 2>/dev/null; then
-  zstd -q -d -f "$tmp/pcb.zst" -o "$tmp/pcb"
-else
-  curl -fsSL "$base_url/$tag/$artifact" -o "$tmp/pcb"
-fi
+artifact=""
+downloaded=""
+for artifact_target in $download_targets; do
+  rm -f "$tmp/pcb" "$tmp/pcb.zst" "$tmp/pcb.sha256"
+  artifact="pcb-$artifact_target"
+  if ! curl -fsSL "$base_url/$tag/$artifact.sha256" -o "$tmp/pcb.sha256" 2>/dev/null; then
+    continue
+  fi
+  if command -v zstd >/dev/null \
+    && curl -fsSL "$base_url/$tag/$artifact.zst" -o "$tmp/pcb.zst" 2>/dev/null; then
+    zstd -q -d -f "$tmp/pcb.zst" -o "$tmp/pcb"
+  elif ! curl -fsSL "$base_url/$tag/$artifact" -o "$tmp/pcb" 2>/dev/null; then
+    continue
+  fi
+  downloaded="true"
+  break
+done
+[ -n "$downloaded" ] || { echo "could not find pcb release artifact for $target" >&2; exit 1; }
 
 expected="$(sed 's/[[:space:]].*//' "$tmp/pcb.sha256")"
 if command -v shasum >/dev/null; then

@@ -55,6 +55,7 @@ jobs:
           base_dir="$RUNNER_TEMP/pcb-base"
           base_bin="$RUNNER_TEMP/pcb-base-bin"
           base_data="$RUNNER_TEMP/pcb-base-data"
+          base_shim="$base_bin/pcb"
           head_bin="$RUNNER_TEMP/pcb-head-bin"
           head_data="$RUNNER_TEMP/pcb-head-data"
           head_shim="$head_bin/pcb"
@@ -62,10 +63,11 @@ jobs:
 
           bench() {
             suffix="$1"
-            data_home="$2"
+            shim="$2"
+            data_home="$3"
             for workspace in $workspaces; do
               XDG_DATA_HOME="$data_home" python3 bin/pcb-build-perf \
-                --pcb "$head_shim" \
+                --pcb "$shim" \
                 --pcb-arg +local \
                 --workspace "workspaces/$workspace" \
                 --suppress bom \
@@ -77,8 +79,8 @@ jobs:
           XDG_DATA_HOME="$base_data" PCB_INSTALL_DIR="$base_bin" "$base_dir/install.sh" --local
 
           XDG_DATA_HOME="$head_data" PCB_INSTALL_DIR="$head_bin" ./install.sh --local
-          bench base "$base_data"
-          bench head "$head_data"
+          bench base "$base_shim" "$base_data"
+          bench head "$head_shim" "$head_data"
 
       - name: Create PR comment body
         id: perf_comment

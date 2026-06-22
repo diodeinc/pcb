@@ -625,9 +625,23 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
         target_triple()
     );
 
-    let name = binary_artifact_name("pcbc");
-    let url = format!("{}/{}", release.base_url.trim_end_matches('/'), name);
-    let bytes = download_artifact_bytes(&http_client(ARCHIVE_TIMEOUT)?, &url)?;
+    let client = http_client(ARCHIVE_TIMEOUT)?;
+    let mut download = None;
+    for target in download_target_triples().iter().copied() {
+        let name = binary_artifact_name_for("pcbc", target);
+        let url = format!("{}/{}", release.base_url.trim_end_matches('/'), name);
+        if let Some(bytes) = download_optional_artifact(&client, &url)? {
+            download = Some((name, url, bytes));
+            break;
+        }
+    }
+    let Some((name, url, bytes)) = download else {
+        anyhow::bail!(
+            "no pcbc nightly binary found for {} on {}",
+            release.date,
+            target_triple()
+        );
+    };
     let actual_sha256 = verify_checksum(&url, &bytes)?;
 
     fs::create_dir_all(downloads_dir())?;
@@ -767,26 +781,28 @@ fn stage_stdlib_archive(base_url: &str, staging_dir: &Path) -> Result<()> {
 fn download_toolchain(version: &Version) -> Result<Download> {
     let client = http_client(ARCHIVE_TIMEOUT)?;
 
-    let name = binary_artifact_name("pcbc");
-    let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
-    if let Some(bytes) = download_optional_artifact(&client, &url)? {
-        return Ok(Download {
-            name,
-            url,
-            bytes,
-            kind: DownloadKind::Binary,
-        });
-    }
+    for target in download_target_triples().iter().copied() {
+        let name = binary_artifact_name_for("pcbc", target);
+        let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
+        if let Some(bytes) = download_optional_artifact(&client, &url)? {
+            return Ok(Download {
+                name,
+                url,
+                bytes,
+                kind: DownloadKind::Binary,
+            });
+        }
 
-    let name = toolchain_archive_name("pcbc");
-    let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
-    if let Some(bytes) = download_optional(&client, &url)? {
-        return Ok(Download {
-            name,
-            url,
-            bytes,
-            kind: DownloadKind::Archive,
-        });
+        let name = toolchain_archive_name_for("pcbc", target);
+        let url = format!("{RELEASE_BASE_URL}/v{version}/{name}");
+        if let Some(bytes) = download_optional(&client, &url)? {
+            return Ok(Download {
+                name,
+                url,
+                bytes,
+                kind: DownloadKind::Archive,
+            });
+        }
     }
 
     anyhow::bail!(
@@ -810,10 +826,6 @@ fn download_optional_artifact(client: &ureq::Agent, url: &str) -> Result<Option<
         return Ok(Some(decompress_zstd(&compressed_url, compressed)?));
     }
     download_optional(client, url)
-}
-
-fn download_artifact_bytes(client: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
-    download_optional_artifact(client, url)?.ok_or_else(|| anyhow::anyhow!("not found: {url}"))
 }
 
 fn read_download_bytes(body: &mut ureq::Body) -> Result<Vec<u8>> {
@@ -1155,9 +1167,22 @@ fn install_shim_update(latest: &LatestRelease) -> Result<()> {
 
     let client = http_client(ARCHIVE_TIMEOUT)?;
     let temp = tempfile::tempdir()?;
-    let binary_name = binary_artifact_name("pcb");
-    let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
-    let bytes = download_artifact_bytes(&client, &binary_url)?;
+    let mut download = None;
+    for target in download_target_triples().iter().copied() {
+        let binary_name = binary_artifact_name_for("pcb", target);
+        let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
+        if let Some(bytes) = download_optional_artifact(&client, &binary_url)? {
+            download = Some((binary_url, bytes));
+            break;
+        }
+    }
+    let Some((binary_url, bytes)) = download else {
+        anyhow::bail!(
+            "no pcb shim binary found for {} on {}",
+            latest.tag,
+            target_triple()
+        );
+    };
     verify_checksum(&binary_url, &bytes)?;
     let binary = temp.path().join(legacy_pcb_binary_name());
     fs::write(&binary, bytes)?;
@@ -1287,14 +1312,14 @@ fn nightly_release_cache_path() -> PathBuf {
     data_dir().join("nightly-release-cache.json")
 }
 
-fn binary_artifact_name(binary: &str) -> String {
+fn binary_artifact_name_for(binary: &str, target: &str) -> String {
     let ext = if cfg!(windows) { ".exe" } else { "" };
-    format!("{}-{}{}", binary, target_triple(), ext)
+    format!("{binary}-{target}{ext}")
 }
 
-fn toolchain_archive_name(binary: &str) -> String {
+fn toolchain_archive_name_for(binary: &str, target: &str) -> String {
     let ext = if cfg!(windows) { "zip" } else { "tar.xz" };
-    format!("{}-{}.{}", binary, target_triple(), ext)
+    format!("{binary}-{target}.{ext}")
 }
 
 fn pcbc_binary_name() -> &'static str {
@@ -1313,6 +1338,18 @@ fn target_triple() -> &'static str {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
         ("windows", "x86_64") => "x86_64-pc-windows-msvc",
         _ => "unsupported",
+    }
+}
+
+fn download_target_triples() -> &'static [&'static str] {
+    // Linux downloads prefer static musl artifacts, then GNU compatibility artifacts.
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "aarch64") => &["aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu"],
+        ("linux", "x86_64") => &["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"],
+        ("macos", "aarch64") => &["aarch64-apple-darwin"],
+        ("macos", "x86_64") => &["x86_64-apple-darwin"],
+        ("windows", "x86_64") => &["x86_64-pc-windows-msvc"],
+        _ => &["unsupported"],
     }
 }
 
