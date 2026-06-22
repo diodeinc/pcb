@@ -1,8 +1,10 @@
 use std::fmt::Write;
 
+use ipc2581::types::LayerFunction;
 use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
-use pcb_ir::dialects::ipc::{LayoutStep, LayoutStepKind, PathCmd, PathOp};
+use pcb_ir::dialects::ipc::{FeatureSemantic, LayoutStep, LayoutStepKind, PathCmd, PathOp};
 
+use crate::LayoutTarget;
 use crate::accessors::{IpcAccessor, PanelGridInfo, PanelInfo};
 
 type GeometryDocument =
@@ -15,10 +17,15 @@ pub fn render_overview_svg(accessor: &IpcAccessor<'_>) -> Option<String> {
     let layout = accessor.board_layout_info()?;
     let panel = layout.panel.as_ref()?;
     let doc = crate::geometry::extract_layout(accessor.ipc()).ok()?;
-    render_panel_svg(panel, &doc)
+    let vcut_paths = vcut_layer_paths(accessor, panel.dimensions.as_ref()?.height_mm());
+    render_panel_svg(panel, &doc, &vcut_paths)
 }
 
-fn render_panel_svg(panel: &PanelInfo, doc: &GeometryDocument) -> Option<String> {
+fn render_panel_svg(
+    panel: &PanelInfo,
+    doc: &GeometryDocument,
+    vcut_paths: &[String],
+) -> Option<String> {
     let dimensions = panel.dimensions.as_ref()?;
     let grid = panel.grid.as_ref()?;
     let panel_width = dimensions.width_mm();
@@ -37,12 +44,12 @@ fn render_panel_svg(panel: &PanelInfo, doc: &GeometryDocument) -> Option<String>
     let scale = (panel_width.max(panel_height) / 450.0).max(MIN_STROKE);
     let panel_stroke = scale * 1.9;
     let board_stroke = scale * 0.75;
-    let score_stroke = scale * 0.85;
+    let vcut_stroke = scale * 0.85;
     let rail_stroke = scale * 0.5;
-    let score_dash = format!(
+    let vcut_dash = format!(
         "{} {}",
-        fmt_num(score_stroke * 7.6),
-        fmt_num(score_stroke * 5.0)
+        fmt_num(vcut_stroke * 7.6),
+        fmt_num(vcut_stroke * 5.0)
     );
     let board_paths = board_instance_paths(doc, panel_height);
     if board_paths.is_empty() {
@@ -77,14 +84,7 @@ fn render_panel_svg(panel: &PanelInfo, doc: &GeometryDocument) -> Option<String>
     write_board_paths(&mut svg, &board_paths, "board-fill", "#f1f5f9", "none", 0.0);
 
     write_rail_guides(&mut svg, grid, panel_width, panel_height, rail_stroke);
-    write_score_guides(
-        &mut svg,
-        grid,
-        panel_width,
-        panel_height,
-        score_stroke,
-        &score_dash,
-    );
+    write_vcut_guides(&mut svg, vcut_paths, vcut_stroke, &vcut_dash);
     writeln!(
         svg,
         "  <rect class='panel-outline' x='0' y='0' width='{}' height='{}' fill='none' stroke='#111827' stroke-width='{}'/>",
@@ -107,15 +107,47 @@ fn render_panel_svg(panel: &PanelInfo, doc: &GeometryDocument) -> Option<String>
     Some(svg)
 }
 
-fn board_instance_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<String> {
-    let flip_y = Affine2 {
-        m00: 1.0,
-        m01: 0.0,
-        m02: 0.0,
-        m10: 0.0,
-        m11: -1.0,
-        m12: panel_height,
+fn vcut_layer_paths(accessor: &IpcAccessor<'_>, panel_height: f64) -> Vec<String> {
+    let Some(ecad) = accessor.ipc().ecad() else {
+        return Vec::new();
     };
+    let layer_names = ecad
+        .cad_data
+        .layers
+        .iter()
+        .filter(|layer| layer.layer_function == LayerFunction::VCut)
+        .map(|layer| accessor.ipc().resolve(layer.name).to_string())
+        .collect::<Vec<_>>();
+
+    let mut paths = Vec::new();
+    for layer_name in layer_names {
+        let Ok(doc) = crate::geometry::extract_layer_for_layout_target(
+            accessor.ipc(),
+            &layer_name,
+            LayoutTarget::Panel,
+        ) else {
+            continue;
+        };
+        paths.extend(vcut_paths_from_layer(&doc, panel_height));
+    }
+    paths
+}
+
+fn vcut_paths_from_layer(doc: &GeometryDocument, panel_height: f64) -> Vec<String> {
+    let Some(layer) = doc.layers.first() else {
+        return Vec::new();
+    };
+    let transform = y_flip_transform(panel_height);
+
+    doc.features[layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
+        .iter()
+        .filter(|feature| feature.semantic == FeatureSemantic::VCut)
+        .filter_map(|feature| feature_path_data(doc, feature, transform))
+        .collect()
+}
+
+fn board_instance_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<String> {
+    let flip_y = y_flip_transform(panel_height);
     let mut paths = Vec::new();
 
     for instance in &doc.layout.instances {
@@ -135,6 +167,17 @@ fn board_instance_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<String
     paths
 }
 
+fn y_flip_transform(panel_height: f64) -> Affine2 {
+    Affine2 {
+        m00: 1.0,
+        m01: 0.0,
+        m02: 0.0,
+        m10: 0.0,
+        m11: -1.0,
+        m12: panel_height,
+    }
+}
+
 fn step_profile_path_data(
     doc: &GeometryDocument,
     step: &LayoutStep<ipc2581::Symbol>,
@@ -151,6 +194,18 @@ fn step_profile_path_data(
         }
     }
 
+    (!path_data.is_empty()).then_some(path_data)
+}
+
+fn feature_path_data(
+    doc: &GeometryDocument,
+    feature: &pcb_ir::dialects::ipc::GeometryFeature<ipc2581::Symbol>,
+    transform: Affine2,
+) -> Option<String> {
+    let mut path_data = String::new();
+    for path_index in feature.path_start..feature.path_start + feature.path_count {
+        append_transformed_path_data(&mut path_data, doc, path_index, transform)?;
+    }
     (!path_data.is_empty()).then_some(path_data)
 }
 
@@ -304,72 +359,15 @@ fn write_rail_guides(
     }
 }
 
-fn write_score_guides(
-    svg: &mut String,
-    grid: &PanelGridInfo,
-    panel_width: f64,
-    panel_height: f64,
-    stroke_width: f64,
-    dash: &str,
-) {
-    for x in score_x_positions(grid) {
+fn write_vcut_guides(svg: &mut String, paths: &[String], stroke_width: f64, dash: &str) {
+    for path in paths {
         writeln!(
             svg,
-            "  <line class='score-guide' x1='{}' y1='0' x2='{}' y2='{}' stroke='#b91c1c' stroke-width='{}' stroke-dasharray='{dash}' opacity='0.78'/>",
-            fmt_num(x),
-            fmt_num(x),
-            fmt_num(panel_height),
+            "  <path class='vcut-guide' d='{path}' fill='none' stroke='#b91c1c' stroke-width='{}' stroke-dasharray='{dash}' opacity='0.78'/>",
             fmt_num(stroke_width)
         )
         .unwrap();
     }
-    for y in score_y_positions(grid, panel_height) {
-        writeln!(
-            svg,
-            "  <line class='score-guide' x1='0' y1='{}' x2='{}' y2='{}' stroke='#b91c1c' stroke-width='{}' stroke-dasharray='{dash}' opacity='0.78'/>",
-            fmt_num(y),
-            fmt_num(panel_width),
-            fmt_num(y),
-            fmt_num(stroke_width)
-        )
-        .unwrap();
-    }
-}
-
-fn score_x_positions(grid: &PanelGridInfo) -> Vec<f64> {
-    let pitch_x = grid
-        .pitch_x
-        .map(|pitch| pitch.mm())
-        .unwrap_or_else(|| grid.board_width.mm());
-    let mut positions = Vec::new();
-    for column in 0..grid.columns {
-        let x = grid.margins.left.mm() + column as f64 * pitch_x;
-        positions.push(x);
-        positions.push(x + grid.board_width.mm());
-    }
-    sorted_positions(positions)
-}
-
-fn score_y_positions(grid: &PanelGridInfo, panel_height: f64) -> Vec<f64> {
-    let pitch_y = grid
-        .pitch_y
-        .map(|pitch| pitch.mm())
-        .unwrap_or_else(|| grid.board_height.mm());
-    let mut positions = Vec::new();
-    for row in 0..grid.rows {
-        let board_bottom = grid.margins.bottom.mm() + row as f64 * pitch_y;
-        let y = panel_height - board_bottom - grid.board_height.mm();
-        positions.push(y);
-        positions.push(y + grid.board_height.mm());
-    }
-    sorted_positions(positions)
-}
-
-fn sorted_positions(mut positions: Vec<f64>) -> Vec<f64> {
-    positions.retain(|position| position.is_finite());
-    positions.sort_by(f64::total_cmp);
-    positions.dedup_by(|a, b| (*a - *b).abs() <= 1e-6);
-    positions
 }
 
 fn escape_xml(input: &str) -> String {
@@ -445,11 +443,78 @@ mod tests {
         assert_eq!(svg.matches("class='board-outline'").count(), 3 * 2);
         assert!(svg.contains("fill='#f1f5f9'"));
         assert!(svg.contains("stroke='#064e3b'"));
-        assert!(svg.contains("class='score-guide'"));
+        assert!(!svg.contains("class='vcut-guide'"));
+        assert!(!svg.contains("class='score-guide'"));
         assert!(svg.contains("class='rail-guide'"));
 
-        let score_start = svg.find("class='score-guide'").unwrap();
         let board_outline_start = svg.find("class='board-outline'").unwrap();
-        assert!(score_start < board_outline_start);
+        let rail_start = svg.find("class='rail-guide'").unwrap();
+        assert!(rail_start < board_outline_start);
+    }
+
+    #[test]
+    fn renders_panel_overview_vcuts_from_vcut_layer_only() {
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    <LayerRef name="VCUT"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="VCUT" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="0" y="27"/>
+            <PolyStepSegment x="46" y="27"/>
+            <PolyStepSegment x="46" y="0"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board" x="6" y="7" nx="3" ny="2" dx="12" dy="8"/>
+        <LayerFeature layerRef="VCUT">
+          <Set>
+            <Features>
+              <Line startX="6" startY="0" endX="6" endY="27">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+              <Line startX="0" startY="7" endX="46" endY="7">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let svg = render_overview_svg(&accessor).unwrap();
+
+        assert_eq!(svg.matches("class='vcut-guide'").count(), 2);
+        assert!(svg.contains("d='M6 27 L6 0'"));
+        assert!(svg.contains("d='M0 20 L46 20'"));
+        assert!(!svg.contains("class='score-guide'"));
+
+        let vcut_start = svg.find("class='vcut-guide'").unwrap();
+        let board_outline_start = svg.find("class='board-outline'").unwrap();
+        assert!(vcut_start < board_outline_start);
     }
 }

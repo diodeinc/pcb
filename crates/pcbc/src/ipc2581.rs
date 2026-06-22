@@ -131,24 +131,24 @@ enum EditCommands {
 
 #[derive(Subcommand)]
 enum PanelCommands {
-    /// Create a rectangular board array panel
+    /// Create a rectangular board array panel. Generated panel size must be 70-260 mm per side.
     Create {
         /// Input IPC-2581 XML file
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
-        /// Number of board columns
+        /// Number of board columns. Must be between 1 and 10.
         #[arg(long)]
         columns: u32,
-        /// Number of board rows
+        /// Number of board rows. Must be between 1 and 10.
         #[arg(long)]
         rows: u32,
-        /// Spacing between board columns, in millimeters
+        /// Spacing between board columns, in millimeters. Must be 0 or between 5 and 20.
         #[arg(long)]
         column_spacing: f64,
-        /// Spacing between board rows, in millimeters
+        /// Spacing between board rows, in millimeters. Must be 0 or between 5 and 20.
         #[arg(long)]
         row_spacing: f64,
-        /// Uniform edge rail width, in millimeters
+        /// Uniform edge rail width, in millimeters. Must be between 5 and 30.
         #[arg(long)]
         edge_rail_width: f64,
         /// Output IPC-2581 XML file

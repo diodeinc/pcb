@@ -241,7 +241,9 @@ fn fabrication_line_layer_output(
     match side {
         Some(Side::Top) => file_function.push("Top".to_string()),
         Some(Side::Bottom) => file_function.push("Bot".to_string()),
-        Some(Side::Both) | Some(Side::All) => file_function.push("Top/Bot".to_string()),
+        Some(Side::Both) | Some(Side::All) | Some(Side::None) => {
+            file_function.push("Top/Bot".to_string())
+        }
         _ => {}
     }
     (filename.to_string(), file_function)
