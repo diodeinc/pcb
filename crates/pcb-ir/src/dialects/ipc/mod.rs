@@ -5,6 +5,7 @@ use crate::dialects::{geom, path as common_path};
 #[derive(Debug, Clone)]
 pub struct GeometryDocument<Symbol, LayerFunction> {
     pub board_name: String,
+    pub layout: LayoutGraph<Symbol>,
     pub layers: Vec<GeometryLayer<Symbol, LayerFunction>>,
     pub boards: Vec<BoardGeometry<Symbol>>,
     pub panels: Vec<PanelGeometry<Symbol>>,
@@ -22,6 +23,7 @@ impl<Symbol, LayerFunction> GeometryDocument<Symbol, LayerFunction> {
     pub fn new(board_name: String) -> Self {
         Self {
             board_name,
+            layout: LayoutGraph::new(),
             layers: Vec::new(),
             boards: Vec::new(),
             panels: Vec::new(),
@@ -210,7 +212,10 @@ pub fn render_profiles<Symbol, LayerFunction>(
         if has_panel {
             matches!(
                 profile.kind,
-                BoardProfileKind::PanelDefinition | BoardProfileKind::BoardInstance
+                BoardProfileKind::PanelDefinition
+                    | BoardProfileKind::PanelInstance
+                    | BoardProfileKind::BoardInstance
+                    | BoardProfileKind::StepInstance
             )
         } else {
             matches!(profile.kind, BoardProfileKind::BoardDefinition)
@@ -278,6 +283,96 @@ fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
 }
 
 #[derive(Debug, Clone)]
+pub struct LayoutGraph<Symbol> {
+    pub root_step: Option<u32>,
+    pub steps: Vec<LayoutStep<Symbol>>,
+    pub repeats: Vec<LayoutRepeat<Symbol>>,
+    pub instances: Vec<LayoutInstance<Symbol>>,
+}
+
+impl<Symbol> LayoutGraph<Symbol> {
+    pub fn new() -> Self {
+        Self {
+            root_step: None,
+            steps: Vec::new(),
+            repeats: Vec::new(),
+            instances: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.root_step.is_none()
+            && self.steps.is_empty()
+            && self.repeats.is_empty()
+            && self.instances.is_empty()
+    }
+}
+
+impl<Symbol> Default for LayoutGraph<Symbol> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LayoutStep<Symbol> {
+    pub source_step_ref: Symbol,
+    pub kind: LayoutStepKind,
+    pub datum: Point,
+    pub profile_start: u32,
+    pub profile_count: u32,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutStepKind {
+    Board,
+    Panel,
+    Coupon,
+    Tooling,
+    Ic,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct LayoutRepeat<Symbol> {
+    pub parent_step: u32,
+    pub parent_instance: Option<u32>,
+    pub child_step: u32,
+    pub source_step_ref: Symbol,
+    pub x: f64,
+    pub y: f64,
+    pub nx: u32,
+    pub ny: u32,
+    pub dx: f64,
+    pub dy: f64,
+    pub angle: f64,
+    pub mirror: bool,
+    pub instance_start: u32,
+    pub instance_count: u32,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone)]
+pub struct LayoutInstance<Symbol> {
+    pub repeat: u32,
+    pub parent_instance: Option<u32>,
+    pub child_step: u32,
+    pub source_step_ref: Symbol,
+    pub parent_step_ref: Symbol,
+    pub transform: Affine2,
+    pub repeat_index_x: u32,
+    pub repeat_index_y: u32,
+    pub repeat_count_x: u32,
+    pub repeat_count_y: u32,
+    pub repeat_pitch_x: f64,
+    pub repeat_pitch_y: f64,
+    pub profile_start: u32,
+    pub profile_count: u32,
+    pub bbox: BBox,
+}
+
+#[derive(Debug, Clone)]
 pub struct BoardGeometry<Symbol> {
     pub step_ref: Symbol,
     pub profile_start: u32,
@@ -318,7 +413,10 @@ pub struct BoardInstance<Symbol> {
 pub enum BoardProfileKind {
     BoardDefinition,
     PanelDefinition,
+    StepDefinition,
     BoardInstance,
+    PanelInstance,
+    StepInstance,
 }
 
 #[derive(Debug, Clone)]

@@ -183,6 +183,36 @@ pub fn normalize_bounds<S, L>(doc: &mut GeometryDocument<S, L>) {
         };
     }
 
+    for instance_index in 0..doc.layout.instances.len() {
+        let profile_start = doc.layout.instances[instance_index].profile_start;
+        let profile_count = doc.layout.instances[instance_index].profile_count;
+        doc.layout.instances[instance_index].bbox =
+            profiles_range_bbox(doc, profile_start, profile_count);
+    }
+
+    for repeat_index in (0..doc.layout.repeats.len()).rev() {
+        let instance_start = doc.layout.repeats[repeat_index].instance_start;
+        let instance_count = doc.layout.repeats[repeat_index].instance_count;
+        let bbox = layout_instances_range_bbox(doc, instance_start, instance_count);
+        doc.layout.repeats[repeat_index].bbox = bbox;
+        if let Some(parent_instance) = doc.layout.repeats[repeat_index].parent_instance {
+            let instance_bbox = doc.layout.instances[parent_instance as usize].bbox;
+            doc.layout.instances[parent_instance as usize].bbox = instance_bbox.union(bbox);
+        }
+    }
+
+    for step_index in 0..doc.layout.steps.len() {
+        let profile_start = doc.layout.steps[step_index].profile_start;
+        let profile_count = doc.layout.steps[step_index].profile_count;
+        let profile_bbox = profiles_range_bbox(doc, profile_start, profile_count);
+        let repeat_bbox = layout_step_repeats_bbox(doc, step_index as u32);
+        doc.layout.steps[step_index].bbox = if !profile_bbox.is_empty() {
+            profile_bbox
+        } else {
+            repeat_bbox
+        };
+    }
+
     for feature_index in 0..doc.features.len() {
         doc.features[feature_index].bbox = feature_bbox(doc, feature_index);
     }
@@ -203,6 +233,22 @@ fn board_instances_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, co
     doc.board_instances[start as usize..(start + count) as usize]
         .iter()
         .map(|instance| instance.bbox)
+        .fold(BBox::empty(), BBox::union)
+}
+
+fn layout_instances_range_bbox<S, L>(doc: &GeometryDocument<S, L>, start: u32, count: u32) -> BBox {
+    doc.layout.instances[start as usize..(start + count) as usize]
+        .iter()
+        .map(|instance| instance.bbox)
+        .fold(BBox::empty(), BBox::union)
+}
+
+fn layout_step_repeats_bbox<S, L>(doc: &GeometryDocument<S, L>, step_index: u32) -> BBox {
+    doc.layout
+        .repeats
+        .iter()
+        .filter(|repeat| repeat.parent_step == step_index && repeat.parent_instance.is_none())
+        .map(|repeat| repeat.bbox)
         .fold(BBox::empty(), BBox::union)
 }
 

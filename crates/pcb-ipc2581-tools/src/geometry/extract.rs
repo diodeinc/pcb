@@ -16,6 +16,29 @@ type GeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<Symbol, LayerFun
 type GeometryLayer = pcb_ir::dialects::ipc::GeometryLayer<Symbol, LayerFunction>;
 type GeometryFeature = pcb_ir::dialects::ipc::GeometryFeature<Symbol>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlacementPolicy {
+    /// Extract only the primary step's own layer features and profile.
+    StepOnly,
+    /// Extract the primary step's own layer features and carry the panel graph sidecar.
+    PanelSymbolic,
+    /// Extract panel-local features and materialize repeated child step features.
+    PanelFlattened,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerExtractionOptions {
+    pub placement: PlacementPolicy,
+}
+
+impl Default for LayerExtractionOptions {
+    fn default() -> Self {
+        Self {
+            placement: PlacementPolicy::PanelFlattened,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ProfileRange {
     start: u32,
@@ -54,6 +77,14 @@ enum PrimitivePaint {
 }
 
 pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
+    extract_layer_with_options(ipc, layer_name, &LayerExtractionOptions::default())
+}
+
+pub fn extract_layer_with_options(
+    ipc: &Ipc2581,
+    layer_name: &str,
+    options: &LayerExtractionOptions,
+) -> Result<GeometryDocument> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let layer = ecad
         .cad_data
@@ -64,25 +95,29 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
     let step = steps::primary_step(ipc, &ecad.cad_data.steps)
         .context("IPC-2581 ECAD section has no Step")?;
 
-    let mut doc = if is_panel_step(step) {
-        extract_panel_layer(
+    let mut doc = match (is_panel_step(step), options.placement) {
+        (true, PlacementPolicy::PanelFlattened) => extract_panel_layer(
             ipc,
             &ecad.cad_data.steps,
             &ecad.cad_data.layers,
             step,
             layer,
             layer_name,
-        )?
-    } else {
-        extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
+        )?,
+        _ => extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
     };
 
-    append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?;
+    match options.placement {
+        PlacementPolicy::StepOnly => append_step_only_layout_geometry(&mut doc, step),
+        PlacementPolicy::PanelSymbolic | PlacementPolicy::PanelFlattened => {
+            append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
+        }
+    }
     pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
 }
 
-pub fn extract_profiles(ipc: &Ipc2581) -> Result<GeometryDocument> {
+pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let step = steps::primary_step(ipc, &ecad.cad_data.steps)
         .context("IPC-2581 ECAD section has no Step")?;
@@ -90,6 +125,10 @@ pub fn extract_profiles(ipc: &Ipc2581) -> Result<GeometryDocument> {
     append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?;
     pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
+}
+
+pub fn extract_profiles(ipc: &Ipc2581) -> Result<GeometryDocument> {
+    extract_layout(ipc)
 }
 
 fn extract_panel_layer(
@@ -427,10 +466,35 @@ fn append_layout_geometry(
     if is_panel_step(primary_step) {
         append_panel_geometry(doc, ipc, steps, primary_step)
     } else if is_board_step(primary_step) {
-        ensure_board_geometry(doc, primary_step);
+        doc.layout.root_step = Some(ensure_layout_step_for_step(doc, primary_step));
         Ok(())
     } else {
         Ok(())
+    }
+}
+
+fn append_step_only_layout_geometry(doc: &mut GeometryDocument, primary_step: &Step) {
+    if is_panel_step(primary_step) {
+        let profiles = append_step_profile(
+            doc,
+            primary_step,
+            Affine2::identity(),
+            BoardProfileKind::PanelDefinition,
+        );
+        let step = push_or_update_layout_step(doc, primary_step, profiles);
+        doc.layout.root_step = Some(step);
+        doc.panels.push(PanelGeometry {
+            step_ref: primary_step.name,
+            profile_start: profiles.start,
+            profile_count: profiles.count,
+            profile_bbox: profiles.bbox,
+            board_instance_start: doc.board_instances.len() as u32,
+            board_instance_count: 0,
+            instance_bbox: BBox::empty(),
+            bbox: profiles.bbox,
+        });
+    } else if is_board_step(primary_step) {
+        doc.layout.root_step = Some(ensure_layout_step_for_step(doc, primary_step));
     }
 }
 
@@ -446,6 +510,8 @@ fn append_panel_geometry(
         Affine2::identity(),
         BoardProfileKind::PanelDefinition,
     );
+    let root_layout_step = push_or_update_layout_step(doc, panel_step, panel_profiles);
+    doc.layout.root_step = Some(root_layout_step);
     let board_instance_start = doc.board_instances.len() as u32;
     let mut stack = vec![panel_step.name];
     append_board_instances_from_repeats(
@@ -455,6 +521,8 @@ fn append_panel_geometry(
         panel_step,
         Affine2::identity(),
         &mut stack,
+        root_layout_step,
+        None,
     )?;
     let board_instance_count = doc.board_instances.len() as u32 - board_instance_start;
     let instance_bbox = board_instances_bbox(doc, board_instance_start, board_instance_count);
@@ -485,6 +553,8 @@ fn append_board_instances_from_repeats(
     parent_step: &Step,
     parent_transform: Affine2,
     stack: &mut Vec<Symbol>,
+    parent_layout_step: u32,
+    parent_instance: Option<u32>,
 ) -> Result<()> {
     for repeat in &parent_step.step_repeats {
         let source_step = steps
@@ -504,24 +574,101 @@ fn append_board_instances_from_repeats(
             );
         }
 
+        let child_layout_step = ensure_layout_step_for_step(doc, source_step);
+        let layout_repeat = push_layout_repeat(
+            doc,
+            parent_layout_step,
+            parent_instance,
+            child_layout_step,
+            source_step.name,
+            repeat,
+        );
+
+        let mut pending_panel_instances = Vec::new();
         for iy in 0..repeat.ny {
             for ix in 0..repeat.nx {
                 let transform = parent_transform.concat(step_repeat_transform(repeat, ix, iy));
                 if is_panel_step(source_step) {
-                    stack.push(source_step.name);
-                    append_board_instances_from_repeats(
+                    let profiles = append_step_profile(
                         doc,
-                        ipc,
-                        steps,
                         source_step,
                         transform,
-                        stack,
-                    )?;
-                    stack.pop();
+                        BoardProfileKind::PanelInstance,
+                    );
+                    let layout_instance = push_layout_instance(
+                        doc,
+                        layout_repeat,
+                        parent_instance,
+                        child_layout_step,
+                        source_step.name,
+                        parent_step.name,
+                        repeat,
+                        ix,
+                        iy,
+                        transform,
+                        profiles,
+                    );
+                    pending_panel_instances.push((source_step, transform, layout_instance));
                 } else if is_board_step(source_step) {
-                    append_board_instance(doc, parent_step, source_step, repeat, ix, iy, transform);
+                    let profiles = append_board_instance(
+                        doc,
+                        parent_step,
+                        source_step,
+                        repeat,
+                        ix,
+                        iy,
+                        transform,
+                    );
+                    push_layout_instance(
+                        doc,
+                        layout_repeat,
+                        parent_instance,
+                        child_layout_step,
+                        source_step.name,
+                        parent_step.name,
+                        repeat,
+                        ix,
+                        iy,
+                        transform,
+                        profiles,
+                    );
+                } else {
+                    let profiles = append_step_profile(
+                        doc,
+                        source_step,
+                        transform,
+                        BoardProfileKind::StepInstance,
+                    );
+                    push_layout_instance(
+                        doc,
+                        layout_repeat,
+                        parent_instance,
+                        child_layout_step,
+                        source_step.name,
+                        parent_step.name,
+                        repeat,
+                        ix,
+                        iy,
+                        transform,
+                        profiles,
+                    );
                 }
             }
+        }
+
+        for (source_step, transform, layout_instance) in pending_panel_instances {
+            stack.push(source_step.name);
+            append_board_instances_from_repeats(
+                doc,
+                ipc,
+                steps,
+                source_step,
+                transform,
+                stack,
+                child_layout_step,
+                Some(layout_instance),
+            )?;
+            stack.pop();
         }
     }
 
@@ -536,7 +683,7 @@ fn append_board_instance(
     ix: u32,
     iy: u32,
     transform: Affine2,
-) {
+) -> ProfileRange {
     let board_index = ensure_board_geometry(doc, board_step);
     let profiles = append_step_profile(doc, board_step, transform, BoardProfileKind::BoardInstance);
 
@@ -555,6 +702,7 @@ fn append_board_instance(
         profile_count: profiles.count,
         bbox: profiles.bbox,
     });
+    profiles
 }
 
 fn ensure_board_geometry(doc: &mut GeometryDocument, step: &Step) -> u32 {
@@ -580,6 +728,154 @@ fn ensure_board_geometry(doc: &mut GeometryDocument, step: &Step) -> u32 {
         bbox: profiles.bbox,
     });
     board_index
+}
+
+fn ensure_layout_step_for_step(doc: &mut GeometryDocument, step: &Step) -> u32 {
+    if let Some(index) = doc
+        .layout
+        .steps
+        .iter()
+        .position(|layout_step| layout_step.source_step_ref == step.name)
+    {
+        return index as u32;
+    }
+
+    if is_board_step(step) {
+        let board_index = ensure_board_geometry(doc, step);
+        let board = &doc.boards[board_index as usize];
+        return push_or_update_layout_step(
+            doc,
+            step,
+            ProfileRange {
+                start: board.profile_start,
+                count: board.profile_count,
+                bbox: board.bbox,
+            },
+        );
+    }
+
+    let profiles = append_step_profile(
+        doc,
+        step,
+        Affine2::identity(),
+        BoardProfileKind::StepDefinition,
+    );
+    push_or_update_layout_step(doc, step, profiles)
+}
+
+fn push_or_update_layout_step(
+    doc: &mut GeometryDocument,
+    step: &Step,
+    profiles: ProfileRange,
+) -> u32 {
+    if let Some(index) = doc
+        .layout
+        .steps
+        .iter()
+        .position(|layout_step| layout_step.source_step_ref == step.name)
+    {
+        let layout_step = &mut doc.layout.steps[index];
+        if layout_step.profile_count == 0 && profiles.count > 0 {
+            layout_step.profile_start = profiles.start;
+            layout_step.profile_count = profiles.count;
+            layout_step.bbox = profiles.bbox;
+        }
+        return index as u32;
+    }
+
+    let index = doc.layout.steps.len() as u32;
+    doc.layout.steps.push(LayoutStep {
+        source_step_ref: step.name,
+        kind: layout_step_kind(step),
+        datum: step
+            .datum
+            .map(|datum| Point::new(datum.x, datum.y))
+            .unwrap_or_default(),
+        profile_start: profiles.start,
+        profile_count: profiles.count,
+        bbox: profiles.bbox,
+    });
+    index
+}
+
+fn push_layout_repeat(
+    doc: &mut GeometryDocument,
+    parent_step: u32,
+    parent_instance: Option<u32>,
+    child_step: u32,
+    source_step_ref: Symbol,
+    repeat: &StepRepeat,
+) -> u32 {
+    let repeat_index = doc.layout.repeats.len() as u32;
+
+    doc.layout.repeats.push(LayoutRepeat {
+        parent_step,
+        parent_instance,
+        child_step,
+        source_step_ref,
+        x: repeat.x,
+        y: repeat.y,
+        nx: repeat.nx,
+        ny: repeat.ny,
+        dx: repeat.dx,
+        dy: repeat.dy,
+        angle: repeat.angle,
+        mirror: repeat.mirror,
+        instance_start: doc.layout.instances.len() as u32,
+        instance_count: 0,
+        bbox: BBox::empty(),
+    });
+    repeat_index
+}
+
+fn push_layout_instance(
+    doc: &mut GeometryDocument,
+    repeat_index: u32,
+    parent_instance: Option<u32>,
+    child_step: u32,
+    source_step_ref: Symbol,
+    parent_step_ref: Symbol,
+    repeat: &StepRepeat,
+    ix: u32,
+    iy: u32,
+    transform: Affine2,
+    profiles: ProfileRange,
+) -> u32 {
+    let instance_index = doc.layout.instances.len() as u32;
+    let repeat_record = &mut doc.layout.repeats[repeat_index as usize];
+    if repeat_record.instance_count == 0 {
+        repeat_record.instance_start = instance_index;
+    }
+    repeat_record.instance_count += 1;
+
+    doc.layout.instances.push(LayoutInstance {
+        repeat: repeat_index,
+        parent_instance,
+        child_step,
+        source_step_ref,
+        parent_step_ref,
+        transform,
+        repeat_index_x: ix,
+        repeat_index_y: iy,
+        repeat_count_x: repeat.nx,
+        repeat_count_y: repeat.ny,
+        repeat_pitch_x: repeat.dx,
+        repeat_pitch_y: repeat.dy,
+        profile_start: profiles.start,
+        profile_count: profiles.count,
+        bbox: profiles.bbox,
+    });
+    instance_index
+}
+
+fn layout_step_kind(step: &Step) -> LayoutStepKind {
+    match step.step_type {
+        Some(StepType::Board) => LayoutStepKind::Board,
+        Some(StepType::Pallet) => LayoutStepKind::Panel,
+        Some(StepType::Ic) => LayoutStepKind::Ic,
+        None if !step.step_repeats.is_empty() => LayoutStepKind::Panel,
+        None => LayoutStepKind::Board,
+    }
 }
 
 fn board_instances_bbox(doc: &GeometryDocument, start: u32, count: u32) -> BBox {
@@ -2655,6 +2951,118 @@ mod tests {
         assert_eq!(doc.board_instances[0].bbox.max, Point::new(20.0, 25.0));
         assert_eq!(doc.board_instances[1].bbox.min, Point::new(25.0, 20.0));
         assert_eq!(doc.board_instances[1].bbox.max, Point::new(35.0, 25.0));
+        assert_eq!(doc.layout.steps.len(), 2);
+        assert_eq!(doc.layout.repeats.len(), 1);
+        assert_eq!(doc.layout.instances.len(), 2);
+        assert_eq!(doc.layout.root_step, Some(0));
+        assert_eq!(doc.layout.steps[0].kind, LayoutStepKind::Panel);
+        assert_eq!(doc.layout.steps[1].kind, LayoutStepKind::Board);
+        assert_eq!(doc.layout.repeats[0].instance_start, 0);
+        assert_eq!(doc.layout.repeats[0].instance_count, 2);
+        assert_eq!(doc.layout.instances[0].repeat_index_x, 0);
+        assert_eq!(doc.layout.instances[1].repeat_index_x, 1);
+        assert_eq!(doc.layout.instances[1].transform.m02, 25.0);
+    }
+
+    #[test]
+    fn symbolic_panel_extraction_carries_repeats_without_child_features() {
+        let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
+            .expect("synthetic panel fixture should parse");
+        let doc = extract_layer_with_options(
+            &ipc,
+            "TOP",
+            &LayerExtractionOptions {
+                placement: PlacementPolicy::PanelSymbolic,
+            },
+        )
+        .expect("panel layer should extract");
+        let layer = &doc.layers[0];
+        let features = &doc.features
+            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
+
+        assert_eq!(features.len(), 1);
+        assert_eq!(features[0].center, Point::new(40.0, 5.0));
+        assert_eq!(doc.layout.steps.len(), 2);
+        assert_eq!(doc.layout.repeats.len(), 1);
+        assert_eq!(doc.layout.instances.len(), 2);
+        assert_eq!(doc.board_instances.len(), 2);
+    }
+
+    #[test]
+    fn step_only_panel_extraction_omits_repeat_graph_expansion() {
+        let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
+            .expect("synthetic panel fixture should parse");
+        let doc = extract_layer_with_options(
+            &ipc,
+            "TOP",
+            &LayerExtractionOptions {
+                placement: PlacementPolicy::StepOnly,
+            },
+        )
+        .expect("panel layer should extract");
+        let layer = &doc.layers[0];
+        let features = &doc.features
+            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
+
+        assert_eq!(features.len(), 1);
+        assert_eq!(doc.layout.steps.len(), 1);
+        assert!(doc.layout.repeats.is_empty());
+        assert!(doc.layout.instances.is_empty());
+        assert!(doc.board_instances.is_empty());
+        assert_eq!(doc.panels[0].board_instance_count, 0);
+    }
+
+    #[test]
+    fn extract_layout_builds_sidecar_without_layer_features() {
+        let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
+            .expect("synthetic panel fixture should parse");
+        let doc = extract_layout(&ipc).expect("layout should extract");
+
+        assert!(doc.layers.is_empty());
+        assert!(doc.features.is_empty());
+        assert_eq!(doc.layout.steps.len(), 2);
+        assert_eq!(doc.layout.repeats.len(), 1);
+        assert_eq!(doc.layout.instances.len(), 2);
+        assert_eq!(doc.panels.len(), 1);
+        assert_eq!(doc.board_instances.len(), 2);
+    }
+
+    #[test]
+    fn nested_panel_layout_keeps_symbolic_parent_instances() {
+        let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
+            .expect("synthetic nested panel fixture should parse");
+        let doc = extract_layout(&ipc).expect("layout should extract");
+
+        assert_eq!(doc.layout.steps.len(), 3);
+        assert_eq!(doc.layout.repeats.len(), 3);
+        assert_eq!(doc.layout.instances.len(), 6);
+        assert_eq!(doc.board_instances.len(), 4);
+        assert_eq!(doc.layout.repeats[0].instance_start, 0);
+        assert_eq!(doc.layout.repeats[0].instance_count, 2);
+        assert_eq!(doc.layout.repeats[1].instance_start, 2);
+        assert_eq!(doc.layout.repeats[1].instance_count, 2);
+        assert_eq!(doc.layout.repeats[2].instance_start, 4);
+        assert_eq!(doc.layout.repeats[2].instance_count, 2);
+        assert_eq!(doc.layout.instances[0].parent_instance, None);
+        assert_eq!(doc.layout.instances[1].parent_instance, None);
+        assert_eq!(doc.layout.instances[2].parent_instance, Some(0));
+        assert_eq!(doc.layout.instances[3].parent_instance, Some(0));
+        assert_eq!(doc.layout.instances[4].parent_instance, Some(1));
+        assert_eq!(doc.layout.instances[5].parent_instance, Some(1));
+    }
+
+    #[test]
+    fn nested_panel_instance_bbox_includes_child_repeats_without_profile() {
+        let ipc = ipc2581::Ipc2581::parse(nested_panel_without_subpanel_profile_fixture())
+            .expect("synthetic nested panel fixture should parse");
+        let doc = extract_layout(&ipc).expect("layout should extract");
+
+        assert_eq!(doc.layout.instances[0].bbox.min, Point::new(5.0, 5.0));
+        assert_eq!(doc.layout.instances[0].bbox.max, Point::new(30.0, 10.0));
+        assert_eq!(doc.layout.instances[1].bbox.min, Point::new(5.0, 25.0));
+        assert_eq!(doc.layout.instances[1].bbox.max, Point::new(30.0, 30.0));
+        assert_eq!(doc.layout.repeats[0].bbox.min, Point::new(5.0, 5.0));
+        assert_eq!(doc.layout.repeats[0].bbox.max, Point::new(30.0, 30.0));
     }
 
     #[test]
@@ -2899,6 +3307,96 @@ mod tests {
       </Step>
       <Step name="panel" type="PALLET">
         <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="20" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn nested_panel_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="subpanel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="30" y="0"/>
+            <PolyStepSegment x="30" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="15" dy="0"/>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="40" y="0"/>
+            <PolyStepSegment x="40" y="40"/>
+            <PolyStepSegment x="0" y="40"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="subpanel" x="5" y="5" nx="1" ny="2" dx="0" dy="20"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn nested_panel_without_subpanel_profile_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="subpanel" type="PALLET">
+        <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="15" dy="0"/>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="40" y="0"/>
+            <PolyStepSegment x="40" y="40"/>
+            <PolyStepSegment x="0" y="40"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="subpanel" x="5" y="5" nx="1" ny="2" dx="0" dy="20"/>
       </Step>
     </CadData>
   </Ecad>
