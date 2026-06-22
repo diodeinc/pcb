@@ -8,6 +8,7 @@ use ipc2581::types::{
 };
 use ipc2581::{Ipc2581, Symbol};
 
+use crate::LayoutTarget;
 use crate::steps;
 use pcb_ir::common::*;
 use pcb_ir::dialects::ipc::*;
@@ -109,6 +110,53 @@ pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument
     extract_layer_with_options(ipc, layer_name, &LayerExtractionOptions::default())
 }
 
+pub fn extract_layer_for_layout_target(
+    ipc: &Ipc2581,
+    layer_name: &str,
+    layout_target: LayoutTarget,
+) -> Result<GeometryDocument> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let layer = ecad
+        .cad_data
+        .layers
+        .iter()
+        .find(|layer| ipc.resolve(layer.name) == layer_name)
+        .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))?;
+    let primary_step = steps::primary_step(ipc, &ecad.cad_data.steps)
+        .context("IPC-2581 ECAD section has no Step")?;
+
+    let step = match layout_target {
+        LayoutTarget::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
+        LayoutTarget::Panel | LayoutTarget::Layout => primary_step,
+    };
+
+    let mut doc = match layout_target {
+        LayoutTarget::Board => {
+            extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
+        }
+        LayoutTarget::Panel | LayoutTarget::Layout if is_panel_step(step) => extract_panel_layer(
+            ipc,
+            &ecad.cad_data.steps,
+            &ecad.cad_data.layers,
+            step,
+            layer,
+            layer_name,
+        )?,
+        LayoutTarget::Panel | LayoutTarget::Layout => {
+            extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
+        }
+    };
+
+    match layout_target {
+        LayoutTarget::Board => append_step_only_layout_geometry(&mut doc, step),
+        LayoutTarget::Panel | LayoutTarget::Layout => {
+            append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
+        }
+    }
+    pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
+    Ok(doc)
+}
+
 pub fn extract_layer_with_options(
     ipc: &Ipc2581,
     layer_name: &str,
@@ -144,6 +192,67 @@ pub fn extract_layer_with_options(
     }
     pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
+}
+
+fn canonical_board_step<'a>(
+    ipc: &Ipc2581,
+    steps: &'a [Step],
+    primary_step: &'a Step,
+) -> Result<&'a Step> {
+    if is_board_step(primary_step) {
+        return Ok(primary_step);
+    }
+
+    let mut stack = vec![primary_step.name];
+    if let Some(step) = first_reachable_board_step(ipc, steps, primary_step, &mut stack)? {
+        return Ok(step);
+    }
+
+    bail!(
+        "IPC-2581 primary step '{}' does not reference a board step",
+        ipc.resolve(primary_step.name)
+    )
+}
+
+fn first_reachable_board_step<'a>(
+    ipc: &Ipc2581,
+    steps: &'a [Step],
+    parent_step: &Step,
+    stack: &mut Vec<Symbol>,
+) -> Result<Option<&'a Step>> {
+    for repeat in &parent_step.step_repeats {
+        let source_step = steps
+            .iter()
+            .find(|step| step.name == repeat.step_ref)
+            .with_context(|| {
+                format!(
+                    "StepRepeat references unknown Step '{}'",
+                    ipc.resolve(repeat.step_ref)
+                )
+            })?;
+
+        if is_board_step(source_step) {
+            return Ok(Some(source_step));
+        }
+        if !is_panel_step(source_step) {
+            continue;
+        }
+        if stack.contains(&source_step.name) {
+            bail!(
+                "StepRepeat cycle references Step '{}'",
+                ipc.resolve(source_step.name)
+            );
+        }
+
+        stack.push(source_step.name);
+        let board_step = first_reachable_board_step(ipc, steps, source_step, stack)?;
+        stack.pop();
+        if board_step.is_some() {
+            return Ok(board_step);
+        }
+    }
+
+    Ok(None)
 }
 
 pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
@@ -2753,6 +2862,46 @@ mod tests {
         assert_eq!(doc.layout.instances[0].repeat_index_x, 0);
         assert_eq!(doc.layout.instances[1].repeat_index_x, 1);
         assert_eq!(doc.layout.instances[1].transform.m02, 25.0);
+    }
+
+    #[test]
+    fn extracts_layer_for_layout_target_board_or_panel() {
+        let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
+            .expect("synthetic panel fixture should parse");
+
+        let board = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::Board)
+            .expect("board layer should extract");
+        let board_layer = &board.layers[0];
+        let board_features = &board.features[board_layer.feature_start as usize
+            ..(board_layer.feature_start + board_layer.feature_count) as usize];
+
+        assert_eq!(board_features.len(), 1);
+        assert_eq!(board_features[0].center, Point::new(2.0, 3.0));
+        assert_eq!(board.layout.steps.len(), 1);
+        assert_eq!(board.layout.root_step, Some(0));
+        assert_eq!(board.layout.steps[0].kind, LayoutStepKind::Board);
+        assert!(board.layout.instances.is_empty());
+        assert_eq!(
+            profile_occurrences_for(&board, ProfileSet::BoardOutlines).len(),
+            1
+        );
+
+        let panel = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::Panel)
+            .expect("panel layer should extract");
+        let panel_layer = &panel.layers[0];
+        let panel_features = &panel.features[panel_layer.feature_start as usize
+            ..(panel_layer.feature_start + panel_layer.feature_count) as usize];
+
+        assert_eq!(panel_features.len(), 3);
+        assert_eq!(panel_features[0].center, Point::new(40.0, 5.0));
+        assert_eq!(panel_features[1].center, Point::new(12.0, 23.0));
+        assert_eq!(panel_features[2].center, Point::new(27.0, 23.0));
+        assert_eq!(panel.layout.steps.len(), 2);
+        assert_eq!(panel.layout.instances.len(), 2);
+        assert_eq!(
+            profile_occurrences_for(&panel, ProfileSet::FabricationOutlines).len(),
+            3
+        );
     }
 
     #[test]

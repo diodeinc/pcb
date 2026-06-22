@@ -7,7 +7,7 @@ use ipc2581::types::{LayerFunction, Side, ecad::Layer};
 
 use super::artwork::{ArtworkLayer, ObjectAttributes};
 use super::lower::lower_artwork_layer;
-use crate::{geometry, ipc2581 as ipc};
+use crate::{LayoutTarget, geometry, ipc2581 as ipc};
 use pcb_ir::common::{BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Unit};
 use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{FeatureBucket, GeometryPath};
@@ -16,6 +16,7 @@ use pcb_ir::dialects::path as common_path;
 #[derive(Debug, Clone)]
 pub struct GerberExportOptions {
     pub output_dir: PathBuf,
+    pub layout_target: LayoutTarget,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,10 @@ pub struct GerberExportFile {
 }
 
 pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<GerberExportSet> {
+    if options.layout_target == LayoutTarget::Layout {
+        bail!("Gerber export does not support --layout-target layout; use board or panel");
+    }
+
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut files = Vec::new();
     let mut first_doc = None;
@@ -39,8 +44,9 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
     for plan in &plans {
         let source_layer = plan.layer;
         let layer_name = ipc.resolve(source_layer.name);
-        let mut doc = geometry::extract_layer(ipc, layer_name)
-            .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
+        let mut doc =
+            geometry::extract_layer_for_layout_target(ipc, layer_name, options.layout_target)
+                .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::process_document(&mut doc);
         if first_doc.is_none() {
             first_doc = Some(doc.clone());
@@ -62,7 +68,7 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
     }
 
     if let Some(doc) = first_doc {
-        let profile = profile_artwork_from_profiles(&doc)?;
+        let profile = profile_artwork_from_profiles(&doc, options.layout_target)?;
         if !profile.objects.is_empty() {
             let layer = lower_artwork_layer(&profile)?;
             let contents = write_layer(&layer)?;
@@ -285,6 +291,7 @@ const PROFILE_STROKE_WIDTH: f64 = 0.1;
 
 fn profile_artwork_from_profiles(
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    layout_target: LayoutTarget,
 ) -> Result<ArtworkLayer> {
     let mut artwork = ArtworkLayer::new(Unit::Millimeter);
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
@@ -296,10 +303,9 @@ fn profile_artwork_from_profiles(
         bbox: BBox::empty(),
         meta: vec!["Profile".into(), "NP".into()],
     });
-    for occurrence in pcb_ir::dialects::ipc::profile_occurrences_for(
-        doc,
-        pcb_ir::dialects::ipc::ProfileSet::FabricationOutlines,
-    ) {
+    for occurrence in
+        pcb_ir::dialects::ipc::profile_occurrences_for(doc, layout_target.profile_set())
+    {
         push_profile_artwork_object(
             &mut artwork,
             artwork_layer,
@@ -429,14 +435,22 @@ fn artwork_contours(
 }
 
 pub fn execute_file(input_file: &Path, output_dir: &Path) -> Result<GerberExportSet> {
-    let content = crate::utils::file::load_ipc_file(input_file)?;
-    let ipc = ipc::Ipc2581::parse(&content)?;
-    export_gerber_x2(
-        &ipc,
+    execute_file_with_options(
+        input_file,
         &GerberExportOptions {
             output_dir: output_dir.to_path_buf(),
+            layout_target: LayoutTarget::Board,
         },
     )
+}
+
+pub fn execute_file_with_options(
+    input_file: &Path,
+    options: &GerberExportOptions,
+) -> Result<GerberExportSet> {
+    let content = crate::utils::file::load_ipc_file(input_file)?;
+    let ipc = ipc::Ipc2581::parse(&content)?;
+    export_gerber_x2(&ipc, options)
 }
 
 #[cfg(test)]
@@ -490,7 +504,14 @@ mod tests {
             std::env::temp_dir().join(format!("pcb-ipc-gerber-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&output_dir);
 
-        let set = export_gerber_x2(&ipc, &GerberExportOptions { output_dir }).unwrap();
+        let set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir,
+                layout_target: LayoutTarget::Board,
+            },
+        )
+        .unwrap();
 
         assert!(set.files.iter().any(|file| file.filename == "F_Cu.gtl"));
         assert!(set.files.iter().any(|file| file.filename == "profile.gbr"));
@@ -507,6 +528,36 @@ mod tests {
     }
 
     #[test]
+    fn gerber_export_rejects_symbolic_layout_target() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let output_dir =
+            std::env::temp_dir().join(format!("pcb-ipc-gerber-layout-test-{}", std::process::id()));
+
+        let error = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir,
+                layout_target: LayoutTarget::Layout,
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Gerber export does not support --layout-target layout")
+        );
+    }
+
+    #[test]
     fn real_board_export_parseback_and_svg_paths_smoke() {
         let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
         let content = zstd::decode_all(Cursor::new(compressed)).unwrap();
@@ -519,6 +570,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output_dir: output_dir.clone(),
+                layout_target: LayoutTarget::Board,
             },
         )
         .unwrap();

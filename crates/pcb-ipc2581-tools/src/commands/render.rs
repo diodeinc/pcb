@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::geometry;
 use crate::utils::file as file_utils;
-use crate::{RenderFormat, ipc2581};
+use crate::{LayoutTarget, RenderFormat, ipc2581};
 
 /// Options for rendering processed geometry from a single IPC-2581 layer.
 #[derive(Debug, Clone)]
@@ -13,6 +13,7 @@ pub struct RenderOptions {
     pub layer: String,
     pub output: Option<PathBuf>,
     pub format: RenderFormat,
+    pub layout_target: LayoutTarget,
     pub flat: bool,
 }
 
@@ -21,7 +22,8 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
     let target = resolve_target(options)?;
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
-    let mut geometry = geometry::extract_layer(&ipc, &options.layer)?;
+    let mut geometry =
+        geometry::extract_layer_for_layout_target(&ipc, &options.layer, options.layout_target)?;
     pcb_ir::dialects::ipc::process::process_document(&mut geometry);
     if options.flat {
         pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut geometry);
@@ -31,7 +33,8 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
         RenderTarget::Svg => render_svg(&geometry, options)?,
         RenderTarget::Png => render_png(&geometry, options)?,
         RenderTarget::Terminal => {
-            let mask = geometry::render::layer_mask(&geometry, true);
+            let mask =
+                geometry::render::layer_mask(&geometry, true, options.layout_target.profile_set());
             pcb_ir::dialects::mask::render_all_to_terminal(&mask).map_err(anyhow::Error::msg)?;
         }
     }
@@ -90,7 +93,8 @@ fn render_svg(
     >,
     options: &RenderOptions,
 ) -> Result<()> {
-    let svg = geometry::render::render_layer_svg(geometry, true);
+    let svg =
+        geometry::render::render_layer_svg(geometry, true, options.layout_target.profile_set());
 
     if let Some(output) = &options.output {
         std::fs::write(output, svg)
@@ -114,7 +118,7 @@ fn render_png(
     >,
     options: &RenderOptions,
 ) -> Result<()> {
-    let mask = geometry::render::layer_mask(geometry, true);
+    let mask = geometry::render::layer_mask(geometry, true, options.layout_target.profile_set());
     let png = pcb_ir::dialects::mask::render_png_all(&mask).map_err(anyhow::Error::msg)?;
 
     if let Some(output) = &options.output {

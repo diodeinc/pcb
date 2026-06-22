@@ -31,6 +31,23 @@ pub enum UnitFormat {
     Inch,
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutTarget {
+    Board,
+    Panel,
+    Layout,
+}
+
+impl LayoutTarget {
+    pub fn profile_set(self) -> pcb_ir::dialects::ipc::ProfileSet {
+        match self {
+            Self::Board => pcb_ir::dialects::ipc::ProfileSet::BoardOutlines,
+            Self::Panel => pcb_ir::dialects::ipc::ProfileSet::FabricationOutlines,
+            Self::Layout => pcb_ir::dialects::ipc::ProfileSet::LayoutBoundaries,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum ViewMode {
     Bom,

@@ -6,13 +6,17 @@ use pcb_ir::dialects::mask::MaskDocument;
 
 type GeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<Symbol, LayerFunction>;
 
-pub fn render_layer_svg(geometry: &GeometryDocument, include_profiles: bool) -> String {
-    let mask = layer_mask(geometry, include_profiles);
+pub fn render_layer_svg(
+    geometry: &GeometryDocument,
+    include_profiles: bool,
+    profile_set: ProfileSet,
+) -> String {
+    let mask = layer_mask(geometry, include_profiles, profile_set);
     pcb_ir::dialects::mask::render_svg_all(&mask)
 }
 
 fn layer_has_content(geometry: &GeometryDocument) -> bool {
-    let mask = layer_mask(geometry, false);
+    let mask = layer_mask(geometry, false, ProfileSet::RootOnly);
     mask.layers
         .first()
         .map(|layer| layer.shape_count > 0 && !layer.bbox.is_empty())
@@ -46,6 +50,7 @@ pub fn layer_has_native_content(geometry: &GeometryDocument) -> bool {
 pub fn layer_mask(
     geometry: &GeometryDocument,
     include_profiles: bool,
+    profile_set: ProfileSet,
 ) -> MaskDocument<LayerFunction> {
     let layer = &geometry.layers[0];
     let geom = if include_profiles {
@@ -54,7 +59,7 @@ pub fn layer_mask(
             0,
             layer_role(layer.layer_function),
             Side::None,
-            ProfileSet::LayoutBoundaries,
+            profile_set,
         )
     } else {
         pcb_ir::dialects::ipc::lower_layer_to_geom(

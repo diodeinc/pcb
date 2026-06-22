@@ -212,6 +212,8 @@ pub fn panel_step_count<Symbol, LayerFunction>(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfileSet {
+    /// The canonical board step profile only.
+    BoardOutlines,
     /// Physical outlines for manufacturing exports.
     ///
     /// For a panel root, this means the root panel profile plus final board
@@ -230,6 +232,7 @@ pub enum ProfileOccurrenceRole {
     RootBoard,
     RootPanel,
     RootStep,
+    BoardDefinition,
     BoardInstance,
     PanelInstance,
     StepInstance,
@@ -254,6 +257,10 @@ pub fn profile_occurrences_for<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     profile_set: ProfileSet,
 ) -> Vec<ProfileOccurrence<'_>> {
+    if profile_set == ProfileSet::BoardOutlines {
+        return board_profile_occurrences(doc);
+    }
+
     let Some((root_index, root)) = root_step(doc) else {
         return doc
             .profiles
@@ -357,8 +364,36 @@ fn include_instance_profiles(
             root_kind == LayoutStepKind::Panel && child_kind == LayoutStepKind::Board
         }
         ProfileSet::LayoutBoundaries => true,
-        ProfileSet::RootOnly => false,
+        ProfileSet::BoardOutlines | ProfileSet::RootOnly => false,
     }
+}
+
+fn board_profile_occurrences<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Vec<ProfileOccurrence<'_>> {
+    let Some((step_index, step)) = layout_steps_by_kind(doc, LayoutStepKind::Board).next() else {
+        return Vec::new();
+    };
+    let role = if root_step(doc).is_some_and(|(root_index, _)| root_index == step_index) {
+        ProfileOccurrenceRole::RootBoard
+    } else {
+        ProfileOccurrenceRole::BoardDefinition
+    };
+    let mut occurrences = Vec::new();
+    push_profile_occurrences(
+        &mut occurrences,
+        doc,
+        ProfileOccurrenceSpec {
+            start: step.profile_start,
+            count: step.profile_count,
+            step: Some(step_index),
+            instance: None,
+            transform: Affine2::identity(),
+            role,
+            depth: 0,
+        },
+    );
+    occurrences
 }
 
 fn root_profile_role(kind: LayoutStepKind) -> ProfileOccurrenceRole {

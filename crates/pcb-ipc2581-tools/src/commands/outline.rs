@@ -1,32 +1,35 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use pcb_ir::dialects::ipc::{ProfileSet, profile_occurrences_for};
+use pcb_ir::dialects::ipc::profile_occurrences_for;
 
+use crate::LayoutTarget;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
-/// Options for exporting the IPC-2581 board outline.
+/// Options for exporting IPC-2581 profile outlines.
 #[derive(Debug, Clone)]
 pub struct OutlineOptions {
     pub output: PathBuf,
+    pub layout_target: LayoutTarget,
 }
 
-/// Export the board outline from Step/Profile as a DXF file.
+/// Export Step/Profile outlines as a DXF file.
 pub fn execute(input_file: &Path, options: &OutlineOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = Ipc2581::parse(&content)?;
     let layout = geometry::extract_layout(&ipc)?;
-    if profile_occurrences_for(&layout, ProfileSet::FabricationOutlines).is_empty() {
+    let profile_set = options.layout_target.profile_set();
+    if profile_occurrences_for(&layout, profile_set).is_empty() {
         bail!("IPC-2581 primary step and repeated child steps have no board Profile outline");
     }
 
-    let dxf = geometry::dxf::render_profile_set_dxf(&layout, ProfileSet::FabricationOutlines);
+    let dxf = geometry::dxf::render_profile_set_dxf(&layout, profile_set);
     std::fs::write(&options.output, dxf)
         .with_context(|| format!("Failed to write DXF to {}", options.output.display()))?;
     println!(
-        "✓ IPC-2581 board outline exported to {}",
+        "✓ IPC-2581 outline exported to {}",
         options.output.display()
     );
     Ok(())
@@ -74,7 +77,7 @@ mod tests {
         assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 1);
         assert_eq!(layout.profiles.len(), 1);
         assert_eq!(
-            profile_occurrences_for(&layout, ProfileSet::FabricationOutlines).len(),
+            profile_occurrences_for(&layout, LayoutTarget::Panel.profile_set()).len(),
             1
         );
     }
