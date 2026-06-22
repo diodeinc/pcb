@@ -221,13 +221,22 @@ fn layer_output(
             "Edge_Cuts.gm1".to_string(),
             vec!["Profile".into(), "NP".into()],
         ),
-        GerberLayerRole::Vcut => vcut_layer_output("V_Cut.gbr", side),
-        GerberLayerRole::Score => vcut_layer_output("Score.gbr", side),
+        GerberLayerRole::Vcut => fabrication_line_layer_output("V_Cut.gbr", &["Vcut"], side),
+        GerberLayerRole::Score => {
+            fabrication_line_layer_output("Score.gbr", &["Other", "Score"], side)
+        }
     }
 }
 
-fn vcut_layer_output(filename: &str, side: Option<Side>) -> (String, Vec<String>) {
-    let mut file_function = vec!["Vcut".to_string()];
+fn fabrication_line_layer_output(
+    filename: &str,
+    function: &[&str],
+    side: Option<Side>,
+) -> (String, Vec<String>) {
+    let mut file_function = function
+        .iter()
+        .map(|field| (*field).to_string())
+        .collect::<Vec<_>>();
     match side {
         Some(Side::Top) => file_function.push("Top".to_string()),
         Some(Side::Bottom) => file_function.push("Bot".to_string()),
@@ -392,9 +401,8 @@ fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> 
         FeatureSemantic::SmdPad => vec!["SMDPad".to_string()],
         FeatureSemantic::ComponentPad => vec!["ComponentPad".to_string()],
         FeatureSemantic::ViaPad => vec!["ViaPad".to_string()],
-        FeatureSemantic::VCut | FeatureSemantic::Score => {
-            vec!["Other".to_string(), "Vcut".to_string()]
-        }
+        FeatureSemantic::VCut => vec!["Other".to_string(), "Vcut".to_string()],
+        FeatureSemantic::Score => vec!["Other".to_string(), "Score".to_string()],
         FeatureSemantic::Route | FeatureSemantic::BoardOutline => vec!["Profile".to_string()],
         _ => match feature.bucket {
             FeatureBucket::Smd => vec!["SMDPad".to_string()],
@@ -626,6 +634,7 @@ mod tests {
     <StepRef name="Panel"/>
     <LayerRef name="TOP"/>
     <LayerRef name="VCUT"/>
+    <LayerRef name="SCORE"/>
     <DictionaryLineDesc units="MILLIMETER">
       <EntryLineDesc id="fidline">
         <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
@@ -645,6 +654,7 @@ mod tests {
       <Layer name="VCUT" layerFunction="V_CUT" side="ALL" polarity="POSITIVE">
         <SpecRef id="VCut_1"/>
       </Layer>
+      <Layer name="SCORE" layerFunction="SCORE" side="ALL" polarity="POSITIVE"/>
       <Step name="Panel" type="PALLET">
         <LayerFeature layerRef="TOP">
           <Set>
@@ -662,6 +672,15 @@ mod tests {
           <Set>
             <Features>
               <Line startX="0" startY="5" endX="10" endY="5">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="SCORE">
+          <Set>
+            <Features>
+              <Line startX="0" startY="7" endX="10" endY="7">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
               </Line>
             </Features>
@@ -707,6 +726,20 @@ mod tests {
         assert!(vcut.contents.contains("%TF.FileFunction,Vcut,Top/Bot*%"));
         assert!(vcut.contents.contains("%TF.Part,Array*%"));
         assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
+
+        let score = set
+            .files
+            .iter()
+            .find(|file| file.filename == "Score.gbr")
+            .unwrap();
+        assert!(
+            score
+                .contents
+                .contains("%TF.FileFunction,Other,Score,Top/Bot*%")
+        );
+        assert!(score.contents.contains("%TF.Part,Array*%"));
+        assert!(score.contents.contains("%TA.AperFunction,Other,Score*%"));
+        assert!(!score.contents.contains("Vcut"));
     }
 
     #[test]
