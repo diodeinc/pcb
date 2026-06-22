@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  KICAD_VERSION: 10.0.0
+  KICAD_VERSION: 10.0.4
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -29,16 +29,16 @@ jobs:
           - name: Ubuntu
             runs-on: ubicloud-standard-16
             container:
-              image: ghcr.io/diodeinc/kicad:10.0.0
+              image: ghcr.io/diodeinc/kicad:10.0.4
               options: --user root
     steps:
-      - uses: actions/checkout@v5
-
       - name: Install Dependencies (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
         run: |
           apt-get update
-          apt-get install -y curl build-essential pkg-config libssl-dev
+          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev
+
+      - uses: actions/checkout@v5
 
       - name: Cache KiCad (macOS)
         if: matrix.config.name == 'macOS'

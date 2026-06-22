@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_TEST_DEBUG: 0
-  KICAD_VERSION: 10.0.0  # Update container image below when changing this
+  KICAD_VERSION: 10.0.4  # Update container image below when changing this
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -64,16 +64,16 @@ jobs:
           - name: Ubuntu
             runs-on: ubicloud-standard-16
             container:
-              image: ghcr.io/diodeinc/kicad:10.0.0  # Keep in sync with KICAD_VERSION
+              image: ghcr.io/diodeinc/kicad:10.0.4  # Keep in sync with KICAD_VERSION
               options: --user root
     steps:
-      - uses: actions/checkout@v5
-
       - name: Install Dependencies (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
         run: |
           apt-get update
-          apt-get install -y curl build-essential pkg-config libssl-dev
+          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev
+
+      - uses: actions/checkout@v5
 
       - name: Cache KiCad (macOS)
         if: contains(matrix.config.name, 'macOS')
