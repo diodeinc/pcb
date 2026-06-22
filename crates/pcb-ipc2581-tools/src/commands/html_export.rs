@@ -116,6 +116,17 @@ struct PanelSummary {
     height: Option<String>,
     board_count: usize,
     board_instances: usize,
+    grid: Option<PanelGridSummary>,
+    overview_svg: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PanelGridSummary {
+    columns: u32,
+    rows: u32,
+    column_spacing: Option<String>,
+    row_spacing: Option<String>,
+    edge_rail_width: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -176,10 +187,9 @@ struct Color {
 }
 
 fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> BoardSummary {
-    let design_name = accessor
-        .primary_step()
-        .map(|step| accessor.ipc().resolve(step.name).to_string());
+    let design_name = board_design_name(accessor);
     let layout = accessor.board_layout_info();
+    let panel_overview_svg = crate::panel::render_overview_svg(accessor);
 
     let (width, height) = if let Some(dims) = layout
         .as_ref()
@@ -205,6 +215,20 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
                 height,
                 board_count: panel.board_count,
                 board_instances: panel.board_instances,
+                grid: panel.grid.as_ref().map(|grid| PanelGridSummary {
+                    columns: grid.columns,
+                    rows: grid.rows,
+                    column_spacing: grid
+                        .column_spacing
+                        .map(|spacing| format_length(spacing.mm(), unit_format)),
+                    row_spacing: grid
+                        .row_spacing
+                        .map(|spacing| format_length(spacing.mm(), unit_format)),
+                    edge_rail_width: grid
+                        .edge_rail_width
+                        .map(|width| format_length(width.mm(), unit_format)),
+                }),
+                overview_svg: panel_overview_svg,
             }
         });
 
@@ -248,6 +272,21 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         components,
         nets,
         drill_holes,
+    }
+}
+
+fn board_design_name(accessor: &IpcAccessor) -> Option<String> {
+    let doc = geometry::extract_layout(accessor.ipc()).ok()?;
+    pcb_ir::dialects::ipc::layout_steps_by_kind(&doc, pcb_ir::dialects::ipc::LayoutStepKind::Board)
+        .next()
+        .map(|(_, step)| accessor.ipc().resolve(step.source_step_ref).to_string())
+}
+
+fn format_length(value_mm: f64, unit_format: UnitFormat) -> String {
+    match unit_format {
+        UnitFormat::Mm => format!("{value_mm:.2} mm"),
+        UnitFormat::Mil => format!("{:.1} mil", value_mm / 0.0254),
+        UnitFormat::Inch => format!("{:.3} in", value_mm / 25.4),
     }
 }
 
@@ -359,14 +398,14 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    match geometry::extract_layer_for_layout_target(ipc, &name, LayoutTarget::Layout) {
+    match geometry::extract_layer_for_layout_target(ipc, &name, LayoutTarget::Board) {
         Ok(mut geometry) => {
             rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
             pcb_ir::dialects::ipc::process::process_document(&mut geometry);
             rendered.svg = Some(geometry::render::render_layer_svg(
                 &geometry,
                 true,
-                LayoutTarget::Layout.profile_set(),
+                LayoutTarget::Board.profile_set(),
             ));
             if !geometry.diagnostics.is_empty() {
                 rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
@@ -501,7 +540,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn html_board_summary_design_uses_content_step_ref() {
+    fn html_keeps_board_summary_separate_from_panel_summary() {
         let ipc = ipc2581::Ipc2581::parse(panel_design_name_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
@@ -510,11 +549,19 @@ mod tests {
         let dimensions_start = html.find("Board Dimensions:").unwrap();
         let design_row = &html[design_start..dimensions_start];
 
-        assert!(design_row.contains(r#"<span class="summary-value">panel</span>"#));
-        assert!(!design_row.contains(r#"<span class="summary-value">board</span>"#));
+        assert!(design_row.contains(r#"<span class="summary-value">board</span>"#));
+        assert!(!design_row.contains(r#"<span class="summary-value">panel</span>"#));
+        let board_summary = html.find("<h2>Board Summary</h2>").unwrap();
+        let panel_summary = html.find("<h2>Panel Summary</h2>").unwrap();
+        let file_info = html.find(r#"<div class="file-info">"#).unwrap();
+        assert!(board_summary < panel_summary);
+        assert!(panel_summary < file_info);
+        assert!(!html[board_summary..panel_summary].contains("Panel Step:"));
         assert!(html.contains("Panel Step:"));
         assert!(html.contains("Panel Boards:"));
         assert!(html.contains("1 instance from 1 board step"));
+        assert!(html.contains("Panel Grid:"));
+        assert!(html.contains("data-panel-overview='true'"));
     }
 
     #[test]

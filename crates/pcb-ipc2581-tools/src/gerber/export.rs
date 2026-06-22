@@ -674,6 +674,88 @@ mod tests {
     }
 
     #[test]
+    fn gerber_panel_target_flattens_repeated_board_instances_as_array() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad"><Circle diameter="1"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set net="N1">
+            <Pad padstackDefRef="padstack"><Location x="2" y="3"/></Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="0" y="17"/>
+            <PolyStepSegment x="28" y="17"/>
+            <PolyStepSegment x="28" y="0"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board" x="4" y="6" nx="2" ny="1" dx="14" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let output_dir = std::env::temp_dir().join(format!(
+            "pcb-ipc-gerber-panel-array-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir,
+                layout_target: LayoutTarget::Panel,
+            },
+        )
+        .unwrap();
+
+        let top = set
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert!(top.contents.contains("%TF.Part,Array*%"));
+
+        let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
+        let mut geometry = gerberx2::geometry::extract_document(&parsed);
+        pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+        assert!(geometry.features.len() >= 2);
+        assert!(geometry.bbox.width() > 14.0);
+    }
+
+    #[test]
     fn gerber_export_carries_vcut_and_fiducial_x2_metadata() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>

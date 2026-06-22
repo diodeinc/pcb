@@ -188,6 +188,30 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
                 if panel.board_instances == 1 { "" } else { "s" }
             )),
         ]);
+        if let Some(grid) = panel.grid.as_ref() {
+            summary_table.add_row(vec![
+                Cell::new("Panel Grid").fg(Color::Cyan),
+                Cell::new(format!("{} x {}", grid.columns, grid.rows)),
+            ]);
+            if let Some(spacing) = grid.column_spacing {
+                summary_table.add_row(vec![
+                    Cell::new("Column Spacing").fg(Color::Cyan),
+                    Cell::new(units::convert_mm(spacing.mm(), unit_format)),
+                ]);
+            }
+            if let Some(spacing) = grid.row_spacing {
+                summary_table.add_row(vec![
+                    Cell::new("Row Spacing").fg(Color::Cyan),
+                    Cell::new(units::convert_mm(spacing.mm(), unit_format)),
+                ]);
+            }
+            if let Some(width) = grid.edge_rail_width {
+                summary_table.add_row(vec![
+                    Cell::new("Edge Rail").fg(Color::Cyan),
+                    Cell::new(units::convert_mm(width.mm(), unit_format)),
+                ]);
+            }
+        }
     }
 
     // Component statistics
@@ -606,6 +630,19 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
             "board_count": panel.board_count,
             "board_instances": panel.board_instances,
         });
+        if let Some(grid) = panel.grid.as_ref() {
+            info["panel"]["grid"] = json!({
+                "columns": grid.columns,
+                "rows": grid.rows,
+                "board_width_mm": grid.board_width.mm(),
+                "board_height_mm": grid.board_height.mm(),
+                "pitch_x_mm": grid.pitch_x.map(|pitch| pitch.mm()),
+                "pitch_y_mm": grid.pitch_y.map(|pitch| pitch.mm()),
+                "column_spacing_mm": grid.column_spacing.map(|spacing| spacing.mm()),
+                "row_spacing_mm": grid.row_spacing.map(|spacing| spacing.mm()),
+                "edge_rail_width_mm": grid.edge_rail_width.map(|width| width.mm()),
+            });
+        }
         if let Some(dimensions) = panel.dimensions.as_ref() {
             info["panel_dimensions"] = json!({
                 "width_mm": dimensions.width_mm(),

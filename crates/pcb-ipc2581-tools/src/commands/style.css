@@ -78,6 +78,26 @@ h3 {
     gap: 6px;
 }
 
+.panel-overview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #d0d0d0;
+    background: #fff;
+    padding: 12px;
+    margin-bottom: 24px;
+    min-height: 260px;
+    max-height: min(520px, 70vh);
+}
+
+.panel-overview svg {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: min(496px, calc(70vh - 24px));
+}
+
 .color-swatch {
     display: inline-block;
     width: 16px;

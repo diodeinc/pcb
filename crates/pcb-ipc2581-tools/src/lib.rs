@@ -5,6 +5,7 @@ pub mod accessors;
 pub mod commands;
 pub mod geometry;
 pub mod gerber;
+pub mod panel;
 mod steps;
 pub mod utils;
 
