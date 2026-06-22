@@ -1379,12 +1379,12 @@ mod tests {
 
     const TEST_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 "#;
 
     const TEST_REPOSITORY_WORKSPACE_PCB_TOML: &str = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 repository = "github.com/example/workspace"
 "#;
 

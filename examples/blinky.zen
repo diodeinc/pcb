@@ -1,6 +1,6 @@
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 Resistor = Module("@stdlib/generics/Resistor.zen")

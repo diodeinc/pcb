@@ -125,7 +125,7 @@ impl PcbToml {
             && parse_pcb_version(version).is_none()
         {
             anyhow::bail!(
-                "invalid `pcb-version`: expected \"major.minor\" like \"0.3\", got \"{}\"",
+                "invalid `pcb-version`: expected \"major.minor\" like \"0.4\", got \"{}\"",
                 version
             );
         }
@@ -189,7 +189,7 @@ impl PcbToml {
     /// ```text
     /// # ```pcb
     /// # [workspace]
-    /// # pcb-version = "0.3"
+    /// # pcb-version = "0.4"
     /// # ```
     /// ```
     ///
@@ -263,7 +263,7 @@ pub struct WorkspaceConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 
-    /// Minimum compatible toolchain release series (e.g., "0.3")
+    /// Minimum compatible toolchain release series (e.g., "0.4")
     /// V2 only. Indicates breaking changes requiring newer compiler.
     #[serde(skip_serializing_if = "Option::is_none", rename = "pcb-version")]
     pub pcb_version: Option<String>,
@@ -421,7 +421,7 @@ pub struct ManifestPart {
 /// ```text
 /// # ```pcb
 /// # [workspace]
-/// # pcb-version = "0.3"
+/// # pcb-version = "0.4"
 /// # ```
 /// ```
 ///
@@ -619,7 +619,7 @@ members = ["boards/*"]
     fn test_parse_v2_package() {
         let content = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [board]
 name = "WV0002"
@@ -630,7 +630,7 @@ description = "Power Regulator Board"
         let config = PcbToml::parse(content).unwrap();
 
         let workspace = config.workspace.as_ref().unwrap();
-        assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
+        assert_eq!(workspace.pcb_version.as_deref(), Some("0.4"));
 
         let board = config.board.as_ref().unwrap();
         assert_eq!(board.name, "WV0002");
@@ -642,7 +642,7 @@ description = "Power Regulator Board"
     fn test_parse_v2_workspace() {
         let content = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [access]
 allow = ["*@weaverobots.com"]
@@ -652,7 +652,7 @@ allow = ["*@weaverobots.com"]
         assert!(config.is_workspace());
 
         let workspace = config.workspace.as_ref().unwrap();
-        assert_eq!(workspace.pcb_version.as_deref(), Some("0.3"));
+        assert_eq!(workspace.pcb_version.as_deref(), Some("0.4"));
 
         let access = config.access.as_ref().unwrap();
         assert_eq!(access.allow, vec!["*@weaverobots.com"]);
@@ -662,7 +662,7 @@ allow = ["*@weaverobots.com"]
     fn test_parse_v2_dependencies() {
         let content = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [board]
 name = "Test"
@@ -766,7 +766,7 @@ path = "test.zen"
     fn test_parse_v2_patch() {
         let content = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [board]
 name = "Test"
@@ -787,7 +787,7 @@ path = "test.zen"
     fn test_parse_workspace_bom_config() {
         let content = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [workspace.bom]
 strict = true
@@ -803,7 +803,7 @@ strict = true
     fn test_parse_v2_patch_branch() {
         let content = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [board]
 name = "Test"
@@ -829,7 +829,7 @@ path = "test.zen"
     fn test_parse_v2_patch_rev() {
         let content = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [board]
 name = "Test"
@@ -855,7 +855,7 @@ path = "test.zen"
     fn test_v2_workspace_and_board() {
         let content = r#"
 [workspace]
-pcb-version = "0.3"
+pcb-version = "0.4"
 
 [board]
 name = "RootBoard"
@@ -912,7 +912,7 @@ name = "TestBoard"
         let err = PcbToml::parse(
             r#"
 [workspace]
-pcb-version = "0.3.71"
+pcb-version = "0.4.1"
 "#,
         )
         .expect_err("expected patch pcb-version to be rejected at parse time");
@@ -933,7 +933,7 @@ pcb-version = "0.3.71"
 #
 # ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 #
 # [dependencies]
 # ```
@@ -945,7 +945,7 @@ load("@stdlib/units.zen", "Voltage")
         assert!(result.is_some());
         let toml = result.unwrap();
         assert!(toml.contains("[workspace]"));
-        assert!(toml.contains("pcb-version = \"0.3\""));
+        assert!(toml.contains("pcb-version = \"0.4\""));
         assert!(toml.contains("[dependencies]"));
     }
 
@@ -953,7 +953,7 @@ load("@stdlib/units.zen", "Voltage")
     fn test_extract_inline_manifest_no_shebang() {
         let zen_content = r#"# ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 load("foo.zen", "Bar")
@@ -977,7 +977,7 @@ load("foo.zen", "Bar")
     fn test_extract_inline_manifest_unclosed() {
         let zen_content = r#"# ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # Missing closing marker
 
 load("foo.zen", "Bar")
@@ -992,7 +992,7 @@ load("foo.zen", "Bar")
     fn test_from_zen_content() {
         let zen_content = r#"# ```pcb
 # [workspace]
-# pcb-version = "0.3"
+# pcb-version = "0.4"
 # ```
 
 load("foo.zen", "Bar")
