@@ -24,7 +24,7 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let mut geometry =
         geometry::extract_layer_for_layout_target(&ipc, &options.layer, options.layout_target)?;
-    pcb_ir::dialects::ipc::process::process_document(&mut geometry);
+    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut geometry);
     if options.flat {
         pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut geometry);
     }

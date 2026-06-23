@@ -46,7 +46,7 @@ pub struct GeometrySummary {
 /// Compare two processed layer geometries using manufacturing-relevant summary
 /// metrics.
 ///
-/// Call `process::process_document` on both inputs first. This helper assumes
+/// Call `process::compose_for_rendering` on both inputs first. This helper assumes
 /// strokes and clear polarity have already been resolved into the final layer
 /// image, then compares the final image bounds and filled area. It intentionally
 /// does not compare object counts or command streams, because idiomatic exports

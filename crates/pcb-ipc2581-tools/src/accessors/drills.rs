@@ -67,7 +67,7 @@ fn collect_drill_info(step: &Step) -> DrillStats {
 
     for layer_feature in &step.layer_features {
         for set in &layer_feature.sets {
-            for hole in &set.holes {
+            for hole in set.holes() {
                 total_holes += 1;
                 let diameter_mils = (hole.diameter * 39370.0) as i32;
                 all_diameters.insert(diameter_mils);

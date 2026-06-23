@@ -1,7 +1,11 @@
 use crate::dialects::gerber::*;
 use crate::dialects::path as common_path;
 
-pub fn process_document<A: Clone>(doc: &mut GeometryDocument<A>) {
+/// Resolve Gerber paint operations into a single composed image.
+///
+/// This is destructive and polygonizes strokes/regions. Use it for rendering,
+/// comparison, and mask extraction, not for preserving original Gerber objects.
+pub fn compose_for_rendering<A: Clone>(doc: &mut GeometryDocument<A>) {
     normalize_bounds(doc);
     outline_stroked_paths(doc);
     resolve_polarity_and_cutouts(doc);

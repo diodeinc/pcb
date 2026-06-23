@@ -5,10 +5,10 @@ use gerberx2::{
     AttributeValue, Contour, ContourSegment, GerberLayer, ObjectKind, Point as GerberPoint,
     WriterAperture, WriterApertureTemplate, WriterObject, sanitize_attribute_field,
 };
-use pcb_ir::common::{PaintPolarity, Point};
+use pcb_ir::common::{BBox, FillRule, PaintPolarity, Point};
 use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkPath};
 use pcb_ir::dialects::gerber::Polarity;
-use pcb_ir::dialects::path::{PathCmd, PathOp};
+use pcb_ir::dialects::path::{self as common_path, PathCmd, PathOp, PathPayload, PolygonContour};
 
 use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 
@@ -24,13 +24,12 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
     for object in &layer.objects {
         let attributes = lower_object_attributes(&object.meta);
         match object.geometry {
-            ArtworkGeometry::Region { path } => objects.push(WriterObject {
-                kind: ObjectKind::Region {
-                    contours: lower_region_contours(layer, path)?,
-                },
-                polarity: lower_polarity(object.paint),
-                attributes,
-            }),
+            ArtworkGeometry::Region { path } => objects.extend(lower_region_objects(
+                layer,
+                path,
+                object.paint,
+                &attributes,
+            )?),
             ArtworkGeometry::Stroke { path } => {
                 let artwork_path = &layer.paths[path as usize];
                 let default_function = vec!["Conductor".to_string()];
@@ -154,41 +153,116 @@ fn lower_layer_attributes(attributes: &LayerAttributes) -> Vec<AttributeValue> {
     values
 }
 
-fn lower_region_contours(layer: &ArtworkLayer, path: u32) -> Result<Vec<Contour>> {
-    path_contours(layer, &layer.paths[path as usize])
+fn lower_region_objects(
+    layer: &ArtworkLayer,
+    path_index: u32,
+    paint: PaintPolarity,
+    attributes: &[AttributeValue],
+) -> Result<Vec<WriterObject>> {
+    let artwork_path = &layer.paths[path_index as usize];
+    let payloads = path_contours(layer, artwork_path);
+    if payloads.len() <= 1 {
+        return Ok(vec![WriterObject {
+            kind: ObjectKind::Region {
+                contours: payloads
+                    .iter()
+                    .map(lower_region_contour)
+                    .collect::<Result<Vec<_>>>()?,
+            },
+            polarity: lower_polarity(paint),
+            attributes: attributes.to_vec(),
+        }]);
+    }
+
+    if artwork_path.fill_rule == FillRule::EvenOdd
+        && let Some(objects) = lower_simple_compound_region_objects(&payloads, paint, attributes)?
+    {
+        return Ok(objects);
+    }
+
+    let contours = common_path::payloads_to_polygon_contours(&payloads);
+    let contours = common_path::simplify_polygon_contours(contours, artwork_path.fill_rule);
+    let mut parts = contours
         .into_iter()
-        .map(|contour| {
-            if contour.cmds.is_empty() {
-                bail!("cannot export empty Gerber region contour");
-            }
-            Ok(Contour {
-                segments: contour_segments(&contour.cmds)?
-                    .into_iter()
-                    .map(|segment| match segment {
-                        Segment::Line { start, end } => ContourSegment::Line {
-                            start: lower_point(start),
-                            end: lower_point(end),
-                        },
-                        Segment::Arc {
-                            start,
-                            end,
-                            center,
-                            clockwise,
-                        } => ContourSegment::Arc {
-                            start: lower_point(start),
-                            end: lower_point(end),
-                            center_offset: lower_point(Point::new(
-                                center.x - start.x,
-                                center.y - start.y,
-                            )),
-                            clockwise,
-                        },
-                    })
-                    .collect(),
-            })
+        .filter_map(region_part)
+        .collect::<Result<Vec<_>>>()?;
+    assign_region_depths(&mut parts);
+    parts.sort_by_key(|part| part.depth);
+
+    Ok(parts
+        .into_iter()
+        .map(|part| WriterObject {
+            kind: ObjectKind::Region {
+                contours: vec![part.contour],
+            },
+            polarity: polarity_at_depth(paint, part.depth),
+            attributes: attributes.to_vec(),
         })
-        .collect::<Result<Vec<_>>>()
-        .context("failed to lower artwork contours to Gerber regions")
+        .collect())
+}
+
+fn lower_simple_compound_region_objects(
+    payloads: &[PathPayload],
+    paint: PaintPolarity,
+    attributes: &[AttributeValue],
+) -> Result<Option<Vec<WriterObject>>> {
+    let polygons = common_path::payloads_to_polygon_contours(payloads);
+    if polygons.len() != payloads.len() {
+        return Ok(None);
+    }
+
+    let mut parts = payloads
+        .iter()
+        .zip(polygons)
+        .filter_map(|(payload, polygon)| original_region_part(payload, polygon))
+        .collect::<Result<Vec<_>>>()?;
+    if parts.len() != payloads.len() || !region_parts_are_nested_or_disjoint(&parts) {
+        return Ok(None);
+    }
+
+    assign_region_depths(&mut parts);
+    parts.sort_by_key(|part| part.depth);
+
+    Ok(Some(
+        parts
+            .into_iter()
+            .map(|part| WriterObject {
+                kind: ObjectKind::Region {
+                    contours: vec![part.contour],
+                },
+                polarity: polarity_at_depth(paint, part.depth),
+                attributes: attributes.to_vec(),
+            })
+            .collect(),
+    ))
+}
+
+fn lower_region_contour(contour: &PathPayload) -> Result<Contour> {
+    if contour.cmds.is_empty() {
+        bail!("cannot export empty Gerber region contour");
+    }
+    Ok(Contour {
+        segments: contour_segments(&contour.cmds)?
+            .into_iter()
+            .map(|segment| match segment {
+                Segment::Line { start, end } => ContourSegment::Line {
+                    start: lower_point(start),
+                    end: lower_point(end),
+                },
+                Segment::Arc {
+                    start,
+                    end,
+                    center,
+                    clockwise,
+                } => ContourSegment::Arc {
+                    start: lower_point(start),
+                    end: lower_point(end),
+                    center_offset: lower_point(Point::new(center.x - start.x, center.y - start.y)),
+                    clockwise,
+                },
+            })
+            .collect(),
+    })
 }
 
 fn path_contours(
@@ -204,6 +278,153 @@ fn path_contours(
                 .to_vec(),
         })
         .collect()
+}
+
+#[derive(Debug)]
+struct RegionPart {
+    polygon: PolygonContour,
+    contour: Contour,
+    bbox: BBox,
+    area: f64,
+    depth: usize,
+}
+
+fn region_part(polygon: PolygonContour) -> Option<Result<RegionPart>> {
+    let payload = common_path::polygon_contours_to_payloads(vec![polygon.clone()])
+        .into_iter()
+        .next()?;
+    original_region_part(&payload, polygon)
+}
+
+fn original_region_part(
+    payload: &PathPayload,
+    polygon: PolygonContour,
+) -> Option<Result<RegionPart>> {
+    if polygon.is_empty() {
+        return None;
+    }
+    let bbox = payload.bbox;
+    let area = polygon_area_abs(&polygon);
+    Some(lower_region_contour(payload).map(|contour| RegionPart {
+        polygon,
+        contour,
+        bbox,
+        area,
+        depth: 0,
+    }))
+}
+
+fn region_parts_are_nested_or_disjoint(parts: &[RegionPart]) -> bool {
+    for left_index in 0..parts.len() {
+        for right_index in left_index + 1..parts.len() {
+            let left = &parts[left_index];
+            let right = &parts[right_index];
+            if !left.bbox.intersects(right.bbox) {
+                continue;
+            }
+
+            let left_contains_right = region_part_contains(left, right);
+            let right_contains_left = region_part_contains(right, left);
+            if left_contains_right == right_contains_left {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn region_part_contains(outer: &RegionPart, inner: &RegionPart) -> bool {
+    bbox_contains_bbox(outer.bbox, inner.bbox) && point_in_polygon(inner.polygon[0], &outer.polygon)
+}
+
+fn assign_region_depths(parts: &mut [RegionPart]) {
+    let parents = (0..parts.len())
+        .map(|index| region_parent(index, parts))
+        .collect::<Vec<_>>();
+    let mut depths = vec![None; parts.len()];
+    for (index, part) in parts.iter_mut().enumerate() {
+        part.depth = region_depth(index, &parents, &mut depths);
+    }
+}
+
+fn region_parent(index: usize, parts: &[RegionPart]) -> Option<usize> {
+    let point = parts[index].polygon[0];
+    let mut parent: Option<usize> = None;
+    for candidate in 0..parts.len() {
+        if candidate == index
+            || parts[candidate].area <= parts[index].area
+            || !bbox_contains_bbox(parts[candidate].bbox, parts[index].bbox)
+            || !point_in_polygon(point, &parts[candidate].polygon)
+        {
+            continue;
+        }
+        if let Some(current_parent) = parent
+            && parts[candidate].area >= parts[current_parent].area
+        {
+            continue;
+        }
+        parent = Some(candidate);
+    }
+    parent
+}
+
+fn region_depth(index: usize, parents: &[Option<usize>], depths: &mut [Option<usize>]) -> usize {
+    if let Some(depth) = depths[index] {
+        return depth;
+    }
+    let depth = parents[index]
+        .map(|parent| region_depth(parent, parents, depths) + 1)
+        .unwrap_or(0);
+    depths[index] = Some(depth);
+    depth
+}
+
+fn polarity_at_depth(paint: PaintPolarity, depth: usize) -> Polarity {
+    let polarity = lower_polarity(paint);
+    if depth.is_multiple_of(2) {
+        polarity
+    } else {
+        opposite_polarity(polarity)
+    }
+}
+
+fn opposite_polarity(polarity: Polarity) -> Polarity {
+    match polarity {
+        Polarity::Dark => Polarity::Clear,
+        Polarity::Clear => Polarity::Dark,
+    }
+}
+
+fn bbox_contains_bbox(outer: BBox, inner: BBox) -> bool {
+    !outer.is_empty()
+        && !inner.is_empty()
+        && outer.min.x <= inner.min.x
+        && outer.min.y <= inner.min.y
+        && outer.max.x >= inner.max.x
+        && outer.max.y >= inner.max.y
+}
+
+fn point_in_polygon(point: [f64; 2], polygon: &PolygonContour) -> bool {
+    let [x, y] = point;
+    let mut inside = false;
+    for index in 0..polygon.len() {
+        let [x0, y0] = polygon[index];
+        let [x1, y1] = polygon[(index + 1) % polygon.len()];
+        if ((y0 > y) != (y1 > y)) && x < (x1 - x0) * (y - y0) / (y1 - y0) + x0 {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+fn polygon_area_abs(polygon: &PolygonContour) -> f64 {
+    let mut area = 0.0;
+    for index in 0..polygon.len() {
+        let [x0, y0] = polygon[index];
+        let [x1, y1] = polygon[(index + 1) % polygon.len()];
+        area += x0 * y1 - x1 * y0;
+    }
+    (area / 2.0).abs()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -337,6 +558,8 @@ fn quantize_mm(value: f64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcb_ir::common::{FillRule, LayerRole, Side, Unit};
+    use pcb_ir::dialects::artwork::{ArtworkLayer as IrArtworkLayer, ArtworkObject};
 
     #[test]
     fn sanitizes_net_names_for_gerber_attribute_fields() {
@@ -376,5 +599,130 @@ mod tests {
         });
 
         assert!(attributes.is_empty());
+    }
+
+    #[test]
+    fn lowers_compound_region_holes_as_clear_gerber_regions() {
+        let mut artwork = ArtworkLayer::new(Unit::Millimeter);
+        let layer_id = artwork.push_layer(IrArtworkLayer {
+            name: "F.SilkS".to_string(),
+            role: LayerRole::Legend,
+            side: Side::None,
+            object_start: 0,
+            object_count: 0,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+        let path = artwork.push_path(
+            ArtworkPath::filled(FillRule::EvenOdd),
+            vec![
+                rect_payload(0.0, 0.0, 10.0, 10.0),
+                rect_payload(2.0, 2.0, 8.0, 8.0),
+            ],
+        );
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                paint: PaintPolarity::Dark,
+                geometry: ArtworkGeometry::Region { path },
+                net: None,
+                bbox: artwork.paths[path as usize].bbox,
+                meta: ObjectAttributes::default(),
+            },
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+
+        assert_eq!(gerber.objects.len(), 2);
+        assert_eq!(gerber.objects[0].polarity, Polarity::Dark);
+        assert_eq!(gerber.objects[1].polarity, Polarity::Clear);
+    }
+
+    #[test]
+    fn preserves_arcs_for_simple_compound_region_holes() {
+        let mut artwork = ArtworkLayer::new(Unit::Millimeter);
+        let layer_id = artwork.push_layer(IrArtworkLayer {
+            name: "F.SilkS".to_string(),
+            role: LayerRole::Legend,
+            side: Side::None,
+            object_start: 0,
+            object_count: 0,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+        let path = artwork.push_path(
+            ArtworkPath::filled(FillRule::EvenOdd),
+            vec![circle_payload(0.0, 0.0, 5.0), circle_payload(0.0, 0.0, 2.0)],
+        );
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                paint: PaintPolarity::Dark,
+                geometry: ArtworkGeometry::Region { path },
+                net: None,
+                bbox: artwork.paths[path as usize].bbox,
+                meta: ObjectAttributes::default(),
+            },
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+
+        assert_eq!(gerber.objects.len(), 2);
+        assert_eq!(gerber.objects[1].polarity, Polarity::Clear);
+        let ObjectKind::Region { contours } = &gerber.objects[1].kind else {
+            panic!("expected clear region");
+        };
+        assert!(
+            contours[0]
+                .segments
+                .iter()
+                .any(|segment| matches!(segment, ContourSegment::Arc { .. }))
+        );
+    }
+
+    fn rect_payload(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> PathPayload {
+        let points = [
+            Point::new(min_x, min_y),
+            Point::new(max_x, min_y),
+            Point::new(max_x, max_y),
+            Point::new(min_x, max_y),
+        ];
+        let mut bbox = BBox::empty();
+        let mut cmds = Vec::new();
+        for (index, point) in points.into_iter().enumerate() {
+            bbox.include_point(point);
+            cmds.push(if index == 0 {
+                PathCmd::move_to(point)
+            } else {
+                PathCmd::line_to(point)
+            });
+        }
+        cmds.push(PathCmd::close());
+        PathPayload { bbox, cmds }
+    }
+
+    fn circle_payload(cx: f64, cy: f64, radius: f64) -> PathPayload {
+        let center = Point::new(cx, cy);
+        let points = [
+            Point::new(cx + radius, cy),
+            Point::new(cx, cy + radius),
+            Point::new(cx - radius, cy),
+            Point::new(cx, cy - radius),
+            Point::new(cx + radius, cy),
+        ];
+        let mut bbox = BBox::empty();
+        bbox.include_circular_arc(points[0], points[1], center, false);
+        bbox.include_circular_arc(points[1], points[2], center, false);
+        bbox.include_circular_arc(points[2], points[3], center, false);
+        bbox.include_circular_arc(points[3], points[4], center, false);
+        let cmds = vec![
+            PathCmd::move_to(points[0]),
+            PathCmd::arc_to(points[1], center, false),
+            PathCmd::arc_to(points[2], center, false),
+            PathCmd::arc_to(points[3], center, false),
+            PathCmd::arc_to(points[4], center, false),
+            PathCmd::close(),
+        ];
+        PathPayload { bbox, cmds }
     }
 }

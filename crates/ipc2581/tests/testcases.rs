@@ -453,7 +453,7 @@ fn test_testcase1_metadata() {
 
             if is_drill_layer {
                 for set in &feature.sets {
-                    for hole in &set.holes {
+                    for hole in set.holes() {
                         total_drills += 1;
                         match hole.plating_status {
                             PlatingStatus::Via => via_drills += 1,
@@ -664,7 +664,7 @@ fn print_testcase_metadata(doc: &Ipc2581, testcase_name: &str) -> TestcaseMetada
 
             if is_drill_layer {
                 for set in &feature.sets {
-                    for hole in &set.holes {
+                    for hole in set.holes() {
                         total_drills += 1;
                         match hole.plating_status {
                             ipc2581::PlatingStatus::Via => via_drills += 1,

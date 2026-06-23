@@ -421,7 +421,7 @@ fn extracts_and_processes_render_geometry() {
     assert_eq!(geometry.features.len(), 2);
     assert!(geometry.paths.iter().any(|path| path.flags.stroked));
 
-    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
     assert!(geometry.features.iter().any(|feature| {
         feature.kind == pcb_ir::dialects::gerber::FeatureKind::Composite && feature.path_count == 1
     }));
@@ -436,7 +436,7 @@ fn process_applies_clear_polarity_cutouts() {
     .unwrap();
 
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
     let composite = geometry
         .features
         .iter()
@@ -454,7 +454,7 @@ fn process_keeps_clear_polarity_semantics_after_overlapping_dark_runs() {
     .unwrap();
 
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
     let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
 
     assert!(
@@ -472,7 +472,7 @@ fn process_preserves_ordered_aperture_path_polarity() {
     .unwrap();
 
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
     let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
 
     assert!(
@@ -534,7 +534,7 @@ fn renders_svg_and_png_from_processed_geometry() {
     .unwrap();
 
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
     let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
     assert!(svg.contains("<svg"));
     assert!(svg.contains("<path"));
@@ -552,7 +552,7 @@ fn renders_profile_gerber_as_black_board_outline() {
     .unwrap();
 
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
     let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
 
     assert!(svg.contains("fill='none' stroke='#000000'"));

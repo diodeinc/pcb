@@ -401,7 +401,7 @@ fn rendered_source_layer(
     match geometry::extract_layer_for_layout_target(ipc, &name, LayoutTarget::Board) {
         Ok(mut geometry) => {
             rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
-            pcb_ir::dialects::ipc::process::process_document(&mut geometry);
+            pcb_ir::dialects::ipc::process::compose_for_rendering(&mut geometry);
             rendered.svg = Some(geometry::render::render_layer_svg(
                 &geometry,
                 true,

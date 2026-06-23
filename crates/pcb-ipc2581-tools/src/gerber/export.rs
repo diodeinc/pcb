@@ -49,7 +49,7 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
         let mut doc =
             geometry::extract_layer_for_layout_target(ipc, layer_name, options.layout_target)
                 .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
-        pcb_ir::dialects::ipc::process::process_document(&mut doc);
+        pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut doc);
         if first_doc.is_none() {
             first_doc = Some(doc.clone());
         }
@@ -463,10 +463,19 @@ fn push_artwork_object(
     layer_name: &str,
 ) -> Result<()> {
     let (geometry, path_id) = if path.flags.filled {
-        let path = push_artwork_path(artwork, ArtworkPath::filled(path.fill_rule), doc, path);
+        let path = push_artwork_path(
+            artwork,
+            ArtworkPath::filled(path.style.fill.rule),
+            doc,
+            path,
+        );
         (ArtworkGeometry::Region { path }, path)
     } else if path.flags.stroked {
-        let artwork_path = ArtworkPath::stroked(path.stroke_width, path.line_cap, LineJoin::Round);
+        let artwork_path = ArtworkPath::stroked(
+            path.style.stroke.width,
+            path.style.stroke.line_cap,
+            LineJoin::Round,
+        );
         let path = push_artwork_path(artwork, artwork_path, doc, path);
         (ArtworkGeometry::Stroke { path }, path)
     } else {
@@ -676,6 +685,77 @@ mod tests {
     }
 
     #[test]
+    fn gerber_export_preserves_user_special_counter_holes() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="F.SilkS"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.SilkS" layerFunction="LEGEND" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="F.SilkS">
+          <Set>
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="0" y="0"/>
+                    <PolyStepSegment x="4" y="0"/>
+                    <PolyStepSegment x="4" y="4"/>
+                    <PolyStepSegment x="0" y="4"/>
+                    <PolyStepSegment x="0" y="0"/>
+                  </Polygon>
+                </Contour>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="1" y="1"/>
+                    <PolyStepSegment x="3" y="1"/>
+                    <PolyStepSegment x="3" y="3"/>
+                    <PolyStepSegment x="1" y="3"/>
+                    <PolyStepSegment x="1" y="1"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let output_dir = std::env::temp_dir().join(format!(
+            "pcb-ipc-gerber-counter-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output_dir,
+                layout_target: LayoutTarget::Board,
+            },
+        )
+        .unwrap();
+
+        let silk = set
+            .files
+            .iter()
+            .find(|file| file.filename == "F_SilkS.gto")
+            .unwrap();
+        assert!(silk.contents.contains("%LPC*%"));
+        gerberx2::GerberX2::parse(&silk.contents).unwrap();
+    }
+
+    #[test]
     fn gerber_panel_target_flattens_repeated_board_instances_as_array() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -752,7 +832,7 @@ mod tests {
 
         let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
         let mut geometry = gerberx2::geometry::extract_document(&parsed);
-        pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+        pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
         assert!(geometry.features.len() >= 2);
         assert!(geometry.bbox.width() > 14.0);
     }
@@ -904,7 +984,7 @@ mod tests {
         for file in &set.files {
             let parsed = gerberx2::GerberX2::parse(&file.contents).unwrap();
             let mut geometry = gerberx2::geometry::extract_document(&parsed);
-            pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+            pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
             let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
             assert!(svg.contains("<svg"), "{} did not render SVG", file.filename);
 
@@ -915,7 +995,7 @@ mod tests {
         }
 
         let mut layer = geometry::extract_layer(&ipc, "F.Cu").unwrap();
-        pcb_ir::dialects::ipc::process::process_document(&mut layer);
+        pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut layer);
         let geom = pcb_ir::dialects::ipc::lower_layer_to_geom(
             &layer,
             0,

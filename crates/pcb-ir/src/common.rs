@@ -13,6 +13,13 @@ pub enum LineJoin {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LinePattern {
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FillRule {
     NonZero,
     EvenOdd,

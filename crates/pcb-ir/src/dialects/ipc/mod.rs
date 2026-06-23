@@ -565,11 +565,11 @@ fn push_profile_path_to_geom<Symbol, LayerFunction>(
 
 fn lower_path_kind(path: &GeometryPath) -> Option<geom::GeomPath> {
     if path.flags.filled {
-        Some(geom::GeomPath::filled(path.fill_rule))
+        Some(geom::GeomPath::filled(path.style.fill.rule))
     } else if path.flags.stroked {
         Some(geom::GeomPath::stroked(
-            path.stroke_width,
-            path.line_cap,
+            path.style.stroke.width,
+            path.style.stroke.line_cap,
             LineJoin::Round,
         ))
     } else {
@@ -904,10 +904,90 @@ pub struct GeometryPath {
     pub contour_start: u32,
     pub contour_count: u32,
     pub bbox: BBox,
-    pub fill_rule: FillRule,
-    pub stroke_width: f64,
-    pub line_cap: LineCap,
+    pub style: GeometryPathStyle,
     pub flags: PathFlags,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GeometryPathStyle {
+    pub fill: GeometryFillStyle,
+    pub stroke: GeometryStrokeStyle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeometryFillStyle {
+    pub property: GeometryFillProperty,
+    pub rule: FillRule,
+    pub hatch: Option<GeometryHatchStyle>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GeometryFillProperty {
+    Solid,
+    Hollow,
+    Void,
+    Hatch,
+    Mesh,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeometryHatchStyle {
+    pub angle1_degrees: Option<f64>,
+    pub angle2_degrees: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeometryStrokeStyle {
+    pub width: f64,
+    pub line_cap: LineCap,
+    pub line_join: LineJoin,
+    pub pattern: LinePattern,
+}
+
+impl GeometryPathStyle {
+    pub fn filled(rule: FillRule) -> Self {
+        Self {
+            fill: GeometryFillStyle {
+                property: GeometryFillProperty::Solid,
+                rule,
+                hatch: None,
+            },
+            stroke: GeometryStrokeStyle::default(),
+        }
+    }
+
+    pub fn stroked(width: f64, line_cap: LineCap) -> Self {
+        Self {
+            fill: GeometryFillStyle::default(),
+            stroke: GeometryStrokeStyle {
+                width,
+                line_cap,
+                line_join: LineJoin::Round,
+                pattern: LinePattern::Solid,
+            },
+        }
+    }
+}
+
+impl Default for GeometryFillStyle {
+    fn default() -> Self {
+        Self {
+            property: GeometryFillProperty::Solid,
+            rule: FillRule::NonZero,
+            hatch: None,
+        }
+    }
+}
+
+impl Default for GeometryStrokeStyle {
+    fn default() -> Self {
+        Self {
+            width: 0.0,
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+            pattern: LinePattern::Solid,
+        }
+    }
 }
 
 impl GeometryPath {
@@ -916,9 +996,7 @@ impl GeometryPath {
             contour_start: 0,
             contour_count: 0,
             bbox,
-            fill_rule,
-            stroke_width: 0.0,
-            line_cap: LineCap::Round,
+            style: GeometryPathStyle::filled(fill_rule),
             flags: PathFlags {
                 filled: true,
                 stroked: false,
@@ -931,9 +1009,7 @@ impl GeometryPath {
             contour_start: 0,
             contour_count: 0,
             bbox,
-            fill_rule: FillRule::NonZero,
-            stroke_width: width,
-            line_cap,
+            style: GeometryPathStyle::stroked(width, line_cap),
             flags: PathFlags {
                 filled: false,
                 stroked: true,
@@ -946,9 +1022,7 @@ impl GeometryPath {
             contour_start: 0,
             contour_count: 0,
             bbox,
-            fill_rule: FillRule::NonZero,
-            stroke_width: 0.0,
-            line_cap: LineCap::Round,
+            style: GeometryPathStyle::default(),
             flags: PathFlags::default(),
         }
     }

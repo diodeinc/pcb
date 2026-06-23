@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 use ipc2581::types::{
-    FillProperty, LayerFunction, LineEnd, PadUse, PlatingStatus, Polarity, PolyStep, SlotShape,
-    StandardPrimitive, UserPrimitive, UserShapeType,
+    FillDesc, FillProperty, LayerFunction, LineEnd, LineProperty, PadUse, PlatingStatus, Polarity,
+    PolyStep, SlotShape, StandardPrimitive, UserPrimitive, UserShapeType, Xform,
     ecad::{Layer, SetFeature, Step, StepRepeat, StepType},
 };
 use ipc2581::{Ipc2581, Symbol};
@@ -85,6 +85,38 @@ struct ExtractContext<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct IpcPlacement {
+    center: Point,
+    xform: Xform,
+    transform: Affine2,
+}
+
+fn ipc_placement(location: Point, xform: Option<Xform>) -> IpcPlacement {
+    let xform = xform.unwrap_or_default();
+    let offset = Affine2::transform_vector(
+        xform.rotation,
+        xform.mirror,
+        xform.scale,
+        Point::new(xform.x_offset, xform.y_offset),
+    );
+    let center = Point::new(location.x + offset.x, location.y + offset.y);
+    let transform = Affine2::placement(center, xform.rotation, xform.mirror, xform.scale);
+
+    IpcPlacement {
+        center,
+        xform,
+        transform,
+    }
+}
+
+fn apply_ipc_placement(feature: &mut GeometryFeature, placement: IpcPlacement) {
+    feature.transform = placement.transform;
+    feature.center = placement.center;
+    feature.rotation_degrees = placement.xform.rotation;
+    feature.scale = placement.xform.scale;
+}
+
+#[derive(Debug, Clone, Copy)]
 enum PadPrimitiveRef {
     Standard(Symbol),
     User(Symbol),
@@ -97,6 +129,7 @@ struct StrokedFeatureStyle {
     source: SourceRef,
     width: f64,
     line_cap: LineCap,
+    line_pattern: LinePattern,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -548,6 +581,9 @@ fn extract_step_layer(
                     SetFeature::Trace(trace) => {
                         extract_trace(&context, set.net, polarity, source, trace, &mut doc)
                     }
+                    SetFeature::UserPrimitive(primitive) => extract_inline_user_primitive(
+                        &context, set.net, polarity, source, primitive, &mut doc,
+                    ),
                     SetFeature::Polygon(polygon) => Some(extract_polygon(
                         set.net, polarity, source, polygon, &mut doc,
                     )),
@@ -1076,7 +1112,7 @@ fn append_transformed_path(
         let cmd_start = target.path_cmds.len() as u32;
         target.path_cmds.extend(cmds);
         if path.flags.stroked {
-            contour_bbox = contour_bbox.expand(path.stroke_width / 2.0);
+            contour_bbox = contour_bbox.expand(path.style.stroke.width / 2.0);
         }
 
         let cmd_count = target.path_cmds.len() as u32 - cmd_start;
@@ -1180,15 +1216,7 @@ fn extract_pad(
         None => FeatureBucket::Smd,
     };
 
-    let xform = pad.xform.unwrap_or_default();
-    let offset = Affine2::transform_vector(
-        xform.rotation,
-        xform.mirror,
-        xform.scale,
-        Point::new(xform.x_offset, xform.y_offset),
-    );
-    let center = Point::new(x + offset.x, y + offset.y);
-    let transform = Affine2::placement(center, xform.rotation, xform.mirror, xform.scale);
+    let placement = ipc_placement(Point::new(x, y), pad.xform);
 
     let primitive_ref = pad_primitive_ref(pad, padstack, layer_ref);
     let Some(primitive_ref) = primitive_ref else {
@@ -1211,7 +1239,7 @@ fn extract_pad(
                 ));
                 return Ok(None);
             };
-            lower_standard_primitive(context, doc, primitive, transform, bucket)?
+            lower_standard_primitive(context, doc, primitive, placement.transform, bucket)?
         }
         PadPrimitiveRef::User(primitive_ref) => {
             let Some(primitive) = context.user_primitives.get(&primitive_ref).copied() else {
@@ -1222,7 +1250,7 @@ fn extract_pad(
                 ));
                 return Ok(None);
             };
-            lower_user_primitive(context, doc, primitive, transform)
+            lower_user_primitive(context, doc, primitive, placement.transform)
         }
     };
     let path_count = doc.paths.len() as u32 - path_start;
@@ -1242,13 +1270,10 @@ fn extract_pad(
     );
     feature.net = net;
     feature.source = source;
-    feature.transform = transform;
     feature.bbox = bbox;
     feature.path_start = path_start;
     feature.path_count = path_count;
-    feature.center = center;
-    feature.rotation_degrees = xform.rotation;
-    feature.scale = xform.scale;
+    apply_ipc_placement(&mut feature, placement);
     feature.padstack_ref = Some(padstack_ref);
     feature.primitive_ref = match primitive_ref {
         PadPrimitiveRef::Standard(primitive_ref) | PadPrimitiveRef::User(primitive_ref) => {
@@ -1340,9 +1365,72 @@ fn extract_feature_primitive(
         }
     };
 
+    Ok(primitive_feature_from_paths(
+        doc,
+        PrimitiveFeatureSpec {
+            net,
+            polarity,
+            source,
+            transform,
+            path_start,
+            paint,
+            primitive_ref: Some(primitive_ref.id),
+        },
+    ))
+}
+
+fn extract_inline_user_primitive(
+    context: &ExtractContext<'_>,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    primitive: &ipc2581::types::ecad::FeatureUserPrimitive,
+    doc: &mut GeometryDocument,
+) -> Option<GeometryFeature> {
+    let transform = Affine2::placement(Point::new(primitive.x, primitive.y), 0.0, false, 1.0);
+    let path_start = doc.paths.len() as u32;
+    let paint = lower_user_primitive(context, doc, &primitive.primitive, transform);
+    primitive_feature_from_paths(
+        doc,
+        PrimitiveFeatureSpec {
+            net,
+            polarity,
+            source,
+            transform,
+            path_start,
+            paint,
+            primitive_ref: None,
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PrimitiveFeatureSpec {
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    transform: Affine2,
+    path_start: u32,
+    paint: PrimitivePaint,
+    primitive_ref: Option<Symbol>,
+}
+
+fn primitive_feature_from_paths(
+    doc: &GeometryDocument,
+    spec: PrimitiveFeatureSpec,
+) -> Option<GeometryFeature> {
+    let PrimitiveFeatureSpec {
+        net,
+        polarity,
+        source,
+        transform,
+        path_start,
+        paint,
+        primitive_ref,
+    } = spec;
     let path_count = doc.paths.len() as u32 - path_start;
     if path_count == 0 {
-        return Ok(None);
+        return None;
     }
 
     let mut feature = GeometryFeature::new(
@@ -1360,8 +1448,9 @@ fn extract_feature_primitive(
     feature.bbox = paths_bbox(doc, path_start, path_count);
     feature.path_start = path_start;
     feature.path_count = path_count;
+    feature.primitive_ref = primitive_ref;
     feature.flags.lowered_to_paths = true;
-    Ok(Some(feature))
+    Some(feature)
 }
 
 fn extract_fiducial(
@@ -1372,23 +1461,21 @@ fn extract_fiducial(
     fiducial: &ipc2581::types::ecad::Fiducial,
     doc: &mut GeometryDocument,
 ) -> Result<Option<GeometryFeature>> {
-    let xform = fiducial.xform.unwrap_or_default();
-    let offset = Affine2::transform_vector(
-        xform.rotation,
-        xform.mirror,
-        xform.scale,
-        Point::new(xform.x_offset, xform.y_offset),
+    let placement = ipc_placement(
+        Point::new(fiducial.location.x, fiducial.location.y),
+        fiducial.xform,
     );
-    let center = Point::new(
-        fiducial.location.x + offset.x,
-        fiducial.location.y + offset.y,
-    );
-    let transform = Affine2::placement(center, xform.rotation, xform.mirror, xform.scale);
 
     let path_start = doc.paths.len() as u32;
     let (paint, primitive_ref) = match &fiducial.shape {
         ipc2581::types::ecad::FiducialShape::Primitive(primitive) => (
-            lower_standard_primitive(context, doc, primitive, transform, FeatureBucket::Fiducial)?,
+            lower_standard_primitive(
+                context,
+                doc,
+                primitive,
+                placement.transform,
+                FeatureBucket::Fiducial,
+            )?,
             None,
         ),
         ipc2581::types::ecad::FiducialShape::StandardPrimitiveRef(primitive_ref) => {
@@ -1404,7 +1491,7 @@ fn extract_fiducial(
                     context,
                     doc,
                     primitive,
-                    transform,
+                    placement.transform,
                     FeatureBucket::Fiducial,
                 )?,
                 Some(*primitive_ref),
@@ -1429,13 +1516,10 @@ fn extract_fiducial(
     feature.net = net;
     feature.source = source;
     feature.semantic = FeatureSemantic::Fiducial(map_fiducial_kind(fiducial.kind));
-    feature.transform = transform;
     feature.bbox = paths_bbox(doc, path_start, path_count);
     feature.path_start = path_start;
     feature.path_count = path_count;
-    feature.center = center;
-    feature.rotation_degrees = xform.rotation;
-    feature.scale = xform.scale;
+    apply_ipc_placement(&mut feature, placement);
     feature.primitive_ref = primitive_ref;
     feature.flags.lowered_to_paths = true;
     if let Some(pin_ref) = &fiducial.pin_ref {
@@ -1487,12 +1571,15 @@ fn extract_trace(
 
     Some(push_stroked_trace(
         doc,
-        net,
-        polarity,
-        source,
+        StrokedFeatureStyle {
+            net,
+            polarity,
+            source,
+            width: line_desc.line_width,
+            line_cap: map_line_cap(line_desc.line_end),
+            line_pattern: map_line_pattern(line_desc.line_property),
+        },
         trace,
-        line_desc.line_width,
-        map_line_cap(line_desc.line_end),
     ))
 }
 
@@ -1504,7 +1591,7 @@ fn extract_line(
     line: &ipc2581::types::ecad::Line,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let (line_width, line_cap) =
+    let (line_width, line_cap, line_pattern) =
         resolve_feature_line_style(context, line.line_desc_ref, line.line_width, line.line_end);
 
     push_stroked_polyline(
@@ -1515,6 +1602,7 @@ fn extract_line(
             source,
             width: line_width,
             line_cap,
+            line_pattern,
         },
         vec![
             Point::new(line.start_x, line.start_y),
@@ -1531,7 +1619,7 @@ fn extract_feature_polyline(
     polyline: &ipc2581::types::ecad::FeaturePolyline,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let (line_width, line_cap) = resolve_feature_line_style(
+    let (line_width, line_cap, line_pattern) = resolve_feature_line_style(
         context,
         polyline.line_desc_ref,
         polyline.line_width,
@@ -1546,6 +1634,7 @@ fn extract_feature_polyline(
             source,
             width: line_width,
             line_cap,
+            line_pattern,
         },
         Point::new(polyline.begin.x, polyline.begin.y),
         &polyline.steps,
@@ -1560,7 +1649,7 @@ fn extract_arc(
     arc: &ipc2581::types::ecad::FeatureArc,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let (line_width, line_cap) =
+    let (line_width, line_cap, line_pattern) =
         resolve_feature_line_style(context, arc.line_desc_ref, arc.line_width, arc.line_end);
 
     push_stroked_arc(
@@ -1571,6 +1660,7 @@ fn extract_arc(
             source,
             width: line_width,
             line_cap,
+            line_pattern,
         },
         Point::new(arc.start.x, arc.start.y),
         Point::new(arc.end.x, arc.end.y),
@@ -1584,7 +1674,7 @@ fn resolve_feature_line_style(
     line_desc_ref: Option<Symbol>,
     inline_width: f64,
     inline_end: Option<LineEnd>,
-) -> (f64, LineCap) {
+) -> (f64, LineCap, LinePattern) {
     let line_desc =
         line_desc_ref.and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
     let width = line_desc
@@ -1594,7 +1684,8 @@ fn resolve_feature_line_style(
         .map(|desc| map_line_cap(desc.line_end))
         .or_else(|| inline_end.map(map_line_cap))
         .unwrap_or(LineCap::Round);
-    (width, line_cap)
+    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
+    (width, line_cap, line_pattern)
 }
 
 fn extract_polygon(
@@ -1675,10 +1766,7 @@ fn push_stroked_polyline(
     bbox = bbox.expand(style.width / 2.0);
 
     let path_start = doc.paths.len() as u32;
-    doc.push_path(
-        GeometryPath::stroked(style.width, style.line_cap, bbox),
-        cmds,
-    );
+    doc.push_path(stroked_path(style, bbox), cmds);
 
     let mut feature =
         GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, style.polarity);
@@ -1707,7 +1795,7 @@ fn push_stroked_arc(
 
     let path_start = doc.paths.len() as u32;
     doc.push_path(
-        GeometryPath::stroked(style.width, style.line_cap, bbox),
+        stroked_path(style, bbox),
         vec![
             PathCmd::move_to(start),
             PathCmd::arc_to(end, center, clockwise),
@@ -1729,12 +1817,8 @@ fn push_stroked_arc(
 
 fn push_stroked_trace(
     doc: &mut GeometryDocument,
-    net: Option<Symbol>,
-    polarity: GeometryPolarity,
-    source: SourceRef,
+    style: StrokedFeatureStyle,
     trace: &ipc2581::types::Trace,
-    width: f64,
-    line_cap: LineCap,
 ) -> GeometryFeature {
     if trace.steps.is_empty() {
         let points = trace
@@ -1742,28 +1826,12 @@ fn push_stroked_trace(
             .iter()
             .map(|point| Point::new(point.x, point.y))
             .collect();
-        return push_stroked_polyline(
-            doc,
-            StrokedFeatureStyle {
-                net,
-                polarity,
-                source,
-                width,
-                line_cap,
-            },
-            points,
-        );
+        return push_stroked_polyline(doc, style, points);
     }
 
     push_stroked_steps(
         doc,
-        StrokedFeatureStyle {
-            net,
-            polarity,
-            source,
-            width,
-            line_cap,
-        },
+        style,
         Point::new(trace.points[0].x, trace.points[0].y),
         &trace.steps,
     )
@@ -1797,10 +1865,7 @@ fn push_stroked_steps(
     bbox = bbox.expand(style.width / 2.0);
 
     let path_start = doc.paths.len() as u32;
-    doc.push_path(
-        GeometryPath::stroked(style.width, style.line_cap, bbox),
-        cmds,
-    );
+    doc.push_path(stroked_path(style, bbox), cmds);
 
     let mut feature =
         GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, style.polarity);
@@ -1813,6 +1878,12 @@ fn push_stroked_steps(
     feature.line_cap = style.line_cap;
     feature.flags.lowered_to_paths = true;
     feature
+}
+
+fn stroked_path(style: StrokedFeatureStyle, bbox: BBox) -> GeometryPath {
+    let mut path = GeometryPath::stroked(style.width, style.line_cap, bbox);
+    path.style.stroke.pattern = style.line_pattern;
+    path
 }
 
 fn extract_hole(
@@ -1851,19 +1922,19 @@ fn extract_slot(
     slot: &ipc2581::types::Slot,
     doc: &mut GeometryDocument,
 ) -> Result<GeometryFeature> {
-    let transform = Affine2::placement(Point::new(slot.x, slot.y), 0.0, false, 1.0);
+    let placement = ipc_placement(Point::new(slot.x, slot.y), slot.xform);
     let path_start = doc.paths.len() as u32;
 
     match &slot.shape {
         SlotShape::Outline(polygon) => {
-            push_polygon_path(doc, polygon, transform, FillRule::NonZero);
+            push_polygon_path(doc, polygon, placement.transform, FillRule::NonZero);
         }
         SlotShape::Primitive(primitive) => {
             let _ = lower_standard_primitive(
                 context,
                 doc,
                 primitive,
-                transform,
+                placement.transform,
                 FeatureBucket::Cutout,
             )?;
         }
@@ -1876,11 +1947,10 @@ fn extract_slot(
         GeometryPolarity::Positive,
     );
     feature.source = source;
-    feature.transform = transform;
     feature.bbox = paths_bbox(doc, path_start, path_count);
     feature.path_start = path_start;
     feature.path_count = path_count;
-    feature.center = Point::new(slot.x, slot.y);
+    apply_ipc_placement(&mut feature, placement);
     feature.flags.lowered_to_paths = true;
     Ok(feature)
 }
@@ -1990,15 +2060,7 @@ fn lower_standard_primitive(
             );
         }
         StandardPrimitive::Contour(contour) => {
-            let mut contours = Vec::with_capacity(1 + contour.cutouts.len());
-            contours.push(polygon_contour(&contour.polygon, transform));
-            for cutout in &contour.cutouts {
-                contours.push(polygon_contour(cutout, transform));
-            }
-            doc.push_compound_path(
-                GeometryPath::filled(FillRule::EvenOdd, BBox::empty()),
-                contours,
-            );
+            push_contour_path(doc, contour, transform);
         }
         StandardPrimitive::RectRound(rect) => {
             push_rounded_rect_path(
@@ -2043,6 +2105,18 @@ fn lower_standard_primitive(
         // just here to make the bucket dependency explicit for future styling.
     }
 
+    if let Some(fill_property) = primitive_fill_property(primitive) {
+        set_paths_fill_style(
+            doc,
+            path_start,
+            GeometryFillStyle {
+                property: map_fill_property(fill_property),
+                rule: FillRule::NonZero,
+                hatch: None,
+            },
+        );
+    }
+
     let paint = primitive_paint(primitive);
     match paint {
         PrimitivePaint::Fill => {}
@@ -2057,6 +2131,7 @@ fn lower_standard_primitive(
                 path_start,
                 line_desc.line_width,
                 map_line_cap(line_desc.line_end),
+                map_line_pattern(line_desc.line_property),
             );
         }
         PrimitivePaint::Void => {}
@@ -2074,7 +2149,20 @@ fn lower_user_primitive(
     match primitive {
         UserPrimitive::UserSpecial(user_special) => {
             let mut paint = PrimitivePaint::Fill;
+            let mut pending_contours = Vec::new();
+            let mut pending_fill_style = even_odd_fill_style(GeometryFillStyle::default());
             for shape in &user_special.shapes {
+                if user_shape_is_filled_contour(shape) {
+                    let fill_style =
+                        even_odd_fill_style(shape.fill_desc.map(map_fill_desc).unwrap_or_default());
+                    if !pending_contours.is_empty() && pending_fill_style != fill_style {
+                        flush_user_contours(doc, &mut pending_contours, pending_fill_style);
+                    }
+                    pending_fill_style = fill_style;
+                    push_user_shape_contours(&mut pending_contours, &shape.shape, transform);
+                    continue;
+                }
+                flush_user_contours(doc, &mut pending_contours, pending_fill_style);
                 let path_start = doc.paths.len() as u32;
                 let mut nested_paint = None;
                 match &shape.shape {
@@ -2105,6 +2193,9 @@ fn lower_user_primitive(
                     UserShapeType::Polygon(polygon) => {
                         push_polygon_path(doc, polygon, transform, FillRule::NonZero);
                     }
+                    UserShapeType::Contour(contour) => {
+                        push_contour_path(doc, contour, transform);
+                    }
                     UserShapeType::Line(line) => {
                         let line_desc = user_shape_line_desc(context, shape);
                         push_user_line_path(doc, line, transform, line_desc);
@@ -2128,26 +2219,29 @@ fn lower_user_primitive(
                     }
                 }
 
-                match shape.fill_desc.map(|desc| desc.fill_property) {
-                    Some(FillProperty::Hollow) => {
+                match shape.fill_desc {
+                    Some(fill_desc) if fill_desc.fill_property == FillProperty::Hollow => {
+                        set_paths_fill_style(doc, path_start, map_fill_desc(fill_desc));
                         if let Some(line_desc) = user_shape_line_desc(context, shape) {
                             make_paths_stroked(
                                 doc,
                                 path_start,
                                 line_desc.line_width,
                                 map_line_cap(line_desc.line_end),
+                                map_line_pattern(line_desc.line_property),
                             );
                         } else {
                             make_paths_unpainted(doc, path_start);
                         }
                         paint = PrimitivePaint::Hollow;
                     }
-                    Some(FillProperty::Void) => {
+                    Some(fill_desc) if fill_desc.fill_property == FillProperty::Void => {
+                        set_paths_fill_style(doc, path_start, map_fill_desc(fill_desc));
                         paint = PrimitivePaint::Void;
                     }
-                    Some(FillProperty::Fill)
-                    | Some(FillProperty::Hatch)
-                    | Some(FillProperty::Mesh) => {}
+                    Some(fill_desc) => {
+                        set_paths_fill_style(doc, path_start, map_fill_desc(fill_desc));
+                    }
                     None => {
                         if let Some(nested_paint) = nested_paint {
                             paint = nested_paint;
@@ -2155,9 +2249,45 @@ fn lower_user_primitive(
                     }
                 }
             }
+            flush_user_contours(doc, &mut pending_contours, pending_fill_style);
             paint
         }
     }
+}
+
+fn user_shape_is_filled_contour(shape: &ipc2581::types::UserShape) -> bool {
+    matches!(
+        shape.fill_desc.map(|desc| desc.fill_property),
+        None | Some(FillProperty::Fill | FillProperty::Hatch | FillProperty::Mesh)
+    ) && matches!(
+        &shape.shape,
+        UserShapeType::Polygon(_) | UserShapeType::Contour(_)
+    )
+}
+
+fn push_user_shape_contours(
+    out: &mut Vec<(BBox, Vec<PathCmd>)>,
+    shape: &UserShapeType,
+    transform: Affine2,
+) {
+    match shape {
+        UserShapeType::Polygon(polygon) => out.push(polygon_contour(polygon, transform)),
+        UserShapeType::Contour(contour) => push_contour_payloads(out, contour, transform),
+        _ => {}
+    }
+}
+
+fn flush_user_contours(
+    doc: &mut GeometryDocument,
+    contours: &mut Vec<(BBox, Vec<PathCmd>)>,
+    fill_style: GeometryFillStyle,
+) {
+    if contours.is_empty() {
+        return;
+    }
+    let mut path = GeometryPath::filled(fill_style.rule, BBox::empty());
+    path.style.fill = fill_style;
+    doc.push_compound_path(path, std::mem::take(contours));
 }
 
 fn user_shape_line_desc(
@@ -2183,13 +2313,13 @@ fn push_user_line_path(
     let line_cap = line_desc
         .map(|desc| map_line_cap(desc.line_end))
         .unwrap_or(LineCap::Round);
+    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
     let bbox = BBox::from_point(start)
         .union(BBox::from_point(end))
         .expand(width / 2.0);
-    doc.push_path(
-        GeometryPath::stroked(width, line_cap, bbox),
-        vec![PathCmd::move_to(start), PathCmd::line_to(end)],
-    );
+    let mut path = GeometryPath::stroked(width, line_cap, bbox);
+    path.style.stroke.pattern = line_pattern;
+    doc.push_path(path, vec![PathCmd::move_to(start), PathCmd::line_to(end)]);
 }
 
 fn push_user_arc_path(
@@ -2210,11 +2340,14 @@ fn push_user_arc_path(
     let line_cap = line_desc
         .map(|desc| map_line_cap(desc.line_end))
         .unwrap_or(LineCap::Round);
+    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
     let mut bbox = BBox::empty();
     bbox.include_circular_arc(start, end, center, clockwise);
     bbox = bbox.expand(width / 2.0);
+    let mut path = GeometryPath::stroked(width, line_cap, bbox);
+    path.style.stroke.pattern = line_pattern;
     doc.push_path(
-        GeometryPath::stroked(width, line_cap, bbox),
+        path,
         vec![
             PathCmd::move_to(start),
             PathCmd::arc_to(end, center, clockwise),
@@ -2232,6 +2365,7 @@ fn push_user_polyline_path(
     let line_cap = line_desc
         .map(|desc| map_line_cap(desc.line_end))
         .unwrap_or(LineCap::Round);
+    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
     let mut current = Point::new(polyline.begin.x, polyline.begin.y);
     let start = transform.transform_point(current);
     let mut bbox = BBox::from_point(start);
@@ -2264,7 +2398,9 @@ fn push_user_polyline_path(
     }
 
     bbox = bbox.expand(width / 2.0);
-    doc.push_path(GeometryPath::stroked(width, line_cap, bbox), cmds);
+    let mut path = GeometryPath::stroked(width, line_cap, bbox);
+    path.style.stroke.pattern = line_pattern;
+    doc.push_path(path, cmds);
 }
 
 fn push_polygon_path(
@@ -2329,13 +2465,59 @@ fn primitive_line_desc(
     context.line_descs.get(&line_desc_ref).copied()
 }
 
-fn make_paths_stroked(doc: &mut GeometryDocument, path_start: u32, width: f64, line_cap: LineCap) {
+fn make_paths_stroked(
+    doc: &mut GeometryDocument,
+    path_start: u32,
+    width: f64,
+    line_cap: LineCap,
+    line_pattern: LinePattern,
+) {
     for path in &mut doc.paths[path_start as usize..] {
         path.flags.filled = false;
         path.flags.stroked = true;
-        path.fill_rule = FillRule::NonZero;
-        path.stroke_width = width;
-        path.line_cap = line_cap;
+        path.style.fill.rule = FillRule::NonZero;
+        path.style.stroke.width = width;
+        path.style.stroke.line_cap = line_cap;
+        path.style.stroke.pattern = line_pattern;
+    }
+}
+
+fn set_paths_fill_style(
+    doc: &mut GeometryDocument,
+    path_start: u32,
+    fill_style: GeometryFillStyle,
+) {
+    for path in &mut doc.paths[path_start as usize..] {
+        path.style.fill = fill_style;
+    }
+}
+
+fn map_fill_desc(fill_desc: FillDesc) -> GeometryFillStyle {
+    GeometryFillStyle {
+        property: map_fill_property(fill_desc.fill_property),
+        rule: FillRule::NonZero,
+        hatch: match fill_desc.fill_property {
+            FillProperty::Hatch | FillProperty::Mesh => Some(GeometryHatchStyle {
+                angle1_degrees: fill_desc.angle1,
+                angle2_degrees: fill_desc.angle2,
+            }),
+            _ => None,
+        },
+    }
+}
+
+fn even_odd_fill_style(mut fill_style: GeometryFillStyle) -> GeometryFillStyle {
+    fill_style.rule = FillRule::EvenOdd;
+    fill_style
+}
+
+fn map_fill_property(fill_property: FillProperty) -> GeometryFillProperty {
+    match fill_property {
+        FillProperty::Fill => GeometryFillProperty::Solid,
+        FillProperty::Hollow => GeometryFillProperty::Hollow,
+        FillProperty::Void => GeometryFillProperty::Void,
+        FillProperty::Hatch => GeometryFillProperty::Hatch,
+        FillProperty::Mesh => GeometryFillProperty::Mesh,
     }
 }
 
@@ -2380,6 +2562,31 @@ fn polygon_contour(polygon: &ipc2581::types::Polygon, transform: Affine2) -> (BB
     }
     cmds.push(PathCmd::close());
     (bbox, cmds)
+}
+
+fn push_contour_path(
+    doc: &mut GeometryDocument,
+    contour: &ipc2581::types::Contour,
+    transform: Affine2,
+) {
+    let mut contours = Vec::new();
+    push_contour_payloads(&mut contours, contour, transform);
+    doc.push_compound_path(
+        GeometryPath::filled(FillRule::EvenOdd, BBox::empty()),
+        contours,
+    );
+}
+
+fn push_contour_payloads(
+    out: &mut Vec<(BBox, Vec<PathCmd>)>,
+    contour: &ipc2581::types::Contour,
+    transform: Affine2,
+) {
+    out.reserve(1 + contour.cutouts.len());
+    out.push(polygon_contour(&contour.polygon, transform));
+    for cutout in &contour.cutouts {
+        out.push(polygon_contour(cutout, transform));
+    }
 }
 
 fn push_closed_points_path(
@@ -2845,6 +3052,14 @@ fn map_line_cap(line_end: LineEnd) -> LineCap {
     }
 }
 
+fn map_line_pattern(line_property: Option<LineProperty>) -> LinePattern {
+    match line_property {
+        Some(LineProperty::Dashed) => LinePattern::Dashed,
+        Some(LineProperty::Dotted) => LinePattern::Dotted,
+        Some(LineProperty::Solid) | None => LinePattern::Solid,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2941,12 +3156,12 @@ mod tests {
         );
 
         assert_eq!(doc.paths.len(), 5);
-        assert_eq!(doc.paths[0].fill_rule, FillRule::EvenOdd);
+        assert_eq!(doc.paths[0].style.fill.rule, FillRule::EvenOdd);
         assert_eq!(doc.paths[0].contour_count, 2);
         assert_eq!(doc.paths[1].contour_count, 2);
         assert_eq!(doc.paths[2].contour_count, 2);
-        assert_eq!(doc.paths[3].fill_rule, FillRule::NonZero);
-        assert_eq!(doc.paths[4].fill_rule, FillRule::NonZero);
+        assert_eq!(doc.paths[3].style.fill.rule, FillRule::NonZero);
+        assert_eq!(doc.paths[4].style.fill.rule, FillRule::NonZero);
         assert_eq!(doc.paths[0].bbox.min, Point::new(-4.25, -4.25));
         assert_eq!(doc.paths[0].bbox.max, Point::new(4.25, 4.25));
         assert_eq!(doc.paths[1].bbox.min, Point::new(-3.25, -3.25));
@@ -2993,12 +3208,15 @@ mod tests {
 
         let feature = push_stroked_trace(
             &mut doc,
-            None,
-            GeometryPolarity::Positive,
-            SourceRef::default(),
+            StrokedFeatureStyle {
+                net: None,
+                polarity: GeometryPolarity::Positive,
+                source: SourceRef::default(),
+                width: 0.2,
+                line_cap: LineCap::Round,
+                line_pattern: LinePattern::Solid,
+            },
             &trace,
-            0.2,
-            LineCap::Round,
         );
 
         assert_eq!(feature.path_count, 1);
@@ -3083,7 +3301,7 @@ mod tests {
         assert_eq!(doc.paths.len(), 1);
         assert!(doc.paths[0].flags.stroked);
         assert!(!doc.paths[0].flags.filled);
-        assert_eq!(doc.paths[0].stroke_width, 0.1);
+        assert_eq!(doc.paths[0].style.stroke.width, 0.1);
         assert_eq!(doc.paths[0].bbox.min, Point::new(-0.7, -0.7));
         assert_eq!(doc.paths[0].bbox.max, Point::new(0.7, 0.7));
     }
@@ -3144,8 +3362,66 @@ mod tests {
         assert_eq!(paint, PrimitivePaint::Fill);
         assert_eq!(doc.paths.len(), 2);
         assert!(doc.paths.iter().all(|path| path.flags.stroked));
-        assert!(doc.paths.iter().all(|path| path.stroke_width == 0.15));
+        assert!(doc.paths.iter().all(|path| path.style.stroke.width == 0.15));
         assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+    }
+
+    #[test]
+    fn lowers_inline_user_contour_as_compound_path_at_feature_location() {
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
+        )
+        .unwrap();
+        let context = ExtractContext {
+            ipc: &ipc,
+            padstacks: HashMap::new(),
+            line_descs: HashMap::new(),
+            standard_primitives: HashMap::new(),
+            user_primitives: HashMap::new(),
+        };
+        let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
+            primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
+                shapes: vec![
+                    ipc2581::types::UserShape {
+                        shape: UserShapeType::Contour(ipc2581::types::Contour {
+                            polygon: rect_polygon(0.0, 0.0, 2.0, 2.0),
+                            cutouts: Vec::new(),
+                        }),
+                        line_desc: None,
+                        line_desc_ref: None,
+                        fill_desc: None,
+                    },
+                    ipc2581::types::UserShape {
+                        shape: UserShapeType::Contour(ipc2581::types::Contour {
+                            polygon: rect_polygon(0.5, 0.5, 1.5, 1.5),
+                            cutouts: Vec::new(),
+                        }),
+                        line_desc: None,
+                        line_desc_ref: None,
+                        fill_desc: None,
+                    },
+                ],
+            }),
+            x: 10.0,
+            y: 20.0,
+        };
+        let mut doc = GeometryDocument::new();
+
+        let feature = extract_inline_user_primitive(
+            &context,
+            None,
+            GeometryPolarity::Positive,
+            SourceRef::default(),
+            &primitive,
+            &mut doc,
+        )
+        .expect("inline user primitive should lower");
+
+        assert_eq!(feature.path_count, 1);
+        assert_eq!(doc.paths[0].style.fill.rule, FillRule::EvenOdd);
+        assert_eq!(doc.paths[0].contour_count, 2);
+        assert_eq!(doc.paths[0].bbox.min, Point::new(10.0, 20.0));
+        assert_eq!(doc.paths[0].bbox.max, Point::new(12.0, 22.0));
     }
 
     #[test]
@@ -3171,6 +3447,26 @@ mod tests {
         assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
     }
 
+    fn rect_polygon(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ipc2581::types::Polygon {
+        ipc2581::types::Polygon {
+            begin: ipc2581::types::Point { x: min_x, y: min_y },
+            steps: vec![
+                PolyStep::Segment(ipc2581::types::PolyStepSegment {
+                    point: ipc2581::types::Point { x: max_x, y: min_y },
+                }),
+                PolyStep::Segment(ipc2581::types::PolyStepSegment {
+                    point: ipc2581::types::Point { x: max_x, y: max_y },
+                }),
+                PolyStep::Segment(ipc2581::types::PolyStepSegment {
+                    point: ipc2581::types::Point { x: min_x, y: max_y },
+                }),
+                PolyStep::Segment(ipc2581::types::PolyStepSegment {
+                    point: ipc2581::types::Point { x: min_x, y: min_y },
+                }),
+            ],
+        }
+    }
+
     #[test]
     fn lowers_thermal_as_spokes_without_redundant_ring() {
         let mut doc = GeometryDocument::new();
@@ -3181,7 +3477,7 @@ mod tests {
         assert!(
             doc.paths
                 .iter()
-                .all(|path| path.fill_rule == FillRule::NonZero && path.contour_count == 1)
+                .all(|path| path.style.fill.rule == FillRule::NonZero && path.contour_count == 1)
         );
         assert_eq!(doc.paths[0].bbox.min, Point::new(3.0, -1.0));
         assert_eq!(doc.paths[0].bbox.max, Point::new(5.0, 1.0));
@@ -3194,7 +3490,7 @@ mod tests {
         push_thermal_path(&mut doc, Affine2::identity(), 10.0, 6.0, 2.0, 0, 0.0);
 
         assert_eq!(doc.paths.len(), 1);
-        assert_eq!(doc.paths[0].fill_rule, FillRule::EvenOdd);
+        assert_eq!(doc.paths[0].style.fill.rule, FillRule::EvenOdd);
         assert_eq!(doc.paths[0].contour_count, 2);
     }
 
@@ -3419,7 +3715,7 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
             .expect("synthetic panel fixture should parse");
         let mut doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
-        pcb_ir::dialects::ipc::process::process_document(&mut doc);
+        pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut doc);
 
         let layer = &doc.layers[0];
         let traces = doc.features
@@ -3528,6 +3824,54 @@ mod tests {
         assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
     }
 
+    #[test]
+    fn rotated_slot_cavity_xform_orients_route_slot() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="F.Cu_B.Cu_1"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu_B.Cu_1" layerFunction="ROUT" side="ALL">
+        <Span fromLayer="F.Cu" toLayer="B.Cu"/>
+      </Layer>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="F.Cu_B.Cu_1">
+          <Set>
+            <SlotCavity name="SLOT1" platingStatus="PLATED" plusTol="0" minusTol="0">
+              <Location x="10" y="20"/>
+              <Xform rotation="90"/>
+              <Oval width="1.70" height="0.60"/>
+            </SlotCavity>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let doc = extract_layer(&ipc, "F.Cu_B.Cu_1").unwrap();
+        assert_eq!(doc.features.len(), 1);
+
+        let slot = &doc.features[0];
+        assert_eq!(slot.kind, FeatureKind::Slot);
+        assert!((slot.rotation_degrees - 90.0).abs() < 1e-9);
+        assert!(
+            slot.bbox.height() > slot.bbox.width(),
+            "expected rotated slot to be vertical, got bbox {:?}",
+            slot.bbox
+        );
+        assert!((slot.bbox.width() - 0.60).abs() < 1e-6);
+        assert!((slot.bbox.height() - 1.70).abs() < 1e-6);
+    }
+
     fn test_layer(
         interner: &mut ipc2581::Interner,
         name: &str,
@@ -3555,6 +3899,7 @@ mod tests {
             })),
             plating_status: PlatingStatus::NonPlated,
             z_axis_dim,
+            xform: None,
             x: 0.0,
             y: 0.0,
         }

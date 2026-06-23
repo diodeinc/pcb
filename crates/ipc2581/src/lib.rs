@@ -344,7 +344,7 @@ mod tests {
 
         let set = &ecad.cad_data.steps[0].layer_features[0].sets[0];
         assert_eq!(doc.resolve(set.spec_refs[0]), "VCut_1");
-        assert_eq!(set.fiducials.len(), 1);
+        assert_eq!(set.fiducials().count(), 1);
         assert!(matches!(
             set.features[0],
             ecad::SetFeature::Fiducial(ecad::Fiducial {
@@ -404,13 +404,17 @@ mod tests {
         assert_eq!(set.features.len(), 4);
         assert!(matches!(set.features[0], ecad::SetFeature::Trace(_)));
         assert!(matches!(set.features[1], ecad::SetFeature::Polygon(_)));
-        assert!(matches!(set.features[2], ecad::SetFeature::Line(_)));
+        assert!(matches!(
+            set.features[2],
+            ecad::SetFeature::UserPrimitive(_)
+        ));
         assert!(matches!(set.features[3], ecad::SetFeature::Trace(_)));
 
-        assert_eq!(set.traces.len(), 2);
-        assert!(matches!(set.traces[1].steps[0], PolyStep::Curve(_)));
-        assert_eq!(set.polygons.len(), 1);
-        assert_eq!(set.lines.len(), 1);
+        let traces = set.traces().collect::<Vec<_>>();
+        assert_eq!(traces.len(), 2);
+        assert!(matches!(traces[1].steps[0], PolyStep::Curve(_)));
+        assert_eq!(set.polygons().count(), 1);
+        assert_eq!(set.lines().count(), 0);
     }
 
     #[test]
@@ -451,8 +455,8 @@ mod tests {
         };
         assert_eq!(polyline.begin, Point { x: 11.0, y: 20.0 });
         assert!(matches!(polyline.steps[0], PolyStep::Curve(_)));
-        assert_eq!(set.polylines.len(), 1);
-        assert!(set.lines.is_empty());
+        assert_eq!(set.polylines().count(), 1);
+        assert_eq!(set.lines().count(), 0);
     }
 
     #[test]
@@ -497,16 +501,26 @@ mod tests {
         let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
         let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
 
-        assert_eq!(set.polygons.len(), 2);
-        assert_eq!(set.polygons[0].begin, Point { x: 10.0, y: 20.0 });
+        let polygons = set.polygons().collect::<Vec<_>>();
+        assert_eq!(polygons.len(), 1);
+        assert_eq!(polygons[0].begin, Point { x: 10.0, y: 20.0 });
         assert!(matches!(
-            set.polygons[0].steps[1],
+            polygons[0].steps[1],
             PolyStep::Curve(PolyStepCurve {
                 center: Point { x: 10.0, y: 20.0 },
                 ..
             })
         ));
-        assert_eq!(set.polygons[1].begin, Point { x: 12.0, y: 20.0 });
+        let ecad::SetFeature::UserPrimitive(user_primitive) = &set.features[1] else {
+            panic!("expected inline user primitive");
+        };
+        assert_eq!(user_primitive.x, 10.0);
+        assert_eq!(user_primitive.y, 20.0);
+        let UserPrimitive::UserSpecial(user_special) = &user_primitive.primitive;
+        let UserShapeType::Contour(contour) = &user_special.shapes[0].shape else {
+            panic!("expected contour");
+        };
+        assert_eq!(contour.polygon.begin, Point { x: 2.0, y: 0.0 });
     }
 
     #[test]
@@ -526,6 +540,11 @@ mod tests {
               <LineDescRef id="fine"/>
               <FillDesc fillProperty="HOLLOW"/>
             </Polygon>
+            <Cutout>
+              <PolyBegin x="0.25" y="0.25"/>
+              <PolyStepSegment x="0.75" y="0.25"/>
+              <PolyStepSegment x="0.25" y="0.25"/>
+            </Cutout>
           </Contour>
           <Line startX="0" startY="0" endX="1" endY="0">
             <LineDescRef id="fine"/>
@@ -546,10 +565,10 @@ mod tests {
         let UserPrimitive::UserSpecial(user_special) = primitive;
 
         assert_eq!(user_special.shapes.len(), 3);
-        assert!(matches!(
-            user_special.shapes[0].shape,
-            UserShapeType::Polygon(_)
-        ));
+        let UserShapeType::Contour(contour) = &user_special.shapes[0].shape else {
+            panic!("expected contour");
+        };
+        assert_eq!(contour.cutouts.len(), 1);
         assert_eq!(
             user_special.shapes[0]
                 .line_desc_ref

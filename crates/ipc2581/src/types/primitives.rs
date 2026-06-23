@@ -318,6 +318,7 @@ pub enum UserShapeType {
     RectCenter(RectCenter),
     Oval(Oval),
     RectRound(RectRound),
+    Contour(Contour),
     Polygon(Polygon),
     Line(Line),
     Arc(Arc),

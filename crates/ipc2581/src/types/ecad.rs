@@ -1,4 +1,4 @@
-use super::Units;
+use super::{Units, UserPrimitive};
 use crate::Symbol;
 use std::collections::HashMap;
 
@@ -282,15 +282,65 @@ pub struct FeatureSet {
     pub polarity: Option<Polarity>,
     pub spec_refs: Vec<Symbol>,
     pub features: Vec<SetFeature>,
-    pub holes: Vec<Hole>,
-    pub slots: Vec<Slot>,
-    pub pads: Vec<Pad>,
-    pub fiducials: Vec<Fiducial>,
-    pub traces: Vec<Trace>,
-    pub polygons: Vec<super::Polygon>, // Copper pours from Features
-    pub lines: Vec<Line>,              // Trace lines from Features > UserSpecial > Line
-    pub polylines: Vec<FeaturePolyline>,
     pub nonstandard_attributes: Vec<NonstandardAttribute>,
+}
+
+impl FeatureSet {
+    pub fn holes(&self) -> impl Iterator<Item = &Hole> {
+        self.features.iter().filter_map(|feature| match feature {
+            SetFeature::Hole(hole) => Some(hole),
+            _ => None,
+        })
+    }
+
+    pub fn slots(&self) -> impl Iterator<Item = &Slot> {
+        self.features.iter().filter_map(|feature| match feature {
+            SetFeature::Slot(slot) => Some(slot),
+            _ => None,
+        })
+    }
+
+    pub fn pads(&self) -> impl Iterator<Item = &Pad> {
+        self.features.iter().filter_map(|feature| match feature {
+            SetFeature::Pad(pad) => Some(pad),
+            _ => None,
+        })
+    }
+
+    pub fn fiducials(&self) -> impl Iterator<Item = &Fiducial> {
+        self.features.iter().filter_map(|feature| match feature {
+            SetFeature::Fiducial(fiducial) => Some(fiducial),
+            _ => None,
+        })
+    }
+
+    pub fn traces(&self) -> impl Iterator<Item = &Trace> {
+        self.features.iter().filter_map(|feature| match feature {
+            SetFeature::Trace(trace) => Some(trace),
+            _ => None,
+        })
+    }
+
+    pub fn polygons(&self) -> impl Iterator<Item = &super::Polygon> {
+        self.features.iter().filter_map(|feature| match feature {
+            SetFeature::Polygon(polygon) => Some(polygon),
+            _ => None,
+        })
+    }
+
+    pub fn lines(&self) -> impl Iterator<Item = &Line> {
+        self.features.iter().filter_map(|feature| match feature {
+            SetFeature::Line(line) => Some(line),
+            _ => None,
+        })
+    }
+
+    pub fn polylines(&self) -> impl Iterator<Item = &FeaturePolyline> {
+        self.features.iter().filter_map(|feature| match feature {
+            SetFeature::Polyline(polyline) => Some(polyline),
+            _ => None,
+        })
+    }
 }
 
 /// Geometry-bearing children of a Set in source document order.
@@ -301,12 +351,21 @@ pub enum SetFeature {
     Pad(Pad),
     Fiducial(Fiducial),
     Trace(Trace),
+    UserPrimitive(FeatureUserPrimitive),
     Polygon(super::Polygon),
     Line(Line),
     Arc(FeatureArc),
     Polyline(FeaturePolyline),
     StandardPrimitiveRef(FeaturePrimitiveRef),
     UserPrimitiveRef(FeaturePrimitiveRef),
+}
+
+/// Inline user primitive feature carried directly by a Features block.
+#[derive(Debug, Clone)]
+pub struct FeatureUserPrimitive {
+    pub primitive: UserPrimitive,
+    pub x: f64,
+    pub y: f64,
 }
 
 /// IPC fiducial and panel mark feature carried by a Set.
@@ -413,6 +472,7 @@ pub struct Slot {
     pub shape: SlotShape,
     pub plating_status: PlatingStatus,
     pub z_axis_dim: bool,
+    pub xform: Option<super::Xform>,
     pub x: f64,
     pub y: f64,
 }

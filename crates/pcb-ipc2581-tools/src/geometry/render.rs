@@ -43,7 +43,7 @@ pub fn layer_has_native_content(geometry: &GeometryDocument) -> bool {
     native.features = features;
     native.layers[0].feature_start = 0;
     native.layers[0].feature_count = native.features.len() as u32;
-    pcb_ir::dialects::ipc::process::process_document(&mut native);
+    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native);
     layer_has_content(&native)
 }
 
