@@ -19,7 +19,7 @@ Ground = builtin.net_type(
     voltage=field(Voltage, default=Voltage("0V")),
 )
 
-NotConnected = builtin.net_type("NotConnected")
+NotConnected = builtin.not_connected
 
 Analog = builtin.net_type("Analog")
 Pwm = builtin.net_type("Pwm")

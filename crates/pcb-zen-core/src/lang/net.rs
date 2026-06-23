@@ -34,62 +34,53 @@ use super::validation::validate_identifier_name;
 
 pub type NetId = u64;
 
-// Net kind semantics:
-// - Net values have a current runtime kind used for type checks and casts.
-// - Each registration/port observation merges that kind into the net id's canonical kind.
-// - Canonical kind merge is monotonic: empty accepts any kind, NotConnected upgrades to
-//   concrete, and concrete kinds stay concrete.
-// - Only NotConnected may remain unnamed; all other canonical kinds need a name.
-fn is_concrete_net_type_name(kind: &str) -> bool {
-    !kind.is_empty() && kind != "NotConnected"
+pub(crate) fn compatible_net_type_view<'a>(actual: &str, expected: &'a str) -> Option<&'a str> {
+    (actual != expected && expected == "Net").then_some(expected)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NetTypeCompatibility<'a> {
-    Exact,
-    View(&'a str),
-    Incompatible,
-}
-
-pub(crate) fn net_type_compatibility<'a>(
-    actual: &'a str,
-    expected: &'a str,
-) -> NetTypeCompatibility<'a> {
-    match (actual, expected) {
-        (a, e) if a == e => NetTypeCompatibility::Exact,
-        ("NotConnected", expected) => NetTypeCompatibility::View(expected),
-        (_, "Net") => NetTypeCompatibility::View("Net"),
-        _ => NetTypeCompatibility::Incompatible,
+pub(crate) fn net_type_name_from_value<'v>(value: Value<'v>) -> Option<&'v str> {
+    if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
+        Some(net.net_type_name())
+    } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+        Some(net.net_type_name())
+    } else {
+        None
     }
 }
 
-pub(crate) fn net_type_requires_name(kind: &str) -> bool {
+pub(crate) fn net_matches_type_name(value: Value<'_>, expected_type_name: &str) -> Option<bool> {
+    if let Some(net) = value.downcast_ref::<NetValue<'_>>() {
+        Some(net.is_open() || net.net_type_name() == expected_type_name)
+    } else {
+        value
+            .downcast_ref::<FrozenNetValue>()
+            .map(|net| net.is_open() || net.net_type_name() == expected_type_name)
+    }
+}
+
+pub(crate) fn net_kind_requires_name(kind: &str) -> bool {
     kind != "NotConnected"
 }
 
-pub(crate) fn merge_canonical_net_type_name(current: &mut Option<String>, observed: &str) {
-    if current.is_none()
-        || (current.as_deref() == Some("NotConnected") && is_concrete_net_type_name(observed))
-    {
+pub(crate) fn merge_canonical_net_kind_name(current: &mut Option<String>, observed: &str) {
+    if current.is_none() {
         *current = Some(observed.to_string());
     }
 }
 
 #[cfg(test)]
-mod net_type_merge_tests {
-    use super::{NetTypeCompatibility, merge_canonical_net_type_name, net_type_compatibility};
+mod net_kind_merge_tests {
+    use super::{compatible_net_type_view, merge_canonical_net_kind_name};
 
     #[test]
-    fn merge_canonical_net_type_name_promotes_only_empty_or_not_connected() {
+    fn merge_canonical_net_kind_name_only_fills_empty() {
         let mut kind = None;
         for (observed, expected) in [
             ("NotConnected", Some("NotConnected")),
-            ("Net", Some("Net")),
-            ("Power", Some("Net")),
-            ("Net", Some("Net")),
-            ("NotConnected", Some("Net")),
+            ("Net", Some("NotConnected")),
+            ("Power", Some("NotConnected")),
         ] {
-            merge_canonical_net_type_name(&mut kind, observed);
+            merge_canonical_net_kind_name(&mut kind, observed);
             assert_eq!(kind.as_deref(), expected);
         }
 
@@ -99,24 +90,21 @@ mod net_type_merge_tests {
             ("NotConnected", Some("Power")),
             ("Net", Some("Power")),
         ] {
-            merge_canonical_net_type_name(&mut kind, observed);
+            merge_canonical_net_kind_name(&mut kind, observed);
             assert_eq!(kind.as_deref(), expected);
         }
     }
 
     #[test]
-    fn net_type_compatibility_is_not_canonical_promotion() {
-        for (actual, expected, compatibility) in [
-            ("NotConnected", "Power", NetTypeCompatibility::View("Power")),
-            ("NotConnected", "Net", NetTypeCompatibility::View("Net")),
-            ("Power", "Net", NetTypeCompatibility::View("Net")),
-            ("Ground", "Net", NetTypeCompatibility::View("Net")),
-            ("Power", "Power", NetTypeCompatibility::Exact),
-            ("Net", "Power", NetTypeCompatibility::Incompatible),
-            ("Power", "NotConnected", NetTypeCompatibility::Incompatible),
-            ("Ground", "Power", NetTypeCompatibility::Incompatible),
+    fn compatible_net_type_view_is_not_canonical_promotion() {
+        for (actual, expected, view) in [
+            ("Power", "Net", Some("Net")),
+            ("Ground", "Net", Some("Net")),
+            ("Power", "Power", None),
+            ("Net", "Power", None),
+            ("Ground", "Power", None),
         ] {
-            assert_eq!(net_type_compatibility(actual, expected), compatibility);
+            assert_eq!(compatible_net_type_view(actual, expected), view);
         }
     }
 }
@@ -155,6 +143,37 @@ fn is_unset_builtin_optional_net_field<'v>(
 #[cfg(test)]
 pub fn reset_net_id_counter() {
     NEXT_NET_ID.store(1, Ordering::Relaxed);
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    ProvidesStaticType,
+    Allocative,
+    Trace,
+    Freeze,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ConnectionIntent {
+    #[default]
+    Connected,
+    Open,
+}
+
+impl ConnectionIntent {
+    fn is_connected(&self) -> bool {
+        *self == Self::Connected
+    }
+
+    fn is_open(&self) -> bool {
+        *self == Self::Open
+    }
 }
 
 #[derive(
@@ -209,6 +228,9 @@ pub struct NetValueGen<V> {
     pub(crate) declaration_span: Option<starlark::codemap::ResolvedSpan>,
     /// The type name (e.g., "Net", "Power", "Ground")
     pub(crate) type_name: String,
+    /// Whether this net is intended to be connected or intentionally left open.
+    #[serde(default, skip_serializing_if = "ConnectionIntent::is_connected")]
+    pub(crate) connection_intent: ConnectionIntent,
     /// Properties (including symbol, voltage, impedance, etc. if provided)
     pub(crate) properties: SmallMap<String, V>,
 }
@@ -330,7 +352,13 @@ impl<V> NetValueGen<V> {
 }
 
 impl<'v, V: ValueLike<'v>> NetValueGen<V> {
-    fn alloc_clone(&self, heap: Heap<'v>, net_id: NetId, type_name: String) -> Value<'v> {
+    fn alloc_clone(
+        &self,
+        heap: Heap<'v>,
+        net_id: NetId,
+        type_name: String,
+        connection_intent: ConnectionIntent,
+    ) -> Value<'v> {
         let properties: SmallMap<String, Value<'v>> = self
             .properties
             .iter()
@@ -348,6 +376,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             declaration_path: self.declaration_path.clone(),
             declaration_span: self.declaration_span,
             type_name,
+            connection_intent,
             properties,
         })
     }
@@ -393,6 +422,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             declaration_path: String::new(),
             declaration_span: None,
             type_name: "Net".to_string(),
+            connection_intent: ConnectionIntent::Connected,
             properties,
         }
     }
@@ -421,6 +451,19 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Returns the type name of this net
     pub fn net_type_name(&self) -> &str {
         &self.type_name
+    }
+
+    /// Returns the serialized/netlist kind for this net.
+    pub fn net_kind_name(&self) -> &str {
+        if self.connection_intent.is_open() {
+            "NotConnected"
+        } else {
+            &self.type_name
+        }
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.connection_intent.is_open()
     }
 
     /// Return the properties map of this net instance.
@@ -464,12 +507,32 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
     /// Create a new net with the same fields but a fresh net ID.
     /// This avoids deep copying - properties are shared via Value references.
     pub fn with_new_id(&self, heap: Heap<'v>) -> Value<'v> {
-        self.alloc_clone(heap, generate_net_id(), self.type_name.clone())
+        self.alloc_clone(
+            heap,
+            generate_net_id(),
+            self.type_name.clone(),
+            self.connection_intent,
+        )
     }
 
     /// Create a typed compatibility view with the same identity and properties.
     pub fn with_net_type(&self, new_type_name: &str, heap: Heap<'v>) -> Value<'v> {
-        self.alloc_clone(heap, self.net_id, new_type_name.to_string())
+        self.alloc_clone(
+            heap,
+            self.net_id,
+            new_type_name.to_string(),
+            self.connection_intent,
+        )
+    }
+
+    /// Materialize this net on the current heap without changing its type or intent.
+    pub fn to_current_heap(&self, heap: Heap<'v>) -> Value<'v> {
+        self.alloc_clone(
+            heap,
+            self.net_id,
+            self.type_name.clone(),
+            self.connection_intent,
+        )
     }
 
     /// Create a new net with identical runtime identity but updated declaration metadata.
@@ -496,6 +559,7 @@ impl<'v, V: ValueLike<'v>> NetValueGen<V> {
             declaration_path: declaration_path.into(),
             declaration_span,
             type_name: self.type_name.clone(),
+            connection_intent: self.connection_intent,
             properties,
         })
     }
@@ -522,6 +586,80 @@ fn builtin_net_methods(methods: &mut MethodsBuilder) {
     fn r#type<'v>(this: &NetValue<'v>) -> starlark::Result<String> {
         Ok(this.net_type_name().to_string())
     }
+}
+
+pub(crate) fn instantiate_not_connected<'v>(
+    args: &Arguments<'v, '_>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> starlark::Result<Value<'v>> {
+    let mut ignored_name = None;
+    let positional_values: Vec<Value<'v>> = args.positions(eval.heap())?.collect();
+    match positional_values.as_slice() {
+        [] => {}
+        [value] => {
+            ignored_name = Some(value.unpack_str().ok_or_else(|| {
+                starlark::Error::new_other(anyhow::anyhow!(
+                    "NotConnected() expects an optional name string, got {}",
+                    value.get_type()
+                ))
+            })?);
+        }
+        _ => {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "NotConnected() accepts at most one positional argument"
+            )));
+        }
+    }
+
+    for (arg_name, value) in args.names_map()? {
+        match arg_name.as_str() {
+            "name" => {
+                ignored_name = Some(value.unpack_str().ok_or_else(|| {
+                    starlark::Error::new_other(anyhow::anyhow!(
+                        "NotConnected() `name` must be string, got {}",
+                        value.get_type()
+                    ))
+                })?);
+            }
+            other => {
+                return Err(starlark::Error::new_other(anyhow::anyhow!(
+                    "NotConnected() got unexpected named argument `{other}`"
+                )));
+            }
+        }
+    }
+
+    let (declaration_path, declaration_span) = eval
+        .call_stack_top_location()
+        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+
+    if ignored_name.is_some() {
+        eval.add_diagnostic(
+            crate::Diagnostic::categorized(
+                &declaration_path,
+                "NotConnected does not support names; name ignored",
+                "net.not_connected_name_ignored",
+                starlark::errors::EvalSeverity::Warning,
+            )
+            .with_span(declaration_span),
+        );
+    }
+
+    Ok(eval.heap().alloc(NetValue {
+        net_id: generate_net_id(),
+        name: String::new(),
+        template_name: None,
+        original_name: None,
+        assignment_inferable: false,
+        was_bound: OnceLock::new(),
+        inferred_name: OnceLock::new(),
+        declaration_path,
+        declaration_span,
+        type_name: "Net".to_string(),
+        connection_intent: ConnectionIntent::Open,
+        properties: SmallMap::new(),
+    }))
 }
 
 /// A callable type constructor for creating typed nets
@@ -613,9 +751,16 @@ impl<'v> NetType<'v> {
 }
 
 #[derive(Clone, Copy)]
+pub(crate) enum NetInstantiateIntent {
+    Connected,
+    PreserveBase,
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct NetInstantiateOptions {
     pub(crate) should_register: bool,
     pub(crate) assignment_inferable: bool,
+    pub(crate) intent: NetInstantiateIntent,
 }
 
 impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
@@ -633,7 +778,14 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
             .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
 
-        let source_names_enabled = self.type_name != "NotConnected";
+        let base_intent = base_net
+            .map(|net| net.connection_intent)
+            .unwrap_or(ConnectionIntent::Connected);
+        let connection_intent = match options.intent {
+            NetInstantiateIntent::Connected => ConnectionIntent::Connected,
+            NetInstantiateIntent::PreserveBase => base_intent,
+        };
+        let source_names_enabled = !connection_intent.is_open();
         if !source_names_enabled && explicit_name.is_some() {
             eval.add_diagnostic(
                 crate::Diagnostic::categorized(
@@ -730,7 +882,12 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
                 .extra_value()
                 .and_then(|e| e.downcast_ref::<ContextValue>())
                 .map(|ctx| {
-                    ctx.register_net(net_id, &net_name, assignment_inferable, &self.type_name)
+                    let kind = if connection_intent.is_open() {
+                        "NotConnected"
+                    } else {
+                        &self.type_name
+                    };
+                    ctx.register_net(net_id, &net_name, assignment_inferable, kind)
                 })
                 .transpose()
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
@@ -750,6 +907,7 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             declaration_path,
             declaration_span,
             type_name: self.type_name.clone(),
+            connection_intent,
             properties,
         }))
     }
@@ -923,28 +1081,28 @@ pub(crate) fn instantiate_generated_net<'v>(
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
     if let Some(net_type) = spec.downcast_ref::<NetType<'v>>() {
-        let generated_name = (net_type.type_name != "NotConnected").then_some(generated_name);
         return net_type.instantiate(
             None,
-            generated_name,
+            Some(generated_name),
             SmallMap::new(),
             NetInstantiateOptions {
                 should_register,
                 assignment_inferable,
+                intent: NetInstantiateIntent::Connected,
             },
             eval,
         );
     }
 
     if let Some(net_type) = spec.downcast_ref::<FrozenNetType>() {
-        let generated_name = (net_type.type_name != "NotConnected").then_some(generated_name);
         return net_type.instantiate(
             None,
-            generated_name,
+            Some(generated_name),
             SmallMap::new(),
             NetInstantiateOptions {
                 should_register,
                 assignment_inferable,
+                intent: NetInstantiateIntent::Connected,
             },
             eval,
         );
@@ -1024,7 +1182,8 @@ where
 
                 // Choose requested name: name= overrides positional string, which overrides base net's original name
                 let explicit_name = name_from_kw.or(name_from_pos);
-                let assignment_inferable = explicit_name.is_none() && base_net.is_none();
+                let assignment_inferable =
+                    explicit_name.is_none() && base_net.is_none_or(NetValue::is_open);
 
                 self.instantiate(
                     base_net,
@@ -1033,6 +1192,7 @@ where
                     NetInstantiateOptions {
                         should_register,
                         assignment_inferable,
+                        intent: NetInstantiateIntent::Connected,
                     },
                     eval,
                 )
@@ -1116,9 +1276,6 @@ struct NetTypeMatcher {
 #[starlark::type_matcher]
 impl TypeMatcher for NetTypeMatcher {
     fn matches(&self, value: Value) -> bool {
-        match NetValue::from_value(value) {
-            Some(net) => net.type_name == self.type_name,
-            None => false,
-        }
+        net_matches_type_name(value, &self.type_name).unwrap_or(false)
     }
 }

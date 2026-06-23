@@ -2,7 +2,7 @@ use crate::lang::r#enum::EnumValue;
 use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::io_direction::IoDirection;
 use crate::lang::module::{ModulePath, find_moved_span};
-use crate::lang::net::{merge_canonical_net_type_name, net_type_requires_name};
+use crate::lang::net::{merge_canonical_net_kind_name, net_kind_requires_name};
 use crate::lang::part::PartValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
@@ -38,8 +38,8 @@ struct NetInfo {
     kind: Option<String>,
 }
 
-fn net_kind_requires_name(kind: Option<&str>) -> bool {
-    kind.is_none_or(net_type_requires_name)
+fn net_info_requires_name(kind: Option<&str>) -> bool {
+    kind.is_none_or(net_kind_requires_name)
 }
 
 /// Convert a [`FrozenModuleValue`] to a [`Schematic`].
@@ -273,7 +273,7 @@ impl ModuleConverter {
                 continue;
             }
 
-            if net_kind_requires_name(net_info.kind.as_deref()) && net_info.name.is_none() {
+            if net_info_requires_name(net_info.kind.as_deref()) && net_info.name.is_none() {
                 let mut diagnostics = Diagnostics::default();
                 diagnostics.push(Diagnostic::new(
                     "Net is unnamed",
@@ -641,7 +641,7 @@ impl ModuleConverter {
 
             let info = self.net_info_mut(*net_id);
             if let Some(kind) = introduced_net.kind.as_deref() {
-                merge_canonical_net_type_name(&mut info.kind, kind);
+                merge_canonical_net_kind_name(&mut info.kind, kind);
             }
         }
 
@@ -665,7 +665,7 @@ impl ModuleConverter {
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
         net_info.ports.push(instance_ref.clone());
-        merge_canonical_net_type_name(&mut net_info.kind, net.net_type_name());
+        merge_canonical_net_kind_name(&mut net_info.kind, net.net_kind_name());
 
         // For unnamed NotConnected nets, use a stable port-derived name when possible.
         if net_info.kind.as_deref() == Some("NotConnected")

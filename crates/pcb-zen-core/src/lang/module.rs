@@ -59,7 +59,8 @@ macro_rules! downcast_frozen_module {
 
 use super::net::{
     FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id,
-    merge_canonical_net_type_name, net_type_requires_name,
+    merge_canonical_net_kind_name, net_kind_requires_name, net_matches_type_name,
+    net_type_name_from_value,
 };
 use crate::lang::context::FrozenContextValue;
 use starlark::errors::EvalMessage;
@@ -773,9 +774,9 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         id: NetId,
         base_name: &str,
         assignment_inferable: bool,
-        net_type: &str,
+        kind: &str,
     ) -> anyhow::Result<()> {
-        if !net_type_requires_name(net_type) {
+        if !net_kind_requires_name(kind) {
             return Ok(());
         }
 
@@ -819,7 +820,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
 
         if let Some(existing) = self.introduced_nets.get(&id).cloned() {
             let mut merged_kind = existing.kind.clone();
-            merge_canonical_net_type_name(&mut merged_kind, &observed_kind);
+            merge_canonical_net_kind_name(&mut merged_kind, &observed_kind);
 
             let has_name_evidence = assignment_inferable || !base_name.trim().is_empty();
             if merged_kind == existing.kind && !has_name_evidence {
@@ -860,7 +861,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         }
 
         let mut kind = None;
-        merge_canonical_net_type_name(&mut kind, &observed_kind);
+        merge_canonical_net_kind_name(&mut kind, &observed_kind);
         self.record_net_name(
             id,
             &base_name,
@@ -1356,7 +1357,7 @@ fn validate_type<'v>(
         return Ok(());
     }
 
-    // Net compatibility is handled by typed-view conversion.
+    // Open intent is orthogonal to net type: an open net satisfies any net-shaped type.
     if let Some(expected_type_name) = typ
         .downcast_ref::<NetType>()
         .map(|nt| &nt.type_name)
@@ -1364,25 +1365,17 @@ fn validate_type<'v>(
             typ.downcast_ref::<FrozenNetType>()
                 .map(|fnt| &fnt.type_name)
         })
+        && let Some(matches) = net_matches_type_name(value, expected_type_name)
     {
-        let actual_type_name = value
-            .downcast_ref::<NetValue>()
-            .map(|nv| nv.net_type_name())
-            .or_else(|| {
-                value
-                    .downcast_ref::<FrozenNetValue>()
-                    .map(|fnv| fnv.net_type_name())
-            });
-
-        if let Some(actual_type_name) = actual_type_name {
-            if expected_type_name == actual_type_name {
-                return Ok(());
-            }
-
-            anyhow::bail!(
-                "Input '{name}' has wrong net type: expected {expected_type_name}, got {actual_type_name}"
-            );
+        if matches {
+            return Ok(());
         }
+
+        let actual_type_name =
+            net_type_name_from_value(value).expect("net match implies a net value");
+        anyhow::bail!(
+            "Input '{name}' has wrong net type: expected {expected_type_name}, got {actual_type_name}"
+        );
     }
 
     // InterfaceFactory validation

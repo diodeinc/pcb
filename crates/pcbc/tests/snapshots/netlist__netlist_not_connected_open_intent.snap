@@ -1,0 +1,16 @@
+---
+source: crates/pcbc/tests/netlist.rs
+assertion_line: 431
+expression: output
+---
+{
+  "U1.NC_R1_1": {
+    "id": "<ID>",
+    "kind": "NotConnected",
+    "name": "U1.NC_R1_1",
+    "ports": [
+      "<TEMP_DIR>/boards/NCBoard.zen:<root>.U1.R1.1"
+    ],
+    "properties": {}
+  }
+}

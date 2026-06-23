@@ -176,7 +176,7 @@ See [Packages](/pages/packages) for the complete manifest reference.
 These stdlib symbols are available in every user `.zen` file without `load()`:
 
 - `io`, `input`, `output` — from `@stdlib/io.zen`
-- `Net`, `Power`, `Ground`, `NotConnected` — from `@stdlib/interfaces.zen`
+- `Net`, `Power`, `Ground`, and the `NotConnected()` open-net constructor — from `@stdlib/interfaces.zen`
 - `Board` — from `@stdlib/board_config.zen`
 - `Layout`, `Part` — from `@stdlib/properties.zen`
 
@@ -186,7 +186,7 @@ Local definitions shadow prelude symbols. The prelude does not apply to stdlib m
 
 ### Nets
 
-A `Net` represents an electrical connection between component pins. `Net` is the base net type; specialized types like `Power`, `Ground`, and `NotConnected` add metadata (schematic symbols, voltage) while remaining fundamentally nets.
+A `Net` represents an electrical connection between component pins. `Net` is the base net type; specialized types like `Power` and `Ground` add metadata (schematic symbols, voltage) while remaining fundamentally nets. `NotConnected` is a constructor for an intentionally open net, not a net type.
 
 ```python
 load("@stdlib/units.zen", "Impedance")
@@ -200,14 +200,15 @@ VREF = Net()  # inferred from assignment
 VCC = Power("VCC_3V3", voltage="3.3V")
 GND = Ground()  # inferred from assignment; voltage defaults to 0V
 
-# Intentionally unconnected
+# Intentionally open
 nc = NotConnected()
 ```
 
 `Net(name_or_net=None, voltage=None, impedance=None)` accepts a positional-only
 name string or existing net to cast. `Power` and `Ground` also accept `voltage`.
-Additional net types (`Analog`, `Pwm`, `Gpio`) are available from
-`@stdlib/interfaces.zen`.
+Additional connected net types (`Analog`, `Pwm`, `Gpio`) are available from
+`@stdlib/interfaces.zen`. `NotConnected` is reserved for the open-net
+constructor; `builtin.net_type("NotConnected")` is invalid.
 
 If a net constructor omits `name`, the assigned variable name is used when available:
 
@@ -226,18 +227,24 @@ alias = Net("CLK")  # name is "CLK", not "alias"
 Net()               # error: Net is unnamed
 ```
 
-Regular net names must be unique. Duplicate regular net names are rejected; `NotConnected` nets are exempt.
+Regular net names must be unique. Duplicate regular net names are rejected; open `NotConnected()` nets are exempt.
 `NotConnected()` has no source-level name. If you pass a name, it is ignored with a warning, and downstream tools assign connection-derived names where needed.
 
 Typed net fields validate against their declared field type and use the same
 string coercions as module inputs, so `Power("VCC", voltage="3.3V")` is
 equivalent to `Power("VCC", voltage=Voltage("3.3V"))`.
 
-Net types follow automatic conversion rules across `io()` boundaries:
-`NotConnected` promotes to any type, specialized types demote to `Net`, and
-`Net` does not automatically promote to specialized types. For explicit casting,
-call the target constructor with an existing net as the first positional
-argument: `Power(net, voltage=Voltage("3.3V"))` or `Net(power_net)`.
+Net type annotations on `io()` boundaries check electrical compatibility; they
+do not change whether a provided value is connected or intentionally open.
+`NotConnected()` can satisfy any net-shaped `io()` because it is an open net
+value, and it remains `NotConnected` in the emitted netlist. Specialized
+connected types can be viewed as `Net`; plain connected `Net` values do not
+automatically promote to specialized types.
+
+Explicit constructors assert the resulting connected net type. For example,
+`Net(NotConnected())` constructs a regular connected `Net`, while passing
+`NotConnected()` directly to `io(Net)` keeps it open. `NotConnected` itself is
+not valid where a type is expected, such as `io(NotConnected)`.
 
 ### Interfaces
 

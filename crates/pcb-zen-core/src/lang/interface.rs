@@ -159,7 +159,7 @@ fn clone_net_template<'v>(
                     cloned_net.id(),
                     &net_name,
                     prefix.assignment_inferable,
-                    cloned_net.net_type_name(),
+                    cloned_net.net_kind_name(),
                 )
             })
             .transpose()?
@@ -182,6 +182,7 @@ fn clone_net_template<'v>(
             .to_string(),
         declaration_span: cloned_net.declaration_span(),
         type_name: cloned_net.type_name.clone(),
+        connection_intent: cloned_net.connection_intent,
         properties: cloned_net.properties().clone(),
     });
     cloned_nets.insert(source_id, cloned_net);
