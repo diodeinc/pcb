@@ -10,6 +10,7 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 
+use crate::accessors::IpcAccessor;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
@@ -151,6 +152,19 @@ pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -
     let updated_xml = create_board_array_xml(&content, options)?;
     file_utils::save_ipc_file(output, &updated_xml)?;
     eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+    Ok(())
+}
+
+pub fn execute_svg(input: &Path, output: &Path) -> Result<()> {
+    let content = file_utils::load_ipc_file(input)?;
+    let ipc = Ipc2581::parse(&content)?;
+    let accessor = IpcAccessor::new(&ipc);
+    let svg = crate::panel::render_board_array_overview_svg(&accessor)
+        .context("IPC-2581 file has no renderable board array overview")?;
+
+    std::fs::write(output, svg)
+        .with_context(|| format!("failed to write board array SVG to {}", output.display()))?;
+    println!("✓ Board array SVG exported to {}", output.display());
     Ok(())
 }
 
@@ -937,6 +951,34 @@ mod tests {
         assert!(vcut.contents.contains("%TF.Part,Array*%"));
         assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
         assert_eq!(vcut.contents.matches("D01*").count(), 24);
+    }
+
+    #[test]
+    fn exports_board_array_overview_svg_file() {
+        let xml = create_board_array_xml(
+            board_fixture_mm(),
+            &BoardArrayCreateOptions {
+                columns: 6,
+                rows: 6,
+                column_spacing_mm: 5.0,
+                row_spacing_mm: 5.0,
+                edge_rail_width_mm: 5.0,
+            },
+        )
+        .unwrap();
+        let temp_dir =
+            std::env::temp_dir().join(format!("pcb-ipc-panel-svg-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let input = temp_dir.join("panel.ipc2581.xml");
+        let output = temp_dir.join("panel.svg");
+        std::fs::write(&input, xml).unwrap();
+
+        execute_svg(&input, &output).unwrap();
+
+        let svg = std::fs::read_to_string(output).unwrap();
+        assert!(svg.contains("data-board-array-overview='true'"));
+        assert!(svg.contains("Board array overview: 6 columns by 6 rows"));
     }
 
     #[test]

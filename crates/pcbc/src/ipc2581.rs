@@ -155,6 +155,15 @@ enum PanelCommands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
     },
+    /// Export the board array overview as SVG
+    Svg {
+        /// Input IPC-2581 XML file
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        input: PathBuf,
+        /// Output SVG file path
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
 }
 
 pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
@@ -199,6 +208,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     edge_rail_width_mm: edge_rail_width,
                 },
             ),
+            PanelCommands::Svg { input, output } => commands::panel::execute_svg(&input, &output),
         },
         Commands::View {
             input,

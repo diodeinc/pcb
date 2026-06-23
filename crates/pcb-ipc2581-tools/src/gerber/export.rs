@@ -117,6 +117,7 @@ enum GerberLayerRole {
     Soldermask,
     Legend,
     Profile,
+    Route,
     Vcut,
     Score,
 }
@@ -159,7 +160,8 @@ fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
         LayerFunction::Solderpaste | LayerFunction::Pastemask => Some(GerberLayerRole::Paste),
         LayerFunction::Soldermask => Some(GerberLayerRole::Soldermask),
         LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),
-        LayerFunction::Rout | LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
+        LayerFunction::Rout => Some(GerberLayerRole::Route),
+        LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
         LayerFunction::VCut => Some(GerberLayerRole::Vcut),
         LayerFunction::Score => Some(GerberLayerRole::Score),
         _ => None,
@@ -173,9 +175,10 @@ impl GerberLayerRole {
             GerberLayerRole::Paste => LayerRole::Paste,
             GerberLayerRole::Soldermask => LayerRole::Soldermask,
             GerberLayerRole::Legend => LayerRole::Legend,
-            GerberLayerRole::Profile | GerberLayerRole::Vcut | GerberLayerRole::Score => {
-                LayerRole::Profile
-            }
+            GerberLayerRole::Profile
+            | GerberLayerRole::Route
+            | GerberLayerRole::Vcut
+            | GerberLayerRole::Score => LayerRole::Profile,
         }
     }
 }
@@ -222,6 +225,9 @@ fn layer_output(
             "Edge_Cuts.gm1".to_string(),
             vec!["Profile".into(), "NP".into()],
         ),
+        GerberLayerRole::Route => {
+            fabrication_line_layer_output("Route.gbr", &["Other", "Route"], side)
+        }
         GerberLayerRole::Vcut => fabrication_line_layer_output("V_Cut.gbr", &["Vcut"], side),
         GerberLayerRole::Score => {
             fabrication_line_layer_output("Score.gbr", &["Other", "Score"], side)
@@ -561,6 +567,38 @@ pub fn execute_file_with_options(
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn route_and_board_outline_layers_export_to_distinct_files() {
+        let mut interner = ipc2581::Interner::new();
+        let layers = [
+            Layer {
+                name: interner.intern("Edge.Cuts"),
+                layer_function: LayerFunction::BoardOutline,
+                side: Some(Side::All),
+                polarity: None,
+                span: None,
+                spec_refs: Vec::new(),
+                profile: None,
+            },
+            Layer {
+                name: interner.intern("F.Cu_B.Cu_1"),
+                layer_function: LayerFunction::Rout,
+                side: Some(Side::All),
+                polarity: None,
+                span: None,
+                spec_refs: Vec::new(),
+                profile: None,
+            },
+        ];
+
+        let filenames = export_layer_plans(&layers)
+            .into_iter()
+            .map(|plan| plan.filename)
+            .collect::<Vec<_>>();
+
+        assert_eq!(filenames, ["Edge_Cuts.gm1", "Route.gbr"]);
+    }
 
     #[test]
     fn exports_ipc_layer_to_parseable_gerber_x2() {
