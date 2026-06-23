@@ -169,7 +169,6 @@ struct StackupLayer {
 struct RenderedLayers {
     stackup: Vec<RenderedLayer>,
     non_stackup: Vec<RenderedLayer>,
-    board_array: Vec<RenderedLayer>,
 }
 
 #[derive(Serialize)]
@@ -313,10 +312,6 @@ fn extract_rendered_layers(accessor: &IpcAccessor) -> Result<RenderedLayers> {
     let Some(ecad) = ipc.ecad() else {
         return Ok(RenderedLayers::default());
     };
-    let has_board_array = accessor
-        .board_layout_info()
-        .and_then(|layout| layout.board_array)
-        .is_some();
     let layers_by_ref = ecad
         .cad_data
         .layers
@@ -373,23 +368,9 @@ fn extract_rendered_layers(accessor: &IpcAccessor) -> Result<RenderedLayers> {
         }
     }
 
-    let board_array_layers = if has_board_array {
-        ecad.cad_data
-            .layers
-            .iter()
-            .filter_map(|layer| {
-                let rendered = rendered_board_array_layer(ipc, layer);
-                rendered.has_native_content.then_some(rendered)
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
     Ok(RenderedLayers {
         stackup: stackup_layers,
         non_stackup: non_stackup_layers,
-        board_array: board_array_layers,
     })
 }
 
@@ -417,36 +398,6 @@ fn rendered_source_layer(
         Ok(geometry) => {
             render_extracted_layer(&mut rendered, geometry, GeometryView::Board.profile_set())
         }
-        Err(error) => {
-            rendered.warning = Some(format!("Render unavailable: {error}"));
-        }
-    }
-
-    rendered
-}
-
-fn rendered_board_array_layer(ipc: &ipc2581::Ipc2581, layer: &Layer) -> RenderedLayer {
-    let name = ipc.resolve(layer.name).to_string();
-    let mut rendered = RenderedLayer {
-        name: name.clone(),
-        function: layer.layer_function.as_str().to_string(),
-        side: layer
-            .side
-            .map(|side| side.as_str())
-            .unwrap_or("None")
-            .to_string(),
-        sequence: None,
-        svg: None,
-        warning: None,
-        has_native_content: false,
-    };
-
-    match geometry::extract_layer_for_view(ipc, &name, GeometryView::ArrayLocal) {
-        Ok(geometry) => render_extracted_layer(
-            &mut rendered,
-            geometry,
-            GeometryView::ArrayLocal.profile_set(),
-        ),
         Err(error) => {
             rendered.warning = Some(format!("Render unavailable: {error}"));
         }
@@ -648,22 +599,23 @@ mod tests {
     }
 
     #[test]
-    fn html_renders_array_local_layers_in_board_array_section() {
+    fn html_renders_array_local_layers_in_board_array_summary_only() {
         let ipc = ipc2581::Ipc2581::parse(array_layer_render_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
         let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
 
         let array_summary = html.find("<h2>Board Array Summary</h2>").unwrap();
-        let array_layers = html.find("<h3>Board Array Layers</h3>").unwrap();
-        assert!(array_summary < array_layers);
+        let file_info = html.find(r#"<div class="file-info">"#).unwrap();
+        assert!(array_summary < file_info);
+        assert!(!html.contains("<h3>Board Array Layers</h3>"));
+        assert!(!html.contains("board-array-layer-render"));
 
-        let array_section = &html[array_layers..];
-        assert!(array_section.contains("<span>F.Cu</span>"));
-        assert!(array_section.contains("<span>V-Score</span>"));
-        assert!(array_section.contains("<span>Board_Array_Drill</span>"));
-        assert!(!array_section.contains("<span>B.Cu</span>"));
-        assert!(array_section.matches("<svg ").count() >= 3);
+        let summary_section = &html[array_summary..file_info];
+        assert!(summary_section.contains("data-board-array-overview='true'"));
+        assert!(summary_section.contains("array-layer-copper"));
+        assert!(summary_section.contains("vcut-guide"));
+        assert!(summary_section.contains("array-layer-drill"));
     }
 
     fn board_array_design_name_fixture() -> &'static str {

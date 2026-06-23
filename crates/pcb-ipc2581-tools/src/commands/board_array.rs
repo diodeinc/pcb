@@ -1487,7 +1487,9 @@ mod tests {
         let accessor = IpcAccessor::new(&ipc);
 
         let svg = crate::board_array::render_board_array_overview_svg(&accessor).unwrap();
-        assert_eq!(svg.matches("class='vcut-guide'").count(), 24);
+        assert_eq!(svg.matches("vcut-guide").count(), 24);
+        assert!(svg.contains("stroke='#dc2626'"));
+        assert!(!svg.contains("stroke-dasharray"));
         assert!(!svg.contains("class='score-guide'"));
 
         let output_dir = std::env::temp_dir().join(format!(

@@ -241,25 +241,6 @@
         {{ board_summary.board_array.overview_svg|safe }}
     </div>
     {% endif %}
-    {% if rendered_layers and rendered_layers.board_array %}
-    <h3>Board Array Layers</h3>
-    <div class="layer-list">
-        {% for layer in rendered_layers.board_array %}
-        <section class="layer-render">
-            <div class="layer-title">
-                <span>{{ layer.name }}</span>
-                <span class="layer-meta">{{ layer.function }} • {{ layer.side }}</span>
-            </div>
-            {% if layer.svg %}
-            <div class="layer-preview">{{ layer.svg|safe }}</div>
-            {% endif %}
-            {% if layer.warning %}
-            <div class="layer-warning">{{ layer.warning }}</div>
-            {% endif %}
-        </section>
-        {% endfor %}
-    </div>
-    {% endif %}
     {% endif %}
 
     <div class="file-info">

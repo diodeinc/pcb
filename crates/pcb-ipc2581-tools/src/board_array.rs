@@ -2,9 +2,7 @@ use std::fmt::Write;
 
 use ipc2581::types::LayerFunction;
 use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
-use pcb_ir::dialects::ipc::{
-    FeatureDomain, GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp,
-};
+use pcb_ir::dialects::ipc::{GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp};
 
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
 
@@ -18,14 +16,15 @@ pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Option<Str
     let layout = accessor.board_layout_info()?;
     let board_array = layout.board_array.as_ref()?;
     let doc = crate::geometry::extract_layout(accessor.ipc()).ok()?;
-    let vcut_paths = vcut_layer_paths(accessor, board_array.dimensions.as_ref()?.height_mm());
-    render_board_array_svg(board_array, &doc, &vcut_paths)
+    let array_height = board_array.dimensions.as_ref()?.height_mm();
+    let layer_overlays = board_array_layer_overlays(accessor, array_height);
+    render_board_array_svg(board_array, &doc, &layer_overlays)
 }
 
 fn render_board_array_svg(
     board_array: &BoardArrayInfo,
     doc: &GeometryDocument,
-    vcut_paths: &[String],
+    layer_overlays: &[BoardArrayLayerOverlay],
 ) -> Option<String> {
     let dimensions = board_array.dimensions.as_ref()?;
     let grid = board_array.grid.as_ref()?;
@@ -45,13 +44,7 @@ fn render_board_array_svg(
     let scale = (array_width.max(array_height) / 450.0).max(MIN_STROKE);
     let array_stroke = scale * 1.9;
     let board_stroke = scale * 0.75;
-    let vcut_stroke = scale * 0.85;
     let rail_stroke = scale * 0.5;
-    let vcut_dash = format!(
-        "{} {}",
-        fmt_num(vcut_stroke * 7.6),
-        fmt_num(vcut_stroke * 5.0)
-    );
     let board_paths = board_instance_paths(doc, array_height);
     if board_paths.is_empty() {
         return None;
@@ -84,8 +77,8 @@ fn render_board_array_svg(
 
     write_board_paths(&mut svg, &board_paths, "board-fill", "#f1f5f9", "none", 0.0);
 
+    write_layer_overlays(&mut svg, layer_overlays, scale);
     write_rail_guides(&mut svg, grid, array_width, array_height, rail_stroke);
-    write_vcut_guides(&mut svg, vcut_paths, vcut_stroke, &vcut_dash);
     writeln!(
         svg,
         "  <rect class='board-array-outline' x='0' y='0' width='{}' height='{}' fill='none' stroke='#111827' stroke-width='{}'/>",
@@ -108,33 +101,61 @@ fn render_board_array_svg(
     Some(svg)
 }
 
-fn vcut_layer_paths(accessor: &IpcAccessor<'_>, array_height: f64) -> Vec<String> {
+struct BoardArrayLayerOverlay {
+    function: LayerFunction,
+    paths: Vec<BoardArrayLayerPath>,
+}
+
+struct BoardArrayLayerPath {
+    data: String,
+    filled: bool,
+    stroked: bool,
+    stroke_width: f64,
+}
+
+struct BoardArrayLayerStyle {
+    class_name: &'static str,
+    fill: &'static str,
+    stroke: &'static str,
+    fill_opacity: f64,
+    stroke_opacity: f64,
+    stroke_width_scale: f64,
+}
+
+fn board_array_layer_overlays(
+    accessor: &IpcAccessor<'_>,
+    array_height: f64,
+) -> Vec<BoardArrayLayerOverlay> {
     let Some(ecad) = accessor.ipc().ecad() else {
         return Vec::new();
     };
-    let layer_names = ecad
-        .cad_data
+
+    ecad.cad_data
         .layers
         .iter()
-        .filter(|layer| layer.layer_function == LayerFunction::VCut)
-        .map(|layer| accessor.ipc().resolve(layer.name).to_string())
-        .collect::<Vec<_>>();
-
-    let mut paths = Vec::new();
-    for layer_name in layer_names {
-        let Ok(doc) = crate::geometry::extract_layer_for_view(
-            accessor.ipc(),
-            &layer_name,
-            GeometryView::ArrayLocal,
-        ) else {
-            continue;
-        };
-        paths.extend(vcut_paths_from_layer(&doc, array_height));
-    }
-    paths
+        .filter_map(|layer| {
+            let layer_name = accessor.ipc().resolve(layer.name);
+            let Ok(mut doc) = crate::geometry::extract_layer_for_view(
+                accessor.ipc(),
+                layer_name,
+                GeometryView::ArrayLocal,
+            ) else {
+                return None;
+            };
+            if !crate::geometry::render::layer_has_native_content(&doc) {
+                return None;
+            }
+            pcb_ir::dialects::ipc::process::compose_for_rendering(&mut doc);
+            let paths = layer_paths(&doc, array_height);
+            (!paths.is_empty()).then_some(BoardArrayLayerOverlay {
+                function: layer.layer_function,
+                paths,
+            })
+        })
+        .collect()
 }
 
-fn vcut_paths_from_layer(doc: &GeometryDocument, panel_height: f64) -> Vec<String> {
+fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayerPath> {
     let Some(layer) = doc.layers.first() else {
         return Vec::new();
     };
@@ -142,8 +163,8 @@ fn vcut_paths_from_layer(doc: &GeometryDocument, panel_height: f64) -> Vec<Strin
 
     doc.features[layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
         .iter()
-        .filter(|feature| feature.intent.domain == FeatureDomain::VCut)
-        .filter_map(|feature| feature_path_data(doc, feature, transform))
+        .filter(|feature| feature.source_layer_ref == Some(layer.source_layer_ref))
+        .flat_map(|feature| feature_paths(doc, feature, transform))
         .collect()
 }
 
@@ -198,16 +219,24 @@ fn step_profile_path_data(
     (!path_data.is_empty()).then_some(path_data)
 }
 
-fn feature_path_data(
+fn feature_paths(
     doc: &GeometryDocument,
     feature: &pcb_ir::dialects::ipc::GeometryFeature<ipc2581::Symbol>,
     transform: Affine2,
-) -> Option<String> {
-    let mut path_data = String::new();
-    for path_index in feature.path_start..feature.path_start + feature.path_count {
-        append_transformed_path_data(&mut path_data, doc, path_index, transform)?;
-    }
-    (!path_data.is_empty()).then_some(path_data)
+) -> Vec<BoardArrayLayerPath> {
+    (feature.path_start..feature.path_start + feature.path_count)
+        .filter_map(|path_index| {
+            let path = doc.paths.get(path_index as usize)?;
+            let mut data = String::new();
+            append_transformed_path_data(&mut data, doc, path_index, transform)?;
+            (!data.is_empty()).then_some(BoardArrayLayerPath {
+                data,
+                filled: path.flags.filled,
+                stroked: path.flags.stroked,
+                stroke_width: path.style.stroke.width,
+            })
+        })
+        .collect()
 }
 
 fn append_transformed_path_data(
@@ -322,6 +351,116 @@ fn write_board_paths(
     }
 }
 
+fn write_layer_overlays(
+    svg: &mut String,
+    layer_overlays: &[BoardArrayLayerOverlay],
+    stroke_scale: f64,
+) {
+    for overlay in layer_overlays {
+        let style = board_array_layer_style(overlay.function);
+        let stroke_width = fmt_num(style.stroke_width_scale * stroke_scale);
+        for path in &overlay.paths {
+            let force_stroke =
+                matches!(overlay.function, LayerFunction::VCut | LayerFunction::Score);
+            if force_stroke || (path.stroked && !path.filled) {
+                let width = if force_stroke {
+                    stroke_width.clone()
+                } else {
+                    fmt_num(
+                        path.stroke_width
+                            .max(style.stroke_width_scale * stroke_scale),
+                    )
+                };
+                writeln!(
+                    svg,
+                    "  <path class='array-layer {}' d='{}' fill='none' stroke='{}' stroke-width='{width}' stroke-linejoin='round' opacity='{}'/>",
+                    style.class_name,
+                    path.data,
+                    style.stroke,
+                    fmt_num(style.stroke_opacity)
+                )
+                .unwrap();
+            } else if path.filled {
+                writeln!(
+                    svg,
+                    "  <path class='array-layer {}' d='{}' fill='{}' fill-opacity='{}' stroke='none' fill-rule='evenodd'/>",
+                    style.class_name,
+                    path.data,
+                    style.fill,
+                    fmt_num(style.fill_opacity)
+                )
+                .unwrap();
+            }
+        }
+    }
+}
+
+fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
+    match function {
+        LayerFunction::VCut | LayerFunction::Score => BoardArrayLayerStyle {
+            class_name: "vcut-guide array-layer-vscore",
+            fill: "none",
+            stroke: "#dc2626",
+            fill_opacity: 0.0,
+            stroke_opacity: 0.78,
+            stroke_width_scale: 0.78,
+        },
+        LayerFunction::Drill => BoardArrayLayerStyle {
+            class_name: "array-layer-drill",
+            fill: "#2563eb",
+            stroke: "#1d4ed8",
+            fill_opacity: 0.42,
+            stroke_opacity: 0.64,
+            stroke_width_scale: 0.48,
+        },
+        LayerFunction::Conductor
+        | LayerFunction::CondFilm
+        | LayerFunction::CondFoil
+        | LayerFunction::Plane
+        | LayerFunction::Signal
+        | LayerFunction::Mixed => BoardArrayLayerStyle {
+            class_name: "array-layer-copper",
+            fill: "#d87822",
+            stroke: "#b45309",
+            fill_opacity: 0.30,
+            stroke_opacity: 0.52,
+            stroke_width_scale: 0.42,
+        },
+        LayerFunction::Soldermask => BoardArrayLayerStyle {
+            class_name: "array-layer-mask",
+            fill: "#159447",
+            stroke: "#15803d",
+            fill_opacity: 0.18,
+            stroke_opacity: 0.42,
+            stroke_width_scale: 0.42,
+        },
+        LayerFunction::Solderpaste | LayerFunction::Pastemask => BoardArrayLayerStyle {
+            class_name: "array-layer-paste",
+            fill: "#64748b",
+            stroke: "#475569",
+            fill_opacity: 0.30,
+            stroke_opacity: 0.50,
+            stroke_width_scale: 0.42,
+        },
+        LayerFunction::Silkscreen | LayerFunction::Legend => BoardArrayLayerStyle {
+            class_name: "array-layer-legend",
+            fill: "#111827",
+            stroke: "#111827",
+            fill_opacity: 0.34,
+            stroke_opacity: 0.54,
+            stroke_width_scale: 0.42,
+        },
+        _ => BoardArrayLayerStyle {
+            class_name: "array-layer-fab",
+            fill: "#334155",
+            stroke: "#334155",
+            fill_opacity: 0.22,
+            stroke_opacity: 0.56,
+            stroke_width_scale: 0.42,
+        },
+    }
+}
+
 fn write_rail_guides(
     svg: &mut String,
     grid: &BoardArrayGridInfo,
@@ -357,17 +496,6 @@ fn write_rail_guides(
             )
             .unwrap();
         }
-    }
-}
-
-fn write_vcut_guides(svg: &mut String, paths: &[String], stroke_width: f64, dash: &str) {
-    for path in paths {
-        writeln!(
-            svg,
-            "  <path class='vcut-guide' d='{path}' fill='none' stroke='#b91c1c' stroke-width='{}' stroke-dasharray='{dash}' opacity='0.78'/>",
-            fmt_num(stroke_width)
-        )
-        .unwrap();
     }
 }
 
@@ -509,12 +637,14 @@ mod tests {
 
         let svg = render_board_array_overview_svg(&accessor).unwrap();
 
-        assert_eq!(svg.matches("class='vcut-guide'").count(), 2);
+        assert_eq!(svg.matches("vcut-guide").count(), 2);
         assert!(svg.contains("d='M6 27 L6 0'"));
         assert!(svg.contains("d='M0 20 L46 20'"));
+        assert!(svg.contains("stroke='#dc2626'"));
+        assert!(!svg.contains("stroke-dasharray"));
         assert!(!svg.contains("class='score-guide'"));
 
-        let vcut_start = svg.find("class='vcut-guide'").unwrap();
+        let vcut_start = svg.find("vcut-guide").unwrap();
         let board_outline_start = svg.find("class='board-outline'").unwrap();
         assert!(vcut_start < board_outline_start);
     }
