@@ -2561,6 +2561,14 @@ impl<'a> Parser<'a> {
             .and_then(|n| self.attr(&n, "id"))
             .map(|id| self.interner.intern(id));
 
+        let mut pin_ref = None;
+        for child in self.element_children(node) {
+            if self.name(&child) == "PinRef" {
+                pin_ref = Some(self.parse_pin_ref(&child)?);
+                break;
+            }
+        }
+
         Ok(Pad {
             padstack_def_ref,
             x,
@@ -2568,6 +2576,7 @@ impl<'a> Parser<'a> {
             xform,
             standard_primitive_ref,
             user_primitive_ref,
+            pin_ref,
         })
     }
 

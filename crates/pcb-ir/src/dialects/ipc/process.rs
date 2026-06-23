@@ -641,12 +641,14 @@ fn replace_feature_with_compound_path<S, L>(
     let feature = &mut doc.features[feature_index];
     feature.path_start = path_id;
     feature.path_count = 1;
+    feature.primitive_ref = None;
 }
 
 fn clear_feature_paths<S, L>(doc: &mut GeometryDocument<S, L>, feature_index: usize) {
     let feature = &mut doc.features[feature_index];
     feature.path_start = doc.paths.len() as u32;
     feature.path_count = 0;
+    feature.primitive_ref = None;
 }
 
 fn path_contours<S, L>(doc: &GeometryDocument<S, L>, path: &GeometryPath) -> Vec<ContourPayload> {

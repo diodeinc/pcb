@@ -12,6 +12,7 @@ use crate::dialects::path::{self, PathCmd, PathPayload};
 #[derive(Debug, Clone)]
 pub struct ArtworkDocument<LayerMeta = (), ObjectMeta = ()> {
     pub unit: Unit,
+    pub apertures: Vec<ArtworkAperture>,
     pub layers: Vec<ArtworkLayer<LayerMeta>>,
     pub objects: Vec<ArtworkObject<ObjectMeta>>,
     pub paths: Vec<ArtworkPath>,
@@ -24,6 +25,7 @@ impl<LayerMeta, ObjectMeta> ArtworkDocument<LayerMeta, ObjectMeta> {
     pub fn new(unit: Unit) -> Self {
         Self {
             unit,
+            apertures: Vec::new(),
             layers: Vec::new(),
             objects: Vec::new(),
             paths: Vec::new(),
@@ -38,6 +40,12 @@ impl<LayerMeta, ObjectMeta> ArtworkDocument<LayerMeta, ObjectMeta> {
         layer.object_count = 0;
         let id = self.layers.len() as u32;
         self.layers.push(layer);
+        id
+    }
+
+    pub fn push_aperture(&mut self, aperture: ArtworkAperture) -> u32 {
+        let id = self.apertures.len() as u32;
+        self.apertures.push(aperture);
         id
     }
 
@@ -90,12 +98,23 @@ impl<LayerMeta, ObjectMeta> ArtworkDocument<LayerMeta, ObjectMeta> {
             validate_bbox("artwork layer", index, layer.bbox)?;
         }
         for (index, object) in self.objects.iter().enumerate() {
-            if let Some(path) = object.geometry.path()
-                && path as usize >= self.paths.len()
-            {
-                return Err(format!(
-                    "artwork object {index} references missing path {path}"
-                ));
+            match object.geometry {
+                ArtworkGeometry::Flash { aperture, .. } => {
+                    if aperture as usize >= self.apertures.len() {
+                        return Err(format!(
+                            "artwork object {index} references missing aperture {aperture}"
+                        ));
+                    }
+                }
+                _ => {
+                    if let Some(path) = object.geometry.path()
+                        && path as usize >= self.paths.len()
+                    {
+                        return Err(format!(
+                            "artwork object {index} references missing path {path}"
+                        ));
+                    }
+                }
             }
             validate_bbox("artwork object", index, object.bbox)?;
         }
@@ -249,6 +268,13 @@ impl<Meta: Default> ArtworkObject<Meta> {
             meta: Meta::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ArtworkAperture {
+    Circle { diameter: f64 },
+    Rectangle { width: f64, height: f64 },
+    Obround { width: f64, height: f64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

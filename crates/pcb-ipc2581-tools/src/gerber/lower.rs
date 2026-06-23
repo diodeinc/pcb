@@ -6,7 +6,7 @@ use gerberx2::{
     WriterAperture, WriterApertureTemplate, WriterObject, sanitize_attribute_field,
 };
 use pcb_ir::common::{BBox, FillRule, PaintPolarity, Point};
-use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkPath};
+use pcb_ir::dialects::artwork::{ArtworkAperture, ArtworkGeometry, ArtworkPath};
 use pcb_ir::dialects::gerber::Polarity;
 use pcb_ir::dialects::path::{self as common_path, PathCmd, PathOp, PathPayload, PolygonContour};
 
@@ -87,8 +87,32 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
                     attributes,
                 });
             }
-            ArtworkGeometry::Flash { .. } => {
-                bail!("cannot lower unexpanded artwork flash to Gerber")
+            ArtworkGeometry::Flash {
+                aperture,
+                transform,
+            } => {
+                if !transform_is_translation(transform) {
+                    bail!("cannot lower transformed artwork flash to Gerber");
+                }
+                let artwork_aperture =
+                    *layer.apertures.get(aperture as usize).with_context(|| {
+                        format!("artwork flash references missing aperture {aperture}")
+                    })?;
+                let default_function = vec!["Conductor".to_string()];
+                let aperture_function = object
+                    .meta
+                    .aperture_function
+                    .as_deref()
+                    .unwrap_or(default_function.as_slice());
+                let aperture = apertures.artwork_aperture(artwork_aperture, aperture_function)?;
+                objects.push(WriterObject {
+                    kind: ObjectKind::Flash {
+                        at: lower_point(transform.transform_point(Point::new(0.0, 0.0))),
+                        aperture,
+                    },
+                    polarity: lower_polarity(object.paint),
+                    attributes,
+                });
             }
         }
     }
@@ -110,8 +134,15 @@ struct ApertureTable {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ApertureKey {
-    diameter_nm: i64,
+    template: ApertureTemplateKey,
     function: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ApertureTemplateKey {
+    Circle { diameter_nm: i64 },
+    Rectangle { width_nm: i64, height_nm: i64 },
+    Obround { width_nm: i64, height_nm: i64 },
 }
 
 impl ApertureTable {
@@ -119,8 +150,68 @@ impl ApertureTable {
         if diameter <= 0.0 {
             bail!("cannot export non-positive Gerber stroke aperture diameter {diameter}");
         }
+        self.define(
+            ApertureTemplateKey::Circle {
+                diameter_nm: quantize_mm(diameter),
+            },
+            WriterApertureTemplate::Circle {
+                diameter,
+                hole_diameter: None,
+            },
+            function,
+        )
+    }
+
+    fn artwork_aperture(&mut self, aperture: ArtworkAperture, function: &[String]) -> Result<i32> {
+        match aperture {
+            ArtworkAperture::Circle { diameter } => self.circle(diameter, function),
+            ArtworkAperture::Rectangle { width, height } => {
+                if width <= 0.0 || height <= 0.0 {
+                    bail!(
+                        "cannot export non-positive Gerber rectangle aperture {width} x {height}"
+                    );
+                }
+                self.define(
+                    ApertureTemplateKey::Rectangle {
+                        width_nm: quantize_mm(width),
+                        height_nm: quantize_mm(height),
+                    },
+                    WriterApertureTemplate::Rectangle {
+                        width,
+                        height,
+                        hole_diameter: None,
+                    },
+                    function,
+                )
+            }
+            ArtworkAperture::Obround { width, height } => {
+                if width <= 0.0 || height <= 0.0 {
+                    bail!("cannot export non-positive Gerber obround aperture {width} x {height}");
+                }
+                self.define(
+                    ApertureTemplateKey::Obround {
+                        width_nm: quantize_mm(width),
+                        height_nm: quantize_mm(height),
+                    },
+                    WriterApertureTemplate::Obround {
+                        width,
+                        height,
+                        hole_diameter: None,
+                    },
+                    function,
+                )
+            }
+        }
+    }
+
+    fn define(
+        &mut self,
+        template_key: ApertureTemplateKey,
+        template: WriterApertureTemplate,
+        function: &[String],
+    ) -> Result<i32> {
         let key = ApertureKey {
-            diameter_nm: quantize_mm(diameter),
+            template: template_key,
             function: function.to_vec(),
         };
         if let Some(code) = self.by_key.get(&key) {
@@ -136,10 +227,7 @@ impl ApertureTable {
         self.by_key.insert(key, code);
         self.apertures.push(WriterAperture {
             code,
-            template: WriterApertureTemplate::Circle {
-                diameter,
-                hole_diameter: None,
-            },
+            template,
             attributes: vec![AttributeValue::new(
                 ".AperFunction",
                 function.iter().cloned(),
@@ -548,6 +636,13 @@ fn lower_point(point: Point) -> GerberPoint {
         x: point.x,
         y: point.y,
     }
+}
+
+fn transform_is_translation(transform: pcb_ir::common::Affine2) -> bool {
+    (transform.m00 - 1.0).abs() <= 1e-9
+        && transform.m01.abs() <= 1e-9
+        && transform.m10.abs() <= 1e-9
+        && (transform.m11 - 1.0).abs() <= 1e-9
 }
 
 fn points_close(a: Point, b: Point) -> bool {

@@ -6,19 +6,21 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use gerberx2::{GerberLayer, write_layer};
 use ipc2581::Ipc2581;
-use ipc2581::types::{LayerFunction, Side, ecad::Layer};
+use ipc2581::types::{FillProperty, LayerFunction, Side, StandardPrimitive, ecad::Layer};
 use zip::{ZipWriter, write::FileOptions};
 
 use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 use super::lower::lower_artwork_layer;
 use crate::{geometry, ipc2581 as ipc};
-use pcb_ir::common::{BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Point, Unit};
-use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkObject, ArtworkPath};
+use pcb_ir::common::{Affine2, BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Point, Unit};
+use pcb_ir::dialects::artwork::{ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{
-    FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature, GeometryPath,
-    GeometryView, PlatingKind, ProfileSet,
+    FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature,
+    GeometryPath, GeometryPolarity, GeometryView, PlatingKind, ProfileSet,
 };
 use pcb_ir::dialects::path as common_path;
+
+type IpcGeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>;
 
 #[derive(Debug, Clone)]
 pub struct GerberExportOptions {
@@ -389,9 +391,7 @@ impl GerberPart {
     }
 }
 
-fn gerber_part_for_doc(
-    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
-) -> GerberPart {
+fn gerber_part_for_doc(doc: &IpcGeometryDocument) -> GerberPart {
     if pcb_ir::dialects::ipc::root_panel_step(doc).is_some() {
         GerberPart::Array
     } else {
@@ -439,7 +439,7 @@ fn copper_layer_output(
 
 fn artwork_from_processed_layer(
     ipc: &Ipc2581,
-    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    doc: &IpcGeometryDocument,
     layer_index: usize,
     role: LayerRole,
     meta: LayerAttributes,
@@ -455,42 +455,255 @@ fn artwork_from_processed_layer(
         bbox: layer.bbox,
         meta,
     });
-    for feature in &doc.features
-        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
-    {
-        if let Some((at, diameter)) = circle_flash(doc, feature) {
-            artwork.push_object(
-                artwork_layer,
-                ArtworkObject {
-                    paint: PaintPolarity::Dark,
-                    geometry: ArtworkGeometry::CircleFlash { at, diameter },
-                    net: None,
-                    bbox: BBox::from_point(at).expand(diameter / 2.0),
-                    meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
-                },
-            );
-            continue;
-        }
+    let features = &doc.features
+        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
 
-        for path in &doc.paths
-            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
-        {
-            let aperture_function = path.flags.stroked.then(|| aperture_function(feature));
-            push_artwork_object(
-                &mut artwork,
-                artwork_layer,
-                doc,
-                path,
-                object_attributes(ipc, doc, feature, aperture_function),
-                &layer.name,
-            )?;
+    for phase in [ArtworkExportPhase::Base, ArtworkExportPhase::Overlay] {
+        for feature in features {
+            if artwork_export_phase(doc, feature) != phase {
+                continue;
+            }
+            push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
         }
     }
     Ok(artwork)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtworkExportPhase {
+    Base,
+    Overlay,
+}
+
+fn artwork_export_phase(
+    doc: &IpcGeometryDocument,
+    feature: &GeometryFeature<ipc2581::Symbol>,
+) -> ArtworkExportPhase {
+    if feature.polarity == GeometryPolarity::Positive
+        && feature.intent.domain == FeatureDomain::Copper
+        && matches!(
+            feature.bucket,
+            FeatureBucket::Smd
+                | FeatureBucket::Pth
+                | FeatureBucket::Via
+                | FeatureBucket::Fiducial
+                | FeatureBucket::Trace
+                | FeatureBucket::Thermal
+        )
+        && feature_lowers_without_local_clear(doc, feature)
+    {
+        ArtworkExportPhase::Overlay
+    } else {
+        ArtworkExportPhase::Base
+    }
+}
+
+fn feature_lowers_without_local_clear(
+    doc: &IpcGeometryDocument,
+    feature: &GeometryFeature<ipc2581::Symbol>,
+) -> bool {
+    doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+        .iter()
+        .all(|path| !path.flags.filled || path.contour_count <= 1)
+}
+
+fn push_artwork_feature(
+    artwork: &mut ArtworkLayer,
+    artwork_layer: u32,
+    ipc: &Ipc2581,
+    doc: &IpcGeometryDocument,
+    feature: &GeometryFeature<ipc2581::Symbol>,
+    layer_name: &str,
+) -> Result<()> {
+    if let Some((aperture, at, bbox)) = standard_flash_aperture(ipc, feature) {
+        let aperture = artwork.push_aperture(aperture);
+        artwork.push_object(
+            artwork_layer,
+            ArtworkObject {
+                paint: PaintPolarity::Dark,
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: Affine2::placement(at, 0.0, false, 1.0),
+                },
+                net: None,
+                bbox,
+                meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
+            },
+        );
+        return Ok(());
+    }
+
+    if let Some((at, diameter)) = circle_flash(doc, feature) {
+        artwork.push_object(
+            artwork_layer,
+            ArtworkObject {
+                paint: PaintPolarity::Dark,
+                geometry: ArtworkGeometry::CircleFlash { at, diameter },
+                net: None,
+                bbox: BBox::from_point(at).expand(diameter / 2.0),
+                meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
+            },
+        );
+        return Ok(());
+    }
+
+    for path in
+        &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+    {
+        let aperture_function = path.flags.stroked.then(|| aperture_function(feature));
+        push_artwork_object(
+            artwork,
+            artwork_layer,
+            doc,
+            path,
+            object_attributes(ipc, doc, feature, aperture_function),
+            layer_name,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn standard_flash_aperture(
+    ipc: &Ipc2581,
+    feature: &GeometryFeature<ipc2581::Symbol>,
+) -> Option<(ArtworkAperture, Point, BBox)> {
+    if feature.polarity != GeometryPolarity::Positive
+        || feature.path_count == 0
+        || !matches!(
+            feature.intent.role,
+            FeatureRole::Pad | FeatureRole::Via | FeatureRole::Fiducial | FeatureRole::Hole
+        )
+    {
+        return None;
+    }
+
+    let primitive = standard_primitive_for_feature(ipc, feature)?;
+    if !standard_primitive_is_solid_fill(primitive) {
+        return None;
+    }
+
+    let aperture = match primitive {
+        StandardPrimitive::Circle(circle) => {
+            let scale = uniform_scale(feature.transform)?;
+            ArtworkAperture::Circle {
+                diameter: circle.shape.diameter * scale,
+            }
+        }
+        StandardPrimitive::RectCenter(rect) => {
+            let (width, height) = axis_aligned_size(
+                feature.transform,
+                rect.shape.size.width,
+                rect.shape.size.height,
+            )?;
+            ArtworkAperture::Rectangle { width, height }
+        }
+        StandardPrimitive::Oval(oval) => {
+            let (width, height) = axis_aligned_size(
+                feature.transform,
+                oval.shape.size.width,
+                oval.shape.size.height,
+            )?;
+            ArtworkAperture::Obround { width, height }
+        }
+        _ => return None,
+    };
+
+    let at = feature.center;
+    let bbox = flash_bbox(at, aperture);
+    Some((aperture, at, bbox))
+}
+
+fn standard_primitive_for_feature<'a>(
+    ipc: &'a Ipc2581,
+    feature: &GeometryFeature<ipc2581::Symbol>,
+) -> Option<&'a StandardPrimitive> {
+    let primitive_ref = feature.primitive_ref?;
+    ipc.content()
+        .dictionary_standard
+        .entries
+        .iter()
+        .find(|entry| entry.id == primitive_ref)
+        .map(|entry| &entry.primitive)
+}
+
+fn standard_primitive_is_solid_fill(primitive: &StandardPrimitive) -> bool {
+    matches!(
+        standard_primitive_fill_property(primitive),
+        None | Some(FillProperty::Fill)
+    )
+}
+
+fn standard_primitive_fill_property(primitive: &StandardPrimitive) -> Option<FillProperty> {
+    match primitive {
+        StandardPrimitive::Circle(styled) => styled.fill_property,
+        StandardPrimitive::RectCenter(styled) => styled.fill_property,
+        StandardPrimitive::RectRound(styled) => styled.fill_property,
+        StandardPrimitive::RectCham(styled) => styled.fill_property,
+        StandardPrimitive::RectCorner(styled) => styled.fill_property,
+        StandardPrimitive::Oval(styled) => styled.fill_property,
+        StandardPrimitive::Butterfly(styled) => styled.fill_property,
+        StandardPrimitive::Diamond(styled) => styled.fill_property,
+        StandardPrimitive::Donut(styled) => styled.fill_property,
+        StandardPrimitive::Ellipse(styled) => styled.fill_property,
+        StandardPrimitive::Hexagon(styled) => styled.fill_property,
+        StandardPrimitive::Octagon(styled) => styled.fill_property,
+        StandardPrimitive::Thermal(styled) => styled.fill_property,
+        StandardPrimitive::Triangle(styled) => styled.fill_property,
+        StandardPrimitive::Moire(_) | StandardPrimitive::Contour(_) => None,
+    }
+}
+
+fn uniform_scale(transform: Affine2) -> Option<f64> {
+    let sx = transform.m00.hypot(transform.m10);
+    let sy = transform.m01.hypot(transform.m11);
+    let dot = transform.m00 * transform.m01 + transform.m10 * transform.m11;
+    if sx <= GEOMETRY_EPSILON
+        || sy <= GEOMETRY_EPSILON
+        || !nearly_equal(sx, sy)
+        || dot.abs() > GEOMETRY_EPSILON * sx.max(sy).max(1.0)
+    {
+        return None;
+    }
+    Some((sx + sy) / 2.0)
+}
+
+fn axis_aligned_size(transform: Affine2, width: f64, height: f64) -> Option<(f64, f64)> {
+    let sx = transform.m00.hypot(transform.m10);
+    let sy = transform.m01.hypot(transform.m11);
+    if sx <= GEOMETRY_EPSILON || sy <= GEOMETRY_EPSILON {
+        return None;
+    }
+
+    if transform.m10.abs() <= GEOMETRY_EPSILON && transform.m01.abs() <= GEOMETRY_EPSILON {
+        return Some((width * sx, height * sy));
+    }
+    if transform.m00.abs() <= GEOMETRY_EPSILON && transform.m11.abs() <= GEOMETRY_EPSILON {
+        return Some((height * sy, width * sx));
+    }
+    None
+}
+
+fn flash_bbox(at: Point, aperture: ArtworkAperture) -> BBox {
+    let (width, height) = match aperture {
+        ArtworkAperture::Circle { diameter } => (diameter, diameter),
+        ArtworkAperture::Rectangle { width, height }
+        | ArtworkAperture::Obround { width, height } => (width, height),
+    };
+    BBox {
+        min: Point::new(at.x - width / 2.0, at.y - height / 2.0),
+        max: Point::new(at.x + width / 2.0, at.y + height / 2.0),
+    }
+}
+
+const GEOMETRY_EPSILON: f64 = 1e-9;
+
+fn nearly_equal(left: f64, right: f64) -> bool {
+    (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
+}
+
 fn circle_flash(
-    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    doc: &IpcGeometryDocument,
     feature: &GeometryFeature<ipc2581::Symbol>,
 ) -> Option<(Point, f64)> {
     if feature.outer_diameter <= 0.0 || feature.path_count != 1 {
@@ -514,7 +727,7 @@ fn circle_flash(
 const PROFILE_STROKE_WIDTH: f64 = 0.1;
 
 fn profile_artwork_from_profiles(
-    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    doc: &IpcGeometryDocument,
     profile_set: ProfileSet,
 ) -> Result<ArtworkLayer> {
     let mut artwork = ArtworkLayer::new(Unit::Millimeter);
@@ -555,7 +768,7 @@ fn profile_artwork_from_profiles(
 
 fn object_attributes(
     ipc: &Ipc2581,
-    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    doc: &IpcGeometryDocument,
     feature: &GeometryFeature<ipc2581::Symbol>,
     aperture_function: Option<Vec<String>>,
 ) -> ObjectAttributes {
@@ -642,7 +855,7 @@ fn fiducial_aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec
 fn push_artwork_path(
     artwork: &mut ArtworkLayer,
     artwork_path: ArtworkPath,
-    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    doc: &IpcGeometryDocument,
     path: &GeometryPath,
 ) -> u32 {
     artwork.push_path(artwork_path, artwork_contours(doc, path))
@@ -651,7 +864,7 @@ fn push_artwork_path(
 fn push_artwork_object(
     artwork: &mut ArtworkLayer,
     artwork_layer: u32,
-    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    doc: &IpcGeometryDocument,
     path: &GeometryPath,
     meta: ObjectAttributes,
     layer_name: &str,
@@ -691,7 +904,7 @@ fn push_artwork_object(
 fn push_profile_artwork_object(
     artwork: &mut ArtworkLayer,
     artwork_layer: u32,
-    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    doc: &IpcGeometryDocument,
     path_index: u32,
     transform: pcb_ir::common::Affine2,
 ) {
@@ -718,7 +931,7 @@ fn push_profile_artwork_object(
 }
 
 fn artwork_contours(
-    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    doc: &IpcGeometryDocument,
     path: &GeometryPath,
 ) -> Vec<common_path::PathPayload> {
     doc.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
@@ -857,7 +1070,11 @@ mod tests {
         </PadStackDef>
         <LayerFeature layerRef="TOP">
           <Set net="N1">
-            <Pad padstackDefRef="padstack"><Location x="2" y="3"/></Pad>
+            <Pad padstackDefRef="padstack">
+              <Location x="2" y="3"/>
+              <StandardPrimitiveRef id="pad"/>
+              <PinRef componentRef="U1" pin="1"/>
+            </Pad>
           </Set>
         </LayerFeature>
       </Step>
@@ -891,7 +1108,17 @@ mod tests {
             .unwrap();
         assert!(copper.contents.contains("%TF.FileFunction,Copper,L1,Top*%"));
         assert!(copper.contents.contains("%TF.Part,Single*%"));
+        assert!(copper.contents.contains("%TA.AperFunction,SMDPad*%"));
+        assert!(copper.contents.contains("%TO.C,U1*%"));
+        assert!(copper.contents.contains("%TO.P,U1,1*%"));
         assert!(copper.contents.contains("%TO.N,N1*%"));
+        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
+        assert!(
+            parsed
+                .objects()
+                .iter()
+                .any(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
+        );
 
         let panel_output_dir = std::env::temp_dir().join(format!(
             "pcb-ipc-gerber-board-array-target-test-{}",
@@ -914,6 +1141,108 @@ mod tests {
             .unwrap();
         assert!(panel_target_copper.contents.contains("%TF.Part,Single*%"));
         assert!(!panel_target_copper.contents.contains("%TF.Part,Array*%"));
+    }
+
+    #[test]
+    fn gerber_export_places_pad_flashes_after_local_fill_clear_regions() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad"><Circle diameter="1"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set net="N1">
+            <Pad padstackDefRef="padstack">
+              <Location x="5" y="5"/>
+              <StandardPrimitiveRef id="pad"/>
+            </Pad>
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="0" y="0"/>
+                    <PolyStepSegment x="10" y="0"/>
+                    <PolyStepSegment x="10" y="10"/>
+                    <PolyStepSegment x="0" y="10"/>
+                    <PolyStepSegment x="0" y="0"/>
+                  </Polygon>
+                </Contour>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="4" y="4"/>
+                    <PolyStepSegment x="6" y="4"/>
+                    <PolyStepSegment x="6" y="6"/>
+                    <PolyStepSegment x="4" y="6"/>
+                    <PolyStepSegment x="4" y="4"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let output_dir = std::env::temp_dir().join(format!(
+            "pcb-ipc-gerber-fill-clear-order-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output: output_dir,
+                view: GeometryView::Board,
+            },
+        )
+        .unwrap();
+
+        let copper = set
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
+        let clear_index = parsed
+            .objects()
+            .iter()
+            .position(|object| object.polarity == pcb_ir::dialects::gerber::Polarity::Clear)
+            .expect("compound fill should lower its hole as a clear object");
+        let pad_flash_index = parsed
+            .objects()
+            .iter()
+            .position(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
+            .expect("standard circular pad should export as a flash");
+        assert!(clear_index < pad_flash_index);
+
+        let mut geometry = gerberx2::geometry::extract_document(&parsed);
+        pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+        let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+        assert!(
+            summary.area_mm2 > 96.7,
+            "pad flash was not restored after local clear; area was {}",
+            summary.area_mm2
+        );
     }
 
     #[test]

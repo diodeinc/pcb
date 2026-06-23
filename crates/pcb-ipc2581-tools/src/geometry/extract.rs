@@ -1350,8 +1350,7 @@ fn extract_pad(
 
     let bucket = match padstack.hole_def.as_ref().map(|hole| hole.plating_status) {
         Some(PlatingStatus::Via) => FeatureBucket::Via,
-        Some(PlatingStatus::Plated) => FeatureBucket::Pth,
-        Some(PlatingStatus::NonPlated) => return Ok(None),
+        Some(PlatingStatus::Plated | PlatingStatus::NonPlated) => FeatureBucket::Pth,
         None => FeatureBucket::Smd,
     };
 
@@ -1427,6 +1426,15 @@ fn extract_pad(
     feature.flags.expanded_padstack = true;
     feature.flags.lowered_to_paths = true;
     feature.flags.clears_previous_in_set = paint == PrimitivePaint::Void;
+    if let Some(pin_ref) = &pad.pin_ref {
+        feature.pin_ref_start = doc.pin_refs.len() as u32;
+        doc.pin_refs.push(IpcPinRef {
+            component_ref: pin_ref.component_ref,
+            pin: pin_ref.pin,
+            title: pin_ref.title,
+        });
+        feature.pin_ref_count = 1;
+    }
 
     Ok(Some(feature))
 }
@@ -4040,6 +4048,59 @@ mod tests {
         );
         assert!((slot.bbox.width() - 0.60).abs() < 1e-6);
         assert!((slot.bbox.height() - 1.70).abs() < 1e-6);
+    }
+
+    #[test]
+    fn extracts_nonplated_padstack_artwork_on_soldermask_layers() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="F.Mask"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="mask_opening">
+        <Circle diameter="0.9906"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="npth_mask">
+          <PadstackHoleDef name="npth" diameter="0.9906" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+          <PadstackPadDef layerRef="F.Mask" padUse="REGULAR">
+            <StandardPrimitiveRef id="mask_opening"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="F.Mask">
+          <Set>
+            <Pad padstackDefRef="npth_mask">
+              <Location x="117.065" y="-133.14"/>
+              <PinRef componentRef="J3" pin="NPTH0"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let doc = extract_layer(&ipc, "F.Mask").unwrap();
+
+        assert_eq!(doc.features.len(), 1);
+        let feature = &doc.features[0];
+        assert_eq!(feature.bucket, FeatureBucket::Pth);
+        assert_eq!(feature.intent.domain, FeatureDomain::Soldermask);
+        assert_eq!(feature.intent.plating, PlatingKind::NonPlated);
+        assert_eq!(feature.pin_ref_count, 1);
+        assert!((feature.bbox.width() - 0.9906).abs() < 1e-6);
+        assert!((feature.bbox.height() - 0.9906).abs() < 1e-6);
     }
 
     fn test_layer(
