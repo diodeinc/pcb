@@ -69,7 +69,9 @@ pub fn layer_mask(
             Side::None,
         )
     };
-    pcb_ir::dialects::geom::lower_filled_to_mask(&pcb_ir::dialects::geom::outline_strokes(geom))
+    pcb_ir::dialects::geom::lower_filled_to_mask(&pcb_ir::dialects::geom::expand_strokes_to_fills(
+        geom,
+    ))
 }
 
 pub fn layer_role(function: LayerFunction) -> LayerRole {

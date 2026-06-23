@@ -179,7 +179,7 @@ pub fn lower_filled_to_mask<LayerMeta: Clone, ObjectMeta>(
     mask
 }
 
-pub fn outline_strokes<LayerMeta, ObjectMeta>(
+pub fn expand_strokes_to_fills<LayerMeta, ObjectMeta>(
     mut geom: GeomDocument<LayerMeta, ObjectMeta>,
 ) -> GeomDocument<LayerMeta, ObjectMeta> {
     for object_index in 0..geom.objects.len() {
@@ -199,9 +199,10 @@ pub fn outline_strokes<LayerMeta, ObjectMeta>(
         else {
             continue;
         };
-        let Some(contours) =
-            path::outline_stroke(&path_payloads(&geom, &path), width, line_cap, line_join)
-        else {
+        let Some(contours) = path::stroke_to_fill(
+            &path_payloads(&geom, &path),
+            path::StrokeToFillStyle::new(width, line_cap, line_join),
+        ) else {
             continue;
         };
         let path_id = geom.push_path(GeomPath::filled(FillRule::NonZero), contours);

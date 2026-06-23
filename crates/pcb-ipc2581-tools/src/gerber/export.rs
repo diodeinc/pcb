@@ -11,8 +11,8 @@ use crate::geometry;
 use pcb_ir::common::{Affine2, BBox, LayerRole, LineJoin, PaintPolarity, Point, Unit};
 use pcb_ir::dialects::artwork::{ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{
-    FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature,
-    GeometryPath, GeometryPolarity, GeometryView, PlatingKind,
+    FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature, GeometryPath,
+    GeometryPolarity, GeometryView, PlatingKind,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -351,53 +351,10 @@ fn artwork_from_processed_layer(
     let features = &doc.features
         [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
 
-    for phase in [ArtworkExportPhase::Base, ArtworkExportPhase::Overlay] {
-        for feature in features {
-            if artwork_export_phase(doc, feature) != phase {
-                continue;
-            }
-            push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
-        }
+    for feature in features {
+        push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
     }
     Ok(artwork)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArtworkExportPhase {
-    Base,
-    Overlay,
-}
-
-fn artwork_export_phase(
-    doc: &IpcGeometryDocument,
-    feature: &GeometryFeature<ipc2581::Symbol>,
-) -> ArtworkExportPhase {
-    if feature.polarity == GeometryPolarity::Positive
-        && feature.intent.domain == FeatureDomain::Copper
-        && matches!(
-            feature.bucket,
-            FeatureBucket::Smd
-                | FeatureBucket::Pth
-                | FeatureBucket::Via
-                | FeatureBucket::Fiducial
-                | FeatureBucket::Trace
-                | FeatureBucket::Thermal
-        )
-        && feature_lowers_without_local_clear(doc, feature)
-    {
-        ArtworkExportPhase::Overlay
-    } else {
-        ArtworkExportPhase::Base
-    }
-}
-
-fn feature_lowers_without_local_clear(
-    doc: &IpcGeometryDocument,
-    feature: &GeometryFeature<ipc2581::Symbol>,
-) -> bool {
-    doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
-        .iter()
-        .all(|path| !path.flags.filled || path.contour_count <= 1)
 }
 
 fn push_artwork_feature(
@@ -1003,6 +960,90 @@ mod tests {
         assert!(
             summary.area_mm2 > 96.7,
             "pad flash was not restored after local clear; area was {}",
+            summary.area_mm2
+        );
+    }
+
+    #[test]
+    fn gerber_export_places_multi_contour_traces_after_local_fill_clear_regions() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set net="TRACE">
+            <Features>
+              <Line startX="4.2" startY="4.6" endX="5.8" endY="4.6">
+                <LineDesc lineWidth="0.5" lineEnd="ROUND"/>
+              </Line>
+              <Line startX="4.2" startY="5.4" endX="5.8" endY="5.4">
+                <LineDesc lineWidth="0.5" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+          <Set>
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="0" y="0"/>
+                    <PolyStepSegment x="10" y="0"/>
+                    <PolyStepSegment x="10" y="10"/>
+                    <PolyStepSegment x="0" y="10"/>
+                    <PolyStepSegment x="0" y="0"/>
+                  </Polygon>
+                </Contour>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="4" y="4"/>
+                    <PolyStepSegment x="6" y="4"/>
+                    <PolyStepSegment x="6" y="6"/>
+                    <PolyStepSegment x="4" y="6"/>
+                    <PolyStepSegment x="4" y="4"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
+
+        let copper = files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        let clear_index = copper
+            .contents
+            .find("%LPC*%")
+            .expect("compound fill should lower its hole as a clear object");
+        let trace_index = copper
+            .contents
+            .find("%TO.N,TRACE*%")
+            .expect("multi-contour trace should keep its net attribute");
+        assert!(clear_index < trace_index);
+
+        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
+        let mut geometry = gerberx2::geometry::extract_document(&parsed);
+        pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+        let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+        assert!(
+            summary.area_mm2 > 97.0,
+            "multi-contour trace was not restored after local clear; area was {}",
             summary.area_mm2
         );
     }

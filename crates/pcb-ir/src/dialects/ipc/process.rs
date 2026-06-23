@@ -43,7 +43,7 @@ where
     L: Clone,
 {
     normalize_preserving(doc);
-    outline_stroked_paths(doc);
+    expand_stroked_paths_to_fills(doc);
     union_feature_filled_paths(doc);
     coalesce_related_trace_features(doc);
     resolve_set_voids(doc);
@@ -315,7 +315,7 @@ pub fn compose_feature_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
     }
 }
 
-pub fn outline_stroked_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
+pub fn expand_stroked_paths_to_fills<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
         let feature = doc.features[feature_index].clone();
@@ -333,7 +333,7 @@ pub fn outline_stroked_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
         let new_path_start = doc.paths.len() as u32;
         for path in paths {
             if path.flags.stroked {
-                if let Some(contours) = stroked_path_outline(doc, &path) {
+                if let Some(contours) = stroked_path_fill(doc, &path) {
                     doc.push_compound_path(
                         GeometryPath::filled(FillRule::NonZero, BBox::empty()),
                         contours,
@@ -726,15 +726,17 @@ fn feature_polygon_contours<S, L>(
         .collect()
 }
 
-fn stroked_path_outline<S, L>(
+fn stroked_path_fill<S, L>(
     doc: &GeometryDocument<S, L>,
     path: &GeometryPath,
 ) -> Option<Vec<ContourPayload>> {
-    common_path::outline_stroke(
+    common_path::stroke_to_fill(
         &path_payloads(doc, path),
-        path.style.stroke.width,
-        path.style.stroke.line_cap,
-        LineJoin::Round,
+        common_path::StrokeToFillStyle::new(
+            path.style.stroke.width,
+            path.style.stroke.line_cap,
+            LineJoin::Round,
+        ),
     )
 }
 

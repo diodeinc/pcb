@@ -2821,6 +2821,7 @@ fn push_rounded_rect_path(
     }
 
     let k = 0.552_284_749_830_793_6;
+    let use_arcs = affine_preserves_circles(transform);
     let [upper_right, lower_right, lower_left, upper_left] = corners;
     let mut cmds = Vec::new();
 
@@ -2834,11 +2835,19 @@ fn push_rounded_rect_path(
         -hh,
     )));
     if lower_right {
-        cmds.push(PathCmd::cubic_to(
-            Point::new(hw - r + k * r, -hh),
-            Point::new(hw, -hh + r - k * r),
-            Point::new(hw, -hh + r),
-        ));
+        if use_arcs {
+            cmds.push(PathCmd::arc_to(
+                Point::new(hw, -hh + r),
+                Point::new(hw - r, -hh + r),
+                false,
+            ));
+        } else {
+            cmds.push(PathCmd::cubic_to(
+                Point::new(hw - r + k * r, -hh),
+                Point::new(hw, -hh + r - k * r),
+                Point::new(hw, -hh + r),
+            ));
+        }
     }
 
     cmds.push(PathCmd::line_to(Point::new(
@@ -2846,11 +2855,19 @@ fn push_rounded_rect_path(
         hh - if upper_right { r } else { 0.0 },
     )));
     if upper_right {
-        cmds.push(PathCmd::cubic_to(
-            Point::new(hw, hh - r + k * r),
-            Point::new(hw - r + k * r, hh),
-            Point::new(hw - r, hh),
-        ));
+        if use_arcs {
+            cmds.push(PathCmd::arc_to(
+                Point::new(hw - r, hh),
+                Point::new(hw - r, hh - r),
+                false,
+            ));
+        } else {
+            cmds.push(PathCmd::cubic_to(
+                Point::new(hw, hh - r + k * r),
+                Point::new(hw - r + k * r, hh),
+                Point::new(hw - r, hh),
+            ));
+        }
     }
 
     cmds.push(PathCmd::line_to(Point::new(
@@ -2858,11 +2875,19 @@ fn push_rounded_rect_path(
         hh,
     )));
     if upper_left {
-        cmds.push(PathCmd::cubic_to(
-            Point::new(-hw + r - k * r, hh),
-            Point::new(-hw, hh - r + k * r),
-            Point::new(-hw, hh - r),
-        ));
+        if use_arcs {
+            cmds.push(PathCmd::arc_to(
+                Point::new(-hw, hh - r),
+                Point::new(-hw + r, hh - r),
+                false,
+            ));
+        } else {
+            cmds.push(PathCmd::cubic_to(
+                Point::new(-hw + r - k * r, hh),
+                Point::new(-hw, hh - r + k * r),
+                Point::new(-hw, hh - r),
+            ));
+        }
     }
 
     cmds.push(PathCmd::line_to(Point::new(
@@ -2870,11 +2895,19 @@ fn push_rounded_rect_path(
         -hh + if lower_left { r } else { 0.0 },
     )));
     if lower_left {
-        cmds.push(PathCmd::cubic_to(
-            Point::new(-hw, -hh + r - k * r),
-            Point::new(-hw + r - k * r, -hh),
-            Point::new(-hw + r, -hh),
-        ));
+        if use_arcs {
+            cmds.push(PathCmd::arc_to(
+                Point::new(-hw + r, -hh),
+                Point::new(-hw + r, -hh + r),
+                false,
+            ));
+        } else {
+            cmds.push(PathCmd::cubic_to(
+                Point::new(-hw, -hh + r - k * r),
+                Point::new(-hw + r - k * r, -hh),
+                Point::new(-hw + r, -hh),
+            ));
+        }
     }
     cmds.push(PathCmd::close());
 
@@ -3064,6 +3097,22 @@ fn transform_path_cmds(
 ) -> (BBox, Vec<PathCmd>) {
     pcb_ir::dialects::path::transform_cmds(cmds, transform)
 }
+
+fn affine_preserves_circles(transform: Affine2) -> bool {
+    let sx = transform.m00.hypot(transform.m10);
+    let sy = transform.m01.hypot(transform.m11);
+    let dot = transform.m00 * transform.m01 + transform.m10 * transform.m11;
+    sx > GEOMETRY_EPSILON
+        && sy > GEOMETRY_EPSILON
+        && nearly_equal(sx, sy)
+        && dot.abs() <= GEOMETRY_EPSILON * sx.max(sy).max(1.0)
+}
+
+fn nearly_equal(left: f64, right: f64) -> bool {
+    (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
+}
+
+const GEOMETRY_EPSILON: f64 = 1e-9;
 
 fn push_donut_path(
     doc: &mut GeometryDocument,
@@ -3970,6 +4019,53 @@ mod tests {
         assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, 2.0)));
         assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-5.0, -2.0)));
         assert!(!cmds.iter().any(|cmd| cmd.p0 == Point::new(-4.0, -3.0)));
+    }
+
+    #[test]
+    fn rounded_rect_preserves_arcs_when_transform_preserves_circles() {
+        let mut doc = GeometryDocument::new();
+
+        push_rounded_rect_path(&mut doc, Affine2::identity(), 10.0, 6.0, 1.0, [true; 4]);
+
+        let path = &doc.paths[0];
+        let contour = &doc.contours[path.contour_start as usize];
+        let cmds = &doc.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
+
+        assert_eq!(cmds.iter().filter(|cmd| cmd.op == PathOp::ArcTo).count(), 4);
+        assert!(!cmds.iter().any(|cmd| cmd.op == PathOp::CubicTo));
+    }
+
+    #[test]
+    fn rounded_rect_uses_cubics_when_transform_distorts_circles() {
+        let mut doc = GeometryDocument::new();
+
+        push_rounded_rect_path(
+            &mut doc,
+            Affine2 {
+                m00: 2.0,
+                m01: 0.0,
+                m02: 0.0,
+                m10: 0.0,
+                m11: 1.0,
+                m12: 0.0,
+            },
+            10.0,
+            6.0,
+            1.0,
+            [true; 4],
+        );
+
+        let path = &doc.paths[0];
+        let contour = &doc.contours[path.contour_start as usize];
+        let cmds = &doc.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
+
+        assert_eq!(
+            cmds.iter().filter(|cmd| cmd.op == PathOp::CubicTo).count(),
+            4
+        );
+        assert!(!cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
     }
 
     #[test]

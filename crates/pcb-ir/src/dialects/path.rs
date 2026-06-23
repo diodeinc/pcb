@@ -254,22 +254,48 @@ pub fn transform_cmds(
     (bbox, transformed_cmds)
 }
 
-pub fn outline_stroke(
+/// Style for converting a stroked centerline into filled geometry.
+///
+/// Geometrically this is the Minkowski sum of the source path and the stroke
+/// aperture implied by the style. For the normal PCB/Gerber case that aperture
+/// is a disk with radius `width / 2`, with caps and joins controlling endpoint
+/// and vertex treatment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StrokeToFillStyle {
+    pub width: f64,
+    pub line_cap: LineCap,
+    pub line_join: LineJoin,
+}
+
+impl StrokeToFillStyle {
+    pub fn new(width: f64, line_cap: LineCap, line_join: LineJoin) -> Self {
+        Self {
+            width,
+            line_cap,
+            line_join,
+        }
+    }
+}
+
+/// Convert stroked centerlines/arcs into filled contours.
+///
+/// Use this for rendering, boolean composition, comparison, and fallback
+/// targets that cannot represent native strokes. Gerber export should prefer
+/// native draw/arc objects where possible.
+pub fn stroke_to_fill(
     payloads: &[PathPayload],
-    width: f64,
-    line_cap: LineCap,
-    line_join: LineJoin,
+    style: StrokeToFillStyle,
 ) -> Option<Vec<PathPayload>> {
-    if width <= 0.0 {
+    if style.width <= 0.0 {
         return None;
     }
     let source = payloads_to_kurbo(payloads);
     if source.elements().is_empty() {
         return None;
     }
-    let stroke = Stroke::new(width)
-        .with_join(kurbo_join(line_join))
-        .with_caps(kurbo_cap(line_cap));
+    let stroke = Stroke::new(style.width)
+        .with_join(kurbo_join(style.line_join))
+        .with_caps(kurbo_cap(style.line_cap));
     let outline = kurbo::stroke(source, &stroke, &StrokeOpts::default(), 0.01);
     let contours = kurbo_path_to_payloads(&outline);
     (!contours.is_empty()).then_some(contours)
@@ -539,4 +565,56 @@ fn kurbo_point(point: Point) -> kurbo::Point {
 
 fn ir_point(point: kurbo::Point) -> Point {
     Point::new(point.x, point.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stroke_to_fill_rejects_non_positive_width() {
+        let source = vec![line_payload(Point::new(0.0, 0.0), Point::new(1.0, 0.0))];
+
+        assert!(
+            stroke_to_fill(
+                &source,
+                StrokeToFillStyle::new(0.0, LineCap::Round, LineJoin::Round)
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn stroke_to_fill_expands_centerline_by_half_width() {
+        let source = vec![line_payload(Point::new(0.0, 0.0), Point::new(10.0, 0.0))];
+        let fill = stroke_to_fill(
+            &source,
+            StrokeToFillStyle::new(2.0, LineCap::Butt, LineJoin::Round),
+        )
+        .expect("stroke should expand to fill geometry");
+        let bbox = fill
+            .iter()
+            .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox));
+
+        assert_close(bbox.min.x, 0.0);
+        assert_close(bbox.min.y, -1.0);
+        assert_close(bbox.max.x, 10.0);
+        assert_close(bbox.max.y, 1.0);
+    }
+
+    fn line_payload(start: Point, end: Point) -> PathPayload {
+        let mut bbox = BBox::from_point(start);
+        bbox.include_point(end);
+        PathPayload {
+            bbox,
+            cmds: vec![PathCmd::move_to(start), PathCmd::line_to(end)],
+        }
+    }
+
+    fn assert_close(left: f64, right: f64) {
+        assert!(
+            (left - right).abs() <= 1e-9,
+            "expected {left} to be close to {right}"
+        );
+    }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
 use gerberx2::{
@@ -14,108 +14,18 @@ use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 
 pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
     let mut apertures = ApertureTable::default();
-    let mut objects = Vec::new();
+    let mut plan = GerberPlan::default();
     let layer_attributes = layer
         .layers
         .first()
         .map(|layer| layer.meta.clone())
         .unwrap_or_default();
 
-    for object in &layer.objects {
-        let attributes = lower_object_attributes(&object.meta);
-        match object.geometry {
-            ArtworkGeometry::Region { path } => objects.extend(lower_region_objects(
-                layer,
-                path,
-                object.paint,
-                &attributes,
-            )?),
-            ArtworkGeometry::Stroke { path } => {
-                let artwork_path = &layer.paths[path as usize];
-                let default_function = vec!["Conductor".to_string()];
-                let aperture_function = object
-                    .meta
-                    .aperture_function
-                    .as_deref()
-                    .unwrap_or(default_function.as_slice());
-                let aperture = apertures.circle(artwork_path.stroke_width, aperture_function)?;
-                for contour in path_contours(layer, artwork_path) {
-                    for segment in contour_segments(&contour.cmds)? {
-                        objects.push(WriterObject {
-                            kind: match segment {
-                                Segment::Line { start, end } => ObjectKind::Draw {
-                                    start: lower_point(start),
-                                    end: lower_point(end),
-                                    aperture,
-                                },
-                                Segment::Arc {
-                                    start,
-                                    end,
-                                    center,
-                                    clockwise,
-                                } => ObjectKind::Arc {
-                                    start: lower_point(start),
-                                    end: lower_point(end),
-                                    center_offset: lower_point(Point::new(
-                                        center.x - start.x,
-                                        center.y - start.y,
-                                    )),
-                                    clockwise,
-                                    aperture,
-                                },
-                            },
-                            polarity: lower_polarity(object.paint),
-                            attributes: attributes.clone(),
-                        });
-                    }
-                }
-            }
-            ArtworkGeometry::CircleFlash { at, diameter } => {
-                let default_function = vec!["Conductor".to_string()];
-                let aperture_function = object
-                    .meta
-                    .aperture_function
-                    .as_deref()
-                    .unwrap_or(default_function.as_slice());
-                let aperture = apertures.circle(diameter, aperture_function)?;
-                objects.push(WriterObject {
-                    kind: ObjectKind::Flash {
-                        at: lower_point(at),
-                        aperture,
-                    },
-                    polarity: lower_polarity(object.paint),
-                    attributes,
-                });
-            }
-            ArtworkGeometry::Flash {
-                aperture,
-                transform,
-            } => {
-                if !transform_is_translation(transform) {
-                    bail!("cannot lower transformed artwork flash to Gerber");
-                }
-                let artwork_aperture =
-                    *layer.apertures.get(aperture as usize).with_context(|| {
-                        format!("artwork flash references missing aperture {aperture}")
-                    })?;
-                let default_function = vec!["Conductor".to_string()];
-                let aperture_function = object
-                    .meta
-                    .aperture_function
-                    .as_deref()
-                    .unwrap_or(default_function.as_slice());
-                let aperture = apertures.artwork_aperture(artwork_aperture, aperture_function)?;
-                objects.push(WriterObject {
-                    kind: ObjectKind::Flash {
-                        at: lower_point(transform.transform_point(Point::new(0.0, 0.0))),
-                        aperture,
-                    },
-                    polarity: lower_polarity(object.paint),
-                    attributes,
-                });
-            }
-        }
+    for (source_index, object) in layer.objects.iter().enumerate() {
+        let objects = lower_artwork_object(layer, object, &mut apertures)?;
+        plan.push_group(source_index, objects);
     }
+    let objects = plan.into_ordered_objects()?;
 
     Ok(GerberLayer {
         file_attributes: lower_layer_attributes(&layer_attributes),
@@ -123,6 +33,292 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
         objects,
         ..GerberLayer::default()
     })
+}
+
+fn lower_artwork_object(
+    layer: &ArtworkLayer,
+    object: &pcb_ir::dialects::artwork::ArtworkObject<ObjectAttributes>,
+    apertures: &mut ApertureTable,
+) -> Result<Vec<WriterObject>> {
+    let attributes = lower_object_attributes(&object.meta);
+    let mut objects = Vec::new();
+    match object.geometry {
+        ArtworkGeometry::Region { path } => {
+            objects.extend(lower_region_objects(
+                layer,
+                path,
+                object.paint,
+                &attributes,
+            )?);
+        }
+        ArtworkGeometry::Stroke { path } => {
+            let artwork_path = &layer.paths[path as usize];
+            let default_function = vec!["Conductor".to_string()];
+            let aperture_function = object
+                .meta
+                .aperture_function
+                .as_deref()
+                .unwrap_or(default_function.as_slice());
+            let aperture = apertures.circle(artwork_path.stroke_width, aperture_function)?;
+            for contour in path_contours(layer, artwork_path) {
+                for segment in contour_segments(&contour.cmds)? {
+                    objects.push(WriterObject {
+                        kind: match segment {
+                            Segment::Line { start, end } => ObjectKind::Draw {
+                                start: lower_point(start),
+                                end: lower_point(end),
+                                aperture,
+                            },
+                            Segment::Arc {
+                                start,
+                                end,
+                                center,
+                                clockwise,
+                            } => ObjectKind::Arc {
+                                start: lower_point(start),
+                                end: lower_point(end),
+                                center_offset: lower_point(Point::new(
+                                    center.x - start.x,
+                                    center.y - start.y,
+                                )),
+                                clockwise,
+                                aperture,
+                            },
+                        },
+                        polarity: lower_polarity(object.paint),
+                        attributes: attributes.clone(),
+                    });
+                }
+            }
+        }
+        ArtworkGeometry::CircleFlash { at, diameter } => {
+            let default_function = vec!["Conductor".to_string()];
+            let aperture_function = object
+                .meta
+                .aperture_function
+                .as_deref()
+                .unwrap_or(default_function.as_slice());
+            let aperture = apertures.circle(diameter, aperture_function)?;
+            objects.push(WriterObject {
+                kind: ObjectKind::Flash {
+                    at: lower_point(at),
+                    aperture,
+                },
+                polarity: lower_polarity(object.paint),
+                attributes,
+            });
+        }
+        ArtworkGeometry::Flash {
+            aperture,
+            transform,
+        } => {
+            if !transform_is_translation(transform) {
+                bail!("cannot lower transformed artwork flash to Gerber");
+            }
+            let artwork_aperture = *layer
+                .apertures
+                .get(aperture as usize)
+                .with_context(|| format!("artwork flash references missing aperture {aperture}"))?;
+            let default_function = vec!["Conductor".to_string()];
+            let aperture_function = object
+                .meta
+                .aperture_function
+                .as_deref()
+                .unwrap_or(default_function.as_slice());
+            let aperture = apertures.artwork_aperture(artwork_aperture, aperture_function)?;
+            objects.push(WriterObject {
+                kind: ObjectKind::Flash {
+                    at: lower_point(transform.transform_point(Point::new(0.0, 0.0))),
+                    aperture,
+                },
+                polarity: lower_polarity(object.paint),
+                attributes,
+            });
+        }
+    }
+    Ok(objects)
+}
+
+#[derive(Debug, Default)]
+struct GerberPlan {
+    groups: Vec<GerberObjectGroup>,
+}
+
+#[derive(Debug)]
+struct GerberObjectGroup {
+    source_index: usize,
+    stage: GerberPaintStage,
+    objects: Vec<WriterObject>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum GerberPaintStage {
+    /// Paint that may use local clear polarity internally, such as pours with holes.
+    Base,
+    /// Dark-only objects that must survive all base clears: pads, vias, traces, fiducials.
+    Overlay,
+    /// True layer-wide removals. There are no current producers, but the stage is explicit.
+    FinalCutout,
+}
+
+impl GerberPlan {
+    fn push_group(&mut self, source_index: usize, objects: Vec<WriterObject>) {
+        if objects.is_empty() {
+            return;
+        }
+        self.groups.push(GerberObjectGroup {
+            source_index,
+            stage: paint_stage_for_objects(&objects),
+            objects,
+        });
+    }
+
+    fn into_ordered_objects(self) -> Result<Vec<WriterObject>> {
+        let order = self.topological_order()?;
+        let mut groups = self.groups.into_iter().map(Some).collect::<Vec<_>>();
+        let mut objects = Vec::new();
+        for group_index in order {
+            let Some(group) = groups[group_index].take() else {
+                continue;
+            };
+            objects.extend(group.objects);
+        }
+        Ok(objects)
+    }
+
+    fn topological_order(&self) -> Result<Vec<usize>> {
+        let group_count = self.groups.len();
+        let base_barrier = group_count;
+        let overlay_barrier = group_count + 1;
+        let node_count = group_count + 2;
+        let mut graph = ScheduleGraph::new(node_count);
+
+        let mut by_stage = [
+            Vec::<usize>::new(),
+            Vec::<usize>::new(),
+            Vec::<usize>::new(),
+        ];
+        for (index, group) in self.groups.iter().enumerate() {
+            by_stage[group.stage as usize].push(index);
+        }
+
+        for stage_groups in &by_stage {
+            for pair in stage_groups.windows(2) {
+                graph.add_edge(pair[0], pair[1]);
+            }
+        }
+        for &group in &by_stage[GerberPaintStage::Base as usize] {
+            graph.add_edge(group, base_barrier);
+        }
+        graph.add_edge(base_barrier, overlay_barrier);
+        for &group in &by_stage[GerberPaintStage::Overlay as usize] {
+            graph.add_edge(base_barrier, group);
+            graph.add_edge(group, overlay_barrier);
+        }
+        for &group in &by_stage[GerberPaintStage::FinalCutout as usize] {
+            graph.add_edge(overlay_barrier, group);
+        }
+
+        let priorities = (0..node_count)
+            .map(|node| self.schedule_priority(node, base_barrier, overlay_barrier))
+            .collect::<Vec<_>>();
+        let order = graph.topological_order(&priorities)?;
+        Ok(order
+            .into_iter()
+            .filter(|&node| node < group_count)
+            .collect())
+    }
+
+    fn schedule_priority(
+        &self,
+        node: usize,
+        base_barrier: usize,
+        overlay_barrier: usize,
+    ) -> SchedulePriority {
+        if node == base_barrier {
+            return SchedulePriority {
+                stage: GerberPaintStage::Base,
+                source_index: usize::MAX,
+                barrier: 0,
+            };
+        }
+        if node == overlay_barrier {
+            return SchedulePriority {
+                stage: GerberPaintStage::Overlay,
+                source_index: usize::MAX,
+                barrier: 0,
+            };
+        }
+        let group = &self.groups[node];
+        SchedulePriority {
+            stage: group.stage,
+            source_index: group.source_index,
+            barrier: 1,
+        }
+    }
+}
+
+fn paint_stage_for_objects(objects: &[WriterObject]) -> GerberPaintStage {
+    if objects
+        .iter()
+        .any(|object| object.polarity == Polarity::Clear)
+    {
+        GerberPaintStage::Base
+    } else {
+        GerberPaintStage::Overlay
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SchedulePriority {
+    stage: GerberPaintStage,
+    source_index: usize,
+    barrier: usize,
+}
+
+struct ScheduleGraph {
+    outgoing: Vec<Vec<usize>>,
+    indegree: Vec<usize>,
+}
+
+impl ScheduleGraph {
+    fn new(node_count: usize) -> Self {
+        Self {
+            outgoing: vec![Vec::new(); node_count],
+            indegree: vec![0; node_count],
+        }
+    }
+
+    fn add_edge(&mut self, from: usize, to: usize) {
+        self.outgoing[from].push(to);
+        self.indegree[to] += 1;
+    }
+
+    fn topological_order(&self, priorities: &[SchedulePriority]) -> Result<Vec<usize>> {
+        let mut indegree = self.indegree.clone();
+        let mut ready = BTreeSet::new();
+        for (node, &degree) in indegree.iter().enumerate() {
+            if degree == 0 {
+                ready.insert((priorities[node], node));
+            }
+        }
+
+        let mut order = Vec::with_capacity(indegree.len());
+        while let Some((_, node)) = ready.pop_first() {
+            order.push(node);
+            for &next in &self.outgoing[node] {
+                indegree[next] -= 1;
+                if indegree[next] == 0 {
+                    ready.insert((priorities[next], next));
+                }
+            }
+        }
+
+        if order.len() != indegree.len() {
+            bail!("Gerber emission schedule contains a cycle");
+        }
+        Ok(order)
+    }
 }
 
 #[derive(Default)]
@@ -789,6 +985,88 @@ mod tests {
                 .segments
                 .iter()
                 .any(|segment| matches!(segment, ContourSegment::Arc { .. }))
+        );
+    }
+
+    #[test]
+    fn schedules_dark_only_multi_contour_groups_after_base_clears() {
+        let mut artwork = ArtworkLayer::new(Unit::Millimeter);
+        let layer_id = artwork.push_layer(IrArtworkLayer {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            object_start: 0,
+            object_count: 0,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+        let pour = artwork.push_path(
+            ArtworkPath::filled(FillRule::EvenOdd),
+            vec![
+                rect_payload(0.0, 0.0, 10.0, 10.0),
+                rect_payload(2.0, 2.0, 8.0, 8.0),
+            ],
+        );
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                paint: PaintPolarity::Dark,
+                geometry: ArtworkGeometry::Region { path: pour },
+                net: None,
+                bbox: artwork.paths[pour as usize].bbox,
+                meta: ObjectAttributes::default(),
+            },
+        );
+        let trace = artwork.push_path(
+            ArtworkPath::filled(FillRule::NonZero),
+            vec![
+                rect_payload(11.0, 0.0, 12.0, 1.0),
+                rect_payload(11.0, 2.0, 12.0, 3.0),
+            ],
+        );
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                paint: PaintPolarity::Dark,
+                geometry: ArtworkGeometry::Region { path: trace },
+                net: None,
+                bbox: artwork.paths[trace as usize].bbox,
+                meta: ObjectAttributes {
+                    net: Some("TRACE".to_string()),
+                    ..ObjectAttributes::default()
+                },
+            },
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+
+        let clear_index = gerber
+            .objects
+            .iter()
+            .position(|object| object.polarity == Polarity::Clear)
+            .expect("base pour should lower its hole as a clear object");
+        let trace_index = gerber
+            .objects
+            .iter()
+            .position(|object| {
+                object
+                    .attributes
+                    .iter()
+                    .any(|attr| attr.name == ".N" && attr.fields == ["TRACE"])
+            })
+            .expect("dark-only multi-contour trace should keep its net attribute");
+
+        assert!(clear_index < trace_index);
+        assert!(
+            gerber.objects[trace_index..]
+                .iter()
+                .filter(|object| {
+                    object
+                        .attributes
+                        .iter()
+                        .any(|attr| attr.name == ".N" && attr.fields == ["TRACE"])
+                })
+                .all(|object| object.polarity == Polarity::Dark)
         );
     }
 

@@ -7,7 +7,7 @@ use crate::dialects::path as common_path;
 /// comparison, and mask extraction, not for preserving original Gerber objects.
 pub fn compose_for_rendering<A: Clone>(doc: &mut GeometryDocument<A>) {
     normalize_bounds(doc);
-    outline_stroked_paths(doc);
+    expand_stroked_paths_to_fills(doc);
     resolve_polarity_and_cutouts(doc);
     normalize_bounds(doc);
 }
@@ -33,7 +33,7 @@ pub fn normalize_bounds<A>(doc: &mut GeometryDocument<A>) {
         .fold(BBox::empty(), |bbox, feature| bbox.union(feature.bbox));
 }
 
-pub fn outline_stroked_paths<A: Clone>(doc: &mut GeometryDocument<A>) {
+pub fn expand_stroked_paths_to_fills<A: Clone>(doc: &mut GeometryDocument<A>) {
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
         let feature = doc.features[feature_index].clone();
@@ -47,11 +47,13 @@ pub fn outline_stroked_paths<A: Clone>(doc: &mut GeometryDocument<A>) {
         let path_start = doc.paths.len() as u32;
         for path in paths {
             if path.flags.stroked {
-                if let Some(contours) = common_path::outline_stroke(
+                if let Some(contours) = common_path::stroke_to_fill(
                     &path_payloads(doc, &path),
-                    path.stroke_width,
-                    path.line_cap,
-                    LineJoin::Round,
+                    common_path::StrokeToFillStyle::new(
+                        path.stroke_width,
+                        path.line_cap,
+                        LineJoin::Round,
+                    ),
                 ) {
                     let contours = common_path::polygon_contours_to_payloads(
                         common_path::payloads_to_polygon_contours(&contours),

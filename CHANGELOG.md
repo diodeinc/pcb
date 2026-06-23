@@ -24,6 +24,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - IPC-2581 Gerber export now preserves standard pad flashes and copper feature ordering around local clear regions.
+- IPC-2581 Gerber export now uses explicit paint-order scheduling, preserves rounded IPC arcs where possible, and centralizes stroke-to-fill expansion for geometry consumers.
 
 ## [0.4.1] - 2026-06-22
 
