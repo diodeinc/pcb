@@ -8,6 +8,7 @@ pub mod geometry;
 pub mod gerber;
 mod steps;
 pub mod utils;
+pub mod xnc;
 
 // Re-export ipc2581 for external use
 pub use ipc2581;

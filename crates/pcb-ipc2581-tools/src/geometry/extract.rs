@@ -2088,12 +2088,16 @@ fn extract_slot(
 ) -> Result<GeometryFeature> {
     let placement = ipc_placement(Point::new(slot.x, slot.y), slot.xform);
     let path_start = doc.paths.len() as u32;
+    let mut primitive_size = None;
 
     match &slot.shape {
         SlotShape::Outline(polygon) => {
             push_polygon_path(doc, polygon, placement.transform, FillRule::NonZero);
         }
         SlotShape::Primitive(primitive) => {
+            if let StandardPrimitive::Oval(oval) = primitive {
+                primitive_size = Some((oval.shape.size.width, oval.shape.size.height));
+            }
             let _ = lower_standard_primitive(
                 context,
                 doc,
@@ -2115,6 +2119,12 @@ fn extract_slot(
     feature.path_start = path_start;
     feature.path_count = path_count;
     apply_ipc_placement(&mut feature, placement);
+    if let Some((width, height)) = primitive_size {
+        feature.width = width;
+        feature.height = height;
+        feature.outer_diameter = width.min(height) * feature.scale;
+        feature.stroke_width = feature.outer_diameter;
+    }
     feature.intent.plating = plating_kind(slot.plating_status);
     feature.flags.lowered_to_paths = true;
     Ok(feature)

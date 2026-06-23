@@ -11,12 +11,13 @@ use zip::{ZipWriter, write::FileOptions};
 
 use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 use super::lower::lower_artwork_layer;
+use crate::xnc::{XncAttribute, XncBuilder, XncUnit, write_xnc};
 use crate::{geometry, ipc2581 as ipc};
-use pcb_ir::common::{Affine2, BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Point, Unit};
+use pcb_ir::common::{Affine2, BBox, LayerRole, LineJoin, PaintPolarity, Point, Unit};
 use pcb_ir::dialects::artwork::{ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{
-    FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature,
-    GeometryPath, GeometryPolarity, GeometryView, PlatingKind, ProfileSet,
+    FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FiducialKind,
+    GeometryFeature, GeometryPath, GeometryPolarity, GeometryView, PlatingKind,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -36,7 +37,7 @@ pub struct GerberExportSet {
 #[derive(Debug, Clone)]
 pub struct GerberExportFile {
     pub filename: String,
-    pub layer: GerberLayer,
+    pub layer: Option<GerberLayer>,
     pub contents: String,
 }
 
@@ -53,7 +54,6 @@ pub fn build_gerber_x2(ipc: &Ipc2581, view: GeometryView) -> Result<GerberExport
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut files = Vec::new();
-    let mut first_doc = None;
     let plans = export_layer_plans(ipc, &ecad.cad_data.layers);
 
     for plan in &plans {
@@ -62,9 +62,6 @@ pub fn build_gerber_x2(ipc: &Ipc2581, view: GeometryView) -> Result<GerberExport
         let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut doc);
-        if first_doc.is_none() {
-            first_doc = Some(doc.clone());
-        }
         let part = gerber_part_for_doc(&doc);
         let artwork = artwork_from_processed_layer(
             ipc,
@@ -77,24 +74,16 @@ pub fn build_gerber_x2(ipc: &Ipc2581, view: GeometryView) -> Result<GerberExport
         let contents = write_layer(&layer)?;
         files.push(GerberExportFile {
             filename: plan.filename.clone(),
-            layer,
+            layer: Some(layer),
             contents,
         });
     }
 
-    if let Some(doc) = first_doc {
-        let profile = profile_artwork_from_profiles(&doc, view.profile_set())?;
-        if !profile.objects.is_empty() {
-            let layer = lower_artwork_layer(&profile)?;
-            let contents = write_layer(&layer)?;
-            let filename = unique_profile_filename(&files);
-            files.push(GerberExportFile {
-                filename,
-                layer,
-                contents,
-            });
-        }
-    }
+    files.extend(build_xnc_drill_files(
+        ipc,
+        view,
+        copper_layer_count(&ecad.cad_data.layers),
+    )?);
 
     Ok(GerberExportSet { files })
 }
@@ -167,18 +156,13 @@ enum GerberLayerRole {
     Paste,
     Soldermask,
     Legend,
-    Drill,
     Profile,
-    Route,
     Vcut,
     Score,
 }
 
 fn export_layer_plans<'a>(ipc: &Ipc2581, layers: &'a [Layer]) -> Vec<ExportLayerPlan<'a>> {
-    let copper_count = layers
-        .iter()
-        .filter(|layer| gerber_layer_role(layer.layer_function) == Some(GerberLayerRole::Copper))
-        .count();
+    let copper_count = copper_layer_count(layers);
     let mut copper_index = 0;
     let mut plans = Vec::new();
     let mut used_filenames = HashSet::new();
@@ -201,6 +185,13 @@ fn export_layer_plans<'a>(ipc: &Ipc2581, layers: &'a [Layer]) -> Vec<ExportLayer
     }
 
     plans
+}
+
+fn copper_layer_count(layers: &[Layer]) -> usize {
+    layers
+        .iter()
+        .filter(|layer| gerber_layer_role(layer.layer_function) == Some(GerberLayerRole::Copper))
+        .count()
 }
 
 fn allocate_filename(
@@ -234,14 +225,6 @@ fn allocate_filename(
         }
     }
     unreachable!("unbounded filename allocation should find an unused name")
-}
-
-fn unique_profile_filename(files: &[GerberExportFile]) -> String {
-    let mut used = files
-        .iter()
-        .map(|file| file.filename.clone())
-        .collect::<HashSet<_>>();
-    allocate_filename(&mut used, "profile.gbr", "profile")
 }
 
 fn split_filename(filename: &str) -> (&str, Option<&str>) {
@@ -278,8 +261,7 @@ fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
         LayerFunction::Solderpaste | LayerFunction::Pastemask => Some(GerberLayerRole::Paste),
         LayerFunction::Soldermask => Some(GerberLayerRole::Soldermask),
         LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),
-        LayerFunction::Drill => Some(GerberLayerRole::Drill),
-        LayerFunction::Rout => Some(GerberLayerRole::Route),
+        LayerFunction::Drill | LayerFunction::Rout => None,
         LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
         LayerFunction::VCut => Some(GerberLayerRole::Vcut),
         LayerFunction::Score => Some(GerberLayerRole::Score),
@@ -294,11 +276,9 @@ impl GerberLayerRole {
             GerberLayerRole::Paste => LayerRole::Paste,
             GerberLayerRole::Soldermask => LayerRole::Soldermask,
             GerberLayerRole::Legend => LayerRole::Legend,
-            GerberLayerRole::Drill => LayerRole::Drill,
-            GerberLayerRole::Profile
-            | GerberLayerRole::Route
-            | GerberLayerRole::Vcut
-            | GerberLayerRole::Score => LayerRole::Profile,
+            GerberLayerRole::Profile | GerberLayerRole::Vcut | GerberLayerRole::Score => {
+                LayerRole::Profile
+            }
         }
     }
 }
@@ -341,14 +321,10 @@ fn layer_output(
                 vec!["Legend".into(), "Top".into()],
             ),
         },
-        GerberLayerRole::Drill => ("Drill.gbr".to_string(), vec!["Drill".into()]),
         GerberLayerRole::Profile => (
             "Edge_Cuts.gm1".to_string(),
             vec!["Profile".into(), "NP".into()],
         ),
-        GerberLayerRole::Route => {
-            fabrication_line_layer_output("Route.gbr", &["Other", "Route"], side)
-        }
         GerberLayerRole::Vcut => fabrication_line_layer_output("V_Cut.gbr", &["Vcut"], side),
         GerberLayerRole::Score => {
             fabrication_line_layer_output("Score.gbr", &["Other", "Score"], side)
@@ -435,6 +411,214 @@ fn copper_layer_output(
             side_field.to_string(),
         ],
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XncDrillFileKind {
+    Plated,
+    NonPlated,
+}
+
+fn build_xnc_drill_files(
+    ipc: &Ipc2581,
+    view: GeometryView,
+    copper_count: usize,
+) -> Result<Vec<GerberExportFile>> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let mut plated = XncBuilder::new(
+        XncUnit::Metric,
+        vec![xnc_file_function(XncDrillFileKind::Plated, copper_count)],
+    );
+    let mut non_plated = XncBuilder::new(
+        XncUnit::Metric,
+        vec![xnc_file_function(XncDrillFileKind::NonPlated, copper_count)],
+    );
+
+    for layer in &ecad.cad_data.layers {
+        if !matches!(
+            layer.layer_function,
+            LayerFunction::Drill | LayerFunction::Rout
+        ) {
+            continue;
+        }
+        let layer_name = ipc.resolve(layer.name);
+        let doc = geometry::extract_layer_for_view(ipc, layer_name, view).with_context(|| {
+            format!("failed to extract IPC-2581 drill/rout layer '{layer_name}'")
+        })?;
+        collect_xnc_drill_features(ipc, &doc, &mut plated, &mut non_plated)?;
+    }
+
+    let mut files = Vec::new();
+    push_xnc_file(&mut files, "PTH.drl", plated.finish())?;
+    push_xnc_file(&mut files, "NPTH.drl", non_plated.finish())?;
+    Ok(files)
+}
+
+fn push_xnc_file(
+    files: &mut Vec<GerberExportFile>,
+    filename: &str,
+    document: crate::xnc::XncDocument,
+) -> Result<()> {
+    if document.is_empty() {
+        return Ok(());
+    }
+    files.push(GerberExportFile {
+        filename: filename.to_string(),
+        layer: None,
+        contents: write_xnc(&document)?,
+    });
+    Ok(())
+}
+
+fn collect_xnc_drill_features(
+    ipc: &Ipc2581,
+    doc: &IpcGeometryDocument,
+    plated: &mut XncBuilder,
+    non_plated: &mut XncBuilder,
+) -> Result<()> {
+    for layer in &doc.layers {
+        for feature in &doc.features
+            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
+        {
+            let kind = xnc_drill_file_kind(feature.intent.plating);
+            let builder = match kind {
+                XncDrillFileKind::Plated => &mut *plated,
+                XncDrillFileKind::NonPlated => &mut *non_plated,
+            };
+            match feature.kind {
+                FeatureKind::Hole if feature.outer_diameter > 0.0 => builder.add_drill(
+                    feature.outer_diameter,
+                    feature.center,
+                    xnc_tool_attributes(feature, kind),
+                    xnc_object_attributes(ipc, doc, feature),
+                )?,
+                FeatureKind::Slot => {
+                    if let Some(slot) = xnc_linear_slot(feature) {
+                        if slot.start.distance_to(slot.end) <= XNC_GEOMETRY_EPSILON {
+                            builder.add_drill(
+                                slot.diameter,
+                                feature.center,
+                                xnc_tool_attributes(feature, kind),
+                                xnc_object_attributes(ipc, doc, feature),
+                            )?;
+                        } else {
+                            builder.add_linear_route(
+                                slot.diameter,
+                                slot.start,
+                                slot.end,
+                                xnc_tool_attributes(feature, kind),
+                                xnc_object_attributes(ipc, doc, feature),
+                            )?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct XncLinearSlot {
+    diameter: f64,
+    start: Point,
+    end: Point,
+}
+
+fn xnc_linear_slot(feature: &GeometryFeature<ipc2581::Symbol>) -> Option<XncLinearSlot> {
+    if feature.width <= 0.0 || feature.height <= 0.0 || feature.scale <= 0.0 {
+        return None;
+    }
+    let diameter = feature.width.min(feature.height) * feature.scale;
+    if diameter <= XNC_GEOMETRY_EPSILON {
+        return None;
+    }
+    let long = feature.width.max(feature.height);
+    let short = feature.width.min(feature.height);
+    let centerline = (long - short).max(0.0) / 2.0;
+    let (start, end) = if feature.width >= feature.height {
+        (Point::new(-centerline, 0.0), Point::new(centerline, 0.0))
+    } else {
+        (Point::new(0.0, -centerline), Point::new(0.0, centerline))
+    };
+    Some(XncLinearSlot {
+        diameter,
+        start: feature.transform.transform_point(start),
+        end: feature.transform.transform_point(end),
+    })
+}
+
+const XNC_GEOMETRY_EPSILON: f64 = 1e-9;
+
+fn xnc_file_function(kind: XncDrillFileKind, copper_count: usize) -> XncAttribute {
+    let (plating, suffix) = match kind {
+        XncDrillFileKind::Plated => ("Plated", "PTH"),
+        XncDrillFileKind::NonPlated => ("NonPlated", "NPTH"),
+    };
+    XncAttribute::file(
+        "FileFunction",
+        [
+            plating.to_string(),
+            "1".to_string(),
+            copper_count.max(1).to_string(),
+            suffix.to_string(),
+        ],
+    )
+}
+
+fn xnc_tool_attributes(
+    feature: &GeometryFeature<ipc2581::Symbol>,
+    kind: XncDrillFileKind,
+) -> Vec<XncAttribute> {
+    let fields = match kind {
+        XncDrillFileKind::Plated => {
+            let drill_function = if matches!(
+                feature.intent.plating,
+                PlatingKind::Via | PlatingKind::ViaCapped
+            ) {
+                "ViaDrill"
+            } else {
+                "ComponentDrill"
+            };
+            vec!["Plated", "PTH", drill_function]
+        }
+        XncDrillFileKind::NonPlated => vec!["NonPlated", "NPTH", "ComponentDrill"],
+    };
+    vec![XncAttribute::tool("AperFunction", fields)]
+}
+
+fn xnc_object_attributes(
+    ipc: &Ipc2581,
+    doc: &IpcGeometryDocument,
+    feature: &GeometryFeature<ipc2581::Symbol>,
+) -> Vec<XncAttribute> {
+    let mut attributes = Vec::new();
+    if let Some(net) = feature.net {
+        attributes.push(XncAttribute::object("N", [ipc.resolve(net)]));
+    }
+    let pin_ref = (feature.pin_ref_count > 0)
+        .then(|| doc.pin_refs.get(feature.pin_ref_start as usize))
+        .flatten();
+    if let Some(pin_ref) = pin_ref {
+        if let Some(component_ref) = pin_ref.component_ref {
+            attributes.push(XncAttribute::object("C", [ipc.resolve(component_ref)]));
+            attributes.push(XncAttribute::object(
+                "P",
+                [ipc.resolve(component_ref), ipc.resolve(pin_ref.pin)],
+            ));
+        }
+    }
+    attributes
+}
+
+fn xnc_drill_file_kind(plating: PlatingKind) -> XncDrillFileKind {
+    match plating {
+        PlatingKind::Via | PlatingKind::ViaCapped | PlatingKind::Plated => XncDrillFileKind::Plated,
+        PlatingKind::NonPlated | PlatingKind::None | PlatingKind::Unknown => {
+            XncDrillFileKind::NonPlated
+        }
+    }
 }
 
 fn artwork_from_processed_layer(
@@ -724,48 +908,6 @@ fn circle_flash(
     }
 }
 
-const PROFILE_STROKE_WIDTH: f64 = 0.1;
-
-fn profile_artwork_from_profiles(
-    doc: &IpcGeometryDocument,
-    profile_set: ProfileSet,
-) -> Result<ArtworkLayer> {
-    let mut artwork = ArtworkLayer::new(Unit::Millimeter);
-    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
-        name: "Profile".to_string(),
-        role: LayerRole::Profile,
-        side: pcb_ir::common::Side::None,
-        object_start: 0,
-        object_count: 0,
-        bbox: BBox::empty(),
-        meta: layer_attributes(
-            vec!["Profile".into(), "NP".into()],
-            gerber_part_for_doc(doc),
-        ),
-    });
-    for occurrence in pcb_ir::dialects::ipc::profile_occurrences_for(doc, profile_set) {
-        push_profile_artwork_object(
-            &mut artwork,
-            artwork_layer,
-            doc,
-            occurrence.profile.outer_path,
-            occurrence.transform,
-        );
-        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
-            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
-        {
-            push_profile_artwork_object(
-                &mut artwork,
-                artwork_layer,
-                doc,
-                cutout.path,
-                occurrence.transform,
-            );
-        }
-    }
-    Ok(artwork)
-}
-
 fn object_attributes(
     ipc: &Ipc2581,
     doc: &IpcGeometryDocument,
@@ -901,35 +1043,6 @@ fn push_artwork_object(
     Ok(())
 }
 
-fn push_profile_artwork_object(
-    artwork: &mut ArtworkLayer,
-    artwork_layer: u32,
-    doc: &IpcGeometryDocument,
-    path_index: u32,
-    transform: pcb_ir::common::Affine2,
-) {
-    let artwork_path = ArtworkPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round);
-    let path_id = artwork.push_path(
-        artwork_path,
-        pcb_ir::dialects::ipc::transformed_path_payloads(doc, path_index, transform),
-    );
-    artwork.push_object(
-        artwork_layer,
-        ArtworkObject {
-            paint: PaintPolarity::Dark,
-            geometry: ArtworkGeometry::Stroke { path: path_id },
-            net: None,
-            bbox: artwork.paths[path_id as usize].bbox,
-            meta: ObjectAttributes {
-                aperture_function: Some(vec!["Profile".to_string()]),
-                net: None,
-                component: None,
-                pin: None,
-            },
-        },
-    );
-}
-
 fn artwork_contours(
     doc: &IpcGeometryDocument,
     path: &GeometryPath,
@@ -970,7 +1083,7 @@ mod tests {
     use std::io::{Cursor, Read};
 
     #[test]
-    fn route_and_board_outline_layers_export_to_distinct_files() {
+    fn drill_and_route_layers_are_not_exported_as_gerber_layers() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -979,6 +1092,7 @@ mod tests {
     <CadHeader units="MILLIMETER"/>
     <CadData>
       <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL"/>
+      <Layer name="Drill" layerFunction="DRILL" side="ALL"/>
       <Layer name="F.Cu_B.Cu_1" layerFunction="ROUT" side="ALL"/>
     </CadData>
   </Ecad>
@@ -992,7 +1106,7 @@ mod tests {
             .map(|plan| plan.filename)
             .collect::<Vec<_>>();
 
-        assert_eq!(filenames, ["Edge_Cuts.gm1", "Route.gbr"]);
+        assert_eq!(filenames, ["Edge_Cuts.gm1"]);
     }
 
     #[test]
@@ -1001,7 +1115,7 @@ mod tests {
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner"><FunctionMode mode="FABRICATION"/></Content>
-  <Ecad>
+      <Ecad>
     <CadHeader units="MILLIMETER"/>
     <CadData>
       <Layer name="ROUT-A" layerFunction="ROUT" side="ALL"/>
@@ -1026,14 +1140,7 @@ mod tests {
         assert_eq!(unique.len(), filenames.len());
         assert_eq!(
             filenames,
-            [
-                "Route.gbr",
-                "ROUT_B.gbr",
-                "V_Cut.gbr",
-                "VCUT_B.gbr",
-                "Score.gbr",
-                "SCORE_B.gbr"
-            ]
+            ["V_Cut.gbr", "VCUT_B.gbr", "Score.gbr", "SCORE_B.gbr"]
         );
     }
 
@@ -1097,9 +1204,10 @@ mod tests {
         .unwrap();
 
         assert!(set.files.iter().any(|file| file.filename == "F_Cu.gtl"));
-        assert!(set.files.iter().any(|file| file.filename == "profile.gbr"));
         for file in &set.files {
-            gerberx2::GerberX2::parse(&file.contents).unwrap();
+            if file.layer.is_some() {
+                gerberx2::GerberX2::parse(&file.contents).unwrap();
+            }
         }
         let copper = set
             .files
@@ -1246,6 +1354,103 @@ mod tests {
     }
 
     #[test]
+    fn gerber_export_writes_separate_xnc_drill_files_with_routes() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="BOTTOM"/>
+    <LayerRef name="DRILL"/>
+    <LayerRef name="ROUTE"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+      <Layer name="ROUTE" layerFunction="ROUT" side="ALL" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="DRILL">
+          <Set net="GND">
+            <Hole name="V1" diameter="0.3" platingStatus="VIA" plusTol="0" minusTol="0" x="1" y="2"/>
+          </Set>
+          <Set>
+            <Hole name="N1" diameter="0.65" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="3" y="4"/>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="ROUTE">
+          <Set net="GND">
+            <SlotCavity name="S1" platingStatus="PLATED" plusTol="0" minusTol="0">
+              <Location x="10" y="20"/>
+              <Xform rotation="90"/>
+              <Oval width="1.7" height="0.6"/>
+            </SlotCavity>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let output_dir = std::env::temp_dir().join(format!(
+            "pcb-ipc-gerber-xnc-drill-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output: output_dir,
+                view: GeometryView::Board,
+            },
+        )
+        .unwrap();
+
+        assert!(!set.files.iter().any(|file| file.filename == "Drill.gbr"));
+        assert!(!set.files.iter().any(|file| file.filename == "Route.gbr"));
+        let pth = set
+            .files
+            .iter()
+            .find(|file| file.filename == "PTH.drl")
+            .unwrap();
+        let npth = set
+            .files
+            .iter()
+            .find(|file| file.filename == "NPTH.drl")
+            .unwrap();
+
+        assert!(pth.layer.is_none());
+        assert!(
+            pth.contents
+                .contains("; #@! TF.FileFunction,Plated,1,2,PTH")
+        );
+        assert!(
+            pth.contents
+                .contains("; #@! TA.AperFunction,Plated,PTH,ViaDrill\nT01C0.3")
+        );
+        assert!(
+            pth.contents
+                .contains("; #@! TA.AperFunction,Plated,PTH,ComponentDrill\nT02C0.6")
+        );
+        assert!(
+            pth.contents
+                .contains("G00X10Y19.45\nM15\nG01X10Y20.55\nM16")
+        );
+        assert!(
+            npth.contents
+                .contains("; #@! TF.FileFunction,NonPlated,1,2,NPTH")
+        );
+        assert!(npth.contents.contains("T01C0.65"));
+        assert!(npth.contents.contains("X3Y4"));
+    }
+
+    #[test]
     fn gerber_export_writes_zip_when_output_has_zip_extension() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1297,7 +1502,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(archive.len(), set.files.len());
         assert!(names.iter().any(|name| name == "F_Cu.gtl"));
-        assert!(names.iter().any(|name| name == "profile.gbr"));
+        assert!(!names.iter().any(|name| name == "profile.gbr"));
 
         let mut top_copper = String::new();
         archive
@@ -1637,6 +1842,9 @@ mod tests {
         );
 
         for file in &set.files {
+            if file.layer.is_none() {
+                continue;
+            }
             let parsed = gerberx2::GerberX2::parse(&file.contents).unwrap();
             let mut geometry = gerberx2::geometry::extract_document(&parsed);
             pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);

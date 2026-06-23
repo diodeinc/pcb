@@ -100,15 +100,15 @@ enum Commands {
         #[arg(long)]
         flat: bool,
     },
-    /// Export IPC-2581 fabrication layers as Gerber X2 files
+    /// Export IPC-2581 fabrication layers as manufacturing files
     Gerber {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to export. Gerber supports board or board-array.
+        /// Layout target to export. Manufacturing export supports board or board-array.
         #[arg(long, default_value = "board")]
         layout_target: GerberLayoutTarget,
-        /// Output directory, or a .zip file for an archived Gerber package
+        /// Output directory, or a .zip file for an archived manufacturing package
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
     },
@@ -268,7 +268,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 },
             )?;
             println!(
-                "✓ IPC-2581 exported {} Gerber X2 file(s) to {}",
+                "✓ IPC-2581 exported {} manufacturing file(s) to {}",
                 set.files.len(),
                 output.display()
             );

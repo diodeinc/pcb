@@ -1644,7 +1644,7 @@ mod tests {
         let drill = set
             .files
             .iter()
-            .find(|file| file.filename == "Drill.gbr")
+            .find(|file| file.filename == "NPTH.drl")
             .unwrap();
 
         assert!(
@@ -1655,8 +1655,13 @@ mod tests {
             mask.contents
                 .contains("%TA.AperFunction,FiducialPad,Global*%")
         );
-        assert!(drill.contents.contains("%TA.AperFunction,Other,Drill*%"));
-        assert!(drill.contents.contains("D03*"));
+        assert!(drill.contents.contains("; #@! TF.FileFunction,NonPlated"));
+        assert!(
+            drill
+                .contents
+                .contains("; #@! TA.AperFunction,NonPlated,NPTH,ComponentDrill")
+        );
+        assert!(drill.contents.contains("X20Y20"));
         assert!(!top.contents.contains("%TA.AperFunction,Other,Drill*%"));
         assert!(!mask.contents.contains("%TA.AperFunction,Other,Drill*%"));
     }
