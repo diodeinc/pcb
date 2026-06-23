@@ -120,6 +120,7 @@ struct BoardArraySummary {
     board_count: usize,
     board_instances: usize,
     grid: Option<BoardArrayGridSummary>,
+    drill_holes: Option<String>,
     overview_svg: Option<String>,
 }
 
@@ -231,6 +232,9 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
                         .edge_rail_width
                         .map(|width| format_length(width.mm(), unit_format)),
                 }),
+                drill_holes: accessor
+                    .board_array_drill_stats()
+                    .and_then(format_drill_count),
                 overview_svg: array_overview_svg,
             }
         });
@@ -254,16 +258,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
 
     let components = accessor.component_stats().map(|stats| stats.total);
     let nets = accessor.net_stats().map(|stats| stats.count);
-    let drill_holes = accessor.drill_stats().and_then(|drills| {
-        if drills.total_holes > 0 {
-            Some(format!(
-                "{} total ({} sizes)",
-                drills.total_holes, drills.unique_sizes
-            ))
-        } else {
-            None
-        }
-    });
+    let drill_holes = accessor.board_drill_stats().and_then(format_drill_count);
 
     BoardSummary {
         design_name,
@@ -276,6 +271,15 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         nets,
         drill_holes,
     }
+}
+
+fn format_drill_count(drills: crate::accessors::DrillStats) -> Option<String> {
+    (drills.total_holes > 0).then(|| {
+        format!(
+            "{} total ({} sizes)",
+            drills.total_holes, drills.unique_sizes
+        )
+    })
 }
 
 fn format_length(value_mm: f64, unit_format: UnitFormat) -> String {
@@ -616,6 +620,7 @@ mod tests {
         assert!(summary_section.contains("array-layer-copper"));
         assert!(summary_section.contains("vcut-guide"));
         assert!(summary_section.contains("array-layer-drill"));
+        assert!(summary_section.contains("Array Drill Holes:"));
     }
 
     fn board_array_design_name_fixture() -> &'static str {

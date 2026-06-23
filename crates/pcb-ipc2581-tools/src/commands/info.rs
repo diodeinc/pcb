@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::accessors::{
-    ColorInfo, DrillHoleType, IpcAccessor, StackupLayerType, SurfaceFinishInfo,
+    ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType, SurfaceFinishInfo,
 };
 use crate::utils::{file as file_utils, units};
 use crate::{OutputFormat, UnitFormat};
@@ -220,6 +220,17 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
                 ]);
             }
         }
+        if let Some(drills) = accessor.board_array_drill_stats()
+            && drills.total_holes > 0
+        {
+            summary_table.add_row(vec![
+                Cell::new("Array Drill Holes").fg(Color::Cyan),
+                Cell::new(format!(
+                    "{} ({} sizes)",
+                    drills.total_holes, drills.unique_sizes
+                )),
+            ]);
+        }
     }
 
     // Component statistics
@@ -241,7 +252,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Drill statistics (summary)
-    if let Some(drills) = accessor.drill_stats()
+    if let Some(drills) = accessor.board_drill_stats()
         && drills.total_holes > 0
     {
         summary_table.add_row(vec![
@@ -515,36 +526,16 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Drill distribution
-    if let Some(drills) = accessor.drill_stats()
+    if let Some(drills) = accessor.board_drill_stats()
         && !drills.distribution.is_empty()
     {
-        println!("{}", "Drill Distribution".bold());
-        let mut drill_table = Table::new();
-        drill_table.load_preset(UTF8_FULL_CONDENSED);
-        drill_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
-        drill_table.set_header(vec![
-            Cell::new("Type"),
-            Cell::new("Diameter"),
-            Cell::new("Count"),
-        ]);
+        print_drill_distribution("Drill Distribution", &drills);
+    }
 
-        for dist in &drills.distribution {
-            for (i, size) in dist.sizes.iter().enumerate() {
-                let type_cell = if i == 0 {
-                    Cell::new(dist.hole_type.as_str()).fg(Color::Cyan)
-                } else {
-                    Cell::new("")
-                };
-                drill_table.add_row(vec![
-                    type_cell,
-                    Cell::new(format_diameter(size.diameter_mm)),
-                    Cell::new(size.count.to_string()),
-                ]);
-            }
-        }
-
-        println!("{drill_table}");
-        println!();
+    if let Some(drills) = accessor.board_array_drill_stats()
+        && !drills.distribution.is_empty()
+    {
+        print_drill_distribution("Array Drill Distribution", &drills);
     }
 
     // File metadata at the end (greyed out)
@@ -580,6 +571,74 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_drill_distribution(title: &str, drills: &DrillStats) {
+    println!("{}", title.bold());
+    let mut drill_table = Table::new();
+    drill_table.load_preset(UTF8_FULL_CONDENSED);
+    drill_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+    drill_table.set_header(vec![
+        Cell::new("Type"),
+        Cell::new("Diameter"),
+        Cell::new("Count"),
+    ]);
+
+    for dist in &drills.distribution {
+        for (i, size) in dist.sizes.iter().enumerate() {
+            let type_cell = if i == 0 {
+                Cell::new(dist.hole_type.as_str()).fg(Color::Cyan)
+            } else {
+                Cell::new("")
+            };
+            drill_table.add_row(vec![
+                type_cell,
+                Cell::new(format_diameter(size.diameter_mm)),
+                Cell::new(size.count.to_string()),
+            ]);
+        }
+    }
+
+    println!("{drill_table}");
+    println!();
+}
+
+fn drill_stats_json(drills: &DrillStats) -> serde_json::Value {
+    let min_via_hole_mm = drills
+        .distribution
+        .iter()
+        .filter(|dist| dist.hole_type == DrillHoleType::Via)
+        .flat_map(|dist| dist.sizes.iter().map(|size| size.diameter_mm))
+        .min_by(|a, b| a.total_cmp(b));
+
+    let distribution: Vec<_> = drills
+        .distribution
+        .iter()
+        .map(|dist| {
+            let sizes: Vec<_> = dist
+                .sizes
+                .iter()
+                .map(|s| {
+                    json!({
+                        "diameter_mm": s.diameter_mm,
+                        "count": s.count,
+                    })
+                })
+                .collect();
+            json!({
+                "type": format!("{:?}", dist.hole_type),
+                "total": dist.total,
+                "sizes": sizes,
+            })
+        })
+        .collect();
+
+    json!({
+        "total_holes": drills.total_holes,
+        "unique_sizes": drills.unique_sizes,
+        "distribution": distribution,
+        "via_min_diameter_mm": min_via_hole_mm,
+    })
 }
 
 fn output_json(accessor: &IpcAccessor) -> Result<()> {
@@ -662,6 +721,11 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
                 "height_inch": dimensions.height_inch(),
             });
         }
+        if let Some(drills) = accessor.board_array_drill_stats()
+            && drills.total_holes > 0
+        {
+            info["board_array"]["drills"] = drill_stats_json(&drills);
+        }
     }
 
     // Component statistics
@@ -675,43 +739,10 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
     }
 
     // Drill statistics with distribution
-    if let Some(drills) = accessor.drill_stats()
+    if let Some(drills) = accessor.board_drill_stats()
         && drills.total_holes > 0
     {
-        let min_via_hole_mm = drills
-            .distribution
-            .iter()
-            .filter(|dist| dist.hole_type == DrillHoleType::Via)
-            .flat_map(|dist| dist.sizes.iter().map(|size| size.diameter_mm))
-            .min_by(|a, b| a.total_cmp(b));
-
-        let distribution: Vec<_> = drills
-            .distribution
-            .iter()
-            .map(|dist| {
-                let sizes: Vec<_> = dist
-                    .sizes
-                    .iter()
-                    .map(|s| {
-                        json!({
-                            "diameter_mm": s.diameter_mm,
-                            "count": s.count,
-                        })
-                    })
-                    .collect();
-                json!({
-                    "type": format!("{:?}", dist.hole_type),
-                    "total": dist.total,
-                    "sizes": sizes,
-                })
-            })
-            .collect();
-        info["drills"] = json!({
-            "total_holes": drills.total_holes,
-            "unique_sizes": drills.unique_sizes,
-            "distribution": distribution,
-            "via_min_diameter_mm": min_via_hole_mm,
-        });
+        info["drills"] = drill_stats_json(&drills);
     }
 
     // Net statistics

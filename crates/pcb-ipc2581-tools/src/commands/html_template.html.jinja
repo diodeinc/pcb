@@ -235,6 +235,12 @@
         </div>
         {% endif %}
         {% endif %}
+        {% if board_summary.board_array.drill_holes %}
+        <div class="summary-item">
+            <span class="summary-label">Array Drill Holes:</span>
+            <span class="summary-value">{{ board_summary.board_array.drill_holes }}</span>
+        </div>
+        {% endif %}
     </div>
     {% if board_summary.board_array.overview_svg %}
     <div class="array-overview">
