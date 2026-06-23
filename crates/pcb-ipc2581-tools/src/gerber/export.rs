@@ -3,16 +3,22 @@ use std::collections::HashSet;
 use anyhow::{Context, Result, bail};
 use gerberx2::{GerberLayer, write_layer};
 use ipc2581::Ipc2581;
-use ipc2581::types::{FillProperty, LayerFunction, Side, StandardPrimitive, ecad::Layer};
+use ipc2581::types::{
+    FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive, ecad::Layer,
+};
 
 use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 use super::lower::lower_artwork_layer;
 use crate::geometry;
-use pcb_ir::common::{Affine2, BBox, LayerRole, LineJoin, PaintPolarity, Point, Unit};
-use pcb_ir::dialects::artwork::{ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath};
+use pcb_ir::common::{
+    Affine2, BBox, LayerRole, LineJoin, PaintPolarity, Point, Side as IrSide, Unit,
+};
+use pcb_ir::dialects::artwork::{
+    ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath, PaintOrder, PaintStage,
+};
 use pcb_ir::dialects::ipc::{
-    FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature, GeometryPath,
-    GeometryPolarity, GeometryView, PlatingKind,
+    FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature,
+    GeometryPath, GeometryPolarity, GeometryView, PlatingKind,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -39,13 +45,14 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
         let layer_name = ipc.resolve(source_layer.name);
         let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
-        pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut doc);
+        pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
         let part = gerber_part_for_doc(&doc);
-        let artwork = artwork_from_processed_layer(
+        let artwork = artwork_from_ipc_layer(
             ipc,
             &doc,
             0,
             plan.role.ir_role(),
+            ir_side(source_layer.side),
             layer_attributes(plan.file_function.clone(), part),
         )?;
         let layer = lower_artwork_layer(&artwork)?;
@@ -202,14 +209,14 @@ impl GerberLayerRole {
 
 fn layer_output(
     role: GerberLayerRole,
-    side: Option<Side>,
+    side: Option<IpcSide>,
     copper_index: usize,
     copper_count: usize,
 ) -> (String, Vec<String>) {
     match role {
         GerberLayerRole::Copper => copper_layer_output(side, copper_index, copper_count),
         GerberLayerRole::Paste => match side {
-            Some(Side::Bottom) => (
+            Some(IpcSide::Bottom) => (
                 "B_Paste.gbp".to_string(),
                 vec!["Paste".into(), "Bot".into()],
             ),
@@ -219,7 +226,7 @@ fn layer_output(
             ),
         },
         GerberLayerRole::Soldermask => match side {
-            Some(Side::Bottom) => (
+            Some(IpcSide::Bottom) => (
                 "B_Mask.gbs".to_string(),
                 vec!["Soldermask".into(), "Bot".into()],
             ),
@@ -229,7 +236,7 @@ fn layer_output(
             ),
         },
         GerberLayerRole::Legend => match side {
-            Some(Side::Bottom) => (
+            Some(IpcSide::Bottom) => (
                 "B_SilkS.gbo".to_string(),
                 vec!["Legend".into(), "Bot".into()],
             ),
@@ -252,16 +259,16 @@ fn layer_output(
 fn fabrication_line_layer_output(
     filename: &str,
     function: &[&str],
-    side: Option<Side>,
+    side: Option<IpcSide>,
 ) -> (String, Vec<String>) {
     let mut file_function = function
         .iter()
         .map(|field| (*field).to_string())
         .collect::<Vec<_>>();
     match side {
-        Some(Side::Top) => file_function.push("Top".to_string()),
-        Some(Side::Bottom) => file_function.push("Bot".to_string()),
-        Some(Side::Both) | Some(Side::All) | Some(Side::None) => {
+        Some(IpcSide::Top) => file_function.push("Top".to_string()),
+        Some(IpcSide::Bottom) => file_function.push("Bot".to_string()),
+        Some(IpcSide::Both) | Some(IpcSide::All) | Some(IpcSide::None) => {
             file_function.push("Top/Bot".to_string())
         }
         _ => {}
@@ -301,23 +308,23 @@ fn layer_attributes(file_function: Vec<String>, part: GerberPart) -> LayerAttrib
 }
 
 fn copper_layer_output(
-    side: Option<Side>,
+    side: Option<IpcSide>,
     copper_index: usize,
     copper_count: usize,
 ) -> (String, Vec<String>) {
     let side_field = match side {
-        Some(Side::Top) => "Top",
-        Some(Side::Bottom) => "Bot",
+        Some(IpcSide::Top) => "Top",
+        Some(IpcSide::Bottom) => "Bot",
         _ => "Inr",
     };
     let filename = match side {
-        Some(Side::Top) => "F_Cu.gtl".to_string(),
-        Some(Side::Bottom) => "B_Cu.gbl".to_string(),
+        Some(IpcSide::Top) => "F_Cu.gtl".to_string(),
+        Some(IpcSide::Bottom) => "B_Cu.gbl".to_string(),
         _ => format!("In{}_Cu.gbr", copper_index),
     };
     let index = match side {
-        Some(Side::Top) => 1,
-        Some(Side::Bottom) => copper_count,
+        Some(IpcSide::Top) => 1,
+        Some(IpcSide::Bottom) => copper_count,
         _ => copper_index,
     };
     (
@@ -330,11 +337,12 @@ fn copper_layer_output(
     )
 }
 
-fn artwork_from_processed_layer(
+fn artwork_from_ipc_layer(
     ipc: &Ipc2581,
     doc: &IpcGeometryDocument,
     layer_index: usize,
     role: LayerRole,
+    side: IrSide,
     meta: LayerAttributes,
 ) -> Result<ArtworkLayer> {
     let layer = &doc.layers[layer_index];
@@ -342,7 +350,7 @@ fn artwork_from_processed_layer(
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
         name: layer.name.clone(),
         role,
-        side: pcb_ir::common::Side::None,
+        side,
         object_start: 0,
         object_count: 0,
         bbox: layer.bbox,
@@ -355,6 +363,14 @@ fn artwork_from_processed_layer(
         push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
     }
     Ok(artwork)
+}
+
+fn ir_side(side: Option<IpcSide>) -> IrSide {
+    match side {
+        Some(IpcSide::Top) => IrSide::Top,
+        Some(IpcSide::Bottom) => IrSide::Bottom,
+        _ => IrSide::None,
+    }
 }
 
 fn push_artwork_feature(
@@ -370,7 +386,8 @@ fn push_artwork_feature(
         artwork.push_object(
             artwork_layer,
             ArtworkObject {
-                paint: PaintPolarity::Dark,
+                paint: paint_polarity(feature.polarity),
+                order: paint_order(feature),
                 geometry: ArtworkGeometry::Flash {
                     aperture,
                     transform: Affine2::placement(at, 0.0, false, 1.0),
@@ -387,7 +404,8 @@ fn push_artwork_feature(
         artwork.push_object(
             artwork_layer,
             ArtworkObject {
-                paint: PaintPolarity::Dark,
+                paint: paint_polarity(feature.polarity),
+                order: paint_order(feature),
                 geometry: ArtworkGeometry::CircleFlash { at, diameter },
                 net: None,
                 bbox: BBox::from_point(at).expand(diameter / 2.0),
@@ -405,6 +423,7 @@ fn push_artwork_feature(
             artwork,
             artwork_layer,
             doc,
+            feature,
             path,
             object_attributes(ipc, doc, feature, aperture_function),
             layer_name,
@@ -552,6 +571,33 @@ fn nearly_equal(left: f64, right: f64) -> bool {
     (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
 }
 
+fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
+    match polarity {
+        GeometryPolarity::Positive => PaintPolarity::Dark,
+        GeometryPolarity::Negative => PaintPolarity::Clear,
+    }
+}
+
+fn paint_order(feature: &GeometryFeature<ipc2581::Symbol>) -> PaintOrder {
+    let stage = if feature.intent.role == FeatureRole::Cutout
+        || feature.intent.operation == FeatureOperation::Drill
+        || feature.intent.operation == FeatureOperation::Route
+    {
+        PaintStage::FinalCutout
+    } else if feature.polarity == GeometryPolarity::Negative || feature.flags.clears_previous_in_set
+    {
+        PaintStage::Base
+    } else if matches!(
+        feature.bucket,
+        FeatureBucket::Fill | FeatureBucket::Thermal | FeatureBucket::Antipad
+    ) {
+        PaintStage::Base
+    } else {
+        PaintStage::Overlay
+    };
+    PaintOrder { stage }
+}
+
 fn circle_flash(
     doc: &IpcGeometryDocument,
     feature: &GeometryFeature<ipc2581::Symbol>,
@@ -673,6 +719,7 @@ fn push_artwork_object(
     artwork: &mut ArtworkLayer,
     artwork_layer: u32,
     doc: &IpcGeometryDocument,
+    feature: &GeometryFeature<ipc2581::Symbol>,
     path: &GeometryPath,
     meta: ObjectAttributes,
     layer_name: &str,
@@ -699,7 +746,8 @@ fn push_artwork_object(
     artwork.push_object(
         artwork_layer,
         ArtworkObject {
-            paint: PaintPolarity::Dark,
+            paint: paint_polarity(feature.polarity),
+            order: paint_order(feature),
             geometry,
             net: None,
             bbox: artwork.paths[path_id as usize].bbox,
@@ -954,8 +1002,7 @@ mod tests {
             .expect("standard circular pad should export as a flash");
         assert!(clear_index < pad_flash_index);
 
-        let mut geometry = gerberx2::geometry::extract_document(&parsed);
-        pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+        let geometry = gerberx2::geometry::extract_document(&parsed);
         let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
         assert!(
             summary.area_mm2 > 96.7,
@@ -1038,8 +1085,7 @@ mod tests {
         assert!(clear_index < trace_index);
 
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        let mut geometry = gerberx2::geometry::extract_document(&parsed);
-        pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+        let geometry = gerberx2::geometry::extract_document(&parsed);
         let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
         assert!(
             summary.area_mm2 > 97.0,
@@ -1346,10 +1392,9 @@ mod tests {
         assert!(top.contents.contains("%TF.Part,Array*%"));
 
         let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
-        let mut geometry = gerberx2::geometry::extract_document(&parsed);
-        pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
-        assert!(geometry.features.len() >= 2);
-        assert!(geometry.bbox.width() > 14.0);
+        let geometry = gerberx2::geometry::extract_document(&parsed);
+        assert!(geometry.objects.len() >= 2);
+        assert!(geometry.layers[0].bbox.width() > 14.0);
     }
 
     #[test]
@@ -1469,39 +1514,37 @@ mod tests {
 
         for file in &files {
             let parsed = gerberx2::GerberX2::parse(&file.contents).unwrap();
-            let mut geometry = gerberx2::geometry::extract_document(&parsed);
-            pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+            let geometry = gerberx2::geometry::extract_document(&parsed);
+            geometry.validate().unwrap();
             let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
             assert!(svg.contains("<svg"), "{} did not render SVG", file.filename);
 
-            let geom = pcb_ir::dialects::gerber::lower_to_geom(&geometry);
-            geom.validate().unwrap();
-            let mask = pcb_ir::dialects::geom::lower_filled_to_mask(&geom);
+            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
             mask.validate().unwrap();
         }
 
         let mut layer = geometry::extract_layer(&ipc, "F.Cu").unwrap();
-        pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut layer);
-        let geom = pcb_ir::dialects::ipc::lower_layer_to_geom(
+        pcb_ir::dialects::ipc::process::compose_for_rendering(&mut layer);
+        let artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
             &layer,
             0,
             LayerRole::Copper,
             pcb_ir::common::Side::Top,
         );
-        geom.validate().unwrap();
-        let mask = pcb_ir::dialects::geom::lower_filled_to_mask(&geom);
+        artwork.validate().unwrap();
+        let mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork);
         mask.validate().unwrap();
         assert!(pcb_ir::dialects::mask::render_svg(&mask, 0).contains("<svg"));
 
         pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut layer);
-        let flat_geom = pcb_ir::dialects::ipc::lower_layer_to_geom(
+        let flat_artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
             &layer,
             0,
             LayerRole::Copper,
             pcb_ir::common::Side::Top,
         );
-        flat_geom.validate().unwrap();
-        let flat_mask = pcb_ir::dialects::geom::lower_filled_to_mask(&flat_geom);
+        flat_artwork.validate().unwrap();
+        let flat_mask = pcb_ir::dialects::artwork::compose_to_mask(&flat_artwork);
         flat_mask.validate().unwrap();
         assert!(pcb_ir::dialects::mask::render_svg(&flat_mask, 0).contains("<svg"));
     }

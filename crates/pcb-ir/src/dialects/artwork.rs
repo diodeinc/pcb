@@ -1,5 +1,5 @@
 use crate::common::*;
-use crate::dialects::geom;
+use crate::dialects::mask;
 use crate::dialects::path::{self, PathCmd, PathPayload};
 
 /// Source-independent ordered fabrication artwork.
@@ -142,74 +142,7 @@ impl<LayerMeta, ObjectMeta> ArtworkDocument<LayerMeta, ObjectMeta> {
     }
 }
 
-pub fn lower_to_geom<LayerMeta: Clone, ObjectMeta: Clone>(
-    artwork: &ArtworkDocument<LayerMeta, ObjectMeta>,
-) -> geom::GeomDocument<LayerMeta, ObjectMeta> {
-    let mut geom = geom::GeomDocument::new(artwork.unit);
-
-    for layer in &artwork.layers {
-        geom.push_layer(geom::GeomLayer {
-            name: layer.name.clone(),
-            role: layer.role,
-            side: layer.side,
-            object_start: 0,
-            object_count: 0,
-            bbox: layer.bbox,
-            meta: layer.meta.clone(),
-        });
-    }
-
-    let path_map = artwork
-        .paths
-        .iter()
-        .map(|path| {
-            let geom_path = match path.flags {
-                PathFlags { filled: true, .. } => geom::GeomPath::filled(path.fill_rule),
-                PathFlags { stroked: true, .. } => {
-                    geom::GeomPath::stroked(path.stroke_width, path.line_cap, path.line_join)
-                }
-                _ => geom::GeomPath::filled(path.fill_rule),
-            };
-            geom.push_path(geom_path, path_payloads(artwork, path))
-        })
-        .collect::<Vec<_>>();
-
-    for (layer_index, layer) in artwork.layers.iter().enumerate() {
-        let layer_objects = &artwork.objects
-            [layer.object_start as usize..(layer.object_start + layer.object_count) as usize];
-        for object in layer_objects {
-            let Some(path) = object.geometry.path() else {
-                geom.diagnostics.push(GeometryDiagnostic {
-                    severity: DiagnosticSeverity::Warning,
-                    message: "Skipping artwork flash without expanded aperture geometry"
-                        .to_string(),
-                });
-                continue;
-            };
-            let Some(&path) = path_map.get(path as usize) else {
-                geom.diagnostics.push(GeometryDiagnostic {
-                    severity: DiagnosticSeverity::Warning,
-                    message: "Skipping artwork object with invalid path reference".to_string(),
-                });
-                continue;
-            };
-            geom.push_object(
-                layer_index as u32,
-                geom::GeomObject {
-                    paint: object.paint,
-                    path,
-                    bbox: object.bbox,
-                    meta: object.meta.clone(),
-                },
-            );
-        }
-    }
-
-    geom.diagnostics.extend(artwork.diagnostics.clone());
-    geom
-}
-
-fn path_payloads<LayerMeta, ObjectMeta>(
+pub fn path_payloads<LayerMeta, ObjectMeta>(
     doc: &ArtworkDocument<LayerMeta, ObjectMeta>,
     path: &ArtworkPath,
 ) -> Vec<PathPayload> {
@@ -252,6 +185,7 @@ impl<Meta: Default> ArtworkLayer<Meta> {
 #[derive(Debug, Clone)]
 pub struct ArtworkObject<Meta = ()> {
     pub paint: PaintPolarity,
+    pub order: PaintOrder,
     pub geometry: ArtworkGeometry,
     pub net: Option<String>,
     pub bbox: BBox,
@@ -262,12 +196,29 @@ impl<Meta: Default> ArtworkObject<Meta> {
     pub fn new(paint: PaintPolarity, geometry: ArtworkGeometry) -> Self {
         Self {
             paint,
+            order: PaintOrder::default(),
             geometry,
             net: None,
             bbox: BBox::empty(),
             meta: Meta::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PaintStage {
+    /// Base images such as pours that local clear objects may subtract.
+    Base,
+    /// Dark objects that must survive base-stage clears: pads, vias, traces, fiducials.
+    #[default]
+    Overlay,
+    /// Deliberate final removals applied after all material has been painted.
+    FinalCutout,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PaintOrder {
+    pub stage: PaintStage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -292,6 +243,278 @@ impl ArtworkGeometry {
             Self::Stroke { path } | Self::Region { path } => Some(path),
         }
     }
+}
+
+pub fn normalize_bounds<LayerMeta, ObjectMeta>(
+    artwork: &mut ArtworkDocument<LayerMeta, ObjectMeta>,
+) {
+    for contour_index in 0..artwork.contours.len() {
+        let contour = &artwork.contours[contour_index];
+        artwork.contours[contour_index].bbox = path::contour_bbox(
+            &artwork.path_cmds
+                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize],
+        );
+    }
+    for path_index in 0..artwork.paths.len() {
+        artwork.paths[path_index].bbox = path_bbox(artwork, path_index);
+    }
+    for object_index in 0..artwork.objects.len() {
+        artwork.objects[object_index].bbox = object_bbox(artwork, object_index);
+    }
+    for layer_index in 0..artwork.layers.len() {
+        let layer = &artwork.layers[layer_index];
+        artwork.layers[layer_index].bbox = artwork.objects
+            [layer.object_start as usize..(layer.object_start + layer.object_count) as usize]
+            .iter()
+            .fold(BBox::empty(), |bbox, object| bbox.union(object.bbox));
+    }
+}
+
+pub fn expand_native_geometry_to_regions<LayerMeta, ObjectMeta>(
+    mut artwork: ArtworkDocument<LayerMeta, ObjectMeta>,
+) -> ArtworkDocument<LayerMeta, ObjectMeta> {
+    expand_strokes_to_regions(&mut artwork);
+    expand_flashes_to_regions(&mut artwork);
+    normalize_bounds(&mut artwork);
+    artwork
+}
+
+pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
+    artwork: &ArtworkDocument<LayerMeta, ObjectMeta>,
+) -> mask::MaskDocument<LayerMeta> {
+    let artwork = expand_native_geometry_to_regions(artwork.clone());
+    let mut mask = mask::MaskDocument::new(artwork.unit);
+
+    for layer in &artwork.layers {
+        mask.push_layer(mask::MaskLayer {
+            name: layer.name.clone(),
+            role: layer.role,
+            side: layer.side,
+            shape_start: 0,
+            shape_count: 0,
+            bbox: BBox::empty(),
+            meta: layer.meta.clone(),
+        });
+    }
+
+    for (layer_index, layer) in artwork.layers.iter().enumerate() {
+        let mut composer = path::PaintComposer::default();
+        for object in &artwork.objects
+            [layer.object_start as usize..(layer.object_start + layer.object_count) as usize]
+        {
+            let image = object_image_contours(&artwork, object);
+            if image.is_empty() {
+                continue;
+            }
+            let op = match object.paint {
+                PaintPolarity::Dark => path::PaintOp::Dark,
+                PaintPolarity::Clear => path::PaintOp::Clear,
+            };
+            composer.push(op, image);
+        }
+
+        let contours = path::polygon_contours_to_payloads(composer.finish());
+        if !contours.is_empty() {
+            mask.push_shape(
+                layer_index as u32,
+                mask::MaskShape::new(FillRule::NonZero),
+                contours,
+            );
+        }
+    }
+
+    mask.diagnostics.extend(artwork.diagnostics);
+    mask
+}
+
+fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
+    artwork: &mut ArtworkDocument<LayerMeta, ObjectMeta>,
+) {
+    for object_index in 0..artwork.objects.len() {
+        let ArtworkGeometry::Stroke { path: path_index } = artwork.objects[object_index].geometry
+        else {
+            continue;
+        };
+        let Some(path) = artwork.paths.get(path_index as usize).cloned() else {
+            artwork.diagnostics.push(GeometryDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                message: "Skipping artwork stroke with invalid path reference".to_string(),
+            });
+            continue;
+        };
+        let Some(contours) = path::stroke_to_fill(
+            &path_payloads(artwork, &path),
+            path::StrokeToFillStyle::new(path.stroke_width, path.line_cap, path.line_join),
+        ) else {
+            continue;
+        };
+        let path_id = artwork.push_path(ArtworkPath::filled(FillRule::NonZero), contours);
+        artwork.objects[object_index].geometry = ArtworkGeometry::Region { path: path_id };
+        artwork.objects[object_index].bbox = artwork.paths[path_id as usize].bbox;
+    }
+}
+
+fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(
+    artwork: &mut ArtworkDocument<LayerMeta, ObjectMeta>,
+) {
+    for object_index in 0..artwork.objects.len() {
+        let payloads = match artwork.objects[object_index].geometry {
+            ArtworkGeometry::Flash {
+                aperture,
+                transform,
+            } => {
+                let Some(aperture) = artwork.apertures.get(aperture as usize).copied() else {
+                    artwork.diagnostics.push(GeometryDiagnostic {
+                        severity: DiagnosticSeverity::Warning,
+                        message: "Skipping artwork flash with invalid aperture reference"
+                            .to_string(),
+                    });
+                    continue;
+                };
+                aperture_payloads(aperture, transform)
+            }
+            ArtworkGeometry::CircleFlash { at, diameter } => {
+                circle_payloads(diameter / 2.0, Affine2::placement(at, 0.0, false, 1.0))
+            }
+            ArtworkGeometry::Stroke { .. } | ArtworkGeometry::Region { .. } => continue,
+        };
+        let path_id = artwork.push_path(ArtworkPath::filled(FillRule::NonZero), payloads);
+        artwork.objects[object_index].geometry = ArtworkGeometry::Region { path: path_id };
+        artwork.objects[object_index].bbox = artwork.paths[path_id as usize].bbox;
+    }
+}
+
+fn object_image_contours<LayerMeta, ObjectMeta>(
+    artwork: &ArtworkDocument<LayerMeta, ObjectMeta>,
+    object: &ArtworkObject<ObjectMeta>,
+) -> Vec<path::PolygonContour> {
+    match object.geometry {
+        ArtworkGeometry::Region { path } => artwork
+            .paths
+            .get(path as usize)
+            .map(|path| path::payloads_to_polygon_contours(&path_payloads(artwork, path)))
+            .unwrap_or_default(),
+        ArtworkGeometry::Flash { .. } | ArtworkGeometry::CircleFlash { .. } => Vec::new(),
+        ArtworkGeometry::Stroke { .. } => Vec::new(),
+    }
+}
+
+fn path_bbox<LayerMeta, ObjectMeta>(
+    artwork: &ArtworkDocument<LayerMeta, ObjectMeta>,
+    path_index: usize,
+) -> BBox {
+    let path = &artwork.paths[path_index];
+    let bbox = artwork.contours
+        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
+        .iter()
+        .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
+    if path.flags.stroked {
+        bbox.expand(path.stroke_width / 2.0)
+    } else {
+        bbox
+    }
+}
+
+fn object_bbox<LayerMeta, ObjectMeta>(
+    artwork: &ArtworkDocument<LayerMeta, ObjectMeta>,
+    object_index: usize,
+) -> BBox {
+    match artwork.objects[object_index].geometry {
+        ArtworkGeometry::Region { path } | ArtworkGeometry::Stroke { path } => artwork
+            .paths
+            .get(path as usize)
+            .map(|path| path.bbox)
+            .unwrap_or_else(BBox::empty),
+        ArtworkGeometry::CircleFlash { at, diameter } => {
+            BBox::from_point(at).expand(diameter / 2.0)
+        }
+        ArtworkGeometry::Flash {
+            aperture,
+            transform,
+        } => artwork
+            .apertures
+            .get(aperture as usize)
+            .copied()
+            .map(|aperture| {
+                aperture_payloads(aperture, transform)
+                    .iter()
+                    .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
+            })
+            .unwrap_or_else(BBox::empty),
+    }
+}
+
+fn aperture_payloads(aperture: ArtworkAperture, transform: Affine2) -> Vec<PathPayload> {
+    match aperture {
+        ArtworkAperture::Circle { diameter } => circle_payloads(diameter / 2.0, transform),
+        ArtworkAperture::Rectangle { width, height } => rect_payloads(width, height, transform),
+        ArtworkAperture::Obround { width, height } => obround_payloads(width, height, transform),
+    }
+}
+
+fn circle_payloads(radius: f64, transform: Affine2) -> Vec<PathPayload> {
+    if radius <= 0.0 {
+        return Vec::new();
+    }
+    let raw = [
+        PathCmd::move_to(Point::new(radius, 0.0)),
+        PathCmd::arc_to(Point::new(-radius, 0.0), Point::new(0.0, 0.0), false),
+        PathCmd::arc_to(Point::new(radius, 0.0), Point::new(0.0, 0.0), false),
+        PathCmd::close(),
+    ];
+    vec![transformed_payload(&raw, transform)]
+}
+
+fn rect_payloads(width: f64, height: f64, transform: Affine2) -> Vec<PathPayload> {
+    if width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let hw = width / 2.0;
+    let hh = height / 2.0;
+    let raw = [
+        PathCmd::move_to(Point::new(-hw, -hh)),
+        PathCmd::line_to(Point::new(hw, -hh)),
+        PathCmd::line_to(Point::new(hw, hh)),
+        PathCmd::line_to(Point::new(-hw, hh)),
+        PathCmd::close(),
+    ];
+    vec![transformed_payload(&raw, transform)]
+}
+
+fn obround_payloads(width: f64, height: f64, transform: Affine2) -> Vec<PathPayload> {
+    if width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let rx = width / 2.0;
+    let ry = height / 2.0;
+    let raw = if width >= height {
+        let r = ry;
+        let cx = rx - r;
+        vec![
+            PathCmd::move_to(Point::new(-cx, -r)),
+            PathCmd::line_to(Point::new(cx, -r)),
+            PathCmd::arc_to(Point::new(cx, r), Point::new(cx, 0.0), false),
+            PathCmd::line_to(Point::new(-cx, r)),
+            PathCmd::arc_to(Point::new(-cx, -r), Point::new(-cx, 0.0), false),
+            PathCmd::close(),
+        ]
+    } else {
+        let r = rx;
+        let cy = ry - r;
+        vec![
+            PathCmd::move_to(Point::new(r, -cy)),
+            PathCmd::line_to(Point::new(r, cy)),
+            PathCmd::arc_to(Point::new(-r, cy), Point::new(0.0, cy), false),
+            PathCmd::line_to(Point::new(-r, -cy)),
+            PathCmd::arc_to(Point::new(r, -cy), Point::new(0.0, -cy), false),
+            PathCmd::close(),
+        ]
+    };
+    vec![transformed_payload(&raw, transform)]
+}
+
+fn transformed_payload(cmds: &[PathCmd], transform: Affine2) -> PathPayload {
+    path::transform_cmds(cmds.iter().copied(), transform).into()
 }
 
 #[derive(Debug, Clone)]
@@ -376,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn lowers_ordered_artwork_paths_to_geom() {
+    fn composes_ordered_artwork_to_mask() {
         let mut doc = ArtworkDocument::<(), ()>::new(Unit::Millimeter);
         let layer = doc.push_layer(ArtworkLayer::new("F.Cu", LayerRole::Copper, Side::Top));
         let path = doc.push_path(
@@ -395,16 +618,12 @@ mod tests {
             ArtworkObject::new(PaintPolarity::Dark, ArtworkGeometry::Stroke { path }),
         );
 
-        let geom = lower_to_geom(&doc);
+        let mask = compose_to_mask(&doc);
 
-        assert_eq!(geom.layers.len(), 1);
-        assert_eq!(geom.objects.len(), 1);
-        assert_eq!(geom.paths.len(), 1);
-        assert!(matches!(
-            geom.paths[0].kind,
-            geom::GeomPathKind::Stroke { width, .. } if width == 0.15
-        ));
-        assert_eq!(geom.path_cmds.len(), 2);
-        geom.validate().unwrap();
+        assert_eq!(mask.layers.len(), 1);
+        assert_eq!(mask.layers[0].shape_count, 1);
+        assert_eq!(mask.shapes[0].fill_rule, FillRule::NonZero);
+        assert!(!mask.layers[0].bbox.is_empty());
+        mask.validate().unwrap();
     }
 }

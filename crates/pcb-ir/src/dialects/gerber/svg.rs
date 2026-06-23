@@ -1,6 +1,5 @@
 use crate::common::BBox;
-use crate::dialects::gerber::{GeometryDocument, lower_to_geom};
-use crate::dialects::{geom, mask};
+use crate::dialects::{artwork, mask};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SvgOptions {
@@ -8,12 +7,14 @@ pub struct SvgOptions {
     pub height_px: Option<u32>,
 }
 
-pub fn render_svg<A: Clone>(doc: &GeometryDocument<A>) -> String {
+pub fn render_svg<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &artwork::ArtworkDocument<LayerMeta, ObjectMeta>,
+) -> String {
     render_svg_with_options(doc, SvgOptions::default())
 }
 
-pub fn render_svg_sized<A: Clone>(
-    doc: &GeometryDocument<A>,
+pub fn render_svg_sized<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &artwork::ArtworkDocument<LayerMeta, ObjectMeta>,
     width_px: u32,
     height_px: u32,
 ) -> String {
@@ -26,17 +27,20 @@ pub fn render_svg_sized<A: Clone>(
     )
 }
 
-pub fn render_svg_with_options<A: Clone>(doc: &GeometryDocument<A>, options: SvgOptions) -> String {
-    let geom = lower_to_geom(doc);
-    let mask = geom::lower_filled_to_mask(&geom);
+pub fn render_svg_with_options<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &artwork::ArtworkDocument<LayerMeta, ObjectMeta>,
+    options: SvgOptions,
+) -> String {
+    let mask = artwork::compose_to_mask(doc);
     match (options.width_px, options.height_px) {
         (Some(width), Some(height)) => mask::render_svg_sized(&mask, 0, width, height),
         _ => mask::render_svg(&mask, 0),
     }
 }
 
-pub fn render_bbox<A: Clone>(doc: &GeometryDocument<A>) -> BBox {
-    let geom = lower_to_geom(doc);
-    let mask = geom::lower_filled_to_mask(&geom);
+pub fn render_bbox<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &artwork::ArtworkDocument<LayerMeta, ObjectMeta>,
+) -> BBox {
+    let mask = artwork::compose_to_mask(doc);
     mask::render_bbox(&mask, 0)
 }

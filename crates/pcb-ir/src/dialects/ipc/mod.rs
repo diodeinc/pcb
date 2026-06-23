@@ -1,6 +1,6 @@
 use crate::common::*;
 pub use crate::dialects::path::{PathCmd, PathOp};
-use crate::dialects::{geom, path as common_path};
+use crate::dialects::{artwork, path as common_path};
 
 #[derive(Debug, Clone)]
 pub struct GeometryDocument<Symbol, LayerFunction> {
@@ -474,15 +474,15 @@ fn instance_depth<Symbol, LayerFunction>(
     depth
 }
 
-pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
+pub fn lower_layer_to_artwork<Symbol: Clone, LayerFunction: Clone>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     layer_index: usize,
     role: LayerRole,
     side: Side,
-) -> geom::GeomDocument<LayerFunction, Option<Symbol>> {
-    let mut geom = geom::GeomDocument::new(Unit::Millimeter);
+) -> artwork::ArtworkDocument<LayerFunction, Option<Symbol>> {
+    let mut artwork = artwork::ArtworkDocument::new(Unit::Millimeter);
     let layer = &doc.layers[layer_index];
-    let geom_layer = geom.push_layer(geom::GeomLayer {
+    let artwork_layer = artwork.push_layer(artwork::ArtworkLayer {
         name: layer.name.clone(),
         role,
         side,
@@ -498,15 +498,17 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
         for path in &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         {
-            let Some(geom_path) = lower_path_kind(path) else {
+            let Some((artwork_path, geometry)) = lower_path_kind(path) else {
                 continue;
             };
-            let path_id = geom.push_path(geom_path, path_payloads(doc, path));
-            geom.push_object(
-                geom_layer,
-                geom::GeomObject {
+            let path_id = artwork.push_path(artwork_path, path_payloads(doc, path));
+            artwork.push_object(
+                artwork_layer,
+                artwork::ArtworkObject {
                     paint: paint_polarity(feature.polarity),
-                    path: path_id,
+                    order: paint_order(feature),
+                    geometry: geometry(path_id),
+                    net: None,
                     bbox: path.bbox,
                     meta: feature.net.clone(),
                 },
@@ -514,20 +516,21 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
         }
     }
 
-    geom.diagnostics.extend(doc.diagnostics.clone());
-    geom
+    artwork.diagnostics.extend(doc.diagnostics.clone());
+    artwork::normalize_bounds(&mut artwork);
+    artwork
 }
 
-pub fn lower_layer_with_profile_set_to_geom<Symbol: Clone, LayerFunction: Clone>(
+pub fn lower_layer_with_profile_set_to_artwork<Symbol: Clone, LayerFunction: Clone>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     layer_index: usize,
     role: LayerRole,
     side: Side,
     profile_set: ProfileSet,
-) -> geom::GeomDocument<LayerFunction, Option<Symbol>> {
-    let mut geom = lower_layer_to_geom(doc, layer_index, role, side);
+) -> artwork::ArtworkDocument<LayerFunction, Option<Symbol>> {
+    let mut artwork = lower_layer_to_artwork(doc, layer_index, role, side);
     let layer = &doc.layers[layer_index];
-    let outline_layer = geom.push_layer(geom::GeomLayer {
+    let outline_layer = artwork.push_layer(artwork::ArtworkLayer {
         name: "Profile".to_string(),
         role: LayerRole::Profile,
         side: Side::None,
@@ -538,8 +541,8 @@ pub fn lower_layer_with_profile_set_to_geom<Symbol: Clone, LayerFunction: Clone>
     });
 
     for occurrence in profile_occurrences_for(doc, profile_set) {
-        push_profile_path_to_geom(
-            &mut geom,
+        push_profile_path_to_artwork(
+            &mut artwork,
             outline_layer,
             doc,
             occurrence.profile.outer_path,
@@ -548,8 +551,8 @@ pub fn lower_layer_with_profile_set_to_geom<Symbol: Clone, LayerFunction: Clone>
         for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
             ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
         {
-            push_profile_path_to_geom(
-                &mut geom,
+            push_profile_path_to_artwork(
+                &mut artwork,
                 outline_layer,
                 doc,
                 cutout.path,
@@ -558,46 +561,77 @@ pub fn lower_layer_with_profile_set_to_geom<Symbol: Clone, LayerFunction: Clone>
         }
     }
 
-    geom
+    artwork::normalize_bounds(&mut artwork);
+    artwork
 }
 
-fn push_profile_path_to_geom<Symbol, LayerFunction>(
-    geom: &mut geom::GeomDocument<LayerFunction, Option<Symbol>>,
+fn push_profile_path_to_artwork<Symbol, LayerFunction>(
+    artwork: &mut artwork::ArtworkDocument<LayerFunction, Option<Symbol>>,
     layer_id: u32,
     doc: &GeometryDocument<Symbol, LayerFunction>,
     path_index: u32,
     transform: Affine2,
 ) {
     let payloads = transformed_path_payloads(doc, path_index, transform);
-    let path_id = geom.push_path(
-        geom::GeomPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round),
+    let path_id = artwork.push_path(
+        artwork::ArtworkPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round),
         payloads,
     );
-    let bbox = geom.paths[path_id as usize].bbox;
-    geom.push_object(
+    let bbox = artwork.paths[path_id as usize].bbox;
+    artwork.push_object(
         layer_id,
-        geom::GeomObject {
+        artwork::ArtworkObject {
             paint: PaintPolarity::Dark,
-            path: path_id,
+            order: artwork::PaintOrder {
+                stage: artwork::PaintStage::Overlay,
+            },
+            geometry: artwork::ArtworkGeometry::Stroke { path: path_id },
+            net: None,
             bbox,
             meta: None,
         },
     );
-    geom.layers[layer_id as usize].bbox = geom.layers[layer_id as usize].bbox.union(bbox);
+    artwork.layers[layer_id as usize].bbox = artwork.layers[layer_id as usize].bbox.union(bbox);
 }
 
-fn lower_path_kind(path: &GeometryPath) -> Option<geom::GeomPath> {
+type ArtworkGeometryFactory = fn(u32) -> artwork::ArtworkGeometry;
+
+fn lower_path_kind(path: &GeometryPath) -> Option<(artwork::ArtworkPath, ArtworkGeometryFactory)> {
     if path.flags.filled {
-        Some(geom::GeomPath::filled(path.style.fill.rule))
+        Some(
+            (artwork::ArtworkPath::filled(path.style.fill.rule), |path| {
+                artwork::ArtworkGeometry::Region { path }
+            }),
+        )
     } else if path.flags.stroked {
-        Some(geom::GeomPath::stroked(
-            path.style.stroke.width,
-            path.style.stroke.line_cap,
-            LineJoin::Round,
+        Some((
+            artwork::ArtworkPath::stroked(
+                path.style.stroke.width,
+                path.style.stroke.line_cap,
+                LineJoin::Round,
+            ),
+            |path| artwork::ArtworkGeometry::Stroke { path },
         ))
     } else {
         None
     }
+}
+
+fn paint_order<Symbol>(feature: &GeometryFeature<Symbol>) -> artwork::PaintOrder {
+    let stage = if feature.bucket == FeatureBucket::Cutout {
+        artwork::PaintStage::FinalCutout
+    } else if feature.polarity == GeometryPolarity::Negative || feature.flags.clears_previous_in_set
+    {
+        artwork::PaintStage::Base
+    } else if matches!(
+        feature.bucket,
+        FeatureBucket::Fill | FeatureBucket::Thermal | FeatureBucket::Antipad
+    ) {
+        artwork::PaintStage::Base
+    } else {
+        artwork::PaintStage::Overlay
+    };
+    artwork::PaintOrder { stage }
 }
 
 fn path_payloads<Symbol, LayerFunction>(

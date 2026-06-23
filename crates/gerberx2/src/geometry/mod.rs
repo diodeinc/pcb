@@ -1,3 +1,3 @@
 pub mod extract;
 
-pub use extract::extract_document;
+pub use extract::{GerberArtworkDocument, GerberObjectMeta, extract_document};

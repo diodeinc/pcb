@@ -53,8 +53,8 @@ pub fn layer_mask(
     profile_set: ProfileSet,
 ) -> MaskDocument<LayerFunction> {
     let layer = &geometry.layers[0];
-    let geom = if include_profiles {
-        pcb_ir::dialects::ipc::lower_layer_with_profile_set_to_geom(
+    let artwork = if include_profiles {
+        pcb_ir::dialects::ipc::lower_layer_with_profile_set_to_artwork(
             geometry,
             0,
             layer_role(layer.layer_function),
@@ -62,16 +62,14 @@ pub fn layer_mask(
             profile_set,
         )
     } else {
-        pcb_ir::dialects::ipc::lower_layer_to_geom(
+        pcb_ir::dialects::ipc::lower_layer_to_artwork(
             geometry,
             0,
             layer_role(layer.layer_function),
             Side::None,
         )
     };
-    pcb_ir::dialects::geom::lower_filled_to_mask(&pcb_ir::dialects::geom::expand_strokes_to_fills(
-        geom,
-    ))
+    pcb_ir::dialects::artwork::compose_to_mask(&artwork)
 }
 
 pub fn layer_role(function: LayerFunction) -> LayerRole {

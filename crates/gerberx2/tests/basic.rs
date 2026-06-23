@@ -302,9 +302,9 @@ fn normalizes_inch_coordinates_and_standard_apertures_to_mm() {
     ));
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
-    let feature = &geometry.features[0];
-    assert!(close(feature.bbox.min.x, 25.4 - 1.27));
-    assert!(close(feature.bbox.max.x, 25.4 + 1.27));
+    let object = &geometry.objects[0];
+    assert!(close(object.bbox.min.x, 25.4 - 1.27));
+    assert!(close(object.bbox.max.x, 25.4 + 1.27));
 }
 
 #[test]
@@ -410,51 +410,44 @@ fn rejects_unclosed_region_contours() {
 }
 
 #[test]
-fn extracts_and_processes_render_geometry() {
+fn extracts_render_artwork() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Copper,L1,Top*%\n%ADD10C,0.2*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nX1000000Y1000000D03*\nM02*\n",
     )
     .unwrap();
 
-    let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    assert_eq!(geometry.file_function, vec!["Copper", "L1", "Top"]);
-    assert_eq!(geometry.features.len(), 2);
+    let geometry = gerberx2::geometry::extract_document(&gerber);
+    assert_eq!(geometry.layers[0].meta, vec!["Copper", "L1", "Top"]);
+    assert_eq!(geometry.objects.len(), 2);
     assert!(geometry.paths.iter().any(|path| path.flags.stroked));
-
-    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
-    assert!(geometry.features.iter().any(|feature| {
-        feature.kind == pcb_ir::dialects::gerber::FeatureKind::Composite && feature.path_count == 1
-    }));
-    assert!(!geometry.bbox.is_empty());
+    assert!(!geometry.layers[0].bbox.is_empty());
 }
 
 #[test]
-fn process_applies_clear_polarity_cutouts() {
+fn artwork_composition_applies_clear_polarity_cutouts() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,2.0X2.0*%\n%ADD11C,1.0*%\nD10*\nX0Y0D03*\n%LPC*%\nD11*\nX0Y0D03*\nM02*\n",
     )
     .unwrap();
 
-    let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
-    let composite = geometry
-        .features
-        .iter()
-        .find(|feature| feature.kind == pcb_ir::dialects::gerber::FeatureKind::Composite)
-        .unwrap();
-    let path = &geometry.paths[composite.path_start as usize];
-    assert!(path.contour_count >= 2);
+    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+    let expected_area = 4.0 - std::f64::consts::PI * 0.25;
+    assert!(
+        (summary.area_mm2 - expected_area).abs() < 0.02,
+        "area was {}",
+        summary.area_mm2
+    );
 }
 
 #[test]
-fn process_keeps_clear_polarity_semantics_after_overlapping_dark_runs() {
+fn artwork_composition_keeps_clear_polarity_semantics_after_overlapping_dark_runs() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,4.0X4.0*%\n%ADD11R,2.0X2.0*%\nD10*\nX0Y0D03*\nX0Y0D03*\n%LPC*%\nD11*\nX0Y0D03*\nM02*\n",
     )
     .unwrap();
 
-    let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber);
     let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
 
     assert!(
@@ -465,14 +458,13 @@ fn process_keeps_clear_polarity_semantics_after_overlapping_dark_runs() {
 }
 
 #[test]
-fn process_preserves_ordered_aperture_path_polarity() {
+fn extraction_preserves_ordered_aperture_path_polarity() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%AMORDERED*\n21,1,4,4,0,0,0*\n21,0,2,2,0,0,0*\n21,1,1,1,0,0,0*\n%\n%ADD10ORDERED*%\nD10*\nX0Y0D03*\nM02*\n",
     )
     .unwrap();
 
-    let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber);
     let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
 
     assert!(
@@ -523,18 +515,18 @@ fn extracts_non_circular_aperture_sweeps_without_diagnostics() {
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
     assert!(geometry.diagnostics.is_empty());
-    assert!(geometry.paths.len() > 1);
+    assert_eq!(geometry.objects.len(), 1);
+    assert!(geometry.paths[0].flags.filled);
 }
 
 #[test]
-fn renders_svg_and_png_from_processed_geometry() {
+fn renders_svg_and_png_from_artwork() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Paste,Top*%\n%ADD10R,1.0X1.0*%\nD10*\nX0Y0D03*\nM02*\n",
     )
     .unwrap();
 
-    let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber);
     let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
     assert!(svg.contains("<svg"));
     assert!(svg.contains("<path"));
@@ -551,8 +543,7 @@ fn renders_profile_gerber_as_black_board_outline() {
     )
     .unwrap();
 
-    let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber);
     let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
 
     assert!(svg.contains("fill='none' stroke='#000000'"));

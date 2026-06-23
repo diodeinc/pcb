@@ -32,12 +32,30 @@ where
     normalize_bounds(doc);
 }
 
-/// Resolve source geometry into composed fabrication artwork.
+/// Resolve IPC-specific paint semantics while preserving native artwork shapes.
+///
+/// IPC feature-set voids, negative polarity, and layer cutouts are semantic
+/// operators on source features, not generic ordered artwork objects. Resolve
+/// those before lowering to source-independent artwork, but do not outline
+/// strokes or flatten unrelated positive features.
+pub fn normalize_for_artwork<S, L>(doc: &mut GeometryDocument<S, L>)
+where
+    S: Copy + Eq + Hash + Clone,
+    L: Clone,
+{
+    normalize_preserving(doc);
+    resolve_set_voids(doc);
+    resolve_negative_polarity(doc);
+    subtract_layer_cutouts(doc);
+    normalize_bounds(doc);
+}
+
+/// Resolve source geometry into a composed rendering image.
 ///
 /// This is intentionally destructive: it outlines strokes, applies boolean
 /// union/difference, resolves voids, and may convert arcs into polygon
-/// contours. Use it only when a target needs final painted artwork.
-pub fn compose_for_artwork_export<S, L>(doc: &mut GeometryDocument<S, L>)
+/// contours. Use it only when a target needs a final painted image.
+pub fn compose_for_rendering<S, L>(doc: &mut GeometryDocument<S, L>)
 where
     S: Copy + Eq + Hash + Clone,
     L: Clone,
@@ -50,14 +68,6 @@ where
     resolve_negative_polarity(doc);
     subtract_layer_cutouts(doc);
     normalize_bounds(doc);
-}
-
-pub fn compose_for_rendering<S, L>(doc: &mut GeometryDocument<S, L>)
-where
-    S: Copy + Eq + Hash + Clone,
-    L: Clone,
-{
-    compose_for_artwork_export(doc);
 }
 
 pub fn prune_unpainted_paths<S, L>(doc: &mut GeometryDocument<S, L>) {
@@ -811,7 +821,7 @@ mod tests {
             ..copper_trace_feature()
         });
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         assert_eq!(doc.features[0].path_count, 1);
         let path = &doc.paths[doc.features[0].path_start as usize];
@@ -879,7 +889,7 @@ mod tests {
             bbox: BBox::empty(),
         });
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         let feature_paths = &doc.paths[doc.features[0].path_start as usize
             ..(doc.features[0].path_start + doc.features[0].path_count) as usize];
@@ -938,7 +948,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 3);
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         assert_eq!(doc.features[0].path_count, 1);
         assert_eq!(doc.features[1].path_count, 0);
@@ -979,7 +989,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 2);
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         let feature = &doc.features[0];
         let path = &doc.paths[feature.path_start as usize];
@@ -1020,7 +1030,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 2);
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         let trace = &doc.features[0];
         let path = &doc.paths[trace.path_start as usize];
@@ -1056,7 +1066,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 2);
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
         flatten_layers_to_masks(&mut doc);
 
         assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);

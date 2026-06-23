@@ -3952,7 +3952,7 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
             .expect("synthetic panel fixture should parse");
         let mut doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
-        pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut doc);
+        pcb_ir::dialects::ipc::process::compose_for_rendering(&mut doc);
 
         let layer = &doc.layers[0];
         let traces = doc.features

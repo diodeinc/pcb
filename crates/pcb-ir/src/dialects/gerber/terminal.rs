@@ -1,15 +1,15 @@
 use std::io::{self, Write};
 
-use crate::dialects::gerber::{GeometryDocument, lower_to_geom};
-use crate::dialects::{geom, mask};
+use crate::dialects::{artwork, mask};
 
 pub fn can_render_to_terminal() -> bool {
     mask::can_render_to_terminal()
 }
 
-pub fn render_to_terminal<A: Clone>(doc: &GeometryDocument<A>) -> Result<(), String> {
-    let geom = lower_to_geom(doc);
-    let mask = geom::lower_filled_to_mask(&geom);
+pub fn render_to_terminal<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &artwork::ArtworkDocument<LayerMeta, ObjectMeta>,
+) -> Result<(), String> {
+    let mask = artwork::compose_to_mask(doc);
     mask::render_to_terminal(&mask, 0)
 }
 

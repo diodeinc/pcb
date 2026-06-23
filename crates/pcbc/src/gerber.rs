@@ -110,10 +110,10 @@ fn compare(
         report.candidate.bbox.max.y
     );
     println!(
-        "reference features {}, paths {}; candidate features {}, paths {}",
-        report.reference.feature_count,
+        "reference objects {}, paths {}; candidate objects {}, paths {}",
+        report.reference.object_count,
         report.reference.path_count,
-        report.candidate.feature_count,
+        report.candidate.object_count,
         report.candidate.path_count
     );
 
@@ -170,14 +170,10 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
     Ok(())
 }
 
-fn load_geometry(
-    file: &Path,
-) -> Result<pcb_ir::dialects::gerber::GeometryDocument<gerberx2::Attribute>> {
+fn load_geometry(file: &Path) -> Result<gerberx2::geometry::GerberArtworkDocument> {
     let gerber = gerberx2::GerberX2::parse_file(file)
         .with_context(|| format!("Failed to parse Gerber file {}", file.display()))?;
-    let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
-    Ok(geometry)
+    Ok(gerberx2::geometry::extract_document(&gerber))
 }
 
 fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderTarget> {

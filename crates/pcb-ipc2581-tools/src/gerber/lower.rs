@@ -6,7 +6,7 @@ use gerberx2::{
     WriterAperture, WriterApertureTemplate, WriterObject, sanitize_attribute_field,
 };
 use pcb_ir::common::{BBox, FillRule, PaintPolarity, Point};
-use pcb_ir::dialects::artwork::{ArtworkAperture, ArtworkGeometry, ArtworkPath};
+use pcb_ir::dialects::artwork::{ArtworkAperture, ArtworkGeometry, ArtworkPath, PaintStage};
 use pcb_ir::dialects::gerber::Polarity;
 use pcb_ir::dialects::path::{self as common_path, PathCmd, PathOp, PathPayload, PolygonContour};
 
@@ -23,7 +23,7 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
 
     for (source_index, object) in layer.objects.iter().enumerate() {
         let objects = lower_artwork_object(layer, object, &mut apertures)?;
-        plan.push_group(source_index, objects);
+        plan.push_group(source_index, object.order.stage, objects);
     }
     let objects = plan.into_ordered_objects()?;
 
@@ -162,13 +162,13 @@ enum GerberPaintStage {
 }
 
 impl GerberPlan {
-    fn push_group(&mut self, source_index: usize, objects: Vec<WriterObject>) {
+    fn push_group(&mut self, source_index: usize, stage: PaintStage, objects: Vec<WriterObject>) {
         if objects.is_empty() {
             return;
         }
         self.groups.push(GerberObjectGroup {
             source_index,
-            stage: paint_stage_for_objects(&objects),
+            stage: GerberPaintStage::from(stage),
             objects,
         });
     }
@@ -258,14 +258,13 @@ impl GerberPlan {
     }
 }
 
-fn paint_stage_for_objects(objects: &[WriterObject]) -> GerberPaintStage {
-    if objects
-        .iter()
-        .any(|object| object.polarity == Polarity::Clear)
-    {
-        GerberPaintStage::Base
-    } else {
-        GerberPaintStage::Overlay
+impl From<PaintStage> for GerberPaintStage {
+    fn from(stage: PaintStage) -> Self {
+        match stage {
+            PaintStage::Base => Self::Base,
+            PaintStage::Overlay => Self::Overlay,
+            PaintStage::FinalCutout => Self::FinalCutout,
+        }
     }
 }
 
@@ -867,7 +866,7 @@ fn quantize_mm(value: f64) -> i64 {
 mod tests {
     use super::*;
     use pcb_ir::common::{FillRule, LayerRole, Side, Unit};
-    use pcb_ir::dialects::artwork::{ArtworkLayer as IrArtworkLayer, ArtworkObject};
+    use pcb_ir::dialects::artwork::{ArtworkLayer as IrArtworkLayer, ArtworkObject, PaintOrder};
 
     #[test]
     fn sanitizes_net_names_for_gerber_attribute_fields() {
@@ -932,6 +931,7 @@ mod tests {
             layer_id,
             ArtworkObject {
                 paint: PaintPolarity::Dark,
+                order: Default::default(),
                 geometry: ArtworkGeometry::Region { path },
                 net: None,
                 bbox: artwork.paths[path as usize].bbox,
@@ -966,6 +966,7 @@ mod tests {
             layer_id,
             ArtworkObject {
                 paint: PaintPolarity::Dark,
+                order: Default::default(),
                 geometry: ArtworkGeometry::Region { path },
                 net: None,
                 bbox: artwork.paths[path as usize].bbox,
@@ -1011,6 +1012,9 @@ mod tests {
             layer_id,
             ArtworkObject {
                 paint: PaintPolarity::Dark,
+                order: PaintOrder {
+                    stage: PaintStage::Base,
+                },
                 geometry: ArtworkGeometry::Region { path: pour },
                 net: None,
                 bbox: artwork.paths[pour as usize].bbox,
@@ -1028,6 +1032,9 @@ mod tests {
             layer_id,
             ArtworkObject {
                 paint: PaintPolarity::Dark,
+                order: PaintOrder {
+                    stage: PaintStage::Overlay,
+                },
                 geometry: ArtworkGeometry::Region { path: trace },
                 net: None,
                 bbox: artwork.paths[trace as usize].bbox,
