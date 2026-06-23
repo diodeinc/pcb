@@ -855,8 +855,8 @@ pub struct GeometryFeature<Symbol> {
     pub source_layer_ref: Option<Symbol>,
     pub set: Option<u32>,
     pub source: SourceRef,
-    pub semantic: FeatureSemantic,
     pub intent: FeatureIntent<Symbol>,
+    pub fiducial_kind: FiducialKind,
     pub transform: Affine2,
     pub bbox: BBox,
     pub path_start: u32,
@@ -891,8 +891,8 @@ impl<Symbol> GeometryFeature<Symbol> {
             source_layer_ref: None,
             set: None,
             source: SourceRef::default(),
-            semantic: FeatureSemantic::None,
             intent: FeatureIntent::default(),
+            fiducial_kind: FiducialKind::Unknown,
             transform: Affine2::identity(),
             bbox: BBox::empty(),
             path_start: 0,
@@ -1084,25 +1084,7 @@ pub enum FeatureBucket {
     Antipad,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeatureSemantic {
-    None,
-    CopperConductor,
-    SmdPad,
-    ComponentPad,
-    ViaPad,
-    Fiducial(FiducialKind),
-    VCut,
-    Score,
-    Route,
-    BoardOutline,
-    Other,
-}
-
 /// Source-level fabrication meaning carried with geometry through processing.
-///
-/// This is the authoritative feature classification. `FeatureSemantic` remains
-/// as a compact compatibility label for existing callers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FeatureIntent<Symbol> {
     pub domain: FeatureDomain,
@@ -1211,6 +1193,7 @@ pub enum FeatureSpan<Symbol> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FiducialKind {
+    Unknown,
     Local,
     Global,
     Panel,

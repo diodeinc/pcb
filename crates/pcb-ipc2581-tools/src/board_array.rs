@@ -3,7 +3,7 @@ use std::fmt::Write;
 use ipc2581::types::LayerFunction;
 use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
 use pcb_ir::dialects::ipc::{
-    FeatureSemantic, GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp,
+    FeatureDomain, GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp,
 };
 
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
@@ -142,7 +142,7 @@ fn vcut_paths_from_layer(doc: &GeometryDocument, panel_height: f64) -> Vec<Strin
 
     doc.features[layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
         .iter()
-        .filter(|feature| feature.semantic == FeatureSemantic::VCut)
+        .filter(|feature| feature.intent.domain == FeatureDomain::VCut)
         .filter_map(|feature| feature_path_data(doc, feature, transform))
         .collect()
 }

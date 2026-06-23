@@ -15,8 +15,8 @@ use crate::{geometry, ipc2581 as ipc};
 use pcb_ir::common::{BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Point, Unit};
 use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{
-    FeatureDomain, FeatureOperation, FeatureRole, FeatureSemantic, FiducialKind, GeometryFeature,
-    GeometryPath, GeometryView, PlatingKind, ProfileSet,
+    FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature, GeometryPath,
+    GeometryView, PlatingKind, ProfileSet,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -627,10 +627,8 @@ fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> 
 }
 
 fn fiducial_aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> {
-    let FeatureSemantic::Fiducial(kind) = feature.semantic else {
-        return vec!["FiducialPad".to_string(), "Global".to_string()];
-    };
-    let kind = match kind {
+    let kind = match feature.fiducial_kind {
+        FiducialKind::Unknown => "Global",
         FiducialKind::Local => "Local",
         FiducialKind::Global => "Global",
         FiducialKind::Panel | FiducialKind::GoodPanel => "Panel",

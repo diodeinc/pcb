@@ -1237,11 +1237,11 @@ fn write_hole(
     let diameter = fmt_units(hole.diameter, units);
     let x = fmt_units(hole.x, units);
     let y = fmt_units(hole.y, units);
-    let fallback_name = format!("{GENERATED_HOLE_NAME_PREFIX}_{}", *generated_hole_index);
+    let generated_name = format!("{GENERATED_HOLE_NAME_PREFIX}_{}", *generated_hole_index);
     *generated_hole_index += 1;
 
     let mut elem = BytesStart::new("Hole");
-    elem.push_attribute(("name", fallback_name.as_str()));
+    elem.push_attribute(("name", generated_name.as_str()));
     elem.push_attribute(("type", "CIRCLE"));
     elem.push_attribute(("diameter", diameter.as_str()));
     elem.push_attribute(("platingStatus", plating_status_attr(hole.plating_status)));
@@ -1417,7 +1417,7 @@ mod tests {
     use crate::gerber::{GerberExportOptions, export_gerber_x2};
     use pcb_ir::common::Point;
     use pcb_ir::dialects::ipc::{
-        FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FeatureSemantic,
+        FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FiducialKind,
         GeometryView, PlatingKind,
     };
     #[test]
@@ -1466,7 +1466,7 @@ mod tests {
         assert!(
             vcut.features
                 .iter()
-                .all(|feature| feature.semantic == FeatureSemantic::VCut)
+                .all(|feature| feature.intent.domain == FeatureDomain::VCut)
         );
     }
 
@@ -1546,7 +1546,8 @@ mod tests {
             assert_eq!(before_feature.kind, after_feature.kind);
             assert_eq!(before_feature.bucket, after_feature.bucket);
             assert_eq!(before_feature.polarity, after_feature.polarity);
-            assert_eq!(before_feature.semantic, after_feature.semantic);
+            assert_eq!(before_feature.intent, after_feature.intent);
+            assert_eq!(before_feature.fiducial_kind, after_feature.fiducial_kind);
             assert_eq!(before_feature.bbox, after_feature.bbox);
             assert_eq!(before_feature.path_count, after_feature.path_count);
         }
@@ -1599,10 +1600,10 @@ mod tests {
         let parsed = Ipc2581::parse(&xml).unwrap();
         let top =
             geometry::extract_layer_for_view(&parsed, "TOP", GeometryView::ArrayFlattened).unwrap();
-        assert!(top.features.iter().any(|feature| matches!(
-            feature.semantic,
-            FeatureSemantic::Fiducial(pcb_ir::dialects::ipc::FiducialKind::Global)
-        )));
+        assert!(top.features.iter().any(|feature| {
+            feature.intent.role == FeatureRole::Fiducial
+                && feature.fiducial_kind == FiducialKind::Global
+        }));
 
         let drill =
             geometry::extract_layer_for_view(&parsed, "Array_Drill", GeometryView::ArrayFlattened)

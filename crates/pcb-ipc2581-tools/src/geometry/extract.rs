@@ -238,7 +238,6 @@ fn complete_feature_intent(layer: &Layer, feature: &mut GeometryFeature) {
     if feature.intent.plating == PlatingKind::Unknown {
         feature.intent.plating = plating_for_feature(feature);
     }
-    feature.semantic = semantic_for_intent(feature);
 }
 
 fn intent_for_layer(layer: &Layer) -> FeatureIntent<Symbol> {
@@ -394,31 +393,6 @@ fn plating_kind(status: PlatingStatus) -> PlatingKind {
         PlatingStatus::Plated => PlatingKind::Plated,
         PlatingStatus::NonPlated => PlatingKind::NonPlated,
         PlatingStatus::Via => PlatingKind::Via,
-    }
-}
-
-fn semantic_for_intent(feature: &GeometryFeature) -> FeatureSemantic {
-    if matches!(feature.semantic, FeatureSemantic::Fiducial(_)) {
-        return feature.semantic;
-    }
-
-    match feature.intent.role {
-        FeatureRole::Fiducial => FeatureSemantic::Fiducial(FiducialKind::Global),
-        FeatureRole::Via => FeatureSemantic::ViaPad,
-        FeatureRole::Pad => match feature.intent.plating {
-            PlatingKind::Plated => FeatureSemantic::ComponentPad,
-            PlatingKind::Via => FeatureSemantic::ViaPad,
-            _ => FeatureSemantic::SmdPad,
-        },
-        FeatureRole::ArraySeparation => match feature.intent.domain {
-            FeatureDomain::VCut => FeatureSemantic::VCut,
-            FeatureDomain::Score => FeatureSemantic::Score,
-            _ => FeatureSemantic::Other,
-        },
-        FeatureRole::Route => FeatureSemantic::Route,
-        FeatureRole::BoardOutline => FeatureSemantic::BoardOutline,
-        FeatureRole::Conductor => FeatureSemantic::CopperConductor,
-        _ => FeatureSemantic::Other,
     }
 }
 
@@ -1687,7 +1661,7 @@ fn extract_fiducial(
     );
     feature.net = net;
     feature.source = source;
-    feature.semantic = FeatureSemantic::Fiducial(map_fiducial_kind(fiducial.kind));
+    feature.fiducial_kind = map_fiducial_kind(fiducial.kind);
     feature.bbox = paths_bbox(doc, path_start, path_count);
     feature.path_start = path_start;
     feature.path_count = path_count;
@@ -3248,7 +3222,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn carries_spec_refs_fiducials_and_vcut_semantics() {
+    fn carries_spec_refs_fiducials_and_vcut_intent() {
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -3307,17 +3281,16 @@ mod tests {
         assert_eq!(top.feature_sets.len(), 1);
         assert_eq!(top.feature_sets[0].spec_ref_count, 1);
         assert_eq!(top.features[0].bucket, FeatureBucket::Fiducial);
-        assert_eq!(
-            top.features[0].semantic,
-            FeatureSemantic::Fiducial(FiducialKind::Global)
-        );
+        assert_eq!(top.features[0].intent.role, FeatureRole::Fiducial);
+        assert_eq!(top.features[0].fiducial_kind, FiducialKind::Global);
         assert_eq!(top.features[0].pin_ref_count, 1);
         assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
         let vcut = extract_layer_for_view(&ipc, "VCUT", GeometryView::ArrayFlattened).unwrap();
         assert_eq!(vcut.layers[0].spec_ref_count, 1);
         assert_eq!(vcut.feature_sets[0].spec_ref_count, 1);
-        assert_eq!(vcut.features[0].semantic, FeatureSemantic::VCut);
+        assert_eq!(vcut.features[0].intent.domain, FeatureDomain::VCut);
+        assert_eq!(vcut.features[0].intent.role, FeatureRole::ArraySeparation);
     }
 
     #[test]

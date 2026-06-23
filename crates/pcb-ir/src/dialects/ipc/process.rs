@@ -462,13 +462,7 @@ where
 }
 
 fn is_copper_trace_feature<S>(feature: &GeometryFeature<S>) -> bool {
-    feature.bucket == FeatureBucket::Trace
-        && (feature.intent.domain == FeatureDomain::Copper
-            || (feature.intent.domain == FeatureDomain::Unknown
-                && matches!(
-                    feature.semantic,
-                    FeatureSemantic::None | FeatureSemantic::CopperConductor
-                )))
+    feature.bucket == FeatureBucket::Trace && feature.intent.domain == FeatureDomain::Copper
 }
 
 pub fn resolve_set_voids<S: Clone, L: Clone>(doc: &mut GeometryDocument<S, L>) {
@@ -810,11 +804,7 @@ mod tests {
         );
         doc.features.push(GeometryFeature {
             path_count: 2,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
 
         compose_for_artwork_export(&mut doc);
@@ -912,11 +902,7 @@ mod tests {
                 feature_index: 0,
             },
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
@@ -930,11 +916,7 @@ mod tests {
             },
             path_start: 1,
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
@@ -948,11 +930,7 @@ mod tests {
             },
             path_start: 2,
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         push_test_layer(&mut doc, 0, 3);
 
@@ -1021,11 +999,7 @@ mod tests {
         );
         doc.features.push(GeometryFeature {
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
@@ -1074,11 +1048,7 @@ mod tests {
         doc.features.push(GeometryFeature {
             path_start: 1,
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         push_test_layer(&mut doc, 0, 2);
 
@@ -1110,6 +1080,19 @@ mod tests {
             feature_count,
             bbox: BBox::empty(),
         });
+    }
+
+    fn copper_trace_feature() -> GeometryFeature<u32> {
+        let mut feature = GeometryFeature::new(
+            FeatureKind::Trace,
+            FeatureBucket::Trace,
+            GeometryPolarity::Positive,
+        );
+        feature.intent.domain = FeatureDomain::Copper;
+        feature.intent.role = FeatureRole::Conductor;
+        feature.intent.operation = FeatureOperation::AddMaterial;
+        feature.intent.material = FeatureMaterial::Copper;
+        feature
     }
 
     fn rect_cmds(x0: f64, y0: f64, x1: f64, y1: f64) -> [PathCmd; 5] {
