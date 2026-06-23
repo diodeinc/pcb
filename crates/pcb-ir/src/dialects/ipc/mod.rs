@@ -1320,7 +1320,7 @@ fn validate_arc_command(
             "feature {feature_index} path {path_index} command {cmd_index} has a zero-radius arc"
         ));
     }
-    if !nearly_equal(start_radius, end_radius) {
+    if !arc_radii_nearly_equal(start_radius, end_radius) {
         return Err(format!(
             "feature {feature_index} path {path_index} command {cmd_index} has non-circular arc radii {start_radius} and {end_radius}"
         ));
@@ -1351,9 +1351,12 @@ fn paths_bbox<Symbol, LayerFunction>(
 }
 
 const GEOMETRY_EPSILON: f64 = 1e-9;
+const ARC_RADIUS_ABSOLUTE_TOLERANCE_MM: f64 = 1e-4;
 
-fn nearly_equal(left: f64, right: f64) -> bool {
-    (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
+fn arc_radii_nearly_equal(left: f64, right: f64) -> bool {
+    (left - right).abs()
+        <= ARC_RADIUS_ABSOLUTE_TOLERANCE_MM
+            .max(GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

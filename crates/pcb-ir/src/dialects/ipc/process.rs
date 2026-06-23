@@ -1143,6 +1143,24 @@ mod tests {
     }
 
     #[test]
+    fn artwork_ready_validation_accepts_source_precision_arc_radius_noise() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::stroked(0.2, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(0.250024, 0.0)),
+                PathCmd::arc_to(Point::new(0.0, 0.249977), Point::new(0.0, 0.0), false),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..copper_trace_feature()
+        });
+
+        validate_artwork_ready(&doc).unwrap();
+    }
+
+    #[test]
     fn flattens_processed_layer_features_to_single_mask() {
         let mut doc = TestDoc::new();
         doc.push_path(
