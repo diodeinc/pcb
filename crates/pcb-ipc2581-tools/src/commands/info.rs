@@ -9,7 +9,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::accessors::{
-    ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType, SurfaceFinishInfo,
+    BoardArrayInfo, ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType,
+    SurfaceFinishInfo,
 };
 use crate::utils::{file as file_utils, units};
 use crate::{OutputFormat, UnitFormat};
@@ -168,69 +169,6 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
                 unit_format,
             )),
         ]);
-    }
-
-    if let Some(board_array) = layout
-        .as_ref()
-        .and_then(|layout| layout.board_array.as_ref())
-    {
-        if let Some(dimensions) = board_array.dimensions.as_ref() {
-            summary_table.add_row(vec![
-                Cell::new("Array Size").fg(Color::Cyan),
-                Cell::new(units::format_board_size(
-                    dimensions.width_mm(),
-                    dimensions.height_mm(),
-                    unit_format,
-                )),
-            ]);
-        }
-        summary_table.add_row(vec![
-            Cell::new("Array Boards").fg(Color::Cyan),
-            Cell::new(format!(
-                "{} instance{}",
-                board_array.board_instances,
-                if board_array.board_instances == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            )),
-        ]);
-        if let Some(grid) = board_array.grid.as_ref() {
-            summary_table.add_row(vec![
-                Cell::new("Array Grid").fg(Color::Cyan),
-                Cell::new(format!("{} x {}", grid.columns, grid.rows)),
-            ]);
-            if let Some(spacing) = grid.column_spacing {
-                summary_table.add_row(vec![
-                    Cell::new("Column Spacing").fg(Color::Cyan),
-                    Cell::new(units::convert_mm(spacing.mm(), unit_format)),
-                ]);
-            }
-            if let Some(spacing) = grid.row_spacing {
-                summary_table.add_row(vec![
-                    Cell::new("Row Spacing").fg(Color::Cyan),
-                    Cell::new(units::convert_mm(spacing.mm(), unit_format)),
-                ]);
-            }
-            if let Some(width) = grid.edge_rail_width {
-                summary_table.add_row(vec![
-                    Cell::new("Edge Rail").fg(Color::Cyan),
-                    Cell::new(units::convert_mm(width.mm(), unit_format)),
-                ]);
-            }
-        }
-        if let Some(drills) = accessor.board_array_drill_stats()
-            && drills.total_holes > 0
-        {
-            summary_table.add_row(vec![
-                Cell::new("Array Drill Holes").fg(Color::Cyan),
-                Cell::new(format!(
-                    "{} ({} sizes)",
-                    drills.total_holes, drills.unique_sizes
-                )),
-            ]);
-        }
     }
 
     // Component statistics
@@ -532,6 +470,10 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         print_drill_distribution("Drill Distribution", &drills);
     }
 
+    if let Some(board_array) = layout.and_then(|layout| layout.board_array) {
+        print_board_array_summary(&board_array, accessor, unit_format);
+    }
+
     if let Some(drills) = accessor.board_array_drill_stats()
         && !drills.distribution.is_empty()
     {
@@ -571,6 +513,69 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_board_array_summary(
+    board_array: &BoardArrayInfo,
+    accessor: &IpcAccessor,
+    unit_format: UnitFormat,
+) {
+    println!("{}", "Board Array Summary".bold());
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL_CONDENSED);
+    table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+
+    if let Some(dimensions) = board_array.dimensions.as_ref() {
+        table.add_row(vec![
+            Cell::new("Array Size").fg(Color::Cyan),
+            Cell::new(units::format_board_size(
+                dimensions.width_mm(),
+                dimensions.height_mm(),
+                unit_format,
+            )),
+        ]);
+    }
+
+    if let Some(grid) = board_array.grid.as_ref() {
+        table.add_row(vec![
+            Cell::new("Array Grid").fg(Color::Cyan),
+            Cell::new(format!("{} x {}", grid.columns, grid.rows)),
+        ]);
+        if let Some(spacing) = grid.column_spacing {
+            table.add_row(vec![
+                Cell::new("Column Spacing").fg(Color::Cyan),
+                Cell::new(units::convert_mm(spacing.mm(), unit_format)),
+            ]);
+        }
+        if let Some(spacing) = grid.row_spacing {
+            table.add_row(vec![
+                Cell::new("Row Spacing").fg(Color::Cyan),
+                Cell::new(units::convert_mm(spacing.mm(), unit_format)),
+            ]);
+        }
+        if let Some(width) = grid.edge_rail_width {
+            table.add_row(vec![
+                Cell::new("Edge Rail").fg(Color::Cyan),
+                Cell::new(units::convert_mm(width.mm(), unit_format)),
+            ]);
+        }
+    }
+
+    if let Some(drills) = accessor.board_array_drill_stats()
+        && drills.total_holes > 0
+    {
+        table.add_row(vec![
+            Cell::new("Array Drill Holes").fg(Color::Cyan),
+            Cell::new(format!(
+                "{} ({} sizes)",
+                drills.total_holes, drills.unique_sizes
+            )),
+        ]);
+    }
+
+    println!("{table}");
+    println!();
 }
 
 fn print_drill_distribution(title: &str, drills: &DrillStats) {

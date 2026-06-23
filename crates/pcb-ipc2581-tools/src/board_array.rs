@@ -9,7 +9,7 @@ use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
 type GeometryDocument =
     pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
-const MIN_STROKE: f64 = 0.08;
+const OVERVIEW_STROKE_WIDTH_MM: f64 = 0.1;
 const POINT_EPSILON_MM: f64 = 1e-9;
 
 pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Option<String> {
@@ -41,10 +41,6 @@ fn render_board_array_svg(
         return None;
     }
 
-    let scale = (array_width.max(array_height) / 450.0).max(MIN_STROKE);
-    let array_stroke = scale * 1.9;
-    let board_stroke = scale * 0.75;
-    let rail_stroke = scale * 0.5;
     let board_paths = board_instance_paths(doc, array_height);
     if board_paths.is_empty() {
         return None;
@@ -77,14 +73,20 @@ fn render_board_array_svg(
 
     write_board_paths(&mut svg, &board_paths, "board-fill", "#f1f5f9", "none", 0.0);
 
-    write_layer_overlays(&mut svg, layer_overlays, scale);
-    write_rail_guides(&mut svg, grid, array_width, array_height, rail_stroke);
+    write_layer_overlays(&mut svg, layer_overlays);
+    write_rail_guides(
+        &mut svg,
+        grid,
+        array_width,
+        array_height,
+        OVERVIEW_STROKE_WIDTH_MM,
+    );
     writeln!(
         svg,
         "  <rect class='board-array-outline' x='0' y='0' width='{}' height='{}' fill='none' stroke='#111827' stroke-width='{}'/>",
         fmt_num(array_width),
         fmt_num(array_height),
-        fmt_num(array_stroke)
+        fmt_num(OVERVIEW_STROKE_WIDTH_MM)
     )
     .unwrap();
 
@@ -94,7 +96,7 @@ fn render_board_array_svg(
         "board-outline",
         "none",
         "#064e3b",
-        board_stroke,
+        OVERVIEW_STROKE_WIDTH_MM,
     );
 
     writeln!(svg, "</svg>").unwrap();
@@ -110,7 +112,6 @@ struct BoardArrayLayerPath {
     data: String,
     filled: bool,
     stroked: bool,
-    stroke_width: f64,
 }
 
 struct BoardArrayLayerStyle {
@@ -119,7 +120,6 @@ struct BoardArrayLayerStyle {
     stroke: &'static str,
     fill_opacity: f64,
     stroke_opacity: f64,
-    stroke_width_scale: f64,
 }
 
 fn board_array_layer_overlays(
@@ -233,7 +233,6 @@ fn feature_paths(
                 data,
                 filled: path.flags.filled,
                 stroked: path.flags.stroked,
-                stroke_width: path.style.stroke.width,
             })
         })
         .collect()
@@ -351,32 +350,20 @@ fn write_board_paths(
     }
 }
 
-fn write_layer_overlays(
-    svg: &mut String,
-    layer_overlays: &[BoardArrayLayerOverlay],
-    stroke_scale: f64,
-) {
+fn write_layer_overlays(svg: &mut String, layer_overlays: &[BoardArrayLayerOverlay]) {
     for overlay in layer_overlays {
         let style = board_array_layer_style(overlay.function);
-        let stroke_width = fmt_num(style.stroke_width_scale * stroke_scale);
         for path in &overlay.paths {
             let force_stroke =
                 matches!(overlay.function, LayerFunction::VCut | LayerFunction::Score);
             if force_stroke || (path.stroked && !path.filled) {
-                let width = if force_stroke {
-                    stroke_width.clone()
-                } else {
-                    fmt_num(
-                        path.stroke_width
-                            .max(style.stroke_width_scale * stroke_scale),
-                    )
-                };
                 writeln!(
                     svg,
-                    "  <path class='array-layer {}' d='{}' fill='none' stroke='{}' stroke-width='{width}' stroke-linejoin='round' opacity='{}'/>",
+                    "  <path class='array-layer {}' d='{}' fill='none' stroke='{}' stroke-width='{}' stroke-linejoin='round' opacity='{}'/>",
                     style.class_name,
                     path.data,
                     style.stroke,
+                    fmt_num(OVERVIEW_STROKE_WIDTH_MM),
                     fmt_num(style.stroke_opacity)
                 )
                 .unwrap();
@@ -403,7 +390,6 @@ fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
             stroke: "#dc2626",
             fill_opacity: 0.0,
             stroke_opacity: 0.78,
-            stroke_width_scale: 0.78,
         },
         LayerFunction::Drill => BoardArrayLayerStyle {
             class_name: "array-layer-drill",
@@ -411,7 +397,6 @@ fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
             stroke: "#1d4ed8",
             fill_opacity: 0.42,
             stroke_opacity: 0.64,
-            stroke_width_scale: 0.48,
         },
         LayerFunction::Conductor
         | LayerFunction::CondFilm
@@ -424,7 +409,6 @@ fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
             stroke: "#b45309",
             fill_opacity: 0.30,
             stroke_opacity: 0.52,
-            stroke_width_scale: 0.42,
         },
         LayerFunction::Soldermask => BoardArrayLayerStyle {
             class_name: "array-layer-mask",
@@ -432,7 +416,6 @@ fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
             stroke: "#15803d",
             fill_opacity: 0.18,
             stroke_opacity: 0.42,
-            stroke_width_scale: 0.42,
         },
         LayerFunction::Solderpaste | LayerFunction::Pastemask => BoardArrayLayerStyle {
             class_name: "array-layer-paste",
@@ -440,7 +423,6 @@ fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
             stroke: "#475569",
             fill_opacity: 0.30,
             stroke_opacity: 0.50,
-            stroke_width_scale: 0.42,
         },
         LayerFunction::Silkscreen | LayerFunction::Legend => BoardArrayLayerStyle {
             class_name: "array-layer-legend",
@@ -448,7 +430,6 @@ fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
             stroke: "#111827",
             fill_opacity: 0.34,
             stroke_opacity: 0.54,
-            stroke_width_scale: 0.42,
         },
         _ => BoardArrayLayerStyle {
             class_name: "array-layer-fab",
@@ -456,7 +437,6 @@ fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
             stroke: "#334155",
             fill_opacity: 0.22,
             stroke_opacity: 0.56,
-            stroke_width_scale: 0.42,
         },
     }
 }
@@ -641,6 +621,7 @@ mod tests {
         assert!(svg.contains("d='M6 27 L6 0'"));
         assert!(svg.contains("d='M0 20 L46 20'"));
         assert!(svg.contains("stroke='#dc2626'"));
+        assert!(svg.contains("stroke-width='0.1'"));
         assert!(!svg.contains("stroke-dasharray"));
         assert!(!svg.contains("class='score-guide'"));
 
