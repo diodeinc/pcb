@@ -290,29 +290,31 @@ pub fn extract_layer_for_layout_target(
 
     let step = match layout_target {
         LayoutTarget::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
-        LayoutTarget::Panel | LayoutTarget::Layout => primary_step,
+        LayoutTarget::BoardArray | LayoutTarget::Layout => primary_step,
     };
 
     let mut doc = match layout_target {
         LayoutTarget::Board => {
             extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
         }
-        LayoutTarget::Panel | LayoutTarget::Layout if is_panel_step(step) => extract_panel_layer(
-            ipc,
-            &ecad.cad_data.steps,
-            &ecad.cad_data.layers,
-            step,
-            layer,
-            layer_name,
-        )?,
-        LayoutTarget::Panel | LayoutTarget::Layout => {
+        LayoutTarget::BoardArray | LayoutTarget::Layout if is_panel_step(step) => {
+            extract_panel_layer(
+                ipc,
+                &ecad.cad_data.steps,
+                &ecad.cad_data.layers,
+                step,
+                layer,
+                layer_name,
+            )?
+        }
+        LayoutTarget::BoardArray | LayoutTarget::Layout => {
             extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
         }
     };
 
     match layout_target {
         LayoutTarget::Board => append_step_only_layout_geometry(&mut doc, step),
-        LayoutTarget::Panel | LayoutTarget::Layout => {
+        LayoutTarget::BoardArray | LayoutTarget::Layout => {
             append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
         }
     }
@@ -3164,7 +3166,7 @@ mod tests {
         )
         .unwrap();
 
-        let top = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::Panel).unwrap();
+        let top = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::BoardArray).unwrap();
         assert_eq!(top.specs.len(), 1);
         assert_eq!(top.layers[0].spec_ref_count, 1);
         assert_eq!(top.feature_sets.len(), 1);
@@ -3177,7 +3179,7 @@ mod tests {
         assert_eq!(top.features[0].pin_ref_count, 1);
         assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
-        let vcut = extract_layer_for_layout_target(&ipc, "VCUT", LayoutTarget::Panel).unwrap();
+        let vcut = extract_layer_for_layout_target(&ipc, "VCUT", LayoutTarget::BoardArray).unwrap();
         assert_eq!(vcut.layers[0].spec_ref_count, 1);
         assert_eq!(vcut.feature_sets[0].spec_ref_count, 1);
         assert_eq!(vcut.features[0].semantic, FeatureSemantic::VCut);
@@ -3585,7 +3587,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_layer_for_layout_target_board_or_panel() {
+    fn extracts_layer_for_layout_target_board_or_board_array() {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
 
@@ -3606,7 +3608,7 @@ mod tests {
             1
         );
 
-        let panel = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::Panel)
+        let panel = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::BoardArray)
             .expect("panel layer should extract");
         let panel_layer = &panel.layers[0];
         let panel_features = &panel.features[panel_layer.feature_start as usize
@@ -3746,7 +3748,7 @@ mod tests {
     fn nested_panel_layer_extraction_materializes_descendant_board_features() {
         let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
             .expect("synthetic nested panel fixture should parse");
-        let doc = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::Panel)
+        let doc = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::BoardArray)
             .expect("nested panel layer should extract");
         let layer = &doc.layers[0];
         let features = &doc.features

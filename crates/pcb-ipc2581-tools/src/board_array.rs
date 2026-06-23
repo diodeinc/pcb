@@ -5,7 +5,7 @@ use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
 use pcb_ir::dialects::ipc::{FeatureSemantic, LayoutStep, LayoutStepKind, PathCmd, PathOp};
 
 use crate::LayoutTarget;
-use crate::accessors::{IpcAccessor, PanelGridInfo, PanelInfo};
+use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
 
 type GeometryDocument =
     pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
@@ -15,24 +15,24 @@ const POINT_EPSILON_MM: f64 = 1e-9;
 
 pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Option<String> {
     let layout = accessor.board_layout_info()?;
-    let panel = layout.panel.as_ref()?;
+    let board_array = layout.board_array.as_ref()?;
     let doc = crate::geometry::extract_layout(accessor.ipc()).ok()?;
-    let vcut_paths = vcut_layer_paths(accessor, panel.dimensions.as_ref()?.height_mm());
-    render_board_array_svg(panel, &doc, &vcut_paths)
+    let vcut_paths = vcut_layer_paths(accessor, board_array.dimensions.as_ref()?.height_mm());
+    render_board_array_svg(board_array, &doc, &vcut_paths)
 }
 
 fn render_board_array_svg(
-    panel: &PanelInfo,
+    board_array: &BoardArrayInfo,
     doc: &GeometryDocument,
     vcut_paths: &[String],
 ) -> Option<String> {
-    let dimensions = panel.dimensions.as_ref()?;
-    let grid = panel.grid.as_ref()?;
-    let panel_width = dimensions.width_mm();
-    let panel_height = dimensions.height_mm();
+    let dimensions = board_array.dimensions.as_ref()?;
+    let grid = board_array.grid.as_ref()?;
+    let array_width = dimensions.width_mm();
+    let array_height = dimensions.height_mm();
 
-    if panel_width <= 0.0
-        || panel_height <= 0.0
+    if array_width <= 0.0
+        || array_height <= 0.0
         || grid.board_width.mm() <= 0.0
         || grid.board_height.mm() <= 0.0
         || grid.columns == 0
@@ -41,8 +41,8 @@ fn render_board_array_svg(
         return None;
     }
 
-    let scale = (panel_width.max(panel_height) / 450.0).max(MIN_STROKE);
-    let panel_stroke = scale * 1.9;
+    let scale = (array_width.max(array_height) / 450.0).max(MIN_STROKE);
+    let array_stroke = scale * 1.9;
     let board_stroke = scale * 0.75;
     let vcut_stroke = scale * 0.85;
     let rail_stroke = scale * 0.5;
@@ -51,7 +51,7 @@ fn render_board_array_svg(
         fmt_num(vcut_stroke * 7.6),
         fmt_num(vcut_stroke * 5.0)
     );
-    let board_paths = board_instance_paths(doc, panel_height);
+    let board_paths = board_instance_paths(doc, array_height);
     if board_paths.is_empty() {
         return None;
     }
@@ -60,8 +60,8 @@ fn render_board_array_svg(
     writeln!(
         svg,
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {} {}' role='img' data-board-array-overview='true'>",
-        fmt_num(panel_width),
-        fmt_num(panel_height)
+        fmt_num(array_width),
+        fmt_num(array_height)
     )
     .unwrap();
     writeln!(
@@ -76,21 +76,21 @@ fn render_board_array_svg(
     writeln!(
         svg,
         "  <rect x='0' y='0' width='{}' height='{}' fill='#ffffff'/>",
-        fmt_num(panel_width),
-        fmt_num(panel_height)
+        fmt_num(array_width),
+        fmt_num(array_height)
     )
     .unwrap();
 
     write_board_paths(&mut svg, &board_paths, "board-fill", "#f1f5f9", "none", 0.0);
 
-    write_rail_guides(&mut svg, grid, panel_width, panel_height, rail_stroke);
+    write_rail_guides(&mut svg, grid, array_width, array_height, rail_stroke);
     write_vcut_guides(&mut svg, vcut_paths, vcut_stroke, &vcut_dash);
     writeln!(
         svg,
-        "  <rect class='panel-outline' x='0' y='0' width='{}' height='{}' fill='none' stroke='#111827' stroke-width='{}'/>",
-        fmt_num(panel_width),
-        fmt_num(panel_height),
-        fmt_num(panel_stroke)
+        "  <rect class='board-array-outline' x='0' y='0' width='{}' height='{}' fill='none' stroke='#111827' stroke-width='{}'/>",
+        fmt_num(array_width),
+        fmt_num(array_height),
+        fmt_num(array_stroke)
     )
     .unwrap();
 
@@ -107,7 +107,7 @@ fn render_board_array_svg(
     Some(svg)
 }
 
-fn vcut_layer_paths(accessor: &IpcAccessor<'_>, panel_height: f64) -> Vec<String> {
+fn vcut_layer_paths(accessor: &IpcAccessor<'_>, array_height: f64) -> Vec<String> {
     let Some(ecad) = accessor.ipc().ecad() else {
         return Vec::new();
     };
@@ -124,11 +124,11 @@ fn vcut_layer_paths(accessor: &IpcAccessor<'_>, panel_height: f64) -> Vec<String
         let Ok(doc) = crate::geometry::extract_layer_for_layout_target(
             accessor.ipc(),
             &layer_name,
-            LayoutTarget::Panel,
+            LayoutTarget::BoardArray,
         ) else {
             continue;
         };
-        paths.extend(vcut_paths_from_layer(&doc, panel_height));
+        paths.extend(vcut_paths_from_layer(&doc, array_height));
     }
     paths
 }
@@ -323,34 +323,34 @@ fn write_board_paths(
 
 fn write_rail_guides(
     svg: &mut String,
-    grid: &PanelGridInfo,
-    panel_width: f64,
-    panel_height: f64,
+    grid: &BoardArrayGridInfo,
+    array_width: f64,
+    array_height: f64,
     stroke_width: f64,
 ) {
     let Some(rail) = grid.edge_rail_width.map(|rail| rail.mm()) else {
         return;
     };
-    for x in [rail, panel_width - rail] {
-        if x > 0.0 && x < panel_width {
+    for x in [rail, array_width - rail] {
+        if x > 0.0 && x < array_width {
             writeln!(
                 svg,
                 "  <line class='rail-guide' x1='{}' y1='0' x2='{}' y2='{}' stroke='#cbd5e1' stroke-width='{}' opacity='0.62'/>",
                 fmt_num(x),
                 fmt_num(x),
-                fmt_num(panel_height),
+                fmt_num(array_height),
                 fmt_num(stroke_width)
             )
             .unwrap();
         }
     }
-    for y in [rail, panel_height - rail] {
-        if y > 0.0 && y < panel_height {
+    for y in [rail, array_height - rail] {
+        if y > 0.0 && y < array_height {
             writeln!(
                 svg,
                 "  <line class='rail-guide' x1='0' y1='{}' x2='{}' y2='{}' stroke='#cbd5e1' stroke-width='{}' opacity='0.62'/>",
                 fmt_num(y),
-                fmt_num(panel_width),
+                fmt_num(array_width),
                 fmt_num(y),
                 fmt_num(stroke_width)
             )
@@ -397,7 +397,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renders_simple_panel_overview_svg() {
+    fn renders_simple_board_array_overview_svg() {
         let ipc = ipc2581::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -453,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_panel_overview_vcuts_from_vcut_layer_only() {
+    fn renders_board_array_overview_vcuts_from_vcut_layer_only() {
         let ipc = ipc2581::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

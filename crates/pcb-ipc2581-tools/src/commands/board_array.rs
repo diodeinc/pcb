@@ -18,14 +18,13 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 
-use crate::accessors::IpcAccessor;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
 const EPSILON: f64 = 1e-9;
-const MIN_PANEL_DIMENSION_MM: f64 = 70.0;
-const MAX_PANEL_DIMENSION_MM: f64 = 260.0;
+const MIN_BOARD_ARRAY_DIMENSION_MM: f64 = 70.0;
+const MAX_BOARD_ARRAY_DIMENSION_MM: f64 = 260.0;
 const MAX_VCUT_LINES_PER_AXIS: usize = 25;
 const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
@@ -265,19 +264,6 @@ pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -
     Ok(())
 }
 
-pub fn execute_svg(input: &Path, output: &Path) -> Result<()> {
-    let content = file_utils::load_ipc_file(input)?;
-    let ipc = Ipc2581::parse(&content)?;
-    let accessor = IpcAccessor::new(&ipc);
-    let svg = crate::panel::render_board_array_overview_svg(&accessor)
-        .context("IPC-2581 file has no renderable board array overview")?;
-
-    std::fs::write(output, svg)
-        .with_context(|| format!("failed to write board array SVG to {}", output.display()))?;
-    println!("✓ Board array SVG exported to {}", output.display());
-    Ok(())
-}
-
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(&ipc, options)?;
@@ -307,7 +293,9 @@ fn build_board_array_spec(
         .context("IPC-2581 ECAD section has no Step")?;
 
     if is_panel_step(primary_step) {
-        bail!("primary IPC-2581 step is already a panel; board array create expects a board step");
+        bail!(
+            "primary IPC-2581 step is already a board array; board array create expects a board step"
+        );
     }
     if !is_board_step(primary_step) {
         bail!("primary IPC-2581 step is not a board step");
@@ -454,18 +442,18 @@ fn validate_array_dimensions(width_mm: f64, height_mm: f64) -> Result<()> {
 }
 
 fn validate_array_dimension(axis: &'static str, value: f64) -> Result<()> {
-    if !value.is_finite() || value + EPSILON < MIN_PANEL_DIMENSION_MM {
+    if !value.is_finite() || value + EPSILON < MIN_BOARD_ARRAY_DIMENSION_MM {
         Err(BoardArrayCreateValidationError::ArrayDimensionMin {
             axis,
             value,
-            min: MIN_PANEL_DIMENSION_MM,
+            min: MIN_BOARD_ARRAY_DIMENSION_MM,
         }
         .into())
-    } else if value > MAX_PANEL_DIMENSION_MM + EPSILON {
+    } else if value > MAX_BOARD_ARRAY_DIMENSION_MM + EPSILON {
         Err(BoardArrayCreateValidationError::ArrayDimensionMax {
             axis,
             value,
-            max: MAX_PANEL_DIMENSION_MM,
+            max: MAX_BOARD_ARRAY_DIMENSION_MM,
         }
         .into())
     } else {
@@ -1249,8 +1237,9 @@ mod tests {
         assert_point_close(first_instance.bbox.min, Point::new(10.0, 10.0));
         assert_point_close(first_instance.bbox.max, Point::new(20.0, 20.0));
 
-        let vcut = geometry::extract_layer_for_layout_target(&ipc, "V-Score", LayoutTarget::Panel)
-            .unwrap();
+        let vcut =
+            geometry::extract_layer_for_layout_target(&ipc, "V-Score", LayoutTarget::BoardArray)
+                .unwrap();
         assert_eq!(vcut.features.len(), 24);
         assert!(
             vcut.features
@@ -1260,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn created_panel_vcuts_flow_to_svg_and_gerber() {
+    fn created_board_array_vcuts_flow_to_svg_and_gerber() {
         let xml = create_board_array_xml(
             board_fixture_mm(),
             &BoardArrayCreateOptions {
@@ -1275,12 +1264,12 @@ mod tests {
         let ipc = Ipc2581::parse(&xml).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = crate::panel::render_board_array_overview_svg(&accessor).unwrap();
+        let svg = crate::board_array::render_board_array_overview_svg(&accessor).unwrap();
         assert_eq!(svg.matches("class='vcut-guide'").count(), 24);
         assert!(!svg.contains("class='score-guide'"));
 
         let output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-created-panel-vcuts-gerber-test-{}",
+            "pcb-ipc-created-board-array-vcuts-gerber-test-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&output_dir);
@@ -1288,7 +1277,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir,
-                layout_target: LayoutTarget::Panel,
+                layout_target: LayoutTarget::BoardArray,
             },
         )
         .unwrap();
@@ -1389,50 +1378,26 @@ mod tests {
 
         let parsed = Ipc2581::parse(&xml).unwrap();
         let top =
-            geometry::extract_layer_for_layout_target(&parsed, "TOP", LayoutTarget::Panel).unwrap();
+            geometry::extract_layer_for_layout_target(&parsed, "TOP", LayoutTarget::BoardArray)
+                .unwrap();
         assert!(top.features.iter().any(|feature| matches!(
             feature.semantic,
             FeatureSemantic::Fiducial(pcb_ir::dialects::ipc::FiducialKind::Global)
         )));
 
-        let drill =
-            geometry::extract_layer_for_layout_target(&parsed, "Array_Drill", LayoutTarget::Panel)
-                .unwrap();
+        let drill = geometry::extract_layer_for_layout_target(
+            &parsed,
+            "Array_Drill",
+            LayoutTarget::BoardArray,
+        )
+        .unwrap();
         assert_eq!(drill.features.len(), 1);
         assert_eq!(drill.features[0].kind, FeatureKind::Hole);
         assert_eq!(drill.features[0].bucket, FeatureBucket::Cutout);
     }
 
     #[test]
-    fn exports_board_array_overview_svg_file() {
-        let xml = create_board_array_xml(
-            board_fixture_mm(),
-            &BoardArrayCreateOptions {
-                columns: 6,
-                rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
-                edge_rail_width_mm: 5.0,
-            },
-        )
-        .unwrap();
-        let temp_dir =
-            std::env::temp_dir().join(format!("pcb-ipc-panel-svg-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let input = temp_dir.join("panel.ipc2581.xml");
-        let output = temp_dir.join("panel.svg");
-        std::fs::write(&input, xml).unwrap();
-
-        execute_svg(&input, &output).unwrap();
-
-        let svg = std::fs::read_to_string(output).unwrap();
-        assert!(svg.contains("data-board-array-overview='true'"));
-        assert!(svg.contains("Board array overview: 6 columns by 6 rows"));
-    }
-
-    #[test]
-    fn writes_generated_panel_values_in_cad_header_units() {
+    fn writes_generated_board_array_values_in_cad_header_units() {
         let xml = create_board_array_xml(
             board_fixture_inch(),
             &BoardArrayCreateOptions {
@@ -1469,7 +1434,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("primary IPC-2581 step is already a panel")
+                .contains("primary IPC-2581 step is already a board array")
         );
     }
 

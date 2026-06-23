@@ -45,7 +45,7 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
 
 pub fn build_gerber_x2(ipc: &Ipc2581, layout_target: LayoutTarget) -> Result<GerberExportSet> {
     if layout_target == LayoutTarget::Layout {
-        bail!("Gerber export does not support --layout-target layout; use board or panel");
+        bail!("Gerber export does not support --layout-target layout; use board or board-array");
     }
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
@@ -820,7 +820,7 @@ mod tests {
         assert!(copper.contents.contains("%TO.N,N1*%"));
 
         let panel_output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-gerber-panel-target-test-{}",
+            "pcb-ipc-gerber-board-array-target-test-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&panel_output_dir);
@@ -828,7 +828,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: panel_output_dir,
-                layout_target: LayoutTarget::Panel,
+                layout_target: LayoutTarget::BoardArray,
             },
         )
         .unwrap();
@@ -1008,7 +1008,7 @@ mod tests {
     }
 
     #[test]
-    fn gerber_panel_target_flattens_repeated_board_instances_as_array() {
+    fn gerber_board_array_target_flattens_repeated_board_instances_as_array() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1070,7 +1070,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir,
-                layout_target: LayoutTarget::Panel,
+                layout_target: LayoutTarget::BoardArray,
             },
         )
         .unwrap();
@@ -1165,7 +1165,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir,
-                layout_target: LayoutTarget::Panel,
+                layout_target: LayoutTarget::BoardArray,
             },
         )
         .unwrap();

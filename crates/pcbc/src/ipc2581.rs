@@ -1,4 +1,4 @@
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
@@ -40,9 +40,10 @@ enum Commands {
         command: EditCommands,
     },
     /// Create and inspect IPC-2581 board array data
-    Panel {
+    #[command(alias = "panel")]
+    BoardArray {
         #[command(subcommand)]
-        command: PanelCommands,
+        command: BoardArrayCommands,
     },
     /// Export a filtered view of an IPC-2581 file for a specific mode
     View {
@@ -104,9 +105,9 @@ enum Commands {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to export. Gerber supports board or panel.
+        /// Layout target to export. Gerber supports board or board-array.
         #[arg(long, default_value = "board")]
-        layout_target: LayoutTarget,
+        layout_target: GerberLayoutTarget,
         /// Output directory, or a .zip file for an archived Gerber package
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
@@ -130,7 +131,7 @@ enum EditCommands {
 }
 
 #[derive(Subcommand)]
-enum PanelCommands {
+enum BoardArrayCommands {
     /// Create a rectangular board array. Generated array size must be 70-260 mm per side.
     Create {
         /// Input IPC-2581 XML file
@@ -155,15 +156,22 @@ enum PanelCommands {
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
     },
-    /// Export the board array overview as SVG
-    Svg {
-        /// Input IPC-2581 XML file
-        #[arg(value_hint = clap::ValueHint::FilePath)]
-        input: PathBuf,
-        /// Output SVG file path
-        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
-        output: PathBuf,
-    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum GerberLayoutTarget {
+    Board,
+    #[value(name = "board-array", alias = "panel")]
+    BoardArray,
+}
+
+impl From<GerberLayoutTarget> for LayoutTarget {
+    fn from(target: GerberLayoutTarget) -> Self {
+        match target {
+            GerberLayoutTarget::Board => Self::Board,
+            GerberLayoutTarget::BoardArray => Self::BoardArray,
+        }
+    }
 }
 
 pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
@@ -188,8 +196,8 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 ..
             } => commands::bom_edit::execute(&file, &rules, output.as_deref()),
         },
-        Commands::Panel { command } => match command {
-            PanelCommands::Create {
+        Commands::BoardArray { command } => match command {
+            BoardArrayCommands::Create {
                 input,
                 columns,
                 rows,
@@ -197,10 +205,10 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 row_spacing,
                 edge_rail_width,
                 output,
-            } => commands::panel::execute(
+            } => commands::board_array::execute(
                 &input,
                 &output,
-                &commands::panel::BoardArrayCreateOptions {
+                &commands::board_array::BoardArrayCreateOptions {
                     columns,
                     rows,
                     column_spacing_mm: column_spacing,
@@ -208,7 +216,6 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     edge_rail_width_mm: edge_rail_width,
                 },
             ),
-            PanelCommands::Svg { input, output } => commands::panel::execute_svg(&input, &output),
         },
         Commands::View {
             input,
@@ -257,7 +264,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 &file,
                 &gerber::GerberExportOptions {
                     output: output.clone(),
-                    layout_target,
+                    layout_target: layout_target.into(),
                 },
             )?;
             println!(

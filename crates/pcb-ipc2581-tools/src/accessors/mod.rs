@@ -12,7 +12,10 @@ mod metadata;
 mod stackup;
 
 // Re-export types
-pub use board::{BoardDimensions, PanelGridInfo, PanelInfo, PanelMargins, StackupInfo};
+pub use board::{
+    BoardArrayDimensions, BoardArrayGridInfo, BoardArrayInfo, BoardArrayMargins, BoardDimensions,
+    StackupInfo,
+};
 pub use bom::{AvlLookup, BomStats, CharacteristicsData};
 pub use components::ComponentStats;
 pub use drills::{DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution};

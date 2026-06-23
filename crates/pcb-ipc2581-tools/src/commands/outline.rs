@@ -77,7 +77,7 @@ mod tests {
         assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 1);
         assert_eq!(layout.profiles.len(), 1);
         assert_eq!(
-            profile_occurrences_for(&layout, LayoutTarget::Panel.profile_set()).len(),
+            profile_occurrences_for(&layout, LayoutTarget::BoardArray.profile_set()).len(),
             1
         );
     }

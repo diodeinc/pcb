@@ -169,8 +169,11 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         ]);
     }
 
-    if let Some(panel) = layout.as_ref().and_then(|layout| layout.panel.as_ref()) {
-        if let Some(dimensions) = panel.dimensions.as_ref() {
+    if let Some(board_array) = layout
+        .as_ref()
+        .and_then(|layout| layout.board_array.as_ref())
+    {
+        if let Some(dimensions) = board_array.dimensions.as_ref() {
             summary_table.add_row(vec![
                 Cell::new("Array Size").fg(Color::Cyan),
                 Cell::new(units::format_board_size(
@@ -184,11 +187,15 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
             Cell::new("Array Boards").fg(Color::Cyan),
             Cell::new(format!(
                 "{} instance{}",
-                panel.board_instances,
-                if panel.board_instances == 1 { "" } else { "s" }
+                board_array.board_instances,
+                if board_array.board_instances == 1 {
+                    ""
+                } else {
+                    "s"
+                }
             )),
         ]);
-        if let Some(grid) = panel.grid.as_ref() {
+        if let Some(grid) = board_array.grid.as_ref() {
             summary_table.add_row(vec![
                 Cell::new("Array Grid").fg(Color::Cyan),
                 Cell::new(format!("{} x {}", grid.columns, grid.rows)),
@@ -624,13 +631,16 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         });
     }
 
-    if let Some(panel) = layout.as_ref().and_then(|layout| layout.panel.as_ref()) {
+    if let Some(board_array) = layout
+        .as_ref()
+        .and_then(|layout| layout.board_array.as_ref())
+    {
         info["board_array"] = json!({
-            "step_name": panel.step_name,
-            "board_count": panel.board_count,
-            "board_instances": panel.board_instances,
+            "step_name": board_array.step_name,
+            "board_count": board_array.board_count,
+            "board_instances": board_array.board_instances,
         });
-        if let Some(grid) = panel.grid.as_ref() {
+        if let Some(grid) = board_array.grid.as_ref() {
             info["board_array"]["grid"] = json!({
                 "columns": grid.columns,
                 "rows": grid.rows,
@@ -643,7 +653,7 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
                 "edge_rail_width_mm": grid.edge_rail_width.map(|width| width.mm()),
             });
         }
-        if let Some(dimensions) = panel.dimensions.as_ref() {
+        if let Some(dimensions) = board_array.dimensions.as_ref() {
             info["board_array"]["dimensions"] = json!({
                 "width_mm": dimensions.width_mm(),
                 "height_mm": dimensions.height_mm(),

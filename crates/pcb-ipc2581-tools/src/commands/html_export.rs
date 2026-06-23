@@ -189,7 +189,7 @@ struct Color {
 fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> BoardSummary {
     let design_name = board_design_name(accessor);
     let layout = accessor.board_layout_info();
-    let array_overview_svg = crate::panel::render_board_array_overview_svg(accessor);
+    let array_overview_svg = crate::board_array::render_board_array_overview_svg(accessor);
 
     let (width, height) = if let Some(dims) = layout
         .as_ref()
@@ -202,20 +202,20 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
 
     let board_array = layout
         .as_ref()
-        .and_then(|layout| layout.panel.as_ref())
-        .map(|panel| {
-            let (width, height) = panel
+        .and_then(|layout| layout.board_array.as_ref())
+        .map(|board_array| {
+            let (width, height) = board_array
                 .dimensions
                 .as_ref()
                 .map(|dims| formatted_dimensions(dims.width_mm(), dims.height_mm(), unit_format))
                 .unwrap_or((None, None));
             BoardArraySummary {
-                step_name: panel.step_name.clone(),
+                step_name: board_array.step_name.clone(),
                 width,
                 height,
-                board_count: panel.board_count,
-                board_instances: panel.board_instances,
-                grid: panel.grid.as_ref().map(|grid| BoardArrayGridSummary {
+                board_count: board_array.board_count,
+                board_instances: board_array.board_instances,
+                grid: board_array.grid.as_ref().map(|grid| BoardArrayGridSummary {
                     columns: grid.columns,
                     rows: grid.rows,
                     column_spacing: grid
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn html_keeps_board_summary_separate_from_board_array_summary() {
-        let ipc = ipc2581::Ipc2581::parse(panel_design_name_fixture()).unwrap();
+        let ipc = ipc2581::Ipc2581::parse(board_array_design_name_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
         let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
@@ -550,7 +550,7 @@ mod tests {
         let design_row = &html[design_start..dimensions_start];
 
         assert!(design_row.contains(r#"<span class="summary-value">board</span>"#));
-        assert!(!design_row.contains(r#"<span class="summary-value">panel</span>"#));
+        assert!(!design_row.contains(r#"<span class="summary-value">board_array</span>"#));
         let board_summary = html.find("<h2>Board Summary</h2>").unwrap();
         let array_summary = html.find("<h2>Board Array Summary</h2>").unwrap();
         let file_info = html.find(r#"<div class="file-info">"#).unwrap();
@@ -594,12 +594,12 @@ mod tests {
         assert!(html.matches("<svg ").count() >= 4);
     }
 
-    fn panel_design_name_fixture() -> &'static str {
+    fn board_array_design_name_fixture() -> &'static str {
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
     <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
+    <StepRef name="board_array"/>
   </Content>
   <Ecad>
     <CadHeader units="MILLIMETER"/>
@@ -614,7 +614,7 @@ mod tests {
           </Polygon>
         </Profile>
       </Step>
-      <Step name="panel" type="PALLET">
+      <Step name="board_array" type="PALLET">
         <StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0"/>
       </Step>
     </CadData>
