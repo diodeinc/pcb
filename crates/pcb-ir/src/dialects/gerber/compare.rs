@@ -308,6 +308,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn dark_flash_does_not_reduce_self_cut_region_area() {
+        let reference = self_cut_even_odd_doc(false);
+        let candidate = self_cut_even_odd_doc(true);
+
+        let reference_area = summarize(&reference).area_mm2;
+        let candidate_area = summarize(&candidate).area_mm2;
+
+        assert!(
+            candidate_area >= reference_area,
+            "adding a dark flash reduced area: reference={reference_area}, candidate={candidate_area}"
+        );
+    }
+
     fn triangle_doc(side: &str) -> ArtworkDocument<Vec<String>, ()> {
         let mut doc = ArtworkDocument::new(Unit::Millimeter);
         let layer = doc.push_layer(ArtworkLayer {
@@ -338,6 +352,60 @@ mod tests {
             layer,
             ArtworkObject::new(PaintPolarity::Dark, ArtworkGeometry::Region { path }),
         );
+        artwork::normalize_bounds(&mut doc);
+        doc
+    }
+
+    fn self_cut_even_odd_doc(with_flash: bool) -> ArtworkDocument<Vec<String>, ()> {
+        let mut doc = ArtworkDocument::new(Unit::Millimeter);
+        let layer = doc.push_layer(ArtworkLayer {
+            name: "Copper".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            object_start: 0,
+            object_count: 0,
+            bbox: BBox::empty(),
+            meta: vec!["Copper".to_string(), "L1".to_string(), "Top".to_string()],
+        });
+        let path = doc.push_path(
+            ArtworkPath::filled(FillRule::EvenOdd),
+            vec![common_path::PathPayload {
+                bbox: BBox {
+                    min: Point::new(0.0, 0.0),
+                    max: Point::new(4.0, 4.0),
+                },
+                cmds: vec![
+                    PathCmd::move_to(Point::new(0.0, 0.0)),
+                    PathCmd::line_to(Point::new(4.0, 0.0)),
+                    PathCmd::line_to(Point::new(4.0, 4.0)),
+                    PathCmd::line_to(Point::new(0.0, 4.0)),
+                    PathCmd::line_to(Point::new(0.0, 0.0)),
+                    PathCmd::line_to(Point::new(1.0, 1.0)),
+                    PathCmd::line_to(Point::new(3.0, 1.0)),
+                    PathCmd::line_to(Point::new(3.0, 3.0)),
+                    PathCmd::line_to(Point::new(1.0, 3.0)),
+                    PathCmd::line_to(Point::new(1.0, 1.0)),
+                    PathCmd::line_to(Point::new(0.0, 0.0)),
+                    PathCmd::close(),
+                ],
+            }],
+        );
+        doc.push_object(
+            layer,
+            ArtworkObject::new(PaintPolarity::Dark, ArtworkGeometry::Region { path }),
+        );
+        if with_flash {
+            doc.push_object(
+                layer,
+                ArtworkObject::new(
+                    PaintPolarity::Dark,
+                    ArtworkGeometry::CircleFlash {
+                        at: Point::new(2.0, 2.0),
+                        diameter: 0.5,
+                    },
+                ),
+            );
+        }
         artwork::normalize_bounds(&mut doc);
         doc
     }

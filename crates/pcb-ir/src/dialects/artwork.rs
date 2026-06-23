@@ -392,7 +392,12 @@ fn object_image_contours<LayerMeta, ObjectMeta>(
         ArtworkGeometry::Region { path } => artwork
             .paths
             .get(path as usize)
-            .map(|path| path::payloads_to_polygon_contours(&path_payloads(artwork, path)))
+            .map(|path| {
+                path::simplify_polygon_contours(
+                    path::payloads_to_polygon_contours(&path_payloads(artwork, path)),
+                    path.fill_rule,
+                )
+            })
             .unwrap_or_default(),
         ArtworkGeometry::Flash { .. } | ArtworkGeometry::CircleFlash { .. } => Vec::new(),
         ArtworkGeometry::Stroke { .. } => Vec::new(),

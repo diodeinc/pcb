@@ -441,7 +441,7 @@ fn lower_region_objects(
 ) -> Result<Vec<WriterObject>> {
     let artwork_path = &layer.paths[path_index as usize];
     let payloads = path_contours(layer, artwork_path);
-    if payloads.len() <= 1 {
+    if payloads.len() <= 1 && artwork_path.fill_rule == FillRule::NonZero {
         return Ok(vec![WriterObject {
             kind: ObjectKind::Region {
                 contours: payloads
@@ -454,7 +454,8 @@ fn lower_region_objects(
         }]);
     }
 
-    if artwork_path.fill_rule == FillRule::EvenOdd
+    if payloads.len() > 1
+        && artwork_path.fill_rule == FillRule::EvenOdd
         && let Some(objects) = lower_simple_compound_region_objects(&payloads, paint, attributes)?
     {
         return Ok(objects);
@@ -970,6 +971,45 @@ mod tests {
     }
 
     #[test]
+    fn lowers_single_self_cut_even_odd_region_before_emitting_gerber() {
+        let mut artwork = ArtworkLayer::new(Unit::Millimeter);
+        let layer_id = artwork.push_layer(IrArtworkLayer {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            object_start: 0,
+            object_count: 0,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+        let path = artwork.push_path(
+            ArtworkPath::filled(FillRule::EvenOdd),
+            vec![self_cut_donut_payload()],
+        );
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                paint: PaintPolarity::Dark,
+                order: Default::default(),
+                geometry: ArtworkGeometry::Region { path },
+                net: None,
+                bbox: artwork.paths[path as usize].bbox,
+                meta: ObjectAttributes::default(),
+            },
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+
+        assert!(gerber.objects.len() > 1);
+        assert!(
+            gerber
+                .objects
+                .iter()
+                .any(|object| object.polarity == Polarity::Clear)
+        );
+    }
+
+    #[test]
     fn schedules_dark_only_multi_contour_groups_after_base_clears() {
         let mut artwork = ArtworkLayer::new(Unit::Millimeter);
         let layer_id = artwork.push_layer(IrArtworkLayer {
@@ -1063,6 +1103,34 @@ mod tests {
             Point::new(max_x, min_y),
             Point::new(max_x, max_y),
             Point::new(min_x, max_y),
+        ];
+        let mut bbox = BBox::empty();
+        let mut cmds = Vec::new();
+        for (index, point) in points.into_iter().enumerate() {
+            bbox.include_point(point);
+            cmds.push(if index == 0 {
+                PathCmd::move_to(point)
+            } else {
+                PathCmd::line_to(point)
+            });
+        }
+        cmds.push(PathCmd::close());
+        PathPayload { bbox, cmds }
+    }
+
+    fn self_cut_donut_payload() -> PathPayload {
+        let points = [
+            Point::new(0.0, 0.0),
+            Point::new(4.0, 0.0),
+            Point::new(4.0, 4.0),
+            Point::new(0.0, 4.0),
+            Point::new(0.0, 0.0),
+            Point::new(1.0, 1.0),
+            Point::new(3.0, 1.0),
+            Point::new(3.0, 3.0),
+            Point::new(1.0, 3.0),
+            Point::new(1.0, 1.0),
+            Point::new(0.0, 0.0),
         ];
         let mut bbox = BBox::empty();
         let mut cmds = Vec::new();
