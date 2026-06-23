@@ -36,6 +36,11 @@ pub enum NcGeometry {
         at: Point,
         diameter: f64,
     },
+    Slot {
+        start: Point,
+        end: Point,
+        diameter: f64,
+    },
     Route {
         start: Point,
         diameter: f64,
@@ -46,7 +51,9 @@ pub enum NcGeometry {
 impl NcGeometry {
     pub fn diameter(&self) -> f64 {
         match self {
-            Self::Drill { diameter, .. } | Self::Route { diameter, .. } => *diameter,
+            Self::Drill { diameter, .. }
+            | Self::Slot { diameter, .. }
+            | Self::Route { diameter, .. } => *diameter,
         }
     }
 }

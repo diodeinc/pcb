@@ -1,9 +1,10 @@
 //! XNC / Excellon 2 CAD-CAM drill/rout emitter.
 //!
-//! This file implements the Ucamco XNC format, the compact CAD/CAM exchange
-//! subset of IPC-NC-349 commonly understood as Excellon. The target dialect is
-//! intentionally decimal and self-describing; it does not use legacy implied
-//! decimal coordinates.
+//! This file implements a compact CAD/CAM Exchange NC dialect for
+//! Excellon-compatible drill/rout output. The core is the Ucamco XNC subset of
+//! IPC-NC-349, with the common Excellon `G85` canned cycle for simple straight
+//! slots. The target dialect is intentionally decimal and self-describing; it
+//! does not use legacy implied decimal coordinates.
 //!
 //! Format summary:
 //! - Files are printable 7-bit ASCII plus CR/LF. One command is written per
@@ -18,6 +19,10 @@
 //!   drill/rout mode. Tools are selected with `Tnn`.
 //! - Drill mode is selected with `G05`. A drill hit is `XxYy` and creates one
 //!   circular hole at that coordinate with the selected tool.
+//! - A straight slot is `XxYyG85XxYy`, where the first coordinate is the slot
+//!   start, the second coordinate is the slot end, and the selected tool
+//!   diameter is the slot width. `G05` is emitted after the slot cycle to return
+//!   to drill mode.
 //! - Rout mode is entered with `G00XxYy`, which moves to the route start point.
 //!   `M15` lowers the tool and starts a route path; `M16` raises it and ends the
 //!   route path.
@@ -101,6 +106,12 @@ pub enum XncObject {
         at: Point,
         attributes: Vec<XncAttribute>,
     },
+    Slot {
+        tool: u8,
+        start: Point,
+        end: Point,
+        attributes: Vec<XncAttribute>,
+    },
     Route {
         tool: u8,
         start: Point,
@@ -161,6 +172,25 @@ impl XncBuilder {
         self.objects.push(XncObject::Drill {
             tool,
             at,
+            attributes: object_attributes,
+        });
+        Ok(())
+    }
+
+    pub fn add_slot(
+        &mut self,
+        diameter: f64,
+        start: Point,
+        end: Point,
+        tool_attributes: Vec<XncAttribute>,
+        object_attributes: Vec<XncAttribute>,
+    ) -> Result<()> {
+        validate_slot_endpoints(start, end)?;
+        let tool = self.tool(diameter, tool_attributes)?;
+        self.objects.push(XncObject::Slot {
+            tool,
+            start,
+            end,
             attributes: object_attributes,
         });
         Ok(())
@@ -272,6 +302,20 @@ pub fn write_xnc(doc: &XncDocument) -> Result<String> {
                     format_decimal(at.y)
                 ));
             }
+            XncObject::Slot { start, end, .. } => {
+                if mode != XncMode::Drill {
+                    out.push_str("G05\n");
+                }
+                out.push_str(&format!(
+                    "X{}Y{}G85X{}Y{}\n",
+                    format_decimal(start.x),
+                    format_decimal(start.y),
+                    format_decimal(end.x),
+                    format_decimal(end.y)
+                ));
+                out.push_str("G05\n");
+                mode = XncMode::Drill;
+            }
             XncObject::Route {
                 start, segments, ..
             } => {
@@ -325,13 +369,15 @@ enum XncMode {
 impl XncObject {
     fn tool(&self) -> u8 {
         match self {
-            Self::Drill { tool, .. } | Self::Route { tool, .. } => *tool,
+            Self::Drill { tool, .. } | Self::Slot { tool, .. } | Self::Route { tool, .. } => *tool,
         }
     }
 
     fn attributes(&self) -> &[XncAttribute] {
         match self {
-            Self::Drill { attributes, .. } | Self::Route { attributes, .. } => attributes,
+            Self::Drill { attributes, .. }
+            | Self::Slot { attributes, .. }
+            | Self::Route { attributes, .. } => attributes,
         }
     }
 }
@@ -357,6 +403,11 @@ fn validate_document(doc: &XncDocument) -> Result<()> {
         validate_attributes(object.attributes())?;
         match object {
             XncObject::Drill { at, .. } => validate_point(*at)?,
+            XncObject::Slot { start, end, .. } => {
+                validate_point(*start)?;
+                validate_point(*end)?;
+                validate_slot_endpoints(*start, *end)?;
+            }
             XncObject::Route {
                 start, segments, ..
             } => {
@@ -415,6 +466,15 @@ fn validate_point(point: Point) -> Result<()> {
     Ok(())
 }
 
+fn validate_slot_endpoints(start: Point, end: Point) -> Result<()> {
+    validate_point(start)?;
+    validate_point(end)?;
+    if start.distance_to(end) <= 1e-9 {
+        bail!("XNC slot start and end must be distinct");
+    }
+    Ok(())
+}
+
 fn validate_positive(label: &str, value: f64) -> Result<()> {
     if !value.is_finite() || value <= 0.0 {
         bail!("XNC {label} must be positive and finite");
@@ -465,7 +525,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn emits_decimal_metric_drill_and_route_xnc() {
+    fn emits_decimal_metric_drill_slot_and_route_xnc() {
         let mut builder = XncBuilder::new(
             XncUnit::Metric,
             vec![XncAttribute::file(
@@ -485,11 +545,23 @@ mod tests {
             )
             .unwrap();
         builder
-            .add_route(
+            .add_slot(
                 0.6,
                 Point::new(3.0, 4.0),
+                Point::new(3.0, 5.1),
+                vec![XncAttribute::tool(
+                    "AperFunction",
+                    ["Plated", "PTH", "ComponentDrill"],
+                )],
+                vec![],
+            )
+            .unwrap();
+        builder
+            .add_route(
+                0.7,
+                Point::new(4.0, 4.0),
                 vec![XncRouteSegment::Line {
-                    to: Point::new(3.0, 5.1),
+                    to: Point::new(5.0, 4.0),
                 }],
                 vec![XncAttribute::tool(
                     "AperFunction",
@@ -504,7 +576,8 @@ mod tests {
         assert!(output.contains("; #@! TF.FileFunction,Plated,1,4,PTH\n"));
         assert!(output.contains("; #@! TA.AperFunction,Plated,PTH,ViaDrill\nT01C0.3\n"));
         assert!(output.contains("T01\n; #@! TO.N,GND\nG05\nX1Y-2.5\n"));
-        assert!(output.contains("T02\nG00X3Y4\nM15\nG01X3Y5.1\nM16\n"));
+        assert!(output.contains("T02\nX3Y4G85X3Y5.1\nG05\n"));
+        assert!(output.contains("T03\nG00X4Y4\nM15\nG01X5Y4\nM16\n"));
         assert!(output.ends_with("M30\n"));
     }
 }

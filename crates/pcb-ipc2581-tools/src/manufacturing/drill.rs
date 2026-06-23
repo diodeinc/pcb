@@ -79,17 +79,10 @@ fn collect_nc_features(
                             layer.name
                         );
                     };
-                    let geometry = if slot.start.distance_to(slot.end) <= NC_GEOMETRY_EPSILON {
-                        NcGeometry::Drill {
-                            at: feature.center,
-                            diameter: slot.diameter,
-                        }
-                    } else {
-                        NcGeometry::Route {
-                            diameter: slot.diameter,
-                            start: slot.start,
-                            segments: vec![NcRouteSegment::Line { to: slot.end }],
-                        }
+                    let geometry = NcGeometry::Slot {
+                        diameter: slot.diameter,
+                        start: slot.start,
+                        end: slot.end,
                     };
                     nc.objects
                         .push(nc_object_from_feature(doc, feature, geometry)?);
@@ -162,6 +155,9 @@ fn nc_linear_slot(feature: &GeometryFeature<ipc2581::Symbol>) -> Option<NcLinear
     let long = feature.width.max(feature.height);
     let short = feature.width.min(feature.height);
     let centerline = (long - short).max(0.0) / 2.0;
+    if centerline <= NC_GEOMETRY_EPSILON {
+        return None;
+    }
     let (start, end) = if feature.width >= feature.height {
         (Point::new(-centerline, 0.0), Point::new(centerline, 0.0))
     } else {
@@ -212,6 +208,13 @@ fn xnc_files_from_nc(
         match &object.geometry {
             NcGeometry::Drill { at, diameter } => {
                 builder.add_drill(*diameter, *at, tool_attributes, object_attributes)?;
+            }
+            NcGeometry::Slot {
+                start,
+                end,
+                diameter,
+            } => {
+                builder.add_slot(*diameter, *start, *end, tool_attributes, object_attributes)?;
             }
             NcGeometry::Route {
                 start,

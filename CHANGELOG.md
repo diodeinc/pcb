@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - IPC-2581 manufacturing export now uses an explicit manufacturing package model and PCB IR NC dialect for drill/rout lowering.
+- IPC-2581 XNC export now emits first-class linear slots with `G85` instead of lowering them to generic route paths.
 - IPC-2581 Gerber export no longer emits redundant profile, drill, or rout visual Gerbers.
 - `NotConnected` is now an open-net constructor, not a net type.
 

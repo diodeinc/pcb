@@ -1093,10 +1093,7 @@ mod tests {
             pth.contents
                 .contains("; #@! TA.AperFunction,Plated,PTH,ComponentDrill\nT02C0.6")
         );
-        assert!(
-            pth.contents
-                .contains("G00X10Y19.45\nM15\nG01X10Y20.55\nM16")
-        );
+        assert!(pth.contents.contains("X10Y19.45G85X10Y20.55\nG05"));
         assert!(
             npth.contents
                 .contains("; #@! TF.FileFunction,NonPlated,1,2,NPTH")
