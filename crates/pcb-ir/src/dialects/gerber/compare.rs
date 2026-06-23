@@ -27,6 +27,7 @@ impl Default for GeometryCompareTolerance {
 pub struct GeometryCompareReport {
     pub reference: GeometrySummary,
     pub candidate: GeometrySummary,
+    pub difference: GeometryDifferenceSummary,
     pub mismatches: Vec<String>,
 }
 
@@ -43,6 +44,25 @@ pub struct GeometrySummary {
     pub area_mm2: f64,
     pub object_count: usize,
     pub path_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryDifferenceSummary {
+    pub reference_only: DirectionalDifferenceSummary,
+    pub candidate_only: DirectionalDifferenceSummary,
+    pub symmetric_area_mm2: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DirectionalDifferenceSummary {
+    pub area_mm2: f64,
+    pub components: Vec<DifferenceComponentSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DifferenceComponentSummary {
+    pub bbox: BBox,
+    pub area_mm2: f64,
 }
 
 /// Compare two layer artworks using manufacturing-relevant final-image metrics.
@@ -86,17 +106,18 @@ where
         ));
     }
 
-    let symmetric_difference_area = symmetric_difference_area(reference, candidate);
-    if symmetric_difference_area > tolerance.area_mm2 {
+    let difference = difference_summary(reference, candidate);
+    if difference.symmetric_area_mm2 > tolerance.area_mm2 {
         mismatches.push(format!(
-            "symmetric difference area is {symmetric_difference_area:.6} mm², tolerance={:.6}",
-            tolerance.area_mm2
+            "symmetric difference area is {:.6} mm², tolerance={:.6}",
+            difference.symmetric_area_mm2, tolerance.area_mm2
         ));
     }
 
     GeometryCompareReport {
         reference: reference_summary,
         candidate: candidate_summary,
+        difference,
         mismatches,
     }
 }
@@ -153,20 +174,59 @@ fn compare_bbox(
     }
 }
 
-fn symmetric_difference_area<A, B>(
+fn difference_summary<A, B>(
     reference: &ArtworkDocument<Vec<String>, A>,
     candidate: &ArtworkDocument<Vec<String>, B>,
-) -> f64
+) -> GeometryDifferenceSummary
 where
     A: Clone,
     B: Clone,
 {
     let reference = document_image_contours(&artwork::compose_to_mask(reference));
     let candidate = document_image_contours(&artwork::compose_to_mask(candidate));
-    polygon_area(&common_path::difference_contours(
-        reference.clone(),
-        candidate.clone(),
-    )) + polygon_area(&common_path::difference_contours(candidate, reference))
+    let reference_only = directional_difference_summary(reference.clone(), candidate.clone());
+    let candidate_only = directional_difference_summary(candidate, reference);
+    let symmetric_area_mm2 = reference_only.area_mm2 + candidate_only.area_mm2;
+    GeometryDifferenceSummary {
+        reference_only,
+        candidate_only,
+        symmetric_area_mm2,
+    }
+}
+
+fn directional_difference_summary(
+    subject: Vec<common_path::PolygonContour>,
+    cutters: Vec<common_path::PolygonContour>,
+) -> DirectionalDifferenceSummary {
+    let mut components = common_path::difference_contour_shapes(subject, cutters)
+        .into_iter()
+        .filter_map(difference_component_summary)
+        .collect::<Vec<_>>();
+    components.sort_by(|left, right| right.area_mm2.total_cmp(&left.area_mm2));
+    let area_mm2 = components
+        .iter()
+        .map(|component| component.area_mm2)
+        .sum::<f64>();
+    DirectionalDifferenceSummary {
+        area_mm2,
+        components,
+    }
+}
+
+fn difference_component_summary(
+    shape: common_path::PolygonShape,
+) -> Option<DifferenceComponentSummary> {
+    if shape.is_empty() {
+        return None;
+    }
+    let area_mm2 = shape_area(&shape);
+    if area_mm2 <= 1e-9 {
+        return None;
+    }
+    Some(DifferenceComponentSummary {
+        bbox: common_path::polygon_contours_bbox(&shape),
+        area_mm2,
+    })
 }
 
 fn document_image_contours<LayerMeta>(
@@ -195,6 +255,10 @@ fn document_image_contours<LayerMeta>(
 }
 
 fn polygon_area(contours: &[common_path::PolygonContour]) -> f64 {
+    shape_area(contours)
+}
+
+fn shape_area(contours: &[common_path::PolygonContour]) -> f64 {
     contours
         .iter()
         .map(|contour| {

@@ -11,22 +11,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added IPC-2581 board array creation, viewing, and export support to `pcb ipc`.
-- IPC-2581 manufacturing export now emits plated and non-plated XNC drill/rout files.
-- Added `pcb gerber compare` for permanent Gerber geometry comparison checks.
 
 ### Changed
 
-- IPC-2581 manufacturing export now uses an explicit manufacturing package model and PCB IR NC dialect for drill/rout lowering.
-- IPC-2581 XNC export now emits first-class linear slots with `G85` instead of lowering them to generic route paths.
-- IPC-2581 Gerber export no longer emits redundant profile, drill, or rout visual Gerbers.
-- PCB IR now uses `artwork` as the canonical source-independent paint dialect for Gerber render/compare/export lowering.
 - `NotConnected` is now an open-net constructor, not a net type.
-
-### Fixed
-
-- IPC-2581 Gerber export now preserves standard pad flashes and copper feature ordering around local clear regions.
-- IPC-2581 Gerber export now uses explicit paint-order scheduling, preserves rounded IPC arcs where possible, and centralizes stroke-to-fill expansion for geometry consumers.
-- Gerber comparison now composes each artwork object before unioning paint runs, avoiding false copper deltas for complex regions with flashes.
 
 ## [0.4.1] - 2026-06-22
 

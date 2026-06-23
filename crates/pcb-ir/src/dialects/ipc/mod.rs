@@ -597,23 +597,20 @@ fn push_profile_path_to_artwork<Symbol, LayerFunction>(
 type ArtworkGeometryFactory = fn(u32) -> artwork::ArtworkGeometry;
 
 fn lower_path_kind(path: &GeometryPath) -> Option<(artwork::ArtworkPath, ArtworkGeometryFactory)> {
-    if path.flags.filled {
-        Some(
-            (artwork::ArtworkPath::filled(path.style.fill.rule), |path| {
-                artwork::ArtworkGeometry::Region { path }
-            }),
-        )
-    } else if path.flags.stroked {
-        Some((
+    match path.paint_class().ok()? {
+        Some(GeometryPathPaintClass::Filled) => Some((
+            artwork::ArtworkPath::filled(path.style.fill.rule),
+            |path| artwork::ArtworkGeometry::Region { path },
+        )),
+        Some(GeometryPathPaintClass::Stroked) => Some((
             artwork::ArtworkPath::stroked(
                 path.style.stroke.width,
                 path.style.stroke.line_cap,
                 LineJoin::Round,
             ),
             |path| artwork::ArtworkGeometry::Stroke { path },
-        ))
-    } else {
-        None
+        )),
+        None => None,
     }
 }
 
@@ -951,6 +948,23 @@ impl<Symbol> GeometryFeature<Symbol> {
     }
 }
 
+impl<Symbol: Clone> GeometryFeature<Symbol> {
+    pub fn with_path_range(
+        &self,
+        bucket: FeatureBucket,
+        path_start: u32,
+        path_count: u32,
+        bbox: BBox,
+    ) -> Self {
+        let mut feature = self.clone();
+        feature.bucket = bucket;
+        feature.bbox = bbox;
+        feature.path_start = path_start;
+        feature.path_count = path_count;
+        feature
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IpcPinRef<Symbol> {
     pub component_ref: Option<Symbol>,
@@ -1085,6 +1099,30 @@ impl GeometryPath {
             flags: PathFlags::default(),
         }
     }
+
+    pub fn paint_class(&self) -> Result<Option<GeometryPathPaintClass>, String> {
+        match (self.flags.filled, self.flags.stroked) {
+            (true, false) => Ok(Some(GeometryPathPaintClass::Filled)),
+            (false, true) => Ok(Some(GeometryPathPaintClass::Stroked)),
+            (false, false) => Ok(None),
+            (true, true) => Err("path is both filled and stroked".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GeometryPathPaintClass {
+    Filled,
+    Stroked,
+}
+
+impl GeometryPathPaintClass {
+    pub fn primitive_bucket(self) -> FeatureBucket {
+        match self {
+            Self::Filled => FeatureBucket::Fill,
+            Self::Stroked => FeatureBucket::Trace,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1092,6 +1130,230 @@ pub struct GeometryContour {
     pub cmd_start: u32,
     pub cmd_count: u32,
     pub bbox: BBox,
+}
+
+pub fn split_primitive_feature_path_runs<Symbol: Clone, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    feature: GeometryFeature<Symbol>,
+) -> Result<Vec<GeometryFeature<Symbol>>, String> {
+    let path_end = checked_range_end(
+        "feature paths",
+        feature.path_start,
+        feature.path_count,
+        doc.paths.len(),
+    )?;
+    let mut features = Vec::new();
+    let mut run_start = feature.path_start;
+    let mut run_class = None;
+
+    for path_index in feature.path_start..path_end {
+        let path = &doc.paths[path_index as usize];
+        let class = path.paint_class().map_err(|error| {
+            format!(
+                "feature source {:?} path {path_index} has invalid paint flags: {error}",
+                feature.source
+            )
+        })?;
+        if class == run_class {
+            continue;
+        }
+
+        if let Some(class) = run_class {
+            push_primitive_path_run(&mut features, doc, &feature, run_start, path_index, class);
+        }
+        run_start = path_index;
+        run_class = class;
+    }
+
+    if let Some(class) = run_class {
+        push_primitive_path_run(&mut features, doc, &feature, run_start, path_end, class);
+    }
+
+    Ok(features)
+}
+
+fn push_primitive_path_run<Symbol: Clone, LayerFunction>(
+    features: &mut Vec<GeometryFeature<Symbol>>,
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    feature: &GeometryFeature<Symbol>,
+    run_start: u32,
+    run_end: u32,
+    class: GeometryPathPaintClass,
+) {
+    if run_start == run_end {
+        return;
+    }
+    features.push(feature.with_path_range(
+        class.primitive_bucket(),
+        run_start,
+        run_end - run_start,
+        paths_bbox(doc, run_start, run_end - run_start),
+    ));
+}
+
+pub fn validate_artwork_ready<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Result<(), String> {
+    validate_homogeneous_features(doc)?;
+    for (feature_index, feature) in doc.features.iter().enumerate() {
+        if feature.path_count == 0 {
+            continue;
+        }
+        if feature.flags.clears_previous_in_set {
+            return Err(format!(
+                "feature {feature_index} still has unresolved set-void clear semantics"
+            ));
+        }
+        if feature.bucket != FeatureBucket::Cutout && feature.polarity != GeometryPolarity::Positive
+        {
+            return Err(format!(
+                "feature {feature_index} still has unresolved negative polarity"
+            ));
+        }
+        validate_feature_arcs(doc, feature_index, feature)?;
+    }
+    Ok(())
+}
+
+pub fn validate_homogeneous_features<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Result<(), String> {
+    for (feature_index, feature) in doc.features.iter().enumerate() {
+        let path_end = checked_range_end(
+            "feature paths",
+            feature.path_start,
+            feature.path_count,
+            doc.paths.len(),
+        )
+        .map_err(|error| format!("feature {feature_index}: {error}"))?;
+        let mut feature_class = None;
+        for path_index in feature.path_start..path_end {
+            let path_class = doc.paths[path_index as usize]
+                .paint_class()
+                .map_err(|error| format!("feature {feature_index} path {path_index}: {error}"))?
+                .ok_or_else(|| format!("feature {feature_index} path {path_index} is unpainted"))?;
+
+            match feature_class {
+                Some(previous) if previous != path_class => {
+                    return Err(format!(
+                        "feature {feature_index} mixes {previous:?} and {path_class:?} paths"
+                    ));
+                }
+                None => feature_class = Some(path_class),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_feature_arcs<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    feature_index: usize,
+    feature: &GeometryFeature<Symbol>,
+) -> Result<(), String> {
+    let path_end = checked_range_end(
+        "feature paths",
+        feature.path_start,
+        feature.path_count,
+        doc.paths.len(),
+    )
+    .map_err(|error| format!("feature {feature_index}: {error}"))?;
+    for path_index in feature.path_start..path_end {
+        validate_path_arcs(doc, feature_index, path_index)?;
+    }
+    Ok(())
+}
+
+fn validate_path_arcs<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    feature_index: usize,
+    path_index: u32,
+) -> Result<(), String> {
+    let path = &doc.paths[path_index as usize];
+    let contour_end = checked_range_end(
+        "path contours",
+        path.contour_start,
+        path.contour_count,
+        doc.contours.len(),
+    )
+    .map_err(|error| format!("feature {feature_index} path {path_index}: {error}"))?;
+    for contour_index in path.contour_start..contour_end {
+        let contour = &doc.contours[contour_index as usize];
+        let cmd_end = checked_range_end(
+            "contour commands",
+            contour.cmd_start,
+            contour.cmd_count,
+            doc.path_cmds.len(),
+        )
+        .map_err(|error| {
+            format!("feature {feature_index} path {path_index} contour {contour_index}: {error}")
+        })?;
+        let mut current = Point::default();
+        for cmd_index in contour.cmd_start..cmd_end {
+            let cmd = doc.path_cmds[cmd_index as usize];
+            match cmd.op {
+                PathOp::MoveTo | PathOp::LineTo => current = cmd.p0,
+                PathOp::ArcTo => {
+                    validate_arc_command(feature_index, path_index, cmd_index, current, cmd)?;
+                    current = cmd.p0;
+                }
+                PathOp::CubicTo => current = cmd.p2,
+                PathOp::Close => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_arc_command(
+    feature_index: usize,
+    path_index: u32,
+    cmd_index: u32,
+    start: Point,
+    cmd: PathCmd,
+) -> Result<(), String> {
+    let start_radius = start.distance_to(cmd.p1);
+    let end_radius = cmd.p0.distance_to(cmd.p1);
+    if start_radius <= 0.0 || end_radius <= 0.0 {
+        return Err(format!(
+            "feature {feature_index} path {path_index} command {cmd_index} has a zero-radius arc"
+        ));
+    }
+    if !nearly_equal(start_radius, end_radius) {
+        return Err(format!(
+            "feature {feature_index} path {path_index} command {cmd_index} has non-circular arc radii {start_radius} and {end_radius}"
+        ));
+    }
+    Ok(())
+}
+
+fn checked_range_end(label: &str, start: u32, count: u32, len: usize) -> Result<u32, String> {
+    let end = start
+        .checked_add(count)
+        .ok_or_else(|| format!("{label} range overflows"))?;
+    if end as usize > len {
+        return Err(format!(
+            "{label} range {start}..{end} exceeds available length {len}"
+        ));
+    }
+    Ok(end)
+}
+
+fn paths_bbox<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    path_start: u32,
+    path_count: u32,
+) -> BBox {
+    doc.paths[path_start as usize..(path_start + path_count) as usize]
+        .iter()
+        .fold(BBox::empty(), |bbox, path| bbox.union(path.bbox))
+}
+
+const GEOMETRY_EPSILON: f64 = 1e-9;
+
+fn nearly_equal(left: f64, right: f64) -> bool {
+    (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

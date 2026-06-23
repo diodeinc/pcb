@@ -6,6 +6,7 @@ use i_overlay::float::single::SingleFloatOverlay;
 use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 
 pub type PolygonContour = Vec<[f64; 2]>;
+pub type PolygonShape = Vec<PolygonContour>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaintOp {
@@ -333,14 +334,17 @@ pub fn difference_contours(
     subject: Vec<PolygonContour>,
     cutters: Vec<PolygonContour>,
 ) -> Vec<PolygonContour> {
+    polygon_shapes_to_polygon_contours(difference_contour_shapes(subject, cutters))
+}
+
+pub fn difference_contour_shapes(
+    subject: Vec<PolygonContour>,
+    cutters: Vec<PolygonContour>,
+) -> Vec<PolygonShape> {
     if subject.is_empty() || cutters.is_empty() {
-        return subject;
+        return subject.simplify_shape(OverlayFillRule::NonZero);
     }
-    polygon_shapes_to_polygon_contours(subject.overlay(
-        &cutters,
-        OverlayRule::Difference,
-        OverlayFillRule::NonZero,
-    ))
+    subject.overlay(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
 }
 
 pub fn polygon_contours_to_payloads(contours: Vec<PolygonContour>) -> Vec<PathPayload> {

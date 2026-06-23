@@ -18,7 +18,7 @@ use pcb_ir::dialects::artwork::{
 };
 use pcb_ir::dialects::ipc::{
     FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature,
-    GeometryPath, GeometryPolarity, GeometryView, PlatingKind,
+    GeometryPath, GeometryPathPaintClass, GeometryPolarity, GeometryView, PlatingKind,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -46,6 +46,9 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
         let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
+        if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
+            bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
+        }
         let part = gerber_part_for_doc(&doc);
         let artwork = artwork_from_ipc_layer(
             ipc,
@@ -418,7 +421,11 @@ fn push_artwork_feature(
     for path in
         &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
     {
-        let aperture_function = path.flags.stroked.then(|| aperture_function(feature));
+        let aperture_function = matches!(
+            path.paint_class().ok().flatten(),
+            Some(GeometryPathPaintClass::Stroked)
+        )
+        .then(|| aperture_function(feature));
         push_artwork_object(
             artwork,
             artwork_layer,
@@ -607,7 +614,7 @@ fn circle_flash(
     }
 
     let path = &doc.paths[feature.path_start as usize];
-    if !path.flags.filled || path.flags.stroked {
+    if path.paint_class().ok().flatten() != Some(GeometryPathPaintClass::Filled) {
         return None;
     }
 
@@ -724,24 +731,33 @@ fn push_artwork_object(
     meta: ObjectAttributes,
     layer_name: &str,
 ) -> Result<()> {
-    let (geometry, path_id) = if path.flags.filled {
-        let path = push_artwork_path(
-            artwork,
-            ArtworkPath::filled(path.style.fill.rule),
-            doc,
-            path,
-        );
-        (ArtworkGeometry::Region { path }, path)
-    } else if path.flags.stroked {
-        let artwork_path = ArtworkPath::stroked(
-            path.style.stroke.width,
-            path.style.stroke.line_cap,
-            LineJoin::Round,
-        );
-        let path = push_artwork_path(artwork, artwork_path, doc, path);
-        (ArtworkGeometry::Stroke { path }, path)
-    } else {
-        bail!("processed IPC geometry path is neither filled nor stroked on layer '{layer_name}'");
+    let paint_class = path.paint_class().map_err(|error| {
+        anyhow::anyhow!("processed IPC geometry path is invalid on layer '{layer_name}': {error}")
+    })?;
+    let (geometry, path_id) = match paint_class {
+        Some(GeometryPathPaintClass::Filled) => {
+            let path = push_artwork_path(
+                artwork,
+                ArtworkPath::filled(path.style.fill.rule),
+                doc,
+                path,
+            );
+            (ArtworkGeometry::Region { path }, path)
+        }
+        Some(GeometryPathPaintClass::Stroked) => {
+            let artwork_path = ArtworkPath::stroked(
+                path.style.stroke.width,
+                path.style.stroke.line_cap,
+                LineJoin::Round,
+            );
+            let path = push_artwork_path(artwork, artwork_path, doc, path);
+            (ArtworkGeometry::Stroke { path }, path)
+        }
+        None => {
+            bail!(
+                "processed IPC geometry path is neither filled nor stroked on layer '{layer_name}'"
+            );
+        }
     };
     artwork.push_object(
         artwork_layer,
@@ -990,17 +1006,24 @@ mod tests {
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        let clear_index = parsed
+        assert!(
+            parsed
+                .objects()
+                .iter()
+                .all(|object| object.polarity == pcb_ir::dialects::gerber::Polarity::Dark),
+            "compound region holes should stay object-local, not global clear polarity"
+        );
+        let region_index = parsed
             .objects()
             .iter()
-            .position(|object| object.polarity == pcb_ir::dialects::gerber::Polarity::Clear)
-            .expect("compound fill should lower its hole as a clear object");
+            .position(|object| matches!(object.kind, gerberx2::ObjectKind::Region { .. }))
+            .expect("compound fill should export as a region");
         let pad_flash_index = parsed
             .objects()
             .iter()
             .position(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
             .expect("standard circular pad should export as a flash");
-        assert!(clear_index < pad_flash_index);
+        assert!(region_index < pad_flash_index);
 
         let geometry = gerberx2::geometry::extract_document(&parsed);
         let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
@@ -1074,15 +1097,19 @@ mod tests {
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
-        let clear_index = copper
+        assert!(
+            !copper.contents.contains("%LPC*%"),
+            "compound region holes should stay object-local, not global clear polarity"
+        );
+        let fill_end_index = copper
             .contents
-            .find("%LPC*%")
-            .expect("compound fill should lower its hole as a clear object");
+            .find("G37*")
+            .expect("compound fill should export as a region");
         let trace_index = copper
             .contents
             .find("%TO.N,TRACE*%")
             .expect("multi-contour trace should keep its net attribute");
-        assert!(clear_index < trace_index);
+        assert!(fill_end_index < trace_index);
 
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
         let geometry = gerberx2::geometry::extract_document(&parsed);
@@ -1326,8 +1353,18 @@ mod tests {
             .iter()
             .find(|file| file.filename == "F_SilkS.gto")
             .unwrap();
-        assert!(silk.contents.contains("%LPC*%"));
-        gerberx2::GerberX2::parse(&silk.contents).unwrap();
+        assert!(
+            !silk.contents.contains("%LPC*%"),
+            "compound region holes should stay object-local, not global clear polarity"
+        );
+        let parsed = gerberx2::GerberX2::parse(&silk.contents).unwrap();
+        let geometry = gerberx2::geometry::extract_document(&parsed);
+        let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+        assert!(
+            (summary.area_mm2 - 12.0).abs() < 1e-6,
+            "compound region should preserve its counter hole; area was {}",
+            summary.area_mm2
+        );
     }
 
     #[test]

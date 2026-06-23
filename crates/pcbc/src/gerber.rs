@@ -116,6 +116,12 @@ fn compare(
         report.candidate.object_count,
         report.candidate.path_count
     );
+    println!(
+        "reference-only area {:.6} mm², candidate-only area {:.6} mm², symmetric difference {:.6} mm²",
+        report.difference.reference_only.area_mm2,
+        report.difference.candidate_only.area_mm2,
+        report.difference.symmetric_area_mm2
+    );
 
     if report.is_match() {
         println!("✓ Gerber geometry matches within tolerance");
@@ -124,7 +130,26 @@ fn compare(
         for mismatch in &report.mismatches {
             println!("mismatch: {mismatch}");
         }
+        print_difference_components("reference-only", &report.difference.reference_only);
+        print_difference_components("candidate-only", &report.difference.candidate_only);
         bail!("Gerber geometry differs")
+    }
+}
+
+fn print_difference_components(
+    label: &str,
+    summary: &pcb_ir::dialects::gerber::compare::DirectionalDifferenceSummary,
+) {
+    for (index, component) in summary.components.iter().take(12).enumerate() {
+        println!(
+            "{label} component {}: area {:.6} mm², bbox [{:.6},{:.6}]..[{:.6},{:.6}]",
+            index + 1,
+            component.area_mm2,
+            component.bbox.min.x,
+            component.bbox.min.y,
+            component.bbox.max.x,
+            component.bbox.max.y
+        );
     }
 }
 

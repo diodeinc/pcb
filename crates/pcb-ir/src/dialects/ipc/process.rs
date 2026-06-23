@@ -1041,6 +1041,108 @@ mod tests {
     }
 
     #[test]
+    fn splits_primitive_path_runs_by_paint_class() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 1.0, 1.0),
+        );
+        doc.push_path(
+            GeometryPath::stroked(0.2, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(2.0, 0.0)),
+                PathCmd::line_to(Point::new(3.0, 0.0)),
+            ],
+        );
+        let mut feature = GeometryFeature::new(
+            FeatureKind::Primitive,
+            FeatureBucket::Fill,
+            GeometryPolarity::Positive,
+        );
+        feature.path_count = 2;
+        feature.flags.lowered_to_paths = true;
+
+        let features = split_primitive_feature_path_runs(&doc, feature).unwrap();
+
+        assert_eq!(features.len(), 2);
+        assert_eq!(features[0].bucket, FeatureBucket::Fill);
+        assert_eq!(features[0].path_start, 0);
+        assert_eq!(features[0].path_count, 1);
+        assert_eq!(features[1].bucket, FeatureBucket::Trace);
+        assert_eq!(features[1].path_start, 1);
+        assert_eq!(features[1].path_count, 1);
+    }
+
+    #[test]
+    fn artwork_ready_validation_rejects_mixed_feature_paint_classes() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 1.0, 1.0),
+        );
+        doc.push_path(
+            GeometryPath::stroked(0.2, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(2.0, 0.0)),
+                PathCmd::line_to(Point::new(3.0, 0.0)),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 2,
+            ..GeometryFeature::new(
+                FeatureKind::Primitive,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+
+        let error = validate_artwork_ready(&doc).unwrap_err();
+
+        assert!(error.contains("mixes Filled and Stroked paths"));
+    }
+
+    #[test]
+    fn artwork_ready_validation_rejects_unresolved_negative_polarity() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 1.0, 1.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Negative,
+            )
+        });
+
+        let error = validate_artwork_ready(&doc).unwrap_err();
+
+        assert!(error.contains("unresolved negative polarity"));
+    }
+
+    #[test]
+    fn artwork_ready_validation_rejects_non_circular_arcs() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::stroked(0.2, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(1.0, 0.0)),
+                PathCmd::arc_to(Point::new(0.0, 2.0), Point::new(0.0, 0.0), false),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..copper_trace_feature()
+        });
+
+        let error = validate_artwork_ready(&doc).unwrap_err();
+
+        assert!(error.contains("non-circular arc radii"));
+    }
+
+    #[test]
     fn flattens_processed_layer_features_to_single_mask() {
         let mut doc = TestDoc::new();
         doc.push_path(

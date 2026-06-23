@@ -441,28 +441,31 @@ fn lower_region_objects(
 ) -> Result<Vec<WriterObject>> {
     let artwork_path = &layer.paths[path_index as usize];
     let payloads = path_contours(layer, artwork_path);
-    if payloads.len() <= 1 && artwork_path.fill_rule == FillRule::NonZero {
-        return Ok(vec![WriterObject {
-            kind: ObjectKind::Region {
-                contours: payloads
-                    .iter()
-                    .map(lower_region_contour)
-                    .collect::<Result<Vec<_>>>()?,
-            },
-            polarity: lower_polarity(paint),
-            attributes: attributes.to_vec(),
-        }]);
+    let contours = lower_region_image_contours(&payloads, artwork_path.fill_rule)?;
+    if contours.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![WriterObject {
+        kind: ObjectKind::Region { contours },
+        polarity: lower_polarity(paint),
+        attributes: attributes.to_vec(),
+    }])
+}
+
+fn lower_region_image_contours(
+    payloads: &[PathPayload],
+    fill_rule: FillRule,
+) -> Result<Vec<Contour>> {
+    if fill_rule == FillRule::NonZero {
+        return payloads.iter().map(lower_region_contour).collect();
     }
 
-    if payloads.len() > 1
-        && artwork_path.fill_rule == FillRule::EvenOdd
-        && let Some(objects) = lower_simple_compound_region_objects(&payloads, paint, attributes)?
-    {
-        return Ok(objects);
+    if let Some(contours) = lower_simple_compound_region_contours(payloads)? {
+        return Ok(contours);
     }
 
-    let contours = common_path::payloads_to_polygon_contours(&payloads);
-    let contours = common_path::simplify_polygon_contours(contours, artwork_path.fill_rule);
+    let contours = common_path::payloads_to_polygon_contours(payloads);
+    let contours = common_path::simplify_polygon_contours(contours, fill_rule);
     let mut parts = contours
         .into_iter()
         .filter_map(region_part)
@@ -472,21 +475,11 @@ fn lower_region_objects(
 
     Ok(parts
         .into_iter()
-        .map(|part| WriterObject {
-            kind: ObjectKind::Region {
-                contours: vec![part.contour],
-            },
-            polarity: polarity_at_depth(paint, part.depth),
-            attributes: attributes.to_vec(),
-        })
+        .map(oriented_region_part_contour)
         .collect())
 }
 
-fn lower_simple_compound_region_objects(
-    payloads: &[PathPayload],
-    paint: PaintPolarity,
-    attributes: &[AttributeValue],
-) -> Result<Option<Vec<WriterObject>>> {
+fn lower_simple_compound_region_contours(payloads: &[PathPayload]) -> Result<Option<Vec<Contour>>> {
     let polygons = common_path::payloads_to_polygon_contours(payloads);
     if polygons.len() != payloads.len() {
         return Ok(None);
@@ -507,13 +500,7 @@ fn lower_simple_compound_region_objects(
     Ok(Some(
         parts
             .into_iter()
-            .map(|part| WriterObject {
-                kind: ObjectKind::Region {
-                    contours: vec![part.contour],
-                },
-                polarity: polarity_at_depth(paint, part.depth),
-                attributes: attributes.to_vec(),
-            })
+            .map(oriented_region_part_contour)
             .collect(),
     ))
 }
@@ -660,19 +647,50 @@ fn region_depth(index: usize, parents: &[Option<usize>], depths: &mut [Option<us
     depth
 }
 
-fn polarity_at_depth(paint: PaintPolarity, depth: usize) -> Polarity {
-    let polarity = lower_polarity(paint);
-    if depth.is_multiple_of(2) {
-        polarity
+fn oriented_region_part_contour(part: RegionPart) -> Contour {
+    let signed_area = polygon_area_signed(&part.polygon);
+    let wants_positive = part.depth.is_multiple_of(2);
+    if (signed_area >= 0.0) == wants_positive {
+        part.contour
     } else {
-        opposite_polarity(polarity)
+        reverse_contour(part.contour)
     }
 }
 
-fn opposite_polarity(polarity: Polarity) -> Polarity {
-    match polarity {
-        Polarity::Dark => Polarity::Clear,
-        Polarity::Clear => Polarity::Dark,
+fn reverse_contour(contour: Contour) -> Contour {
+    Contour {
+        segments: contour
+            .segments
+            .into_iter()
+            .rev()
+            .map(reverse_segment)
+            .collect(),
+    }
+}
+
+fn reverse_segment(segment: ContourSegment) -> ContourSegment {
+    match segment {
+        ContourSegment::Line { start, end } => ContourSegment::Line {
+            start: end,
+            end: start,
+        },
+        ContourSegment::Arc {
+            start,
+            end,
+            center_offset,
+            clockwise,
+        } => {
+            let center = Point::new(start.x + center_offset.x, start.y + center_offset.y);
+            ContourSegment::Arc {
+                start: end,
+                end: start,
+                center_offset: GerberPoint {
+                    x: center.x - end.x,
+                    y: center.y - end.y,
+                },
+                clockwise: !clockwise,
+            }
+        }
     }
 }
 
@@ -699,13 +717,17 @@ fn point_in_polygon(point: [f64; 2], polygon: &PolygonContour) -> bool {
 }
 
 fn polygon_area_abs(polygon: &PolygonContour) -> f64 {
+    polygon_area_signed(polygon).abs()
+}
+
+fn polygon_area_signed(polygon: &PolygonContour) -> f64 {
     let mut area = 0.0;
     for index in 0..polygon.len() {
         let [x0, y0] = polygon[index];
         let [x1, y1] = polygon[(index + 1) % polygon.len()];
         area += x0 * y1 - x1 * y0;
     }
-    (area / 2.0).abs()
+    area / 2.0
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -890,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn lowers_compound_region_holes_as_clear_gerber_regions() {
+    fn lowers_compound_region_holes_as_object_local_contours() {
         let mut artwork = ArtworkLayer::new(Unit::Millimeter);
         let layer_id = artwork.push_layer(IrArtworkLayer {
             name: "F.SilkS".to_string(),
@@ -922,9 +944,12 @@ mod tests {
 
         let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
 
-        assert_eq!(gerber.objects.len(), 2);
+        assert_eq!(gerber.objects.len(), 1);
         assert_eq!(gerber.objects[0].polarity, Polarity::Dark);
-        assert_eq!(gerber.objects[1].polarity, Polarity::Clear);
+        let ObjectKind::Region { contours } = &gerber.objects[0].kind else {
+            panic!("expected multi-contour region");
+        };
+        assert_eq!(contours.len(), 2);
     }
 
     #[test]
@@ -957,13 +982,14 @@ mod tests {
 
         let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
 
-        assert_eq!(gerber.objects.len(), 2);
-        assert_eq!(gerber.objects[1].polarity, Polarity::Clear);
-        let ObjectKind::Region { contours } = &gerber.objects[1].kind else {
-            panic!("expected clear region");
+        assert_eq!(gerber.objects.len(), 1);
+        assert_eq!(gerber.objects[0].polarity, Polarity::Dark);
+        let ObjectKind::Region { contours } = &gerber.objects[0].kind else {
+            panic!("expected multi-contour region");
         };
+        assert_eq!(contours.len(), 2);
         assert!(
-            contours[0]
+            contours[1]
                 .segments
                 .iter()
                 .any(|segment| matches!(segment, ContourSegment::Arc { .. }))
@@ -1000,17 +1026,16 @@ mod tests {
 
         let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
 
-        assert!(gerber.objects.len() > 1);
-        assert!(
-            gerber
-                .objects
-                .iter()
-                .any(|object| object.polarity == Polarity::Clear)
-        );
+        assert_eq!(gerber.objects.len(), 1);
+        assert_eq!(gerber.objects[0].polarity, Polarity::Dark);
+        let ObjectKind::Region { contours } = &gerber.objects[0].kind else {
+            panic!("expected simplified multi-contour region");
+        };
+        assert!(!contours.is_empty());
     }
 
     #[test]
-    fn schedules_dark_only_multi_contour_groups_after_base_clears() {
+    fn keeps_object_local_holes_inside_base_region_before_overlay() {
         let mut artwork = ArtworkLayer::new(Unit::Millimeter);
         let layer_id = artwork.push_layer(IrArtworkLayer {
             name: "F.Cu".to_string(),
@@ -1067,11 +1092,16 @@ mod tests {
 
         let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
 
-        let clear_index = gerber
+        let pour_index = gerber
             .objects
             .iter()
-            .position(|object| object.polarity == Polarity::Clear)
-            .expect("base pour should lower its hole as a clear object");
+            .position(|object| {
+                matches!(
+                    &object.kind,
+                    ObjectKind::Region { contours } if contours.len() == 2
+                )
+            })
+            .expect("base pour should stay one multi-contour region");
         let trace_index = gerber
             .objects
             .iter()
@@ -1083,7 +1113,13 @@ mod tests {
             })
             .expect("dark-only multi-contour trace should keep its net attribute");
 
-        assert!(clear_index < trace_index);
+        assert!(pour_index < trace_index);
+        assert!(
+            gerber
+                .objects
+                .iter()
+                .all(|object| object.polarity == Polarity::Dark)
+        );
         assert!(
             gerber.objects[trace_index..]
                 .iter()
