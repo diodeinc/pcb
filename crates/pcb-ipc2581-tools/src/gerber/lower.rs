@@ -147,18 +147,8 @@ struct GerberPlan {
 #[derive(Debug)]
 struct GerberObjectGroup {
     source_index: usize,
-    stage: GerberPaintStage,
+    stage: PaintStage,
     objects: Vec<WriterObject>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum GerberPaintStage {
-    /// Paint that may use local clear polarity internally, such as pours with holes.
-    Base,
-    /// Dark-only objects that must survive all base clears: pads, vias, traces, fiducials.
-    Overlay,
-    /// True layer-wide removals. There are no current producers, but the stage is explicit.
-    FinalCutout,
 }
 
 impl GerberPlan {
@@ -168,7 +158,7 @@ impl GerberPlan {
         }
         self.groups.push(GerberObjectGroup {
             source_index,
-            stage: GerberPaintStage::from(stage),
+            stage,
             objects,
         });
     }
@@ -207,15 +197,15 @@ impl GerberPlan {
                 graph.add_edge(pair[0], pair[1]);
             }
         }
-        for &group in &by_stage[GerberPaintStage::Base as usize] {
+        for &group in &by_stage[PaintStage::Base as usize] {
             graph.add_edge(group, base_barrier);
         }
         graph.add_edge(base_barrier, overlay_barrier);
-        for &group in &by_stage[GerberPaintStage::Overlay as usize] {
+        for &group in &by_stage[PaintStage::Overlay as usize] {
             graph.add_edge(base_barrier, group);
             graph.add_edge(group, overlay_barrier);
         }
-        for &group in &by_stage[GerberPaintStage::FinalCutout as usize] {
+        for &group in &by_stage[PaintStage::FinalCutout as usize] {
             graph.add_edge(overlay_barrier, group);
         }
 
@@ -237,14 +227,14 @@ impl GerberPlan {
     ) -> SchedulePriority {
         if node == base_barrier {
             return SchedulePriority {
-                stage: GerberPaintStage::Base,
+                stage: PaintStage::Base,
                 source_index: usize::MAX,
                 barrier: 0,
             };
         }
         if node == overlay_barrier {
             return SchedulePriority {
-                stage: GerberPaintStage::Overlay,
+                stage: PaintStage::Overlay,
                 source_index: usize::MAX,
                 barrier: 0,
             };
@@ -258,19 +248,9 @@ impl GerberPlan {
     }
 }
 
-impl From<PaintStage> for GerberPaintStage {
-    fn from(stage: PaintStage) -> Self {
-        match stage {
-            PaintStage::Base => Self::Base,
-            PaintStage::Overlay => Self::Overlay,
-            PaintStage::FinalCutout => Self::FinalCutout,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SchedulePriority {
-    stage: GerberPaintStage,
+    stage: PaintStage,
     source_index: usize,
     barrier: usize,
 }
