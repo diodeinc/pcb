@@ -29,7 +29,8 @@ use super::module::{
     validate_or_convert,
 };
 use super::net::{
-    FrozenNetType, FrozenNetValue, NetInstantiateOptions, NetType, NetTypeGen, NetValue,
+    FrozenNetType, FrozenNetValue, NetInstantiateIntent, NetInstantiateOptions, NetType,
+    NetTypeGen, NetValue,
 };
 
 #[derive(Debug, Clone, Trace, Allocative)]
@@ -569,9 +570,15 @@ pub(crate) fn invoke_builtin_io<'v>(
 
 impl<'v> IoTemplateValue<'v> {
     fn from_value(value: Value<'v>) -> Option<Self> {
-        if value.downcast_ref::<NetValue<'v>>().is_some()
-            || value.downcast_ref::<FrozenNetValue>().is_some()
-        {
+        if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
+            if net.is_open() {
+                return None;
+            }
+            Some(Self::Net(value))
+        } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+            if net.is_open() {
+                return None;
+            }
             Some(Self::Net(value))
         } else if value.downcast_ref::<InterfaceValue<'v>>().is_some()
             || value.downcast_ref::<FrozenInterfaceValue>().is_some()
@@ -781,9 +788,15 @@ fn register_provided_io_net_type<'v, V: ValueLike<'v>>(
     net_type: &NetTypeGen<V>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> starlark::Result<Value<'v>> {
-    let value = if value.downcast_ref::<NetValue<'v>>().is_some() {
+    let value = if let Some(net) = value.downcast_ref::<NetValue<'v>>() {
+        if net.is_open() {
+            return Ok(value);
+        }
         value
     } else if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
+        if net.is_open() {
+            return Ok(net.to_current_heap(eval.heap()));
+        }
         net.with_net_type(&net_type.type_name, eval.heap())
     } else {
         return Ok(value);
@@ -798,11 +811,12 @@ fn register_provided_io_net_type<'v, V: ValueLike<'v>>(
 
     net_type.instantiate(
         Some(net),
-        (net_type.type_name != "NotConnected").then(|| name.to_owned()),
+        Some(name.to_owned()),
         SmallMap::new(),
         NetInstantiateOptions {
             should_register: true,
             assignment_inferable: false,
+            intent: NetInstantiateIntent::PreserveBase,
         },
         eval,
     )
@@ -828,6 +842,7 @@ fn instantiate_net_template<'v>(
         super::net::NetInstantiateOptions {
             should_register,
             assignment_inferable: false,
+            intent: NetInstantiateIntent::PreserveBase,
         },
         eval,
     )

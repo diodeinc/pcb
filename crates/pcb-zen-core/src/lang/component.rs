@@ -31,7 +31,7 @@ use crate::{
     },
 };
 
-use super::net::{FrozenNetValue, NetValue, generate_net_id};
+use super::net::{ConnectionIntent, FrozenNetValue, NetValue, generate_net_id};
 use super::part::PartValue;
 use super::path::normalize_path_to_package_uri;
 use super::symbol::{SymbolType, SymbolValue, symbol_pins_from_pad_map};
@@ -800,11 +800,11 @@ fn diagnostic_location(
 fn net_kind_and_name<'v>(value: Value<'v>) -> Option<(&'v str, &'v str)> {
     value
         .downcast_ref::<NetValue>()
-        .map(|net| (net.net_type_name(), net.name()))
+        .map(|net| (net.net_kind_name(), net.name()))
         .or_else(|| {
             value
                 .downcast_ref::<FrozenNetValue>()
-                .map(|net| (net.net_type_name(), net.name()))
+                .map(|net| (net.net_kind_name(), net.name()))
         })
 }
 
@@ -910,7 +910,8 @@ fn alloc_not_connected<'v>(
         inferred_name: std::sync::OnceLock::new(),
         declaration_path,
         declaration_span,
-        type_name: "NotConnected".to_string(),
+        type_name: "Net".to_string(),
+        connection_intent: ConnectionIntent::Open,
         properties: SmallMap::new(),
     })
 }

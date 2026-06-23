@@ -1320,7 +1320,7 @@ fn warns_for_explicit_not_connected_pin() {
         (
             "test.zen".to_string(),
             r#"
-NotConnected = builtin.net_type("NotConnected")
+NotConnected = builtin.not_connected
 symbol = Symbol(library = "nc_pin.kicad_sym")
 
 Component(

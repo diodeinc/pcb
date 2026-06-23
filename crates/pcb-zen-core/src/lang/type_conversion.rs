@@ -5,7 +5,7 @@ use starlark::values::{Value, ValueLike, float::StarlarkFloat, typing::TypeCompi
 
 use crate::lang::r#enum::{EnumType, EnumValue};
 use crate::lang::net::{
-    FrozenNetType, FrozenNetValue, NetType, NetTypeCompatibility, NetValue, net_type_compatibility,
+    FrozenNetType, FrozenNetValue, NetType, NetValue, compatible_net_type_view,
 };
 
 fn has_type_name<'v>(typ: Value<'v>, names: &[&str]) -> bool {
@@ -33,7 +33,7 @@ fn try_function_conversion<'v>(
     }
 }
 
-/// Return a typed compatibility view of a net, preserving identity for canonical kind merge.
+/// Return a typed compatibility view of a connected net, preserving identity for canonical kind merge.
 pub(crate) fn try_net_conversion<'v>(
     value: Value<'v>,
     expected_typ: Value<'v>,
@@ -52,16 +52,20 @@ pub(crate) fn try_net_conversion<'v>(
         return Ok(None);
     };
 
-    if let Some(nv) = value.downcast_ref::<NetValue>()
-        && let NetTypeCompatibility::View(target) =
-            net_type_compatibility(nv.net_type_name(), expected)
-    {
-        return Ok(Some(nv.with_net_type(target, eval.heap())));
-    } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>()
-        && let NetTypeCompatibility::View(target) =
-            net_type_compatibility(fnv.net_type_name(), expected)
-    {
-        return Ok(Some(fnv.with_net_type(target, eval.heap())));
+    if let Some(nv) = value.downcast_ref::<NetValue>() {
+        if nv.is_open() {
+            return Ok(None);
+        }
+        if let Some(target) = compatible_net_type_view(nv.net_type_name(), expected) {
+            return Ok(Some(nv.with_net_type(target, eval.heap())));
+        }
+    } else if let Some(fnv) = value.downcast_ref::<FrozenNetValue>() {
+        if fnv.is_open() {
+            return Ok(None);
+        }
+        if let Some(target) = compatible_net_type_view(fnv.net_type_name(), expected) {
+            return Ok(Some(fnv.with_net_type(target, eval.heap())));
+        }
     }
 
     Ok(None)

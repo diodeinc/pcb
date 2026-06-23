@@ -152,8 +152,22 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         #[starlark(kwargs)] kwargs: SmallMap<String, Value<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<Value<'v>> {
+        if name == "NotConnected" {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "NotConnected is an open-net constructor, not a net type"
+            )));
+        }
+
         let net_type = NetType::new(name, kwargs, eval)?;
         Ok(eval.heap().alloc(net_type))
+    }
+
+    fn not_connected<'v>(
+        #[allow(unused_variables)] this: &Builtin,
+        args: &Arguments<'v, '_>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> starlark::Result<Value<'v>> {
+        instantiate_not_connected(args, eval)
     }
 
     fn io<'v>(

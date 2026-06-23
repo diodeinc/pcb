@@ -354,7 +354,7 @@ const NOT_CONNECTED_BOARD_ZEN: &str = r#"
 
 PowerConsumer = Module("PowerConsumer.zen")
 
-# NotConnected promotes to Power - the net should retain its NotConnected kind
+# NotConnected satisfies the Power IO but remains an open net
 nc = NotConnected()
 
 PowerConsumer(name = "U1", vcc = nc)
@@ -418,7 +418,7 @@ fn test_netlist_descendant_net_symbol_override_with_renamed_io() {
 }
 
 #[test]
-fn test_netlist_not_connected_promotion() {
+fn test_netlist_not_connected_open_intent() {
     let mut sandbox = Sandbox::new();
     sandbox
         .write("boards/PowerConsumer.zen", NOT_CONNECTED_MODULE_ZEN)
@@ -428,5 +428,5 @@ fn test_netlist_not_connected_promotion() {
         "pcbc",
         &["build", "boards/NCBoard.zen", "--netlist"],
     );
-    assert_snapshot!("netlist_not_connected_promotion", output);
+    assert_snapshot!("netlist_not_connected_open_intent", output);
 }
