@@ -62,38 +62,9 @@ pub(crate) fn net_kind_requires_name(kind: &str) -> bool {
     kind != "NotConnected"
 }
 
-pub(crate) fn merge_canonical_net_kind_name(current: &mut Option<String>, observed: &str) {
-    if current.is_none() {
-        *current = Some(observed.to_string());
-    }
-}
-
 #[cfg(test)]
-mod net_kind_merge_tests {
-    use super::{compatible_net_type_view, merge_canonical_net_kind_name};
-
-    #[test]
-    fn merge_canonical_net_kind_name_only_fills_empty() {
-        let mut kind = None;
-        for (observed, expected) in [
-            ("NotConnected", Some("NotConnected")),
-            ("Net", Some("NotConnected")),
-            ("Power", Some("NotConnected")),
-        ] {
-            merge_canonical_net_kind_name(&mut kind, observed);
-            assert_eq!(kind.as_deref(), expected);
-        }
-
-        let mut kind = None;
-        for (observed, expected) in [
-            ("Power", Some("Power")),
-            ("NotConnected", Some("Power")),
-            ("Net", Some("Power")),
-        ] {
-            merge_canonical_net_kind_name(&mut kind, observed);
-            assert_eq!(kind.as_deref(), expected);
-        }
-    }
+mod net_type_view_tests {
+    use super::compatible_net_type_view;
 
     #[test]
     fn compatible_net_type_view_is_not_canonical_promotion() {

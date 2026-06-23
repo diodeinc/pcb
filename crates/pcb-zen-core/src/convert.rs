@@ -2,7 +2,7 @@ use crate::lang::r#enum::EnumValue;
 use crate::lang::interface::FrozenInterfaceValue;
 use crate::lang::io_direction::IoDirection;
 use crate::lang::module::{ModulePath, find_moved_span};
-use crate::lang::net::{merge_canonical_net_kind_name, net_kind_requires_name};
+use crate::lang::net::net_kind_requires_name;
 use crate::lang::part::PartValue;
 use crate::lang::symbol::SymbolValue;
 use crate::lang::type_info::TypeInfo;
@@ -34,7 +34,7 @@ struct NetInfo {
     ports: Vec<InstanceRef>,
     /// Aggregated properties for this net.
     properties: HashMap<String, AttributeValue>,
-    /// Canonical Starlark net kind, if observed.
+    /// Starlark net kind, if observed during conversion.
     kind: Option<String>,
 }
 
@@ -640,9 +640,7 @@ impl ModuleConverter {
             }
 
             let info = self.net_info_mut(*net_id);
-            if let Some(kind) = introduced_net.kind.as_deref() {
-                merge_canonical_net_kind_name(&mut info.kind, kind);
-            }
+            info.kind.get_or_insert_with(|| introduced_net.kind.clone());
         }
 
         // Add direct child components
@@ -665,7 +663,9 @@ impl ModuleConverter {
     fn update_net(&mut self, net: &FrozenNetValue, instance_ref: &InstanceRef) {
         let net_info = self.net_info_mut(net.id());
         net_info.ports.push(instance_ref.clone());
-        merge_canonical_net_kind_name(&mut net_info.kind, net.net_kind_name());
+        net_info
+            .kind
+            .get_or_insert_with(|| net.net_kind_name().to_string());
 
         // For unnamed NotConnected nets, use a stable port-derived name when possible.
         if net_info.kind.as_deref() == Some("NotConnected")

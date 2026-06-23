@@ -59,8 +59,7 @@ macro_rules! downcast_frozen_module {
 
 use super::net::{
     FrozenNetType, FrozenNetValue, NetId, NetType, NetValue, generate_net_id,
-    merge_canonical_net_kind_name, net_kind_requires_name, net_matches_type_name,
-    net_type_name_from_value,
+    net_kind_requires_name, net_matches_type_name, net_type_name_from_value,
 };
 use crate::lang::context::FrozenContextValue;
 use starlark::errors::EvalMessage;
@@ -69,8 +68,8 @@ use starlark::errors::EvalMessage;
 #[derive(Clone, Debug, Trace, Allocative, Freeze)]
 pub struct IntroducedNet {
     pub name: IntroducedNetName,
-    /// Canonical kind evidence, if this module introduced any.
-    pub kind: Option<String>,
+    /// Starlark net kind introduced by this module.
+    pub kind: String,
 }
 
 #[derive(Clone, Debug, Trace, Allocative, Freeze)]
@@ -814,60 +813,30 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         id: NetId,
         local_name: String,
         assignment_inferable: bool,
-        observed_kind: String,
+        kind: String,
     ) -> anyhow::Result<String> {
         let base_name = local_name;
 
         if let Some(existing) = self.introduced_nets.get(&id).cloned() {
-            let mut merged_kind = existing.kind.clone();
-            merge_canonical_net_kind_name(&mut merged_kind, &observed_kind);
-
             let has_name_evidence = assignment_inferable || !base_name.trim().is_empty();
-            if merged_kind == existing.kind && !has_name_evidence {
+            if !has_name_evidence {
                 return Ok(existing.name.as_str().to_string());
             }
 
-            let (name, returned_name) = if has_name_evidence {
-                self.record_net_name(
-                    id,
-                    &base_name,
-                    assignment_inferable,
-                    merged_kind.as_deref().unwrap_or("Net"),
-                )?;
-                (
-                    Self::registration_name(&base_name, assignment_inferable),
-                    base_name,
-                )
-            } else if existing.name.as_str().is_empty() {
-                return Ok(existing.name.as_str().to_string());
-            } else {
-                self.record_net_name(
-                    id,
-                    existing.name.as_str(),
-                    false,
-                    merged_kind.as_deref().unwrap_or("Net"),
-                )?;
-                (existing.name.clone(), existing.name.as_str().to_string())
-            };
+            self.record_net_name(id, &base_name, assignment_inferable, &existing.kind)?;
+            let name = Self::registration_name(&base_name, assignment_inferable);
 
             self.introduced_nets.insert(
                 id,
                 IntroducedNet {
                     name,
-                    kind: merged_kind,
+                    kind: existing.kind,
                 },
             );
-            return Ok(returned_name);
+            return Ok(base_name);
         }
 
-        let mut kind = None;
-        merge_canonical_net_kind_name(&mut kind, &observed_kind);
-        self.record_net_name(
-            id,
-            &base_name,
-            assignment_inferable,
-            kind.as_deref().unwrap_or("Net"),
-        )?;
+        self.record_net_name(id, &base_name, assignment_inferable, &kind)?;
         let name = Self::registration_name(&base_name, assignment_inferable);
         self.introduced_nets
             .insert(id, IntroducedNet { name, kind });
@@ -885,12 +854,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             return Ok(existing.name.as_str().to_string());
         }
 
-        self.record_net_name(
-            id,
-            &inferred_name,
-            false,
-            existing.kind.as_deref().unwrap_or("Net"),
-        )?;
+        self.record_net_name(id, &inferred_name, false, &existing.kind)?;
         self.introduced_nets.insert(
             id,
             IntroducedNet {
