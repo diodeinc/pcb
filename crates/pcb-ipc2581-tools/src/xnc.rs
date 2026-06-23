@@ -166,19 +166,22 @@ impl XncBuilder {
         Ok(())
     }
 
-    pub fn add_linear_route(
+    pub fn add_route(
         &mut self,
         diameter: f64,
         start: Point,
-        end: Point,
+        segments: Vec<XncRouteSegment>,
         tool_attributes: Vec<XncAttribute>,
         object_attributes: Vec<XncAttribute>,
     ) -> Result<()> {
+        if segments.is_empty() {
+            bail!("XNC route object has no segments");
+        }
         let tool = self.tool(diameter, tool_attributes)?;
         self.objects.push(XncObject::Route {
             tool,
             start,
-            segments: vec![XncRouteSegment::Line { to: end }],
+            segments,
             attributes: object_attributes,
         });
         Ok(())
@@ -482,10 +485,12 @@ mod tests {
             )
             .unwrap();
         builder
-            .add_linear_route(
+            .add_route(
                 0.6,
                 Point::new(3.0, 4.0),
-                Point::new(3.0, 5.1),
+                vec![XncRouteSegment::Line {
+                    to: Point::new(3.0, 5.1),
+                }],
                 vec![XncAttribute::tool(
                     "AperFunction",
                     ["Plated", "PTH", "ComponentDrill"],

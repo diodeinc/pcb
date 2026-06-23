@@ -2,7 +2,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
-    LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, gerber, utils,
+    LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, manufacturing, utils,
 };
 
 #[derive(Args)]
@@ -260,16 +260,16 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             layout_target,
             output,
         } => {
-            let set = gerber::execute_file_with_options(
+            let package = manufacturing::execute_file_with_options(
                 &file,
-                &gerber::GerberExportOptions {
+                &manufacturing::ManufacturingExportOptions {
                     output: output.clone(),
                     view: layout_target.into(),
                 },
             )?;
             println!(
                 "✓ IPC-2581 exported {} manufacturing file(s) to {}",
-                set.files.len(),
+                package.files.len(),
                 output.display()
             );
             Ok(())

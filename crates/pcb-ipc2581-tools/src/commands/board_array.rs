@@ -1414,7 +1414,7 @@ fn fmt_num(value: f64) -> String {
 mod tests {
     use super::*;
     use crate::accessors::IpcAccessor;
-    use crate::gerber::{GerberExportOptions, export_gerber_x2};
+    use crate::manufacturing::build_manufacturing_package;
     use pcb_ir::common::Point;
     use pcb_ir::dialects::ipc::{
         FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FiducialKind,
@@ -1492,21 +1492,9 @@ mod tests {
         assert!(!svg.contains("stroke-dasharray"));
         assert!(!svg.contains("class='score-guide'"));
 
-        let output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-created-board-array-vcuts-gerber-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&output_dir);
-        let set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::ArrayFlattened,
-            },
-        )
-        .unwrap();
+        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
 
-        let vcut = set
+        let vcut = package
             .files
             .iter()
             .find(|file| file.filename == "V_Cut.gbr")
@@ -1618,30 +1606,18 @@ mod tests {
         assert_eq!(drill.features[0].intent.operation, FeatureOperation::Drill);
         assert_eq!(drill.features[0].intent.plating, PlatingKind::NonPlated);
 
-        let output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-board-array-tooling-gerber-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&output_dir);
-        let set = export_gerber_x2(
-            &parsed,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::ArrayFlattened,
-            },
-        )
-        .unwrap();
-        let top = set
+        let package = build_manufacturing_package(&parsed, GeometryView::ArrayFlattened).unwrap();
+        let top = package
             .files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
-        let mask = set
+        let mask = package
             .files
             .iter()
             .find(|file| file.filename == "F_Mask.gts")
             .unwrap();
-        let drill = set
+        let drill = package
             .files
             .iter()
             .find(|file| file.filename == "NPTH.drl")

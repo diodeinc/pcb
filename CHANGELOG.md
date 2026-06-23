@@ -12,9 +12,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added IPC-2581 board array creation, viewing, and export support to `pcb ipc`.
 - IPC-2581 manufacturing export now emits plated and non-plated XNC drill/rout files.
+- Added `pcb gerber compare` for permanent Gerber geometry comparison checks.
 
 ### Changed
 
+- IPC-2581 manufacturing export now uses an explicit manufacturing package model and PCB IR NC dialect for drill/rout lowering.
 - IPC-2581 Gerber export no longer emits redundant profile, drill, or rout visual Gerbers.
 - `NotConnected` is now an open-net constructor, not a net type.
 

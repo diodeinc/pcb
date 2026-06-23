@@ -1,53 +1,31 @@
 use std::collections::HashSet;
-use std::fs;
-use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use gerberx2::{GerberLayer, write_layer};
 use ipc2581::Ipc2581;
 use ipc2581::types::{FillProperty, LayerFunction, Side, StandardPrimitive, ecad::Layer};
-use zip::{ZipWriter, write::FileOptions};
 
 use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 use super::lower::lower_artwork_layer;
-use crate::xnc::{XncAttribute, XncBuilder, XncUnit, write_xnc};
-use crate::{geometry, ipc2581 as ipc};
+use crate::geometry;
 use pcb_ir::common::{Affine2, BBox, LayerRole, LineJoin, PaintPolarity, Point, Unit};
 use pcb_ir::dialects::artwork::{ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{
-    FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FiducialKind,
-    GeometryFeature, GeometryPath, GeometryPolarity, GeometryView, PlatingKind,
+    FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature,
+    GeometryPath, GeometryPolarity, GeometryView, PlatingKind,
 };
 use pcb_ir::dialects::path as common_path;
 
 type IpcGeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>;
 
 #[derive(Debug, Clone)]
-pub struct GerberExportOptions {
-    pub output: PathBuf,
-    pub view: GeometryView,
-}
-
-#[derive(Debug, Clone)]
-pub struct GerberExportSet {
-    pub files: Vec<GerberExportFile>,
-}
-
-#[derive(Debug, Clone)]
-pub struct GerberExportFile {
+pub struct GerberX2File {
     pub filename: String,
-    pub layer: Option<GerberLayer>,
+    pub layer: GerberLayer,
     pub contents: String,
 }
 
-pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<GerberExportSet> {
-    let set = build_gerber_x2(ipc, options.view)?;
-    write_gerber_export_set(&set, &options.output)?;
-    Ok(set)
-}
-
-pub fn build_gerber_x2(ipc: &Ipc2581, view: GeometryView) -> Result<GerberExportSet> {
+pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<GerberX2File>> {
     if view == GeometryView::LayoutSymbolic {
         bail!("Gerber export does not support symbolic layout view; use board or board-array");
     }
@@ -72,75 +50,14 @@ pub fn build_gerber_x2(ipc: &Ipc2581, view: GeometryView) -> Result<GerberExport
         )?;
         let layer = lower_artwork_layer(&artwork)?;
         let contents = write_layer(&layer)?;
-        files.push(GerberExportFile {
+        files.push(GerberX2File {
             filename: plan.filename.clone(),
-            layer: Some(layer),
+            layer,
             contents,
         });
     }
 
-    files.extend(build_xnc_drill_files(
-        ipc,
-        view,
-        copper_layer_count(&ecad.cad_data.layers),
-    )?);
-
-    Ok(GerberExportSet { files })
-}
-
-pub fn write_gerber_export_set(set: &GerberExportSet, output: &Path) -> Result<()> {
-    if output
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-    {
-        write_gerber_zip(set, output)
-    } else {
-        write_gerber_directory(set, output)
-    }
-}
-
-fn write_gerber_directory(set: &GerberExportSet, output_dir: &Path) -> Result<()> {
-    fs::create_dir_all(output_dir).with_context(|| {
-        format!(
-            "failed to create Gerber output directory {}",
-            output_dir.display()
-        )
-    })?;
-    for file in &set.files {
-        fs::write(output_dir.join(&file.filename), &file.contents).with_context(|| {
-            format!(
-                "failed to write Gerber file {}",
-                output_dir.join(&file.filename).display()
-            )
-        })?;
-    }
-    Ok(())
-}
-
-fn write_gerber_zip(set: &GerberExportSet, output_zip: &Path) -> Result<()> {
-    if let Some(parent) = output_zip.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create Gerber zip output directory {}",
-                parent.display()
-            )
-        })?;
-    }
-
-    let zip_file = fs::File::create(output_zip)
-        .with_context(|| format!("failed to create Gerber zip {}", output_zip.display()))?;
-    let mut zip = ZipWriter::new(BufWriter::new(zip_file));
-    for file in &set.files {
-        zip.start_file(&file.filename, FileOptions::<()>::default())
-            .with_context(|| format!("failed to add {} to Gerber zip", file.filename))?;
-        zip.write_all(file.contents.as_bytes())
-            .with_context(|| format!("failed to write {} to Gerber zip", file.filename))?;
-    }
-    zip.finish()
-        .with_context(|| format!("failed to finalize Gerber zip {}", output_zip.display()))?;
-    Ok(())
+    Ok(files)
 }
 
 struct ExportLayerPlan<'a> {
@@ -411,214 +328,6 @@ fn copper_layer_output(
             side_field.to_string(),
         ],
     )
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum XncDrillFileKind {
-    Plated,
-    NonPlated,
-}
-
-fn build_xnc_drill_files(
-    ipc: &Ipc2581,
-    view: GeometryView,
-    copper_count: usize,
-) -> Result<Vec<GerberExportFile>> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let mut plated = XncBuilder::new(
-        XncUnit::Metric,
-        vec![xnc_file_function(XncDrillFileKind::Plated, copper_count)],
-    );
-    let mut non_plated = XncBuilder::new(
-        XncUnit::Metric,
-        vec![xnc_file_function(XncDrillFileKind::NonPlated, copper_count)],
-    );
-
-    for layer in &ecad.cad_data.layers {
-        if !matches!(
-            layer.layer_function,
-            LayerFunction::Drill | LayerFunction::Rout
-        ) {
-            continue;
-        }
-        let layer_name = ipc.resolve(layer.name);
-        let doc = geometry::extract_layer_for_view(ipc, layer_name, view).with_context(|| {
-            format!("failed to extract IPC-2581 drill/rout layer '{layer_name}'")
-        })?;
-        collect_xnc_drill_features(ipc, &doc, &mut plated, &mut non_plated)?;
-    }
-
-    let mut files = Vec::new();
-    push_xnc_file(&mut files, "PTH.drl", plated.finish())?;
-    push_xnc_file(&mut files, "NPTH.drl", non_plated.finish())?;
-    Ok(files)
-}
-
-fn push_xnc_file(
-    files: &mut Vec<GerberExportFile>,
-    filename: &str,
-    document: crate::xnc::XncDocument,
-) -> Result<()> {
-    if document.is_empty() {
-        return Ok(());
-    }
-    files.push(GerberExportFile {
-        filename: filename.to_string(),
-        layer: None,
-        contents: write_xnc(&document)?,
-    });
-    Ok(())
-}
-
-fn collect_xnc_drill_features(
-    ipc: &Ipc2581,
-    doc: &IpcGeometryDocument,
-    plated: &mut XncBuilder,
-    non_plated: &mut XncBuilder,
-) -> Result<()> {
-    for layer in &doc.layers {
-        for feature in &doc.features
-            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
-        {
-            let kind = xnc_drill_file_kind(feature.intent.plating);
-            let builder = match kind {
-                XncDrillFileKind::Plated => &mut *plated,
-                XncDrillFileKind::NonPlated => &mut *non_plated,
-            };
-            match feature.kind {
-                FeatureKind::Hole if feature.outer_diameter > 0.0 => builder.add_drill(
-                    feature.outer_diameter,
-                    feature.center,
-                    xnc_tool_attributes(feature, kind),
-                    xnc_object_attributes(ipc, doc, feature),
-                )?,
-                FeatureKind::Slot => {
-                    if let Some(slot) = xnc_linear_slot(feature) {
-                        if slot.start.distance_to(slot.end) <= XNC_GEOMETRY_EPSILON {
-                            builder.add_drill(
-                                slot.diameter,
-                                feature.center,
-                                xnc_tool_attributes(feature, kind),
-                                xnc_object_attributes(ipc, doc, feature),
-                            )?;
-                        } else {
-                            builder.add_linear_route(
-                                slot.diameter,
-                                slot.start,
-                                slot.end,
-                                xnc_tool_attributes(feature, kind),
-                                xnc_object_attributes(ipc, doc, feature),
-                            )?;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, Copy)]
-struct XncLinearSlot {
-    diameter: f64,
-    start: Point,
-    end: Point,
-}
-
-fn xnc_linear_slot(feature: &GeometryFeature<ipc2581::Symbol>) -> Option<XncLinearSlot> {
-    if feature.width <= 0.0 || feature.height <= 0.0 || feature.scale <= 0.0 {
-        return None;
-    }
-    let diameter = feature.width.min(feature.height) * feature.scale;
-    if diameter <= XNC_GEOMETRY_EPSILON {
-        return None;
-    }
-    let long = feature.width.max(feature.height);
-    let short = feature.width.min(feature.height);
-    let centerline = (long - short).max(0.0) / 2.0;
-    let (start, end) = if feature.width >= feature.height {
-        (Point::new(-centerline, 0.0), Point::new(centerline, 0.0))
-    } else {
-        (Point::new(0.0, -centerline), Point::new(0.0, centerline))
-    };
-    Some(XncLinearSlot {
-        diameter,
-        start: feature.transform.transform_point(start),
-        end: feature.transform.transform_point(end),
-    })
-}
-
-const XNC_GEOMETRY_EPSILON: f64 = 1e-9;
-
-fn xnc_file_function(kind: XncDrillFileKind, copper_count: usize) -> XncAttribute {
-    let (plating, suffix) = match kind {
-        XncDrillFileKind::Plated => ("Plated", "PTH"),
-        XncDrillFileKind::NonPlated => ("NonPlated", "NPTH"),
-    };
-    XncAttribute::file(
-        "FileFunction",
-        [
-            plating.to_string(),
-            "1".to_string(),
-            copper_count.max(1).to_string(),
-            suffix.to_string(),
-        ],
-    )
-}
-
-fn xnc_tool_attributes(
-    feature: &GeometryFeature<ipc2581::Symbol>,
-    kind: XncDrillFileKind,
-) -> Vec<XncAttribute> {
-    let fields = match kind {
-        XncDrillFileKind::Plated => {
-            let drill_function = if matches!(
-                feature.intent.plating,
-                PlatingKind::Via | PlatingKind::ViaCapped
-            ) {
-                "ViaDrill"
-            } else {
-                "ComponentDrill"
-            };
-            vec!["Plated", "PTH", drill_function]
-        }
-        XncDrillFileKind::NonPlated => vec!["NonPlated", "NPTH", "ComponentDrill"],
-    };
-    vec![XncAttribute::tool("AperFunction", fields)]
-}
-
-fn xnc_object_attributes(
-    ipc: &Ipc2581,
-    doc: &IpcGeometryDocument,
-    feature: &GeometryFeature<ipc2581::Symbol>,
-) -> Vec<XncAttribute> {
-    let mut attributes = Vec::new();
-    if let Some(net) = feature.net {
-        attributes.push(XncAttribute::object("N", [ipc.resolve(net)]));
-    }
-    let pin_ref = (feature.pin_ref_count > 0)
-        .then(|| doc.pin_refs.get(feature.pin_ref_start as usize))
-        .flatten();
-    if let Some(pin_ref) = pin_ref {
-        if let Some(component_ref) = pin_ref.component_ref {
-            attributes.push(XncAttribute::object("C", [ipc.resolve(component_ref)]));
-            attributes.push(XncAttribute::object(
-                "P",
-                [ipc.resolve(component_ref), ipc.resolve(pin_ref.pin)],
-            ));
-        }
-    }
-    attributes
-}
-
-fn xnc_drill_file_kind(plating: PlatingKind) -> XncDrillFileKind {
-    match plating {
-        PlatingKind::Via | PlatingKind::ViaCapped | PlatingKind::Plated => XncDrillFileKind::Plated,
-        PlatingKind::NonPlated | PlatingKind::None | PlatingKind::Unknown => {
-            XncDrillFileKind::NonPlated
-        }
-    }
 }
 
 fn artwork_from_processed_layer(
@@ -1058,28 +767,14 @@ fn artwork_contours(
         .collect()
 }
 
-pub fn execute_file(input_file: &Path, output_dir: &Path) -> Result<GerberExportSet> {
-    execute_file_with_options(
-        input_file,
-        &GerberExportOptions {
-            output: output_dir.to_path_buf(),
-            view: GeometryView::Board,
-        },
-    )
-}
-
-pub fn execute_file_with_options(
-    input_file: &Path,
-    options: &GerberExportOptions,
-) -> Result<GerberExportSet> {
-    let content = crate::utils::file::load_ipc_file(input_file)?;
-    let ipc = ipc::Ipc2581::parse(&content)?;
-    export_gerber_x2(&ipc, options)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc2581 as ipc;
+    use crate::manufacturing::{
+        ManufacturingExportOptions, ManufacturingFileKind, build_manufacturing_package,
+        export_manufacturing_package,
+    };
     use std::io::{Cursor, Read};
 
     #[test]
@@ -1190,27 +885,13 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let output_dir =
-            std::env::temp_dir().join(format!("pcb-ipc-gerber-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&output_dir);
+        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
 
-        let set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::Board,
-            },
-        )
-        .unwrap();
-
-        assert!(set.files.iter().any(|file| file.filename == "F_Cu.gtl"));
-        for file in &set.files {
-            if file.layer.is_some() {
-                gerberx2::GerberX2::parse(&file.contents).unwrap();
-            }
+        assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));
+        for file in &files {
+            gerberx2::GerberX2::parse(&file.contents).unwrap();
         }
-        let copper = set
-            .files
+        let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
@@ -1228,22 +909,9 @@ mod tests {
                 .any(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
         );
 
-        let panel_output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-gerber-board-array-target-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&panel_output_dir);
-        let panel_target_set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: panel_output_dir,
-                view: GeometryView::ArrayFlattened,
-            },
-        )
-        .unwrap();
+        let panel_target_files = build_gerber_x2_files(&ipc, GeometryView::ArrayFlattened).unwrap();
 
-        let panel_target_copper = panel_target_set
-            .files
+        let panel_target_copper = panel_target_files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
@@ -1310,23 +978,9 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-gerber-fill-clear-order-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&output_dir);
+        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
 
-        let set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::Board,
-            },
-        )
-        .unwrap();
-
-        let copper = set
-            .files
+        let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
@@ -1371,8 +1025,12 @@ mod tests {
     <CadData>
       <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
       <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
-      <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
-      <Layer name="ROUTE" layerFunction="ROUT" side="ALL" polarity="POSITIVE"/>
+      <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE">
+        <Span fromLayer="TOP" toLayer="BOTTOM"/>
+      </Layer>
+      <Layer name="ROUTE" layerFunction="ROUT" side="ALL" polarity="POSITIVE">
+        <Span fromLayer="TOP" toLayer="BOTTOM"/>
+      </Layer>
       <Step name="board" type="BOARD">
         <LayerFeature layerRef="DRILL">
           <Set net="GND">
@@ -1397,35 +1055,32 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-gerber-xnc-drill-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&output_dir);
+        let package = build_manufacturing_package(&ipc, GeometryView::Board).unwrap();
 
-        let set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::Board,
-            },
-        )
-        .unwrap();
-
-        assert!(!set.files.iter().any(|file| file.filename == "Drill.gbr"));
-        assert!(!set.files.iter().any(|file| file.filename == "Route.gbr"));
-        let pth = set
+        assert!(
+            !package
+                .files
+                .iter()
+                .any(|file| file.filename == "Drill.gbr")
+        );
+        assert!(
+            !package
+                .files
+                .iter()
+                .any(|file| file.filename == "Route.gbr")
+        );
+        let pth = package
             .files
             .iter()
             .find(|file| file.filename == "PTH.drl")
             .unwrap();
-        let npth = set
+        let npth = package
             .files
             .iter()
             .find(|file| file.filename == "NPTH.drl")
             .unwrap();
 
-        assert!(pth.layer.is_none());
+        assert!(matches!(pth.kind, ManufacturingFileKind::Xnc));
         assert!(
             pth.contents
                 .contains("; #@! TF.FileFunction,Plated,1,2,PTH")
@@ -1485,9 +1140,9 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&output_zip);
 
-        let set = export_gerber_x2(
+        let package = export_manufacturing_package(
             &ipc,
-            &GerberExportOptions {
+            &ManufacturingExportOptions {
                 output: output_zip.clone(),
                 view: GeometryView::Board,
             },
@@ -1500,7 +1155,7 @@ mod tests {
         let names = (0..archive.len())
             .map(|index| archive.by_index(index).unwrap().name().to_string())
             .collect::<Vec<_>>();
-        assert_eq!(archive.len(), set.files.len());
+        assert_eq!(archive.len(), package.files.len());
         assert!(names.iter().any(|name| name == "F_Cu.gtl"));
         assert!(!names.iter().any(|name| name == "profile.gbr"));
 
@@ -1525,22 +1180,12 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let output_dir =
-            std::env::temp_dir().join(format!("pcb-ipc-gerber-layout-test-{}", std::process::id()));
-
-        let error = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::LayoutSymbolic,
-            },
-        )
-        .unwrap_err();
+        let error = build_manufacturing_package(&ipc, GeometryView::LayoutSymbolic).unwrap_err();
 
         assert!(
             error
                 .to_string()
-                .contains("Gerber export does not support symbolic layout view")
+                .contains("manufacturing export does not support symbolic layout view")
         );
     }
 
@@ -1591,23 +1236,9 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-gerber-counter-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&output_dir);
+        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
 
-        let set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::Board,
-            },
-        )
-        .unwrap();
-
-        let silk = set
-            .files
+        let silk = files
             .iter()
             .find(|file| file.filename == "F_SilkS.gto")
             .unwrap();
@@ -1668,23 +1299,9 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-gerber-panel-array-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&output_dir);
+        let files = build_gerber_x2_files(&ipc, GeometryView::ArrayFlattened).unwrap();
 
-        let set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::ArrayFlattened,
-            },
-        )
-        .unwrap();
-
-        let top = set
-            .files
+        let top = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
@@ -1765,21 +1382,9 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let output_dir =
-            std::env::temp_dir().join(format!("pcb-ipc-gerber-x2-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&output_dir);
+        let files = build_gerber_x2_files(&ipc, GeometryView::ArrayFlattened).unwrap();
 
-        let set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::ArrayFlattened,
-            },
-        )
-        .unwrap();
-
-        let top = set
-            .files
+        let top = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
@@ -1791,8 +1396,7 @@ mod tests {
         assert!(top.contents.contains("%TO.C,U1*%"));
         assert!(top.contents.contains("%TO.P,U1,1*%"));
 
-        let vcut = set
-            .files
+        let vcut = files
             .iter()
             .find(|file| file.filename == "V_Cut.gbr")
             .unwrap();
@@ -1800,8 +1404,7 @@ mod tests {
         assert!(vcut.contents.contains("%TF.Part,Array*%"));
         assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
 
-        let score = set
-            .files
+        let score = files
             .iter()
             .find(|file| file.filename == "Score.gbr")
             .unwrap();
@@ -1820,31 +1423,13 @@ mod tests {
         let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
         let content = zstd::decode_all(Cursor::new(compressed)).unwrap();
         let ipc = ipc::Ipc2581::parse(std::str::from_utf8(&content).unwrap()).unwrap();
-        let output_dir =
-            std::env::temp_dir().join(format!("pcb-ipc-gerber-real-smoke-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&output_dir);
+        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
 
-        let set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir.clone(),
-                view: GeometryView::Board,
-            },
-        )
-        .unwrap();
+        assert!(files.len() >= 10);
+        assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));
+        assert!(files.iter().any(|file| file.filename == "Edge_Cuts.gm1"));
 
-        assert!(set.files.len() >= 10);
-        assert!(set.files.iter().any(|file| file.filename == "F_Cu.gtl"));
-        assert!(
-            set.files
-                .iter()
-                .any(|file| file.filename == "Edge_Cuts.gm1")
-        );
-
-        for file in &set.files {
-            if file.layer.is_none() {
-                continue;
-            }
+        for file in &files {
             let parsed = gerberx2::GerberX2::parse(&file.contents).unwrap();
             let mut geometry = gerberx2::geometry::extract_document(&parsed);
             pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
@@ -1881,7 +1466,5 @@ mod tests {
         let flat_mask = pcb_ir::dialects::geom::lower_filled_to_mask(&flat_geom);
         flat_mask.validate().unwrap();
         assert!(pcb_ir::dialects::mask::render_svg(&flat_mask, 0).contains("<svg"));
-
-        let _ = std::fs::remove_dir_all(&output_dir);
     }
 }
