@@ -70,6 +70,23 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
                     }
                 }
             }
+            ArtworkGeometry::CircleFlash { at, diameter } => {
+                let default_function = vec!["Conductor".to_string()];
+                let aperture_function = object
+                    .meta
+                    .aperture_function
+                    .as_deref()
+                    .unwrap_or(default_function.as_slice());
+                let aperture = apertures.circle(diameter, aperture_function)?;
+                objects.push(WriterObject {
+                    kind: ObjectKind::Flash {
+                        at: lower_point(at),
+                        aperture,
+                    },
+                    polarity: lower_polarity(object.paint),
+                    attributes,
+                });
+            }
             ArtworkGeometry::Flash { .. } => {
                 bail!("cannot lower unexpanded artwork flash to Gerber")
             }

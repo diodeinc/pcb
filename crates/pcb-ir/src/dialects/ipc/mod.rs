@@ -856,6 +856,7 @@ pub struct GeometryFeature<Symbol> {
     pub set: Option<u32>,
     pub source: SourceRef,
     pub semantic: FeatureSemantic,
+    pub intent: FeatureIntent<Symbol>,
     pub transform: Affine2,
     pub bbox: BBox,
     pub path_start: u32,
@@ -891,6 +892,7 @@ impl<Symbol> GeometryFeature<Symbol> {
             set: None,
             source: SourceRef::default(),
             semantic: FeatureSemantic::None,
+            intent: FeatureIntent::default(),
             transform: Affine2::identity(),
             bbox: BBox::empty(),
             path_start: 0,
@@ -1095,6 +1097,116 @@ pub enum FeatureSemantic {
     Route,
     BoardOutline,
     Other,
+}
+
+/// Source-level fabrication meaning carried with geometry through processing.
+///
+/// This is the authoritative feature classification. `FeatureSemantic` remains
+/// as a compact compatibility label for existing callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FeatureIntent<Symbol> {
+    pub domain: FeatureDomain,
+    pub role: FeatureRole,
+    pub operation: FeatureOperation,
+    pub material: FeatureMaterial,
+    pub plating: PlatingKind,
+    pub span: FeatureSpan<Symbol>,
+    pub side: Side,
+}
+
+impl<Symbol> Default for FeatureIntent<Symbol> {
+    fn default() -> Self {
+        Self {
+            domain: FeatureDomain::Unknown,
+            role: FeatureRole::Unknown,
+            operation: FeatureOperation::Unknown,
+            material: FeatureMaterial::Unknown,
+            plating: PlatingKind::Unknown,
+            span: FeatureSpan::Unknown,
+            side: Side::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FeatureDomain {
+    Unknown,
+    Copper,
+    Soldermask,
+    Paste,
+    Legend,
+    Drill,
+    Rout,
+    VCut,
+    Score,
+    Profile,
+    Mechanical,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FeatureRole {
+    Unknown,
+    Conductor,
+    Pad,
+    Via,
+    Hole,
+    Slot,
+    Fiducial,
+    BoardOutline,
+    ArraySeparation,
+    Route,
+    Cutout,
+    Thermal,
+    Antipad,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FeatureOperation {
+    Unknown,
+    AddMaterial,
+    OpenMask,
+    Print,
+    Drill,
+    Route,
+    Score,
+    Profile,
+    Mark,
+    RemoveMaterial,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FeatureMaterial {
+    Unknown,
+    None,
+    Copper,
+    Soldermask,
+    Paste,
+    Ink,
+    Substrate,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PlatingKind {
+    Unknown,
+    None,
+    Plated,
+    NonPlated,
+    Via,
+    ViaCapped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FeatureSpan<Symbol> {
+    Unknown,
+    Layer(Symbol),
+    ThroughBoard,
+    FromTo {
+        from: Option<Symbol>,
+        to: Option<Symbol>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

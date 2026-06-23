@@ -1416,7 +1416,10 @@ mod tests {
     use crate::accessors::IpcAccessor;
     use crate::gerber::{GerberExportOptions, export_gerber_x2};
     use pcb_ir::common::Point;
-    use pcb_ir::dialects::ipc::{FeatureBucket, FeatureKind, FeatureSemantic, GeometryView};
+    use pcb_ir::dialects::ipc::{
+        FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FeatureSemantic,
+        GeometryView, PlatingKind,
+    };
     #[test]
     fn creates_rectangular_panel_step_from_board_bbox() {
         let xml = create_board_array_xml(
@@ -1607,6 +1610,52 @@ mod tests {
         assert_eq!(drill.features.len(), 1);
         assert_eq!(drill.features[0].kind, FeatureKind::Hole);
         assert_eq!(drill.features[0].bucket, FeatureBucket::Cutout);
+        assert_eq!(drill.features[0].intent.domain, FeatureDomain::Drill);
+        assert_eq!(drill.features[0].intent.role, FeatureRole::Hole);
+        assert_eq!(drill.features[0].intent.operation, FeatureOperation::Drill);
+        assert_eq!(drill.features[0].intent.plating, PlatingKind::NonPlated);
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "pcb-ipc-board-array-tooling-gerber-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+        let set = export_gerber_x2(
+            &parsed,
+            &GerberExportOptions {
+                output: output_dir,
+                view: GeometryView::ArrayFlattened,
+            },
+        )
+        .unwrap();
+        let top = set
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        let mask = set
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Mask.gts")
+            .unwrap();
+        let drill = set
+            .files
+            .iter()
+            .find(|file| file.filename == "Drill.gbr")
+            .unwrap();
+
+        assert!(
+            top.contents
+                .contains("%TA.AperFunction,FiducialPad,Global*%")
+        );
+        assert!(
+            mask.contents
+                .contains("%TA.AperFunction,FiducialPad,Global*%")
+        );
+        assert!(drill.contents.contains("%TA.AperFunction,Other,Drill*%"));
+        assert!(drill.contents.contains("D03*"));
+        assert!(!top.contents.contains("%TA.AperFunction,Other,Drill*%"));
+        assert!(!mask.contents.contains("%TA.AperFunction,Other,Drill*%"));
     }
 
     #[test]

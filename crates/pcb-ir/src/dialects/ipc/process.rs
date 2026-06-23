@@ -13,6 +13,7 @@ struct TraceGroupKey<S> {
     set_index: u32,
     polarity: GeometryPolarity,
     fill_rule: FillRule,
+    intent: FeatureIntent<S>,
 }
 
 /// Run only structure-preserving cleanup passes.
@@ -418,6 +419,7 @@ where
                     set_index: feature.source.set_index,
                     polarity: feature.polarity,
                     fill_rule,
+                    intent: feature.intent,
                 })
                 .or_default()
                 .push(feature_index);
@@ -461,10 +463,12 @@ where
 
 fn is_copper_trace_feature<S>(feature: &GeometryFeature<S>) -> bool {
     feature.bucket == FeatureBucket::Trace
-        && matches!(
-            feature.semantic,
-            FeatureSemantic::None | FeatureSemantic::CopperConductor
-        )
+        && (feature.intent.domain == FeatureDomain::Copper
+            || (feature.intent.domain == FeatureDomain::Unknown
+                && matches!(
+                    feature.semantic,
+                    FeatureSemantic::None | FeatureSemantic::CopperConductor
+                )))
 }
 
 pub fn resolve_set_voids<S: Clone, L: Clone>(doc: &mut GeometryDocument<S, L>) {

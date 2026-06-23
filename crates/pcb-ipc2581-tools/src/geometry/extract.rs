@@ -215,33 +215,210 @@ fn push_extracted_feature(
     doc.features.push(feature);
 }
 
-fn semantic_for_feature(
-    layer_function: LayerFunction,
+fn complete_feature_intent(layer: &Layer, feature: &mut GeometryFeature) {
+    let layer_intent = intent_for_layer(layer);
+    if feature.intent.domain == FeatureDomain::Unknown {
+        feature.intent.domain = layer_intent.domain;
+    }
+    if feature.intent.operation == FeatureOperation::Unknown {
+        feature.intent.operation = operation_for_feature(feature, layer_intent.operation);
+    }
+    if feature.intent.material == FeatureMaterial::Unknown {
+        feature.intent.material = material_for_domain(feature.intent.domain);
+    }
+    if feature.intent.span == FeatureSpan::Unknown {
+        feature.intent.span = layer_intent.span;
+    }
+    if feature.intent.side == pcb_ir::common::Side::None {
+        feature.intent.side = layer_intent.side;
+    }
+    if feature.intent.role == FeatureRole::Unknown {
+        feature.intent.role = role_for_feature(feature);
+    }
+    if feature.intent.plating == PlatingKind::Unknown {
+        feature.intent.plating = plating_for_feature(feature);
+    }
+    feature.semantic = semantic_for_intent(feature);
+}
+
+fn intent_for_layer(layer: &Layer) -> FeatureIntent<Symbol> {
+    let domain = domain_for_layer(layer.layer_function);
+    FeatureIntent {
+        domain,
+        role: FeatureRole::Unknown,
+        operation: operation_for_domain(domain),
+        material: material_for_domain(domain),
+        plating: PlatingKind::Unknown,
+        span: span_for_layer(layer, domain),
+        side: side_for_layer(layer.side),
+    }
+}
+
+fn domain_for_layer(function: LayerFunction) -> FeatureDomain {
+    match function {
+        LayerFunction::Conductor
+        | LayerFunction::CondFilm
+        | LayerFunction::CondFoil
+        | LayerFunction::Plane
+        | LayerFunction::Signal
+        | LayerFunction::Mixed => FeatureDomain::Copper,
+        LayerFunction::Soldermask => FeatureDomain::Soldermask,
+        LayerFunction::Solderpaste | LayerFunction::Pastemask => FeatureDomain::Paste,
+        LayerFunction::Silkscreen | LayerFunction::Legend => FeatureDomain::Legend,
+        LayerFunction::Drill => FeatureDomain::Drill,
+        LayerFunction::Rout => FeatureDomain::Rout,
+        LayerFunction::VCut => FeatureDomain::VCut,
+        LayerFunction::Score => FeatureDomain::Score,
+        LayerFunction::BoardOutline => FeatureDomain::Profile,
+        LayerFunction::Assembly
+        | LayerFunction::BoardFab
+        | LayerFunction::Courtyard
+        | LayerFunction::Document
+        | LayerFunction::Graphic
+        | LayerFunction::Fixture
+        | LayerFunction::Probe
+        | LayerFunction::Rework => FeatureDomain::Mechanical,
+        _ => FeatureDomain::Other,
+    }
+}
+
+fn operation_for_domain(domain: FeatureDomain) -> FeatureOperation {
+    match domain {
+        FeatureDomain::Copper => FeatureOperation::AddMaterial,
+        FeatureDomain::Soldermask => FeatureOperation::OpenMask,
+        FeatureDomain::Paste => FeatureOperation::AddMaterial,
+        FeatureDomain::Legend => FeatureOperation::Print,
+        FeatureDomain::Drill => FeatureOperation::Drill,
+        FeatureDomain::Rout => FeatureOperation::Route,
+        FeatureDomain::VCut | FeatureDomain::Score => FeatureOperation::Score,
+        FeatureDomain::Profile => FeatureOperation::Profile,
+        FeatureDomain::Mechanical => FeatureOperation::Mark,
+        FeatureDomain::Unknown | FeatureDomain::Other => FeatureOperation::Unknown,
+    }
+}
+
+fn operation_for_feature(
     feature: &GeometryFeature,
-) -> FeatureSemantic {
+    layer_operation: FeatureOperation,
+) -> FeatureOperation {
+    match feature.kind {
+        FeatureKind::Hole => FeatureOperation::Drill,
+        FeatureKind::Slot => FeatureOperation::Route,
+        _ => layer_operation,
+    }
+}
+
+fn material_for_domain(domain: FeatureDomain) -> FeatureMaterial {
+    match domain {
+        FeatureDomain::Copper => FeatureMaterial::Copper,
+        FeatureDomain::Soldermask => FeatureMaterial::Soldermask,
+        FeatureDomain::Paste => FeatureMaterial::Paste,
+        FeatureDomain::Legend => FeatureMaterial::Ink,
+        FeatureDomain::Drill
+        | FeatureDomain::Rout
+        | FeatureDomain::VCut
+        | FeatureDomain::Score
+        | FeatureDomain::Profile => FeatureMaterial::Substrate,
+        FeatureDomain::Mechanical | FeatureDomain::Other => FeatureMaterial::Other,
+        FeatureDomain::Unknown => FeatureMaterial::Unknown,
+    }
+}
+
+fn span_for_layer(layer: &Layer, domain: FeatureDomain) -> FeatureSpan<Symbol> {
+    if let Some(span) = layer.span {
+        return FeatureSpan::FromTo {
+            from: span.from_layer,
+            to: span.to_layer,
+        };
+    }
+
+    match domain {
+        FeatureDomain::Drill
+        | FeatureDomain::Rout
+        | FeatureDomain::VCut
+        | FeatureDomain::Score
+        | FeatureDomain::Profile => FeatureSpan::ThroughBoard,
+        FeatureDomain::Unknown => FeatureSpan::Unknown,
+        _ => FeatureSpan::Layer(layer.name),
+    }
+}
+
+fn side_for_layer(side: Option<ipc2581::types::ecad::Side>) -> pcb_ir::common::Side {
+    match side {
+        Some(ipc2581::types::ecad::Side::Top) => pcb_ir::common::Side::Top,
+        Some(ipc2581::types::ecad::Side::Bottom) => pcb_ir::common::Side::Bottom,
+        Some(ipc2581::types::ecad::Side::Internal) => pcb_ir::common::Side::Inner,
+        _ => pcb_ir::common::Side::None,
+    }
+}
+
+fn role_for_feature(feature: &GeometryFeature) -> FeatureRole {
+    match feature.kind {
+        FeatureKind::Hole => FeatureRole::Hole,
+        FeatureKind::Slot => FeatureRole::Slot,
+        _ => match feature.intent.domain {
+            FeatureDomain::VCut | FeatureDomain::Score => FeatureRole::ArraySeparation,
+            FeatureDomain::Rout => FeatureRole::Route,
+            FeatureDomain::Profile => FeatureRole::BoardOutline,
+            _ => match feature.bucket {
+                FeatureBucket::Smd | FeatureBucket::Pth => FeatureRole::Pad,
+                FeatureBucket::Via => FeatureRole::Via,
+                FeatureBucket::Fiducial => FeatureRole::Fiducial,
+                FeatureBucket::Trace | FeatureBucket::Fill => {
+                    if matches!(
+                        feature.intent.domain,
+                        FeatureDomain::Copper | FeatureDomain::Unknown
+                    ) {
+                        FeatureRole::Conductor
+                    } else {
+                        FeatureRole::Other
+                    }
+                }
+                FeatureBucket::Cutout => FeatureRole::Cutout,
+                FeatureBucket::Thermal => FeatureRole::Thermal,
+                FeatureBucket::Antipad => FeatureRole::Antipad,
+            },
+        },
+    }
+}
+
+fn plating_for_feature(feature: &GeometryFeature) -> PlatingKind {
+    match feature.kind {
+        FeatureKind::Hole | FeatureKind::Slot | FeatureKind::Padstack => feature.intent.plating,
+        _ => PlatingKind::None,
+    }
+}
+
+fn plating_kind(status: PlatingStatus) -> PlatingKind {
+    match status {
+        PlatingStatus::Plated => PlatingKind::Plated,
+        PlatingStatus::NonPlated => PlatingKind::NonPlated,
+        PlatingStatus::Via => PlatingKind::Via,
+    }
+}
+
+fn semantic_for_intent(feature: &GeometryFeature) -> FeatureSemantic {
     if matches!(feature.semantic, FeatureSemantic::Fiducial(_)) {
         return feature.semantic;
     }
 
-    match layer_function {
-        LayerFunction::VCut => FeatureSemantic::VCut,
-        LayerFunction::Score => FeatureSemantic::Score,
-        LayerFunction::Rout => FeatureSemantic::Route,
-        LayerFunction::BoardOutline => FeatureSemantic::BoardOutline,
-        _ => semantic_for_bucket(feature.bucket),
-    }
-}
-
-fn semantic_for_bucket(bucket: FeatureBucket) -> FeatureSemantic {
-    match bucket {
-        FeatureBucket::Smd => FeatureSemantic::SmdPad,
-        FeatureBucket::Pth => FeatureSemantic::ComponentPad,
-        FeatureBucket::Via => FeatureSemantic::ViaPad,
-        FeatureBucket::Trace | FeatureBucket::Fill => FeatureSemantic::CopperConductor,
-        FeatureBucket::Fiducial
-        | FeatureBucket::Cutout
-        | FeatureBucket::Thermal
-        | FeatureBucket::Antipad => FeatureSemantic::Other,
+    match feature.intent.role {
+        FeatureRole::Fiducial => FeatureSemantic::Fiducial(FiducialKind::Global),
+        FeatureRole::Via => FeatureSemantic::ViaPad,
+        FeatureRole::Pad => match feature.intent.plating {
+            PlatingKind::Plated => FeatureSemantic::ComponentPad,
+            PlatingKind::Via => FeatureSemantic::ViaPad,
+            _ => FeatureSemantic::SmdPad,
+        },
+        FeatureRole::ArraySeparation => match feature.intent.domain {
+            FeatureDomain::VCut => FeatureSemantic::VCut,
+            FeatureDomain::Score => FeatureSemantic::Score,
+            _ => FeatureSemantic::Other,
+        },
+        FeatureRole::Route => FeatureSemantic::Route,
+        FeatureRole::BoardOutline => FeatureSemantic::BoardOutline,
+        FeatureRole::Conductor => FeatureSemantic::CopperConductor,
+        _ => FeatureSemantic::Other,
     }
 }
 
@@ -606,7 +783,7 @@ fn extract_step_layer(
                 };
 
                 if let Some(mut feature) = feature {
-                    feature.semantic = semantic_for_feature(layer.layer_function, &feature);
+                    complete_feature_intent(layer, &mut feature);
                     push_extracted_feature(
                         &mut doc,
                         set_id,
@@ -672,7 +849,7 @@ fn extract_step_layer(
                 let set_id =
                     push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
                 for mut feature in emitted {
-                    feature.semantic = semantic_for_feature(source_layer.layer_function, &feature);
+                    complete_feature_intent(source_layer, &mut feature);
                     push_extracted_feature(
                         &mut doc,
                         set_id,
@@ -1268,6 +1445,11 @@ fn extract_pad(
             Some(primitive_ref)
         }
     };
+    feature.intent.plating = padstack
+        .hole_def
+        .as_ref()
+        .map(|hole| plating_kind(hole.plating_status))
+        .unwrap_or(PlatingKind::None);
     feature.flags.expanded_padstack = true;
     feature.flags.lowered_to_paths = true;
     feature.flags.clears_previous_in_set = paint == PrimitivePaint::Void;
@@ -1455,7 +1637,7 @@ fn extract_fiducial(
     );
 
     let path_start = doc.paths.len() as u32;
-    let (paint, primitive_ref) = match &fiducial.shape {
+    let (paint, primitive_ref, outer_diameter) = match &fiducial.shape {
         ipc2581::types::ecad::FiducialShape::Primitive(primitive) => (
             lower_standard_primitive(
                 context,
@@ -1465,6 +1647,7 @@ fn extract_fiducial(
                 FeatureBucket::Fiducial,
             )?,
             None,
+            standard_primitive_outer_diameter(primitive),
         ),
         ipc2581::types::ecad::FiducialShape::StandardPrimitiveRef(primitive_ref) => {
             let Some(primitive) = context.standard_primitives.get(primitive_ref).copied() else {
@@ -1483,6 +1666,7 @@ fn extract_fiducial(
                     FeatureBucket::Fiducial,
                 )?,
                 Some(*primitive_ref),
+                standard_primitive_outer_diameter(primitive),
             )
         }
     };
@@ -1508,6 +1692,7 @@ fn extract_fiducial(
     feature.path_start = path_start;
     feature.path_count = path_count;
     apply_ipc_placement(&mut feature, placement);
+    feature.outer_diameter = outer_diameter.unwrap_or_default();
     feature.primitive_ref = primitive_ref;
     feature.flags.lowered_to_paths = true;
     if let Some(pin_ref) = &fiducial.pin_ref {
@@ -1528,6 +1713,14 @@ fn map_fiducial_kind(kind: ipc2581::types::ecad::FiducialKind) -> FiducialKind {
         ipc2581::types::ecad::FiducialKind::Global => FiducialKind::Global,
         ipc2581::types::ecad::FiducialKind::GoodPanelMark => FiducialKind::GoodPanel,
         ipc2581::types::ecad::FiducialKind::Local => FiducialKind::Local,
+    }
+}
+
+fn standard_primitive_outer_diameter(primitive: &StandardPrimitive) -> Option<f64> {
+    match primitive {
+        StandardPrimitive::Circle(circle) => Some(circle.shape.diameter),
+        StandardPrimitive::Donut(donut) => Some(donut.shape.outer_diameter),
+        _ => None,
     }
 }
 
@@ -1900,6 +2093,7 @@ fn extract_hole(
     feature.path_count = path_count;
     feature.center = center;
     feature.outer_diameter = hole.diameter;
+    feature.intent.plating = plating_kind(hole.plating_status);
     feature.flags.lowered_to_paths = true;
     feature
 }
@@ -1939,6 +2133,7 @@ fn extract_slot(
     feature.path_start = path_start;
     feature.path_count = path_count;
     apply_ipc_placement(&mut feature, placement);
+    feature.intent.plating = plating_kind(slot.plating_status);
     feature.flags.lowered_to_paths = true;
     Ok(feature)
 }

@@ -12,11 +12,11 @@ use zip::{ZipWriter, write::FileOptions};
 use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 use super::lower::lower_artwork_layer;
 use crate::{geometry, ipc2581 as ipc};
-use pcb_ir::common::{BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Unit};
+use pcb_ir::common::{BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Point, Unit};
 use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{
-    FeatureBucket, FeatureKind, FeatureSemantic, FiducialKind, GeometryFeature, GeometryPath,
-    GeometryView, ProfileSet,
+    FeatureDomain, FeatureOperation, FeatureRole, FeatureSemantic, FiducialKind, GeometryFeature,
+    GeometryPath, GeometryView, PlatingKind, ProfileSet,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -458,6 +458,20 @@ fn artwork_from_processed_layer(
     for feature in &doc.features
         [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
     {
+        if let Some((at, diameter)) = circle_flash(doc, feature) {
+            artwork.push_object(
+                artwork_layer,
+                ArtworkObject {
+                    paint: PaintPolarity::Dark,
+                    geometry: ArtworkGeometry::CircleFlash { at, diameter },
+                    net: None,
+                    bbox: BBox::from_point(at).expand(diameter / 2.0),
+                    meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
+                },
+            );
+            continue;
+        }
+
         for path in &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         {
@@ -473,6 +487,28 @@ fn artwork_from_processed_layer(
         }
     }
     Ok(artwork)
+}
+
+fn circle_flash(
+    doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
+    feature: &GeometryFeature<ipc2581::Symbol>,
+) -> Option<(Point, f64)> {
+    if feature.outer_diameter <= 0.0 || feature.path_count != 1 {
+        return None;
+    }
+
+    let path = &doc.paths[feature.path_start as usize];
+    if !path.flags.filled || path.flags.stroked {
+        return None;
+    }
+
+    match feature.intent.role {
+        FeatureRole::Fiducial | FeatureRole::Hole => Some((feature.center, feature.outer_diameter)),
+        _ if feature.intent.operation == FeatureOperation::Drill => {
+            Some((feature.center, feature.outer_diameter))
+        }
+        _ => None,
+    }
 }
 
 const PROFILE_STROKE_WIDTH: f64 = 0.1;
@@ -537,39 +573,72 @@ fn object_attributes(
 }
 
 fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> {
-    if feature.kind == FeatureKind::Hole {
-        return vec!["Other".to_string(), "Drill".to_string()];
+    match feature.intent.operation {
+        FeatureOperation::Drill => return vec!["Other".to_string(), "Drill".to_string()],
+        FeatureOperation::Score if feature.intent.domain == FeatureDomain::VCut => {
+            return vec!["Other".to_string(), "Vcut".to_string()];
+        }
+        FeatureOperation::Score if feature.intent.domain == FeatureDomain::Score => {
+            return vec!["Other".to_string(), "Score".to_string()];
+        }
+        FeatureOperation::Route | FeatureOperation::Profile => return vec!["Profile".to_string()],
+        _ => {}
     }
 
-    match feature.semantic {
-        FeatureSemantic::Fiducial(kind) => {
-            let kind = match kind {
-                FiducialKind::Local => "Local",
-                FiducialKind::Global => "Global",
-                FiducialKind::Panel | FiducialKind::GoodPanel => "Panel",
-                FiducialKind::BadBoard => {
-                    return vec!["Other".to_string(), "BadBoardMark".to_string()];
-                }
+    match feature.intent.role {
+        FeatureRole::Fiducial => return fiducial_aperture_function(feature),
+        FeatureRole::Pad => {
+            return match feature.intent.plating {
+                PlatingKind::Plated => vec!["ComponentPad".to_string()],
+                PlatingKind::Via => vec!["ViaPad".to_string()],
+                _ => vec!["SMDPad".to_string()],
             };
-            vec!["FiducialPad".to_string(), kind.to_string()]
         }
-        FeatureSemantic::SmdPad => vec!["SMDPad".to_string()],
-        FeatureSemantic::ComponentPad => vec!["ComponentPad".to_string()],
-        FeatureSemantic::ViaPad => vec!["ViaPad".to_string()],
-        FeatureSemantic::VCut => vec!["Other".to_string(), "Vcut".to_string()],
-        FeatureSemantic::Score => vec!["Other".to_string(), "Score".to_string()],
-        FeatureSemantic::Route | FeatureSemantic::BoardOutline => vec!["Profile".to_string()],
-        _ => match feature.bucket {
-            FeatureBucket::Smd => vec!["SMDPad".to_string()],
-            FeatureBucket::Pth => vec!["ComponentPad".to_string()],
-            FeatureBucket::Via => vec!["ViaPad".to_string()],
-            FeatureBucket::Fiducial => vec!["FiducialPad".to_string()],
-            FeatureBucket::Trace | FeatureBucket::Fill => vec!["Conductor".to_string()],
-            FeatureBucket::Cutout => vec!["Other".to_string()],
-            FeatureBucket::Thermal => vec!["ThermalRelief".to_string()],
-            FeatureBucket::Antipad => vec!["AntiPad".to_string()],
-        },
+        FeatureRole::Via => return vec!["ViaPad".to_string()],
+        FeatureRole::Conductor => return vec!["Conductor".to_string()],
+        FeatureRole::Thermal => return vec!["ThermalRelief".to_string()],
+        FeatureRole::Antipad => return vec!["AntiPad".to_string()],
+        FeatureRole::Hole | FeatureRole::Slot | FeatureRole::Cutout => {
+            return vec!["Other".to_string()];
+        }
+        FeatureRole::ArraySeparation if feature.intent.domain == FeatureDomain::VCut => {
+            return vec!["Other".to_string(), "Vcut".to_string()];
+        }
+        FeatureRole::ArraySeparation if feature.intent.domain == FeatureDomain::Score => {
+            return vec!["Other".to_string(), "Score".to_string()];
+        }
+        FeatureRole::Route | FeatureRole::BoardOutline => return vec!["Profile".to_string()],
+        _ => {}
     }
+
+    match feature.intent.domain {
+        FeatureDomain::Copper => vec!["Conductor".to_string()],
+        FeatureDomain::Drill => vec!["Other".to_string(), "Drill".to_string()],
+        FeatureDomain::Rout | FeatureDomain::Profile => vec!["Profile".to_string()],
+        FeatureDomain::VCut => vec!["Other".to_string(), "Vcut".to_string()],
+        FeatureDomain::Score => vec!["Other".to_string(), "Score".to_string()],
+        FeatureDomain::Soldermask
+        | FeatureDomain::Paste
+        | FeatureDomain::Legend
+        | FeatureDomain::Mechanical
+        | FeatureDomain::Other
+        | FeatureDomain::Unknown => vec!["Other".to_string()],
+    }
+}
+
+fn fiducial_aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> {
+    let FeatureSemantic::Fiducial(kind) = feature.semantic else {
+        return vec!["FiducialPad".to_string(), "Global".to_string()];
+    };
+    let kind = match kind {
+        FiducialKind::Local => "Local",
+        FiducialKind::Global => "Global",
+        FiducialKind::Panel | FiducialKind::GoodPanel => "Panel",
+        FiducialKind::BadBoard => {
+            return vec!["Other".to_string(), "BadBoardMark".to_string()];
+        }
+    };
+    vec!["FiducialPad".to_string(), kind.to_string()]
 }
 
 fn push_artwork_path(
