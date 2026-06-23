@@ -41,6 +41,7 @@ impl BoardDimensions {
 /// Board and board-array geometry summary extracted from canonical IPC layout IR.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoardLayoutInfo {
+    pub board_name: Option<String>,
     pub board_dimensions: Option<BoardDimensions>,
     pub board_array: Option<BoardArrayInfo>,
 }
@@ -96,6 +97,12 @@ impl<'a> IpcAccessor<'a> {
     /// Extract board and board-array geometry from canonical IPC layout IR.
     pub fn board_layout_info(&self) -> Option<BoardLayoutInfo> {
         let doc = geometry::extract_layout(self.ipc()).ok()?;
+        let board_name = pcb_ir::dialects::ipc::layout_steps_by_kind(
+            &doc,
+            pcb_ir::dialects::ipc::LayoutStepKind::Board,
+        )
+        .next()
+        .map(|(_, step)| self.ipc().resolve(step.source_step_ref).to_string());
         let board_dimensions =
             pcb_ir::dialects::ipc::board_bbox(&doc).and_then(dimensions_from_bbox);
         let board_array =
@@ -115,6 +122,7 @@ impl<'a> IpcAccessor<'a> {
         }
 
         Some(BoardLayoutInfo {
+            board_name,
             board_dimensions,
             board_array,
         })
@@ -381,6 +389,7 @@ mod tests {
         let accessor = IpcAccessor::new(&ipc);
 
         let layout = accessor.board_layout_info().unwrap();
+        assert_eq!(layout.board_name.as_deref(), Some("board"));
         let board_array = layout.board_array.as_ref().unwrap();
         let dimensions = board_array.dimensions.as_ref().unwrap();
 

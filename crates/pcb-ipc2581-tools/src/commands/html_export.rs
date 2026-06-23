@@ -187,8 +187,8 @@ struct Color {
 }
 
 fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> BoardSummary {
-    let design_name = board_design_name(accessor);
     let layout = accessor.board_layout_info();
+    let design_name = layout.as_ref().and_then(|layout| layout.board_name.clone());
     let array_overview_svg = crate::board_array::render_board_array_overview_svg(accessor);
 
     let (width, height) = if let Some(dims) = layout
@@ -273,13 +273,6 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         nets,
         drill_holes,
     }
-}
-
-fn board_design_name(accessor: &IpcAccessor) -> Option<String> {
-    let doc = geometry::extract_layout(accessor.ipc()).ok()?;
-    pcb_ir::dialects::ipc::layout_steps_by_kind(&doc, pcb_ir::dialects::ipc::LayoutStepKind::Board)
-        .next()
-        .map(|(_, step)| accessor.ipc().resolve(step.source_step_ref).to_string())
 }
 
 fn format_length(value_mm: f64, unit_format: UnitFormat) -> String {

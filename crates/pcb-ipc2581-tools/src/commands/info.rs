@@ -145,9 +145,10 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     summary_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
     let layout = accessor.board_layout_info();
 
-    // Design name
-    if let Some(step) = accessor.primary_step() {
-        let design_name = accessor.ipc().resolve(step.name);
+    if let Some(design_name) = layout
+        .as_ref()
+        .and_then(|layout| layout.board_name.as_ref())
+    {
         summary_table.add_row(vec![
             Cell::new("Design").fg(Color::Cyan),
             Cell::new(design_name),
