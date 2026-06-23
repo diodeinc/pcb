@@ -107,8 +107,8 @@ enum Commands {
         /// Layout target to export. Gerber supports board or panel.
         #[arg(long, default_value = "board")]
         layout_target: LayoutTarget,
-        /// Output directory for generated Gerber files
-        #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
+        /// Output directory, or a .zip file for an archived Gerber package
+        #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
     },
 }
@@ -256,7 +256,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             let set = gerber::execute_file_with_options(
                 &file,
                 &gerber::GerberExportOptions {
-                    output_dir: output.clone(),
+                    output: output.clone(),
                     layout_target,
                 },
             )?;

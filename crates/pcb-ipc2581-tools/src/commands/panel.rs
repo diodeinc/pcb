@@ -936,7 +936,7 @@ mod tests {
         let set = export_gerber_x2(
             &ipc,
             &GerberExportOptions {
-                output_dir,
+                output: output_dir,
                 layout_target: LayoutTarget::Panel,
             },
         )

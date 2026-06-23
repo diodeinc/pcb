@@ -444,42 +444,22 @@ fn extract_panel_layer(
     let set_start = doc.feature_sets.len() as u32;
     let mut layer_bbox = BBox::empty();
     let mut append_state = LayerAppendState::default();
+    let mut stack = vec![panel.name];
 
-    let panel_doc = extract_step_layer(ipc, panel, layers, layer, layer_name)?;
-    doc.diagnostics
-        .extend(panel_doc.diagnostics.iter().cloned());
-    layer_bbox = layer_bbox.union(append_state.append_layer(
+    layer_bbox = layer_bbox.union(append_step_layer_tree(
         &mut doc,
-        &panel_doc,
-        0,
+        &mut append_state,
+        LayerMaterializeContext {
+            ipc,
+            steps,
+            layers,
+            layer,
+            layer_name,
+        },
+        panel,
         Affine2::identity(),
+        &mut stack,
     )?);
-
-    for repeat in &panel.step_repeats {
-        let source_step = steps
-            .iter()
-            .find(|step| step.name == repeat.step_ref)
-            .with_context(|| {
-                format!(
-                    "StepRepeat references unknown Step '{}'",
-                    ipc.resolve(repeat.step_ref)
-                )
-            })?;
-        let source_doc = extract_step_layer(ipc, source_step, layers, layer, layer_name)?;
-        doc.diagnostics.extend(source_doc.diagnostics.clone());
-
-        for iy in 0..repeat.ny {
-            for ix in 0..repeat.nx {
-                let transform = step_repeat_transform(repeat, ix, iy);
-                layer_bbox = layer_bbox.union(append_state.append_layer(
-                    &mut doc,
-                    &source_doc,
-                    0,
-                    transform,
-                )?);
-            }
-        }
-    }
 
     let feature_count = doc.features.len() as u32 - feature_start;
     let set_count = doc.feature_sets.len() as u32 - set_start;
@@ -498,6 +478,72 @@ fn extract_panel_layer(
     });
 
     Ok(doc)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LayerMaterializeContext<'a> {
+    ipc: &'a Ipc2581,
+    steps: &'a [Step],
+    layers: &'a [Layer],
+    layer: &'a Layer,
+    layer_name: &'a str,
+}
+
+fn append_step_layer_tree(
+    doc: &mut GeometryDocument,
+    append_state: &mut LayerAppendState,
+    context: LayerMaterializeContext<'_>,
+    step: &Step,
+    transform: Affine2,
+    stack: &mut Vec<Symbol>,
+) -> Result<BBox> {
+    let step_doc = extract_step_layer(
+        context.ipc,
+        step,
+        context.layers,
+        context.layer,
+        context.layer_name,
+    )?;
+    doc.diagnostics.extend(step_doc.diagnostics.iter().cloned());
+    let mut bbox = append_state.append_layer(doc, &step_doc, 0, transform)?;
+
+    for repeat in &step.step_repeats {
+        let source_step = context
+            .steps
+            .iter()
+            .find(|step| step.name == repeat.step_ref)
+            .with_context(|| {
+                format!(
+                    "StepRepeat references unknown Step '{}'",
+                    context.ipc.resolve(repeat.step_ref)
+                )
+            })?;
+
+        if stack.contains(&source_step.name) {
+            bail!(
+                "StepRepeat cycle references Step '{}'",
+                context.ipc.resolve(source_step.name)
+            );
+        }
+
+        stack.push(source_step.name);
+        for iy in 0..repeat.ny {
+            for ix in 0..repeat.nx {
+                let instance_transform = transform.concat(step_repeat_transform(repeat, ix, iy));
+                bbox = bbox.union(append_step_layer_tree(
+                    doc,
+                    append_state,
+                    context,
+                    source_step,
+                    instance_transform,
+                    stack,
+                )?);
+            }
+        }
+        stack.pop();
+    }
+
+    Ok(bbox)
 }
 
 fn extract_step_layer(
@@ -3697,6 +3743,32 @@ mod tests {
     }
 
     #[test]
+    fn nested_panel_layer_extraction_materializes_descendant_board_features() {
+        let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
+            .expect("synthetic nested panel fixture should parse");
+        let doc = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::Panel)
+            .expect("nested panel layer should extract");
+        let layer = &doc.layers[0];
+        let features = &doc.features
+            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
+        let centers = features
+            .iter()
+            .map(|feature| feature.center)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            centers,
+            [
+                Point::new(7.0, 8.0),
+                Point::new(22.0, 8.0),
+                Point::new(7.0, 28.0),
+                Point::new(22.0, 28.0)
+            ]
+        );
+        assert_eq!(board_instance_count(&doc), 4);
+    }
+
+    #[test]
     fn nested_panel_instance_bbox_includes_child_repeats_without_profile() {
         let ipc = ipc2581::Ipc2581::parse(nested_panel_without_subpanel_profile_fixture())
             .expect("synthetic nested panel fixture should parse");
@@ -4014,6 +4086,9 @@ mod tests {
     <FunctionMode mode="FABRICATION"/>
     <StepRef name="panel"/>
     <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad"><Circle diameter="1"/></EntryStandard>
+    </DictionaryStandard>
   </Content>
   <Ecad>
     <CadHeader units="MILLIMETER"/>
@@ -4028,6 +4103,18 @@ mod tests {
             <PolyStepSegment x="0" y="5"/>
           </Polygon>
         </Profile>
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Pad padstackDefRef="padstack">
+              <Location x="2" y="3"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
       </Step>
       <Step name="subpanel" type="PALLET">
         <Profile>

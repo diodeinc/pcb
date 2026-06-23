@@ -1,9 +1,13 @@
+use std::collections::HashSet;
+use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use gerberx2::{GerberLayer, write_layer};
 use ipc2581::Ipc2581;
 use ipc2581::types::{LayerFunction, Side, ecad::Layer};
+use zip::{ZipWriter, write::FileOptions};
 
 use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 use super::lower::lower_artwork_layer;
@@ -17,7 +21,7 @@ use pcb_ir::dialects::path as common_path;
 
 #[derive(Debug, Clone)]
 pub struct GerberExportOptions {
-    pub output_dir: PathBuf,
+    pub output: PathBuf,
     pub layout_target: LayoutTarget,
 }
 
@@ -34,21 +38,26 @@ pub struct GerberExportFile {
 }
 
 pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<GerberExportSet> {
-    if options.layout_target == LayoutTarget::Layout {
+    let set = build_gerber_x2(ipc, options.layout_target)?;
+    write_gerber_export_set(&set, &options.output)?;
+    Ok(set)
+}
+
+pub fn build_gerber_x2(ipc: &Ipc2581, layout_target: LayoutTarget) -> Result<GerberExportSet> {
+    if layout_target == LayoutTarget::Layout {
         bail!("Gerber export does not support --layout-target layout; use board or panel");
     }
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut files = Vec::new();
     let mut first_doc = None;
-    let plans = export_layer_plans(&ecad.cad_data.layers);
+    let plans = export_layer_plans(ipc, &ecad.cad_data.layers);
 
     for plan in &plans {
         let source_layer = plan.layer;
         let layer_name = ipc.resolve(source_layer.name);
-        let mut doc =
-            geometry::extract_layer_for_layout_target(ipc, layer_name, options.layout_target)
-                .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
+        let mut doc = geometry::extract_layer_for_layout_target(ipc, layer_name, layout_target)
+            .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut doc);
         if first_doc.is_none() {
             first_doc = Some(doc.clone());
@@ -71,36 +80,75 @@ pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<
     }
 
     if let Some(doc) = first_doc {
-        let profile = profile_artwork_from_profiles(&doc, options.layout_target)?;
+        let profile = profile_artwork_from_profiles(&doc, layout_target)?;
         if !profile.objects.is_empty() {
             let layer = lower_artwork_layer(&profile)?;
             let contents = write_layer(&layer)?;
+            let filename = unique_profile_filename(&files);
             files.push(GerberExportFile {
-                filename: "profile.gbr".to_string(),
+                filename,
                 layer,
                 contents,
             });
         }
     }
 
-    std::fs::create_dir_all(&options.output_dir).with_context(|| {
+    Ok(GerberExportSet { files })
+}
+
+pub fn write_gerber_export_set(set: &GerberExportSet, output: &Path) -> Result<()> {
+    if output
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    {
+        write_gerber_zip(set, output)
+    } else {
+        write_gerber_directory(set, output)
+    }
+}
+
+fn write_gerber_directory(set: &GerberExportSet, output_dir: &Path) -> Result<()> {
+    fs::create_dir_all(output_dir).with_context(|| {
         format!(
             "failed to create Gerber output directory {}",
-            options.output_dir.display()
+            output_dir.display()
         )
     })?;
-    for file in &files {
-        std::fs::write(options.output_dir.join(&file.filename), &file.contents).with_context(
-            || {
-                format!(
-                    "failed to write Gerber file {}",
-                    options.output_dir.join(&file.filename).display()
-                )
-            },
-        )?;
+    for file in &set.files {
+        fs::write(output_dir.join(&file.filename), &file.contents).with_context(|| {
+            format!(
+                "failed to write Gerber file {}",
+                output_dir.join(&file.filename).display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn write_gerber_zip(set: &GerberExportSet, output_zip: &Path) -> Result<()> {
+    if let Some(parent) = output_zip.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create Gerber zip output directory {}",
+                parent.display()
+            )
+        })?;
     }
 
-    Ok(GerberExportSet { files })
+    let zip_file = fs::File::create(output_zip)
+        .with_context(|| format!("failed to create Gerber zip {}", output_zip.display()))?;
+    let mut zip = ZipWriter::new(BufWriter::new(zip_file));
+    for file in &set.files {
+        zip.start_file(&file.filename, FileOptions::<()>::default())
+            .with_context(|| format!("failed to add {} to Gerber zip", file.filename))?;
+        zip.write_all(file.contents.as_bytes())
+            .with_context(|| format!("failed to write {} to Gerber zip", file.filename))?;
+    }
+    zip.finish()
+        .with_context(|| format!("failed to finalize Gerber zip {}", output_zip.display()))?;
+    Ok(())
 }
 
 struct ExportLayerPlan<'a> {
@@ -122,13 +170,14 @@ enum GerberLayerRole {
     Score,
 }
 
-fn export_layer_plans(layers: &[Layer]) -> Vec<ExportLayerPlan<'_>> {
+fn export_layer_plans<'a>(ipc: &Ipc2581, layers: &'a [Layer]) -> Vec<ExportLayerPlan<'a>> {
     let copper_count = layers
         .iter()
         .filter(|layer| gerber_layer_role(layer.layer_function) == Some(GerberLayerRole::Copper))
         .count();
     let mut copper_index = 0;
     let mut plans = Vec::new();
+    let mut used_filenames = HashSet::new();
 
     for layer in layers {
         let Some(role) = gerber_layer_role(layer.layer_function) else {
@@ -138,6 +187,7 @@ fn export_layer_plans(layers: &[Layer]) -> Vec<ExportLayerPlan<'_>> {
             copper_index += 1;
         }
         let (filename, file_function) = layer_output(role, layer.side, copper_index, copper_count);
+        let filename = allocate_filename(&mut used_filenames, &filename, ipc.resolve(layer.name));
         plans.push(ExportLayerPlan {
             layer,
             role,
@@ -147,6 +197,70 @@ fn export_layer_plans(layers: &[Layer]) -> Vec<ExportLayerPlan<'_>> {
     }
 
     plans
+}
+
+fn allocate_filename(
+    used: &mut HashSet<String>,
+    preferred: &str,
+    source_layer_name: &str,
+) -> String {
+    if used.insert(preferred.to_string()) {
+        return preferred.to_string();
+    }
+
+    let (stem, extension) = split_filename(preferred);
+    let extension = extension
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+    let source_stem = sanitize_filename_stem(source_layer_name);
+    let source_stem = if source_stem.is_empty() {
+        stem.to_string()
+    } else {
+        source_stem
+    };
+
+    for index in 1.. {
+        let candidate = if index == 1 {
+            format!("{source_stem}{extension}")
+        } else {
+            format!("{source_stem}_{index}{extension}")
+        };
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded filename allocation should find an unused name")
+}
+
+fn unique_profile_filename(files: &[GerberExportFile]) -> String {
+    let mut used = files
+        .iter()
+        .map(|file| file.filename.clone())
+        .collect::<HashSet<_>>();
+    allocate_filename(&mut used, "profile.gbr", "profile")
+}
+
+fn split_filename(filename: &str) -> (&str, Option<&str>) {
+    filename
+        .rsplit_once('.')
+        .map_or((filename, None), |(stem, extension)| {
+            (stem, Some(extension))
+        })
+}
+
+fn sanitize_filename_stem(name: &str) -> String {
+    let mut stem = String::new();
+    let mut last_was_separator = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            stem.push(ch);
+            last_was_separator = false;
+        } else if !last_was_separator {
+            stem.push('_');
+            last_was_separator = true;
+        }
+    }
+    stem.trim_matches('_').to_string()
 }
 
 fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
@@ -548,7 +662,7 @@ pub fn execute_file(input_file: &Path, output_dir: &Path) -> Result<GerberExport
     execute_file_with_options(
         input_file,
         &GerberExportOptions {
-            output_dir: output_dir.to_path_buf(),
+            output: output_dir.to_path_buf(),
             layout_target: LayoutTarget::Board,
         },
     )
@@ -566,38 +680,74 @@ pub fn execute_file_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{Cursor, Read};
 
     #[test]
     fn route_and_board_outline_layers_export_to_distinct_files() {
-        let mut interner = ipc2581::Interner::new();
-        let layers = [
-            Layer {
-                name: interner.intern("Edge.Cuts"),
-                layer_function: LayerFunction::BoardOutline,
-                side: Some(Side::All),
-                polarity: None,
-                span: None,
-                spec_refs: Vec::new(),
-                profile: None,
-            },
-            Layer {
-                name: interner.intern("F.Cu_B.Cu_1"),
-                layer_function: LayerFunction::Rout,
-                side: Some(Side::All),
-                polarity: None,
-                span: None,
-                spec_refs: Vec::new(),
-                profile: None,
-            },
-        ];
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL"/>
+      <Layer name="F.Cu_B.Cu_1" layerFunction="ROUT" side="ALL"/>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let layers = &ipc.ecad().unwrap().cad_data.layers;
 
-        let filenames = export_layer_plans(&layers)
+        let filenames = export_layer_plans(&ipc, layers)
             .into_iter()
             .map(|plan| plan.filename)
             .collect::<Vec<_>>();
 
         assert_eq!(filenames, ["Edge_Cuts.gm1", "Route.gbr"]);
+    }
+
+    #[test]
+    fn repeated_fabrication_layer_roles_export_to_unique_filenames() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="ROUT-A" layerFunction="ROUT" side="ALL"/>
+      <Layer name="ROUT-B" layerFunction="ROUT" side="ALL"/>
+      <Layer name="VCUT-A" layerFunction="V_CUT" side="NONE"/>
+      <Layer name="VCUT-B" layerFunction="V_CUT" side="NONE"/>
+      <Layer name="SCORE-A" layerFunction="SCORE" side="NONE"/>
+      <Layer name="SCORE-B" layerFunction="SCORE" side="NONE"/>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let layers = &ipc.ecad().unwrap().cad_data.layers;
+
+        let filenames = export_layer_plans(&ipc, layers)
+            .into_iter()
+            .map(|plan| plan.filename)
+            .collect::<Vec<_>>();
+        let unique = filenames.iter().collect::<HashSet<_>>();
+
+        assert_eq!(unique.len(), filenames.len());
+        assert_eq!(
+            filenames,
+            [
+                "Route.gbr",
+                "ROUT_B.gbr",
+                "V_Cut.gbr",
+                "VCUT_B.gbr",
+                "Score.gbr",
+                "SCORE_B.gbr"
+            ]
+        );
     }
 
     #[test]
@@ -649,7 +799,7 @@ mod tests {
         let set = export_gerber_x2(
             &ipc,
             &GerberExportOptions {
-                output_dir,
+                output: output_dir,
                 layout_target: LayoutTarget::Board,
             },
         )
@@ -677,7 +827,7 @@ mod tests {
         let panel_target_set = export_gerber_x2(
             &ipc,
             &GerberExportOptions {
-                output_dir: panel_output_dir,
+                output: panel_output_dir,
                 layout_target: LayoutTarget::Panel,
             },
         )
@@ -690,6 +840,70 @@ mod tests {
             .unwrap();
         assert!(panel_target_copper.contents.contains("%TF.Part,Single*%"));
         assert!(!panel_target_copper.contents.contains("%TF.Part,Array*%"));
+    }
+
+    #[test]
+    fn gerber_export_writes_zip_when_output_has_zip_extension() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let output_zip = std::env::temp_dir().join(format!(
+            "pcb-ipc-gerber-zip-test-{}.zip",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&output_zip);
+
+        let set = export_gerber_x2(
+            &ipc,
+            &GerberExportOptions {
+                output: output_zip.clone(),
+                layout_target: LayoutTarget::Board,
+            },
+        )
+        .unwrap();
+
+        assert!(output_zip.is_file());
+        let zip_file = std::fs::File::open(&output_zip).unwrap();
+        let mut archive = zip::ZipArchive::new(zip_file).unwrap();
+        let names = (0..archive.len())
+            .map(|index| archive.by_index(index).unwrap().name().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(archive.len(), set.files.len());
+        assert!(names.iter().any(|name| name == "F_Cu.gtl"));
+        assert!(names.iter().any(|name| name == "profile.gbr"));
+
+        let mut top_copper = String::new();
+        archive
+            .by_name("F_Cu.gtl")
+            .unwrap()
+            .read_to_string(&mut top_copper)
+            .unwrap();
+        assert!(top_copper.contains("%TF.FileFunction,Copper,L1,Top*%"));
+        let _ = std::fs::remove_file(output_zip);
     }
 
     #[test]
@@ -709,7 +923,7 @@ mod tests {
         let error = export_gerber_x2(
             &ipc,
             &GerberExportOptions {
-                output_dir,
+                output: output_dir,
                 layout_target: LayoutTarget::Layout,
             },
         )
@@ -778,7 +992,7 @@ mod tests {
         let set = export_gerber_x2(
             &ipc,
             &GerberExportOptions {
-                output_dir,
+                output: output_dir,
                 layout_target: LayoutTarget::Board,
             },
         )
@@ -855,7 +1069,7 @@ mod tests {
         let set = export_gerber_x2(
             &ipc,
             &GerberExportOptions {
-                output_dir,
+                output: output_dir,
                 layout_target: LayoutTarget::Panel,
             },
         )
@@ -950,7 +1164,7 @@ mod tests {
         let set = export_gerber_x2(
             &ipc,
             &GerberExportOptions {
-                output_dir,
+                output: output_dir,
                 layout_target: LayoutTarget::Panel,
             },
         )
@@ -1005,7 +1219,7 @@ mod tests {
         let set = export_gerber_x2(
             &ipc,
             &GerberExportOptions {
-                output_dir: output_dir.clone(),
+                output: output_dir.clone(),
                 layout_target: LayoutTarget::Board,
             },
         )
