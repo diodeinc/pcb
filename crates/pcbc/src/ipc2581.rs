@@ -1,4 +1,4 @@
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
@@ -38,6 +38,12 @@ enum Commands {
     Edit {
         #[command(subcommand)]
         command: EditCommands,
+    },
+    /// Create and inspect IPC-2581 board array data
+    #[command(alias = "panel")]
+    BoardArray {
+        #[command(subcommand)]
+        command: BoardArrayCommands,
     },
     /// Export a filtered view of an IPC-2581 file for a specific mode
     View {
@@ -99,11 +105,11 @@ enum Commands {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to export. Gerber supports board or panel.
+        /// Layout target to export. Gerber supports board or board-array.
         #[arg(long, default_value = "board")]
-        layout_target: LayoutTarget,
-        /// Output directory for generated Gerber files
-        #[arg(short, long, value_hint = clap::ValueHint::DirPath)]
+        layout_target: GerberLayoutTarget,
+        /// Output directory, or a .zip file for an archived Gerber package
+        #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
     },
 }
@@ -122,6 +128,50 @@ enum EditCommands {
         #[arg(short = 'f', long, default_value = "text")]
         format: OutputFormat,
     },
+}
+
+#[derive(Subcommand)]
+enum BoardArrayCommands {
+    /// Create a rectangular board array. Generated array size must be 70-260 mm per side.
+    Create {
+        /// Input IPC-2581 XML file
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        input: PathBuf,
+        /// Number of board columns. Must be between 1 and 10.
+        #[arg(long)]
+        columns: u32,
+        /// Number of board rows. Must be between 1 and 10.
+        #[arg(long)]
+        rows: u32,
+        /// Spacing between board columns, in millimeters. Must be 0 or between 5 and 20.
+        #[arg(long)]
+        column_spacing: f64,
+        /// Spacing between board rows, in millimeters. Must be 0 or between 5 and 20.
+        #[arg(long)]
+        row_spacing: f64,
+        /// Uniform edge rail width, in millimeters. Must be between 5 and 30.
+        #[arg(long)]
+        edge_rail_width: f64,
+        /// Output IPC-2581 XML file
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum GerberLayoutTarget {
+    Board,
+    #[value(name = "board-array", alias = "panel")]
+    BoardArray,
+}
+
+impl From<GerberLayoutTarget> for pcb_ir::dialects::ipc::GeometryView {
+    fn from(target: GerberLayoutTarget) -> Self {
+        match target {
+            GerberLayoutTarget::Board => Self::Board,
+            GerberLayoutTarget::BoardArray => Self::ArrayFlattened,
+        }
+    }
 }
 
 pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
@@ -145,6 +195,27 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 output,
                 ..
             } => commands::bom_edit::execute(&file, &rules, output.as_deref()),
+        },
+        Commands::BoardArray { command } => match command {
+            BoardArrayCommands::Create {
+                input,
+                columns,
+                rows,
+                column_spacing,
+                row_spacing,
+                edge_rail_width,
+                output,
+            } => commands::board_array::execute(
+                &input,
+                &output,
+                &commands::board_array::BoardArrayCreateOptions {
+                    columns,
+                    rows,
+                    column_spacing_mm: column_spacing,
+                    row_spacing_mm: row_spacing,
+                    edge_rail_width_mm: edge_rail_width,
+                },
+            ),
         },
         Commands::View {
             input,
@@ -192,8 +263,8 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             let set = gerber::execute_file_with_options(
                 &file,
                 &gerber::GerberExportOptions {
-                    output_dir: output.clone(),
-                    layout_target,
+                    output: output.clone(),
+                    view: layout_target.into(),
                 },
             )?;
             println!(

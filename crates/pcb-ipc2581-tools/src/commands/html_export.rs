@@ -4,13 +4,16 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use ipc2581::types::ecad::Layer;
 use minijinja::{Environment, context};
+use pcb_ir::dialects::ipc::{GeometryView, ProfileSet};
 use serde::Serialize;
 
-use crate::LayoutTarget;
 use crate::UnitFormat;
 use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
 use crate::geometry;
 use crate::utils::file as file_utils;
+
+type GeometryDocument =
+    pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 pub fn execute(
     input_file: &Path,
@@ -101,7 +104,7 @@ struct BoardSummary {
     design_name: Option<String>,
     width: Option<String>,
     height: Option<String>,
-    panel: Option<PanelSummary>,
+    board_array: Option<BoardArraySummary>,
     thickness: Option<String>,
     copper_layers: Option<usize>,
     components: Option<usize>,
@@ -110,12 +113,24 @@ struct BoardSummary {
 }
 
 #[derive(Serialize)]
-struct PanelSummary {
+struct BoardArraySummary {
     step_name: String,
     width: Option<String>,
     height: Option<String>,
     board_count: usize,
     board_instances: usize,
+    grid: Option<BoardArrayGridSummary>,
+    drill_holes: Option<String>,
+    overview_svg: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BoardArrayGridSummary {
+    columns: u32,
+    rows: u32,
+    column_spacing: Option<String>,
+    row_spacing: Option<String>,
+    edge_rail_width: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -176,10 +191,9 @@ struct Color {
 }
 
 fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> BoardSummary {
-    let design_name = accessor
-        .primary_step()
-        .map(|step| accessor.ipc().resolve(step.name).to_string());
     let layout = accessor.board_layout_info();
+    let design_name = layout.as_ref().and_then(|layout| layout.board_name.clone());
+    let array_overview_svg = crate::board_array::render_board_array_overview_svg(accessor);
 
     let (width, height) = if let Some(dims) = layout
         .as_ref()
@@ -190,21 +204,38 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         (None, None)
     };
 
-    let panel = layout
+    let board_array = layout
         .as_ref()
-        .and_then(|layout| layout.panel.as_ref())
-        .map(|panel| {
-            let (width, height) = panel
+        .and_then(|layout| layout.board_array.as_ref())
+        .map(|board_array| {
+            let (width, height) = board_array
                 .dimensions
                 .as_ref()
                 .map(|dims| formatted_dimensions(dims.width_mm(), dims.height_mm(), unit_format))
                 .unwrap_or((None, None));
-            PanelSummary {
-                step_name: panel.step_name.clone(),
+            BoardArraySummary {
+                step_name: board_array.step_name.clone(),
                 width,
                 height,
-                board_count: panel.board_count,
-                board_instances: panel.board_instances,
+                board_count: board_array.board_count,
+                board_instances: board_array.board_instances,
+                grid: board_array.grid.as_ref().map(|grid| BoardArrayGridSummary {
+                    columns: grid.columns,
+                    rows: grid.rows,
+                    column_spacing: grid
+                        .column_spacing
+                        .map(|spacing| format_length(spacing.mm(), unit_format)),
+                    row_spacing: grid
+                        .row_spacing
+                        .map(|spacing| format_length(spacing.mm(), unit_format)),
+                    edge_rail_width: grid
+                        .edge_rail_width
+                        .map(|width| format_length(width.mm(), unit_format)),
+                }),
+                drill_holes: accessor
+                    .board_array_drill_stats()
+                    .and_then(format_drill_count),
+                overview_svg: array_overview_svg,
             }
         });
 
@@ -227,27 +258,35 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
 
     let components = accessor.component_stats().map(|stats| stats.total);
     let nets = accessor.net_stats().map(|stats| stats.count);
-    let drill_holes = accessor.drill_stats().and_then(|drills| {
-        if drills.total_holes > 0 {
-            Some(format!(
-                "{} total ({} sizes)",
-                drills.total_holes, drills.unique_sizes
-            ))
-        } else {
-            None
-        }
-    });
+    let drill_holes = accessor.board_drill_stats().and_then(format_drill_count);
 
     BoardSummary {
         design_name,
         width,
         height,
-        panel,
+        board_array,
         thickness,
         copper_layers,
         components,
         nets,
         drill_holes,
+    }
+}
+
+fn format_drill_count(drills: crate::accessors::DrillStats) -> Option<String> {
+    (drills.total_holes > 0).then(|| {
+        format!(
+            "{} total ({} sizes)",
+            drills.total_holes, drills.unique_sizes
+        )
+    })
+}
+
+fn format_length(value_mm: f64, unit_format: UnitFormat) -> String {
+    match unit_format {
+        UnitFormat::Mm => format!("{value_mm:.2} mm"),
+        UnitFormat::Mil => format!("{:.1} mil", value_mm / 0.0254),
+        UnitFormat::Inch => format!("{:.3} in", value_mm / 25.4),
     }
 }
 
@@ -359,18 +398,9 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    match geometry::extract_layer_for_layout_target(ipc, &name, LayoutTarget::Layout) {
-        Ok(mut geometry) => {
-            rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
-            pcb_ir::dialects::ipc::process::process_document(&mut geometry);
-            rendered.svg = Some(geometry::render::render_layer_svg(
-                &geometry,
-                true,
-                LayoutTarget::Layout.profile_set(),
-            ));
-            if !geometry.diagnostics.is_empty() {
-                rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
-            }
+    match geometry::extract_layer_for_view(ipc, &name, GeometryView::Board) {
+        Ok(geometry) => {
+            render_extracted_layer(&mut rendered, geometry, GeometryView::Board.profile_set())
         }
         Err(error) => {
             rendered.warning = Some(format!("Render unavailable: {error}"));
@@ -378,6 +408,23 @@ fn rendered_source_layer(
     }
 
     rendered
+}
+
+fn render_extracted_layer(
+    rendered: &mut RenderedLayer,
+    mut geometry: GeometryDocument,
+    profile_set: ProfileSet,
+) {
+    rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
+    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut geometry);
+    rendered.svg = Some(geometry::render::render_layer_svg(
+        &geometry,
+        true,
+        profile_set,
+    ));
+    if !geometry.diagnostics.is_empty() {
+        rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
+    }
 }
 
 /// Format a decimal number with engineering precision:
@@ -501,8 +548,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn html_board_summary_design_uses_content_step_ref() {
-        let ipc = ipc2581::Ipc2581::parse(panel_design_name_fixture()).unwrap();
+    fn html_keeps_board_summary_separate_from_board_array_summary() {
+        let ipc = ipc2581::Ipc2581::parse(board_array_design_name_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
         let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
@@ -510,11 +557,19 @@ mod tests {
         let dimensions_start = html.find("Board Dimensions:").unwrap();
         let design_row = &html[design_start..dimensions_start];
 
-        assert!(design_row.contains(r#"<span class="summary-value">panel</span>"#));
-        assert!(!design_row.contains(r#"<span class="summary-value">board</span>"#));
-        assert!(html.contains("Panel Step:"));
-        assert!(html.contains("Panel Boards:"));
+        assert!(design_row.contains(r#"<span class="summary-value">board</span>"#));
+        assert!(!design_row.contains(r#"<span class="summary-value">board_array</span>"#));
+        let board_summary = html.find("<h2>Board Summary</h2>").unwrap();
+        let array_summary = html.find("<h2>Board Array Summary</h2>").unwrap();
+        let file_info = html.find(r#"<div class="file-info">"#).unwrap();
+        assert!(board_summary < array_summary);
+        assert!(array_summary < file_info);
+        assert!(!html[board_summary..array_summary].contains("Array Step:"));
+        assert!(html.contains("Array Step:"));
+        assert!(html.contains("Array Boards:"));
         assert!(html.contains("1 instance from 1 board step"));
+        assert!(html.contains("Array Grid:"));
+        assert!(html.contains("data-board-array-overview='true'"));
     }
 
     #[test]
@@ -547,12 +602,33 @@ mod tests {
         assert!(html.matches("<svg ").count() >= 4);
     }
 
-    fn panel_design_name_fixture() -> &'static str {
+    #[test]
+    fn html_renders_array_local_layers_in_board_array_summary_only() {
+        let ipc = ipc2581::Ipc2581::parse(array_layer_render_fixture()).unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
+
+        let array_summary = html.find("<h2>Board Array Summary</h2>").unwrap();
+        let file_info = html.find(r#"<div class="file-info">"#).unwrap();
+        assert!(array_summary < file_info);
+        assert!(!html.contains("<h3>Board Array Layers</h3>"));
+        assert!(!html.contains("board-array-layer-render"));
+
+        let summary_section = &html[array_summary..file_info];
+        assert!(summary_section.contains("data-board-array-overview='true'"));
+        assert!(summary_section.contains("array-layer-copper"));
+        assert!(summary_section.contains("vcut-guide"));
+        assert!(summary_section.contains("array-layer-drill"));
+        assert!(summary_section.contains("Array Drill Holes:"));
+    }
+
+    fn board_array_design_name_fixture() -> &'static str {
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
     <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
+    <StepRef name="board_array"/>
   </Content>
   <Ecad>
     <CadHeader units="MILLIMETER"/>
@@ -567,8 +643,93 @@ mod tests {
           </Polygon>
         </Profile>
       </Step>
-      <Step name="panel" type="PALLET">
+      <Step name="board_array" type="PALLET">
         <StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn array_layer_render_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="array"/>
+    <LayerRef name="F.Cu"/>
+    <LayerRef name="B.Cu"/>
+    <LayerRef name="V-Score"/>
+    <LayerRef name="Board_Array_Drill"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad">
+        <Circle diameter="1"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="B.Cu" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="V-Score" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>
+      <Layer name="Board_Array_Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="B.Cu" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="B.Cu">
+          <Set>
+            <Pad padstackDefRef="padstack">
+              <Location x="2" y="3"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+      <Step name="array" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="15"/>
+            <PolyStepSegment x="0" y="15"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0"/>
+        <LayerFeature layerRef="F.Cu">
+          <Set polarity="POSITIVE">
+            <GlobalFiducial>
+              <Location x="5" y="12"/>
+              <Circle diameter="1"/>
+            </GlobalFiducial>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="V-Score">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Line startX="5" startY="0" endX="5" endY="15">
+                <LineDesc lineWidth="0.025" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Board_Array_Drill">
+          <Set polarity="POSITIVE">
+            <Hole name="array_tooling_hole_0" type="CIRCLE" diameter="2" platingStatus="NONPLATED" x="5" y="2.5"/>
+          </Set>
+        </LayerFeature>
       </Step>
     </CadData>
   </Ecad>

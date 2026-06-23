@@ -254,6 +254,7 @@ impl<Meta: Default> ArtworkObject<Meta> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ArtworkGeometry {
     Flash { aperture: u32, transform: Affine2 },
+    CircleFlash { at: Point, diameter: f64 },
     Stroke { path: u32 },
     Region { path: u32 },
 }
@@ -261,7 +262,7 @@ pub enum ArtworkGeometry {
 impl ArtworkGeometry {
     fn path(self) -> Option<u32> {
         match self {
-            Self::Flash { .. } => None,
+            Self::Flash { .. } | Self::CircleFlash { .. } => None,
             Self::Stroke { path } | Self::Region { path } => Some(path),
         }
     }

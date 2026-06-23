@@ -24,22 +24,6 @@
             <span class="summary-value">{{ board_summary.width }} × {{ board_summary.height }}</span>
         </div>
         {% endif %}
-        {% if board_summary.panel %}
-        <div class="summary-item">
-            <span class="summary-label">Panel Step:</span>
-            <span class="summary-value">{{ board_summary.panel.step_name }}</span>
-        </div>
-        {% if board_summary.panel.width and board_summary.panel.height %}
-        <div class="summary-item">
-            <span class="summary-label">Panel Dimensions:</span>
-            <span class="summary-value">{{ board_summary.panel.width }} × {{ board_summary.panel.height }}</span>
-        </div>
-        {% endif %}
-        <div class="summary-item">
-            <span class="summary-label">Panel Boards:</span>
-            <span class="summary-value">{{ board_summary.panel.board_instances }} instance{% if board_summary.panel.board_instances != 1 %}s{% endif %} from {{ board_summary.panel.board_count }} board step{% if board_summary.panel.board_count != 1 %}s{% endif %}</span>
-        </div>
-        {% endif %}
         {% if board_summary.thickness %}
         <div class="summary-item">
             <span class="summary-label">Board Thickness:</span>
@@ -206,6 +190,61 @@
             {% endif %}
         </section>
         {% endfor %}
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {% if board_summary and board_summary.board_array %}
+    <h2>Board Array Summary</h2>
+    <div class="summary">
+        <div class="summary-item">
+            <span class="summary-label">Array Step:</span>
+            <span class="summary-value">{{ board_summary.board_array.step_name }}</span>
+        </div>
+        {% if board_summary.board_array.width and board_summary.board_array.height %}
+        <div class="summary-item">
+            <span class="summary-label">Array Dimensions:</span>
+            <span class="summary-value">{{ board_summary.board_array.width }} × {{ board_summary.board_array.height }}</span>
+        </div>
+        {% endif %}
+        <div class="summary-item">
+            <span class="summary-label">Array Boards:</span>
+            <span class="summary-value">{{ board_summary.board_array.board_instances }} instance{% if board_summary.board_array.board_instances != 1 %}s{% endif %} from {{ board_summary.board_array.board_count }} board step{% if board_summary.board_array.board_count != 1 %}s{% endif %}</span>
+        </div>
+        {% if board_summary.board_array.grid %}
+        <div class="summary-item">
+            <span class="summary-label">Array Grid:</span>
+            <span class="summary-value">{{ board_summary.board_array.grid.columns }} × {{ board_summary.board_array.grid.rows }}</span>
+        </div>
+        {% if board_summary.board_array.grid.column_spacing %}
+        <div class="summary-item">
+            <span class="summary-label">Column Spacing:</span>
+            <span class="summary-value">{{ board_summary.board_array.grid.column_spacing }}</span>
+        </div>
+        {% endif %}
+        {% if board_summary.board_array.grid.row_spacing %}
+        <div class="summary-item">
+            <span class="summary-label">Row Spacing:</span>
+            <span class="summary-value">{{ board_summary.board_array.grid.row_spacing }}</span>
+        </div>
+        {% endif %}
+        {% if board_summary.board_array.grid.edge_rail_width %}
+        <div class="summary-item">
+            <span class="summary-label">Edge Rail:</span>
+            <span class="summary-value">{{ board_summary.board_array.grid.edge_rail_width }}</span>
+        </div>
+        {% endif %}
+        {% endif %}
+        {% if board_summary.board_array.drill_holes %}
+        <div class="summary-item">
+            <span class="summary-label">Array Drill Holes:</span>
+            <span class="summary-value">{{ board_summary.board_array.drill_holes }}</span>
+        </div>
+        {% endif %}
+    </div>
+    {% if board_summary.board_array.overview_svg %}
+    <div class="array-overview">
+        {{ board_summary.board_array.overview_svg|safe }}
     </div>
     {% endif %}
     {% endif %}

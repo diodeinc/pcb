@@ -13,9 +13,15 @@ struct TraceGroupKey<S> {
     set_index: u32,
     polarity: GeometryPolarity,
     fill_rule: FillRule,
+    intent: FeatureIntent<S>,
 }
 
-pub fn process_document<S, L>(doc: &mut GeometryDocument<S, L>)
+/// Run only structure-preserving cleanup passes.
+///
+/// This keeps source vector geometry, strokes, feature polarity, and layer
+/// object ordering intact. Use this before targets that can still carry rich
+/// vector artwork semantics.
+pub fn normalize_preserving<S, L>(doc: &mut GeometryDocument<S, L>)
 where
     S: Copy + Eq + Hash + Clone,
     L: Clone,
@@ -23,6 +29,20 @@ where
     normalize_bounds(doc);
     prune_unpainted_paths(doc);
     compose_feature_paths(doc);
+    normalize_bounds(doc);
+}
+
+/// Resolve source geometry into composed fabrication artwork.
+///
+/// This is intentionally destructive: it outlines strokes, applies boolean
+/// union/difference, resolves voids, and may convert arcs into polygon
+/// contours. Use it only when a target needs final painted artwork.
+pub fn compose_for_artwork_export<S, L>(doc: &mut GeometryDocument<S, L>)
+where
+    S: Copy + Eq + Hash + Clone,
+    L: Clone,
+{
+    normalize_preserving(doc);
     outline_stroked_paths(doc);
     union_feature_filled_paths(doc);
     coalesce_related_trace_features(doc);
@@ -30,6 +50,14 @@ where
     resolve_negative_polarity(doc);
     subtract_layer_cutouts(doc);
     normalize_bounds(doc);
+}
+
+pub fn compose_for_rendering<S, L>(doc: &mut GeometryDocument<S, L>)
+where
+    S: Copy + Eq + Hash + Clone,
+    L: Clone,
+{
+    compose_for_artwork_export(doc);
 }
 
 pub fn prune_unpainted_paths<S, L>(doc: &mut GeometryDocument<S, L>) {
@@ -391,6 +419,7 @@ where
                     set_index: feature.source.set_index,
                     polarity: feature.polarity,
                     fill_rule,
+                    intent: feature.intent,
                 })
                 .or_default()
                 .push(feature_index);
@@ -433,11 +462,7 @@ where
 }
 
 fn is_copper_trace_feature<S>(feature: &GeometryFeature<S>) -> bool {
-    feature.bucket == FeatureBucket::Trace
-        && matches!(
-            feature.semantic,
-            FeatureSemantic::None | FeatureSemantic::CopperConductor
-        )
+    feature.bucket == FeatureBucket::Trace && feature.intent.domain == FeatureDomain::Copper
 }
 
 pub fn resolve_set_voids<S: Clone, L: Clone>(doc: &mut GeometryDocument<S, L>) {
@@ -590,15 +615,15 @@ fn layer_features<S, L>(layer: &GeometryLayer<S, L>) -> impl Iterator<Item = usi
 fn compatible_paths(a: &GeometryPath, b: &GeometryPath) -> bool {
     a.flags.filled == b.flags.filled
         && a.flags.stroked == b.flags.stroked
-        && (!a.flags.filled || a.fill_rule == b.fill_rule)
-        && (!a.flags.stroked || (a.stroke_width == b.stroke_width && a.line_cap == b.line_cap))
+        && (!a.flags.filled || a.style.fill.rule == b.style.fill.rule)
+        && (!a.flags.stroked || a.style.stroke == b.style.stroke)
 }
 
 fn feature_fill_rule(paths: &[GeometryPath]) -> Option<FillRule> {
-    let fill_rule = paths.first()?.fill_rule;
+    let fill_rule = paths.first()?.style.fill.rule;
     paths
         .iter()
-        .all(|path| path.fill_rule == fill_rule)
+        .all(|path| path.style.fill.rule == fill_rule)
         .then_some(fill_rule)
 }
 
@@ -671,7 +696,7 @@ fn feature_filled_contours<S, L>(
     {
         if path.flags.filled {
             groups
-                .entry(path.fill_rule)
+                .entry(path.style.fill.rule)
                 .or_default()
                 .extend(path_polygon_contours(doc, path));
         }
@@ -705,8 +730,8 @@ fn stroked_path_outline<S, L>(
 ) -> Option<Vec<ContourPayload>> {
     common_path::outline_stroke(
         &path_payloads(doc, path),
-        path.stroke_width,
-        path.line_cap,
+        path.style.stroke.width,
+        path.style.stroke.line_cap,
         LineJoin::Round,
     )
 }
@@ -726,7 +751,7 @@ fn path_bbox<S, L>(doc: &GeometryDocument<S, L>, path_index: usize) -> BBox {
         .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
 
     if path.flags.stroked {
-        bbox.expand(path.stroke_width / 2.0)
+        bbox.expand(path.style.stroke.width / 2.0)
     } else {
         bbox
     }
@@ -779,14 +804,10 @@ mod tests {
         );
         doc.features.push(GeometryFeature {
             path_count: 2,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
 
-        process_document(&mut doc);
+        compose_for_artwork_export(&mut doc);
 
         assert_eq!(doc.features[0].path_count, 1);
         let path = &doc.paths[doc.features[0].path_start as usize];
@@ -854,7 +875,7 @@ mod tests {
             bbox: BBox::empty(),
         });
 
-        process_document(&mut doc);
+        compose_for_artwork_export(&mut doc);
 
         let feature_paths = &doc.paths[doc.features[0].path_start as usize
             ..(doc.features[0].path_start + doc.features[0].path_count) as usize];
@@ -881,11 +902,7 @@ mod tests {
                 feature_index: 0,
             },
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
@@ -899,11 +916,7 @@ mod tests {
             },
             path_start: 1,
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
@@ -917,15 +930,11 @@ mod tests {
             },
             path_start: 2,
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         push_test_layer(&mut doc, 0, 3);
 
-        process_document(&mut doc);
+        compose_for_artwork_export(&mut doc);
 
         assert_eq!(doc.features[0].path_count, 1);
         assert_eq!(doc.features[1].path_count, 0);
@@ -966,7 +975,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 2);
 
-        process_document(&mut doc);
+        compose_for_artwork_export(&mut doc);
 
         let feature = &doc.features[0];
         let path = &doc.paths[feature.path_start as usize];
@@ -990,11 +999,7 @@ mod tests {
         );
         doc.features.push(GeometryFeature {
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         doc.push_path(
             GeometryPath::filled(FillRule::NonZero, BBox::empty()),
@@ -1011,7 +1016,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 2);
 
-        process_document(&mut doc);
+        compose_for_artwork_export(&mut doc);
 
         let trace = &doc.features[0];
         let path = &doc.paths[trace.path_start as usize];
@@ -1043,15 +1048,11 @@ mod tests {
         doc.features.push(GeometryFeature {
             path_start: 1,
             path_count: 1,
-            ..GeometryFeature::new(
-                FeatureKind::Trace,
-                FeatureBucket::Trace,
-                GeometryPolarity::Positive,
-            )
+            ..copper_trace_feature()
         });
         push_test_layer(&mut doc, 0, 2);
 
-        process_document(&mut doc);
+        compose_for_artwork_export(&mut doc);
         flatten_layers_to_masks(&mut doc);
 
         assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
@@ -1079,6 +1080,19 @@ mod tests {
             feature_count,
             bbox: BBox::empty(),
         });
+    }
+
+    fn copper_trace_feature() -> GeometryFeature<u32> {
+        let mut feature = GeometryFeature::new(
+            FeatureKind::Trace,
+            FeatureBucket::Trace,
+            GeometryPolarity::Positive,
+        );
+        feature.intent.domain = FeatureDomain::Copper;
+        feature.intent.role = FeatureRole::Conductor;
+        feature.intent.operation = FeatureOperation::AddMaterial;
+        feature.intent.material = FeatureMaterial::Copper;
+        feature
     }
 
     fn rect_cmds(x0: f64, y0: f64, x1: f64, y1: f64) -> [PathCmd; 5] {

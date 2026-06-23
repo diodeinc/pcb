@@ -2,6 +2,7 @@ use clap::ValueEnum;
 use ipc2581::Mode;
 
 pub mod accessors;
+pub mod board_array;
 pub mod commands;
 pub mod geometry;
 pub mod gerber;
@@ -34,16 +35,17 @@ pub enum UnitFormat {
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutTarget {
     Board,
-    Panel,
+    #[value(name = "board-array", alias = "panel")]
+    BoardArray,
     Layout,
 }
 
 impl LayoutTarget {
-    pub fn profile_set(self) -> pcb_ir::dialects::ipc::ProfileSet {
+    pub fn geometry_view(self) -> pcb_ir::dialects::ipc::GeometryView {
         match self {
-            Self::Board => pcb_ir::dialects::ipc::ProfileSet::BoardOutlines,
-            Self::Panel => pcb_ir::dialects::ipc::ProfileSet::FabricationOutlines,
-            Self::Layout => pcb_ir::dialects::ipc::ProfileSet::LayoutBoundaries,
+            Self::Board => pcb_ir::dialects::ipc::GeometryView::Board,
+            Self::BoardArray => pcb_ir::dialects::ipc::GeometryView::ArrayFlattened,
+            Self::Layout => pcb_ir::dialects::ipc::GeometryView::LayoutSymbolic,
         }
     }
 }

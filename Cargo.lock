@@ -4429,6 +4429,7 @@ dependencies = [
  "quick-xml",
  "serde",
  "serde_json",
+ "zip 8.5.1",
  "zstd",
 ]
 

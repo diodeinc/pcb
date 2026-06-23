@@ -661,31 +661,31 @@ impl<'a> Parser<'a> {
                     },
                 },
             )?)),
-            "Contour" => {
-                // Parse Polygon and Cutouts
-                let polygon_node = self
-                    .element_children(node)
-                    .find(|n| self.name(n) == "Polygon")
-                    .ok_or(Ipc2581Error::MissingElement("Polygon"))?;
-
-                let polygon = self.parse_polygon(&polygon_node, units)?;
-
-                let cutout_nodes = self
-                    .element_children(node)
-                    .filter(|n| self.name(n) == "Cutout")
-                    .collect::<Vec<_>>();
-                let cutouts = cutout_nodes
-                    .into_iter()
-                    .map(|n| self.parse_polygon(&n, units))
-                    .collect::<Result<Vec<_>>>()?;
-
-                Ok(StandardPrimitive::Contour(Contour { polygon, cutouts }))
-            }
+            "Contour" => Ok(StandardPrimitive::Contour(self.parse_contour(node, units)?)),
             name => Err(Ipc2581Error::InvalidStructure(format!(
                 "Unknown standard primitive: {}",
                 name
             ))),
         }
+    }
+
+    fn parse_contour(&mut self, node: &Node, units: Units) -> Result<Contour> {
+        let polygon_node = self
+            .element_children(node)
+            .find(|n| self.name(n) == "Polygon")
+            .ok_or(Ipc2581Error::MissingElement("Polygon"))?;
+
+        let polygon = self.parse_polygon(&polygon_node, units)?;
+        let cutout_nodes = self
+            .element_children(node)
+            .filter(|n| self.name(n) == "Cutout")
+            .collect::<Vec<_>>();
+        let cutouts = cutout_nodes
+            .into_iter()
+            .map(|n| self.parse_polygon(&n, units))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Contour { polygon, cutouts })
     }
 
     fn parse_polygon(&mut self, node: &Node, units: Units) -> Result<Polygon> {
@@ -784,14 +784,8 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Parse shape based on tag name
             let shape_type = match tag_name {
-                "Contour" => self
-                    .element_children(&child)
-                    .find(|n| self.name(n) == "Polygon")
-                    .map(|polygon| self.parse_polygon(&polygon, units))
-                    .transpose()?
-                    .map(UserShapeType::Polygon),
+                "Contour" => Some(UserShapeType::Contour(self.parse_contour(&child, units)?)),
                 "Circle" => Some(UserShapeType::Circle(Circle {
                     diameter: self
                         .parse_f64_attr_with_units(&child, "diameter", "Circle", units)?,
@@ -1967,14 +1961,6 @@ impl<'a> Parser<'a> {
             _ => None,
         });
 
-        let mut holes = Vec::new();
-        let mut slots = Vec::new();
-        let mut pads = Vec::new();
-        let mut fiducials = Vec::new();
-        let mut traces = Vec::new();
-        let mut polygons = Vec::new();
-        let mut lines = Vec::new();
-        let mut polylines = Vec::new();
         let mut features = Vec::new();
         let mut spec_refs = Vec::new();
         let mut nonstandard_attributes = Vec::new();
@@ -1988,45 +1974,26 @@ impl<'a> Parser<'a> {
                 }
                 "Hole" => {
                     let hole = self.parse_hole(&child)?;
-                    features.push(ecad::SetFeature::Hole(hole.clone()));
-                    holes.push(hole);
+                    features.push(ecad::SetFeature::Hole(hole));
                 }
                 "SlotCavity" => {
                     let slot = self.parse_slot_cavity(&child)?;
-                    features.push(ecad::SetFeature::Slot(slot.clone()));
-                    slots.push(slot);
+                    features.push(ecad::SetFeature::Slot(slot));
                 }
                 "Pad" => {
                     let pad = self.parse_pad(&child)?;
-                    features.push(ecad::SetFeature::Pad(pad.clone()));
-                    pads.push(pad);
+                    features.push(ecad::SetFeature::Pad(pad));
                 }
                 "BadBoardMark" | "GlobalFiducial" | "GoodPanelMark" | "LocalFiducial" => {
                     let fiducial = self.parse_fiducial(&child)?;
-                    features.push(ecad::SetFeature::Fiducial(fiducial.clone()));
-                    fiducials.push(fiducial);
+                    features.push(ecad::SetFeature::Fiducial(fiducial));
                 }
                 "Polyline" => {
                     let trace = self.parse_trace(&child)?;
-                    features.push(ecad::SetFeature::Trace(trace.clone()));
-                    traces.push(trace);
+                    features.push(ecad::SetFeature::Trace(trace));
                 }
                 "Features" => {
-                    for feature in self.parse_features(&child) {
-                        match &feature {
-                            ecad::SetFeature::Polygon(polygon) => polygons.push(polygon.clone()),
-                            ecad::SetFeature::Line(line) => lines.push(line.clone()),
-                            ecad::SetFeature::Polyline(polyline) => {
-                                polylines.push(polyline.clone())
-                            }
-                            ecad::SetFeature::Fiducial(fiducial) => {
-                                fiducials.push(fiducial.clone())
-                            }
-                            ecad::SetFeature::Arc(_)
-                            | ecad::SetFeature::StandardPrimitiveRef(_)
-                            | ecad::SetFeature::UserPrimitiveRef(_) => {}
-                            _ => {}
-                        }
+                    for feature in self.parse_features(&child)? {
                         features.push(feature);
                     }
                 }
@@ -2045,14 +2012,6 @@ impl<'a> Parser<'a> {
             polarity,
             spec_refs,
             features,
-            holes,
-            slots,
-            pads,
-            fiducials,
-            traces,
-            polygons,
-            lines,
-            polylines,
             nonstandard_attributes,
         })
     }
@@ -2084,13 +2043,12 @@ impl<'a> Parser<'a> {
         };
 
         let mut location = None;
-        let mut xform = None;
+        let xform = self.parse_xform_child(node);
         let mut shape = None;
         let mut pin_ref = None;
 
         for child in self.element_children(node) {
             match self.name(&child) {
-                "Xform" => xform = Some(self.parse_xform(&child)),
                 "Location" => {
                     location = Some(Location {
                         x: self.parse_f64_attr_with_units(&child, "x", "Location", units)?,
@@ -2123,7 +2081,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_features(&mut self, features_node: &Node) -> Vec<ecad::SetFeature> {
+    fn parse_features(&mut self, features_node: &Node) -> Result<Vec<ecad::SetFeature>> {
         let mut features = Vec::new();
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
         let offset = self.parse_features_location(features_node, units);
@@ -2153,53 +2111,13 @@ impl<'a> Parser<'a> {
                     }
                 }
                 "UserSpecial" => {
-                    // UserSpecial contains Contour > Polygon, Line, or Polyline.
-                    for inner in self.element_children(&child) {
-                        match self.name(&inner) {
-                            "Contour" => {
-                                for poly_node in self.element_children(&inner) {
-                                    if self.name(&poly_node) == "Polygon"
-                                        && let Some(feature) =
-                                            self.parse_feature_polygon(&poly_node, units, offset)
-                                    {
-                                        features.push(feature);
-                                    }
-                                }
-                            }
-                            "Line" => {
-                                if let Ok(line) = self.parse_line(&inner, units, offset.x, offset.y)
-                                {
-                                    features.push(ecad::SetFeature::Line(line));
-                                }
-                            }
-                            "Arc" => {
-                                if let Ok(arc) =
-                                    self.parse_feature_arc(&inner, units, offset.x, offset.y)
-                                {
-                                    features.push(ecad::SetFeature::Arc(arc));
-                                }
-                            }
-                            "Polyline" => {
-                                if let Ok(polyline) =
-                                    self.parse_feature_polyline(&inner, units, offset.x, offset.y)
-                                {
-                                    features.push(ecad::SetFeature::Polyline(polyline));
-                                }
-                            }
-                            "UserPrimitiveRef" => {
-                                if let Some(id) = self.attr(&inner, "id") {
-                                    features.push(ecad::SetFeature::UserPrimitiveRef(
-                                        ecad::FeaturePrimitiveRef {
-                                            id: self.interner.intern(id),
-                                            x: offset.x,
-                                            y: offset.y,
-                                        },
-                                    ));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
+                    features.push(ecad::SetFeature::UserPrimitive(
+                        ecad::FeatureUserPrimitive {
+                            primitive: self.parse_user_special(&child, units)?,
+                            x: offset.x,
+                            y: offset.y,
+                        },
+                    ));
                 }
                 "StandardPrimitiveRef" => {
                     if let Some(id) = self.attr(&child, "id") {
@@ -2227,7 +2145,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        features
+        Ok(features)
     }
 
     fn parse_features_location(&self, features_node: &Node, units: Units) -> Point {
@@ -2579,6 +2497,8 @@ impl<'a> Parser<'a> {
             SlotShape::Primitive(self.parse_standard_primitive(&primitive_node, units)?)
         };
 
+        let xform = self.parse_xform_child(node);
+
         let z_axis_dim = has_z_axis_dim(self.doc(), node);
 
         Ok(Slot {
@@ -2586,6 +2506,7 @@ impl<'a> Parser<'a> {
             shape,
             plating_status,
             z_axis_dim,
+            xform,
             x,
             y,
         })
@@ -2624,14 +2545,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Parse Xform child element if present
-        let mut xform = None;
-        for child in self.element_children(node) {
-            if self.name(&child) == "Xform" {
-                xform = Some(self.parse_xform(&child));
-                break;
-            }
-        }
+        let xform = self.parse_xform_child(node);
 
         // Parse inline StandardPrimitiveRef if present
         let standard_primitive_ref = self
@@ -3199,6 +3113,12 @@ impl<'a> Parser<'a> {
             scale,
         }
     }
+
+    fn parse_xform_child(&self, node: &Node) -> Option<Xform> {
+        self.element_children(node)
+            .find(|n| self.name(n) == "Xform")
+            .map(|n| self.parse_xform(&n))
+    }
 }
 
 fn has_z_axis_dim(doc: &Document, node: &Node) -> bool {
@@ -3284,6 +3204,61 @@ mod tests {
         let root = doc.document_element().unwrap();
 
         assert!(has_z_axis_dim(&doc, &root));
+    }
+
+    #[test]
+    fn parses_slot_cavity_xform() {
+        let ipc = crate::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="F.Cu_B.Cu_1"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu_B.Cu_1" layerFunction="ROUT" side="ALL"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="F.Cu_B.Cu_1">
+          <Set>
+            <SlotCavity name="SLOT1" platingStatus="PLATED" plusTol="0" minusTol="0">
+              <Location x="1" y="2"/>
+              <Xform rotation="90" mirror="true" scale="2" xOffset="0.5" yOffset="0.25"/>
+              <Oval width="1.7" height="0.6"/>
+            </SlotCavity>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let slot = ipc
+            .ecad()
+            .unwrap()
+            .cad_data
+            .steps
+            .first()
+            .unwrap()
+            .layer_features
+            .first()
+            .unwrap()
+            .sets
+            .first()
+            .unwrap()
+            .slots()
+            .next()
+            .unwrap();
+
+        let xform = slot.xform.unwrap();
+        assert_eq!(xform.rotation, 90.0);
+        assert!(xform.mirror);
+        assert_eq!(xform.scale, 2.0);
+        assert_eq!(xform.x_offset, 0.5);
+        assert_eq!(xform.y_offset, 0.25);
     }
 }
 

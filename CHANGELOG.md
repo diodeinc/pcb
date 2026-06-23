@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added IPC-2581 board array creation, viewing, and export support to `pcb ipc`.
+
 ### Changed
 
 - `NotConnected` is now an open-net constructor, not a net type.

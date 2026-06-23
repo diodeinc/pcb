@@ -54,7 +54,7 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
     let gerber = gerberx2::GerberX2::parse_file(file)
         .with_context(|| format!("Failed to parse Gerber file {}", file.display()))?;
     let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::process_document(&mut geometry);
+    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
 
     for diagnostic in &geometry.diagnostics {
         eprintln!("warning: {}", diagnostic.message);

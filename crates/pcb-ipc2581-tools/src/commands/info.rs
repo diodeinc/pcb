@@ -9,7 +9,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::accessors::{
-    ColorInfo, DrillHoleType, IpcAccessor, StackupLayerType, SurfaceFinishInfo,
+    BoardArrayInfo, ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType,
+    SurfaceFinishInfo,
 };
 use crate::utils::{file as file_utils, units};
 use crate::{OutputFormat, UnitFormat};
@@ -145,9 +146,10 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     summary_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
     let layout = accessor.board_layout_info();
 
-    // Design name
-    if let Some(step) = accessor.primary_step() {
-        let design_name = accessor.ipc().resolve(step.name);
+    if let Some(design_name) = layout
+        .as_ref()
+        .and_then(|layout| layout.board_name.as_ref())
+    {
         summary_table.add_row(vec![
             Cell::new("Design").fg(Color::Cyan),
             Cell::new(design_name),
@@ -165,27 +167,6 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
                 dimensions.width_mm(),
                 dimensions.height_mm(),
                 unit_format,
-            )),
-        ]);
-    }
-
-    if let Some(panel) = layout.as_ref().and_then(|layout| layout.panel.as_ref()) {
-        if let Some(dimensions) = panel.dimensions.as_ref() {
-            summary_table.add_row(vec![
-                Cell::new("Panel Size").fg(Color::Cyan),
-                Cell::new(units::format_board_size(
-                    dimensions.width_mm(),
-                    dimensions.height_mm(),
-                    unit_format,
-                )),
-            ]);
-        }
-        summary_table.add_row(vec![
-            Cell::new("Panel Boards").fg(Color::Cyan),
-            Cell::new(format!(
-                "{} instance{}",
-                panel.board_instances,
-                if panel.board_instances == 1 { "" } else { "s" }
             )),
         ]);
     }
@@ -209,7 +190,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Drill statistics (summary)
-    if let Some(drills) = accessor.drill_stats()
+    if let Some(drills) = accessor.board_drill_stats()
         && drills.total_holes > 0
     {
         summary_table.add_row(vec![
@@ -483,36 +464,20 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Drill distribution
-    if let Some(drills) = accessor.drill_stats()
+    if let Some(drills) = accessor.board_drill_stats()
         && !drills.distribution.is_empty()
     {
-        println!("{}", "Drill Distribution".bold());
-        let mut drill_table = Table::new();
-        drill_table.load_preset(UTF8_FULL_CONDENSED);
-        drill_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
-        drill_table.set_header(vec![
-            Cell::new("Type"),
-            Cell::new("Diameter"),
-            Cell::new("Count"),
-        ]);
+        print_drill_distribution("Drill Distribution", &drills);
+    }
 
-        for dist in &drills.distribution {
-            for (i, size) in dist.sizes.iter().enumerate() {
-                let type_cell = if i == 0 {
-                    Cell::new(dist.hole_type.as_str()).fg(Color::Cyan)
-                } else {
-                    Cell::new("")
-                };
-                drill_table.add_row(vec![
-                    type_cell,
-                    Cell::new(format_diameter(size.diameter_mm)),
-                    Cell::new(size.count.to_string()),
-                ]);
-            }
-        }
+    if let Some(board_array) = layout.and_then(|layout| layout.board_array) {
+        print_board_array_summary(&board_array, accessor, unit_format);
+    }
 
-        println!("{drill_table}");
-        println!();
+    if let Some(drills) = accessor.board_array_drill_stats()
+        && !drills.distribution.is_empty()
+    {
+        print_drill_distribution("Array Drill Distribution", &drills);
     }
 
     // File metadata at the end (greyed out)
@@ -548,6 +513,137 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_board_array_summary(
+    board_array: &BoardArrayInfo,
+    accessor: &IpcAccessor,
+    unit_format: UnitFormat,
+) {
+    println!("{}", "Board Array Summary".bold());
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL_CONDENSED);
+    table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+
+    if let Some(dimensions) = board_array.dimensions.as_ref() {
+        table.add_row(vec![
+            Cell::new("Array Size").fg(Color::Cyan),
+            Cell::new(units::format_board_size(
+                dimensions.width_mm(),
+                dimensions.height_mm(),
+                unit_format,
+            )),
+        ]);
+    }
+
+    if let Some(grid) = board_array.grid.as_ref() {
+        table.add_row(vec![
+            Cell::new("Array Grid").fg(Color::Cyan),
+            Cell::new(format!("{} x {}", grid.columns, grid.rows)),
+        ]);
+        if let Some(spacing) = grid.column_spacing {
+            table.add_row(vec![
+                Cell::new("Column Spacing").fg(Color::Cyan),
+                Cell::new(units::convert_mm(spacing.mm(), unit_format)),
+            ]);
+        }
+        if let Some(spacing) = grid.row_spacing {
+            table.add_row(vec![
+                Cell::new("Row Spacing").fg(Color::Cyan),
+                Cell::new(units::convert_mm(spacing.mm(), unit_format)),
+            ]);
+        }
+        if let Some(width) = grid.edge_rail_width {
+            table.add_row(vec![
+                Cell::new("Edge Rail").fg(Color::Cyan),
+                Cell::new(units::convert_mm(width.mm(), unit_format)),
+            ]);
+        }
+    }
+
+    if let Some(drills) = accessor.board_array_drill_stats()
+        && drills.total_holes > 0
+    {
+        table.add_row(vec![
+            Cell::new("Array Drill Holes").fg(Color::Cyan),
+            Cell::new(format!(
+                "{} ({} sizes)",
+                drills.total_holes, drills.unique_sizes
+            )),
+        ]);
+    }
+
+    println!("{table}");
+    println!();
+}
+
+fn print_drill_distribution(title: &str, drills: &DrillStats) {
+    println!("{}", title.bold());
+    let mut drill_table = Table::new();
+    drill_table.load_preset(UTF8_FULL_CONDENSED);
+    drill_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+    drill_table.set_header(vec![
+        Cell::new("Type"),
+        Cell::new("Diameter"),
+        Cell::new("Count"),
+    ]);
+
+    for dist in &drills.distribution {
+        for (i, size) in dist.sizes.iter().enumerate() {
+            let type_cell = if i == 0 {
+                Cell::new(dist.hole_type.as_str()).fg(Color::Cyan)
+            } else {
+                Cell::new("")
+            };
+            drill_table.add_row(vec![
+                type_cell,
+                Cell::new(format_diameter(size.diameter_mm)),
+                Cell::new(size.count.to_string()),
+            ]);
+        }
+    }
+
+    println!("{drill_table}");
+    println!();
+}
+
+fn drill_stats_json(drills: &DrillStats) -> serde_json::Value {
+    let min_via_hole_mm = drills
+        .distribution
+        .iter()
+        .filter(|dist| dist.hole_type == DrillHoleType::Via)
+        .flat_map(|dist| dist.sizes.iter().map(|size| size.diameter_mm))
+        .min_by(|a, b| a.total_cmp(b));
+
+    let distribution: Vec<_> = drills
+        .distribution
+        .iter()
+        .map(|dist| {
+            let sizes: Vec<_> = dist
+                .sizes
+                .iter()
+                .map(|s| {
+                    json!({
+                        "diameter_mm": s.diameter_mm,
+                        "count": s.count,
+                    })
+                })
+                .collect();
+            json!({
+                "type": format!("{:?}", dist.hole_type),
+                "total": dist.total,
+                "sizes": sizes,
+            })
+        })
+        .collect();
+
+    json!({
+        "total_holes": drills.total_holes,
+        "unique_sizes": drills.unique_sizes,
+        "distribution": distribution,
+        "via_min_diameter_mm": min_via_hole_mm,
+    })
 }
 
 fn output_json(accessor: &IpcAccessor) -> Result<()> {
@@ -600,19 +696,40 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
         });
     }
 
-    if let Some(panel) = layout.as_ref().and_then(|layout| layout.panel.as_ref()) {
-        info["panel"] = json!({
-            "step_name": panel.step_name,
-            "board_count": panel.board_count,
-            "board_instances": panel.board_instances,
+    if let Some(board_array) = layout
+        .as_ref()
+        .and_then(|layout| layout.board_array.as_ref())
+    {
+        info["board_array"] = json!({
+            "step_name": board_array.step_name,
+            "board_count": board_array.board_count,
+            "board_instances": board_array.board_instances,
         });
-        if let Some(dimensions) = panel.dimensions.as_ref() {
-            info["panel_dimensions"] = json!({
+        if let Some(grid) = board_array.grid.as_ref() {
+            info["board_array"]["grid"] = json!({
+                "columns": grid.columns,
+                "rows": grid.rows,
+                "board_width_mm": grid.board_width.mm(),
+                "board_height_mm": grid.board_height.mm(),
+                "pitch_x_mm": grid.pitch_x.map(|pitch| pitch.mm()),
+                "pitch_y_mm": grid.pitch_y.map(|pitch| pitch.mm()),
+                "column_spacing_mm": grid.column_spacing.map(|spacing| spacing.mm()),
+                "row_spacing_mm": grid.row_spacing.map(|spacing| spacing.mm()),
+                "edge_rail_width_mm": grid.edge_rail_width.map(|width| width.mm()),
+            });
+        }
+        if let Some(dimensions) = board_array.dimensions.as_ref() {
+            info["board_array"]["dimensions"] = json!({
                 "width_mm": dimensions.width_mm(),
                 "height_mm": dimensions.height_mm(),
                 "width_inch": dimensions.width_inch(),
                 "height_inch": dimensions.height_inch(),
             });
+        }
+        if let Some(drills) = accessor.board_array_drill_stats()
+            && drills.total_holes > 0
+        {
+            info["board_array"]["drills"] = drill_stats_json(&drills);
         }
     }
 
@@ -627,43 +744,10 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
     }
 
     // Drill statistics with distribution
-    if let Some(drills) = accessor.drill_stats()
+    if let Some(drills) = accessor.board_drill_stats()
         && drills.total_holes > 0
     {
-        let min_via_hole_mm = drills
-            .distribution
-            .iter()
-            .filter(|dist| dist.hole_type == DrillHoleType::Via)
-            .flat_map(|dist| dist.sizes.iter().map(|size| size.diameter_mm))
-            .min_by(|a, b| a.total_cmp(b));
-
-        let distribution: Vec<_> = drills
-            .distribution
-            .iter()
-            .map(|dist| {
-                let sizes: Vec<_> = dist
-                    .sizes
-                    .iter()
-                    .map(|s| {
-                        json!({
-                            "diameter_mm": s.diameter_mm,
-                            "count": s.count,
-                        })
-                    })
-                    .collect();
-                json!({
-                    "type": format!("{:?}", dist.hole_type),
-                    "total": dist.total,
-                    "sizes": sizes,
-                })
-            })
-            .collect();
-        info["drills"] = json!({
-            "total_holes": drills.total_holes,
-            "unique_sizes": drills.unique_sizes,
-            "distribution": distribution,
-            "via_min_diameter_mm": min_via_hole_mm,
-        });
+        info["drills"] = drill_stats_json(&drills);
     }
 
     // Net statistics

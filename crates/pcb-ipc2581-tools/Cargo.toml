@@ -25,3 +25,4 @@ quick-xml = { workspace = true }
 zstd = { workspace = true }
 pcb-diode-api = { workspace = true }
 pcb-ui = { workspace = true }
+zip = { workspace = true }

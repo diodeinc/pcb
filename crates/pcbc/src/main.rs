@@ -162,6 +162,7 @@ enum Commands {
     Simulate(sim::SimArgs),
 
     /// IPC-2581 parser and inspection tool
+    #[command(alias = "ipc")]
     Ipc2581(ipc2581::Ipc2581Args),
 
     /// Gerber X2 parser and rendering tool
