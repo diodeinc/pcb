@@ -239,6 +239,29 @@ pub enum ProfileSet {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeometryView {
+    /// Canonical board-step geometry only.
+    Board,
+    /// Root array-step geometry only, with no repeated child board materialization.
+    ArrayLocal,
+    /// Root array-step geometry plus repeated child board/sub-array geometry in array coordinates.
+    ArrayFlattened,
+    /// Root-step geometry plus the symbolic layout graph, without repeated feature materialization.
+    LayoutSymbolic,
+}
+
+impl GeometryView {
+    pub fn profile_set(self) -> ProfileSet {
+        match self {
+            Self::Board => ProfileSet::BoardOutlines,
+            Self::ArrayLocal => ProfileSet::RootOnly,
+            Self::ArrayFlattened => ProfileSet::FabricationOutlines,
+            Self::LayoutSymbolic => ProfileSet::LayoutBoundaries,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfileOccurrenceRole {
     Unplaced,
     RootBoard,

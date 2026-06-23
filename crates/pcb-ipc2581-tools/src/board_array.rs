@@ -2,9 +2,10 @@ use std::fmt::Write;
 
 use ipc2581::types::LayerFunction;
 use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
-use pcb_ir::dialects::ipc::{FeatureSemantic, LayoutStep, LayoutStepKind, PathCmd, PathOp};
+use pcb_ir::dialects::ipc::{
+    FeatureSemantic, GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp,
+};
 
-use crate::LayoutTarget;
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
 
 type GeometryDocument =
@@ -121,10 +122,10 @@ fn vcut_layer_paths(accessor: &IpcAccessor<'_>, array_height: f64) -> Vec<String
 
     let mut paths = Vec::new();
     for layer_name in layer_names {
-        let Ok(doc) = crate::geometry::extract_layer_for_layout_target(
+        let Ok(doc) = crate::geometry::extract_layer_for_view(
             accessor.ipc(),
             &layer_name,
-            LayoutTarget::BoardArray,
+            GeometryView::ArrayLocal,
         ) else {
             continue;
         };

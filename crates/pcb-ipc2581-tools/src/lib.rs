@@ -41,11 +41,11 @@ pub enum LayoutTarget {
 }
 
 impl LayoutTarget {
-    pub fn profile_set(self) -> pcb_ir::dialects::ipc::ProfileSet {
+    pub fn geometry_view(self) -> pcb_ir::dialects::ipc::GeometryView {
         match self {
-            Self::Board => pcb_ir::dialects::ipc::ProfileSet::BoardOutlines,
-            Self::BoardArray => pcb_ir::dialects::ipc::ProfileSet::FabricationOutlines,
-            Self::Layout => pcb_ir::dialects::ipc::ProfileSet::LayoutBoundaries,
+            Self::Board => pcb_ir::dialects::ipc::GeometryView::Board,
+            Self::BoardArray => pcb_ir::dialects::ipc::GeometryView::ArrayFlattened,
+            Self::Layout => pcb_ir::dialects::ipc::GeometryView::LayoutSymbolic,
         }
     }
 }

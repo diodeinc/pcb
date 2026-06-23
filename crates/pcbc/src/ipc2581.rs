@@ -165,11 +165,11 @@ enum GerberLayoutTarget {
     BoardArray,
 }
 
-impl From<GerberLayoutTarget> for LayoutTarget {
+impl From<GerberLayoutTarget> for pcb_ir::dialects::ipc::GeometryView {
     fn from(target: GerberLayoutTarget) -> Self {
         match target {
             GerberLayoutTarget::Board => Self::Board,
-            GerberLayoutTarget::BoardArray => Self::BoardArray,
+            GerberLayoutTarget::BoardArray => Self::ArrayFlattened,
         }
     }
 }
@@ -264,7 +264,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 &file,
                 &gerber::GerberExportOptions {
                     output: output.clone(),
-                    layout_target: layout_target.into(),
+                    view: layout_target.into(),
                 },
             )?;
             println!(

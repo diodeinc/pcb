@@ -22,19 +22,18 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
     let target = resolve_target(options)?;
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
-    let mut geometry =
-        geometry::extract_layer_for_layout_target(&ipc, &options.layer, options.layout_target)?;
+    let view = options.layout_target.geometry_view();
+    let mut geometry = geometry::extract_layer_for_view(&ipc, &options.layer, view)?;
     pcb_ir::dialects::ipc::process::compose_for_rendering(&mut geometry);
     if options.flat {
         pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut geometry);
     }
 
     match target {
-        RenderTarget::Svg => render_svg(&geometry, options)?,
-        RenderTarget::Png => render_png(&geometry, options)?,
+        RenderTarget::Svg => render_svg(&geometry, options, view)?,
+        RenderTarget::Png => render_png(&geometry, options, view)?,
         RenderTarget::Terminal => {
-            let mask =
-                geometry::render::layer_mask(&geometry, true, options.layout_target.profile_set());
+            let mask = geometry::render::layer_mask(&geometry, true, view.profile_set());
             pcb_ir::dialects::mask::render_all_to_terminal(&mask).map_err(anyhow::Error::msg)?;
         }
     }
@@ -92,9 +91,9 @@ fn render_svg(
         ipc2581::types::LayerFunction,
     >,
     options: &RenderOptions,
+    view: pcb_ir::dialects::ipc::GeometryView,
 ) -> Result<()> {
-    let svg =
-        geometry::render::render_layer_svg(geometry, true, options.layout_target.profile_set());
+    let svg = geometry::render::render_layer_svg(geometry, true, view.profile_set());
 
     if let Some(output) = &options.output {
         std::fs::write(output, svg)
@@ -117,8 +116,9 @@ fn render_png(
         ipc2581::types::LayerFunction,
     >,
     options: &RenderOptions,
+    view: pcb_ir::dialects::ipc::GeometryView,
 ) -> Result<()> {
-    let mask = geometry::render::layer_mask(geometry, true, options.layout_target.profile_set());
+    let mask = geometry::render::layer_mask(geometry, true, view.profile_set());
     let png = pcb_ir::dialects::mask::render_png_all(&mask).map_err(anyhow::Error::msg)?;
 
     if let Some(output) = &options.output {

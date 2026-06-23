@@ -11,18 +11,19 @@ use zip::{ZipWriter, write::FileOptions};
 
 use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 use super::lower::lower_artwork_layer;
-use crate::{LayoutTarget, geometry, ipc2581 as ipc};
+use crate::{geometry, ipc2581 as ipc};
 use pcb_ir::common::{BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Unit};
 use pcb_ir::dialects::artwork::{ArtworkGeometry, ArtworkObject, ArtworkPath};
 use pcb_ir::dialects::ipc::{
-    FeatureBucket, FeatureSemantic, FiducialKind, GeometryFeature, GeometryPath,
+    FeatureBucket, FeatureKind, FeatureSemantic, FiducialKind, GeometryFeature, GeometryPath,
+    GeometryView, ProfileSet,
 };
 use pcb_ir::dialects::path as common_path;
 
 #[derive(Debug, Clone)]
 pub struct GerberExportOptions {
     pub output: PathBuf,
-    pub layout_target: LayoutTarget,
+    pub view: GeometryView,
 }
 
 #[derive(Debug, Clone)]
@@ -38,14 +39,14 @@ pub struct GerberExportFile {
 }
 
 pub fn export_gerber_x2(ipc: &Ipc2581, options: &GerberExportOptions) -> Result<GerberExportSet> {
-    let set = build_gerber_x2(ipc, options.layout_target)?;
+    let set = build_gerber_x2(ipc, options.view)?;
     write_gerber_export_set(&set, &options.output)?;
     Ok(set)
 }
 
-pub fn build_gerber_x2(ipc: &Ipc2581, layout_target: LayoutTarget) -> Result<GerberExportSet> {
-    if layout_target == LayoutTarget::Layout {
-        bail!("Gerber export does not support --layout-target layout; use board or board-array");
+pub fn build_gerber_x2(ipc: &Ipc2581, view: GeometryView) -> Result<GerberExportSet> {
+    if view == GeometryView::LayoutSymbolic {
+        bail!("Gerber export does not support symbolic layout view; use board or board-array");
     }
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
@@ -56,7 +57,7 @@ pub fn build_gerber_x2(ipc: &Ipc2581, layout_target: LayoutTarget) -> Result<Ger
     for plan in &plans {
         let source_layer = plan.layer;
         let layer_name = ipc.resolve(source_layer.name);
-        let mut doc = geometry::extract_layer_for_layout_target(ipc, layer_name, layout_target)
+        let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut doc);
         if first_doc.is_none() {
@@ -80,7 +81,7 @@ pub fn build_gerber_x2(ipc: &Ipc2581, layout_target: LayoutTarget) -> Result<Ger
     }
 
     if let Some(doc) = first_doc {
-        let profile = profile_artwork_from_profiles(&doc, layout_target)?;
+        let profile = profile_artwork_from_profiles(&doc, view.profile_set())?;
         if !profile.objects.is_empty() {
             let layer = lower_artwork_layer(&profile)?;
             let contents = write_layer(&layer)?;
@@ -164,6 +165,7 @@ enum GerberLayerRole {
     Paste,
     Soldermask,
     Legend,
+    Drill,
     Profile,
     Route,
     Vcut,
@@ -274,6 +276,7 @@ fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
         LayerFunction::Solderpaste | LayerFunction::Pastemask => Some(GerberLayerRole::Paste),
         LayerFunction::Soldermask => Some(GerberLayerRole::Soldermask),
         LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),
+        LayerFunction::Drill => Some(GerberLayerRole::Drill),
         LayerFunction::Rout => Some(GerberLayerRole::Route),
         LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
         LayerFunction::VCut => Some(GerberLayerRole::Vcut),
@@ -289,6 +292,7 @@ impl GerberLayerRole {
             GerberLayerRole::Paste => LayerRole::Paste,
             GerberLayerRole::Soldermask => LayerRole::Soldermask,
             GerberLayerRole::Legend => LayerRole::Legend,
+            GerberLayerRole::Drill => LayerRole::Drill,
             GerberLayerRole::Profile
             | GerberLayerRole::Route
             | GerberLayerRole::Vcut
@@ -335,6 +339,7 @@ fn layer_output(
                 vec!["Legend".into(), "Top".into()],
             ),
         },
+        GerberLayerRole::Drill => ("Drill.gbr".to_string(), vec!["Drill".into()]),
         GerberLayerRole::Profile => (
             "Edge_Cuts.gm1".to_string(),
             vec!["Profile".into(), "NP".into()],
@@ -474,7 +479,7 @@ const PROFILE_STROKE_WIDTH: f64 = 0.1;
 
 fn profile_artwork_from_profiles(
     doc: &pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>,
-    layout_target: LayoutTarget,
+    profile_set: ProfileSet,
 ) -> Result<ArtworkLayer> {
     let mut artwork = ArtworkLayer::new(Unit::Millimeter);
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
@@ -489,9 +494,7 @@ fn profile_artwork_from_profiles(
             gerber_part_for_doc(doc),
         ),
     });
-    for occurrence in
-        pcb_ir::dialects::ipc::profile_occurrences_for(doc, layout_target.profile_set())
-    {
+    for occurrence in pcb_ir::dialects::ipc::profile_occurrences_for(doc, profile_set) {
         push_profile_artwork_object(
             &mut artwork,
             artwork_layer,
@@ -534,6 +537,10 @@ fn object_attributes(
 }
 
 fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> {
+    if feature.kind == FeatureKind::Hole {
+        return vec!["Other".to_string(), "Drill".to_string()];
+    }
+
     match feature.semantic {
         FeatureSemantic::Fiducial(kind) => {
             let kind = match kind {
@@ -663,7 +670,7 @@ pub fn execute_file(input_file: &Path, output_dir: &Path) -> Result<GerberExport
         input_file,
         &GerberExportOptions {
             output: output_dir.to_path_buf(),
-            layout_target: LayoutTarget::Board,
+            view: GeometryView::Board,
         },
     )
 }
@@ -800,7 +807,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir,
-                layout_target: LayoutTarget::Board,
+                view: GeometryView::Board,
             },
         )
         .unwrap();
@@ -828,7 +835,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: panel_output_dir,
-                layout_target: LayoutTarget::BoardArray,
+                view: GeometryView::ArrayFlattened,
             },
         )
         .unwrap();
@@ -881,7 +888,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_zip.clone(),
-                layout_target: LayoutTarget::Board,
+                view: GeometryView::Board,
             },
         )
         .unwrap();
@@ -907,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn gerber_export_rejects_symbolic_layout_target() {
+    fn gerber_export_rejects_symbolic_layout_view() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -924,7 +931,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir,
-                layout_target: LayoutTarget::Layout,
+                view: GeometryView::LayoutSymbolic,
             },
         )
         .unwrap_err();
@@ -932,7 +939,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("Gerber export does not support --layout-target layout")
+                .contains("Gerber export does not support symbolic layout view")
         );
     }
 
@@ -993,7 +1000,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir,
-                layout_target: LayoutTarget::Board,
+                view: GeometryView::Board,
             },
         )
         .unwrap();
@@ -1070,7 +1077,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir,
-                layout_target: LayoutTarget::BoardArray,
+                view: GeometryView::ArrayFlattened,
             },
         )
         .unwrap();
@@ -1165,7 +1172,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir,
-                layout_target: LayoutTarget::BoardArray,
+                view: GeometryView::ArrayFlattened,
             },
         )
         .unwrap();
@@ -1220,7 +1227,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir.clone(),
-                layout_target: LayoutTarget::Board,
+                view: GeometryView::Board,
             },
         )
         .unwrap();

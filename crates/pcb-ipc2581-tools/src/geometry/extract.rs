@@ -8,7 +8,6 @@ use ipc2581::types::{
 };
 use ipc2581::{Ipc2581, Symbol};
 
-use crate::LayoutTarget;
 use crate::steps;
 use pcb_ir::common::*;
 use pcb_ir::dialects::ipc::*;
@@ -16,29 +15,6 @@ use pcb_ir::dialects::ipc::*;
 type GeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<Symbol, LayerFunction>;
 type GeometryLayer = pcb_ir::dialects::ipc::GeometryLayer<Symbol, LayerFunction>;
 type GeometryFeature = pcb_ir::dialects::ipc::GeometryFeature<Symbol>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlacementPolicy {
-    /// Extract only the primary step's own layer features and profile.
-    StepOnly,
-    /// Extract the primary step's own layer features and carry the panel graph sidecar.
-    PanelSymbolic,
-    /// Extract panel-local features and materialize repeated child step features.
-    PanelFlattened,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LayerExtractionOptions {
-    pub placement: PlacementPolicy,
-}
-
-impl Default for LayerExtractionOptions {
-    fn default() -> Self {
-        Self {
-            placement: PlacementPolicy::PanelFlattened,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 struct ProfileRange {
@@ -270,13 +246,13 @@ fn semantic_for_bucket(bucket: FeatureBucket) -> FeatureSemantic {
 }
 
 pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
-    extract_layer_with_options(ipc, layer_name, &LayerExtractionOptions::default())
+    extract_layer_for_view(ipc, layer_name, GeometryView::ArrayFlattened)
 }
 
-pub fn extract_layer_for_layout_target(
+pub fn extract_layer_for_view(
     ipc: &Ipc2581,
     layer_name: &str,
-    layout_target: LayoutTarget,
+    view: GeometryView,
 ) -> Result<GeometryDocument> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let layer = ecad
@@ -288,58 +264,18 @@ pub fn extract_layer_for_layout_target(
     let primary_step = steps::primary_step(ipc, &ecad.cad_data.steps)
         .context("IPC-2581 ECAD section has no Step")?;
 
-    let step = match layout_target {
-        LayoutTarget::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
-        LayoutTarget::BoardArray | LayoutTarget::Layout => primary_step,
-    };
-
-    let mut doc = match layout_target {
-        LayoutTarget::Board => {
-            extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
-        }
-        LayoutTarget::BoardArray | LayoutTarget::Layout if is_panel_step(step) => {
-            extract_panel_layer(
-                ipc,
-                &ecad.cad_data.steps,
-                &ecad.cad_data.layers,
-                step,
-                layer,
-                layer_name,
-            )?
-        }
-        LayoutTarget::BoardArray | LayoutTarget::Layout => {
-            extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
+    let step = match view {
+        GeometryView::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
+        GeometryView::ArrayLocal | GeometryView::ArrayFlattened | GeometryView::LayoutSymbolic => {
+            primary_step
         }
     };
 
-    match layout_target {
-        LayoutTarget::Board => append_step_only_layout_geometry(&mut doc, step),
-        LayoutTarget::BoardArray | LayoutTarget::Layout => {
-            append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
+    let mut doc = match view {
+        GeometryView::Board => {
+            extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
         }
-    }
-    populate_ipc_specs(&mut doc, ipc);
-    pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
-    Ok(doc)
-}
-
-pub fn extract_layer_with_options(
-    ipc: &Ipc2581,
-    layer_name: &str,
-    options: &LayerExtractionOptions,
-) -> Result<GeometryDocument> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let layer = ecad
-        .cad_data
-        .layers
-        .iter()
-        .find(|layer| ipc.resolve(layer.name) == layer_name)
-        .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))?;
-    let step = steps::primary_step(ipc, &ecad.cad_data.steps)
-        .context("IPC-2581 ECAD section has no Step")?;
-
-    let mut doc = match (is_panel_step(step), options.placement) {
-        (true, PlacementPolicy::PanelFlattened) => extract_panel_layer(
+        GeometryView::ArrayFlattened if is_panel_step(step) => extract_panel_layer(
             ipc,
             &ecad.cad_data.steps,
             &ecad.cad_data.layers,
@@ -347,12 +283,16 @@ pub fn extract_layer_with_options(
             layer,
             layer_name,
         )?,
-        _ => extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
+        GeometryView::ArrayLocal | GeometryView::ArrayFlattened | GeometryView::LayoutSymbolic => {
+            extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
+        }
     };
 
-    match options.placement {
-        PlacementPolicy::StepOnly => append_step_only_layout_geometry(&mut doc, step),
-        PlacementPolicy::PanelSymbolic | PlacementPolicy::PanelFlattened => {
+    match view {
+        GeometryView::Board | GeometryView::ArrayLocal => {
+            append_step_only_layout_geometry(&mut doc, step)
+        }
+        GeometryView::ArrayFlattened | GeometryView::LayoutSymbolic => {
             append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
         }
     }
@@ -693,7 +633,7 @@ fn extract_step_layer(
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
             let mut emitted = Vec::new();
 
-            if is_drill_layer && layer_span_applies_to_layer(source_layer, layer, layers) {
+            if is_drill_layer && source_layer.name == layer.name {
                 for (feature_index, set_feature) in set.features.iter().enumerate() {
                     if let SetFeature::Hole(hole) = set_feature {
                         let feature = extract_hole(
@@ -3166,7 +3106,7 @@ mod tests {
         )
         .unwrap();
 
-        let top = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::BoardArray).unwrap();
+        let top = extract_layer_for_view(&ipc, "TOP", GeometryView::ArrayFlattened).unwrap();
         assert_eq!(top.specs.len(), 1);
         assert_eq!(top.layers[0].spec_ref_count, 1);
         assert_eq!(top.feature_sets.len(), 1);
@@ -3179,7 +3119,7 @@ mod tests {
         assert_eq!(top.features[0].pin_ref_count, 1);
         assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
-        let vcut = extract_layer_for_layout_target(&ipc, "VCUT", LayoutTarget::BoardArray).unwrap();
+        let vcut = extract_layer_for_view(&ipc, "VCUT", GeometryView::ArrayFlattened).unwrap();
         assert_eq!(vcut.layers[0].spec_ref_count, 1);
         assert_eq!(vcut.feature_sets[0].spec_ref_count, 1);
         assert_eq!(vcut.features[0].semantic, FeatureSemantic::VCut);
@@ -3587,11 +3527,11 @@ mod tests {
     }
 
     #[test]
-    fn extracts_layer_for_layout_target_board_or_board_array() {
+    fn extracts_layer_for_geometry_view_board_or_board_array() {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
 
-        let board = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::Board)
+        let board = extract_layer_for_view(&ipc, "TOP", GeometryView::Board)
             .expect("board layer should extract");
         let board_layer = &board.layers[0];
         let board_features = &board.features[board_layer.feature_start as usize
@@ -3608,7 +3548,7 @@ mod tests {
             1
         );
 
-        let panel = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::BoardArray)
+        let panel = extract_layer_for_view(&ipc, "TOP", GeometryView::ArrayFlattened)
             .expect("panel layer should extract");
         let panel_layer = &panel.layers[0];
         let panel_features = &panel.features[panel_layer.feature_start as usize
@@ -3630,14 +3570,8 @@ mod tests {
     fn symbolic_panel_extraction_carries_repeats_without_child_features() {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
-        let doc = extract_layer_with_options(
-            &ipc,
-            "TOP",
-            &LayerExtractionOptions {
-                placement: PlacementPolicy::PanelSymbolic,
-            },
-        )
-        .expect("panel layer should extract");
+        let doc = extract_layer_for_view(&ipc, "TOP", GeometryView::LayoutSymbolic)
+            .expect("panel layer should extract");
         let layer = &doc.layers[0];
         let features = &doc.features
             [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
@@ -3654,14 +3588,8 @@ mod tests {
     fn step_only_panel_extraction_omits_repeat_graph_expansion() {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
-        let doc = extract_layer_with_options(
-            &ipc,
-            "TOP",
-            &LayerExtractionOptions {
-                placement: PlacementPolicy::StepOnly,
-            },
-        )
-        .expect("panel layer should extract");
+        let doc = extract_layer_for_view(&ipc, "TOP", GeometryView::ArrayLocal)
+            .expect("panel layer should extract");
         let layer = &doc.layers[0];
         let features = &doc.features
             [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
@@ -3748,7 +3676,7 @@ mod tests {
     fn nested_panel_layer_extraction_materializes_descendant_board_features() {
         let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
             .expect("synthetic nested panel fixture should parse");
-        let doc = extract_layer_for_layout_target(&ipc, "TOP", LayoutTarget::BoardArray)
+        let doc = extract_layer_for_view(&ipc, "TOP", GeometryView::ArrayFlattened)
             .expect("nested panel layer should extract");
         let layer = &doc.layers[0];
         let features = &doc.features

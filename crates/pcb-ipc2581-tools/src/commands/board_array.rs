@@ -30,7 +30,20 @@ const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
 const VCUT_LAYER_BASE_NAME: &str = "V-Score";
 const VCUT_LINE_WIDTH_MM: f64 = 0.025;
+const TOP_COPPER_LAYER_BASE_NAME: &str = "F.Cu";
+const TOP_SOLDERMASK_LAYER_BASE_NAME: &str = "F.Mask";
+const TOOLING_HOLE_LAYER_BASE_NAME: &str = "Board_Array_Drill";
 const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
+const FIDUCIAL_COPPER_DIAMETER_MM: f64 = 1.0;
+const FIDUCIAL_MASK_OPENING_DIAMETER_MM: f64 = 2.0;
+const TOOLING_HOLE_DIAMETER_MM: f64 = 2.0;
+const TOOLING_HOLE_EDGE_OFFSET_MM: f64 = 2.5;
+const FIDUCIAL_EDGE_OFFSET_MM: f64 = 3.85;
+const FIDUCIAL_FROM_TOOLING_HOLE_MM: f64 = 5.0;
+const TOP_TOOLING_HOLE_X_INSET_MM: f64 = 5.0;
+const BOTTOM_TOOLING_HOLE_X_INSET_MM: f64 = 10.0;
+const SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 35.0;
+const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 20.0;
 
 #[derive(Debug, Clone, PartialEq)]
 enum BoardArrayCreateValidationError {
@@ -198,13 +211,11 @@ impl BoardArrayGeneratedGeometry {
         self.add_layer_feature(
             layer_name,
             Polarity::Positive,
-            vec![SetFeature::Hole(Hole {
-                name: None,
-                diameter: diameter_mm,
-                plating_status: PlatingStatus::NonPlated,
-                x: x_mm,
-                y: y_mm,
-            })],
+            vec![SetFeature::Hole(round_nonplated_hole(
+                x_mm,
+                y_mm,
+                diameter_mm,
+            ))],
         );
     }
 
@@ -338,7 +349,7 @@ fn build_board_array_spec(
         .map(|step| ipc.resolve(step.name).to_string())
         .collect::<HashSet<_>>();
     let array_name = unique_name(&existing_step_names, "array");
-    let existing_layer_names = ecad
+    let mut used_layer_names = ecad
         .cad_data
         .layers
         .iter()
@@ -347,7 +358,7 @@ fn build_board_array_spec(
     let mut generated_geometry = BoardArrayGeneratedGeometry::default();
     add_vcut_lines(
         &mut generated_geometry,
-        &existing_layer_names,
+        &mut used_layer_names,
         vcut_lines(VcutLineSpec {
             columns,
             rows,
@@ -360,6 +371,19 @@ fn build_board_array_spec(
             array_width_mm: array_width,
             array_height_mm: array_height,
         })?,
+    );
+    add_board_array_tooling(
+        &mut generated_geometry,
+        ipc,
+        ecad,
+        &mut used_layer_names,
+        BoardArrayToolingSpec {
+            columns,
+            board_width_mm: board_width,
+            margin_x_mm: margin_x,
+            pitch_x_mm: pitch_x,
+            array_height_mm: array_height,
+        },
     );
 
     Ok(BoardArraySpec {
@@ -519,14 +543,14 @@ fn content_layer_refs(
 
 fn add_vcut_lines(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
-    existing_layer_names: &HashSet<String>,
+    used_layer_names: &mut HashSet<String>,
     lines: Vec<VcutLine>,
 ) {
     if lines.is_empty() {
         return;
     }
 
-    let layer_name = unique_name(existing_layer_names, VCUT_LAYER_BASE_NAME);
+    let layer_name = reserve_unique_name(used_layer_names, VCUT_LAYER_BASE_NAME);
     generated_geometry.add_layer(GeneratedLayer::new(
         layer_name.clone(),
         LayerFunction::VCut,
@@ -550,6 +574,175 @@ fn vcut_line_feature(line: VcutLine) -> SetFeature {
         line_width: VCUT_LINE_WIDTH_MM,
         line_end: Some(LineEnd::Round),
     })
+}
+
+struct BoardArrayToolingSpec {
+    columns: u32,
+    board_width_mm: f64,
+    margin_x_mm: f64,
+    pitch_x_mm: f64,
+    array_height_mm: f64,
+}
+
+fn add_board_array_tooling(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
+    used_layer_names: &mut HashSet<String>,
+    spec: BoardArrayToolingSpec,
+) {
+    let min_width = if spec.columns == 1 {
+        SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM
+    } else {
+        MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM
+    };
+    if spec.board_width_mm + EPSILON < min_width {
+        return;
+    }
+
+    let top_copper_layer_name = top_copper_layer_name(ipc, ecad).unwrap_or_else(|| {
+        let layer_name = reserve_unique_name(used_layer_names, TOP_COPPER_LAYER_BASE_NAME);
+        generated_geometry.add_layer(GeneratedLayer::new(
+            layer_name.clone(),
+            LayerFunction::Signal,
+            Some(Side::Top),
+            Some(Polarity::Positive),
+        ));
+        layer_name
+    });
+    let top_soldermask_layer_name = top_soldermask_layer_name(ipc, ecad).unwrap_or_else(|| {
+        let layer_name = reserve_unique_name(used_layer_names, TOP_SOLDERMASK_LAYER_BASE_NAME);
+        generated_geometry.add_layer(GeneratedLayer::new(
+            layer_name.clone(),
+            LayerFunction::Soldermask,
+            Some(Side::Top),
+            Some(Polarity::Positive),
+        ));
+        layer_name
+    });
+    let tooling_hole_layer_name =
+        reserve_unique_name(used_layer_names, TOOLING_HOLE_LAYER_BASE_NAME);
+    generated_geometry.add_layer(GeneratedLayer::new(
+        tooling_hole_layer_name.clone(),
+        LayerFunction::Drill,
+        Some(Side::All),
+        Some(Polarity::Positive),
+    ));
+
+    let fiducials = board_array_tooling_fiducials(&spec);
+    generated_geometry.add_layer_feature(
+        top_copper_layer_name,
+        Polarity::Positive,
+        round_global_fiducial_features(fiducials, FIDUCIAL_COPPER_DIAMETER_MM),
+    );
+    generated_geometry.add_layer_feature(
+        top_soldermask_layer_name,
+        Polarity::Positive,
+        round_global_fiducial_features(fiducials, FIDUCIAL_MASK_OPENING_DIAMETER_MM),
+    );
+    generated_geometry.add_layer_feature(
+        tooling_hole_layer_name,
+        Polarity::Positive,
+        round_nonplated_hole_features(board_array_tooling_holes(&spec), TOOLING_HOLE_DIAMETER_MM),
+    );
+}
+
+/// Place board array tooling on the top and bottom edge rails over board columns.
+///
+/// The generated board array uses a rectangular profile with the lower-left
+/// array corner at (0, 0). Fiducials and tooling holes live in the outer 5 mm
+/// rail band even when the configured edge rail is wider. They are not placed
+/// on left/right rails or over column spacing, so removing side rails and
+/// column gaps keeps the top/bottom rail tooling attached to board material.
+///
+/// Horizontal rules:
+/// - one column requires at least 35 mm board width, because both left and
+///   right pairs share the same board span;
+/// - multiple columns require at least 20 mm board width, because each side's
+///   pair sits over a different outer board column;
+/// - top tooling holes are 5 mm inward from the outer board-column edge;
+/// - bottom tooling holes are 10 mm inward from the outer board-column edge;
+/// - each fiducial is another 5 mm inward from its paired tooling hole.
+///
+/// Vertical rules:
+/// - tooling hole centers are 2.5 mm from the top/bottom array edge;
+/// - fiducial centers are 3.85 mm from the top/bottom array edge.
+fn board_array_tooling_fiducials(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
+    let left_edge = spec.margin_x_mm;
+    let right_edge =
+        spec.margin_x_mm + (spec.columns - 1) as f64 * spec.pitch_x_mm + spec.board_width_mm;
+    let top_y = spec.array_height_mm - FIDUCIAL_EDGE_OFFSET_MM;
+    let bottom_y = FIDUCIAL_EDGE_OFFSET_MM;
+
+    [
+        (
+            left_edge + TOP_TOOLING_HOLE_X_INSET_MM + FIDUCIAL_FROM_TOOLING_HOLE_MM,
+            top_y,
+        ),
+        (
+            right_edge - TOP_TOOLING_HOLE_X_INSET_MM - FIDUCIAL_FROM_TOOLING_HOLE_MM,
+            top_y,
+        ),
+        (
+            left_edge + BOTTOM_TOOLING_HOLE_X_INSET_MM + FIDUCIAL_FROM_TOOLING_HOLE_MM,
+            bottom_y,
+        ),
+        (
+            right_edge - BOTTOM_TOOLING_HOLE_X_INSET_MM - FIDUCIAL_FROM_TOOLING_HOLE_MM,
+            bottom_y,
+        ),
+    ]
+}
+
+fn board_array_tooling_holes(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
+    let left_edge = spec.margin_x_mm;
+    let right_edge =
+        spec.margin_x_mm + (spec.columns - 1) as f64 * spec.pitch_x_mm + spec.board_width_mm;
+    let top_y = spec.array_height_mm - TOOLING_HOLE_EDGE_OFFSET_MM;
+    let bottom_y = TOOLING_HOLE_EDGE_OFFSET_MM;
+
+    [
+        (left_edge + TOP_TOOLING_HOLE_X_INSET_MM, top_y),
+        (right_edge - TOP_TOOLING_HOLE_X_INSET_MM, top_y),
+        (left_edge + BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
+        (right_edge - BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
+    ]
+}
+
+fn top_copper_layer_name(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Option<String> {
+    ecad.cad_data
+        .layers
+        .iter()
+        .find(|layer| layer.side == Some(Side::Top) && is_copper_layer(layer.layer_function))
+        .map(|layer| ipc.resolve(layer.name).to_string())
+}
+
+fn top_soldermask_layer_name(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Option<String> {
+    ecad.cad_data
+        .layers
+        .iter()
+        .find(|layer| {
+            layer.side == Some(Side::Top) && layer.layer_function == LayerFunction::Soldermask
+        })
+        .map(|layer| ipc.resolve(layer.name).to_string())
+}
+
+fn is_copper_layer(layer_function: LayerFunction) -> bool {
+    matches!(
+        layer_function,
+        LayerFunction::Conductor
+            | LayerFunction::CondFilm
+            | LayerFunction::CondFoil
+            | LayerFunction::Plane
+            | LayerFunction::Signal
+            | LayerFunction::Mixed
+    )
+}
+
+fn reserve_unique_name(used_names: &mut HashSet<String>, base: &str) -> String {
+    let name = unique_name(used_names, base);
+    used_names.insert(name.clone());
+    name
 }
 
 struct VcutLineSpec {
@@ -1088,6 +1281,36 @@ fn round_global_fiducial(x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
     }
 }
 
+fn round_global_fiducial_features(
+    points: impl IntoIterator<Item = (f64, f64)>,
+    diameter_mm: f64,
+) -> Vec<SetFeature> {
+    points
+        .into_iter()
+        .map(|(x, y)| SetFeature::Fiducial(round_global_fiducial(x, y, diameter_mm)))
+        .collect()
+}
+
+fn round_nonplated_hole(x_mm: f64, y_mm: f64, diameter_mm: f64) -> Hole {
+    Hole {
+        name: None,
+        diameter: diameter_mm,
+        plating_status: PlatingStatus::NonPlated,
+        x: x_mm,
+        y: y_mm,
+    }
+}
+
+fn round_nonplated_hole_features(
+    points: impl IntoIterator<Item = (f64, f64)>,
+    diameter_mm: f64,
+) -> Vec<SetFeature> {
+    points
+        .into_iter()
+        .map(|(x, y)| SetFeature::Hole(round_nonplated_hole(x, y, diameter_mm)))
+        .collect()
+}
+
 fn fiducial_element_name(kind: FiducialKind) -> &'static str {
     match kind {
         FiducialKind::BadBoardMark => "BadBoardMark",
@@ -1193,10 +1416,7 @@ mod tests {
     use crate::accessors::IpcAccessor;
     use crate::gerber::{GerberExportOptions, export_gerber_x2};
     use pcb_ir::common::Point;
-    use pcb_ir::dialects::ipc::{FeatureBucket, FeatureKind, FeatureSemantic};
-
-    use crate::LayoutTarget;
-
+    use pcb_ir::dialects::ipc::{FeatureBucket, FeatureKind, FeatureSemantic, GeometryView};
     #[test]
     fn creates_rectangular_panel_step_from_board_bbox() {
         let xml = create_board_array_xml(
@@ -1237,9 +1457,8 @@ mod tests {
         assert_point_close(first_instance.bbox.min, Point::new(10.0, 10.0));
         assert_point_close(first_instance.bbox.max, Point::new(20.0, 20.0));
 
-        let vcut =
-            geometry::extract_layer_for_layout_target(&ipc, "V-Score", LayoutTarget::BoardArray)
-                .unwrap();
+        let vcut = geometry::extract_layer_for_view(&ipc, "V-Score", GeometryView::ArrayFlattened)
+            .unwrap();
         assert_eq!(vcut.features.len(), 24);
         assert!(
             vcut.features
@@ -1277,7 +1496,7 @@ mod tests {
             &ipc,
             &GerberExportOptions {
                 output: output_dir,
-                layout_target: LayoutTarget::BoardArray,
+                view: GeometryView::ArrayFlattened,
             },
         )
         .unwrap();
@@ -1298,8 +1517,7 @@ mod tests {
         let input = board_fixture_with_top_line_mm();
         let before_ipc = Ipc2581::parse(input).unwrap();
         let before =
-            geometry::extract_layer_for_layout_target(&before_ipc, "TOP", LayoutTarget::Board)
-                .unwrap();
+            geometry::extract_layer_for_view(&before_ipc, "TOP", GeometryView::Board).unwrap();
 
         let xml = create_board_array_xml(
             input,
@@ -1314,8 +1532,7 @@ mod tests {
         .unwrap();
         let after_ipc = Ipc2581::parse(&xml).unwrap();
         let after =
-            geometry::extract_layer_for_layout_target(&after_ipc, "TOP", LayoutTarget::Board)
-                .unwrap();
+            geometry::extract_layer_for_view(&after_ipc, "TOP", GeometryView::Board).unwrap();
 
         assert_eq!(before.features.len(), after.features.len());
         assert_eq!(before.paths.len(), after.paths.len());
@@ -1378,22 +1595,141 @@ mod tests {
 
         let parsed = Ipc2581::parse(&xml).unwrap();
         let top =
-            geometry::extract_layer_for_layout_target(&parsed, "TOP", LayoutTarget::BoardArray)
-                .unwrap();
+            geometry::extract_layer_for_view(&parsed, "TOP", GeometryView::ArrayFlattened).unwrap();
         assert!(top.features.iter().any(|feature| matches!(
             feature.semantic,
             FeatureSemantic::Fiducial(pcb_ir::dialects::ipc::FiducialKind::Global)
         )));
 
-        let drill = geometry::extract_layer_for_layout_target(
-            &parsed,
-            "Array_Drill",
-            LayoutTarget::BoardArray,
-        )
-        .unwrap();
+        let drill =
+            geometry::extract_layer_for_view(&parsed, "Array_Drill", GeometryView::ArrayFlattened)
+                .unwrap();
         assert_eq!(drill.features.len(), 1);
         assert_eq!(drill.features[0].kind, FeatureKind::Hole);
         assert_eq!(drill.features[0].bucket, FeatureBucket::Cutout);
+    }
+
+    #[test]
+    fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
+        let input = board_fixture_with_mask_bbox_mm(35.0, 40.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 1,
+                column_spacing_mm: 5.0,
+                row_spacing_mm: 0.0,
+                edge_rail_width_mm: 15.0,
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let step = array_step(&ipc);
+        let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
+        let mask_fiducials = fiducials_on_layer(&ipc, step, "F.Mask");
+        let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_eq!(mask_fiducials.len(), 4);
+        assert_eq!(tooling_holes.len(), 4);
+        assert!(
+            top_fiducials
+                .iter()
+                .all(|fiducial| close(fiducial_diameter(fiducial), 1.0))
+        );
+        assert!(
+            mask_fiducials
+                .iter()
+                .all(|fiducial| close(fiducial_diameter(fiducial), 2.0))
+        );
+        assert!(tooling_holes.iter().all(|hole| {
+            close(hole.diameter, 2.0) && hole.plating_status == PlatingStatus::NonPlated
+        }));
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(30.0, 66.15), (45.0, 66.15), (35.0, 3.85), (40.0, 3.85)],
+        );
+        assert_points_close(
+            hole_points(&tooling_holes),
+            vec![(25.0, 67.5), (50.0, 67.5), (30.0, 2.5), (45.0, 2.5)],
+        );
+    }
+
+    #[test]
+    fn board_array_creation_adds_default_tooling_at_multi_column_min_width() {
+        let input = board_fixture_with_mask_bbox_mm(20.0, 40.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 1,
+                column_spacing_mm: 5.0,
+                row_spacing_mm: 0.0,
+                edge_rail_width_mm: 15.0,
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let step = array_step(&ipc);
+        let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
+        let mask_fiducials = fiducials_on_layer(&ipc, step, "F.Mask");
+        let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_eq!(mask_fiducials.len(), 4);
+        assert_eq!(tooling_holes.len(), 4);
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(30.0, 66.15), (55.0, 66.15), (35.0, 3.85), (50.0, 3.85)],
+        );
+        assert_points_close(
+            hole_points(&tooling_holes),
+            vec![(25.0, 67.5), (60.0, 67.5), (30.0, 2.5), (55.0, 2.5)],
+        );
+    }
+
+    #[test]
+    fn board_array_creation_skips_default_tooling_when_board_width_is_too_small() {
+        let input = board_fixture_with_mask_bbox_mm(19.0, 40.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 1,
+                column_spacing_mm: 5.0,
+                row_spacing_mm: 0.0,
+                edge_rail_width_mm: 15.0,
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let ecad = ipc.ecad().unwrap();
+        assert!(
+            ecad.cad_data
+                .layers
+                .iter()
+                .all(|layer| ipc.resolve(layer.name) != TOOLING_HOLE_LAYER_BASE_NAME)
+        );
+
+        let step = array_step(&ipc);
+        let fiducial_count = step
+            .layer_features
+            .iter()
+            .flat_map(|layer_feature| &layer_feature.sets)
+            .flat_map(|set| set.fiducials())
+            .count();
+        let hole_count = step
+            .layer_features
+            .iter()
+            .flat_map(|layer_feature| &layer_feature.sets)
+            .flat_map(|set| set.holes())
+            .count();
+
+        assert_eq!(fiducial_count, 0);
+        assert_eq!(hole_count, 0);
     }
 
     #[test]
@@ -1632,6 +1968,85 @@ mod tests {
         );
     }
 
+    fn close(actual: f64, expected: f64) -> bool {
+        (actual - expected).abs() < 1e-9
+    }
+
+    fn array_step(ipc: &Ipc2581) -> &ipc2581::types::ecad::Step {
+        ipc.ecad()
+            .unwrap()
+            .cad_data
+            .steps
+            .iter()
+            .find(|step| ipc.resolve(step.name) == "array")
+            .unwrap()
+    }
+
+    fn fiducials_on_layer<'a>(
+        ipc: &'a Ipc2581,
+        step: &'a ipc2581::types::ecad::Step,
+        layer_name: &str,
+    ) -> Vec<&'a Fiducial> {
+        step.layer_features
+            .iter()
+            .filter(|layer_feature| ipc.resolve(layer_feature.layer_ref) == layer_name)
+            .flat_map(|layer_feature| &layer_feature.sets)
+            .flat_map(|set| set.fiducials())
+            .collect()
+    }
+
+    fn holes_on_layer<'a>(
+        ipc: &'a Ipc2581,
+        step: &'a ipc2581::types::ecad::Step,
+        layer_name: &str,
+    ) -> Vec<&'a Hole> {
+        step.layer_features
+            .iter()
+            .filter(|layer_feature| ipc.resolve(layer_feature.layer_ref) == layer_name)
+            .flat_map(|layer_feature| &layer_feature.sets)
+            .flat_map(|set| set.holes())
+            .collect()
+    }
+
+    fn fiducial_diameter(fiducial: &Fiducial) -> f64 {
+        match &fiducial.shape {
+            FiducialShape::Primitive(StandardPrimitive::Circle(circle)) => circle.shape.diameter,
+            _ => panic!("expected round fiducial"),
+        }
+    }
+
+    fn fiducial_points(fiducials: &[&Fiducial]) -> Vec<(f64, f64)> {
+        fiducials
+            .iter()
+            .map(|fiducial| (fiducial.location.x, fiducial.location.y))
+            .collect()
+    }
+
+    fn hole_points(holes: &[&Hole]) -> Vec<(f64, f64)> {
+        holes.iter().map(|hole| (hole.x, hole.y)).collect()
+    }
+
+    fn assert_points_close(actual: Vec<(f64, f64)>, expected: Vec<(f64, f64)>) {
+        let actual = sorted_points(actual);
+        let expected = sorted_points(expected);
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(&expected) {
+            assert!(
+                close(actual.0, expected.0) && close(actual.1, expected.1),
+                "expected {expected:?}, got {actual:?}"
+            );
+        }
+    }
+
+    fn sorted_points(mut points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+        points.sort_by(|left, right| {
+            left.1
+                .total_cmp(&right.1)
+                .then_with(|| left.0.total_cmp(&right.0))
+        });
+        points
+    }
+
     fn board_fixture_mm() -> &'static str {
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1659,6 +2074,38 @@ mod tests {
     </CadData>
   </Ecad>
 </IPC-2581>"#
+    }
+
+    fn board_fixture_with_mask_bbox_mm(width_mm: f64, height_mm: f64) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="{width_mm}" y="0"/>
+            <PolyStepSegment x="{width_mm}" y="{height_mm}"/>
+            <PolyStepSegment x="0" y="{height_mm}"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+        )
     }
 
     fn board_fixture_with_mask_mm() -> &'static str {

@@ -4,13 +4,16 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use ipc2581::types::ecad::Layer;
 use minijinja::{Environment, context};
+use pcb_ir::dialects::ipc::{GeometryView, ProfileSet};
 use serde::Serialize;
 
-use crate::LayoutTarget;
 use crate::UnitFormat;
 use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
 use crate::geometry;
 use crate::utils::file as file_utils;
+
+type GeometryDocument =
+    pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 pub fn execute(
     input_file: &Path,
@@ -166,6 +169,7 @@ struct StackupLayer {
 struct RenderedLayers {
     stackup: Vec<RenderedLayer>,
     non_stackup: Vec<RenderedLayer>,
+    board_array: Vec<RenderedLayer>,
 }
 
 #[derive(Serialize)]
@@ -309,6 +313,10 @@ fn extract_rendered_layers(accessor: &IpcAccessor) -> Result<RenderedLayers> {
     let Some(ecad) = ipc.ecad() else {
         return Ok(RenderedLayers::default());
     };
+    let has_board_array = accessor
+        .board_layout_info()
+        .and_then(|layout| layout.board_array)
+        .is_some();
     let layers_by_ref = ecad
         .cad_data
         .layers
@@ -365,9 +373,23 @@ fn extract_rendered_layers(accessor: &IpcAccessor) -> Result<RenderedLayers> {
         }
     }
 
+    let board_array_layers = if has_board_array {
+        ecad.cad_data
+            .layers
+            .iter()
+            .filter_map(|layer| {
+                let rendered = rendered_board_array_layer(ipc, layer);
+                rendered.has_native_content.then_some(rendered)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(RenderedLayers {
         stackup: stackup_layers,
         non_stackup: non_stackup_layers,
+        board_array: board_array_layers,
     })
 }
 
@@ -391,18 +413,9 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    match geometry::extract_layer_for_layout_target(ipc, &name, LayoutTarget::Board) {
-        Ok(mut geometry) => {
-            rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
-            pcb_ir::dialects::ipc::process::compose_for_rendering(&mut geometry);
-            rendered.svg = Some(geometry::render::render_layer_svg(
-                &geometry,
-                true,
-                LayoutTarget::Board.profile_set(),
-            ));
-            if !geometry.diagnostics.is_empty() {
-                rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
-            }
+    match geometry::extract_layer_for_view(ipc, &name, GeometryView::Board) {
+        Ok(geometry) => {
+            render_extracted_layer(&mut rendered, geometry, GeometryView::Board.profile_set())
         }
         Err(error) => {
             rendered.warning = Some(format!("Render unavailable: {error}"));
@@ -410,6 +423,53 @@ fn rendered_source_layer(
     }
 
     rendered
+}
+
+fn rendered_board_array_layer(ipc: &ipc2581::Ipc2581, layer: &Layer) -> RenderedLayer {
+    let name = ipc.resolve(layer.name).to_string();
+    let mut rendered = RenderedLayer {
+        name: name.clone(),
+        function: layer.layer_function.as_str().to_string(),
+        side: layer
+            .side
+            .map(|side| side.as_str())
+            .unwrap_or("None")
+            .to_string(),
+        sequence: None,
+        svg: None,
+        warning: None,
+        has_native_content: false,
+    };
+
+    match geometry::extract_layer_for_view(ipc, &name, GeometryView::ArrayLocal) {
+        Ok(geometry) => render_extracted_layer(
+            &mut rendered,
+            geometry,
+            GeometryView::ArrayLocal.profile_set(),
+        ),
+        Err(error) => {
+            rendered.warning = Some(format!("Render unavailable: {error}"));
+        }
+    }
+
+    rendered
+}
+
+fn render_extracted_layer(
+    rendered: &mut RenderedLayer,
+    mut geometry: GeometryDocument,
+    profile_set: ProfileSet,
+) {
+    rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
+    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut geometry);
+    rendered.svg = Some(geometry::render::render_layer_svg(
+        &geometry,
+        true,
+        profile_set,
+    ));
+    if !geometry.diagnostics.is_empty() {
+        rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
+    }
 }
 
 /// Format a decimal number with engineering precision:
@@ -587,6 +647,25 @@ mod tests {
         assert!(html.matches("<svg ").count() >= 4);
     }
 
+    #[test]
+    fn html_renders_array_local_layers_in_board_array_section() {
+        let ipc = ipc2581::Ipc2581::parse(array_layer_render_fixture()).unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
+
+        let array_summary = html.find("<h2>Board Array Summary</h2>").unwrap();
+        let array_layers = html.find("<h3>Board Array Layers</h3>").unwrap();
+        assert!(array_summary < array_layers);
+
+        let array_section = &html[array_layers..];
+        assert!(array_section.contains("<span>F.Cu</span>"));
+        assert!(array_section.contains("<span>V-Score</span>"));
+        assert!(array_section.contains("<span>Board_Array_Drill</span>"));
+        assert!(!array_section.contains("<span>B.Cu</span>"));
+        assert!(array_section.matches("<svg ").count() >= 3);
+    }
+
     fn board_array_design_name_fixture() -> &'static str {
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -609,6 +688,91 @@ mod tests {
       </Step>
       <Step name="board_array" type="PALLET">
         <StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn array_layer_render_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="array"/>
+    <LayerRef name="F.Cu"/>
+    <LayerRef name="B.Cu"/>
+    <LayerRef name="V-Score"/>
+    <LayerRef name="Board_Array_Drill"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad">
+        <Circle diameter="1"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="B.Cu" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="V-Score" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>
+      <Layer name="Board_Array_Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="B.Cu" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="B.Cu">
+          <Set>
+            <Pad padstackDefRef="padstack">
+              <Location x="2" y="3"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+      <Step name="array" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="15"/>
+            <PolyStepSegment x="0" y="15"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0"/>
+        <LayerFeature layerRef="F.Cu">
+          <Set polarity="POSITIVE">
+            <GlobalFiducial>
+              <Location x="5" y="12"/>
+              <Circle diameter="1"/>
+            </GlobalFiducial>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="V-Score">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Line startX="5" startY="0" endX="5" endY="15">
+                <LineDesc lineWidth="0.025" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Board_Array_Drill">
+          <Set polarity="POSITIVE">
+            <Hole name="array_tooling_hole_0" type="CIRCLE" diameter="2" platingStatus="NONPLATED" x="5" y="2.5"/>
+          </Set>
+        </LayerFeature>
       </Step>
     </CadData>
   </Ecad>
