@@ -418,6 +418,45 @@ mod tests {
     }
 
     #[test]
+    fn skips_invalid_inline_user_special_inside_features() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu" layerFunction="SIGNAL"/>
+      <Step name="Board">
+        <LayerFeature layerRef="F.Cu">
+          <Set>
+            <Features>
+              <Line startX="0" startY="0" endX="1" endY="0"/>
+              <UserSpecial>
+                <RectCenter height="1"/>
+              </UserSpecial>
+              <Line startX="0" startY="1" endX="1" endY="1"/>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
+        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+
+        assert_eq!(set.features.len(), 2);
+        assert!(
+            set.features
+                .iter()
+                .all(|feature| matches!(feature, ecad::SetFeature::Line(_)))
+        );
+    }
+
+    #[test]
     fn preserves_feature_polyline_curves() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

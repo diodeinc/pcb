@@ -2111,13 +2111,15 @@ impl<'a> Parser<'a> {
                     }
                 }
                 "UserSpecial" => {
-                    features.push(ecad::SetFeature::UserPrimitive(
-                        ecad::FeatureUserPrimitive {
-                            primitive: self.parse_user_special(&child, units)?,
-                            x: offset.x,
-                            y: offset.y,
-                        },
-                    ));
+                    if let Ok(primitive) = self.parse_user_special(&child, units) {
+                        features.push(ecad::SetFeature::UserPrimitive(
+                            ecad::FeatureUserPrimitive {
+                                primitive,
+                                x: offset.x,
+                                y: offset.y,
+                            },
+                        ));
+                    }
                 }
                 "StandardPrimitiveRef" => {
                     if let Some(id) = self.attr(&child, "id") {
