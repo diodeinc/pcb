@@ -3,7 +3,15 @@ use std::io::{Cursor, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use ipc2581::types::{StepType, Units};
+use ipc2581::types::{
+    Units,
+    ecad::{
+        Fiducial, FiducialKind, FiducialShape, Hole, LayerFunction, Line, PlatingStatus, Polarity,
+        SetFeature, Side, StepType,
+    },
+    primitives::{Circle, LineEnd, StandardPrimitive, Styled},
+    transform::Location,
+};
 use pcb_ir::dialects::ipc::{LayoutStepKind, root_step};
 use quick_xml::{
     Reader, Writer,
@@ -23,6 +31,7 @@ const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
 const VCUT_LAYER_BASE_NAME: &str = "V-Score";
 const VCUT_LINE_WIDTH_MM: f64 = 0.025;
+const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
 
 #[derive(Debug, Clone, PartialEq)]
 enum BoardArrayCreateValidationError {
@@ -134,9 +143,110 @@ struct BoardArraySpec {
     pitch_y_mm: f64,
     array_width_mm: f64,
     array_height_mm: f64,
-    vcut_layer_name: Option<String>,
-    vcut_lines: Vec<VcutLine>,
+    generated_geometry: BoardArrayGeneratedGeometry,
     units: Units,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BoardArrayGeneratedGeometry {
+    pub layers: Vec<GeneratedLayer>,
+    pub layer_features: Vec<GeneratedLayerFeature>,
+}
+
+impl BoardArrayGeneratedGeometry {
+    pub fn add_layer(&mut self, layer: GeneratedLayer) {
+        self.layers.push(layer);
+    }
+
+    pub fn add_layer_feature(
+        &mut self,
+        layer_name: impl Into<String>,
+        polarity: Polarity,
+        features: Vec<SetFeature>,
+    ) {
+        self.layer_features.push(GeneratedLayerFeature {
+            layer_name: layer_name.into(),
+            polarity,
+            features,
+        });
+    }
+
+    pub fn add_round_global_fiducial(
+        &mut self,
+        layer_name: impl Into<String>,
+        x_mm: f64,
+        y_mm: f64,
+        diameter_mm: f64,
+    ) {
+        self.add_layer_feature(
+            layer_name,
+            Polarity::Positive,
+            vec![SetFeature::Fiducial(round_global_fiducial(
+                x_mm,
+                y_mm,
+                diameter_mm,
+            ))],
+        );
+    }
+
+    pub fn add_round_nonplated_hole(
+        &mut self,
+        layer_name: impl Into<String>,
+        x_mm: f64,
+        y_mm: f64,
+        diameter_mm: f64,
+    ) {
+        self.add_layer_feature(
+            layer_name,
+            Polarity::Positive,
+            vec![SetFeature::Hole(Hole {
+                name: None,
+                diameter: diameter_mm,
+                plating_status: PlatingStatus::NonPlated,
+                x: x_mm,
+                y: y_mm,
+            })],
+        );
+    }
+
+    fn referenced_layer_names(&self) -> impl Iterator<Item = &str> {
+        self.layers.iter().map(|layer| layer.name.as_str()).chain(
+            self.layer_features
+                .iter()
+                .map(|layer_feature| layer_feature.layer_name.as_str()),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GeneratedLayer {
+    pub name: String,
+    pub layer_function: LayerFunction,
+    pub side: Option<Side>,
+    pub polarity: Option<Polarity>,
+}
+
+impl GeneratedLayer {
+    pub fn new(
+        name: impl Into<String>,
+        layer_function: LayerFunction,
+        side: Option<Side>,
+        polarity: Option<Polarity>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            layer_function,
+            side,
+            polarity,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GeneratedLayerFeature {
+    pub layer_name: String,
+    pub polarity: Polarity,
+    pub features: Vec<SetFeature>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -171,10 +281,14 @@ pub fn execute_svg(input: &Path, output: &Path) -> Result<()> {
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(&ipc, options)?;
-    let vcut_layer_xml = write_vcut_layer_xml(&spec)?;
-    let array_step_xml = write_array_step_xml(&spec)?;
+    write_board_array_xml(xml, &spec)
+}
+
+fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
+    let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry)?;
+    let array_step_xml = write_array_step_xml(spec)?;
     let xml = update_content_refs(xml, &spec.content_step_refs, &spec.content_layer_refs)?;
-    let xml = insert_array_cad_data(&xml, vcut_layer_xml.as_deref(), &array_step_xml)?;
+    let xml = insert_array_cad_data(&xml, generated_layer_xml.as_deref(), &array_step_xml)?;
     let xml = crate::utils::history::append_file_revision(&xml, "Created board array")?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
@@ -242,26 +356,29 @@ fn build_board_array_spec(
         .iter()
         .map(|layer| ipc.resolve(layer.name).to_string())
         .collect::<HashSet<_>>();
-    let vcut_lines = vcut_lines(VcutLineSpec {
-        columns,
-        rows,
-        board_width_mm: board_width,
-        board_height_mm: board_height,
-        margin_x_mm: margin_x,
-        margin_y_mm: margin_y,
-        pitch_x_mm: pitch_x,
-        pitch_y_mm: pitch_y,
-        array_width_mm: array_width,
-        array_height_mm: array_height,
-    })?;
-    let vcut_layer_name =
-        (!vcut_lines.is_empty()).then(|| unique_name(&existing_layer_names, VCUT_LAYER_BASE_NAME));
+    let mut generated_geometry = BoardArrayGeneratedGeometry::default();
+    add_vcut_lines(
+        &mut generated_geometry,
+        &existing_layer_names,
+        vcut_lines(VcutLineSpec {
+            columns,
+            rows,
+            board_width_mm: board_width,
+            board_height_mm: board_height,
+            margin_x_mm: margin_x,
+            margin_y_mm: margin_y,
+            pitch_x_mm: pitch_x,
+            pitch_y_mm: pitch_y,
+            array_width_mm: array_width,
+            array_height_mm: array_height,
+        })?,
+    );
 
     Ok(BoardArraySpec {
         array_name: array_name.clone(),
         board_name: board_name.clone(),
         content_step_refs: content_step_refs(ipc, &array_name, &board_name),
-        content_layer_refs: content_layer_refs(ipc, vcut_layer_name.as_deref()),
+        content_layer_refs: content_layer_refs(ipc, &generated_geometry),
         columns,
         rows,
         repeat_x_mm: margin_x - root.bbox.min.x,
@@ -270,8 +387,7 @@ fn build_board_array_spec(
         pitch_y_mm: if rows > 1 { pitch_y } else { 0.0 },
         array_width_mm: array_width,
         array_height_mm: array_height,
-        vcut_layer_name,
-        vcut_lines,
+        generated_geometry,
         units: ecad.cad_header.units,
     })
 }
@@ -393,7 +509,10 @@ fn content_step_refs(ipc: &Ipc2581, array_name: &str, board_name: &str) -> Vec<S
     refs
 }
 
-fn content_layer_refs(ipc: &Ipc2581, vcut_layer_name: Option<&str>) -> Vec<String> {
+fn content_layer_refs(
+    ipc: &Ipc2581,
+    generated_geometry: &BoardArrayGeneratedGeometry,
+) -> Vec<String> {
     let mut refs = Vec::new();
     let mut seen = HashSet::new();
     for layer_ref in &ipc.content().layer_refs {
@@ -402,13 +521,47 @@ fn content_layer_refs(ipc: &Ipc2581, vcut_layer_name: Option<&str>) -> Vec<Strin
             refs.push(name);
         }
     }
-    if let Some(vcut_layer_name) = vcut_layer_name {
-        let vcut_layer_name = vcut_layer_name.to_string();
-        if seen.insert(vcut_layer_name.clone()) {
-            refs.push(vcut_layer_name);
+    for layer_name in generated_geometry.referenced_layer_names() {
+        if seen.insert(layer_name.to_string()) {
+            refs.push(layer_name.to_string());
         }
     }
     refs
+}
+
+fn add_vcut_lines(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    existing_layer_names: &HashSet<String>,
+    lines: Vec<VcutLine>,
+) {
+    if lines.is_empty() {
+        return;
+    }
+
+    let layer_name = unique_name(existing_layer_names, VCUT_LAYER_BASE_NAME);
+    generated_geometry.add_layer(GeneratedLayer::new(
+        layer_name.clone(),
+        LayerFunction::VCut,
+        Some(Side::None),
+        Some(Polarity::Positive),
+    ));
+    generated_geometry.add_layer_feature(
+        layer_name,
+        Polarity::Positive,
+        lines.into_iter().map(vcut_line_feature).collect(),
+    );
+}
+
+fn vcut_line_feature(line: VcutLine) -> SetFeature {
+    SetFeature::Line(Line {
+        start_x: line.start_x_mm,
+        start_y: line.start_y_mm,
+        end_x: line.end_x_mm,
+        end_y: line.end_y_mm,
+        line_desc_ref: None,
+        line_width: VCUT_LINE_WIDTH_MM,
+        line_end: Some(LineEnd::Round),
+    })
 }
 
 struct VcutLineSpec {
@@ -609,7 +762,7 @@ fn write_layer_refs(writer: &mut Writer<Cursor<Vec<u8>>>, layer_refs: &[String])
 
 fn insert_array_cad_data(
     xml: &str,
-    vcut_layer_xml: Option<&str>,
+    generated_layer_xml: Option<&str>,
     array_step_xml: &str,
 ) -> Result<String> {
     let mut reader = Reader::from_str(xml);
@@ -618,7 +771,7 @@ fn insert_array_cad_data(
     let mut in_cad_data = false;
     let mut cad_data_depth = 0usize;
     let mut panel_step_inserted = false;
-    let mut vcut_layer_inserted = vcut_layer_xml.is_none();
+    let mut generated_layers_inserted = generated_layer_xml.is_none();
 
     loop {
         match reader.read_event_into(&mut buf)? {
@@ -629,24 +782,30 @@ fn insert_array_cad_data(
                 writer.write_event(Event::Start(e.to_owned()))?;
             }
             Event::Start(ref e) if in_cad_data => {
-                if cad_data_depth == 1 && !vcut_layer_inserted && e.name().as_ref() != b"Layer" {
-                    write_raw_xml(&mut writer, vcut_layer_xml)?;
-                    vcut_layer_inserted = true;
+                if cad_data_depth == 1
+                    && !generated_layers_inserted
+                    && e.name().as_ref() != b"Layer"
+                {
+                    write_raw_xml(&mut writer, generated_layer_xml)?;
+                    generated_layers_inserted = true;
                 }
                 writer.write_event(Event::Start(e.to_owned()))?;
                 cad_data_depth += 1;
             }
             Event::Empty(ref e) if in_cad_data => {
-                if cad_data_depth == 1 && !vcut_layer_inserted && e.name().as_ref() != b"Layer" {
-                    write_raw_xml(&mut writer, vcut_layer_xml)?;
-                    vcut_layer_inserted = true;
+                if cad_data_depth == 1
+                    && !generated_layers_inserted
+                    && e.name().as_ref() != b"Layer"
+                {
+                    write_raw_xml(&mut writer, generated_layer_xml)?;
+                    generated_layers_inserted = true;
                 }
                 writer.write_event(Event::Empty(e.to_owned()))?;
             }
             Event::End(ref e) if e.name().as_ref() == b"CadData" => {
-                if !vcut_layer_inserted {
-                    write_raw_xml(&mut writer, vcut_layer_xml)?;
-                    vcut_layer_inserted = true;
+                if !generated_layers_inserted {
+                    write_raw_xml(&mut writer, generated_layer_xml)?;
+                    generated_layers_inserted = true;
                 }
                 writer.get_mut().write_all(array_step_xml.as_bytes())?;
                 writer.write_event(Event::End(e.to_owned()))?;
@@ -677,18 +836,33 @@ fn write_raw_xml(writer: &mut Writer<Cursor<Vec<u8>>>, xml: Option<&str>) -> Res
     Ok(())
 }
 
-fn write_vcut_layer_xml(spec: &BoardArraySpec) -> Result<Option<String>> {
-    let Some(layer_name) = spec.vcut_layer_name.as_ref() else {
+fn write_generated_layers_xml(geometry: &BoardArrayGeneratedGeometry) -> Result<Option<String>> {
+    if geometry.layers.is_empty() {
         return Ok(None);
-    };
+    }
+
     let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let mut layer = BytesStart::new("Layer");
-    layer.push_attribute(("name", layer_name.as_str()));
-    layer.push_attribute(("layerFunction", "V_CUT"));
-    layer.push_attribute(("side", "NONE"));
-    layer.push_attribute(("polarity", "POSITIVE"));
-    writer.write_event(Event::Empty(layer))?;
+    for generated_layer in &geometry.layers {
+        write_generated_layer_xml(&mut writer, generated_layer)?;
+    }
     Ok(Some(String::from_utf8(writer.into_inner().into_inner())?))
+}
+
+fn write_generated_layer_xml(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    generated_layer: &GeneratedLayer,
+) -> Result<()> {
+    let mut layer = BytesStart::new("Layer");
+    layer.push_attribute(("name", generated_layer.name.as_str()));
+    layer.push_attribute(("layerFunction", generated_layer.layer_function.as_str()));
+    if let Some(side) = generated_layer.side {
+        layer.push_attribute(("side", side_attr(side)));
+    }
+    if let Some(polarity) = generated_layer.polarity {
+        layer.push_attribute(("polarity", polarity_attr(polarity)));
+    }
+    writer.write_event(Event::Empty(layer))?;
+    Ok(())
 }
 
 fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
@@ -730,52 +904,103 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
 
     write_step_repeat(&mut writer, spec)?;
-    write_vcut_layer_feature(&mut writer, spec)?;
+    write_generated_layer_features(&mut writer, spec)?;
 
     writer.write_event(Event::End(BytesStart::new("Step").to_end()))?;
 
     Ok(String::from_utf8(writer.into_inner().into_inner())?)
 }
 
-fn write_vcut_layer_feature(
+fn write_generated_layer_features(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     spec: &BoardArraySpec,
 ) -> Result<()> {
-    let Some(layer_name) = spec.vcut_layer_name.as_ref() else {
-        return Ok(());
-    };
-    if spec.vcut_lines.is_empty() {
+    let mut generated_hole_index = 0usize;
+    for layer_feature in &spec.generated_geometry.layer_features {
+        write_generated_layer_feature(
+            writer,
+            spec.units,
+            layer_feature,
+            &mut generated_hole_index,
+        )?;
+    }
+    Ok(())
+}
+
+fn write_generated_layer_feature(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    layer_feature: &GeneratedLayerFeature,
+    generated_hole_index: &mut usize,
+) -> Result<()> {
+    if layer_feature.features.is_empty() {
         return Ok(());
     }
 
-    let mut layer_feature = BytesStart::new("LayerFeature");
-    layer_feature.push_attribute(("layerRef", layer_name.as_str()));
-    writer.write_event(Event::Start(layer_feature))?;
+    let mut elem = BytesStart::new("LayerFeature");
+    elem.push_attribute(("layerRef", layer_feature.layer_name.as_str()));
+    writer.write_event(Event::Start(elem))?;
 
     let mut set = BytesStart::new("Set");
-    set.push_attribute(("polarity", "POSITIVE"));
+    set.push_attribute(("polarity", polarity_attr(layer_feature.polarity)));
     writer.write_event(Event::Start(set))?;
-    writer.write_event(Event::Start(BytesStart::new("Features")))?;
-
-    for line in &spec.vcut_lines {
-        write_vcut_line(writer, spec.units, *line)?;
-    }
-
-    writer.write_event(Event::End(BytesStart::new("Features").to_end()))?;
+    write_set_features(writer, units, &layer_feature.features, generated_hole_index)?;
     writer.write_event(Event::End(BytesStart::new("Set").to_end()))?;
     writer.write_event(Event::End(BytesStart::new("LayerFeature").to_end()))?;
     Ok(())
 }
 
-fn write_vcut_line(
+fn write_set_features(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     units: Units,
-    line: VcutLine,
+    features: &[SetFeature],
+    generated_hole_index: &mut usize,
 ) -> Result<()> {
-    let start_x = fmt_units(line.start_x_mm, units);
-    let start_y = fmt_units(line.start_y_mm, units);
-    let end_x = fmt_units(line.end_x_mm, units);
-    let end_y = fmt_units(line.end_y_mm, units);
+    let mut features_open = false;
+    for feature in features {
+        match feature {
+            SetFeature::Line(line) => {
+                if !features_open {
+                    writer.write_event(Event::Start(BytesStart::new("Features")))?;
+                    features_open = true;
+                }
+                write_line(writer, units, line)?;
+            }
+            SetFeature::Fiducial(fiducial) => {
+                close_features_element(writer, &mut features_open)?;
+                write_fiducial(writer, units, fiducial)?;
+            }
+            SetFeature::Hole(hole) => {
+                close_features_element(writer, &mut features_open)?;
+                write_hole(writer, units, hole, generated_hole_index)?;
+            }
+            _ => bail!("generated board array layer feature has unsupported feature kind"),
+        }
+    }
+    close_features_element(writer, &mut features_open)?;
+    Ok(())
+}
+
+fn close_features_element(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    features_open: &mut bool,
+) -> Result<()> {
+    if *features_open {
+        writer.write_event(Event::End(BytesStart::new("Features").to_end()))?;
+        *features_open = false;
+    }
+    Ok(())
+}
+
+fn write_line(writer: &mut Writer<Cursor<Vec<u8>>>, units: Units, line: &Line) -> Result<()> {
+    if line.line_desc_ref.is_some() {
+        bail!("generated board array lines must carry inline LineDesc values");
+    }
+
+    let start_x = fmt_units(line.start_x, units);
+    let start_y = fmt_units(line.start_y, units);
+    let end_x = fmt_units(line.end_x, units);
+    let end_y = fmt_units(line.end_y, units);
     let mut elem = BytesStart::new("Line");
     elem.push_attribute(("startX", start_x.as_str()));
     elem.push_attribute(("startY", start_y.as_str()));
@@ -783,13 +1008,139 @@ fn write_vcut_line(
     elem.push_attribute(("endY", end_y.as_str()));
     writer.write_event(Event::Start(elem))?;
 
-    let line_width = fmt_units(VCUT_LINE_WIDTH_MM, units);
+    let line_width = fmt_units(line.line_width, units);
     let mut line_desc = BytesStart::new("LineDesc");
     line_desc.push_attribute(("lineWidth", line_width.as_str()));
-    line_desc.push_attribute(("lineEnd", "ROUND"));
+    if let Some(line_end) = line.line_end {
+        line_desc.push_attribute(("lineEnd", line_end_attr(line_end)));
+    }
     writer.write_event(Event::Empty(line_desc))?;
     writer.write_event(Event::End(BytesStart::new("Line").to_end()))?;
     Ok(())
+}
+
+fn write_fiducial(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    fiducial: &Fiducial,
+) -> Result<()> {
+    if fiducial.xform.is_some() || fiducial.pin_ref.is_some() {
+        bail!("generated board array fiducials must use location-only round geometry");
+    }
+
+    let elem_name = fiducial_element_name(fiducial.kind);
+    writer.write_event(Event::Start(BytesStart::new(elem_name)))?;
+    write_location_empty(
+        writer,
+        "Location",
+        fiducial.location.x,
+        fiducial.location.y,
+        units,
+    )?;
+    match &fiducial.shape {
+        FiducialShape::Primitive(StandardPrimitive::Circle(circle)) => {
+            write_circle(writer, units, circle.shape.diameter)?;
+        }
+        _ => bail!("generated board array fiducials must use inline Circle geometry"),
+    }
+    writer.write_event(Event::End(BytesStart::new(elem_name).to_end()))?;
+    Ok(())
+}
+
+fn write_hole(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    hole: &Hole,
+    generated_hole_index: &mut usize,
+) -> Result<()> {
+    let diameter = fmt_units(hole.diameter, units);
+    let x = fmt_units(hole.x, units);
+    let y = fmt_units(hole.y, units);
+    let fallback_name = format!("{GENERATED_HOLE_NAME_PREFIX}_{}", *generated_hole_index);
+    *generated_hole_index += 1;
+
+    let mut elem = BytesStart::new("Hole");
+    elem.push_attribute(("name", fallback_name.as_str()));
+    elem.push_attribute(("type", "CIRCLE"));
+    elem.push_attribute(("diameter", diameter.as_str()));
+    elem.push_attribute(("platingStatus", plating_status_attr(hole.plating_status)));
+    elem.push_attribute(("plusTol", "0"));
+    elem.push_attribute(("minusTol", "0"));
+    elem.push_attribute(("x", x.as_str()));
+    elem.push_attribute(("y", y.as_str()));
+    writer.write_event(Event::Empty(elem))?;
+    Ok(())
+}
+
+fn write_circle(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    diameter_mm: f64,
+) -> Result<()> {
+    let diameter = fmt_units(diameter_mm, units);
+    let mut elem = BytesStart::new("Circle");
+    elem.push_attribute(("diameter", diameter.as_str()));
+    writer.write_event(Event::Empty(elem))?;
+    Ok(())
+}
+
+fn round_global_fiducial(x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
+    Fiducial {
+        kind: FiducialKind::Global,
+        location: Location { x: x_mm, y: y_mm },
+        xform: None,
+        shape: FiducialShape::Primitive(StandardPrimitive::Circle(Styled {
+            shape: Circle {
+                diameter: diameter_mm,
+            },
+            fill_property: None,
+            line_desc_ref: None,
+        })),
+        pin_ref: None,
+    }
+}
+
+fn fiducial_element_name(kind: FiducialKind) -> &'static str {
+    match kind {
+        FiducialKind::BadBoardMark => "BadBoardMark",
+        FiducialKind::Global => "GlobalFiducial",
+        FiducialKind::GoodPanelMark => "GoodPanelMark",
+        FiducialKind::Local => "LocalFiducial",
+    }
+}
+
+fn side_attr(side: Side) -> &'static str {
+    match side {
+        Side::Top => "TOP",
+        Side::Bottom => "BOTTOM",
+        Side::Both => "BOTH",
+        Side::Internal => "INTERNAL",
+        Side::All => "ALL",
+        Side::None => "NONE",
+    }
+}
+
+fn polarity_attr(polarity: Polarity) -> &'static str {
+    match polarity {
+        Polarity::Positive => "POSITIVE",
+        Polarity::Negative => "NEGATIVE",
+    }
+}
+
+fn line_end_attr(line_end: LineEnd) -> &'static str {
+    match line_end {
+        LineEnd::Round => "ROUND",
+        LineEnd::Square => "SQUARE",
+        LineEnd::Flat => "FLAT",
+    }
+}
+
+fn plating_status_attr(plating_status: PlatingStatus) -> &'static str {
+    match plating_status {
+        PlatingStatus::Plated => "PLATED",
+        PlatingStatus::NonPlated => "NONPLATED",
+        PlatingStatus::Via => "VIA",
+    }
 }
 
 fn write_location_empty(
@@ -854,7 +1205,7 @@ mod tests {
     use crate::accessors::IpcAccessor;
     use crate::gerber::{GerberExportOptions, export_gerber_x2};
     use pcb_ir::common::Point;
-    use pcb_ir::dialects::ipc::FeatureSemantic;
+    use pcb_ir::dialects::ipc::{FeatureBucket, FeatureKind, FeatureSemantic};
 
     use crate::LayoutTarget;
 
@@ -951,6 +1302,105 @@ mod tests {
         assert!(vcut.contents.contains("%TF.Part,Array*%"));
         assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
         assert_eq!(vcut.contents.matches("D01*").count(), 24);
+    }
+
+    #[test]
+    fn board_array_creation_preserves_board_target_geometry() {
+        let input = board_fixture_with_top_line_mm();
+        let before_ipc = Ipc2581::parse(input).unwrap();
+        let before =
+            geometry::extract_layer_for_layout_target(&before_ipc, "TOP", LayoutTarget::Board)
+                .unwrap();
+
+        let xml = create_board_array_xml(
+            input,
+            &BoardArrayCreateOptions {
+                columns: 6,
+                rows: 6,
+                column_spacing_mm: 5.0,
+                row_spacing_mm: 5.0,
+                edge_rail_width_mm: 5.0,
+            },
+        )
+        .unwrap();
+        let after_ipc = Ipc2581::parse(&xml).unwrap();
+        let after =
+            geometry::extract_layer_for_layout_target(&after_ipc, "TOP", LayoutTarget::Board)
+                .unwrap();
+
+        assert_eq!(before.features.len(), after.features.len());
+        assert_eq!(before.paths.len(), after.paths.len());
+        assert_eq!(before.contours.len(), after.contours.len());
+        assert_eq!(before.path_cmds, after.path_cmds);
+
+        for (before_feature, after_feature) in before.features.iter().zip(&after.features) {
+            assert_eq!(before_feature.kind, after_feature.kind);
+            assert_eq!(before_feature.bucket, after_feature.bucket);
+            assert_eq!(before_feature.polarity, after_feature.polarity);
+            assert_eq!(before_feature.semantic, after_feature.semantic);
+            assert_eq!(before_feature.bbox, after_feature.bbox);
+            assert_eq!(before_feature.path_count, after_feature.path_count);
+        }
+    }
+
+    #[test]
+    fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
+        let input = board_fixture_with_mask_mm();
+        let ipc = Ipc2581::parse(input).unwrap();
+        let mut spec = build_board_array_spec(
+            &ipc,
+            &BoardArrayCreateOptions {
+                columns: 6,
+                rows: 6,
+                column_spacing_mm: 5.0,
+                row_spacing_mm: 5.0,
+                edge_rail_width_mm: 5.0,
+            },
+        )
+        .unwrap();
+
+        spec.generated_geometry
+            .add_round_global_fiducial("TOP", 12.5, 12.5, 1.0);
+        spec.generated_geometry
+            .add_round_global_fiducial("F.Mask", 12.5, 12.5, 2.0);
+        spec.generated_geometry.add_layer(GeneratedLayer::new(
+            "Array_Drill",
+            LayerFunction::Drill,
+            Some(Side::All),
+            Some(Polarity::Positive),
+        ));
+        spec.generated_geometry
+            .add_round_nonplated_hole("Array_Drill", 20.0, 20.0, 2.0);
+        spec.content_layer_refs = content_layer_refs(&ipc, &spec.generated_geometry);
+
+        let xml = write_board_array_xml(input, &spec).unwrap();
+
+        assert!(xml.contains(r#"<LayerRef name="F.Mask"/>"#));
+        assert!(xml.contains(r#"<LayerRef name="Array_Drill"/>"#));
+        assert!(xml.contains(
+            r#"<Layer name="Array_Drill" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>"#
+        ));
+        assert_eq!(xml.matches("<GlobalFiducial>").count(), 2);
+        assert!(xml.contains(r#"<Circle diameter="1"/>"#));
+        assert!(xml.contains(r#"<Circle diameter="2"/>"#));
+        assert!(xml.contains(
+            r#"<Hole name="array_tooling_hole_0" type="CIRCLE" diameter="2" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="20" y="20"/>"#
+        ));
+
+        let parsed = Ipc2581::parse(&xml).unwrap();
+        let top =
+            geometry::extract_layer_for_layout_target(&parsed, "TOP", LayoutTarget::Panel).unwrap();
+        assert!(top.features.iter().any(|feature| matches!(
+            feature.semantic,
+            FeatureSemantic::Fiducial(pcb_ir::dialects::ipc::FiducialKind::Global)
+        )));
+
+        let drill =
+            geometry::extract_layer_for_layout_target(&parsed, "Array_Drill", LayoutTarget::Panel)
+                .unwrap();
+        assert_eq!(drill.features.len(), 1);
+        assert_eq!(drill.features[0].kind, FeatureKind::Hole);
+        assert_eq!(drill.features[0].bucket, FeatureBucket::Cutout);
     }
 
     #[test]
@@ -1240,6 +1690,74 @@ mod tests {
             <PolyStepSegment x="-2" y="-3"/>
           </Polygon>
         </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn board_fixture_with_mask_mm() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="-2" y="-3"/>
+            <PolyStepSegment x="8" y="-3"/>
+            <PolyStepSegment x="8" y="7"/>
+            <PolyStepSegment x="-2" y="7"/>
+            <PolyStepSegment x="-2" y="-3"/>
+          </Polygon>
+        </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn board_fixture_with_top_line_mm() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="-2" y="-3"/>
+            <PolyStepSegment x="8" y="-3"/>
+            <PolyStepSegment x="8" y="7"/>
+            <PolyStepSegment x="-2" y="7"/>
+            <PolyStepSegment x="-2" y="-3"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="TOP">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Line startX="0" startY="0" endX="5" endY="0">
+                <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
       </Step>
     </CadData>
   </Ecad>
