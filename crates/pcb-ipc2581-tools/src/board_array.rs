@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use ipc2581::types::LayerFunction;
-use pcb_ir::common::{arc_sweep_radians, Affine2, Point};
+use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
 use pcb_ir::dialects::ipc::{GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp};
 
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
@@ -146,7 +146,7 @@ fn board_array_layer_overlays(
             let Ok(mut doc) = crate::geometry::extract_layer_for_view(
                 accessor.ipc(),
                 layer_name,
-                GeometryView::ArrayLocal,
+                GeometryView::ArraySupport,
             ) else {
                 return None;
             };
@@ -504,11 +504,7 @@ fn fmt_num(value: f64) -> String {
     if text.ends_with('.') {
         text.pop();
     }
-    if text == "-0" {
-        "0".to_string()
-    } else {
-        text
-    }
+    if text == "-0" { "0".to_string() } else { text }
 }
 
 #[cfg(test)]
@@ -640,5 +636,73 @@ mod tests {
         let vcut_start = svg.find("vcut-guide").unwrap();
         let board_outline_start = svg.find("class='board-outline'").unwrap();
         assert!(vcut_start < board_outline_start);
+    }
+
+    #[test]
+    fn renders_nested_board_cell_support_geometry_without_board_features() {
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="array"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Features>
+              <Line startX="1" startY="2.5" endX="9" endY="2.5">
+                <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+      <Step name="board_cell" type="PALLET">
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <LocalFiducial>
+              <Location x="1" y="1"/>
+              <Circle diameter="1"/>
+            </LocalFiducial>
+          </Set>
+        </LayerFeature>
+        <StepRepeat stepRef="board" x="2" y="2" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
+      <Step name="array" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="15"/>
+            <PolyStepSegment x="0" y="15"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board_cell" x="4" y="5" nx="1" ny="1" dx="12" dy="8"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let svg = render_board_array_overview_svg(&accessor).unwrap();
+
+        assert_eq!(svg.matches("array-layer-copper").count(), 1);
+        assert!(!svg.contains("M7 5.5 L15 5.5"));
     }
 }

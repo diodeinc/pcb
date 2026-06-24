@@ -417,15 +417,25 @@ pub fn extract_layer_for_view(
 
     let step = match view {
         GeometryView::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
-        GeometryView::ArrayLocal | GeometryView::ArrayFlattened | GeometryView::LayoutSymbolic => {
-            primary_step
-        }
+        GeometryView::ArrayLocal
+        | GeometryView::ArraySupport
+        | GeometryView::ArrayFlattened
+        | GeometryView::LayoutSymbolic => primary_step,
     };
 
     let mut doc = match view {
         GeometryView::Board => {
             extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
         }
+        GeometryView::ArraySupport if is_panel_step(step) => extract_panel_layer(
+            ipc,
+            &ecad.cad_data.steps,
+            &ecad.cad_data.layers,
+            step,
+            layer,
+            layer_name,
+            PanelLayerMode::SupportOnly,
+        )?,
         GeometryView::ArrayFlattened if is_panel_step(step) => extract_panel_layer(
             ipc,
             &ecad.cad_data.steps,
@@ -433,14 +443,18 @@ pub fn extract_layer_for_view(
             step,
             layer,
             layer_name,
+            PanelLayerMode::Flattened,
         )?,
-        GeometryView::ArrayLocal | GeometryView::ArrayFlattened | GeometryView::LayoutSymbolic => {
+        GeometryView::ArrayLocal
+        | GeometryView::ArraySupport
+        | GeometryView::ArrayFlattened
+        | GeometryView::LayoutSymbolic => {
             extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
         }
     };
 
     match view {
-        GeometryView::Board | GeometryView::ArrayLocal => {
+        GeometryView::Board | GeometryView::ArrayLocal | GeometryView::ArraySupport => {
             append_step_only_layout_geometry(&mut doc, step)
         }
         GeometryView::ArrayFlattened | GeometryView::LayoutSymbolic => {
@@ -531,6 +545,7 @@ fn extract_panel_layer(
     panel: &Step,
     layer: &Layer,
     layer_name: &str,
+    mode: PanelLayerMode,
 ) -> Result<GeometryDocument> {
     let mut doc = GeometryDocument::new();
     let feature_start = doc.features.len() as u32;
@@ -551,6 +566,7 @@ fn extract_panel_layer(
         },
         panel,
         Affine2::identity(),
+        mode,
         &mut stack,
     )?);
 
@@ -582,14 +598,25 @@ struct LayerMaterializeContext<'a> {
     layer_name: &'a str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelLayerMode {
+    SupportOnly,
+    Flattened,
+}
+
 fn append_step_layer_tree(
     doc: &mut GeometryDocument,
     append_state: &mut LayerAppendState,
     context: LayerMaterializeContext<'_>,
     step: &Step,
     transform: Affine2,
+    mode: PanelLayerMode,
     stack: &mut Vec<Symbol>,
 ) -> Result<BBox> {
+    if mode == PanelLayerMode::SupportOnly && is_board_step(step) {
+        return Ok(BBox::empty());
+    }
+
     let step_doc = extract_step_layer(
         context.ipc,
         step,
@@ -629,6 +656,7 @@ fn append_step_layer_tree(
                     context,
                     source_step,
                     instance_transform,
+                    mode,
                     stack,
                 )?);
             }

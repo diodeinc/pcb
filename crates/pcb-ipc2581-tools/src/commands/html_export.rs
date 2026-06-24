@@ -599,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn html_renders_array_local_layers_in_board_array_summary_only() {
+    fn html_renders_array_support_layers_in_board_array_summary_only() {
         let ipc = ipc2581::Ipc2581::parse(array_layer_render_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 

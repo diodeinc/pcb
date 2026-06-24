@@ -2,7 +2,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
-    commands, manufacturing, utils, LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode,
+    LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, manufacturing, utils,
 };
 
 #[derive(Args)]

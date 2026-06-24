@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail};
 use ipc2581::types::{
     Units,
     ecad::{
-        Fiducial, FiducialKind, FiducialShape, Hole, LayerFunction, Line, PlatingStatus, Polarity,
-        SetFeature, Side, StepType,
+        Fiducial, FiducialKind as IpcFiducialKind, FiducialShape, Hole, LayerFunction, Line,
+        PlatingStatus, Polarity, SetFeature, Side, StepType,
     },
     primitives::{Circle, LineEnd, StandardPrimitive, Styled},
     transform::Location,
@@ -38,12 +38,16 @@ const FIDUCIAL_COPPER_DIAMETER_MM: f64 = 1.0;
 const FIDUCIAL_MASK_OPENING_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_EDGE_OFFSET_MM: f64 = 2.5;
-const FIDUCIAL_EDGE_OFFSET_MM: f64 = 3.85;
+const FIDUCIAL_EDGE_OFFSET_MM: f64 = 3.0;
 const FIDUCIAL_FROM_TOOLING_HOLE_MM: f64 = 5.0;
 const TOP_TOOLING_HOLE_X_INSET_MM: f64 = 5.0;
 const BOTTOM_TOOLING_HOLE_X_INSET_MM: f64 = 10.0;
 const SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 35.0;
 const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 20.0;
+const MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM: f64 = 5.0;
+const MIN_BOARD_CELL_FIDUCIAL_SPAN_MM: f64 = 30.0;
+const PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = TOP_TOOLING_HOLE_X_INSET_MM;
+const SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = BOTTOM_TOOLING_HOLE_X_INSET_MM;
 
 #[derive(Debug, Clone, PartialEq)]
 enum BoardArrayCreateValidationError {
@@ -223,63 +227,29 @@ struct BoardArraySpec {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct BoardArrayGeneratedGeometry {
-    pub layers: Vec<GeneratedLayer>,
-    pub layer_features: Vec<GeneratedLayerFeature>,
+struct BoardArrayGeneratedGeometry {
+    layers: Vec<GeneratedLayer>,
+    layer_features: Vec<GeneratedLayerFeature>,
 }
 
 impl BoardArrayGeneratedGeometry {
-    pub fn add_layer(&mut self, layer: GeneratedLayer) {
+    fn add_layer(&mut self, layer: GeneratedLayer) {
         self.layers.push(layer);
     }
 
-    pub fn add_layer_feature(
+    fn add_layer_feature(
         &mut self,
+        scope: GeneratedFeatureScope,
         layer_name: impl Into<String>,
         polarity: Polarity,
         features: Vec<SetFeature>,
     ) {
         self.layer_features.push(GeneratedLayerFeature {
+            scope,
             layer_name: layer_name.into(),
             polarity,
             features,
         });
-    }
-
-    pub fn add_round_global_fiducial(
-        &mut self,
-        layer_name: impl Into<String>,
-        x_mm: f64,
-        y_mm: f64,
-        diameter_mm: f64,
-    ) {
-        self.add_layer_feature(
-            layer_name,
-            Polarity::Positive,
-            vec![SetFeature::Fiducial(round_global_fiducial(
-                x_mm,
-                y_mm,
-                diameter_mm,
-            ))],
-        );
-    }
-
-    pub fn add_round_nonplated_hole(
-        &mut self,
-        layer_name: impl Into<String>,
-        x_mm: f64,
-        y_mm: f64,
-        diameter_mm: f64,
-    ) {
-        self.add_layer_feature(
-            layer_name,
-            Polarity::Positive,
-            vec![SetFeature::Hole(round_nonplated_hole(
-                x_mm,
-                y_mm,
-                diameter_mm,
-            ))],
-        );
     }
 
     fn referenced_layer_names(&self) -> impl Iterator<Item = &str> {
@@ -292,15 +262,15 @@ impl BoardArrayGeneratedGeometry {
 }
 
 #[derive(Debug, Clone)]
-pub struct GeneratedLayer {
-    pub name: String,
-    pub layer_function: LayerFunction,
-    pub side: Option<Side>,
-    pub polarity: Option<Polarity>,
+struct GeneratedLayer {
+    name: String,
+    layer_function: LayerFunction,
+    side: Option<Side>,
+    polarity: Option<Polarity>,
 }
 
 impl GeneratedLayer {
-    pub fn new(
+    fn new(
         name: impl Into<String>,
         layer_function: LayerFunction,
         side: Option<Side>,
@@ -316,10 +286,17 @@ impl GeneratedLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct GeneratedLayerFeature {
-    pub layer_name: String,
-    pub polarity: Polarity,
-    pub features: Vec<SetFeature>,
+struct GeneratedLayerFeature {
+    scope: GeneratedFeatureScope,
+    layer_name: String,
+    polarity: Polarity,
+    features: Vec<SetFeature>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneratedFeatureScope {
+    Array,
+    BoardCell,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -450,6 +427,17 @@ fn build_board_array_spec(
             margin_x_mm: margin_x,
             pitch_x_mm: pitch_x,
             array_height_mm: array_height,
+        },
+    );
+    add_board_cell_fiducials(
+        &mut generated_geometry,
+        ipc,
+        ecad,
+        &mut used_layer_names,
+        BoardCellFiducialSpec {
+            board_width_mm: board_width,
+            board_height_mm: board_height,
+            board_margin,
         },
     );
     let content_step_refs = content_step_refs(ipc, &array_name, &board_cell_name, &board_name);
@@ -646,6 +634,7 @@ fn add_vcut_lines(
         Some(Polarity::Positive),
     ));
     generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
         layer_name,
         Polarity::Positive,
         lines.into_iter().map(vcut_line_feature).collect(),
@@ -688,26 +677,10 @@ fn add_board_array_tooling(
         return;
     }
 
-    let top_copper_layer_name = top_copper_layer_name(ipc, ecad).unwrap_or_else(|| {
-        let layer_name = reserve_unique_name(used_layer_names, TOP_COPPER_LAYER_BASE_NAME);
-        generated_geometry.add_layer(GeneratedLayer::new(
-            layer_name.clone(),
-            LayerFunction::Signal,
-            Some(Side::Top),
-            Some(Polarity::Positive),
-        ));
-        layer_name
-    });
-    let top_soldermask_layer_name = top_soldermask_layer_name(ipc, ecad).unwrap_or_else(|| {
-        let layer_name = reserve_unique_name(used_layer_names, TOP_SOLDERMASK_LAYER_BASE_NAME);
-        generated_geometry.add_layer(GeneratedLayer::new(
-            layer_name.clone(),
-            LayerFunction::Soldermask,
-            Some(Side::Top),
-            Some(Polarity::Positive),
-        ));
-        layer_name
-    });
+    let top_copper_layer_name =
+        ensure_top_copper_layer_name(generated_geometry, ipc, ecad, used_layer_names);
+    let top_soldermask_layer_name =
+        ensure_top_soldermask_layer_name(generated_geometry, ipc, ecad, used_layer_names);
     let tooling_hole_layer_name =
         reserve_unique_name(used_layer_names, TOOLING_HOLE_LAYER_BASE_NAME);
     generated_geometry.add_layer(GeneratedLayer::new(
@@ -719,19 +692,74 @@ fn add_board_array_tooling(
 
     let fiducials = board_array_tooling_fiducials(&spec);
     generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
         top_copper_layer_name,
         Polarity::Positive,
-        round_global_fiducial_features(fiducials, FIDUCIAL_COPPER_DIAMETER_MM),
+        round_fiducial_features(
+            IpcFiducialKind::Global,
+            fiducials,
+            FIDUCIAL_COPPER_DIAMETER_MM,
+        ),
     );
     generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
         top_soldermask_layer_name,
         Polarity::Positive,
-        round_global_fiducial_features(fiducials, FIDUCIAL_MASK_OPENING_DIAMETER_MM),
+        round_fiducial_features(
+            IpcFiducialKind::Global,
+            fiducials,
+            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
+        ),
     );
     generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
         tooling_hole_layer_name,
         Polarity::Positive,
         round_nonplated_hole_features(board_array_tooling_holes(&spec), TOOLING_HOLE_DIAMETER_MM),
+    );
+}
+
+struct BoardCellFiducialSpec {
+    board_width_mm: f64,
+    board_height_mm: f64,
+    board_margin: BoardMarginMm,
+}
+
+fn add_board_cell_fiducials(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
+    used_layer_names: &mut HashSet<String>,
+    spec: BoardCellFiducialSpec,
+) {
+    let Some(fiducials) = board_cell_fiducials(&spec) else {
+        return;
+    };
+
+    let top_copper_layer_name =
+        ensure_top_copper_layer_name(generated_geometry, ipc, ecad, used_layer_names);
+    let top_soldermask_layer_name =
+        ensure_top_soldermask_layer_name(generated_geometry, ipc, ecad, used_layer_names);
+
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::BoardCell,
+        top_copper_layer_name,
+        Polarity::Positive,
+        round_fiducial_features(
+            IpcFiducialKind::Local,
+            fiducials,
+            FIDUCIAL_COPPER_DIAMETER_MM,
+        ),
+    );
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::BoardCell,
+        top_soldermask_layer_name,
+        Polarity::Positive,
+        round_fiducial_features(
+            IpcFiducialKind::Local,
+            fiducials,
+            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
+        ),
     );
 }
 
@@ -754,7 +782,7 @@ fn add_board_array_tooling(
 ///
 /// Vertical rules:
 /// - tooling hole centers are 2.5 mm from the top/bottom array edge;
-/// - fiducial centers are 3.85 mm from the top/bottom array edge.
+/// - fiducial centers are 3 mm from the top/bottom array edge.
 fn board_array_tooling_fiducials(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
     let left_edge = spec.margin_x_mm;
     let right_edge =
@@ -795,6 +823,129 @@ fn board_array_tooling_holes(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
         (left_edge + BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
         (right_edge - BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
     ]
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoardCellFiducialOrientation {
+    TopBottom,
+    LeftRight,
+}
+
+/// Place four board fiducials in each board cell's margin.
+///
+/// Eligibility is checked per orientation: top/bottom needs enough horizontal
+/// board span and top/bottom margins; left/right needs enough vertical board
+/// span and left/right margins. Prefer the board's longer dimension, then fall
+/// back to the other eligible orientation. Offsets along the board span are
+/// measured from the board bbox; offsets into the margin are measured from the
+/// board-cell outer edge. The primary side is top/left and uses a 5 mm span
+/// inset; the opposite side uses 10 mm, matching the array-level tooling pattern.
+fn board_cell_fiducials(spec: &BoardCellFiducialSpec) -> Option<[(f64, f64); 4]> {
+    let orientation = board_cell_fiducial_orientation(spec)?;
+    let board_left = spec.board_margin.left;
+    let board_right = spec.board_margin.left + spec.board_width_mm;
+    let board_bottom = spec.board_margin.bottom;
+    let board_top = spec.board_margin.bottom + spec.board_height_mm;
+    let cell_right = board_right + spec.board_margin.right;
+    let cell_top = board_top + spec.board_margin.top;
+
+    match orientation {
+        BoardCellFiducialOrientation::TopBottom => Some([
+            (
+                board_left + PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+                cell_top - FIDUCIAL_EDGE_OFFSET_MM,
+            ),
+            (
+                board_right - PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+                cell_top - FIDUCIAL_EDGE_OFFSET_MM,
+            ),
+            (
+                board_left + SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+                FIDUCIAL_EDGE_OFFSET_MM,
+            ),
+            (
+                board_right - SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+                FIDUCIAL_EDGE_OFFSET_MM,
+            ),
+        ]),
+        BoardCellFiducialOrientation::LeftRight => Some([
+            (
+                FIDUCIAL_EDGE_OFFSET_MM,
+                board_top - PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+            ),
+            (
+                FIDUCIAL_EDGE_OFFSET_MM,
+                board_bottom + PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+            ),
+            (
+                cell_right - FIDUCIAL_EDGE_OFFSET_MM,
+                board_top - SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+            ),
+            (
+                cell_right - FIDUCIAL_EDGE_OFFSET_MM,
+                board_bottom + SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+            ),
+        ]),
+    }
+}
+
+fn board_cell_fiducial_orientation(
+    spec: &BoardCellFiducialSpec,
+) -> Option<BoardCellFiducialOrientation> {
+    let top_bottom = spec.board_width_mm + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_SPAN_MM
+        && spec.board_margin.top + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM
+        && spec.board_margin.bottom + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM;
+    let left_right = spec.board_height_mm + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_SPAN_MM
+        && spec.board_margin.left + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM
+        && spec.board_margin.right + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM;
+
+    if spec.board_width_mm >= spec.board_height_mm {
+        if top_bottom {
+            Some(BoardCellFiducialOrientation::TopBottom)
+        } else {
+            left_right.then_some(BoardCellFiducialOrientation::LeftRight)
+        }
+    } else if left_right {
+        Some(BoardCellFiducialOrientation::LeftRight)
+    } else {
+        top_bottom.then_some(BoardCellFiducialOrientation::TopBottom)
+    }
+}
+
+fn ensure_top_copper_layer_name(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
+    used_layer_names: &mut HashSet<String>,
+) -> String {
+    top_copper_layer_name(ipc, ecad).unwrap_or_else(|| {
+        let layer_name = reserve_unique_name(used_layer_names, TOP_COPPER_LAYER_BASE_NAME);
+        generated_geometry.add_layer(GeneratedLayer::new(
+            layer_name.clone(),
+            LayerFunction::Signal,
+            Some(Side::Top),
+            Some(Polarity::Positive),
+        ));
+        layer_name
+    })
+}
+
+fn ensure_top_soldermask_layer_name(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
+    used_layer_names: &mut HashSet<String>,
+) -> String {
+    top_soldermask_layer_name(ipc, ecad).unwrap_or_else(|| {
+        let layer_name = reserve_unique_name(used_layer_names, TOP_SOLDERMASK_LAYER_BASE_NAME);
+        generated_geometry.add_layer(GeneratedLayer::new(
+            layer_name.clone(),
+            LayerFunction::Soldermask,
+            Some(Side::Top),
+            Some(Polarity::Positive),
+        ));
+        layer_name
+    })
 }
 
 fn top_copper_layer_name(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Option<String> {
@@ -1150,6 +1301,7 @@ fn write_board_cell_step_xml(spec: &BoardArraySpec) -> Result<String> {
 
     write_location_empty(&mut writer, "Datum", 0.0, 0.0, spec.units)?;
     write_board_cell_step_repeat(&mut writer, spec)?;
+    write_generated_layer_features(&mut writer, spec, GeneratedFeatureScope::BoardCell)?;
 
     writer.write_event(Event::End(BytesStart::new("Step").to_end()))?;
 
@@ -1195,7 +1347,7 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
 
     write_array_step_repeat(&mut writer, spec)?;
-    write_generated_layer_features(&mut writer, spec)?;
+    write_generated_layer_features(&mut writer, spec, GeneratedFeatureScope::Array)?;
 
     writer.write_event(Event::End(BytesStart::new("Step").to_end()))?;
 
@@ -1205,9 +1357,15 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
 fn write_generated_layer_features(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     spec: &BoardArraySpec,
+    scope: GeneratedFeatureScope,
 ) -> Result<()> {
     let mut generated_hole_index = 0usize;
-    for layer_feature in &spec.generated_geometry.layer_features {
+    for layer_feature in spec
+        .generated_geometry
+        .layer_features
+        .iter()
+        .filter(|layer_feature| layer_feature.scope == scope)
+    {
         write_generated_layer_feature(
             writer,
             spec.units,
@@ -1375,9 +1533,9 @@ fn write_circle(
     Ok(())
 }
 
-fn round_global_fiducial(x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
+fn round_fiducial(kind: IpcFiducialKind, x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
     Fiducial {
-        kind: FiducialKind::Global,
+        kind,
         location: Location { x: x_mm, y: y_mm },
         xform: None,
         shape: FiducialShape::Primitive(StandardPrimitive::Circle(Styled {
@@ -1391,13 +1549,14 @@ fn round_global_fiducial(x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
     }
 }
 
-fn round_global_fiducial_features(
+fn round_fiducial_features(
+    kind: IpcFiducialKind,
     points: impl IntoIterator<Item = (f64, f64)>,
     diameter_mm: f64,
 ) -> Vec<SetFeature> {
     points
         .into_iter()
-        .map(|(x, y)| SetFeature::Fiducial(round_global_fiducial(x, y, diameter_mm)))
+        .map(|(x, y)| SetFeature::Fiducial(round_fiducial(kind, x, y, diameter_mm)))
         .collect()
 }
 
@@ -1421,12 +1580,12 @@ fn round_nonplated_hole_features(
         .collect()
 }
 
-fn fiducial_element_name(kind: FiducialKind) -> &'static str {
+fn fiducial_element_name(kind: IpcFiducialKind) -> &'static str {
     match kind {
-        FiducialKind::BadBoardMark => "BadBoardMark",
-        FiducialKind::Global => "GlobalFiducial",
-        FiducialKind::GoodPanelMark => "GoodPanelMark",
-        FiducialKind::Local => "LocalFiducial",
+        IpcFiducialKind::BadBoardMark => "BadBoardMark",
+        IpcFiducialKind::Global => "GlobalFiducial",
+        IpcFiducialKind::GoodPanelMark => "GoodPanelMark",
+        IpcFiducialKind::Local => "LocalFiducial",
     }
 }
 
@@ -1750,18 +1909,30 @@ mod tests {
         )
         .unwrap();
 
-        spec.generated_geometry
-            .add_round_global_fiducial("TOP", 12.5, 12.5, 1.0);
-        spec.generated_geometry
-            .add_round_global_fiducial("F.Mask", 12.5, 12.5, 2.0);
+        spec.generated_geometry.add_layer_feature(
+            GeneratedFeatureScope::Array,
+            "TOP",
+            Polarity::Positive,
+            round_fiducial_features(IpcFiducialKind::Global, [(12.5, 12.5)], 1.0),
+        );
+        spec.generated_geometry.add_layer_feature(
+            GeneratedFeatureScope::Array,
+            "F.Mask",
+            Polarity::Positive,
+            round_fiducial_features(IpcFiducialKind::Global, [(12.5, 12.5)], 2.0),
+        );
         spec.generated_geometry.add_layer(GeneratedLayer::new(
             "Array_Drill",
             LayerFunction::Drill,
             Some(Side::All),
             Some(Polarity::Positive),
         ));
-        spec.generated_geometry
-            .add_round_nonplated_hole("Array_Drill", 20.0, 20.0, 2.0);
+        spec.generated_geometry.add_layer_feature(
+            GeneratedFeatureScope::Array,
+            "Array_Drill",
+            Polarity::Positive,
+            round_nonplated_hole_features([(20.0, 20.0)], 2.0),
+        );
         spec.content_layer_refs = content_layer_refs(&ipc, &spec.generated_geometry);
 
         let xml = write_board_array_xml(input, &spec).unwrap();
@@ -1871,7 +2042,7 @@ mod tests {
         }));
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(27.5, 66.15), (42.5, 66.15), (32.5, 3.85), (37.5, 3.85)],
+            vec![(27.5, 67.0), (42.5, 67.0), (32.5, 3.0), (37.5, 3.0)],
         );
         assert_points_close(
             hole_points(&tooling_holes),
@@ -1904,7 +2075,7 @@ mod tests {
         assert_eq!(tooling_holes.len(), 4);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(27.5, 66.15), (52.5, 66.15), (32.5, 3.85), (47.5, 3.85)],
+            vec![(27.5, 67.0), (52.5, 67.0), (32.5, 3.0), (47.5, 3.0)],
         );
         assert_points_close(
             hole_points(&tooling_holes),
@@ -1951,6 +2122,151 @@ mod tests {
 
         assert_eq!(fiducial_count, 0);
         assert_eq!(hole_count, 0);
+    }
+
+    #[test]
+    fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
+        let input = board_fixture_with_mask_bbox_mm(40.0, 30.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 1,
+                board_margin_mm: BoardMarginMm {
+                    top: 5.0,
+                    right: 0.0,
+                    bottom: 5.0,
+                    left: 0.0,
+                },
+                edge_rail_width_mm: 15.0,
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let cell = board_cell_step(&ipc);
+        let top_fiducials = fiducials_on_layer(&ipc, cell, "TOP");
+        let mask_fiducials = fiducials_on_layer(&ipc, cell, "F.Mask");
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_eq!(mask_fiducials.len(), 4);
+        assert!(
+            top_fiducials
+                .iter()
+                .all(|fiducial| fiducial.kind == IpcFiducialKind::Local)
+        );
+        assert!(
+            top_fiducials
+                .iter()
+                .all(|fiducial| close(fiducial_diameter(fiducial), 1.0))
+        );
+        assert!(
+            mask_fiducials
+                .iter()
+                .all(|fiducial| close(fiducial_diameter(fiducial), 2.0))
+        );
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(5.0, 37.0), (35.0, 37.0), (10.0, 3.0), (30.0, 3.0)],
+        );
+
+        let top =
+            geometry::extract_layer_for_view(&ipc, "TOP", GeometryView::ArrayFlattened).unwrap();
+        assert_eq!(
+            top.features
+                .iter()
+                .filter(|feature| feature.fiducial_kind == FiducialKind::Local)
+                .count(),
+            4
+        );
+
+        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let top = package
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert!(
+            top.contents
+                .contains("%TA.AperFunction,FiducialPad,Local*%")
+        );
+    }
+
+    #[test]
+    fn board_array_creation_adds_board_cell_fiducials_on_left_right_margins() {
+        let input = board_fixture_with_mask_bbox_mm(30.0, 40.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 1,
+                board_margin_mm: BoardMarginMm {
+                    top: 0.0,
+                    right: 5.0,
+                    bottom: 0.0,
+                    left: 5.0,
+                },
+                edge_rail_width_mm: 15.0,
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let top_fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP");
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(3.0, 35.0), (3.0, 5.0), (37.0, 30.0), (37.0, 10.0)],
+        );
+    }
+
+    #[test]
+    fn board_array_creation_skips_board_cell_fiducials_without_eligible_margin() {
+        let input = board_fixture_with_mask_bbox_mm(40.0, 35.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 1,
+                board_margin_mm: BoardMarginMm {
+                    top: 4.99,
+                    right: 0.0,
+                    bottom: 4.99,
+                    left: 0.0,
+                },
+                edge_rail_width_mm: 15.0,
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP").is_empty());
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask").is_empty());
+    }
+
+    #[test]
+    fn board_array_creation_skips_board_cell_fiducials_without_eligible_span() {
+        let input = board_fixture_with_mask_bbox_mm(29.99, 25.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 1,
+                board_margin_mm: BoardMarginMm {
+                    top: 5.0,
+                    right: 5.0,
+                    bottom: 5.0,
+                    left: 5.0,
+                },
+                edge_rail_width_mm: 20.0,
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP").is_empty());
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask").is_empty());
     }
 
     #[test]
@@ -2202,6 +2518,16 @@ mod tests {
             .steps
             .iter()
             .find(|step| ipc.resolve(step.name) == "array")
+            .unwrap()
+    }
+
+    fn board_cell_step(ipc: &Ipc2581) -> &ipc2581::types::ecad::Step {
+        ipc.ecad()
+            .unwrap()
+            .cad_data
+            .steps
+            .iter()
+            .find(|step| ipc.resolve(step.name) == "board_cell")
             .unwrap()
     }
 

@@ -242,6 +242,8 @@ pub enum GeometryView {
     Board,
     /// Root array-step geometry only, with no repeated child board materialization.
     ArrayLocal,
+    /// Root array and nested non-board array support geometry, excluding board materialization.
+    ArraySupport,
     /// Root array-step geometry plus repeated child board/sub-array geometry in array coordinates.
     ArrayFlattened,
     /// Root-step geometry plus the symbolic layout graph, without repeated feature materialization.
@@ -253,6 +255,7 @@ impl GeometryView {
         match self {
             Self::Board => ProfileSet::BoardOutlines,
             Self::ArrayLocal => ProfileSet::RootOnly,
+            Self::ArraySupport => ProfileSet::RootOnly,
             Self::ArrayFlattened => ProfileSet::FabricationOutlines,
             Self::LayoutSymbolic => ProfileSet::LayoutBoundaries,
         }
