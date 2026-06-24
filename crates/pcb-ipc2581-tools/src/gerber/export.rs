@@ -67,6 +67,11 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
         if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
             bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
         }
+        if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
+            && doc.layers[0].feature_count == 0
+        {
+            continue;
+        }
         let part = gerber_part_for_doc(&doc);
         let artwork = artwork_from_ipc_layer(
             ipc,

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::IpcAccessor;
 use crate::geometry;
 use crate::utils::Length;
+use pcb_ir::common::{BBox, Point};
 
 /// Board physical dimensions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,6 +204,8 @@ fn dimensions_from_bbox(bbox: pcb_ir::common::BBox) -> Option<BoardDimensions> {
 
 type IpcGeometryDocument =
     pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
+type IpcLayoutRepeat = pcb_ir::dialects::ipc::LayoutRepeat<ipc2581::Symbol>;
+type IpcLayoutStep = pcb_ir::dialects::ipc::LayoutStep<ipc2581::Symbol>;
 
 const GRID_EPSILON: f64 = 1e-6;
 
@@ -210,7 +213,7 @@ fn infer_simple_board_array_grid(
     doc: &IpcGeometryDocument,
     panel_step_index: u32,
 ) -> Option<BoardArrayGridInfo> {
-    use pcb_ir::dialects::ipc::{LayoutStepKind, layout_child_repeats, layout_repeat_instances};
+    use pcb_ir::dialects::ipc::{LayoutStepKind, layout_child_repeats};
 
     let panel_step = doc.layout.steps.get(panel_step_index as usize)?;
     let panel_bbox = panel_step.bbox;
@@ -229,22 +232,31 @@ fn infer_simple_board_array_grid(
         return None;
     }
 
+    let child_step = doc.layout.steps.get(repeat.child_step as usize)?;
+    match child_step.kind {
+        LayoutStepKind::Board => infer_direct_board_array_grid(doc, panel_bbox, repeat),
+        LayoutStepKind::Panel => infer_board_cell_array_grid(doc, panel_bbox, repeat),
+        _ => None,
+    }
+}
+
+fn infer_direct_board_array_grid(
+    doc: &IpcGeometryDocument,
+    panel_bbox: BBox,
+    repeat: &IpcLayoutRepeat,
+) -> Option<BoardArrayGridInfo> {
+    use pcb_ir::dialects::ipc::{LayoutStepKind, layout_repeat_instances};
+
     let board_step = doc.layout.steps.get(repeat.child_step as usize)?;
-    if board_step.kind != LayoutStepKind::Board
-        || board_step.bbox.is_empty()
-        || board_step.bbox.width() <= 0.0
-        || board_step.bbox.height() <= 0.0
-    {
+    if board_step.kind != LayoutStepKind::Board {
         return None;
     }
-
+    let (board_width, board_height) = board_dimensions(board_step)?;
     let instance_count = layout_repeat_instances(doc, repeat).count() as u32;
     if instance_count != repeat.nx.saturating_mul(repeat.ny) || repeat.bbox.is_empty() {
         return None;
     }
 
-    let board_width = board_step.bbox.width();
-    let board_height = board_step.bbox.height();
     let margins = margins_between(repeat.bbox, panel_bbox)?;
     let pitch_x = (repeat.nx > 1)
         .then_some(repeat.dx)
@@ -273,10 +285,121 @@ fn infer_simple_board_array_grid(
     })
 }
 
-fn margins_between(
-    tiles: pcb_ir::common::BBox,
-    board_array: pcb_ir::common::BBox,
-) -> Option<BoardArrayMargins> {
+fn infer_board_cell_array_grid(
+    doc: &IpcGeometryDocument,
+    panel_bbox: BBox,
+    repeat: &IpcLayoutRepeat,
+) -> Option<BoardArrayGridInfo> {
+    use pcb_ir::dialects::ipc::{LayoutStepKind, layout_child_repeats, layout_repeat_instances};
+
+    if repeat.dx <= 0.0 || repeat.dy <= 0.0 || !repeat.dx.is_finite() || !repeat.dy.is_finite() {
+        return None;
+    }
+
+    let (first_cell_instance, _) = layout_repeat_instances(doc, repeat).next()?;
+    let mut board_repeats = layout_child_repeats(doc, repeat.child_step, Some(first_cell_instance));
+    let (_, board_repeat) = board_repeats.next()?;
+    if board_repeats.next().is_some()
+        || board_repeat.nx != 1
+        || board_repeat.ny != 1
+        || !nearly_zero(board_repeat.dx)
+        || !nearly_zero(board_repeat.dy)
+        || !nearly_zero(board_repeat.angle)
+        || board_repeat.mirror
+    {
+        return None;
+    }
+
+    let board_step = doc.layout.steps.get(board_repeat.child_step as usize)?;
+    if board_step.kind != LayoutStepKind::Board {
+        return None;
+    }
+    let (board_width, board_height) = board_dimensions(board_step)?;
+    if repeat.dx + GRID_EPSILON < board_width || repeat.dy + GRID_EPSILON < board_height {
+        return None;
+    }
+
+    let board_left = board_repeat.x + board_step.bbox.min.x;
+    let board_bottom = board_repeat.y + board_step.bbox.min.y;
+    let board_margin = board_margin_from_cell(
+        board_left,
+        board_bottom,
+        board_width,
+        board_height,
+        repeat.dx,
+        repeat.dy,
+    )?;
+
+    let cell_array_bbox = repeated_cell_bbox(repeat)?;
+    let edge_margins = margins_between(cell_array_bbox, panel_bbox)?;
+    let edge_rail_width = average_if_consistent(vec![
+        edge_margins.left.mm(),
+        edge_margins.right.mm(),
+        edge_margins.bottom.mm(),
+        edge_margins.top.mm(),
+    ]);
+
+    Some(BoardArrayGridInfo {
+        columns: repeat.nx,
+        rows: repeat.ny,
+        board_width: Length::from_mm(board_width),
+        board_height: Length::from_mm(board_height),
+        pitch_x: Some(Length::from_mm(repeat.dx)),
+        pitch_y: Some(Length::from_mm(repeat.dy)),
+        board_margin: Some(board_margin),
+        edge_rail_width: edge_rail_width.map(Length::from_mm),
+        margins: margins_between(repeat.bbox, panel_bbox)?,
+    })
+}
+
+fn board_dimensions(step: &IpcLayoutStep) -> Option<(f64, f64)> {
+    (!step.bbox.is_empty() && step.bbox.width() > 0.0 && step.bbox.height() > 0.0)
+        .then_some((step.bbox.width(), step.bbox.height()))
+}
+
+fn repeated_cell_bbox(repeat: &IpcLayoutRepeat) -> Option<BBox> {
+    if repeat.nx == 0 || repeat.ny == 0 {
+        return None;
+    }
+    let width = repeat.nx as f64 * repeat.dx;
+    let height = repeat.ny as f64 * repeat.dy;
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some(BBox {
+        min: Point::new(repeat.x, repeat.y),
+        max: Point::new(repeat.x + width, repeat.y + height),
+    })
+}
+
+fn board_margin_from_cell(
+    board_left: f64,
+    board_bottom: f64,
+    board_width: f64,
+    board_height: f64,
+    cell_width: f64,
+    cell_height: f64,
+) -> Option<BoardArrayBoardMargin> {
+    let left = board_left;
+    let bottom = board_bottom;
+    let right = cell_width - board_left - board_width;
+    let top = cell_height - board_bottom - board_height;
+    if [left, right, bottom, top]
+        .iter()
+        .any(|value| !value.is_finite() || *value < -GRID_EPSILON)
+    {
+        return None;
+    }
+
+    Some(BoardArrayBoardMargin {
+        top: Length::from_mm(clamp_zero(top)),
+        right: Length::from_mm(clamp_zero(right)),
+        bottom: Length::from_mm(clamp_zero(bottom)),
+        left: Length::from_mm(clamp_zero(left)),
+    })
+}
+
+fn margins_between(tiles: BBox, board_array: BBox) -> Option<BoardArrayMargins> {
     let left = clamp_zero(tiles.min.x - board_array.min.x);
     let right = clamp_zero(board_array.max.x - tiles.max.x);
     let bottom = clamp_zero(tiles.min.y - board_array.min.y);
@@ -467,6 +590,8 @@ mod tests {
   <Content roleRef="owner">
     <FunctionMode mode="FABRICATION"/>
     <StepRef name="panel"/>
+    <StepRef name="board_cell"/>
+    <StepRef name="board"/>
   </Content>
   <Ecad>
     <CadHeader units="MILLIMETER"/>
@@ -509,6 +634,9 @@ mod tests {
           </Polygon>
         </Profile>
       </Step>
+      <Step name="board_cell" type="PALLET">
+        <StepRepeat stepRef="board" x="1" y="1.5" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
       <Step name="panel" type="PALLET">
         <Profile>
           <Polygon>
@@ -518,7 +646,7 @@ mod tests {
             <PolyStepSegment x="44" y="0"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
+        <StepRepeat stepRef="board_cell" x="4" y="4" nx="3" ny="2" dx="12" dy="8"/>
       </Step>
     </CadData>
   </Ecad>

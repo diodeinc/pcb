@@ -204,13 +204,16 @@ impl BoardMarginMm {
 #[derive(Debug, Clone)]
 struct BoardArraySpec {
     array_name: String,
+    board_cell_name: String,
     board_name: String,
     content_step_refs: Vec<String>,
     content_layer_refs: Vec<String>,
     columns: u32,
     rows: u32,
-    repeat_x_mm: f64,
-    repeat_y_mm: f64,
+    array_repeat_x_mm: f64,
+    array_repeat_y_mm: f64,
+    board_repeat_x_mm: f64,
+    board_repeat_y_mm: f64,
     pitch_x_mm: f64,
     pitch_y_mm: f64,
     array_width_mm: f64,
@@ -343,9 +346,9 @@ fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Resul
 
 fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
     let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry)?;
-    let array_step_xml = write_array_step_xml(spec)?;
+    let generated_steps_xml = write_generated_steps_xml(spec)?;
     let xml = update_content_refs(xml, &spec.content_step_refs, &spec.content_layer_refs)?;
-    let xml = insert_array_cad_data(&xml, generated_layer_xml.as_deref(), &array_step_xml)?;
+    let xml = insert_array_cad_data(&xml, generated_layer_xml.as_deref(), &generated_steps_xml)?;
     let xml = crate::utils::history::append_file_revision(&xml, "Created board array")?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
@@ -410,6 +413,9 @@ fn build_board_array_spec(
         .map(|step| ipc.resolve(step.name).to_string())
         .collect::<HashSet<_>>();
     let array_name = unique_name(&existing_step_names, "array");
+    let mut used_step_names = existing_step_names;
+    used_step_names.insert(array_name.clone());
+    let board_cell_name = unique_name(&used_step_names, "board_cell");
     let mut used_layer_names = ecad
         .cad_data
         .layers
@@ -446,18 +452,23 @@ fn build_board_array_spec(
             array_height_mm: array_height,
         },
     );
+    let content_step_refs = content_step_refs(ipc, &array_name, &board_cell_name, &board_name);
+    let content_layer_refs = content_layer_refs(ipc, &generated_geometry);
 
     Ok(BoardArraySpec {
-        array_name: array_name.clone(),
-        board_name: board_name.clone(),
-        content_step_refs: content_step_refs(ipc, &array_name, &board_name),
-        content_layer_refs: content_layer_refs(ipc, &generated_geometry),
+        array_name,
+        board_cell_name,
+        board_name,
+        content_step_refs,
+        content_layer_refs,
         columns,
         rows,
-        repeat_x_mm: margin_x - root.bbox.min.x,
-        repeat_y_mm: margin_y - root.bbox.min.y,
-        pitch_x_mm: if columns > 1 { pitch_x } else { 0.0 },
-        pitch_y_mm: if rows > 1 { pitch_y } else { 0.0 },
+        array_repeat_x_mm: options.edge_rail_width_mm,
+        array_repeat_y_mm: options.edge_rail_width_mm,
+        board_repeat_x_mm: board_margin.left - root.bbox.min.x,
+        board_repeat_y_mm: board_margin.bottom - root.bbox.min.y,
+        pitch_x_mm: pitch_x,
+        pitch_y_mm: pitch_y,
         array_width_mm: array_width,
         array_height_mm: array_height,
         generated_geometry,
@@ -576,9 +587,16 @@ fn unique_name(existing_names: &HashSet<String>, base: &str) -> String {
         .expect("unbounded name search should find an unused name")
 }
 
-fn content_step_refs(ipc: &Ipc2581, array_name: &str, board_name: &str) -> Vec<String> {
+fn content_step_refs(
+    ipc: &Ipc2581,
+    array_name: &str,
+    board_cell_name: &str,
+    board_name: &str,
+) -> Vec<String> {
     let mut refs = vec![array_name.to_string()];
     let mut seen = HashSet::from([array_name.to_string()]);
+    refs.push(board_cell_name.to_string());
+    seen.insert(board_cell_name.to_string());
     for step_ref in &ipc.content().step_refs {
         let name = ipc.resolve(*step_ref).to_string();
         if seen.insert(name.clone()) {
@@ -1116,6 +1134,28 @@ fn write_generated_layer_xml(
     Ok(())
 }
 
+fn write_generated_steps_xml(spec: &BoardArraySpec) -> Result<String> {
+    let mut xml = write_board_cell_step_xml(spec)?;
+    xml.push_str(&write_array_step_xml(spec)?);
+    Ok(xml)
+}
+
+fn write_board_cell_step_xml(spec: &BoardArraySpec) -> Result<String> {
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+
+    let mut step = BytesStart::new("Step");
+    step.push_attribute(("name", spec.board_cell_name.as_str()));
+    step.push_attribute(("type", "PALLET"));
+    writer.write_event(Event::Start(step))?;
+
+    write_location_empty(&mut writer, "Datum", 0.0, 0.0, spec.units)?;
+    write_board_cell_step_repeat(&mut writer, spec)?;
+
+    writer.write_event(Event::End(BytesStart::new("Step").to_end()))?;
+
+    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+}
+
 fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     let mut writer = Writer::new(Cursor::new(Vec::new()));
 
@@ -1154,7 +1194,7 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     writer.write_event(Event::End(BytesStart::new("Polygon").to_end()))?;
     writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
 
-    write_step_repeat(&mut writer, spec)?;
+    write_array_step_repeat(&mut writer, spec)?;
     write_generated_layer_features(&mut writer, spec)?;
 
     writer.write_event(Event::End(BytesStart::new("Step").to_end()))?;
@@ -1440,22 +1480,46 @@ fn write_location_empty(
     Ok(())
 }
 
-fn write_step_repeat(writer: &mut Writer<Cursor<Vec<u8>>>, spec: &BoardArraySpec) -> Result<()> {
-    let x = fmt_units(spec.repeat_x_mm, spec.units);
-    let y = fmt_units(spec.repeat_y_mm, spec.units);
+fn write_array_step_repeat(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    spec: &BoardArraySpec,
+) -> Result<()> {
+    let x = fmt_units(spec.array_repeat_x_mm, spec.units);
+    let y = fmt_units(spec.array_repeat_y_mm, spec.units);
     let dx = fmt_units(spec.pitch_x_mm, spec.units);
     let dy = fmt_units(spec.pitch_y_mm, spec.units);
     let nx = spec.columns.to_string();
     let ny = spec.rows.to_string();
 
     let mut repeat = BytesStart::new("StepRepeat");
-    repeat.push_attribute(("stepRef", spec.board_name.as_str()));
+    repeat.push_attribute(("stepRef", spec.board_cell_name.as_str()));
     repeat.push_attribute(("x", x.as_str()));
     repeat.push_attribute(("y", y.as_str()));
     repeat.push_attribute(("nx", nx.as_str()));
     repeat.push_attribute(("ny", ny.as_str()));
     repeat.push_attribute(("dx", dx.as_str()));
     repeat.push_attribute(("dy", dy.as_str()));
+    repeat.push_attribute(("angle", "0.00"));
+    repeat.push_attribute(("mirror", "false"));
+    writer.write_event(Event::Empty(repeat))?;
+    Ok(())
+}
+
+fn write_board_cell_step_repeat(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    spec: &BoardArraySpec,
+) -> Result<()> {
+    let x = fmt_units(spec.board_repeat_x_mm, spec.units);
+    let y = fmt_units(spec.board_repeat_y_mm, spec.units);
+
+    let mut repeat = BytesStart::new("StepRepeat");
+    repeat.push_attribute(("stepRef", spec.board_name.as_str()));
+    repeat.push_attribute(("x", x.as_str()));
+    repeat.push_attribute(("y", y.as_str()));
+    repeat.push_attribute(("nx", "1"));
+    repeat.push_attribute(("ny", "1"));
+    repeat.push_attribute(("dx", "0"));
+    repeat.push_attribute(("dy", "0"));
     repeat.push_attribute(("angle", "0.00"));
     repeat.push_attribute(("mirror", "false"));
     writer.write_event(Event::Empty(repeat))?;
@@ -1488,7 +1552,7 @@ mod tests {
     use pcb_ir::common::Point;
     use pcb_ir::dialects::ipc::{
         FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FiducialKind,
-        GeometryView, PlatingKind,
+        GeometryView, LayoutStepKind, PlatingKind,
     };
 
     #[test]
@@ -1545,14 +1609,19 @@ mod tests {
         .unwrap();
 
         assert!(xml.contains(r#"<StepRef name="array"/>"#));
+        assert!(xml.contains(r#"<StepRef name="board_cell"/>"#));
         assert!(xml.contains(r#"<StepRef name="board"/>"#));
         assert!(xml.contains(r#"<LayerRef name="V-Score"/>"#));
         assert!(xml.contains(
             r#"<Layer name="V-Score" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>"#
         ));
         assert!(xml.contains(r#"<Step name="array" type="PALLET">"#));
+        assert!(xml.contains(r#"<Step name="board_cell" type="PALLET">"#));
         assert!(xml.contains(
-            r#"<StepRepeat stepRef="board" x="9.5" y="10.5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
+            r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board" x="4.5" y="5.5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
         ));
         assert!(xml.contains(r#"<LayerFeature layerRef="V-Score">"#));
         assert!(xml.contains(r#"<Line startX="7.5" startY="0" endX="7.5" endY="100">"#));
@@ -1566,7 +1635,14 @@ mod tests {
         assert_eq!(pcb_ir::dialects::ipc::board_step_count(&layout), 1);
         assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 36);
 
-        let first_instance = &layout.layout.instances[0];
+        let first_instance = layout
+            .layout
+            .instances
+            .iter()
+            .find(|instance| {
+                layout.layout.steps[instance.child_step as usize].kind == LayoutStepKind::Board
+            })
+            .unwrap();
         assert_point_close(first_instance.bbox.min, Point::new(7.5, 7.5));
         assert_point_close(first_instance.bbox.max, Point::new(17.5, 17.5));
 
@@ -1612,6 +1688,14 @@ mod tests {
         assert!(vcut.contents.contains("%TF.Part,Array*%"));
         assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
         assert_eq!(vcut.contents.matches("D01*").count(), 24);
+
+        let board_package = build_manufacturing_package(&ipc, GeometryView::Board).unwrap();
+        assert!(
+            board_package
+                .files
+                .iter()
+                .all(|file| file.filename != "V_Cut.gbr")
+        );
     }
 
     #[test]
@@ -1885,7 +1969,10 @@ mod tests {
         assert!(xml.contains(r#"<PolyStepSegment x="0" y="3"/>"#));
         assert!(xml.contains(r#"<PolyStepSegment x="3" y="3"/>"#));
         assert!(xml.contains(
-            r#"<StepRepeat stepRef="board" x="1" y="1" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
+            r#"<StepRepeat stepRef="board_cell" x="1" y="1" nx="1" ny="1" dx="1" dy="1" angle="0.00" mirror="false"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
         ));
     }
 
