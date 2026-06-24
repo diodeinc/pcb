@@ -517,7 +517,13 @@ fn format_decimal(value: f64) -> String {
     if text.ends_with('.') {
         text.pop();
     }
-    if text == "-0" { "0".to_string() } else { text }
+    if text == "-0" {
+        "0".to_string()
+    } else if text.contains('.') {
+        text
+    } else {
+        format!("{text}.0")
+    }
 }
 
 #[cfg(test)]
@@ -575,9 +581,9 @@ mod tests {
 
         assert!(output.contains("; #@! TF.FileFunction,Plated,1,4,PTH\n"));
         assert!(output.contains("; #@! TA.AperFunction,Plated,PTH,ViaDrill\nT01C0.3\n"));
-        assert!(output.contains("T01\n; #@! TO.N,GND\nG05\nX1Y-2.5\n"));
-        assert!(output.contains("T02\nX3Y4G85X3Y5.1\nG05\n"));
-        assert!(output.contains("T03\nG00X4Y4\nM15\nG01X5Y4\nM16\n"));
+        assert!(output.contains("T01\n; #@! TO.N,GND\nG05\nX1.0Y-2.5\n"));
+        assert!(output.contains("T02\nX3.0Y4.0G85X3.0Y5.1\nG05\n"));
+        assert!(output.contains("T03\nG00X4.0Y4.0\nM15\nG01X5.0Y4.0\nM16\n"));
         assert!(output.ends_with("M30\n"));
     }
 }

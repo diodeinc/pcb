@@ -2,7 +2,10 @@ use anyhow::{Context, Result, bail};
 use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
 use pcb_ir::common::{Point, Unit};
-use pcb_ir::dialects::ipc::{FeatureKind, FeatureSpan, GeometryFeature, GeometryView, PlatingKind};
+use pcb_ir::dialects::ipc::{
+    FeatureKind, FeatureOperation, FeatureSpan, GeometryFeature, GeometryView, LayoutStepKind,
+    PlatingKind,
+};
 use pcb_ir::dialects::nc::{
     NcDocument, NcFunction, NcGeometry, NcObject, NcPlating, NcRouteSegment, NcSpan,
 };
@@ -73,7 +76,15 @@ fn collect_nc_features(
                     )?);
                 }
                 FeatureKind::Slot => {
+                    if feature.intent.operation == FeatureOperation::Route
+                        && feature.source_step_kind != LayoutStepKind::Board
+                    {
+                        continue;
+                    }
                     let Some(slot) = nc_linear_slot(feature) else {
+                        if feature.intent.operation == FeatureOperation::Route {
+                            continue;
+                        }
                         bail!(
                             "cannot export slot on layer '{}' to XNC because it is not a simple oval slot",
                             layer.name

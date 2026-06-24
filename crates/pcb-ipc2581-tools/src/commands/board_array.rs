@@ -7,12 +7,24 @@ use ipc2581::types::{
     Units,
     ecad::{
         Fiducial, FiducialKind as IpcFiducialKind, FiducialShape, Hole, LayerFunction, Line,
-        PlatingStatus, Polarity, SetFeature, Side, StepType,
+        PlatingStatus, Polarity, SetFeature, Side, Slot, SlotShape, StepType,
     },
-    primitives::{Circle, LineEnd, StandardPrimitive, Styled},
-    transform::Location,
+    primitives::{
+        Circle, LineEnd, Oval, Point as IpcPoint, PolyStep, PolyStepSegment, Polygon, Size,
+        StandardPrimitive, Styled,
+    },
+    transform::{Location, Xform},
 };
-use pcb_ir::dialects::ipc::{LayoutStepKind, root_step};
+use pcb_ir::{
+    common::{BBox, Point, arc_sweep_radians},
+    dialects::ipc::{
+        LayoutStepKind,
+        relief::{
+            DEFAULT_RELIEF_TOLERANCE_MM, RouteRelief, VScoreReliefInput, vscore_route_reliefs,
+        },
+        root_step,
+    },
+};
 use quick_xml::{
     Reader, Writer,
     events::{BytesStart, Event},
@@ -30,10 +42,14 @@ const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
 const VCUT_LAYER_BASE_NAME: &str = "V-Score";
 const VCUT_LINE_WIDTH_MM: f64 = 0.025;
+const ROUT_LAYER_BASE_NAME: &str = "Board_Array_Route";
 const TOP_COPPER_LAYER_BASE_NAME: &str = "F.Cu";
 const TOP_SOLDERMASK_LAYER_BASE_NAME: &str = "F.Mask";
 const TOOLING_HOLE_LAYER_BASE_NAME: &str = "Board_Array_Drill";
 const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
+const GENERATED_SLOT_NAME_PREFIX: &str = "array_route_relief";
+const ROUT_TOOL_DIAMETER_MM: f64 = 1.0;
+const PROFILE_FLATTEN_TOLERANCE_MM: f64 = 0.01;
 const FIDUCIAL_COPPER_DIAMETER_MM: f64 = 1.0;
 const FIDUCIAL_MASK_OPENING_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_DIAMETER_MM: f64 = 2.0;
@@ -46,6 +62,7 @@ const SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 35.0;
 const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 20.0;
 const MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM: f64 = 5.0;
 const MIN_BOARD_CELL_FIDUCIAL_SPAN_MM: f64 = 30.0;
+const BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM: f64 = 2.5;
 const PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = TOP_TOOLING_HOLE_X_INSET_MM;
 const SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = BOTTOM_TOOLING_HOLE_X_INSET_MM;
 
@@ -381,6 +398,8 @@ fn build_board_array_spec(
         + rows as f64 * board_margin.vertical_gap()
         + 2.0 * options.edge_rail_width_mm;
     validate_array_dimensions(array_width, array_height)?;
+    let board_repeat_x = board_margin.left - root.bbox.min.x;
+    let board_repeat_y = board_margin.bottom - root.bbox.min.y;
 
     let board_name = ipc.resolve(root.source_step_ref).to_string();
     let existing_step_names = ecad
@@ -416,6 +435,13 @@ fn build_board_array_spec(
             array_height_mm: array_height,
         })?,
     );
+    add_vscore_route_reliefs(
+        &mut generated_geometry,
+        &mut used_layer_names,
+        primary_step,
+        root.bbox,
+        Point::new(board_repeat_x, board_repeat_y),
+    )?;
     add_board_array_tooling(
         &mut generated_geometry,
         ipc,
@@ -455,8 +481,8 @@ fn build_board_array_spec(
         rows,
         array_repeat_x_mm: options.edge_rail_width_mm,
         array_repeat_y_mm: options.edge_rail_width_mm,
-        board_repeat_x_mm: board_margin.left - root.bbox.min.x,
-        board_repeat_y_mm: board_margin.bottom - root.bbox.min.y,
+        board_repeat_x_mm: board_repeat_x,
+        board_repeat_y_mm: board_repeat_y,
         pitch_x_mm: pitch_x,
         pitch_y_mm: pitch_y,
         array_width_mm: array_width,
@@ -643,6 +669,48 @@ fn add_vcut_lines(
     );
 }
 
+fn add_vscore_route_reliefs(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    used_layer_names: &mut HashSet<String>,
+    board_step: &ipc2581::types::ecad::Step,
+    board_bbox: BBox,
+    board_cell_offset: Point,
+) -> Result<()> {
+    let Some(profile) = &board_step.profile else {
+        bail!("primary IPC-2581 board step has no Profile outline");
+    };
+    let boundary = board_profile_boundary(profile, board_cell_offset)?;
+    let reliefs = vscore_route_reliefs(&VScoreReliefInput {
+        board_boundary: boundary,
+        score_bbox: translate_bbox(board_bbox, board_cell_offset),
+        tool_diameter_mm: ROUT_TOOL_DIAMETER_MM,
+        tolerance_mm: DEFAULT_RELIEF_TOLERANCE_MM,
+    })
+    .context("failed to compute V-score route reliefs")?;
+    if reliefs.is_empty() {
+        return Ok(());
+    }
+    let relief_features = reliefs
+        .into_iter()
+        .map(route_relief_slot)
+        .collect::<Result<Vec<_>>>()?;
+
+    let layer_name = reserve_unique_name(used_layer_names, ROUT_LAYER_BASE_NAME);
+    generated_geometry.add_layer(GeneratedLayer::new(
+        layer_name.clone(),
+        LayerFunction::Rout,
+        Some(Side::All),
+        Some(Polarity::Positive),
+    ));
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::BoardCell,
+        layer_name,
+        Polarity::Positive,
+        relief_features,
+    );
+    Ok(())
+}
+
 fn vcut_line_feature(line: VcutLine) -> SetFeature {
     SetFeature::Line(Line {
         start_x: line.start_x_mm,
@@ -653,6 +721,149 @@ fn vcut_line_feature(line: VcutLine) -> SetFeature {
         line_width: VCUT_LINE_WIDTH_MM,
         line_end: Some(LineEnd::Round),
     })
+}
+
+fn board_profile_boundary(
+    profile: &ipc2581::types::ecad::Profile,
+    offset: Point,
+) -> Result<Vec<Point>> {
+    polygon_boundary_points(&profile.polygon, offset)
+}
+
+fn polygon_boundary_points(polygon: &Polygon, offset: Point) -> Result<Vec<Point>> {
+    let mut current = point_from_ipc(polygon.begin, offset);
+    let mut points = vec![current];
+    for step in &polygon.steps {
+        match step {
+            PolyStep::Segment(segment) => {
+                current = point_from_ipc(segment.point, offset);
+                points.push(current);
+            }
+            PolyStep::Curve(curve) => {
+                let end = point_from_ipc(curve.point, offset);
+                let center = point_from_ipc(curve.center, offset);
+                append_flattened_arc(
+                    &mut points,
+                    current,
+                    end,
+                    center,
+                    curve.clockwise,
+                    PROFILE_FLATTEN_TOLERANCE_MM,
+                )?;
+                current = end;
+            }
+        }
+    }
+    Ok(points)
+}
+
+fn append_flattened_arc(
+    points: &mut Vec<Point>,
+    start: Point,
+    end: Point,
+    center: Point,
+    clockwise: bool,
+    tolerance: f64,
+) -> Result<()> {
+    let radius = start.distance_to(center);
+    if radius <= EPSILON {
+        bail!("board Profile contains an arc with zero radius");
+    }
+    let sweep = arc_sweep_radians(start, end, center, clockwise);
+    let max_step = if radius <= tolerance {
+        std::f64::consts::FRAC_PI_4
+    } else {
+        (2.0 * (1.0 - tolerance / radius).clamp(-1.0, 1.0).acos())
+            .clamp(0.05, std::f64::consts::FRAC_PI_4)
+    };
+    let segment_count = (sweep / max_step).ceil().max(1.0) as usize;
+    let signed_step = if clockwise { -sweep } else { sweep } / segment_count as f64;
+    let start_angle = start.angle_from(center);
+    for index in 1..segment_count {
+        let angle = start_angle + signed_step * index as f64;
+        points.push(Point::new(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        ));
+    }
+    points.push(end);
+    Ok(())
+}
+
+fn point_from_ipc(point: IpcPoint, offset: Point) -> Point {
+    Point::new(point.x + offset.x, point.y + offset.y)
+}
+
+fn translate_bbox(bbox: BBox, offset: Point) -> BBox {
+    BBox {
+        min: Point::new(bbox.min.x + offset.x, bbox.min.y + offset.y),
+        max: Point::new(bbox.max.x + offset.x, bbox.max.y + offset.y),
+    }
+}
+
+fn route_relief_slot(relief: RouteRelief) -> Result<SetFeature> {
+    let length = relief.start.distance_to(relief.end);
+    if length <= EPSILON {
+        bail!("computed V-score route relief produced a zero-length slot");
+    }
+    let center = Point::new(
+        (relief.start.x + relief.end.x) / 2.0,
+        (relief.start.y + relief.end.y) / 2.0,
+    );
+    let rotation = (relief.end.y - relief.start.y)
+        .atan2(relief.end.x - relief.start.x)
+        .to_degrees();
+    Ok(SetFeature::Slot(Slot {
+        name: None,
+        shape: SlotShape::Primitive(StandardPrimitive::Oval(Styled {
+            shape: Oval {
+                size: Size {
+                    width: length + relief.tool_diameter_mm,
+                    height: relief.tool_diameter_mm,
+                },
+            },
+            fill_property: None,
+            line_desc_ref: None,
+        })),
+        plating_status: PlatingStatus::NonPlated,
+        z_axis_dim: false,
+        xform: Some(Xform {
+            rotation,
+            ..Xform::default()
+        }),
+        x: center.x,
+        y: center.y,
+    }))
+}
+
+fn polygon_from_points(points: Vec<Point>) -> Option<Polygon> {
+    let mut points = points
+        .into_iter()
+        .filter(|point| point.is_finite())
+        .collect::<Vec<_>>();
+    if points.len() > 1 && points[0].distance_to(*points.last().unwrap()) <= EPSILON {
+        points.pop();
+    }
+    if points.len() < 3 {
+        return None;
+    }
+    let begin = IpcPoint {
+        x: points[0].x,
+        y: points[0].y,
+    };
+    let mut steps = points[1..]
+        .iter()
+        .map(|point| {
+            PolyStep::Segment(PolyStepSegment {
+                point: IpcPoint {
+                    x: point.x,
+                    y: point.y,
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    steps.push(PolyStep::Segment(PolyStepSegment { point: begin }));
+    Some(Polygon { begin, steps })
 }
 
 struct BoardArrayToolingSpec {
@@ -855,36 +1066,36 @@ fn board_cell_fiducials(spec: &BoardCellFiducialSpec) -> Option<[(f64, f64); 4]>
         BoardCellFiducialOrientation::TopBottom => Some([
             (
                 board_left + PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
-                cell_top - FIDUCIAL_EDGE_OFFSET_MM,
+                cell_top - BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
             ),
             (
                 board_right - PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
-                cell_top - FIDUCIAL_EDGE_OFFSET_MM,
+                cell_top - BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
             ),
             (
                 board_left + SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
-                FIDUCIAL_EDGE_OFFSET_MM,
+                BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
             ),
             (
                 board_right - SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
-                FIDUCIAL_EDGE_OFFSET_MM,
+                BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
             ),
         ]),
         BoardCellFiducialOrientation::LeftRight => Some([
             (
-                FIDUCIAL_EDGE_OFFSET_MM,
+                BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
                 board_top - PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
             ),
             (
-                FIDUCIAL_EDGE_OFFSET_MM,
+                BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
                 board_bottom + PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
             ),
             (
-                cell_right - FIDUCIAL_EDGE_OFFSET_MM,
+                cell_right - BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
                 board_top - SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
             ),
             (
-                cell_right - FIDUCIAL_EDGE_OFFSET_MM,
+                cell_right - BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
                 board_bottom + SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
             ),
         ]),
@@ -1321,31 +1532,11 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     write_location_empty(&mut writer, "Datum", 0.0, 0.0, spec.units)?;
 
     writer.write_event(Event::Start(BytesStart::new("Profile")))?;
-    writer.write_event(Event::Start(BytesStart::new("Polygon")))?;
-    write_location_empty(&mut writer, "PolyBegin", 0.0, 0.0, spec.units)?;
-    write_location_empty(
+    write_polygon(
         &mut writer,
-        "PolyStepSegment",
-        0.0,
-        spec.array_height_mm,
         spec.units,
+        &rectangle_polygon(spec.array_width_mm, spec.array_height_mm),
     )?;
-    write_location_empty(
-        &mut writer,
-        "PolyStepSegment",
-        spec.array_width_mm,
-        spec.array_height_mm,
-        spec.units,
-    )?;
-    write_location_empty(
-        &mut writer,
-        "PolyStepSegment",
-        spec.array_width_mm,
-        0.0,
-        spec.units,
-    )?;
-    write_location_empty(&mut writer, "PolyStepSegment", 0.0, 0.0, spec.units)?;
-    writer.write_event(Event::End(BytesStart::new("Polygon").to_end()))?;
     writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
 
     write_array_step_repeat(&mut writer, spec)?;
@@ -1361,19 +1552,14 @@ fn write_generated_layer_features(
     spec: &BoardArraySpec,
     scope: GeneratedFeatureScope,
 ) -> Result<()> {
-    let mut generated_hole_index = 0usize;
+    let mut names = GeneratedNameState::default();
     for layer_feature in spec
         .generated_geometry
         .layer_features
         .iter()
         .filter(|layer_feature| layer_feature.scope == scope)
     {
-        write_generated_layer_feature(
-            writer,
-            spec.units,
-            layer_feature,
-            &mut generated_hole_index,
-        )?;
+        write_generated_layer_feature(writer, spec.units, layer_feature, &mut names)?;
     }
     Ok(())
 }
@@ -1382,7 +1568,7 @@ fn write_generated_layer_feature(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     units: Units,
     layer_feature: &GeneratedLayerFeature,
-    generated_hole_index: &mut usize,
+    names: &mut GeneratedNameState,
 ) -> Result<()> {
     if layer_feature.features.is_empty() {
         return Ok(());
@@ -1395,17 +1581,23 @@ fn write_generated_layer_feature(
     let mut set = BytesStart::new("Set");
     set.push_attribute(("polarity", polarity_attr(layer_feature.polarity)));
     writer.write_event(Event::Start(set))?;
-    write_set_features(writer, units, &layer_feature.features, generated_hole_index)?;
+    write_set_features(writer, units, &layer_feature.features, names)?;
     writer.write_event(Event::End(BytesStart::new("Set").to_end()))?;
     writer.write_event(Event::End(BytesStart::new("LayerFeature").to_end()))?;
     Ok(())
+}
+
+#[derive(Debug, Default)]
+struct GeneratedNameState {
+    hole_index: usize,
+    slot_index: usize,
 }
 
 fn write_set_features(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     units: Units,
     features: &[SetFeature],
-    generated_hole_index: &mut usize,
+    names: &mut GeneratedNameState,
 ) -> Result<()> {
     let mut features_open = false;
     for feature in features {
@@ -1423,7 +1615,11 @@ fn write_set_features(
             }
             SetFeature::Hole(hole) => {
                 close_features_element(writer, &mut features_open)?;
-                write_hole(writer, units, hole, generated_hole_index)?;
+                write_hole(writer, units, hole, names)?;
+            }
+            SetFeature::Slot(slot) => {
+                close_features_element(writer, &mut features_open)?;
+                write_slot(writer, units, slot, names)?;
             }
             _ => bail!("generated board array layer feature has unsupported feature kind"),
         }
@@ -1502,13 +1698,13 @@ fn write_hole(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     units: Units,
     hole: &Hole,
-    generated_hole_index: &mut usize,
+    names: &mut GeneratedNameState,
 ) -> Result<()> {
     let diameter = fmt_units(hole.diameter, units);
     let x = fmt_units(hole.x, units);
     let y = fmt_units(hole.y, units);
-    let generated_name = format!("{GENERATED_HOLE_NAME_PREFIX}_{}", *generated_hole_index);
-    *generated_hole_index += 1;
+    let generated_name = format!("{GENERATED_HOLE_NAME_PREFIX}_{}", names.hole_index);
+    names.hole_index += 1;
 
     let mut elem = BytesStart::new("Hole");
     elem.push_attribute(("name", generated_name.as_str()));
@@ -1523,6 +1719,71 @@ fn write_hole(
     Ok(())
 }
 
+fn write_slot(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    slot: &Slot,
+    names: &mut GeneratedNameState,
+) -> Result<()> {
+    if slot.z_axis_dim {
+        bail!("generated board array route reliefs must be through-board SlotCavity features");
+    }
+
+    let generated_name = format!("{GENERATED_SLOT_NAME_PREFIX}_{}", names.slot_index);
+    names.slot_index += 1;
+
+    let mut elem = BytesStart::new("SlotCavity");
+    elem.push_attribute(("name", generated_name.as_str()));
+    elem.push_attribute(("platingStatus", plating_status_attr(slot.plating_status)));
+    elem.push_attribute(("plusTol", "0"));
+    elem.push_attribute(("minusTol", "0"));
+    writer.write_event(Event::Start(elem))?;
+    write_location_empty(writer, "Location", slot.x, slot.y, units)?;
+    if let Some(xform) = slot.xform {
+        write_xform(writer, units, xform)?;
+    }
+    match &slot.shape {
+        SlotShape::Outline(polygon) => {
+            writer.write_event(Event::Start(BytesStart::new("Outline")))?;
+            write_polygon(writer, units, polygon)?;
+            writer.write_event(Event::End(BytesStart::new("Outline").to_end()))?;
+        }
+        SlotShape::Primitive(StandardPrimitive::Oval(oval)) => {
+            write_oval(writer, units, oval.shape.size)?;
+        }
+        SlotShape::Primitive(_) => {
+            bail!("generated board array route reliefs must use Oval SlotCavity geometry")
+        }
+    }
+    writer.write_event(Event::End(BytesStart::new("SlotCavity").to_end()))?;
+    Ok(())
+}
+
+fn write_xform(writer: &mut Writer<Cursor<Vec<u8>>>, units: Units, xform: Xform) -> Result<()> {
+    let mut elem = BytesStart::new("Xform");
+    if xform.x_offset.abs() > EPSILON {
+        let x_offset = fmt_units(xform.x_offset, units);
+        elem.push_attribute(("xOffset", x_offset.as_str()));
+    }
+    if xform.y_offset.abs() > EPSILON {
+        let y_offset = fmt_units(xform.y_offset, units);
+        elem.push_attribute(("yOffset", y_offset.as_str()));
+    }
+    if xform.rotation.abs() > EPSILON {
+        let rotation = fmt_num(xform.rotation);
+        elem.push_attribute(("rotation", rotation.as_str()));
+    }
+    if xform.mirror {
+        elem.push_attribute(("mirror", "true"));
+    }
+    if (xform.scale - 1.0).abs() > EPSILON {
+        let scale = fmt_num(xform.scale);
+        elem.push_attribute(("scale", scale.as_str()));
+    }
+    writer.write_event(Event::Empty(elem))?;
+    Ok(())
+}
+
 fn write_circle(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     units: Units,
@@ -1533,6 +1794,51 @@ fn write_circle(
     elem.push_attribute(("diameter", diameter.as_str()));
     writer.write_event(Event::Empty(elem))?;
     Ok(())
+}
+
+fn write_oval(writer: &mut Writer<Cursor<Vec<u8>>>, units: Units, size: Size) -> Result<()> {
+    let width = fmt_units(size.width, units);
+    let height = fmt_units(size.height, units);
+    let mut elem = BytesStart::new("Oval");
+    elem.push_attribute(("width", width.as_str()));
+    elem.push_attribute(("height", height.as_str()));
+    writer.write_event(Event::Empty(elem))?;
+    Ok(())
+}
+
+fn write_polygon(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    polygon: &Polygon,
+) -> Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Polygon")))?;
+    write_location_empty(writer, "PolyBegin", polygon.begin.x, polygon.begin.y, units)?;
+    for step in &polygon.steps {
+        match step {
+            PolyStep::Segment(segment) => {
+                write_location_empty(
+                    writer,
+                    "PolyStepSegment",
+                    segment.point.x,
+                    segment.point.y,
+                    units,
+                )?;
+            }
+            PolyStep::Curve(_) => bail!("generated board array polygons must be line segments"),
+        }
+    }
+    writer.write_event(Event::End(BytesStart::new("Polygon").to_end()))?;
+    Ok(())
+}
+
+fn rectangle_polygon(width_mm: f64, height_mm: f64) -> Polygon {
+    polygon_from_points(vec![
+        Point::new(0.0, 0.0),
+        Point::new(0.0, height_mm),
+        Point::new(width_mm, height_mm),
+        Point::new(width_mm, 0.0),
+    ])
+    .expect("non-degenerate rectangle should produce a polygon")
 }
 
 fn round_fiducial(kind: IpcFiducialKind, x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
@@ -1848,6 +2154,7 @@ mod tests {
         assert!(vcut.contents.contains("%TF.FileFunction,Vcut,Top/Bot*%"));
         assert!(vcut.contents.contains("%TF.Part,Array*%"));
         assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
+        assert!(!vcut.contents.contains("G36*"));
         assert_eq!(vcut.contents.matches("D01*").count(), 24);
 
         let board_package = build_manufacturing_package(&ipc, GeometryView::Board).unwrap();
@@ -1857,6 +2164,64 @@ mod tests {
                 .iter()
                 .all(|file| file.filename != "V_Cut.gbr")
         );
+    }
+
+    #[test]
+    fn created_board_array_route_reliefs_flow_to_profile_gerber() {
+        let xml = create_board_array_xml(
+            notched_board_fixture_mm(),
+            &BoardArrayCreateOptions {
+                columns: 6,
+                rows: 6,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_width_mm: 5.0,
+            },
+        )
+        .unwrap();
+
+        assert!(xml.contains(r#"<LayerRef name="Board_Array_Route"/>"#));
+        assert!(xml.contains(
+            r#"<Layer name="Board_Array_Route" layerFunction="ROUT" side="ALL" polarity="POSITIVE"/>"#
+        ));
+        assert!(xml.contains("<SlotCavity"));
+        assert!(xml.contains("<Oval"));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let route = geometry::extract_layer_for_view(
+            &ipc,
+            "Board_Array_Route",
+            GeometryView::ArrayFlattened,
+        )
+        .unwrap();
+        assert!(!route.features.is_empty());
+        assert!(route.features.iter().all(|feature| {
+            feature.intent.domain == FeatureDomain::Rout
+                && feature.intent.operation == FeatureOperation::Route
+                && feature.intent.plating == PlatingKind::NonPlated
+        }));
+
+        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
+        assert!(
+            package
+                .files
+                .iter()
+                .all(|file| file.filename != "Board_Array_Route.gbr")
+        );
+        let vcut = package
+            .files
+            .iter()
+            .find(|file| file.filename == "V_Cut.gbr")
+            .unwrap();
+        assert!(!vcut.contents.contains("G36*"));
+        let edge_cuts = package
+            .files
+            .iter()
+            .find(|file| file.filename == "Edge_Cuts.gm1")
+            .unwrap();
+        assert!(edge_cuts.contents.contains("%TF.FileFunction,Profile,NP*%"));
+        assert!(edge_cuts.contents.contains("%TA.AperFunction,Profile*%"));
+        assert!(edge_cuts.contents.contains("%ADD10C,0.05*%"));
+        assert!(!edge_cuts.contents.contains("%ADD11C,1*%"));
     }
 
     #[test]
@@ -2001,7 +2366,7 @@ mod tests {
                 .contents
                 .contains("; #@! TA.AperFunction,NonPlated,NPTH,ComponentDrill")
         );
-        assert!(drill.contents.contains("X20Y20"));
+        assert!(drill.contents.contains("X20.0Y20.0"));
         assert!(!top.contents.contains("%TA.AperFunction,Other,Drill*%"));
         assert!(!mask.contents.contains("%TA.AperFunction,Other,Drill*%"));
     }
@@ -2169,7 +2534,7 @@ mod tests {
         );
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(5.0, 37.0), (35.0, 37.0), (10.0, 3.0), (30.0, 3.0)],
+            vec![(5.0, 37.5), (35.0, 37.5), (10.0, 2.5), (30.0, 2.5)],
         );
 
         let top =
@@ -2219,7 +2584,7 @@ mod tests {
         assert_eq!(top_fiducials.len(), 4);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(3.0, 35.0), (3.0, 5.0), (37.0, 30.0), (37.0, 10.0)],
+            vec![(2.5, 35.0), (2.5, 5.0), (37.5, 30.0), (37.5, 10.0)],
         );
     }
 
@@ -2644,6 +3009,38 @@ mod tests {
             <PolyStepSegment x="8" y="7"/>
             <PolyStepSegment x="-2" y="7"/>
             <PolyStepSegment x="-2" y="-3"/>
+          </Polygon>
+        </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn notched_board_fixture_mm() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="6" y="10"/>
+            <PolyStepSegment x="5" y="8"/>
+            <PolyStepSegment x="4" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
           </Polygon>
         </Profile>
       </Step>

@@ -18,8 +18,8 @@ use pcb_ir::dialects::artwork::{
 };
 use pcb_ir::dialects::ipc::{
     FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature,
-    GeometryPath, GeometryPathPaintClass, GeometryPolarity, GeometryView, PlatingKind, ProfileSet,
-    profile_occurrences_for, transformed_path_payloads,
+    GeometryPath, GeometryPathPaintClass, GeometryPolarity, GeometryView, LayoutStepKind,
+    PlatingKind, ProfileSet, profile_occurrences_for, transformed_path_payloads,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -57,6 +57,9 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut files = Vec::new();
     let plans = export_layer_plans(ipc, &ecad.cad_data.layers);
+    let has_profile_plan = plans
+        .iter()
+        .any(|plan| plan.role == GerberLayerRole::Profile);
 
     for plan in &plans {
         let source_layer = plan.layer;
@@ -77,10 +80,12 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
             ipc,
             &doc,
             0,
-            plan.role,
-            ir_side(source_layer.side),
-            layer_attributes(plan.file_function.clone(), part),
-            view.profile_set(),
+            GerberArtworkSpec {
+                role: plan.role,
+                side: ir_side(source_layer.side),
+                meta: layer_attributes(plan.file_function.clone(), part),
+                view,
+            },
         )?;
         let layer = lower_artwork_layer(&artwork)?;
         let contents = write_layer(&layer)?;
@@ -89,6 +94,9 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
             layer,
             contents,
         });
+    }
+    if !has_profile_plan && let Some(file) = synthetic_profile_gerber_file(ipc, view)? {
+        files.push(file);
     }
 
     Ok(files)
@@ -368,21 +376,18 @@ fn artwork_from_ipc_layer(
     ipc: &Ipc2581,
     doc: &IpcGeometryDocument,
     layer_index: usize,
-    role: GerberLayerRole,
-    side: IrSide,
-    meta: LayerAttributes,
-    profile_set: ProfileSet,
+    spec: GerberArtworkSpec,
 ) -> Result<ArtworkLayer> {
     let layer = &doc.layers[layer_index];
     let mut artwork = ArtworkLayer::new(Unit::Millimeter);
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
         name: layer.name.clone(),
-        role: role.ir_role(),
-        side,
+        role: spec.role.ir_role(),
+        side: spec.side,
         object_start: 0,
         object_count: 0,
         bbox: layer.bbox,
-        meta,
+        meta: spec.meta,
     });
     let features = &doc.features
         [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
@@ -390,20 +395,90 @@ fn artwork_from_ipc_layer(
     for feature in features {
         push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
     }
-    if role == GerberLayerRole::Profile && artwork.layers[artwork_layer as usize].object_count == 0
+    if spec.role == GerberLayerRole::Profile
+        && artwork.layers[artwork_layer as usize].object_count == 0
     {
-        append_profile_fallback(
+        append_profile_occurrences(
             &mut artwork,
             artwork_layer,
             doc,
-            profile_set,
+            spec.view.profile_set(),
             ProfileGerberStyle::default(),
         );
+    }
+    if spec.role == GerberLayerRole::Profile {
+        append_route_features_to_profile(
+            ipc,
+            &mut artwork,
+            artwork_layer,
+            spec.view,
+            ProfileGerberStyle::default(),
+        )?;
     }
     Ok(artwork)
 }
 
-fn append_profile_fallback(
+struct GerberArtworkSpec {
+    role: GerberLayerRole,
+    side: IrSide,
+    meta: LayerAttributes,
+    view: GeometryView,
+}
+
+fn synthetic_profile_gerber_file(
+    ipc: &Ipc2581,
+    view: GeometryView,
+) -> Result<Option<GerberX2File>> {
+    let doc = geometry::extract_layout(ipc)?;
+    let mut artwork = ArtworkLayer::new(Unit::Millimeter);
+    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
+        name: "Edge.Cuts".to_string(),
+        role: LayerRole::Profile,
+        side: IrSide::None,
+        object_start: 0,
+        object_count: 0,
+        bbox: BBox::empty(),
+        meta: layer_attributes(
+            vec!["Profile".to_string(), "NP".to_string()],
+            gerber_part_for_view(&doc, view),
+        ),
+    });
+    append_profile_occurrences(
+        &mut artwork,
+        artwork_layer,
+        &doc,
+        view.profile_set(),
+        ProfileGerberStyle::default(),
+    );
+    append_route_features_to_profile(
+        ipc,
+        &mut artwork,
+        artwork_layer,
+        view,
+        ProfileGerberStyle::default(),
+    )?;
+    if artwork.layers[artwork_layer as usize].object_count == 0 {
+        return Ok(None);
+    }
+
+    let layer = lower_artwork_layer(&artwork)?;
+    let contents = write_layer(&layer)?;
+    Ok(Some(GerberX2File {
+        filename: "Edge_Cuts.gm1".to_string(),
+        layer,
+        contents,
+    }))
+}
+
+fn gerber_part_for_view(doc: &IpcGeometryDocument, view: GeometryView) -> GerberPart {
+    if view == GeometryView::Board {
+        GerberPart::Single
+    } else {
+        gerber_part_for_doc(doc)
+    }
+}
+
+fn append_profile_occurrences(
     artwork: &mut ArtworkLayer,
     layer: u32,
     doc: &IpcGeometryDocument,
@@ -411,7 +486,7 @@ fn append_profile_fallback(
     style: ProfileGerberStyle,
 ) {
     for occurrence in profile_occurrences_for(doc, profile_set) {
-        append_profile_fallback_path(
+        append_profile_path(
             artwork,
             layer,
             doc,
@@ -422,7 +497,7 @@ fn append_profile_fallback(
         for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
             ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
         {
-            append_profile_fallback_path(
+            append_profile_path(
                 artwork,
                 layer,
                 doc,
@@ -434,7 +509,7 @@ fn append_profile_fallback(
     }
 }
 
-fn append_profile_fallback_path(
+fn append_profile_path(
     artwork: &mut ArtworkLayer,
     layer: u32,
     doc: &IpcGeometryDocument,
@@ -464,6 +539,84 @@ fn append_profile_fallback_path(
         },
     );
     artwork.layers[layer as usize].bbox = artwork.layers[layer as usize].bbox.union(bbox);
+}
+
+fn append_route_features_to_profile(
+    ipc: &Ipc2581,
+    artwork: &mut ArtworkLayer,
+    artwork_layer: u32,
+    view: GeometryView,
+    style: ProfileGerberStyle,
+) -> Result<()> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    for source_layer in ecad
+        .cad_data
+        .layers
+        .iter()
+        .filter(|layer| layer.layer_function == LayerFunction::Rout)
+    {
+        let layer_name = ipc.resolve(source_layer.name);
+        let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
+            .with_context(|| format!("failed to extract IPC-2581 route layer '{layer_name}'"))?;
+        pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
+        if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
+            bail!("IPC-2581 route layer '{layer_name}' is not artwork-ready: {error}");
+        }
+        let Some(layer) = doc.layers.first() else {
+            continue;
+        };
+        let features = &doc.features
+            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
+        for feature in features {
+            if should_mirror_route_feature_to_profile(feature) {
+                append_route_feature_to_profile(artwork, artwork_layer, &doc, feature, style)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn should_mirror_route_feature_to_profile(feature: &GeometryFeature<ipc2581::Symbol>) -> bool {
+    feature.intent.domain == FeatureDomain::Rout
+        && feature.intent.operation == FeatureOperation::Route
+        && feature.intent.plating == PlatingKind::NonPlated
+        && feature.source_step_kind != LayoutStepKind::Board
+}
+
+fn append_route_feature_to_profile(
+    artwork: &mut ArtworkLayer,
+    layer: u32,
+    doc: &IpcGeometryDocument,
+    feature: &GeometryFeature<ipc2581::Symbol>,
+    style: ProfileGerberStyle,
+) -> Result<()> {
+    for path in
+        &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
+    {
+        let path = artwork.push_path(
+            ArtworkPath::stroked(style.stroke_width_mm, style.line_cap, style.line_join),
+            artwork_contours(doc, path),
+        );
+        let bbox = artwork.paths[path as usize].bbox;
+        artwork.push_object(
+            layer,
+            ArtworkObject {
+                paint: PaintPolarity::Dark,
+                order: PaintOrder {
+                    stage: PaintStage::Overlay,
+                },
+                geometry: ArtworkGeometry::Stroke { path },
+                net: None,
+                bbox,
+                meta: ObjectAttributes {
+                    aperture_function: Some(vec!["Profile".to_string()]),
+                    ..ObjectAttributes::default()
+                },
+            },
+        );
+        artwork.layers[layer as usize].bbox = artwork.layers[layer as usize].bbox.union(bbox);
+    }
+    Ok(())
 }
 
 fn ir_side(side: Option<IpcSide>) -> IrSide {
@@ -1261,7 +1414,7 @@ mod tests {
     }
 
     #[test]
-    fn gerber_export_writes_separate_xnc_drill_files_with_routes() {
+    fn gerber_export_writes_separate_nc_drill_files_with_routes() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1322,6 +1475,12 @@ mod tests {
                 .iter()
                 .any(|file| file.filename == "Route.gbr")
         );
+        assert!(
+            !package
+                .files
+                .iter()
+                .any(|file| file.filename == "Edge_Cuts.gm1")
+        );
         let pth = package
             .files
             .iter()
@@ -1332,6 +1491,12 @@ mod tests {
             .iter()
             .find(|file| file.filename == "NPTH.drl")
             .unwrap();
+        assert!(
+            !package
+                .files
+                .iter()
+                .any(|file| file.filename == "PTH_Slots.drl")
+        );
 
         assert!(matches!(pth.kind, ManufacturingFileKind::Xnc));
         assert!(
@@ -1346,13 +1511,13 @@ mod tests {
             pth.contents
                 .contains("; #@! TA.AperFunction,Plated,PTH,ComponentDrill\nT02C0.6")
         );
-        assert!(pth.contents.contains("X10Y19.45G85X10Y20.55\nG05"));
+        assert!(pth.contents.contains("X10.0Y19.45G85X10.0Y20.55\nG05"));
         assert!(
             npth.contents
                 .contains("; #@! TF.FileFunction,NonPlated,1,2,NPTH")
         );
         assert!(npth.contents.contains("T01C0.65"));
-        assert!(npth.contents.contains("X3Y4"));
+        assert!(npth.contents.contains("X3.0Y4.0"));
     }
 
     #[test]

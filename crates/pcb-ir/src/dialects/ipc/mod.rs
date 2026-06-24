@@ -1,3 +1,5 @@
+pub mod relief;
+
 use crate::common::*;
 pub use crate::dialects::path::{PathCmd, PathOp};
 use crate::dialects::{artwork, path as common_path};

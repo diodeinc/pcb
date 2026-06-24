@@ -1317,6 +1317,10 @@ fn slot_applies_to_layer(
     layers: &[Layer],
     slot: &ipc2581::types::Slot,
 ) -> bool {
+    if source_layer.name != target_layer.name && target_layer.layer_function.is_fabrication() {
+        return false;
+    }
+
     if slot.z_axis_dim {
         return source_layer.name == target_layer.name;
     }
@@ -1334,7 +1338,7 @@ fn layer_span_applies_to_layer(
     }
 
     let Some(span) = source_layer.span else {
-        return true;
+        return false;
     };
 
     let Some(target_index) = layer_index(layers, target_layer.name) else {
@@ -4289,6 +4293,18 @@ mod tests {
         let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
         let layers = [l1.clone(), route.clone()];
         let slot = test_slot(true);
+
+        assert!(!slot_applies_to_layer(&route, &l1, &layers, &slot));
+        assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
+    }
+
+    #[test]
+    fn unspanned_route_slot_stays_on_route_layer() {
+        let mut interner = ipc2581::Interner::new();
+        let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
+        let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
+        let layers = [l1.clone(), route.clone()];
+        let slot = test_slot(false);
 
         assert!(!slot_applies_to_layer(&route, &l1, &layers, &slot));
         assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
