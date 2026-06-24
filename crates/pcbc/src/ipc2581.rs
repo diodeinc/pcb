@@ -2,7 +2,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
-    LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, manufacturing, utils,
+    commands, manufacturing, utils, LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode,
 };
 
 #[derive(Args)]
@@ -138,16 +138,16 @@ enum BoardArrayCommands {
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
         /// Number of board columns. Must be between 1 and 10.
-        #[arg(long)]
+        #[arg(long, default_value_t = 1)]
         columns: u32,
         /// Number of board rows. Must be between 1 and 10.
-        #[arg(long)]
+        #[arg(long, default_value_t = 1)]
         rows: u32,
         /// Board margin in millimeters. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
-        #[arg(long, required = true, num_args = 1..=4, value_name = "MARGIN")]
+        #[arg(long, num_args = 1..=4, default_value = "5", value_name = "MARGIN")]
         board_margin: Vec<f64>,
         /// Uniform edge rail width, in millimeters. Must be between 5 and 30.
-        #[arg(long)]
+        #[arg(long, default_value_t = 5.0)]
         edge_rail_width: f64,
         /// Output IPC-2581 XML file
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]

@@ -79,23 +79,17 @@ h3 {
 }
 
 .array-overview {
-    display: flex;
-    align-items: center;
-    justify-content: center;
     border: 1px solid #d0d0d0;
-    background: #fff;
-    padding: 12px;
+    background: #fdfdfd;
+    padding: 8px;
     margin-bottom: 24px;
-    min-height: 460px;
-    max-height: min(900px, 90vh);
 }
 
 .array-overview svg {
     display: block;
-    width: auto;
+    width: 100%;
     height: auto;
-    max-width: 100%;
-    max-height: min(876px, calc(90vh - 24px));
+    max-height: 680px;
 }
 
 .color-swatch {

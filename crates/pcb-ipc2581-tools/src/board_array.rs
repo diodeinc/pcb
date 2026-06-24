@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use ipc2581::types::LayerFunction;
-use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
+use pcb_ir::common::{arc_sweep_radians, Affine2, Point};
 use pcb_ir::dialects::ipc::{GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp};
 
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
@@ -10,6 +10,7 @@ type GeometryDocument =
     pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 const OVERVIEW_STROKE_WIDTH_MM: f64 = 0.1;
+const OVERVIEW_VIEWBOX_PADDING_MM: f64 = 1.0;
 const POINT_EPSILON_MM: f64 = 1e-9;
 
 pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Option<String> {
@@ -30,6 +31,9 @@ fn render_board_array_svg(
     let grid = board_array.grid.as_ref()?;
     let array_width = dimensions.width_mm();
     let array_height = dimensions.height_mm();
+    let viewbox_padding = OVERVIEW_VIEWBOX_PADDING_MM;
+    let viewbox_width = array_width + 2.0 * viewbox_padding;
+    let viewbox_height = array_height + 2.0 * viewbox_padding;
 
     if array_width <= 0.0
         || array_height <= 0.0
@@ -49,9 +53,11 @@ fn render_board_array_svg(
     let mut svg = String::new();
     writeln!(
         svg,
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {} {}' role='img' data-board-array-overview='true'>",
-        fmt_num(array_width),
-        fmt_num(array_height)
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{} {} {} {}' role='img' data-board-array-overview='true'>",
+        fmt_num(-viewbox_padding),
+        fmt_num(-viewbox_padding),
+        fmt_num(viewbox_width),
+        fmt_num(viewbox_height)
     )
     .unwrap();
     writeln!(
@@ -65,9 +71,11 @@ fn render_board_array_svg(
     .unwrap();
     writeln!(
         svg,
-        "  <rect x='0' y='0' width='{}' height='{}' fill='#ffffff'/>",
-        fmt_num(array_width),
-        fmt_num(array_height)
+        "  <rect x='{}' y='{}' width='{}' height='{}' fill='#ffffff'/>",
+        fmt_num(-viewbox_padding),
+        fmt_num(-viewbox_padding),
+        fmt_num(viewbox_width),
+        fmt_num(viewbox_height)
     )
     .unwrap();
 
@@ -389,14 +397,14 @@ fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
             fill: "none",
             stroke: "#dc2626",
             fill_opacity: 0.0,
-            stroke_opacity: 0.78,
+            stroke_opacity: 1.0,
         },
         LayerFunction::Drill => BoardArrayLayerStyle {
             class_name: "array-layer-drill",
             fill: "#2563eb",
             stroke: "#1d4ed8",
-            fill_opacity: 0.42,
-            stroke_opacity: 0.64,
+            fill_opacity: 0.85,
+            stroke_opacity: 0.85,
         },
         LayerFunction::Conductor
         | LayerFunction::CondFilm
@@ -407,36 +415,36 @@ fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
             class_name: "array-layer-copper",
             fill: "#d87822",
             stroke: "#b45309",
-            fill_opacity: 0.30,
-            stroke_opacity: 0.52,
+            fill_opacity: 0.90,
+            stroke_opacity: 0.85,
         },
         LayerFunction::Soldermask => BoardArrayLayerStyle {
             class_name: "array-layer-mask",
             fill: "#159447",
             stroke: "#15803d",
-            fill_opacity: 0.18,
-            stroke_opacity: 0.42,
+            fill_opacity: 0.55,
+            stroke_opacity: 0.70,
         },
         LayerFunction::Solderpaste | LayerFunction::Pastemask => BoardArrayLayerStyle {
             class_name: "array-layer-paste",
             fill: "#64748b",
             stroke: "#475569",
-            fill_opacity: 0.30,
-            stroke_opacity: 0.50,
+            fill_opacity: 0.90,
+            stroke_opacity: 0.85,
         },
         LayerFunction::Silkscreen | LayerFunction::Legend => BoardArrayLayerStyle {
             class_name: "array-layer-legend",
             fill: "#111827",
             stroke: "#111827",
-            fill_opacity: 0.34,
-            stroke_opacity: 0.54,
+            fill_opacity: 0.95,
+            stroke_opacity: 0.90,
         },
         _ => BoardArrayLayerStyle {
             class_name: "array-layer-fab",
             fill: "#334155",
             stroke: "#334155",
-            fill_opacity: 0.22,
-            stroke_opacity: 0.56,
+            fill_opacity: 0.85,
+            stroke_opacity: 0.85,
         },
     }
 }
@@ -496,7 +504,11 @@ fn fmt_num(value: f64) -> String {
     if text.ends_with('.') {
         text.pop();
     }
-    if text == "-0" { "0".to_string() } else { text }
+    if text == "-0" {
+        "0".to_string()
+    } else {
+        text
+    }
 }
 
 #[cfg(test)]
@@ -548,7 +560,7 @@ mod tests {
         let svg = render_board_array_overview_svg(&accessor).unwrap();
 
         assert!(svg.contains("data-board-array-overview='true'"));
-        assert!(svg.contains("viewBox='0 0 44 24'"));
+        assert!(svg.contains("viewBox='-1 -1 46 26'"));
         assert_eq!(svg.matches("class='board-outline'").count(), 3 * 2);
         assert!(svg.contains("fill='#f1f5f9'"));
         assert!(svg.contains("stroke='#064e3b'"));
