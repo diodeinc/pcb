@@ -68,6 +68,7 @@ pub struct BoardArrayGridInfo {
     pub pitch_y: Option<Length>,
     pub board_margin: Option<BoardArrayBoardMargin>,
     pub edge_rail_width: Option<Length>,
+    pub edge_rail: BoardArrayMargins,
     pub margins: BoardArrayMargins,
 }
 
@@ -89,32 +90,32 @@ pub struct BoardArrayBoardMargin {
     pub left: Length,
 }
 
-impl BoardArrayBoardMargin {
-    pub fn format_shorthand<F>(&self, mut format_length: F) -> String
+impl BoardArrayMargins {
+    pub fn format_shorthand<F>(&self, format_length: F) -> String
     where
         F: FnMut(f64) -> String,
     {
-        let top = self.top.mm();
-        let right = self.right.mm();
-        let bottom = self.bottom.mm();
-        let left = self.left.mm();
+        format_box_shorthand(
+            self.top.mm(),
+            self.right.mm(),
+            self.bottom.mm(),
+            self.left.mm(),
+            format_length,
+        )
+    }
+}
 
-        if nearly_equal(top, right) && nearly_equal(top, bottom) && nearly_equal(top, left) {
-            return format_length(top);
-        }
-        if nearly_equal(top, bottom) && nearly_equal(right, left) {
-            return format!(
-                "{} vertical / {} horizontal",
-                format_length(top),
-                format_length(right)
-            );
-        }
-        format!(
-            "T {} / R {} / B {} / L {}",
-            format_length(top),
-            format_length(right),
-            format_length(bottom),
-            format_length(left)
+impl BoardArrayBoardMargin {
+    pub fn format_shorthand<F>(&self, format_length: F) -> String
+    where
+        F: FnMut(f64) -> String,
+    {
+        format_box_shorthand(
+            self.top.mm(),
+            self.right.mm(),
+            self.bottom.mm(),
+            self.left.mm(),
+            format_length,
         )
     }
 }
@@ -206,6 +207,35 @@ fn nearly_equal(a: f64, b: f64) -> bool {
     (a - b).abs() <= GRID_EPSILON
 }
 
+fn format_box_shorthand<F>(
+    top: f64,
+    right: f64,
+    bottom: f64,
+    left: f64,
+    mut format_length: F,
+) -> String
+where
+    F: FnMut(f64) -> String,
+{
+    if nearly_equal(top, right) && nearly_equal(top, bottom) && nearly_equal(top, left) {
+        return format_length(top);
+    }
+    if nearly_equal(top, bottom) && nearly_equal(right, left) {
+        return format!(
+            "{} vertical / {} horizontal",
+            format_length(top),
+            format_length(right)
+        );
+    }
+    format!(
+        "T {} / R {} / B {} / L {}",
+        format_length(top),
+        format_length(right),
+        format_length(bottom),
+        format_length(left)
+    )
+}
+
 fn board_array_grid_from_ir(layout: SimpleBoardArrayLayout) -> BoardArrayGridInfo {
     BoardArrayGridInfo {
         columns: layout.columns,
@@ -216,6 +246,7 @@ fn board_array_grid_from_ir(layout: SimpleBoardArrayLayout) -> BoardArrayGridInf
         pitch_y: layout.pitch_y.map(Length::from_mm),
         board_margin: layout.board_margin.map(board_margin_from_ir),
         edge_rail_width: layout.edge_rail_width.map(Length::from_mm),
+        edge_rail: margins_from_ir(layout.edge_rail),
         margins: margins_from_ir(layout.margins),
     }
 }

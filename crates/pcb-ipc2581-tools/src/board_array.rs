@@ -3,7 +3,7 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
-use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
+use pcb_ir::common::{Affine2, BBox, Point, arc_sweep_radians};
 use pcb_ir::dialects::ipc::{
     BoardArrayFabricationProfilePathRole, GeometryView, LayoutStep, LayoutStepKind, PathCmd,
     PathOp, board_array_fabrication_profile,
@@ -50,9 +50,6 @@ fn render_board_array_svg(
     };
     let array_width = dimensions.width_mm();
     let array_height = dimensions.height_mm();
-    let viewbox_padding = OVERVIEW_VIEWBOX_PADDING_MM;
-    let viewbox_width = array_width + 2.0 * viewbox_padding;
-    let viewbox_height = array_height + 2.0 * viewbox_padding;
 
     if array_width <= 0.0
         || array_height <= 0.0
@@ -69,13 +66,16 @@ fn render_board_array_svg(
         return Ok(None);
     }
     let relief_paths = board_array_profile_relief_paths(ipc, doc, array_height)?;
+    let viewbox = overview_viewbox(array_width, array_height, layer_overlays);
+    let viewbox_width = viewbox.width();
+    let viewbox_height = viewbox.height();
 
     let mut svg = String::new();
     writeln!(
         svg,
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{} {} {} {}' role='img' data-board-array-overview='true'>",
-        fmt_num(-viewbox_padding),
-        fmt_num(-viewbox_padding),
+        fmt_num(viewbox.min.x),
+        fmt_num(viewbox.min.y),
         fmt_num(viewbox_width),
         fmt_num(viewbox_height)
     )
@@ -92,8 +92,8 @@ fn render_board_array_svg(
     writeln!(
         svg,
         "  <rect x='{}' y='{}' width='{}' height='{}' fill='#ffffff'/>",
-        fmt_num(-viewbox_padding),
-        fmt_num(-viewbox_padding),
+        fmt_num(viewbox.min.x),
+        fmt_num(viewbox.min.y),
         fmt_num(viewbox_width),
         fmt_num(viewbox_height)
     )
@@ -139,6 +139,8 @@ struct BoardArrayLayerOverlay {
 
 struct BoardArrayLayerPath {
     data: String,
+    bbox: BBox,
+    stroke_width: f64,
     filled: bool,
     stroked: bool,
     vscore: bool,
@@ -266,6 +268,25 @@ fn step_profile_path_data(
     (!path_data.is_empty()).then_some(path_data)
 }
 
+fn overview_viewbox(
+    array_width: f64,
+    array_height: f64,
+    layer_overlays: &[BoardArrayLayerOverlay],
+) -> BBox {
+    let mut bbox = BBox {
+        min: Point::new(0.0, 0.0),
+        max: Point::new(array_width, array_height),
+    };
+    for path in layer_overlays
+        .iter()
+        .flat_map(|overlay| overlay.paths.iter())
+        .filter(|path| !path.bbox.is_empty())
+    {
+        bbox = bbox.union(path.bbox);
+    }
+    bbox.expand(OVERVIEW_VIEWBOX_PADDING_MM)
+}
+
 fn feature_paths(
     doc: &GeometryDocument,
     feature: &pcb_ir::dialects::ipc::GeometryFeature<ipc2581::Symbol>,
@@ -278,12 +299,32 @@ fn feature_paths(
             append_transformed_path_data(&mut data, doc, path_index, transform)?;
             (!data.is_empty()).then_some(BoardArrayLayerPath {
                 data,
+                bbox: transform_bbox(path.bbox, transform),
+                stroke_width: path.style.stroke.width,
                 filled: path.flags.filled,
                 stroked: path.flags.stroked,
                 vscore: feature.is_vscore(),
             })
         })
         .collect()
+}
+
+fn transform_bbox(bbox: BBox, transform: Affine2) -> BBox {
+    if bbox.is_empty() {
+        return BBox::empty();
+    }
+
+    [
+        bbox.min,
+        Point::new(bbox.max.x, bbox.min.y),
+        bbox.max,
+        Point::new(bbox.min.x, bbox.max.y),
+    ]
+    .into_iter()
+    .fold(BBox::empty(), |mut transformed, point| {
+        transformed.include_point(transform.transform_point(point));
+        transformed
+    })
 }
 
 fn append_transformed_path_data(
@@ -416,11 +457,11 @@ fn write_layer_overlays(svg: &mut String, layer_overlays: &[BoardArrayLayerOverl
             if force_stroke || (path.stroked && !path.filled) {
                 writeln!(
                     svg,
-                    "  <path class='array-layer {}' d='{}' fill='none' stroke='{}' stroke-width='{}' stroke-linejoin='round' opacity='{}'/>",
+                    "  <path class='array-layer {}' d='{}' fill='none' stroke='{}' stroke-width='{}' stroke-linecap='round' stroke-linejoin='round' opacity='{}'/>",
                     style.class_name,
                     path.data,
                     style.stroke,
-                    fmt_num(OVERVIEW_STROKE_WIDTH_MM),
+                    fmt_num(path.stroke_width.max(OVERVIEW_STROKE_WIDTH_MM)),
                     fmt_num(style.stroke_opacity)
                 )
                 .unwrap();
@@ -519,10 +560,10 @@ fn write_rail_guides(
     array_height: f64,
     stroke_width: f64,
 ) {
-    let Some(rail) = grid.edge_rail_width.map(|rail| rail.mm()) else {
-        return;
-    };
-    for x in [rail, array_width - rail] {
+    for x in [
+        grid.edge_rail.left.mm(),
+        array_width - grid.edge_rail.right.mm(),
+    ] {
         if x > 0.0 && x < array_width {
             writeln!(
                 svg,
@@ -535,7 +576,10 @@ fn write_rail_guides(
             .unwrap();
         }
     }
-    for y in [rail, array_height - rail] {
+    for y in [
+        grid.edge_rail.bottom.mm(),
+        array_height - grid.edge_rail.top.mm(),
+    ] {
         if y > 0.0 && y < array_height {
             writeln!(
                 svg,

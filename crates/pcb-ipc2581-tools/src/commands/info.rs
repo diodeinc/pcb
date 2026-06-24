@@ -548,12 +548,13 @@ fn print_board_array_summary(
                 Cell::new(margin.format_shorthand(|value| units::convert_mm(value, unit_format))),
             ]);
         }
-        if let Some(width) = grid.edge_rail_width {
-            table.add_row(vec![
-                Cell::new("Edge Rail").fg(Color::Cyan),
-                Cell::new(units::convert_mm(width.mm(), unit_format)),
-            ]);
-        }
+        table.add_row(vec![
+            Cell::new("Edge Rail").fg(Color::Cyan),
+            Cell::new(
+                grid.edge_rail
+                    .format_shorthand(|value| units::convert_mm(value, unit_format)),
+            ),
+        ]);
     }
 
     if let Some(drills) = accessor.board_array_drill_stats()
@@ -708,6 +709,12 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
                 "pitch_x_mm": grid.pitch_x.map(|pitch| pitch.mm()),
                 "pitch_y_mm": grid.pitch_y.map(|pitch| pitch.mm()),
                 "edge_rail_width_mm": grid.edge_rail_width.map(|width| width.mm()),
+                "edge_rail_mm": {
+                    "top": grid.edge_rail.top.mm(),
+                    "right": grid.edge_rail.right.mm(),
+                    "bottom": grid.edge_rail.bottom.mm(),
+                    "left": grid.edge_rail.left.mm(),
+                },
             });
             if let Some(margin) = grid.board_margin.as_ref() {
                 info["board_array"]["grid"]["board_margin_mm"] = json!({

@@ -218,9 +218,10 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Res
                     board_margin: grid.board_margin.as_ref().map(|margin| {
                         margin.format_shorthand(|value| format_length(value, unit_format))
                     }),
-                    edge_rail_width: grid
-                        .edge_rail_width
-                        .map(|width| format_length(width.mm(), unit_format)),
+                    edge_rail_width: Some(
+                        grid.edge_rail
+                            .format_shorthand(|value| format_length(value, unit_format)),
+                    ),
                 }),
                 drill_holes: accessor
                     .board_array_drill_stats()

@@ -140,18 +140,21 @@ enum BoardArrayCommands {
         /// Input IPC-2581 XML file
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
-        /// Number of board columns. Must be between 1 and 10.
-        #[arg(long, default_value_t = 1)]
-        columns: u32,
-        /// Number of board rows. Must be between 1 and 10.
-        #[arg(long, default_value_t = 1)]
-        rows: u32,
-        /// Board margin in millimeters. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
-        #[arg(long, num_args = 1..=4, default_value = "5", value_name = "MARGIN")]
+        /// Choose an opinionated A7 board array automatically.
+        #[arg(long)]
+        auto: bool,
+        /// Number of board columns. Must be between 1 and 10. Defaults to 1.
+        #[arg(long)]
+        columns: Option<u32>,
+        /// Number of board rows. Must be between 1 and 10. Defaults to 1.
+        #[arg(long)]
+        rows: Option<u32>,
+        /// Board margin in millimeters. Defaults to 5. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
+        #[arg(long, num_args = 1..=4, value_name = "MARGIN")]
         board_margin: Vec<f64>,
-        /// Uniform edge rail width, in millimeters. Must be between 5 and 30.
-        #[arg(long, default_value_t = 5.0)]
-        edge_rail_width: f64,
+        /// Edge rail in millimeters. Defaults to 5. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
+        #[arg(long, num_args = 1..=4, value_name = "RAIL")]
+        edge_rail: Vec<f64>,
         /// Output IPC-2581 XML file
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
@@ -199,24 +202,47 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
         Commands::BoardArray { command } => match command {
             BoardArrayCommands::Create {
                 input,
+                auto,
                 columns,
                 rows,
                 board_margin,
-                edge_rail_width,
+                edge_rail,
                 output,
             } => {
-                let board_margin_mm =
-                    commands::board_array::BoardMarginMm::from_css_shorthand(&board_margin)?;
-                commands::board_array::execute(
-                    &input,
-                    &output,
-                    &commands::board_array::BoardArrayCreateOptions {
-                        columns,
-                        rows,
-                        board_margin_mm,
-                        edge_rail_width_mm: edge_rail_width,
-                    },
-                )
+                if auto {
+                    if columns.is_some()
+                        || rows.is_some()
+                        || !board_margin.is_empty()
+                        || !edge_rail.is_empty()
+                    {
+                        anyhow::bail!("--auto cannot be combined with manual board array options");
+                    }
+                    commands::board_array::execute_auto(&input, &output)
+                } else {
+                    let board_margin_mm = if board_margin.is_empty() {
+                        commands::board_array::BoardMarginMm::all(5.0)
+                    } else {
+                        commands::board_array::BoardMarginMm::from_css_shorthand(&board_margin)?
+                    };
+                    let edge_rail_mm = if edge_rail.is_empty() {
+                        commands::board_array::BoardMarginMm::all(5.0)
+                    } else {
+                        commands::board_array::BoardMarginMm::from_css_shorthand_named(
+                            "edge rail",
+                            &edge_rail,
+                        )?
+                    };
+                    commands::board_array::execute(
+                        &input,
+                        &output,
+                        &commands::board_array::BoardArrayCreateOptions {
+                            columns: columns.unwrap_or(1),
+                            rows: rows.unwrap_or(1),
+                            board_margin_mm,
+                            edge_rail_mm,
+                        },
+                    )
+                }
             }
         },
         Commands::View {

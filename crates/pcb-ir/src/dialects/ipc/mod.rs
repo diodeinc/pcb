@@ -253,6 +253,7 @@ pub struct SimpleBoardArrayLayout {
     pub pitch_y: Option<f64>,
     pub board_margin: Option<LayoutMargins>,
     pub edge_rail_width: Option<f64>,
+    pub edge_rail: LayoutMargins,
     pub margins: LayoutMargins,
 }
 
@@ -323,6 +324,7 @@ fn simple_direct_board_array<Symbol, LayerFunction>(
     let edge_rail_width = simple_edge_rail_width(margins, horizontal_gap, vertical_gap);
     let board_margin =
         edge_rail_width.and_then(|edge| simple_board_margin_from_margins(margins, edge));
+    let edge_rail = edge_rail_width.map(simple_margins_all).unwrap_or(margins);
 
     Some(SimpleBoardArrayLayout {
         array_step: array_step_index,
@@ -341,6 +343,7 @@ fn simple_direct_board_array<Symbol, LayerFunction>(
         pitch_y,
         board_margin,
         edge_rail_width,
+        edge_rail,
         margins,
     })
 }
@@ -418,8 +421,18 @@ fn simple_board_cell_array<Symbol, LayerFunction>(
         pitch_y: Some(repeat.dy),
         board_margin: Some(board_margin),
         edge_rail_width,
+        edge_rail: edge_margins,
         margins: simple_margins_between(repeat.bbox, array_step.bbox)?,
     })
+}
+
+fn simple_margins_all(value: f64) -> LayoutMargins {
+    LayoutMargins {
+        top: value,
+        right: value,
+        bottom: value,
+        left: value,
+    }
 }
 
 fn simple_step_dimensions<Symbol>(step: &LayoutStep<Symbol>) -> Option<(f64, f64)> {

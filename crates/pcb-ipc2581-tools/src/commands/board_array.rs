@@ -24,6 +24,7 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 
+use super::board_array_auto::auto_a7_board_array_plan;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
@@ -165,7 +166,7 @@ pub struct BoardArrayCreateOptions {
     pub columns: u32,
     pub rows: u32,
     pub board_margin_mm: BoardMarginMm,
-    pub edge_rail_width_mm: f64,
+    pub edge_rail_mm: BoardMarginMm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -187,6 +188,10 @@ impl BoardMarginMm {
     }
 
     pub fn from_css_shorthand(values: &[f64]) -> Result<Self> {
+        Self::from_css_shorthand_named("board margin", values)
+    }
+
+    pub fn from_css_shorthand_named(name: &'static str, values: &[f64]) -> Result<Self> {
         match values {
             [all] => Ok(Self::all(*all)),
             [vertical, horizontal] => Ok(Self {
@@ -207,7 +212,7 @@ impl BoardMarginMm {
                 bottom: *bottom,
                 left: *left,
             }),
-            _ => bail!("board margin expects 1 to 4 values"),
+            _ => bail!("{name} expects 1 to 4 values"),
         }
     }
 
@@ -219,12 +224,21 @@ impl BoardMarginMm {
         self.top + self.bottom
     }
 
-    fn sides(self) -> [(&'static str, f64); 4] {
+    fn board_margin_sides(self) -> [(&'static str, f64); 4] {
         [
             ("board margin top", self.top),
             ("board margin right", self.right),
             ("board margin bottom", self.bottom),
             ("board margin left", self.left),
+        ]
+    }
+
+    fn edge_rail_sides(self) -> [(&'static str, f64); 4] {
+        [
+            ("edge rail top", self.top),
+            ("edge rail right", self.right),
+            ("edge rail bottom", self.bottom),
+            ("edge rail left", self.left),
         ]
     }
 }
@@ -354,10 +368,37 @@ pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -
     Ok(())
 }
 
+pub fn execute_auto(input: &Path, output: &Path) -> Result<()> {
+    let content = file_utils::load_ipc_file(input)?;
+    let updated_xml = create_auto_board_array_xml(&content)?;
+    file_utils::save_ipc_file(output, &updated_xml)?;
+    eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+    Ok(())
+}
+
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(&ipc, options)?;
     write_board_array_xml(xml, &spec)
+}
+
+fn create_auto_board_array_xml(xml: &str) -> Result<String> {
+    let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
+    let options = auto_board_array_options(&ipc)?;
+    let spec = build_board_array_spec(&ipc, &options)?;
+    write_board_array_xml(xml, &spec)
+}
+
+fn auto_board_array_options(ipc: &Ipc2581) -> Result<BoardArrayCreateOptions> {
+    let board = primary_board_layout(ipc)?;
+    let plan = auto_a7_board_array_plan(board.bbox.width(), board.bbox.height())?;
+
+    Ok(BoardArrayCreateOptions {
+        columns: plan.columns,
+        rows: plan.rows,
+        board_margin_mm: plan.board_margin_mm,
+        edge_rail_mm: plan.edge_rail_mm,
+    })
 }
 
 fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
@@ -379,6 +420,34 @@ fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
     Ok(xml)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PrimaryBoardLayout {
+    source_step_ref: ipc2581::Symbol,
+    bbox: pcb_ir::common::BBox,
+}
+
+fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
+    let layout = geometry::extract_layout(ipc)?;
+    let (_, root) = root_step(&layout).context("IPC-2581 board step has no layout root")?;
+    if root.kind != LayoutStepKind::Board {
+        bail!("primary IPC-2581 layout root is not a board step");
+    }
+    if root.bbox.is_empty() {
+        bail!("primary IPC-2581 board step has no Profile outline");
+    }
+
+    let board_width = root.bbox.width();
+    let board_height = root.bbox.height();
+    if board_width <= EPSILON || board_height <= EPSILON {
+        bail!("primary IPC-2581 board Profile outline has zero size");
+    }
+
+    Ok(PrimaryBoardLayout {
+        source_step_ref: root.source_step_ref,
+        bbox: root.bbox,
+    })
+}
+
 fn build_board_array_spec(
     ipc: &Ipc2581,
     options: &BoardArrayCreateOptions,
@@ -398,34 +467,26 @@ fn build_board_array_spec(
         bail!("primary IPC-2581 step is not a board step");
     }
 
-    let layout = geometry::extract_layout(ipc)?;
-    let (_, root) = root_step(&layout).context("IPC-2581 board step has no layout root")?;
-    if root.kind != LayoutStepKind::Board {
-        bail!("primary IPC-2581 layout root is not a board step");
-    }
-    if root.bbox.is_empty() {
-        bail!("primary IPC-2581 board step has no Profile outline");
-    }
-
+    let root = primary_board_layout(ipc)?;
     let board_width = root.bbox.width();
     let board_height = root.bbox.height();
-    if board_width <= EPSILON || board_height <= EPSILON {
-        bail!("primary IPC-2581 board Profile outline has zero size");
-    }
 
     let columns = options.columns;
     let rows = options.rows;
     let board_margin = options.board_margin_mm;
-    let margin_x = options.edge_rail_width_mm + board_margin.left;
-    let margin_y = options.edge_rail_width_mm + board_margin.bottom;
+    let edge_rail = options.edge_rail_mm;
+    let margin_x = edge_rail.left + board_margin.left;
+    let margin_y = edge_rail.bottom + board_margin.bottom;
     let pitch_x = board_width + board_margin.horizontal_gap();
     let pitch_y = board_height + board_margin.vertical_gap();
     let array_width = columns as f64 * board_width
         + columns as f64 * board_margin.horizontal_gap()
-        + 2.0 * options.edge_rail_width_mm;
+        + edge_rail.left
+        + edge_rail.right;
     let array_height = rows as f64 * board_height
         + rows as f64 * board_margin.vertical_gap()
-        + 2.0 * options.edge_rail_width_mm;
+        + edge_rail.bottom
+        + edge_rail.top;
     validate_array_dimensions(array_width, array_height)?;
     let board_repeat_x = board_margin.left - root.bbox.min.x;
     let board_repeat_y = board_margin.bottom - root.bbox.min.y;
@@ -514,8 +575,8 @@ fn build_board_array_spec(
         content_layer_refs,
         columns,
         rows,
-        array_repeat_x_mm: options.edge_rail_width_mm,
-        array_repeat_y_mm: options.edge_rail_width_mm,
+        array_repeat_x_mm: edge_rail.left,
+        array_repeat_y_mm: edge_rail.bottom,
         board_repeat_x_mm: board_repeat_x,
         board_repeat_y_mm: board_repeat_y,
         pitch_x_mm: pitch_x,
@@ -530,15 +591,12 @@ fn build_board_array_spec(
 fn validate_options(options: &BoardArrayCreateOptions) -> Result<()> {
     validate_u32_range("columns", options.columns, 1, 10)?;
     validate_u32_range("rows", options.rows, 1, 10)?;
-    for (field, value) in options.board_margin_mm.sides() {
+    for (field, value) in options.board_margin_mm.board_margin_sides() {
         validate_mm_range(field, value, 0.0, 20.0)?;
     }
-    validate_mm_range(
-        "edge rail width",
-        options.edge_rail_width_mm,
-        MIN_EDGE_RAIL_WIDTH_MM,
-        30.0,
-    )?;
+    for (field, value) in options.edge_rail_mm.edge_rail_sides() {
+        validate_mm_range(field, value, MIN_EDGE_RAIL_WIDTH_MM, 30.0)?;
+    }
     if options.columns > 1 {
         validate_zero_or_min_mm(
             "horizontal board clearance",
@@ -2287,7 +2345,7 @@ mod tests {
                 columns: 6,
                 rows: 6,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap();
@@ -2344,6 +2402,50 @@ mod tests {
     }
 
     #[test]
+    fn auto_create_projects_board_to_a7_array() {
+        let xml = create_auto_board_array_xml(board_fixture_mm()).unwrap();
+
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="12.5" y="7" nx="4" ny="3" dx="20" dy="20" angle="0.00" mirror="false"/>"#
+        ));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+        assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
+        assert_point_close(panel_step.bbox.max, Point::new(105.0, 74.0));
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 12);
+    }
+
+    #[test]
+    fn creates_board_array_with_asymmetric_edge_rails() {
+        let xml = create_board_array_xml(
+            board_fixture_mm(),
+            &BoardArrayCreateOptions {
+                columns: 6,
+                rows: 6,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm {
+                    top: 8.0,
+                    right: 6.0,
+                    bottom: 5.0,
+                    left: 7.0,
+                },
+            },
+        )
+        .unwrap();
+
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="7" y="5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
+        ));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+        assert_point_close(panel_step.bbox.max, Point::new(103.0, 103.0));
+    }
+
+    #[test]
     fn created_board_array_vcuts_flow_to_svg_and_gerber() {
         let xml = create_board_array_xml(
             board_fixture_mm(),
@@ -2351,7 +2453,7 @@ mod tests {
                 columns: 6,
                 rows: 6,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap();
@@ -2363,8 +2465,13 @@ mod tests {
             .unwrap();
         assert!(svg.matches("vcut-guide").count() > 24);
         assert!(svg.contains("stroke='#dc2626'"));
+        assert!(svg.contains("stroke-width='0.12'"));
+        assert!(svg.contains("stroke-linecap='round'"));
         assert!(!svg.contains("stroke-dasharray"));
         assert!(!svg.contains("class='score-guide'"));
+        let viewbox = svg_viewbox(&svg);
+        assert!(viewbox.0 + viewbox.2 > 100.0);
+        assert!(viewbox.1 + viewbox.3 > 100.0);
         assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
 
         let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
@@ -2397,7 +2504,7 @@ mod tests {
                 columns: 6,
                 rows: 6,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap();
@@ -2445,7 +2552,7 @@ mod tests {
                 columns: 2,
                 rows: 2,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap();
@@ -2484,7 +2591,7 @@ mod tests {
                 columns: 6,
                 rows: 6,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap();
@@ -2523,7 +2630,7 @@ mod tests {
                 columns: 6,
                 rows: 6,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap();
@@ -2636,7 +2743,7 @@ mod tests {
                 columns: 1,
                 rows: 1,
                 board_margin_mm: board_margin(5.0, 0.0),
-                edge_rail_width_mm: 15.0,
+                edge_rail_mm: BoardMarginMm::all(15.0),
             },
         )
         .unwrap();
@@ -2682,7 +2789,7 @@ mod tests {
                 columns: 2,
                 rows: 1,
                 board_margin_mm: board_margin(5.0, 0.0),
-                edge_rail_width_mm: 15.0,
+                edge_rail_mm: BoardMarginMm::all(15.0),
             },
         )
         .unwrap();
@@ -2715,7 +2822,7 @@ mod tests {
                 columns: 2,
                 rows: 1,
                 board_margin_mm: board_margin(5.0, 0.0),
-                edge_rail_width_mm: 15.0,
+                edge_rail_mm: BoardMarginMm::all(15.0),
             },
         )
         .unwrap();
@@ -2761,7 +2868,7 @@ mod tests {
                     bottom: 5.0,
                     left: 0.0,
                 },
-                edge_rail_width_mm: 15.0,
+                edge_rail_mm: BoardMarginMm::all(15.0),
             },
         )
         .unwrap();
@@ -2829,7 +2936,7 @@ mod tests {
                     bottom: 0.0,
                     left: 5.0,
                 },
-                edge_rail_width_mm: 15.0,
+                edge_rail_mm: BoardMarginMm::all(15.0),
             },
         )
         .unwrap();
@@ -2858,7 +2965,7 @@ mod tests {
                     bottom: 5.0,
                     left: 5.0,
                 },
-                edge_rail_width_mm: 15.0,
+                edge_rail_mm: BoardMarginMm::all(15.0),
             },
         )
         .unwrap();
@@ -2883,7 +2990,7 @@ mod tests {
                     bottom: 4.99,
                     left: 0.0,
                 },
-                edge_rail_width_mm: 15.0,
+                edge_rail_mm: BoardMarginMm::all(15.0),
             },
         )
         .unwrap();
@@ -2907,7 +3014,7 @@ mod tests {
                     bottom: 5.0,
                     left: 5.0,
                 },
-                edge_rail_width_mm: 30.0,
+                edge_rail_mm: BoardMarginMm::all(30.0),
             },
         )
         .unwrap();
@@ -2925,7 +3032,7 @@ mod tests {
                 columns: 1,
                 rows: 1,
                 board_margin_mm: board_margin(0.0, 0.0),
-                edge_rail_width_mm: 25.4,
+                edge_rail_mm: BoardMarginMm::all(25.4),
             },
         )
         .unwrap();
@@ -2948,7 +3055,7 @@ mod tests {
                 columns: 1,
                 rows: 1,
                 board_margin_mm: board_margin(0.0, 0.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -2968,7 +3075,7 @@ mod tests {
                 columns: 11,
                 rows: 1,
                 board_margin_mm: board_margin(0.0, 0.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -2981,14 +3088,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_small_clearance_and_edge_rail_width() {
+    fn rejects_small_clearance_and_edge_rail() {
         let horizontal_gap_error = create_board_array_xml(
             board_fixture_mm(),
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
                 board_margin_mm: board_margin(4.99, 0.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -3004,7 +3111,7 @@ mod tests {
                 columns: 1,
                 rows: 2,
                 board_margin_mm: board_margin(0.0, 4.99),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -3020,14 +3127,14 @@ mod tests {
                 columns: 1,
                 rows: 1,
                 board_margin_mm: board_margin(0.0, 0.0),
-                edge_rail_width_mm: 0.0,
+                edge_rail_mm: BoardMarginMm::all(0.0),
             },
         )
         .unwrap_err();
         assert!(
             rail_error
                 .to_string()
-                .contains("edge rail width must be between 5 and 30 mm; got 0 mm")
+                .contains("edge rail top must be between 5 and 30 mm; got 0 mm")
         );
     }
 
@@ -3080,7 +3187,7 @@ mod tests {
                 columns: 3,
                 rows: 2,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -3096,7 +3203,7 @@ mod tests {
                 columns: 4,
                 rows: 2,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -3112,7 +3219,7 @@ mod tests {
                 columns: 6,
                 rows: 1,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -3128,7 +3235,7 @@ mod tests {
                 columns: 1,
                 rows: 6,
                 board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_width_mm: 5.0,
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -3146,6 +3253,20 @@ mod tests {
             bottom: vertical_gap_mm / 2.0,
             left: horizontal_gap_mm / 2.0,
         }
+    }
+
+    fn svg_viewbox(svg: &str) -> (f64, f64, f64, f64) {
+        let value = svg
+            .split("viewBox='")
+            .nth(1)
+            .and_then(|rest| rest.split('\'').next())
+            .expect("SVG should have a viewBox");
+        let values = value
+            .split_whitespace()
+            .map(|part| part.parse::<f64>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 4);
+        (values[0], values[1], values[2], values[3])
     }
 
     fn assert_point_close(actual: Point, expected: Point) {
