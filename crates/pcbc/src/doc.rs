@@ -117,20 +117,19 @@ fn resolve_local_workspace_package_url(pkg: &str) -> Option<(PathBuf, String, Op
     let workspace_info = pcb_zen::get_workspace_info(&file_provider, &cwd).ok()?;
 
     workspace_info
-        .packages
-        .iter()
-        .filter(|(package_url, _)| pcb_zen_core::workspace::package_url_covers(package_url, pkg))
-        .max_by_key(|(package_url, _)| package_url.len())
-        .map(|(package_url, package)| {
-            let filter = pkg
-                .strip_prefix(package_url)
-                .and_then(|rest| rest.strip_prefix('/'))
-                .map(str::to_string);
-            (
-                package.dir(&workspace_info.root),
-                package_url.clone(),
-                filter,
-            )
+        .package_url_for_url(pkg)
+        .and_then(|package_url| {
+            workspace_info.packages.get(package_url).map(|package| {
+                let filter = pkg
+                    .strip_prefix(package_url)
+                    .and_then(|rest| rest.strip_prefix('/'))
+                    .map(str::to_string);
+                (
+                    package.dir(&workspace_info.root),
+                    package_url.to_string(),
+                    filter,
+                )
+            })
         })
 }
 

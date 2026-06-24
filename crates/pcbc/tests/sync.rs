@@ -224,6 +224,59 @@ gnd = Net("GND")
 }
 
 #[test]
+fn test_build_rejects_unsynced_cross_package_relative_load() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
+pcb-version = "0.4"
+repository = "github.com/example/demo"
+
+[board]
+name = "Main"
+path = "board.zen"
+"#,
+        )
+        .write(
+            "board.zen",
+            r#"
+load("modules/Lib/Lib.zen", "Marker")
+
+check(Marker == "ok", "loaded marker")
+"#,
+        )
+        .write("modules/Lib/pcb.toml", "[dependencies]\n")
+        .write(
+            "modules/Lib/Lib.zen",
+            r#"
+Marker = "ok"
+"#,
+        );
+
+    let build_before_sync = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen"]);
+    let output_before_sync = command_output(&build_before_sync);
+    assert!(
+        !build_before_sync.status.success(),
+        "expected unsynced build to fail:\n{output_before_sync}"
+    );
+    assert!(
+        output_before_sync.contains("Run `pcb sync`"),
+        "expected build to point at pcb sync:\n{output_before_sync}"
+    );
+
+    sandbox.run("pcbc", ["sync"]).run().unwrap();
+
+    let build_after_sync = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen"]);
+    let output_after_sync = command_output(&build_after_sync);
+    assert!(
+        build_after_sync.status.success(),
+        "expected synced build to succeed:\n{output_after_sync}"
+    );
+}
+
+#[test]
 fn test_same_package_url_rejected() {
     let mut sandbox = Sandbox::new();
 
