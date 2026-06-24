@@ -183,6 +183,25 @@ gnd = Net("GND")
 }
 
 #[test]
+fn test_sync_preserves_empty_package_manifest() {
+    let mut sandbox = Sandbox::new();
+
+    sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
+pcb-version = "0.4"
+repository = "github.com/example/demo"
+"#,
+        )
+        .write("modules/Empty/pcb.toml", "")
+        .write("modules/Empty/Empty.zen", "P1 = io(Net)\n")
+        .sync();
+
+    assert_eq!(read_sandbox_file(&sandbox, "modules/Empty/pcb.toml"), "");
+}
+
+#[test]
 fn test_sync_adds_workspace_dependency_for_cross_package_relative_load() {
     let mut sandbox = Sandbox::new();
 

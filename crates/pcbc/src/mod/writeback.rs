@@ -49,7 +49,7 @@ fn indirect_dependencies(resolution: &PackageResolution) -> BTreeMap<String, Dep
 
 fn render_manifest(config: &PcbToml) -> Result<String> {
     let mut rendered = toml::to_string_pretty(config)?;
-    if !rendered.ends_with('\n') {
+    if !rendered.is_empty() && !rendered.ends_with('\n') {
         rendered.push('\n');
     }
     Ok(rendered)
