@@ -290,6 +290,59 @@ mod tests {
     }
 
     #[test]
+    fn parses_profile_cutouts_as_direct_polygon_contours() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+          <Cutout>
+            <PolyBegin x="2" y="3"/>
+            <PolyStepSegment x="4" y="3"/>
+            <PolyStepSegment x="4" y="5"/>
+            <PolyStepSegment x="2" y="5"/>
+            <PolyStepSegment x="2" y="3"/>
+          </Cutout>
+          <Cutout>
+            <Polygon>
+              <PolyBegin x="8" y="3"/>
+              <PolyStepSegment x="10" y="3"/>
+              <PolyStepSegment x="10" y="5"/>
+              <PolyStepSegment x="8" y="5"/>
+              <PolyStepSegment x="8" y="3"/>
+            </Polygon>
+          </Cutout>
+        </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
+        let profile = doc.ecad().unwrap().cad_data.steps[0]
+            .profile
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(profile.cutouts.len(), 2);
+        assert_eq!(profile.cutouts[0].begin, Point { x: 2.0, y: 3.0 });
+        assert_eq!(profile.cutouts[1].begin, Point { x: 8.0, y: 3.0 });
+    }
+
+    #[test]
     fn preserves_vcut_specs_spec_refs_and_fiducials() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

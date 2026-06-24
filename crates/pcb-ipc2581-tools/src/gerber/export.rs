@@ -17,9 +17,10 @@ use pcb_ir::dialects::artwork::{
     ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath, PaintOrder, PaintStage,
 };
 use pcb_ir::dialects::ipc::{
-    FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature,
-    GeometryPath, GeometryPathPaintClass, GeometryPolarity, GeometryView, LayoutStepKind,
-    PlatingKind, ProfileSet, profile_occurrences_for, transformed_path_payloads,
+    BoardArrayFabricationProfile, FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole,
+    FiducialKind, GeometryFeature, GeometryPath, GeometryPathPaintClass, GeometryPolarity,
+    GeometryView, PlatingKind, ProfileSet, board_array_fabrication_profile,
+    profile_occurrences_for, transformed_path_payloads,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -88,6 +89,9 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
             },
         )?;
         let layer = lower_artwork_layer(&artwork)?;
+        if plan.role == GerberLayerRole::Profile && layer.objects.is_empty() {
+            continue;
+        }
         let contents = write_layer(&layer)?;
         files.push(GerberX2File {
             filename: plan.filename.clone(),
@@ -95,7 +99,11 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
             contents,
         });
     }
-    if !has_profile_plan && let Some(file) = synthetic_profile_gerber_file(ipc, view)? {
+    if view == GeometryView::ArrayFlattened {
+        if let Some(file) = board_array_profile_gerber_file(ipc)? {
+            files.push(file);
+        }
+    } else if !has_profile_plan && let Some(file) = synthetic_profile_gerber_file(ipc, view)? {
         files.push(file);
     }
 
@@ -396,6 +404,7 @@ fn artwork_from_ipc_layer(
         push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
     }
     if spec.role == GerberLayerRole::Profile
+        && spec.view != GeometryView::ArrayFlattened
         && artwork.layers[artwork_layer as usize].object_count == 0
     {
         append_profile_occurrences(
@@ -405,15 +414,6 @@ fn artwork_from_ipc_layer(
             spec.view.profile_set(),
             ProfileGerberStyle::default(),
         );
-    }
-    if spec.role == GerberLayerRole::Profile {
-        append_route_features_to_profile(
-            ipc,
-            &mut artwork,
-            artwork_layer,
-            spec.view,
-            ProfileGerberStyle::default(),
-        )?;
     }
     Ok(artwork)
 }
@@ -450,13 +450,6 @@ fn synthetic_profile_gerber_file(
         view.profile_set(),
         ProfileGerberStyle::default(),
     );
-    append_route_features_to_profile(
-        ipc,
-        &mut artwork,
-        artwork_layer,
-        view,
-        ProfileGerberStyle::default(),
-    )?;
     if artwork.layers[artwork_layer as usize].object_count == 0 {
         return Ok(None);
     }
@@ -465,6 +458,41 @@ fn synthetic_profile_gerber_file(
     let contents = write_layer(&layer)?;
     Ok(Some(GerberX2File {
         filename: "Edge_Cuts.gm1".to_string(),
+        layer,
+        contents,
+    }))
+}
+
+fn board_array_profile_gerber_file(ipc: &Ipc2581) -> Result<Option<GerberX2File>> {
+    let doc = geometry::extract_layout(ipc)?;
+    let profile = board_array_fabrication_profile(&doc, &geometry::board_array_vscore_lines(ipc)?)?;
+    if profile.paths.is_empty() {
+        return Ok(None);
+    }
+
+    let mut artwork = ArtworkLayer::new(Unit::Millimeter);
+    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
+        name: "Board Array Profile".to_string(),
+        role: LayerRole::Profile,
+        side: IrSide::None,
+        object_start: 0,
+        object_count: 0,
+        bbox: BBox::empty(),
+        meta: layer_attributes(
+            vec!["Profile".to_string(), "NP".to_string()],
+            GerberPart::Array,
+        ),
+    });
+    let style = ProfileGerberStyle::default();
+    append_board_array_profile(&mut artwork, artwork_layer, &profile, style);
+    if artwork.layers[artwork_layer as usize].object_count == 0 {
+        return Ok(None);
+    }
+
+    let layer = lower_artwork_layer(&artwork)?;
+    let contents = write_layer(&layer)?;
+    Ok(Some(GerberX2File {
+        filename: "Board_Array_Profile.gm1".to_string(),
         layer,
         contents,
     }))
@@ -494,18 +522,40 @@ fn append_profile_occurrences(
             occurrence.transform,
             style,
         );
-        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
-            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
-        {
-            append_profile_path(
-                artwork,
-                layer,
-                doc,
-                cutout.path,
-                occurrence.transform,
-                style,
-            );
-        }
+        append_profile_cutouts(
+            artwork,
+            layer,
+            doc,
+            occurrence.profile,
+            occurrence.transform,
+            style,
+        );
+    }
+}
+
+fn append_board_array_profile(
+    artwork: &mut ArtworkLayer,
+    layer: u32,
+    profile: &BoardArrayFabricationProfile,
+    style: ProfileGerberStyle,
+) {
+    for path in &profile.paths {
+        append_profile_payloads(artwork, layer, path.payloads.clone(), style);
+    }
+}
+
+fn append_profile_cutouts(
+    artwork: &mut ArtworkLayer,
+    layer: u32,
+    doc: &IpcGeometryDocument,
+    profile: &pcb_ir::dialects::ipc::StepProfile,
+    transform: Affine2,
+    style: ProfileGerberStyle,
+) {
+    for cutout in &doc.profile_cutouts
+        [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
+    {
+        append_profile_path(artwork, layer, doc, cutout.path, transform, style);
     }
 }
 
@@ -517,9 +567,23 @@ fn append_profile_path(
     transform: Affine2,
     style: ProfileGerberStyle,
 ) {
+    append_profile_payloads(
+        artwork,
+        layer,
+        transformed_path_payloads(doc, path, transform),
+        style,
+    );
+}
+
+fn append_profile_payloads(
+    artwork: &mut ArtworkLayer,
+    layer: u32,
+    payloads: Vec<common_path::PathPayload>,
+    style: ProfileGerberStyle,
+) {
     let path = artwork.push_path(
         ArtworkPath::stroked(style.stroke_width_mm, style.line_cap, style.line_join),
-        transformed_path_payloads(doc, path, transform),
+        payloads,
     );
     let bbox = artwork.paths[path as usize].bbox;
     artwork.push_object(
@@ -539,84 +603,6 @@ fn append_profile_path(
         },
     );
     artwork.layers[layer as usize].bbox = artwork.layers[layer as usize].bbox.union(bbox);
-}
-
-fn append_route_features_to_profile(
-    ipc: &Ipc2581,
-    artwork: &mut ArtworkLayer,
-    artwork_layer: u32,
-    view: GeometryView,
-    style: ProfileGerberStyle,
-) -> Result<()> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    for source_layer in ecad
-        .cad_data
-        .layers
-        .iter()
-        .filter(|layer| layer.layer_function == LayerFunction::Rout)
-    {
-        let layer_name = ipc.resolve(source_layer.name);
-        let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
-            .with_context(|| format!("failed to extract IPC-2581 route layer '{layer_name}'"))?;
-        pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
-        if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
-            bail!("IPC-2581 route layer '{layer_name}' is not artwork-ready: {error}");
-        }
-        let Some(layer) = doc.layers.first() else {
-            continue;
-        };
-        let features = &doc.features
-            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
-        for feature in features {
-            if should_mirror_route_feature_to_profile(feature) {
-                append_route_feature_to_profile(artwork, artwork_layer, &doc, feature, style)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn should_mirror_route_feature_to_profile(feature: &GeometryFeature<ipc2581::Symbol>) -> bool {
-    feature.intent.domain == FeatureDomain::Rout
-        && feature.intent.operation == FeatureOperation::Route
-        && feature.intent.plating == PlatingKind::NonPlated
-        && feature.source_step_kind != LayoutStepKind::Board
-}
-
-fn append_route_feature_to_profile(
-    artwork: &mut ArtworkLayer,
-    layer: u32,
-    doc: &IpcGeometryDocument,
-    feature: &GeometryFeature<ipc2581::Symbol>,
-    style: ProfileGerberStyle,
-) -> Result<()> {
-    for path in
-        &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
-    {
-        let path = artwork.push_path(
-            ArtworkPath::stroked(style.stroke_width_mm, style.line_cap, style.line_join),
-            artwork_contours(doc, path),
-        );
-        let bbox = artwork.paths[path as usize].bbox;
-        artwork.push_object(
-            layer,
-            ArtworkObject {
-                paint: PaintPolarity::Dark,
-                order: PaintOrder {
-                    stage: PaintStage::Overlay,
-                },
-                geometry: ArtworkGeometry::Stroke { path },
-                net: None,
-                bbox,
-                meta: ObjectAttributes {
-                    aperture_function: Some(vec!["Profile".to_string()]),
-                    ..ObjectAttributes::default()
-                },
-            },
-        );
-        artwork.layers[layer as usize].bbox = artwork.layers[layer as usize].bbox.union(bbox);
-    }
-    Ok(())
 }
 
 fn ir_side(side: Option<IpcSide>) -> IrSide {
@@ -1736,6 +1722,60 @@ mod tests {
         let geometry = gerberx2::geometry::extract_document(&parsed);
         assert!(geometry.objects.len() >= 2);
         assert!(geometry.layers[0].bbox.width() > 14.0);
+    }
+
+    #[test]
+    fn board_array_profile_does_not_infer_reliefs_without_vcut_lines() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="2" y="10"/>
+            <PolyStepCurve x="0" y="8" centerX="2" centerY="8" clockwise="false"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="20"/>
+            <PolyStepSegment x="0" y="20"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let files = build_gerber_x2_files(&ipc, GeometryView::ArrayFlattened).unwrap();
+
+        assert!(files.iter().all(|file| file.filename != "V_Cut.gbr"));
+        let profile = files
+            .iter()
+            .find(|file| file.filename == "Board_Array_Profile.gm1")
+            .unwrap();
+        assert!(profile.contents.contains("%TF.Part,Array*%"));
+        assert!(!profile.contents.contains("G02*"));
+        assert!(!profile.contents.contains("G03*"));
+        gerberx2::GerberX2::parse(&profile.contents).unwrap();
     }
 
     #[test]

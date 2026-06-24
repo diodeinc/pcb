@@ -682,10 +682,20 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>();
         let cutouts = cutout_nodes
             .into_iter()
-            .map(|n| self.parse_polygon(&n, units))
+            .map(|n| self.parse_polygon_container(&n, units))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(Contour { polygon, cutouts })
+    }
+
+    fn parse_polygon_container(&mut self, node: &Node, units: Units) -> Result<Polygon> {
+        match self
+            .element_children(node)
+            .find(|child| self.name(child) == "Polygon")
+        {
+            Some(polygon) => self.parse_polygon(&polygon, units),
+            None => self.parse_polygon(node, units),
+        }
     }
 
     fn parse_polygon(&mut self, node: &Node, units: Units) -> Result<Polygon> {
@@ -1796,17 +1806,10 @@ impl<'a> Parser<'a> {
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
         let polygon = self.parse_polygon(&polygon_node, units)?;
 
-        // Parse cutouts (voids within the board outline)
         let mut cutouts = Vec::new();
         for child in self.element_children(node) {
             if self.name(&child) == "Cutout" {
-                // Cutout contains a Polygon child
-                if let Some(cutout_polygon_node) = self
-                    .element_children(&child)
-                    .find(|n| self.name(n) == "Polygon")
-                {
-                    cutouts.push(self.parse_polygon(&cutout_polygon_node, units)?);
-                }
+                cutouts.push(self.parse_polygon_container(&child, units)?);
             }
         }
 

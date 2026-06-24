@@ -950,6 +950,104 @@ pub fn transformed_path_bbox<Symbol, LayerFunction>(
         .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct BoardArrayFabricationProfile {
+    pub paths: Vec<BoardArrayFabricationProfilePath>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoardArrayFabricationProfilePath {
+    pub role: BoardArrayFabricationProfilePathRole,
+    pub payloads: Vec<common_path::PathPayload>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardArrayFabricationProfilePathRole {
+    ArrayOutline,
+    ArrayCutout,
+    BoardCutout,
+    VScoreRelief,
+}
+
+pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+) -> Result<BoardArrayFabricationProfile, relief::VScoreReliefError> {
+    let mut profile = BoardArrayFabricationProfile::default();
+    if root_panel_step(doc).is_none() {
+        return Ok(profile);
+    }
+
+    for occurrence in profile_occurrences_for(doc, ProfileSet::RootOnly) {
+        profile.paths.push(BoardArrayFabricationProfilePath {
+            role: BoardArrayFabricationProfilePathRole::ArrayOutline,
+            payloads: transformed_path_payloads(
+                doc,
+                occurrence.profile.outer_path,
+                occurrence.transform,
+            ),
+        });
+        push_board_array_profile_cutouts(
+            &mut profile,
+            doc,
+            occurrence.profile,
+            occurrence.transform,
+            BoardArrayFabricationProfilePathRole::ArrayCutout,
+        );
+    }
+
+    for occurrence in profile_occurrences_for(doc, ProfileSet::FabricationOutlines) {
+        if occurrence.role != ProfileOccurrenceRole::BoardInstance {
+            continue;
+        }
+        push_board_array_profile_cutouts(
+            &mut profile,
+            doc,
+            occurrence.profile,
+            occurrence.transform,
+            BoardArrayFabricationProfilePathRole::BoardCutout,
+        );
+        if score_lines.is_empty() {
+            continue;
+        }
+        let reliefs = relief::vscore_route_reliefs(&relief::VScoreReliefInput {
+            board_boundary: transformed_path_payloads(
+                doc,
+                occurrence.profile.outer_path,
+                occurrence.transform,
+            ),
+            score_lines: score_lines.to_vec(),
+            tool_diameter_mm: relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
+            tolerance_mm: relief::DEFAULT_RELIEF_TOLERANCE_MM,
+        })?;
+        for relief in reliefs {
+            profile.paths.push(BoardArrayFabricationProfilePath {
+                role: BoardArrayFabricationProfilePathRole::VScoreRelief,
+                payloads: relief.contours,
+            });
+        }
+    }
+
+    Ok(profile)
+}
+
+fn push_board_array_profile_cutouts<Symbol, LayerFunction>(
+    profile: &mut BoardArrayFabricationProfile,
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    step_profile: &StepProfile,
+    transform: Affine2,
+    role: BoardArrayFabricationProfilePathRole,
+) {
+    for cutout in &doc.profile_cutouts[step_profile.cutout_start as usize
+        ..(step_profile.cutout_start + step_profile.cutout_count) as usize]
+    {
+        profile.paths.push(BoardArrayFabricationProfilePath {
+            role,
+            payloads: transformed_path_payloads(doc, cutout.path, transform),
+        });
+    }
+}
+
 fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
     match polarity {
         GeometryPolarity::Positive => PaintPolarity::Dark,

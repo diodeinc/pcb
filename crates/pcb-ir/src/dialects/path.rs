@@ -298,7 +298,17 @@ pub fn stroke_to_fill(
         .with_join(kurbo_join(style.line_join))
         .with_caps(kurbo_cap(style.line_cap));
     let outline = kurbo::stroke(source, &stroke, &StrokeOpts::default(), 0.01);
-    let contours = kurbo_path_to_payloads(&outline);
+    let mut contours = kurbo_path_to_payloads(&outline);
+    for contour in &mut contours {
+        if contour
+            .cmds
+            .last()
+            .is_none_or(|cmd| cmd.op != PathOp::Close)
+        {
+            contour.cmds.push(PathCmd::close());
+            contour.bbox = contour_bbox(&contour.cmds);
+        }
+    }
     (!contours.is_empty()).then_some(contours)
 }
 
@@ -604,6 +614,12 @@ mod tests {
         assert_close(bbox.min.y, -1.0);
         assert_close(bbox.max.x, 10.0);
         assert_close(bbox.max.y, 1.0);
+        assert!(fill.iter().all(|payload| {
+            payload
+                .cmds
+                .last()
+                .is_some_and(|cmd| cmd.op == PathOp::Close)
+        }));
     }
 
     fn line_payload(start: Point, end: Point) -> PathPayload {

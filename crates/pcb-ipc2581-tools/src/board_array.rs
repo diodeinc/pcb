@@ -1,8 +1,13 @@
 use std::fmt::Write;
 
+use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
 use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
-use pcb_ir::dialects::ipc::{GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp};
+use pcb_ir::dialects::ipc::{
+    BoardArrayFabricationProfilePathRole, GeometryView, LayoutStep, LayoutStepKind, PathCmd,
+    PathOp, board_array_fabrication_profile,
+};
+use pcb_ir::dialects::path::PathPayload;
 
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
 
@@ -19,10 +24,11 @@ pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Option<Str
     let doc = crate::geometry::extract_layout(accessor.ipc()).ok()?;
     let array_height = board_array.dimensions.as_ref()?.height_mm();
     let layer_overlays = board_array_layer_overlays(accessor, array_height);
-    render_board_array_svg(board_array, &doc, &layer_overlays)
+    render_board_array_svg(accessor.ipc(), board_array, &doc, &layer_overlays)
 }
 
 fn render_board_array_svg(
+    ipc: &Ipc2581,
     board_array: &BoardArrayInfo,
     doc: &GeometryDocument,
     layer_overlays: &[BoardArrayLayerOverlay],
@@ -49,6 +55,7 @@ fn render_board_array_svg(
     if board_paths.is_empty() {
         return None;
     }
+    let relief_paths = board_array_profile_relief_paths(ipc, doc, array_height)?;
 
     let mut svg = String::new();
     writeln!(
@@ -82,6 +89,7 @@ fn render_board_array_svg(
     write_board_paths(&mut svg, &board_paths, "board-fill", "#f1f5f9", "none", 0.0);
 
     write_layer_overlays(&mut svg, layer_overlays);
+    write_profile_relief_paths(&mut svg, &relief_paths);
     write_rail_guides(
         &mut svg,
         grid,
@@ -162,6 +170,25 @@ fn board_array_layer_overlays(
             })
         })
         .collect()
+}
+
+fn board_array_profile_relief_paths(
+    ipc: &Ipc2581,
+    doc: &GeometryDocument,
+    array_height: f64,
+) -> Option<Vec<String>> {
+    let score_lines = crate::geometry::board_array_vscore_lines(ipc).ok()?;
+    let profile = board_array_fabrication_profile(doc, &score_lines).ok()?;
+    let transform = y_flip_transform(array_height);
+
+    Some(
+        profile
+            .paths
+            .iter()
+            .filter(|path| path.role == BoardArrayFabricationProfilePathRole::VScoreRelief)
+            .filter_map(|path| payloads_path_data(&path.payloads, transform))
+            .collect(),
+    )
 }
 
 fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayerPath> {
@@ -264,6 +291,16 @@ fn append_transformed_path_data(
         append_path_cmds(path_data, &cmds);
     }
     Some(())
+}
+
+fn payloads_path_data(payloads: &[PathPayload], transform: Affine2) -> Option<String> {
+    let mut path_data = String::new();
+    for payload in payloads {
+        let (_, cmds) =
+            pcb_ir::dialects::path::transform_cmds(payload.cmds.iter().copied(), transform);
+        append_path_cmds(&mut path_data, &cmds);
+    }
+    (!path_data.is_empty()).then_some(path_data)
 }
 
 fn append_path_cmds(data: &mut String, cmds: &[PathCmd]) {
@@ -388,6 +425,17 @@ fn write_layer_overlays(svg: &mut String, layer_overlays: &[BoardArrayLayerOverl
                 .unwrap();
             }
         }
+    }
+}
+
+fn write_profile_relief_paths(svg: &mut String, paths: &[String]) {
+    for path in paths {
+        writeln!(
+            svg,
+            "  <path class='board-array-profile-relief' d='{path}' fill='none' stroke='#111827' stroke-width='{}' stroke-linejoin='round' opacity='0.9'/>",
+            fmt_num(OVERVIEW_STROKE_WIDTH_MM)
+        )
+        .unwrap();
     }
 }
 
@@ -640,6 +688,76 @@ mod tests {
         let vcut_start = svg.find("vcut-guide").unwrap();
         let board_outline_start = svg.find("class='board-outline'").unwrap();
         assert!(vcut_start < board_outline_start);
+    }
+
+    #[test]
+    fn renders_board_array_overview_vcut_relief_contours() {
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    <LayerRef name="VCUT"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="VCUT" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="6" y="10"/>
+            <PolyStepSegment x="5" y="8"/>
+            <PolyStepSegment x="4" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="0" y="20"/>
+            <PolyStepSegment x="20" y="20"/>
+            <PolyStepSegment x="20" y="0"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0"/>
+        <LayerFeature layerRef="VCUT">
+          <Set>
+            <Features>
+              <Line startX="5" startY="0" endX="5" endY="20">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+              <Line startX="15" startY="0" endX="15" endY="20">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+              <Line startX="0" startY="5" endX="20" endY="5">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+              <Line startX="0" startY="15" endX="20" endY="15">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let svg = render_board_array_overview_svg(&accessor).unwrap();
+
+        assert!(svg.contains("class='board-array-profile-relief'"));
+        assert!(svg.contains("stroke='#111827'"));
+        assert!(svg.contains(" Z"));
     }
 
     #[test]

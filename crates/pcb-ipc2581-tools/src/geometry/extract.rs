@@ -4672,11 +4672,9 @@ mod tests {
             <PolyStepSegment x="0" y="10"/>
           </Polygon>
           <Cutout>
-            <Polygon>
-              <PolyBegin x="6" y="5"/>
-              <PolyStepCurve x="4" y="5" centerX="5" centerY="5" clockwise="false"/>
-              <PolyStepCurve x="6" y="5" centerX="5" centerY="5" clockwise="false"/>
-            </Polygon>
+            <PolyBegin x="6" y="5"/>
+            <PolyStepCurve x="4" y="5" centerX="5" centerY="5" clockwise="false"/>
+            <PolyStepCurve x="6" y="5" centerX="5" centerY="5" clockwise="false"/>
           </Cutout>
         </Profile>
       </Step>
