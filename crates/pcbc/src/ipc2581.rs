@@ -143,12 +143,9 @@ enum BoardArrayCommands {
         /// Number of board rows. Must be between 1 and 10.
         #[arg(long)]
         rows: u32,
-        /// Spacing between board columns, in millimeters. Must be 0 or between 5 and 20.
-        #[arg(long)]
-        column_spacing: f64,
-        /// Spacing between board rows, in millimeters. Must be 0 or between 5 and 20.
-        #[arg(long)]
-        row_spacing: f64,
+        /// Board margin in millimeters. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
+        #[arg(long, required = true, num_args = 1..=4, value_name = "MARGIN")]
+        board_margin: Vec<f64>,
         /// Uniform edge rail width, in millimeters. Must be between 5 and 30.
         #[arg(long)]
         edge_rail_width: f64,
@@ -201,21 +198,23 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 input,
                 columns,
                 rows,
-                column_spacing,
-                row_spacing,
+                board_margin,
                 edge_rail_width,
                 output,
-            } => commands::board_array::execute(
-                &input,
-                &output,
-                &commands::board_array::BoardArrayCreateOptions {
-                    columns,
-                    rows,
-                    column_spacing_mm: column_spacing,
-                    row_spacing_mm: row_spacing,
-                    edge_rail_width_mm: edge_rail_width,
-                },
-            ),
+            } => {
+                let board_margin_mm =
+                    commands::board_array::BoardMarginMm::from_css_shorthand(&board_margin)?;
+                commands::board_array::execute(
+                    &input,
+                    &output,
+                    &commands::board_array::BoardArrayCreateOptions {
+                        columns,
+                        rows,
+                        board_margin_mm,
+                        edge_rail_width_mm: edge_rail_width,
+                    },
+                )
+            }
         },
         Commands::View {
             input,

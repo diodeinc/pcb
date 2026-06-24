@@ -136,9 +136,69 @@ impl std::error::Error for BoardArrayCreateValidationError {}
 pub struct BoardArrayCreateOptions {
     pub columns: u32,
     pub rows: u32,
-    pub column_spacing_mm: f64,
-    pub row_spacing_mm: f64,
+    pub board_margin_mm: BoardMarginMm,
     pub edge_rail_width_mm: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoardMarginMm {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+impl BoardMarginMm {
+    pub fn all(value: f64) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    pub fn from_css_shorthand(values: &[f64]) -> Result<Self> {
+        match values {
+            [all] => Ok(Self::all(*all)),
+            [vertical, horizontal] => Ok(Self {
+                top: *vertical,
+                right: *horizontal,
+                bottom: *vertical,
+                left: *horizontal,
+            }),
+            [top, horizontal, bottom] => Ok(Self {
+                top: *top,
+                right: *horizontal,
+                bottom: *bottom,
+                left: *horizontal,
+            }),
+            [top, right, bottom, left] => Ok(Self {
+                top: *top,
+                right: *right,
+                bottom: *bottom,
+                left: *left,
+            }),
+            _ => bail!("board margin expects 1 to 4 values"),
+        }
+    }
+
+    fn horizontal_gap(self) -> f64 {
+        self.left + self.right
+    }
+
+    fn vertical_gap(self) -> f64 {
+        self.top + self.bottom
+    }
+
+    fn sides(self) -> [(&'static str, f64); 4] {
+        [
+            ("board margin top", self.top),
+            ("board margin right", self.right),
+            ("board margin bottom", self.bottom),
+            ("board margin left", self.left),
+        ]
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -329,15 +389,16 @@ fn build_board_array_spec(
 
     let columns = options.columns;
     let rows = options.rows;
-    let margin_x = options.column_spacing_mm + options.edge_rail_width_mm;
-    let margin_y = options.row_spacing_mm + options.edge_rail_width_mm;
-    let pitch_x = board_width + options.column_spacing_mm;
-    let pitch_y = board_height + options.row_spacing_mm;
+    let board_margin = options.board_margin_mm;
+    let margin_x = options.edge_rail_width_mm + board_margin.left;
+    let margin_y = options.edge_rail_width_mm + board_margin.bottom;
+    let pitch_x = board_width + board_margin.horizontal_gap();
+    let pitch_y = board_height + board_margin.vertical_gap();
     let array_width = columns as f64 * board_width
-        + (columns + 1) as f64 * options.column_spacing_mm
+        + columns as f64 * board_margin.horizontal_gap()
         + 2.0 * options.edge_rail_width_mm;
     let array_height = rows as f64 * board_height
-        + (rows + 1) as f64 * options.row_spacing_mm
+        + rows as f64 * board_margin.vertical_gap()
         + 2.0 * options.edge_rail_width_mm;
     validate_array_dimensions(array_width, array_height)?;
 
@@ -407,20 +468,29 @@ fn build_board_array_spec(
 fn validate_options(options: &BoardArrayCreateOptions) -> Result<()> {
     validate_u32_range("columns", options.columns, 1, 10)?;
     validate_u32_range("rows", options.rows, 1, 10)?;
-    validate_mm_range("column spacing", options.column_spacing_mm, 0.0, 20.0)?;
-    validate_mm_range("row spacing", options.row_spacing_mm, 0.0, 20.0)?;
+    for (field, value) in options.board_margin_mm.sides() {
+        validate_mm_range(field, value, 0.0, 20.0)?;
+    }
     validate_mm_range(
         "edge rail width",
         options.edge_rail_width_mm,
         MIN_EDGE_RAIL_WIDTH_MM,
         30.0,
     )?;
-    validate_zero_or_min_mm(
-        "column spacing",
-        options.column_spacing_mm,
-        MIN_VCUT_CLEARANCE_MM,
-    )?;
-    validate_zero_or_min_mm("row spacing", options.row_spacing_mm, MIN_VCUT_CLEARANCE_MM)?;
+    if options.columns > 1 {
+        validate_zero_or_min_mm(
+            "horizontal board clearance",
+            options.board_margin_mm.horizontal_gap(),
+            MIN_VCUT_CLEARANCE_MM,
+        )?;
+    }
+    if options.rows > 1 {
+        validate_zero_or_min_mm(
+            "vertical board clearance",
+            options.board_margin_mm.vertical_gap(),
+            MIN_VCUT_CLEARANCE_MM,
+        )?;
+    }
     Ok(())
 }
 
@@ -652,8 +722,8 @@ fn add_board_array_tooling(
 /// The generated board array uses a rectangular profile with the lower-left
 /// array corner at (0, 0). Fiducials and tooling holes live in the outer 5 mm
 /// rail band even when the configured edge rail is wider. They are not placed
-/// on left/right rails or over column spacing, so removing side rails and
-/// column gaps keeps the top/bottom rail tooling attached to board material.
+/// on left/right rails or over horizontal board gaps, so removing side rails
+/// and gaps keeps the top/bottom rail tooling attached to board material.
 ///
 /// Horizontal rules:
 /// - one column requires at least 35 mm board width, because both left and
@@ -1420,6 +1490,47 @@ mod tests {
         FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FiducialKind,
         GeometryView, PlatingKind,
     };
+
+    #[test]
+    fn parses_board_margin_css_shorthand() {
+        let cases = [
+            (&[1.0][..], BoardMarginMm::all(1.0)),
+            (
+                &[1.0, 2.0][..],
+                BoardMarginMm {
+                    top: 1.0,
+                    right: 2.0,
+                    bottom: 1.0,
+                    left: 2.0,
+                },
+            ),
+            (
+                &[1.0, 2.0, 3.0][..],
+                BoardMarginMm {
+                    top: 1.0,
+                    right: 2.0,
+                    bottom: 3.0,
+                    left: 2.0,
+                },
+            ),
+            (
+                &[1.0, 2.0, 3.0, 4.0][..],
+                BoardMarginMm {
+                    top: 1.0,
+                    right: 2.0,
+                    bottom: 3.0,
+                    left: 4.0,
+                },
+            ),
+        ];
+
+        for (values, expected) in cases {
+            assert_eq!(BoardMarginMm::from_css_shorthand(values).unwrap(), expected);
+        }
+        assert!(BoardMarginMm::from_css_shorthand(&[]).is_err());
+        assert!(BoardMarginMm::from_css_shorthand(&[1.0, 2.0, 3.0, 4.0, 5.0]).is_err());
+    }
+
     #[test]
     fn creates_rectangular_panel_step_from_board_bbox() {
         let xml = create_board_array_xml(
@@ -1427,8 +1538,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1442,23 +1552,23 @@ mod tests {
         ));
         assert!(xml.contains(r#"<Step name="array" type="PALLET">"#));
         assert!(xml.contains(
-            r#"<StepRepeat stepRef="board" x="12" y="13" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
+            r#"<StepRepeat stepRef="board" x="9.5" y="10.5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
         ));
         assert!(xml.contains(r#"<LayerFeature layerRef="V-Score">"#));
-        assert!(xml.contains(r#"<Line startX="10" startY="0" endX="10" endY="105">"#));
-        assert!(xml.contains(r#"<Line startX="0" startY="10" endX="105" endY="10">"#));
+        assert!(xml.contains(r#"<Line startX="7.5" startY="0" endX="7.5" endY="100">"#));
+        assert!(xml.contains(r#"<Line startX="0" startY="7.5" endX="100" endY="7.5">"#));
 
         let ipc = Ipc2581::parse(&xml).unwrap();
         let layout = geometry::extract_layout(&ipc).unwrap();
         let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
         assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
-        assert_point_close(panel_step.bbox.max, Point::new(105.0, 105.0));
+        assert_point_close(panel_step.bbox.max, Point::new(100.0, 100.0));
         assert_eq!(pcb_ir::dialects::ipc::board_step_count(&layout), 1);
         assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 36);
 
         let first_instance = &layout.layout.instances[0];
-        assert_point_close(first_instance.bbox.min, Point::new(10.0, 10.0));
-        assert_point_close(first_instance.bbox.max, Point::new(20.0, 20.0));
+        assert_point_close(first_instance.bbox.min, Point::new(7.5, 7.5));
+        assert_point_close(first_instance.bbox.max, Point::new(17.5, 17.5));
 
         let vcut = geometry::extract_layer_for_view(&ipc, "V-Score", GeometryView::ArrayFlattened)
             .unwrap();
@@ -1477,8 +1587,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1517,8 +1626,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1552,8 +1660,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1650,8 +1757,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 0.0,
+                board_margin_mm: board_margin(5.0, 0.0),
                 edge_rail_width_mm: 15.0,
             },
         )
@@ -1681,11 +1787,11 @@ mod tests {
         }));
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(30.0, 66.15), (45.0, 66.15), (35.0, 3.85), (40.0, 3.85)],
+            vec![(27.5, 66.15), (42.5, 66.15), (32.5, 3.85), (37.5, 3.85)],
         );
         assert_points_close(
             hole_points(&tooling_holes),
-            vec![(25.0, 67.5), (50.0, 67.5), (30.0, 2.5), (45.0, 2.5)],
+            vec![(22.5, 67.5), (47.5, 67.5), (27.5, 2.5), (42.5, 2.5)],
         );
     }
 
@@ -1697,8 +1803,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 0.0,
+                board_margin_mm: board_margin(5.0, 0.0),
                 edge_rail_width_mm: 15.0,
             },
         )
@@ -1715,11 +1820,11 @@ mod tests {
         assert_eq!(tooling_holes.len(), 4);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(30.0, 66.15), (55.0, 66.15), (35.0, 3.85), (50.0, 3.85)],
+            vec![(27.5, 66.15), (52.5, 66.15), (32.5, 3.85), (47.5, 3.85)],
         );
         assert_points_close(
             hole_points(&tooling_holes),
-            vec![(25.0, 67.5), (60.0, 67.5), (30.0, 2.5), (55.0, 2.5)],
+            vec![(22.5, 67.5), (57.5, 67.5), (27.5, 2.5), (52.5, 2.5)],
         );
     }
 
@@ -1731,8 +1836,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 0.0,
+                board_margin_mm: board_margin(5.0, 0.0),
                 edge_rail_width_mm: 15.0,
             },
         )
@@ -1772,8 +1876,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 0.0,
+                board_margin_mm: board_margin(0.0, 0.0),
                 edge_rail_width_mm: 25.4,
             },
         )
@@ -1793,8 +1896,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 0.0,
+                board_margin_mm: board_margin(0.0, 0.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1814,8 +1916,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 11,
                 rows: 1,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 0.0,
+                board_margin_mm: board_margin(0.0, 0.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1829,39 +1930,37 @@ mod tests {
     }
 
     #[test]
-    fn rejects_small_spacing_and_edge_rail_width() {
-        let column_error = create_board_array_xml(
+    fn rejects_small_clearance_and_edge_rail_width() {
+        let horizontal_gap_error = create_board_array_xml(
             board_fixture_mm(),
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
-                column_spacing_mm: 4.99,
-                row_spacing_mm: 0.0,
+                board_margin_mm: board_margin(4.99, 0.0),
                 edge_rail_width_mm: 5.0,
             },
         )
         .unwrap_err();
         assert!(
-            column_error
+            horizontal_gap_error
                 .to_string()
-                .contains("column spacing must be 0 mm or at least 5 mm")
+                .contains("horizontal board clearance must be 0 mm or at least 5 mm")
         );
 
-        let row_error = create_board_array_xml(
+        let vertical_gap_error = create_board_array_xml(
             board_fixture_mm(),
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 2,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 4.99,
+                board_margin_mm: board_margin(0.0, 4.99),
                 edge_rail_width_mm: 5.0,
             },
         )
         .unwrap_err();
         assert!(
-            row_error
+            vertical_gap_error
                 .to_string()
-                .contains("row spacing must be 0 mm or at least 5 mm")
+                .contains("vertical board clearance must be 0 mm or at least 5 mm")
         );
 
         let rail_error = create_board_array_xml(
@@ -1869,8 +1968,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 0.0,
+                board_margin_mm: board_margin(0.0, 0.0),
                 edge_rail_width_mm: 0.0,
             },
         )
@@ -1930,8 +2028,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 3,
                 rows: 2,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1939,7 +2036,7 @@ mod tests {
         assert!(
             narrow_error
                 .to_string()
-                .contains("array width must be at least 70 mm; got 60 mm")
+                .contains("array width must be at least 70 mm; got 55 mm")
         );
 
         let short_error = create_board_array_xml(
@@ -1947,8 +2044,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 4,
                 rows: 2,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1956,7 +2052,7 @@ mod tests {
         assert!(
             short_error
                 .to_string()
-                .contains("array height must be at least 70 mm; got 45 mm")
+                .contains("array height must be at least 70 mm; got 40 mm")
         );
 
         let wide_error = create_board_array_xml(
@@ -1964,8 +2060,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 1,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1973,7 +2068,7 @@ mod tests {
         assert!(
             wide_error
                 .to_string()
-                .contains("array width must be at most 260 mm; got 405 mm")
+                .contains("array width must be at most 260 mm; got 400 mm")
         );
 
         let tall_error = create_board_array_xml(
@@ -1981,8 +2076,7 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
                 edge_rail_width_mm: 5.0,
             },
         )
@@ -1990,8 +2084,17 @@ mod tests {
         assert!(
             tall_error
                 .to_string()
-                .contains("array height must be at most 260 mm; got 405 mm")
+                .contains("array height must be at most 260 mm; got 400 mm")
         );
+    }
+
+    fn board_margin(horizontal_gap_mm: f64, vertical_gap_mm: f64) -> BoardMarginMm {
+        BoardMarginMm {
+            top: vertical_gap_mm / 2.0,
+            right: horizontal_gap_mm / 2.0,
+            bottom: vertical_gap_mm / 2.0,
+            left: horizontal_gap_mm / 2.0,
+        }
     }
 
     fn assert_point_close(actual: Point, expected: Point) {

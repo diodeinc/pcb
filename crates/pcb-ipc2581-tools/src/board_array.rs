@@ -531,12 +531,12 @@ mod tests {
         <Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="0" y="27"/>
-            <PolyStepSegment x="46" y="27"/>
-            <PolyStepSegment x="46" y="0"/>
+            <PolyStepSegment x="0" y="24"/>
+            <PolyStepSegment x="44" y="24"/>
+            <PolyStepSegment x="44" y="0"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board" x="6" y="7" nx="3" ny="2" dx="12" dy="8"/>
+        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
       </Step>
     </CadData>
   </Ecad>
@@ -548,7 +548,7 @@ mod tests {
         let svg = render_board_array_overview_svg(&accessor).unwrap();
 
         assert!(svg.contains("data-board-array-overview='true'"));
-        assert!(svg.contains("viewBox='0 0 46 27'"));
+        assert!(svg.contains("viewBox='0 0 44 24'"));
         assert_eq!(svg.matches("class='board-outline'").count(), 3 * 2);
         assert!(svg.contains("fill='#f1f5f9'"));
         assert!(svg.contains("stroke='#064e3b'"));
@@ -589,19 +589,19 @@ mod tests {
         <Profile>
           <Polygon>
             <PolyBegin x="0" y="0"/>
-            <PolyStepSegment x="0" y="27"/>
-            <PolyStepSegment x="46" y="27"/>
-            <PolyStepSegment x="46" y="0"/>
+            <PolyStepSegment x="0" y="24"/>
+            <PolyStepSegment x="44" y="24"/>
+            <PolyStepSegment x="44" y="0"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board" x="6" y="7" nx="3" ny="2" dx="12" dy="8"/>
+        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
         <LayerFeature layerRef="VCUT">
           <Set>
             <Features>
-              <Line startX="6" startY="0" endX="6" endY="27">
+              <Line startX="5" startY="0" endX="5" endY="24">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
               </Line>
-              <Line startX="0" startY="7" endX="46" endY="7">
+              <Line startX="0" startY="5.5" endX="44" endY="5.5">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
               </Line>
             </Features>
@@ -618,8 +618,8 @@ mod tests {
         let svg = render_board_array_overview_svg(&accessor).unwrap();
 
         assert_eq!(svg.matches("vcut-guide").count(), 2);
-        assert!(svg.contains("d='M6 27 L6 0'"));
-        assert!(svg.contains("d='M0 20 L46 20'"));
+        assert!(svg.contains("d='M5 24 L5 0'"));
+        assert!(svg.contains("d='M0 18.5 L44 18.5'"));
         assert!(svg.contains("stroke='#dc2626'"));
         assert!(svg.contains("stroke-width='0.1'"));
         assert!(!svg.contains("stroke-dasharray"));

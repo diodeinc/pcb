@@ -542,16 +542,10 @@ fn print_board_array_summary(
             Cell::new("Array Grid").fg(Color::Cyan),
             Cell::new(format!("{} x {}", grid.columns, grid.rows)),
         ]);
-        if let Some(spacing) = grid.column_spacing {
+        if let Some(margin) = grid.board_margin.as_ref() {
             table.add_row(vec![
-                Cell::new("Column Spacing").fg(Color::Cyan),
-                Cell::new(units::convert_mm(spacing.mm(), unit_format)),
-            ]);
-        }
-        if let Some(spacing) = grid.row_spacing {
-            table.add_row(vec![
-                Cell::new("Row Spacing").fg(Color::Cyan),
-                Cell::new(units::convert_mm(spacing.mm(), unit_format)),
+                Cell::new("Board Margin").fg(Color::Cyan),
+                Cell::new(margin.format_shorthand(|value| units::convert_mm(value, unit_format))),
             ]);
         }
         if let Some(width) = grid.edge_rail_width {
@@ -713,10 +707,16 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
                 "board_height_mm": grid.board_height.mm(),
                 "pitch_x_mm": grid.pitch_x.map(|pitch| pitch.mm()),
                 "pitch_y_mm": grid.pitch_y.map(|pitch| pitch.mm()),
-                "column_spacing_mm": grid.column_spacing.map(|spacing| spacing.mm()),
-                "row_spacing_mm": grid.row_spacing.map(|spacing| spacing.mm()),
                 "edge_rail_width_mm": grid.edge_rail_width.map(|width| width.mm()),
             });
+            if let Some(margin) = grid.board_margin.as_ref() {
+                info["board_array"]["grid"]["board_margin_mm"] = json!({
+                    "top": margin.top.mm(),
+                    "right": margin.right.mm(),
+                    "bottom": margin.bottom.mm(),
+                    "left": margin.left.mm(),
+                });
+            }
         }
         if let Some(dimensions) = board_array.dimensions.as_ref() {
             info["board_array"]["dimensions"] = json!({

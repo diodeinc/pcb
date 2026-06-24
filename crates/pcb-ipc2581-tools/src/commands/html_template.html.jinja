@@ -216,16 +216,10 @@
             <span class="summary-label">Array Grid:</span>
             <span class="summary-value">{{ board_summary.board_array.grid.columns }} × {{ board_summary.board_array.grid.rows }}</span>
         </div>
-        {% if board_summary.board_array.grid.column_spacing %}
+        {% if board_summary.board_array.grid.board_margin %}
         <div class="summary-item">
-            <span class="summary-label">Column Spacing:</span>
-            <span class="summary-value">{{ board_summary.board_array.grid.column_spacing }}</span>
-        </div>
-        {% endif %}
-        {% if board_summary.board_array.grid.row_spacing %}
-        <div class="summary-item">
-            <span class="summary-label">Row Spacing:</span>
-            <span class="summary-value">{{ board_summary.board_array.grid.row_spacing }}</span>
+            <span class="summary-label">Board Margin:</span>
+            <span class="summary-value">{{ board_summary.board_array.grid.board_margin }}</span>
         </div>
         {% endif %}
         {% if board_summary.board_array.grid.edge_rail_width %}

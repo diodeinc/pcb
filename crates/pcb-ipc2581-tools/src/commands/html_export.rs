@@ -128,8 +128,7 @@ struct BoardArraySummary {
 struct BoardArrayGridSummary {
     columns: u32,
     rows: u32,
-    column_spacing: Option<String>,
-    row_spacing: Option<String>,
+    board_margin: Option<String>,
     edge_rail_width: Option<String>,
 }
 
@@ -222,12 +221,9 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
                 grid: board_array.grid.as_ref().map(|grid| BoardArrayGridSummary {
                     columns: grid.columns,
                     rows: grid.rows,
-                    column_spacing: grid
-                        .column_spacing
-                        .map(|spacing| format_length(spacing.mm(), unit_format)),
-                    row_spacing: grid
-                        .row_spacing
-                        .map(|spacing| format_length(spacing.mm(), unit_format)),
+                    board_margin: grid.board_margin.as_ref().map(|margin| {
+                        margin.format_shorthand(|value| format_length(value, unit_format))
+                    }),
                     edge_rail_width: grid
                         .edge_rail_width
                         .map(|width| format_length(width.mm(), unit_format)),
