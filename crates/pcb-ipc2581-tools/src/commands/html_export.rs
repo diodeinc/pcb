@@ -114,11 +114,8 @@ struct BoardSummary {
 
 #[derive(Serialize)]
 struct BoardArraySummary {
-    step_name: String,
     width: Option<String>,
     height: Option<String>,
-    board_count: usize,
-    board_instances: usize,
     grid: Option<BoardArrayGridSummary>,
     drill_holes: Option<String>,
     overview_svg: Option<String>,
@@ -213,11 +210,8 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Res
                 .map(|dims| formatted_dimensions(dims.width_mm(), dims.height_mm(), unit_format))
                 .unwrap_or((None, None));
             BoardArraySummary {
-                step_name: board_array.step_name.clone(),
                 width,
                 height,
-                board_count: board_array.board_count,
-                board_instances: board_array.board_instances,
                 grid: board_array.grid.as_ref().map(|grid| BoardArrayGridSummary {
                     columns: grid.columns,
                     rows: grid.rows,
@@ -561,9 +555,9 @@ mod tests {
         assert!(board_summary < array_summary);
         assert!(array_summary < file_info);
         assert!(!html[board_summary..array_summary].contains("Array Step:"));
-        assert!(html.contains("Array Step:"));
-        assert!(html.contains("Array Boards:"));
-        assert!(html.contains("1 instance from 1 board step"));
+        assert!(!html.contains("Array Step:"));
+        assert!(!html.contains("Array Boards:"));
+        assert!(!html.contains("1 instance from 1 board step"));
         assert!(html.contains("Array Grid:"));
         assert!(html.contains("data-board-array-overview='true'"));
     }

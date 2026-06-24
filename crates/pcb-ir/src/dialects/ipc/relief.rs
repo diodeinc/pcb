@@ -39,7 +39,6 @@ pub struct VScoreLine {
 #[derive(Debug, Clone)]
 pub struct RouteRelief {
     pub contours: Vec<PathPayload>,
-    pub tool_diameter_mm: f64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -288,7 +287,6 @@ fn append_boundary_pocket_reliefs(
     if !relief_payloads.is_empty() {
         output.reliefs.push(RouteRelief {
             contours: relief_payloads,
-            tool_diameter_mm: input.tool_diameter_mm,
         });
     }
     Ok(())
@@ -530,7 +528,6 @@ mod tests {
         assert_close(pocket_bbox.max.y, 5.0);
         let relief_bbox = payloads_bbox(&reliefs[0].contours);
         assert!(relief_bbox.max.y > pocket_bbox.max.y);
-        assert!(reliefs.iter().all(|relief| relief.tool_diameter_mm == 1.0));
     }
 
     #[test]
