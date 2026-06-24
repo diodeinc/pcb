@@ -16,6 +16,7 @@ const SHIM_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/pcb-la
 const NIGHTLY_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/nightly/latest.json";
 const USER_AGENT: &str = "pcb";
 const STDLIB_ARCHIVE_NAME: &str = "stdlib.tar.zst";
+const TOOLCHAIN_SIDECARS: &[&str] = &["pcb-rectifier"];
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -675,6 +676,7 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
         serde_json::to_vec_pretty(&receipt)?,
     )?;
     stage_stdlib_archive(&release.base_url, &staging_dir)?;
+    stage_optional_sidecars(&release.base_url, &staging_dir)?;
 
     if install_dir.exists() {
         fs::remove_dir_all(&install_dir)?;
@@ -747,7 +749,9 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
         staging_dir.join("receipt.json"),
         serde_json::to_vec_pretty(&receipt)?,
     )?;
-    stage_stdlib_archive(&format!("{RELEASE_BASE_URL}/v{version}"), &staging_dir)?;
+    let release_base_url = format!("{RELEASE_BASE_URL}/v{version}");
+    stage_stdlib_archive(&release_base_url, &staging_dir)?;
+    stage_optional_sidecars(&release_base_url, &staging_dir)?;
 
     if install_dir.exists() {
         fs::remove_dir_all(&install_dir)?;
@@ -776,6 +780,22 @@ fn stage_stdlib_archive(base_url: &str, staging_dir: &Path) -> Result<()> {
         stdlib_dir.join("interfaces.zen").is_file(),
         "stdlib archive {url} did not contain interfaces.zen at the archive root"
     );
+    Ok(())
+}
+
+fn stage_optional_sidecars(base_url: &str, staging_dir: &Path) -> Result<()> {
+    let client = http_client(ARCHIVE_TIMEOUT)?;
+    for binary in TOOLCHAIN_SIDECARS {
+        let artifact_name = binary_artifact_name(binary);
+        let url = format!("{}/{}", base_url.trim_end_matches('/'), artifact_name);
+        let Some(bytes) = download_optional_artifact(&client, &url)? else {
+            continue;
+        };
+        verify_checksum(&url, &bytes)?;
+        let dst = staging_dir.join(executable_name(binary));
+        fs::write(&dst, bytes)?;
+        copy_executable_permissions(&dst, &dst)?;
+    }
     Ok(())
 }
 
@@ -1343,6 +1363,11 @@ fn binary_artifact_name_for(binary: &str, target: &str) -> String {
 fn toolchain_archive_name_for(binary: &str, target: &str) -> String {
     let ext = if cfg!(windows) { "zip" } else { "tar.xz" };
     format!("{binary}-{target}.{ext}")
+}
+
+fn executable_name(binary: &str) -> String {
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    format!("{binary}{ext}")
 }
 
 fn pcbc_binary_name() -> &'static str {

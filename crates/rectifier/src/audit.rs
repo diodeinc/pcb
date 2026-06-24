@@ -1,4 +1,4 @@
-//! `rectifier audit` — porcelain output for benchmark failures.
+//! `pcb rectifier check` / `pcb rectifier fix` — porcelain output for benchmark failures.
 //!
 //! Failure tiers (most to least severe):
 //!   1. `rotation_mismatch`  — predicted rotation fails the selected audit mode
@@ -30,6 +30,7 @@ pub struct Args {
     pub jsonl: bool,
     pub top: usize,
     pub apply: bool,
+    pub fail_on_flagged: bool,
     pub mode: BenchMode,
     pub randomize_initial_transform: bool,
     pub initial_transform_seed: u64,
@@ -194,7 +195,7 @@ struct AuditSummaryRecord {
 
 pub fn run(args: Args) -> Result<()> {
     if args.paths.is_empty() {
-        bail!("rectifier audit requires at least one path (file or directory)");
+        bail!("pcb rectifier requires at least one path (file or directory)");
     }
     if let Some(jobs) = args.jobs {
         rayon::ThreadPoolBuilder::new()
@@ -219,24 +220,27 @@ pub fn run(args: Args) -> Result<()> {
     }
 
     let total = args.limit.unwrap_or(footprints.len()).min(footprints.len());
+    let selected: Vec<PathBuf> = footprints.into_iter().take(total).collect();
+    let single_human_output = selected.len() == 1 && !args.jsonl;
     let kind_label = args.kind.label();
     let mode_label = args.mode.label();
     let tolerance_mm = args.mode.tolerance_mm();
-    eprintln!(
-        "rectifier audit (kind={kind_label}, mode={mode_label}): scanning {total} footprints"
-    );
-    if args.randomize_initial_transform {
+    if !single_human_output {
         eprintln!(
-            "  benchmark evaluator uses randomized initial transforms with seed={}",
-            args.initial_transform_seed
+            "pcb rectifier (kind={kind_label}, mode={mode_label}): scanning {total} footprints"
         );
-    } else {
-        eprintln!("  benchmark evaluator uses stored footprint transforms as initial transforms");
+        if args.randomize_initial_transform {
+            eprintln!(
+                "  evaluator uses randomized initial transforms with seed={}",
+                args.initial_transform_seed
+            );
+        } else {
+            eprintln!("  evaluator uses stored footprint transforms as initial transforms");
+        }
     }
 
-    let selected: Vec<PathBuf> = footprints.into_iter().take(total).collect();
     let bar = batch_bar(total as u64, "audit", args.jsonl);
-    let records: Vec<AuditRecord> = selected
+    let mut records: Vec<AuditRecord> = selected
         .par_iter()
         .map(|p| {
             let rec = evaluate_one(
@@ -249,6 +253,9 @@ pub fn run(args: Args) -> Result<()> {
             rec
         })
         .collect();
+    if single_human_output && let Some(record) = records.first_mut() {
+        normalize_single_skip(record);
+    }
     bar.finish_and_clear();
 
     let mut ok_count = 0usize;
@@ -324,6 +331,10 @@ pub fn run(args: Args) -> Result<()> {
             }
         }
         println!("{}", serde_json::to_string(&summary)?);
+    } else if single_human_output {
+        if let Some(record) = records.first() {
+            print_single_result(record, &apply_records, args.apply);
+        }
     } else {
         for tier in TIER_ORDER {
             let Some(examples) = tiers.get(tier.key) else {
@@ -359,10 +370,117 @@ pub fn run(args: Args) -> Result<()> {
             ok = ok_count,
         );
     }
+    if single_human_output {
+        if apply_errors > 0 || errors > 0 || (args.fail_on_flagged && flagged > 0) {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if apply_errors > 0 {
         bail!("failed to apply {apply_errors} audit correction(s)");
     }
+    if args.fail_on_flagged && (flagged > 0 || errors > 0) {
+        bail!("rectifier check found {flagged} flagged footprint(s) and {errors} error(s)");
+    }
     Ok(())
+}
+
+fn normalize_single_skip(record: &mut AuditRecord) {
+    if record.verdict != "skip" {
+        return;
+    }
+
+    match footprint::parse(Path::new(&record.path)) {
+        Ok(fp) if fp.require_model().is_err() => {
+            record.error = Some(single_skip_reason(Path::new(&record.path)));
+        }
+        Ok(_) => {
+            record.verdict = "error";
+            record.error = Some("solver skipped footprint despite a usable STEP model".into());
+        }
+        Err(err) => {
+            record.verdict = "error";
+            record.error = Some(format!("{err:#}"));
+        }
+    }
+}
+
+fn single_skip_reason(path: &Path) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(content) if has_model_block(&content) => ".wrl models unsupported".into(),
+        _ => "no 3D model".into(),
+    }
+}
+
+fn has_model_block(content: &str) -> bool {
+    let bytes = content.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'(' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if bytes.get(i..i + 5) == Some(b"model")
+            && bytes
+                .get(i + 5)
+                .is_none_or(|b| b.is_ascii_whitespace() || *b == b')')
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn print_single_result(record: &AuditRecord, apply_records: &[ApplyRecord], apply: bool) {
+    match record.verdict {
+        "ok" => println!("{} OK", record.path),
+        "skip" => println!(
+            "{} SKIP: {}",
+            record.path,
+            record.error.as_deref().unwrap_or("no 3D model")
+        ),
+        "error" => println!(
+            "{} Error: {}",
+            record.path,
+            record.error.as_deref().unwrap_or("solver failed")
+        ),
+        verdict if apply => {
+            let apply_record = apply_records.iter().find(|rec| rec.path == record.path);
+            match apply_record.map(|rec| rec.status) {
+                Some("applied") => println!(
+                    "{} OK: applied correction for {}: {}",
+                    record.path,
+                    verdict,
+                    format_detail(record)
+                ),
+                Some("error") => {
+                    let error = apply_record
+                        .and_then(|rec| rec.error.as_deref())
+                        .unwrap_or("failed to apply correction");
+                    println!(
+                        "{} Error: failed to apply correction for {}: {}",
+                        record.path, verdict, error
+                    );
+                }
+                _ => println!(
+                    "{} Error: {}: {}; no correction candidate available",
+                    record.path,
+                    verdict,
+                    format_detail(record)
+                ),
+            }
+        }
+        verdict => println!(
+            "{} Error: {}: {}",
+            record.path,
+            verdict,
+            format_detail(record)
+        ),
+    }
 }
 
 fn format_detail(rec: &AuditRecord) -> String {

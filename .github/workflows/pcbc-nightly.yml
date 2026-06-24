@@ -140,6 +140,7 @@ jobs:
             export CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
           fi
           cargo build --profile dist -p pcbc --bin pcbc --target "$TARGET"
+          cargo build --profile dist -p rectifier --bin pcb-rectifier --target "$TARGET"
 
       - name: Prepare artifacts
         shell: bash
@@ -148,18 +149,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          exe=pcbc
-          artifact="pcbc-$TARGET"
-          if [[ "$TARGET" == *windows* ]]; then
-            exe=pcbc.exe
-            artifact="$artifact.exe"
-          fi
-          cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
-          if command -v shasum >/dev/null; then
-            shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
-          else
-            sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
-          fi
+          for bin in pcbc pcb-rectifier; do
+            exe="$bin"
+            artifact="$bin-$TARGET"
+            if [[ "$TARGET" == *windows* ]]; then
+              exe="$bin.exe"
+              artifact="$artifact.exe"
+            fi
+            cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
+            if command -v shasum >/dev/null; then
+              shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
+            else
+              sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
+            fi
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7

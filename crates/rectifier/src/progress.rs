@@ -1,8 +1,8 @@
 //! Progress-bar plumbing shared by `bench` and `audit`. Wraps `indicatif` so
 //! callers get a consistent look-and-feel and so both commands disable the
 //! bar in the same set of situations (non-TTY stderr, `jsonl` output, or
-//! `RUST_LOG` being set — where ad-hoc traces would otherwise scramble the
-//! bar's in-place redraw).
+//! `RUST_LOG` being set — where log lines would otherwise scramble the bar's
+//! in-place redraw).
 
 use std::time::Duration;
 
@@ -33,13 +33,9 @@ pub fn batch_bar(total: u64, label: &str, disable: bool) -> ProgressBar {
     bar
 }
 
-/// Show the bar only when stderr is a TTY and `RUST_LOG` is unset. The
-/// bar and any tracing output share stderr, so drawing over live logs
-/// produces garbled output — we let the user pick one or the other.
+/// Show the bar only when stderr is a TTY and `RUST_LOG` is unset.
 fn should_render() -> bool {
     use std::io::IsTerminal;
-    if !std::io::stderr().is_terminal() {
-        return false;
-    }
-    !matches!(std::env::var_os("RUST_LOG"), Some(v) if !v.is_empty())
+    std::io::stderr().is_terminal()
+        && !matches!(std::env::var_os("RUST_LOG"), Some(v) if !v.is_empty())
 }

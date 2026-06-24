@@ -8,12 +8,13 @@ authors = { workspace = true }
 description = "Infer and patch KiCad footprint 3D model rotate/offset from STEP geometry"
 
 [[bin]]
-name = "rectifier"
+name = "pcb-rectifier"
 path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+env_logger = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -29,16 +30,9 @@ regex = { workspace = true }
 
 # Numerics: raster grids, FFT-based mask correlation, parallel pose scan
 ndarray = { workspace = true }
-realfft = { workspace = true }
 rustfft = { workspace = true }
 num-complex = { workspace = true }
 rayon = { workspace = true }
-
-# Polygon booleans
-clipper2-rust = { workspace = true }
-
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 # CLI progress bars for `bench` / `audit` batches.
 indicatif = { workspace = true, features = ["rayon"] }

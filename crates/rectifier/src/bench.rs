@@ -25,6 +25,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use rayon::prelude::*;
 use serde::Serialize;
 
 use crate::footprint::{self, FootprintData, FootprintKind, PadKind, PadShape};
@@ -117,7 +118,7 @@ pub struct Args {
     pub initial_transform_seed: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct EvalRecord {
     pub(crate) path: String,
     pub(crate) status: &'static str,
@@ -157,6 +158,44 @@ pub(crate) struct EvalRecord {
     pub(crate) reward_score: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
+}
+
+#[derive(Default, Serialize)]
+struct ChoiceStats {
+    pipeline: BTreeMap<String, usize>,
+    translation_source: BTreeMap<String, usize>,
+    threshold_mm: BTreeMap<String, usize>,
+    rotation_match: BTreeMap<String, usize>,
+    status_by_pipeline: BTreeMap<String, BTreeMap<String, usize>>,
+    status_by_translation_source: BTreeMap<String, BTreeMap<String, usize>>,
+}
+
+impl ChoiceStats {
+    fn add(&mut self, record: &EvalRecord) {
+        let status = record.status.to_string();
+        if let Some(pipeline) = record.pipeline {
+            inc(&mut self.pipeline, pipeline);
+            inc_nested(&mut self.status_by_pipeline, pipeline, &status);
+        }
+        if let Some(source) = record.translation_source.as_deref() {
+            inc(&mut self.translation_source, source);
+            inc_nested(&mut self.status_by_translation_source, source, &status);
+        }
+        if let Some(threshold) = record.predicted_threshold_mm {
+            inc(&mut self.threshold_mm, &format!("{threshold:.2}"));
+        }
+        if let Some(rotation) = record.rotation_match {
+            inc(&mut self.rotation_match, rotation);
+        }
+    }
+}
+
+fn inc(map: &mut BTreeMap<String, usize>, key: &str) {
+    *map.entry(key.to_string()).or_insert(0) += 1;
+}
+
+fn inc_nested(map: &mut BTreeMap<String, BTreeMap<String, usize>>, outer: &str, inner: &str) {
+    inc(map.entry(outer.to_string()).or_default(), inner);
 }
 
 #[derive(Default)]
@@ -292,33 +331,43 @@ pub fn run(args: Args) -> Result<()> {
         eprintln!("  initial transforms use the stored footprint values");
     }
 
+    let selected: Vec<PathBuf> = footprints.into_iter().take(total).collect();
+    let bar = batch_bar(total as u64, "bench", args.jsonl);
+    let records: Vec<EvalRecord> = selected
+        .par_iter()
+        .map(|path| {
+            let record = evaluate_one(
+                path,
+                args.mode,
+                args.randomize_initial_transform,
+                args.initial_transform_seed,
+            );
+            if !args.jsonl {
+                bar.set_message(format!(
+                    "{:<6} {}",
+                    record.status,
+                    display_path(path, &args.paths)
+                ));
+            }
+            bar.inc(1);
+            record
+        })
+        .collect();
+    bar.finish_and_clear();
+
     let mut stats = BenchStats::default();
     let mut by_kind: BTreeMap<&'static str, BenchStats> = BTreeMap::new();
-
-    let bar = batch_bar(total as u64, "bench", args.jsonl);
-    for path in footprints.iter().take(total) {
-        let record = evaluate_one(
-            path,
-            args.mode,
-            args.randomize_initial_transform,
-            args.initial_transform_seed,
-        );
-        stats.add(&record);
+    let mut choices = ChoiceStats::default();
+    for record in &records {
+        stats.add(record);
+        choices.add(record);
         if let Some(kind) = record.footprint_kind {
-            by_kind.entry(kind).or_default().add(&record);
+            by_kind.entry(kind).or_default().add(record);
         }
         if args.jsonl {
-            println!("{}", serde_json::to_string(&record)?);
-        } else {
-            bar.set_message(format!(
-                "{:<6} {}",
-                record.status,
-                display_path(path, &args.paths)
-            ));
+            println!("{}", serde_json::to_string(record)?);
         }
-        bar.inc(1);
     }
-    bar.finish_and_clear();
 
     let inferred = stats.inferred();
     let pass = stats.pass;
@@ -361,6 +410,7 @@ pub fn run(args: Args) -> Result<()> {
         "median_z_diff_mm": quantile_nearest_rank(&stats.z_diff_errors_mm, 0.50),
         "p95_z_diff_mm": quantile_nearest_rank(&stats.z_diff_errors_mm, 0.95),
         "by_footprint_kind": by_footprint_kind,
+        "choices": &choices,
     });
     if args.jsonl {
         println!("{}", summary);
@@ -409,7 +459,39 @@ pub fn run(args: Args) -> Result<()> {
             stats.reward_score(),
         );
     }
+    log_choice_counts("pipeline", &choices.pipeline);
+    log_choice_counts("translation_source", &choices.translation_source);
+    log_choice_counts("threshold_mm", &choices.threshold_mm);
+    log_choice_counts("rotation_match", &choices.rotation_match);
+    log_nested_choice_counts(
+        "translation_source_status",
+        &choices.status_by_translation_source,
+    );
     Ok(())
+}
+
+fn log_choice_counts(label: &str, counts: &BTreeMap<String, usize>) {
+    if counts.is_empty() {
+        return;
+    }
+    eprintln!("  {label} choices:");
+    for (key, count) in counts {
+        eprintln!("    {key}: {count}");
+    }
+}
+
+fn log_nested_choice_counts(label: &str, counts: &BTreeMap<String, BTreeMap<String, usize>>) {
+    if counts.is_empty() {
+        return;
+    }
+    eprintln!("  {label} choices:");
+    for (key, inner) in counts {
+        let parts: Vec<String> = inner
+            .iter()
+            .map(|(status, count)| format!("{status}={count}"))
+            .collect();
+        eprintln!("    {key}: {}", parts.join(", "));
+    }
 }
 
 fn rate(num: usize, denom: usize) -> f64 {

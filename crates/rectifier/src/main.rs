@@ -1,10 +1,10 @@
-//! `rectifier` — infer and patch KiCad footprint 3D model rotate/offset from
+//! `pcb rectifier` — infer and patch KiCad footprint 3D model rotate/offset from
 //! STEP geometry. Rust port of `research/pose3d/solver.py`.
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 
 mod audit;
 mod bench;
@@ -20,20 +20,21 @@ mod solver;
 #[derive(Parser, Debug)]
 #[command(
     name = "rectifier",
-    about = "Infer and patch KiCad footprint 3D model transforms"
+    bin_name = "pcb rectifier",
+    about = "Check footprint <-> 3d model alignment in .kicad_mod file"
 )]
 struct Cli {
     #[command(subcommand)]
     command: Command,
 }
 
-#[derive(ValueEnum, Clone, Debug)]
+#[derive(ValueEnum, Clone, Copy, Debug)]
 enum Mode {
     Loose,
     Strict,
 }
 
-#[derive(ValueEnum, Clone, Debug)]
+#[derive(ValueEnum, Clone, Copy, Debug)]
 enum Kind {
     All,
     Smd,
@@ -41,9 +42,79 @@ enum Kind {
     Mixed,
 }
 
+#[derive(ClapArgs, Debug)]
+struct CheckArgs {
+    /// Footprint files and/or directories. Directories are searched
+    /// recursively for `.kicad_mod` files.
+    paths: Vec<PathBuf>,
+    /// Restrict the check to one footprint kind.
+    #[arg(long, value_enum, default_value_t = Kind::All)]
+    kind: Kind,
+    /// Stop after N footprints (default: all).
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Override rayon's global thread count.
+    #[arg(long)]
+    jobs: Option<usize>,
+    /// Emit one JSON record per flagged footprint.
+    #[arg(long)]
+    jsonl: bool,
+    /// Limit examples per failure tier (0 = show all).
+    #[arg(long, default_value_t = 0)]
+    top: usize,
+    /// Use strict criteria: exact rotation and ±0.10 mm L∞ offset.
+    #[arg(long)]
+    strict: bool,
+    /// Use each footprint's stored transform as the solver's initial
+    /// transform. This restores the legacy audit behavior.
+    #[arg(long)]
+    use_stored_initial_transform: bool,
+    /// Seed for deterministic benchmark initial-transform randomization.
+    #[arg(long, default_value_t = bench::DEFAULT_INITIAL_TRANSFORM_SEED)]
+    initial_transform_seed: u64,
+}
+
+#[derive(ClapArgs, Debug)]
+struct FixArgs {
+    /// Footprint files and/or directories. Directories are searched
+    /// recursively for `.kicad_mod` files.
+    paths: Vec<PathBuf>,
+    /// Restrict the fix to one footprint kind.
+    #[arg(long, value_enum, default_value_t = Kind::All)]
+    kind: Kind,
+    /// Stop after N footprints (default: all).
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Override rayon's global thread count.
+    #[arg(long)]
+    jobs: Option<usize>,
+    /// Emit one JSON record per flagged footprint and applied correction.
+    #[arg(long)]
+    jsonl: bool,
+    /// Limit examples per failure tier (0 = show all).
+    #[arg(long, default_value_t = 0)]
+    top: usize,
+    /// Use strict criteria: exact rotation and ±0.10 mm L∞ offset.
+    #[arg(long)]
+    strict: bool,
+    /// Use each footprint's stored transform as the solver's initial
+    /// transform. This restores the legacy audit behavior.
+    #[arg(long)]
+    use_stored_initial_transform: bool,
+    /// Seed for deterministic benchmark initial-transform randomization.
+    #[arg(long, default_value_t = bench::DEFAULT_INITIAL_TRANSFORM_SEED)]
+    initial_transform_seed: u64,
+}
+
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Check footprints and exit non-zero when model transforms look wrong.
+    Check(CheckArgs),
+    /// Patch flagged footprint model transforms in place.
+    Fix(FixArgs),
+
     /// Infer pose and patch one or more `.kicad_mod` files in place.
+    #[command(hide = true)]
     Patch {
         /// Footprint files or directories to patch.
         paths: Vec<PathBuf>,
@@ -60,6 +131,7 @@ enum Command {
         verbose: bool,
     },
     /// Infer pose and emit the top candidate as JSON (parity oracle).
+    #[command(hide = true)]
     Solve {
         /// Footprint file to evaluate.
         path: PathBuf,
@@ -68,12 +140,7 @@ enum Command {
         ranked: bool,
     },
     /// Audit footprints by showing benchmark failures in review-friendly form.
-    /// Loose mode is the default; `--strict` requires exact rotation and
-    /// ±0.10 mm L∞ offset. By default, audit uses the same deterministic
-    /// randomized initial transform as `bench`. Default output groups failures
-    /// by tier with up to `--top N` examples each; `--jsonl` emits flagged
-    /// records, candidate correction records, apply errors, and a trailing
-    /// summary for `| jq`.
+    #[command(hide = true)]
     Audit {
         /// Footprint files and/or directories. Directories are searched
         /// recursively for `.kicad_mod` files.
@@ -108,13 +175,7 @@ enum Command {
         initial_transform_seed: u64,
     },
     /// Evaluate the solver against a set of `.kicad_mod` files on disk.
-    ///
-    /// Each footprint's stored `(rotate ...)` / `(offset ...)` is treated as
-    /// ground truth. By default, the solver is given a deterministic randomized
-    /// initial transform so current-file priors cannot use the answer key.
-    /// A footprint passes when the predicted rotation matches (exact or
-    /// Z-rotation equivalent) and the predicted offset is within the mode's
-    /// L∞ tolerance of the stored offset.
+    #[command(hide = true)]
     Bench {
         /// Footprint files and/or directories. Directories are searched
         /// recursively for `.kicad_mod` files.
@@ -146,20 +207,18 @@ enum Command {
 }
 
 fn main() -> Result<()> {
-    // Default to silent: foxtrot's `triangulate` and the `step` parser emit
-    // very chatty WARN/ERROR traces while tessellating STEP geometry that is
-    // not actionable from here. Users can opt in with `RUST_LOG=warn` or
-    // `RUST_LOG=rectifier=debug`.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("off")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    // Default to silent: foxtrot's STEP parser can emit noisy diagnostics that
+    // are not actionable here. Users can opt in with RUST_LOG=warn or a
+    // narrower filter.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("off"))
+        .format_timestamp(None)
+        .try_init()
+        .ok();
 
     let cli = Cli::parse();
     match cli.command {
+        Command::Check(args) => run_check(args),
+        Command::Fix(args) => run_fix(args),
         Command::Patch {
             paths,
             dry_run,
@@ -190,16 +249,8 @@ fn main() -> Result<()> {
             initial_transform_seed,
         } => bench::run(bench::Args {
             paths,
-            mode: match mode {
-                Mode::Loose => bench::BenchMode::Loose,
-                Mode::Strict => bench::BenchMode::Strict,
-            },
-            kind: match kind {
-                Kind::All => bench::BenchKindFilter::All,
-                Kind::Smd => bench::BenchKindFilter::Smd,
-                Kind::Tht => bench::BenchKindFilter::Tht,
-                Kind::Mixed => bench::BenchKindFilter::Mixed,
-            },
+            mode: bench_mode(mode),
+            kind: bench_kind(kind),
             limit,
             jobs,
             jsonl,
@@ -219,17 +270,13 @@ fn main() -> Result<()> {
             initial_transform_seed,
         } => audit::run(audit::Args {
             paths,
-            kind: match kind {
-                Kind::All => audit::AuditKindFilter::All,
-                Kind::Smd => audit::AuditKindFilter::Smd,
-                Kind::Tht => audit::AuditKindFilter::Tht,
-                Kind::Mixed => audit::AuditKindFilter::Mixed,
-            },
+            kind: audit_kind(kind),
             limit,
             jobs,
             jsonl,
             top,
             apply,
+            fail_on_flagged: false,
             mode: if strict {
                 bench::BenchMode::Strict
             } else {
@@ -238,5 +285,70 @@ fn main() -> Result<()> {
             randomize_initial_transform: !use_stored_initial_transform,
             initial_transform_seed,
         }),
+    }
+}
+
+fn run_check(args: CheckArgs) -> Result<()> {
+    audit::run(audit::Args {
+        paths: args.paths,
+        kind: audit_kind(args.kind),
+        limit: args.limit,
+        jobs: args.jobs,
+        jsonl: args.jsonl,
+        top: args.top,
+        apply: false,
+        fail_on_flagged: true,
+        mode: if args.strict {
+            bench::BenchMode::Strict
+        } else {
+            bench::BenchMode::Loose
+        },
+        randomize_initial_transform: !args.use_stored_initial_transform,
+        initial_transform_seed: args.initial_transform_seed,
+    })
+}
+
+fn run_fix(args: FixArgs) -> Result<()> {
+    audit::run(audit::Args {
+        paths: args.paths,
+        kind: audit_kind(args.kind),
+        limit: args.limit,
+        jobs: args.jobs,
+        jsonl: args.jsonl,
+        top: args.top,
+        apply: true,
+        fail_on_flagged: false,
+        mode: if args.strict {
+            bench::BenchMode::Strict
+        } else {
+            bench::BenchMode::Loose
+        },
+        randomize_initial_transform: !args.use_stored_initial_transform,
+        initial_transform_seed: args.initial_transform_seed,
+    })
+}
+
+fn audit_kind(kind: Kind) -> audit::AuditKindFilter {
+    match kind {
+        Kind::All => audit::AuditKindFilter::All,
+        Kind::Smd => audit::AuditKindFilter::Smd,
+        Kind::Tht => audit::AuditKindFilter::Tht,
+        Kind::Mixed => audit::AuditKindFilter::Mixed,
+    }
+}
+
+fn bench_kind(kind: Kind) -> bench::BenchKindFilter {
+    match kind {
+        Kind::All => bench::BenchKindFilter::All,
+        Kind::Smd => bench::BenchKindFilter::Smd,
+        Kind::Tht => bench::BenchKindFilter::Tht,
+        Kind::Mixed => bench::BenchKindFilter::Mixed,
+    }
+}
+
+fn bench_mode(mode: Mode) -> bench::BenchMode {
+    match mode {
+        Mode::Loose => bench::BenchMode::Loose,
+        Mode::Strict => bench::BenchMode::Strict,
     }
 }

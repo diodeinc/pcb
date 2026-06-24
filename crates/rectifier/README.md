@@ -1,6 +1,6 @@
 # rectifier
 
-Infer and patch KiCad footprint `(model ... (rotate ...) (offset ...))`
+Check and fix KiCad footprint `(model ... (rotate ...) (offset ...))`
 transforms from STEP geometry. Rust port of
 [`research/pose3d/solver.py`](../../../../research/pose3d/solver.py).
 
@@ -12,23 +12,18 @@ whose contact slab best aligns with the footprint's copper pads.
 ## Usage
 
 ```bash
-rectifier solve path/to/foo.kicad_mod                # JSON report, top candidate
-rectifier solve path/to/foo.kicad_mod --ranked       # JSON report, all candidates
-rectifier patch path/to/foo.kicad_mod                # rewrite (rotate ...) in place
-rectifier patch path/to/foo.kicad_mod --dry-run      # preview without writing
-rectifier bench path/to/components/                  # loose: rotation + L∞ offset ≤ 0.20 mm
-rectifier bench path/to/components/ --mode strict    # strict: rotation + L∞ offset ≤ 0.10 mm
-rectifier bench path/to/components/ --kind smd       # restrict to SMD-only footprints
-rectifier bench path/to/components/ --initial-transform-seed 2
-rectifier bench foo.kicad_mod bar.kicad_mod --jsonl  # one JSON line per footprint + summary
-rectifier audit path/to/components/                  # flag footprints whose stored (rotate/offset) looks wrong
-rectifier audit path/to/components/ --jsonl          # flagged audit rows + correction candidates + summary
+pcb rectifier check path/to/components/              # flag footprints whose stored transform looks wrong
+pcb rectifier check path/to/components/ --jsonl      # flagged rows + correction candidates + summary
+pcb rectifier check path/to/components/ --strict     # exact rotation + L∞ offset ≤ 0.10 mm
+pcb rectifier fix path/to/components/                # patch flagged footprints in place
+pcb rectifier fix path/to/components/ --kind smd     # restrict to SMD-only footprints
 ```
 
-Upstream `foxtrot`/`step` parsers emit a lot of WARN/ERROR traces while
-tessellating STEP geometry that is not actionable from here. Logging is off
-by default; set `RUST_LOG=warn` (or narrower, e.g. `RUST_LOG=rectifier=debug`)
-to opt in.
+Low-level solver/debug subcommands are still available on the underlying
+`pcb-rectifier` extension binary (`solve`, `patch`, `audit`, `bench`) but are
+hidden from normal `pcb rectifier --help` output.
+
+Logging is quiet by default; set `RUST_LOG=warn` or a narrower filter to opt in.
 
 ## Pipeline
 
@@ -83,9 +78,9 @@ flowchart TD
     AK --> AL["top candidate"]
 
     AL --> AM{"CLI mode"}
+    AM -->|"check"| AQ["classify vs repo (rotate, offset):<br/>pass / fail"]
+    AM -->|"fix"| AO["rewrite flagged (rotate ...)<br/>and (offset ...) in .kicad_mod"]
     AM -->|"solve"| AN["JSON report"]
-    AM -->|"patch"| AO["rewrite (rotate ...)<br/>in .kicad_mod"]
-    AM -->|"bench"| AQ["classify vs repo (rotate, offset):<br/>pass / fail"]
 ```
 
 ### Coordinate frames
@@ -135,7 +130,7 @@ rasterization:
 
 ## Benchmarking
 
-Point `rectifier bench` at a directory of `.kicad_mod` files; every
+Point `pcb-rectifier bench` at a directory of `.kicad_mod` files; every
 footprint's stored `(rotate ...)` / `(offset ...)` is used as ground
 truth. Files are recursed; paths can also be individual `.kicad_mod`
 files.
@@ -158,22 +153,22 @@ Two preset modes control offset tolerance and rotation strictness:
 
 ```bash
 # Default loose mode (±0.20 mm L∞)
-rectifier bench ~/code/github/diodeinc/registry/components
+pcb-rectifier bench ~/code/github/diodeinc/registry/components
 
 # SMD-only loop while tuning the SMD contact pipeline
-rectifier bench ~/code/github/diodeinc/registry/components --kind smd
+pcb-rectifier bench ~/code/github/diodeinc/registry/components --kind smd
 
 # Same benchmark with a different deterministic perturbation set
-rectifier bench ~/code/github/diodeinc/registry/components --initial-transform-seed 2
+pcb-rectifier bench ~/code/github/diodeinc/registry/components --initial-transform-seed 2
 
 # Legacy benchmark mode: solver sees the stored transform as its initial prior
-rectifier bench ~/code/github/diodeinc/registry/components --use-stored-initial-transform
+pcb-rectifier bench ~/code/github/diodeinc/registry/components --use-stored-initial-transform
 
 # Strict mode (±0.10 mm L∞)
-rectifier bench ~/code/github/diodeinc/registry/components --mode strict
+pcb-rectifier bench ~/code/github/diodeinc/registry/components --mode strict
 
 # Per-footprint JSON diagnostics (predicted vs stored offset, L∞, etc.)
-rectifier bench ~/code/github/diodeinc/registry/components --jsonl
+pcb-rectifier bench ~/code/github/diodeinc/registry/components --jsonl
 ```
 
 `--kind` accepts `all` (default), `smd`, `tht`, or `mixed`. Filtered runs
@@ -214,6 +209,6 @@ Run against your local copy of
 `components/` to establish a baseline for your current registry version:
 
 ```bash
-rectifier bench ~/code/github/diodeinc/registry/components
-rectifier bench ~/code/github/diodeinc/registry/components --mode strict
+pcb-rectifier bench ~/code/github/diodeinc/registry/components
+pcb-rectifier bench ~/code/github/diodeinc/registry/components --mode strict
 ```
