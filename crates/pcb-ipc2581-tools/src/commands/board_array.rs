@@ -429,17 +429,19 @@ fn build_board_array_spec(
             array_height_mm: array_height,
         },
     );
-    add_board_cell_fiducials(
-        &mut generated_geometry,
-        ipc,
-        ecad,
-        &mut used_layer_names,
-        BoardCellFiducialSpec {
-            board_width_mm: board_width,
-            board_height_mm: board_height,
-            board_margin,
-        },
-    );
+    if columns > 1 || rows > 1 {
+        add_board_cell_fiducials(
+            &mut generated_geometry,
+            ipc,
+            ecad,
+            &mut used_layer_names,
+            BoardCellFiducialSpec {
+                board_width_mm: board_width,
+                board_height_mm: board_height,
+                board_margin,
+            },
+        );
+    }
     let content_step_refs = content_step_refs(ipc, &array_name, &board_cell_name, &board_name);
     let content_layer_refs = content_layer_refs(ipc, &generated_geometry);
 
@@ -2130,7 +2132,7 @@ mod tests {
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
-                columns: 1,
+                columns: 2,
                 rows: 1,
                 board_margin_mm: BoardMarginMm {
                     top: 5.0,
@@ -2177,7 +2179,7 @@ mod tests {
                 .iter()
                 .filter(|feature| feature.fiducial_kind == FiducialKind::Local)
                 .count(),
-            4
+            8
         );
 
         let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
@@ -2199,7 +2201,7 @@ mod tests {
             &input,
             &BoardArrayCreateOptions {
                 columns: 1,
-                rows: 1,
+                rows: 2,
                 board_margin_mm: BoardMarginMm {
                     top: 0.0,
                     right: 5.0,
@@ -2222,12 +2224,37 @@ mod tests {
     }
 
     #[test]
+    fn board_array_creation_skips_board_cell_fiducials_for_single_board_array() {
+        let input = board_fixture_with_mask_bbox_mm(40.0, 30.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 1,
+                board_margin_mm: BoardMarginMm {
+                    top: 5.0,
+                    right: 5.0,
+                    bottom: 5.0,
+                    left: 5.0,
+                },
+                edge_rail_width_mm: 15.0,
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP").is_empty());
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask").is_empty());
+        assert_eq!(fiducials_on_layer(&ipc, array_step(&ipc), "TOP").len(), 4);
+    }
+
+    #[test]
     fn board_array_creation_skips_board_cell_fiducials_without_eligible_margin() {
         let input = board_fixture_with_mask_bbox_mm(40.0, 35.0);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
-                columns: 1,
+                columns: 2,
                 rows: 1,
                 board_margin_mm: BoardMarginMm {
                     top: 4.99,
@@ -2251,7 +2278,7 @@ mod tests {
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
-                columns: 1,
+                columns: 2,
                 rows: 1,
                 board_margin_mm: BoardMarginMm {
                     top: 5.0,
