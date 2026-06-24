@@ -973,9 +973,24 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     score_lines: &[relief::VScoreLine],
 ) -> Result<BoardArrayFabricationProfile, relief::VScoreReliefError> {
+    Ok(board_array_fabrication_profile_inner(doc, score_lines, false)?.0)
+}
+
+pub fn board_array_fabrication_profile_with_debug<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
+    board_array_fabrication_profile_inner(doc, score_lines, true)
+}
+
+fn board_array_fabrication_profile_inner<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+    include_relief_debug: bool,
+) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
     let mut profile = BoardArrayFabricationProfile::default();
     if root_panel_step(doc).is_none() {
-        return Ok(profile);
+        return Ok((profile, relief::VScoreReliefDebug::default()));
     }
 
     for occurrence in profile_occurrences_for(doc, ProfileSet::RootOnly) {
@@ -996,10 +1011,12 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
         );
     }
 
-    for occurrence in profile_occurrences_for(doc, ProfileSet::FabricationOutlines) {
-        if occurrence.role != ProfileOccurrenceRole::BoardInstance {
-            continue;
-        }
+    let board_occurrences = profile_occurrences_for(doc, ProfileSet::FabricationOutlines)
+        .into_iter()
+        .filter(|occurrence| occurrence.role == ProfileOccurrenceRole::BoardInstance)
+        .collect::<Vec<_>>();
+    let mut board_boundaries = Vec::new();
+    for occurrence in &board_occurrences {
         push_board_array_profile_cutouts(
             &mut profile,
             doc,
@@ -1010,16 +1027,28 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
         if score_lines.is_empty() {
             continue;
         }
-        let reliefs = relief::vscore_route_reliefs(&relief::VScoreReliefInput {
-            board_boundary: transformed_path_payloads(
-                doc,
-                occurrence.profile.outer_path,
-                occurrence.transform,
-            ),
+        board_boundaries.extend(transformed_path_payloads(
+            doc,
+            occurrence.profile.outer_path,
+            occurrence.transform,
+        ));
+    }
+
+    let mut relief_debug = relief::VScoreReliefDebug::default();
+    if !score_lines.is_empty() && !board_boundaries.is_empty() {
+        let relief_input = relief::VScoreReliefInput {
+            board_boundary: board_boundaries,
             score_lines: score_lines.to_vec(),
             tool_diameter_mm: relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
             tolerance_mm: relief::DEFAULT_RELIEF_TOLERANCE_MM,
-        })?;
+        };
+        let reliefs = if include_relief_debug {
+            let output = relief::vscore_route_reliefs_with_debug(&relief_input)?;
+            relief_debug = output.debug;
+            output.reliefs
+        } else {
+            relief::vscore_route_reliefs(&relief_input)?
+        };
         for relief in reliefs {
             profile.paths.push(BoardArrayFabricationProfilePath {
                 role: BoardArrayFabricationProfilePathRole::VScoreRelief,
@@ -1028,7 +1057,7 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
         }
     }
 
-    Ok(profile)
+    Ok((profile, relief_debug))
 }
 
 fn push_board_array_profile_cutouts<Symbol, LayerFunction>(

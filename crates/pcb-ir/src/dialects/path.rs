@@ -357,6 +357,32 @@ pub fn difference_contour_shapes(
     subject.overlay(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
 }
 
+/// Approximate the Minkowski sum of filled contours and a disk.
+///
+/// This is the standard "buffer out" operation used for manufacturability
+/// checks. It unions the original filled region with a round stroke around its
+/// boundary, then simplifies with the requested fill rule.
+pub fn disk_dilate_contours(
+    contours: Vec<PolygonContour>,
+    radius: f64,
+    fill_rule: FillRule,
+) -> Vec<PolygonContour> {
+    let contours = simplify_polygon_contours(contours, fill_rule);
+    if contours.is_empty() || radius <= 0.0 {
+        return contours;
+    }
+
+    let mut dilated = contours.clone();
+    let boundary = polygon_contours_to_payloads(contours);
+    if let Some(stroke) = stroke_to_fill(
+        &boundary,
+        StrokeToFillStyle::new(2.0 * radius, LineCap::Round, LineJoin::Round),
+    ) {
+        dilated.extend(payloads_to_polygon_contours(&stroke));
+    }
+    union_contours(dilated, fill_rule)
+}
+
 pub fn polygon_contours_to_payloads(contours: Vec<PolygonContour>) -> Vec<PathPayload> {
     contours
         .into_iter()

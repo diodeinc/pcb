@@ -14,6 +14,7 @@ use crate::{gerber, ipc2581 as ipc};
 pub struct ManufacturingExportOptions {
     pub output: PathBuf,
     pub view: GeometryView,
+    pub relief_debug_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,7 +39,7 @@ pub fn export_manufacturing_package(
     ipc: &Ipc2581,
     options: &ManufacturingExportOptions,
 ) -> Result<ManufacturingPackage> {
-    let package = build_manufacturing_package(ipc, options.view)?;
+    let package = build_manufacturing_package_with_options(ipc, options)?;
     write_manufacturing_package(&package, &options.output)?;
     Ok(package)
 }
@@ -47,20 +48,41 @@ pub fn build_manufacturing_package(
     ipc: &Ipc2581,
     view: GeometryView,
 ) -> Result<ManufacturingPackage> {
+    build_manufacturing_package_inner(ipc, view, None)
+}
+
+pub fn build_manufacturing_package_with_options(
+    ipc: &Ipc2581,
+    options: &ManufacturingExportOptions,
+) -> Result<ManufacturingPackage> {
+    build_manufacturing_package_inner(ipc, options.view, options.relief_debug_dir.as_deref())
+}
+
+fn build_manufacturing_package_inner(
+    ipc: &Ipc2581,
+    view: GeometryView,
+    relief_debug_dir: Option<&Path>,
+) -> Result<ManufacturingPackage> {
     if view == GeometryView::LayoutSymbolic {
         bail!(
             "manufacturing export does not support symbolic layout view; use board or board-array"
         );
     }
 
-    let mut files = gerber::build_gerber_x2_files(ipc, view)?
-        .into_iter()
-        .map(|file| ManufacturingFile {
-            filename: file.filename,
-            kind: ManufacturingFileKind::GerberX2(file.layer),
-            contents: file.contents,
-        })
-        .collect::<Vec<_>>();
+    let mut files = gerber::build_gerber_x2_files_with_options(
+        ipc,
+        view,
+        &gerber::GerberExportOptions {
+            relief_debug_dir: relief_debug_dir.map(Path::to_path_buf),
+        },
+    )?
+    .into_iter()
+    .map(|file| ManufacturingFile {
+        filename: file.filename,
+        kind: ManufacturingFileKind::GerberX2(file.layer),
+        contents: file.contents,
+    })
+    .collect::<Vec<_>>();
     files.extend(super::drill::build_xnc_drill_files(ipc, view)?);
 
     Ok(ManufacturingPackage { files })

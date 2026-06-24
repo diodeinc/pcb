@@ -2000,7 +2000,9 @@ mod tests {
         let ipc = Ipc2581::parse(&xml).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = crate::board_array::render_board_array_overview_svg(&accessor).unwrap();
+        let svg = crate::board_array::render_board_array_overview_svg(&accessor)
+            .unwrap()
+            .unwrap();
         assert_eq!(svg.matches("vcut-guide").count(), 24);
         assert!(svg.contains("stroke='#dc2626'"));
         assert!(!svg.contains("stroke-dasharray"));
@@ -2925,8 +2927,8 @@ mod tests {
             <PolyBegin x="0" y="0"/>
             <PolyStepSegment x="10" y="0"/>
             <PolyStepSegment x="10" y="10"/>
-            <PolyStepSegment x="2" y="10"/>
-            <PolyStepCurve x="0" y="8" centerX="2" centerY="8" clockwise="false"/>
+            <PolyStepSegment x="4" y="10"/>
+            <PolyStepCurve x="0" y="6" centerX="4" centerY="6" clockwise="false"/>
             <PolyStepSegment x="0" y="0"/>
           </Polygon>
         </Profile>

@@ -55,7 +55,7 @@ pub fn generate_html(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<
     let template = env.get_template("html")?;
 
     // Extract data
-    let board_summary = extract_board_summary(accessor, unit_format);
+    let board_summary = extract_board_summary(accessor, unit_format)?;
     let stackup = extract_stackup_data(accessor, unit_format);
     let rendered_layers = extract_rendered_layers(accessor)?;
     let version = env!("CARGO_PKG_VERSION");
@@ -189,10 +189,10 @@ struct Color {
     hex: String,
 }
 
-fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> BoardSummary {
+fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<BoardSummary> {
     let layout = accessor.board_layout_info();
     let design_name = layout.as_ref().and_then(|layout| layout.board_name.clone());
-    let array_overview_svg = crate::board_array::render_board_array_overview_svg(accessor);
+    let array_overview_svg = crate::board_array::render_board_array_overview_svg(accessor)?;
 
     let (width, height) = if let Some(dims) = layout
         .as_ref()
@@ -256,7 +256,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
     let nets = accessor.net_stats().map(|stats| stats.count);
     let drill_holes = accessor.board_drill_stats().and_then(format_drill_count);
 
-    BoardSummary {
+    Ok(BoardSummary {
         design_name,
         width,
         height,
@@ -266,7 +266,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         components,
         nets,
         drill_holes,
-    }
+    })
 }
 
 fn format_drill_count(drills: crate::accessors::DrillStats) -> Option<String> {

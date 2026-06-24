@@ -111,6 +111,9 @@ enum Commands {
         /// Output directory, or a .zip file for an archived manufacturing package
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
+        /// Write V-score relief debug SVGs to this directory.
+        #[arg(long, hide = true, value_hint = clap::ValueHint::DirPath)]
+        debug_reliefs: Option<PathBuf>,
     },
 }
 
@@ -258,12 +261,14 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             file,
             layout_target,
             output,
+            debug_reliefs,
         } => {
             let package = manufacturing::execute_file_with_options(
                 &file,
                 &manufacturing::ManufacturingExportOptions {
                     output: output.clone(),
                     view: layout_target.into(),
+                    relief_debug_dir: debug_reliefs,
                 },
             )?;
             println!(

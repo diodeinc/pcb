@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use anyhow::{Context, Result};
 use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
 use pcb_ir::common::{Affine2, Point, arc_sweep_radians};
@@ -18,11 +19,19 @@ const OVERVIEW_STROKE_WIDTH_MM: f64 = 0.1;
 const OVERVIEW_VIEWBOX_PADDING_MM: f64 = 1.0;
 const POINT_EPSILON_MM: f64 = 1e-9;
 
-pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Option<String> {
-    let layout = accessor.board_layout_info()?;
-    let board_array = layout.board_array.as_ref()?;
-    let doc = crate::geometry::extract_layout(accessor.ipc()).ok()?;
-    let array_height = board_array.dimensions.as_ref()?.height_mm();
+pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Result<Option<String>> {
+    let Some(layout) = accessor.board_layout_info() else {
+        return Ok(None);
+    };
+    let Some(board_array) = layout.board_array.as_ref() else {
+        return Ok(None);
+    };
+    let doc = crate::geometry::extract_layout(accessor.ipc())
+        .context("failed to extract board-array geometry for overview")?;
+    let Some(dimensions) = board_array.dimensions.as_ref() else {
+        return Ok(None);
+    };
+    let array_height = dimensions.height_mm();
     let layer_overlays = board_array_layer_overlays(accessor, array_height);
     render_board_array_svg(accessor.ipc(), board_array, &doc, &layer_overlays)
 }
@@ -32,9 +41,13 @@ fn render_board_array_svg(
     board_array: &BoardArrayInfo,
     doc: &GeometryDocument,
     layer_overlays: &[BoardArrayLayerOverlay],
-) -> Option<String> {
-    let dimensions = board_array.dimensions.as_ref()?;
-    let grid = board_array.grid.as_ref()?;
+) -> Result<Option<String>> {
+    let Some(dimensions) = board_array.dimensions.as_ref() else {
+        return Ok(None);
+    };
+    let Some(grid) = board_array.grid.as_ref() else {
+        return Ok(None);
+    };
     let array_width = dimensions.width_mm();
     let array_height = dimensions.height_mm();
     let viewbox_padding = OVERVIEW_VIEWBOX_PADDING_MM;
@@ -48,12 +61,12 @@ fn render_board_array_svg(
         || grid.columns == 0
         || grid.rows == 0
     {
-        return None;
+        return Ok(None);
     }
 
     let board_paths = board_instance_paths(doc, array_height);
     if board_paths.is_empty() {
-        return None;
+        return Ok(None);
     }
     let relief_paths = board_array_profile_relief_paths(ipc, doc, array_height)?;
 
@@ -116,7 +129,7 @@ fn render_board_array_svg(
     );
 
     writeln!(svg, "</svg>").unwrap();
-    Some(svg)
+    Ok(Some(svg))
 }
 
 struct BoardArrayLayerOverlay {
@@ -176,19 +189,17 @@ fn board_array_profile_relief_paths(
     ipc: &Ipc2581,
     doc: &GeometryDocument,
     array_height: f64,
-) -> Option<Vec<String>> {
-    let score_lines = crate::geometry::board_array_vscore_lines(ipc).ok()?;
-    let profile = board_array_fabrication_profile(doc, &score_lines).ok()?;
+) -> Result<Vec<String>> {
+    let score_lines = crate::geometry::board_array_vscore_lines(ipc)?;
+    let profile = board_array_fabrication_profile(doc, &score_lines)?;
     let transform = y_flip_transform(array_height);
 
-    Some(
-        profile
-            .paths
-            .iter()
-            .filter(|path| path.role == BoardArrayFabricationProfilePathRole::VScoreRelief)
-            .filter_map(|path| payloads_path_data(&path.payloads, transform))
-            .collect(),
-    )
+    Ok(profile
+        .paths
+        .iter()
+        .filter(|path| path.role == BoardArrayFabricationProfilePathRole::VScoreRelief)
+        .filter_map(|path| payloads_path_data(&path.payloads, transform))
+        .collect())
 }
 
 fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayerPath> {
@@ -605,7 +616,7 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap();
+        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
 
         assert!(svg.contains("data-board-array-overview='true'"));
         assert!(svg.contains("viewBox='-1 -1 46 26'"));
@@ -675,7 +686,7 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap();
+        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
 
         assert_eq!(svg.matches("vcut-guide").count(), 2);
         assert!(svg.contains("d='M5 24 L5 0'"));
@@ -753,7 +764,7 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap();
+        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
 
         assert!(svg.contains("class='board-array-profile-relief'"));
         assert!(svg.contains("stroke='#111827'"));
@@ -822,7 +833,7 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap();
+        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
 
         assert_eq!(svg.matches("array-layer-copper").count(), 1);
         assert!(!svg.contains("M7 5.5 L15 5.5"));

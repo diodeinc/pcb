@@ -1,4 +1,7 @@
 use std::collections::HashSet;
+use std::fmt::Write as _;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use gerberx2::{GerberLayer, write_layer};
@@ -12,6 +15,7 @@ use super::lower::lower_artwork_layer;
 use crate::geometry;
 use pcb_ir::common::{
     Affine2, BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Point, Side as IrSide, Unit,
+    arc_sweep_radians,
 };
 use pcb_ir::dialects::artwork::{
     ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath, PaintOrder, PaintStage,
@@ -20,7 +24,8 @@ use pcb_ir::dialects::ipc::{
     BoardArrayFabricationProfile, FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole,
     FiducialKind, GeometryFeature, GeometryPath, GeometryPathPaintClass, GeometryPolarity,
     GeometryView, PlatingKind, ProfileSet, board_array_fabrication_profile,
-    profile_occurrences_for, transformed_path_payloads,
+    board_array_fabrication_profile_with_debug, profile_occurrences_for, relief,
+    transformed_path_payloads,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -31,6 +36,11 @@ pub struct GerberX2File {
     pub filename: String,
     pub layer: GerberLayer,
     pub contents: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GerberExportOptions {
+    pub relief_debug_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -51,6 +61,14 @@ impl Default for ProfileGerberStyle {
 }
 
 pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<GerberX2File>> {
+    build_gerber_x2_files_with_options(ipc, view, &GerberExportOptions::default())
+}
+
+pub fn build_gerber_x2_files_with_options(
+    ipc: &Ipc2581,
+    view: GeometryView,
+    options: &GerberExportOptions,
+) -> Result<Vec<GerberX2File>> {
     if view == GeometryView::LayoutSymbolic {
         bail!("Gerber export does not support symbolic layout view; use board or board-array");
     }
@@ -100,7 +118,9 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
         });
     }
     if view == GeometryView::ArrayFlattened {
-        if let Some(file) = board_array_profile_gerber_file(ipc)? {
+        if let Some(file) =
+            board_array_profile_gerber_file(ipc, options.relief_debug_dir.as_deref())?
+        {
             files.push(file);
         }
     } else if !has_profile_plan && let Some(file) = synthetic_profile_gerber_file(ipc, view)? {
@@ -463,9 +483,20 @@ fn synthetic_profile_gerber_file(
     }))
 }
 
-fn board_array_profile_gerber_file(ipc: &Ipc2581) -> Result<Option<GerberX2File>> {
+fn board_array_profile_gerber_file(
+    ipc: &Ipc2581,
+    relief_debug_dir: Option<&Path>,
+) -> Result<Option<GerberX2File>> {
     let doc = geometry::extract_layout(ipc)?;
-    let profile = board_array_fabrication_profile(&doc, &geometry::board_array_vscore_lines(ipc)?)?;
+    let score_lines = geometry::board_array_vscore_lines(ipc)?;
+    let profile = if let Some(debug_dir) = relief_debug_dir {
+        let (profile, relief_debug) =
+            board_array_fabrication_profile_with_debug(&doc, &score_lines)?;
+        write_vscore_relief_debug(debug_dir, &relief_debug)?;
+        profile
+    } else {
+        board_array_fabrication_profile(&doc, &score_lines)?
+    };
     if profile.paths.is_empty() {
         return Ok(None);
     }
@@ -496,6 +527,252 @@ fn board_array_profile_gerber_file(ipc: &Ipc2581) -> Result<Option<GerberX2File>
         layer,
         contents,
     }))
+}
+
+fn write_vscore_relief_debug(output_dir: &Path, debug: &relief::VScoreReliefDebug) -> Result<()> {
+    let Some(svg) = render_vscore_relief_debug_svg(debug) else {
+        return Ok(());
+    };
+    fs::create_dir_all(output_dir).with_context(|| {
+        format!(
+            "failed to create V-score relief debug directory {}",
+            output_dir.display()
+        )
+    })?;
+    let output = output_dir.join("vscore-reliefs.svg");
+    fs::write(&output, svg).with_context(|| {
+        format!(
+            "failed to write V-score relief debug SVG {}",
+            output.display()
+        )
+    })
+}
+
+fn render_vscore_relief_debug_svg(debug: &relief::VScoreReliefDebug) -> Option<String> {
+    if debug.entries.is_empty() {
+        return None;
+    }
+
+    let bbox = debug.entries.iter().fold(BBox::empty(), |bbox, entry| {
+        bbox.union(payloads_bbox(&entry.board_boundary))
+            .union(entry.score_cell.bbox)
+            .union(payloads_bbox(&entry.dead_space_pockets))
+            .union(payloads_bbox(&entry.legal_tool_centers))
+            .union(payloads_bbox(&entry.relief_contours))
+    });
+    if bbox.is_empty() {
+        return None;
+    }
+
+    let padding = 2.0;
+    let mut svg = String::new();
+    writeln!(
+        svg,
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{} {} {} {}' data-vscore-relief-debug='true'>",
+        debug_num(bbox.min.x - padding),
+        debug_num(-(bbox.max.y + padding)),
+        debug_num(bbox.width() + 2.0 * padding),
+        debug_num(bbox.height() + 2.0 * padding)
+    )
+    .unwrap();
+    writeln!(
+        svg,
+        "  <rect x='{}' y='{}' width='{}' height='{}' fill='#ffffff'/>",
+        debug_num(bbox.min.x - padding),
+        debug_num(-(bbox.max.y + padding)),
+        debug_num(bbox.width() + 2.0 * padding),
+        debug_num(bbox.height() + 2.0 * padding)
+    )
+    .unwrap();
+    writeln!(svg, "  <g transform='scale(1 -1)'>").unwrap();
+
+    for (index, entry) in debug.entries.iter().enumerate() {
+        write_debug_path(
+            &mut svg,
+            index,
+            std::slice::from_ref(&entry.score_cell),
+            DebugSvgPathStyle {
+                class_name: "score-cell",
+                fill: "none",
+                stroke: "#64748b",
+                stroke_width: "0.08",
+                extra_attrs: "stroke-dasharray='0.6 0.6'",
+            },
+        );
+        write_debug_path(
+            &mut svg,
+            index,
+            &entry.board_boundary,
+            DebugSvgPathStyle {
+                class_name: "board-boundary",
+                fill: "none",
+                stroke: "#064e3b",
+                stroke_width: "0.08",
+                extra_attrs: "",
+            },
+        );
+        write_debug_path(
+            &mut svg,
+            index,
+            &entry.dead_space_pockets,
+            DebugSvgPathStyle {
+                class_name: "dead-space-pocket",
+                fill: "#f59e0b",
+                stroke: "#f59e0b",
+                stroke_width: "0.05",
+                extra_attrs: "fill-opacity='0.18'",
+            },
+        );
+        write_debug_path(
+            &mut svg,
+            index,
+            &entry.legal_tool_centers,
+            DebugSvgPathStyle {
+                class_name: "legal-tool-center",
+                fill: "#2563eb",
+                stroke: "#1d4ed8",
+                stroke_width: "0.05",
+                extra_attrs: "fill-opacity='0.16'",
+            },
+        );
+        write_debug_path(
+            &mut svg,
+            index,
+            &entry.relief_contours,
+            DebugSvgPathStyle {
+                class_name: "relief-contour",
+                fill: "none",
+                stroke: "#dc2626",
+                stroke_width: "0.1",
+                extra_attrs: "",
+            },
+        );
+    }
+
+    writeln!(svg, "  </g>").unwrap();
+    writeln!(svg, "</svg>").unwrap();
+    Some(svg)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DebugSvgPathStyle {
+    class_name: &'static str,
+    fill: &'static str,
+    stroke: &'static str,
+    stroke_width: &'static str,
+    extra_attrs: &'static str,
+}
+
+fn write_debug_path(
+    svg: &mut String,
+    entry_index: usize,
+    payloads: &[common_path::PathPayload],
+    style: DebugSvgPathStyle,
+) {
+    let Some(path_data) = debug_path_data(payloads) else {
+        return;
+    };
+    writeln!(
+        svg,
+        "    <path class='{}' data-entry='{entry_index}' d='{path_data}' fill='{}' stroke='{}' stroke-width='{}' {} fill-rule='evenodd'/>",
+        style.class_name, style.fill, style.stroke, style.stroke_width, style.extra_attrs
+    )
+    .unwrap();
+}
+
+fn debug_path_data(payloads: &[common_path::PathPayload]) -> Option<String> {
+    let mut data = String::new();
+    for payload in payloads {
+        append_debug_path_cmds(&mut data, &payload.cmds);
+    }
+    (!data.is_empty()).then_some(data)
+}
+
+fn append_debug_path_cmds(data: &mut String, cmds: &[common_path::PathCmd]) {
+    let mut current = Point::default();
+    for cmd in cmds {
+        match cmd.op {
+            common_path::PathOp::MoveTo => {
+                current = cmd.p0;
+                if !data.is_empty() {
+                    data.push(' ');
+                }
+                write!(data, "M{} {}", debug_num(cmd.p0.x), debug_num(cmd.p0.y)).unwrap();
+            }
+            common_path::PathOp::LineTo => {
+                current = cmd.p0;
+                write!(data, " L{} {}", debug_num(cmd.p0.x), debug_num(cmd.p0.y)).unwrap();
+            }
+            common_path::PathOp::ArcTo => {
+                write_debug_arc(data, current, cmd.p0, cmd.p1, cmd.clockwise);
+                current = cmd.p0;
+            }
+            common_path::PathOp::CubicTo => {
+                current = cmd.p2;
+                write!(
+                    data,
+                    " C{} {},{} {},{} {}",
+                    debug_num(cmd.p0.x),
+                    debug_num(cmd.p0.y),
+                    debug_num(cmd.p1.x),
+                    debug_num(cmd.p1.y),
+                    debug_num(cmd.p2.x),
+                    debug_num(cmd.p2.y)
+                )
+                .unwrap();
+            }
+            common_path::PathOp::Close => data.push_str(" Z"),
+        }
+    }
+}
+
+fn write_debug_arc(data: &mut String, start: Point, end: Point, center: Point, clockwise: bool) {
+    let radius = start.distance_to(center);
+    if radius <= 1e-9 {
+        write!(data, " L{} {}", debug_num(end.x), debug_num(end.y)).unwrap();
+        return;
+    }
+
+    let sweep_flag = if clockwise { 0 } else { 1 };
+    if start.distance_to(end) <= 1e-9 {
+        let midpoint = Point::new(2.0 * center.x - start.x, 2.0 * center.y - start.y);
+        write_debug_svg_arc(data, radius, 0, sweep_flag, midpoint);
+        write_debug_svg_arc(data, radius, 0, sweep_flag, end);
+        return;
+    }
+
+    let large_arc =
+        u8::from(arc_sweep_radians(start, end, center, clockwise) > std::f64::consts::PI);
+    write_debug_svg_arc(data, radius, large_arc, sweep_flag, end);
+}
+
+fn write_debug_svg_arc(data: &mut String, radius: f64, large_arc: u8, sweep_flag: u8, end: Point) {
+    write!(
+        data,
+        " A{} {} 0 {large_arc} {sweep_flag} {} {}",
+        debug_num(radius),
+        debug_num(radius),
+        debug_num(end.x),
+        debug_num(end.y)
+    )
+    .unwrap();
+}
+
+fn payloads_bbox(payloads: &[common_path::PathPayload]) -> BBox {
+    payloads
+        .iter()
+        .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
+}
+
+fn debug_num(value: f64) -> String {
+    let mut text = format!("{value:.6}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    if text == "-0" { "0".to_string() } else { text }
 }
 
 fn gerber_part_for_view(doc: &IpcGeometryDocument, view: GeometryView) -> GerberPart {
@@ -1546,6 +1823,7 @@ mod tests {
             &ManufacturingExportOptions {
                 output: output_zip.clone(),
                 view: GeometryView::Board,
+                relief_debug_dir: None,
             },
         )
         .unwrap();
