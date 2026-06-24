@@ -49,12 +49,12 @@ const FIDUCIAL_FROM_TOOLING_HOLE_MM: f64 = 5.0;
 const TOP_TOOLING_HOLE_X_INSET_MM: f64 = 5.0;
 const BOTTOM_TOOLING_HOLE_X_INSET_MM: f64 = 10.0;
 const SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 35.0;
-const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 20.0;
+const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 17.0;
 const MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM: f64 = 5.0;
-const MIN_BOARD_CELL_FIDUCIAL_SPAN_MM: f64 = 30.0;
+const MIN_BOARD_CELL_FIDUCIAL_SPAN_MM: f64 = 17.0;
 const BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM: f64 = 2.0;
-const PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = TOP_TOOLING_HOLE_X_INSET_MM;
-const SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = BOTTOM_TOOLING_HOLE_X_INSET_MM;
+const PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = 3.0;
+const SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = 7.0;
 
 #[derive(Debug, Clone, PartialEq)]
 enum BoardArrayCreateValidationError {
@@ -837,7 +837,7 @@ fn add_board_cell_fiducials(
 /// Horizontal rules:
 /// - one column requires at least 35 mm board width, because both left and
 ///   right pairs share the same board span;
-/// - multiple columns require at least 20 mm board width, because each side's
+/// - multiple columns require at least 17 mm board width, because each side's
 ///   pair sits over a different outer board column;
 /// - top tooling holes are 5 mm inward from the outer board-column edge;
 /// - bottom tooling holes are 10 mm inward from the outer board-column edge;
@@ -901,8 +901,8 @@ enum BoardCellFiducialOrientation {
 /// span and left/right margins. Prefer the board's longer dimension, then fall
 /// back to the other eligible orientation. Offsets along the board span are
 /// measured from the board bbox; offsets into the margin are measured from the
-/// board-cell outer edge. The primary side is top/left and uses a 5 mm span
-/// inset; the opposite side uses 10 mm, matching the array-level tooling pattern.
+/// board-cell outer edge. The primary side is top/left and uses a 3 mm span
+/// inset; the opposite side uses 7 mm.
 fn board_cell_fiducials(spec: &BoardCellFiducialSpec) -> Option<[(f64, f64); 4]> {
     let orientation = board_cell_fiducial_orientation(spec)?;
     let board_left = spec.board_margin.left;
@@ -2310,7 +2310,7 @@ mod tests {
 
     #[test]
     fn board_array_creation_adds_default_tooling_at_multi_column_min_width() {
-        let input = board_fixture_with_mask_bbox_mm(20.0, 40.0);
+        let input = board_fixture_with_mask_bbox_mm(17.0, 40.0);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
@@ -2333,17 +2333,17 @@ mod tests {
         assert_eq!(tooling_holes.len(), 4);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(27.5, 66.15), (52.5, 66.15), (32.5, 3.85), (47.5, 3.85)],
+            vec![(27.5, 66.15), (46.5, 66.15), (32.5, 3.85), (41.5, 3.85)],
         );
         assert_points_close(
             hole_points(&tooling_holes),
-            vec![(22.5, 67.5), (57.5, 67.5), (27.5, 2.5), (52.5, 2.5)],
+            vec![(22.5, 67.5), (51.5, 67.5), (27.5, 2.5), (46.5, 2.5)],
         );
     }
 
     #[test]
     fn board_array_creation_skips_default_tooling_when_board_width_is_too_small() {
-        let input = board_fixture_with_mask_bbox_mm(19.0, 40.0);
+        let input = board_fixture_with_mask_bbox_mm(16.99, 40.0);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
@@ -2425,7 +2425,7 @@ mod tests {
         );
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(5.0, 38.0), (35.0, 38.0), (10.0, 2.0), (30.0, 2.0)],
+            vec![(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
         );
 
         let top =
@@ -2475,7 +2475,7 @@ mod tests {
         assert_eq!(top_fiducials.len(), 4);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(2.0, 35.0), (2.0, 5.0), (38.0, 30.0), (38.0, 10.0)],
+            vec![(2.0, 37.0), (2.0, 3.0), (38.0, 33.0), (38.0, 7.0)],
         );
     }
 
@@ -2530,7 +2530,7 @@ mod tests {
 
     #[test]
     fn board_array_creation_skips_board_cell_fiducials_without_eligible_span() {
-        let input = board_fixture_with_mask_bbox_mm(29.99, 25.0);
+        let input = board_fixture_with_mask_bbox_mm(16.99, 16.99);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
@@ -2542,7 +2542,7 @@ mod tests {
                     bottom: 5.0,
                     left: 5.0,
                 },
-                edge_rail_width_mm: 20.0,
+                edge_rail_width_mm: 30.0,
             },
         )
         .unwrap();
