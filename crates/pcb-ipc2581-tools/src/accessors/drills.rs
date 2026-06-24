@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::ipc::{FeatureDomain, FeatureKind, GeometryView, PlatingKind};
+use pcb_ir::dialects::ipc::{FeatureKind, GeometryView, PlatingKind};
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
@@ -157,7 +157,7 @@ fn collect_drill_info(doc: &GeometryDocument, collector: &mut DrillStatsCollecto
 fn drill_hole(
     feature: &pcb_ir::dialects::ipc::GeometryFeature<ipc2581::Symbol>,
 ) -> Option<(f64, DrillHoleType)> {
-    if feature.intent.domain != FeatureDomain::Drill
+    if !feature.is_drill_like()
         || feature.kind != FeatureKind::Hole
         || feature.outer_diameter <= 0.0
     {

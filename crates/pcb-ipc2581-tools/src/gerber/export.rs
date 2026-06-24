@@ -544,10 +544,10 @@ fn standard_flash_aperture(
 ) -> Option<(ArtworkAperture, Point, BBox)> {
     if feature.polarity != GeometryPolarity::Positive
         || feature.path_count == 0
-        || !matches!(
+        || !(matches!(
             feature.intent.role,
-            FeatureRole::Pad | FeatureRole::Via | FeatureRole::Fiducial | FeatureRole::Hole
-        )
+            FeatureRole::Pad | FeatureRole::Via | FeatureRole::Hole
+        ) || feature.is_fiducial())
     {
         return None;
     }
@@ -684,18 +684,15 @@ fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
 }
 
 fn paint_order(feature: &GeometryFeature<ipc2581::Symbol>) -> PaintOrder {
-    let stage = if feature.intent.role == FeatureRole::Cutout
-        || feature.intent.operation == FeatureOperation::Drill
-        || feature.intent.operation == FeatureOperation::Route
-    {
+    let stage = if feature.intent.role == FeatureRole::Cutout || feature.is_drill_like() {
         PaintStage::FinalCutout
-    } else if feature.polarity == GeometryPolarity::Negative || feature.flags.clears_previous_in_set
+    } else if feature.polarity == GeometryPolarity::Negative
+        || feature.flags.clears_previous_in_set
+        || matches!(
+            feature.bucket,
+            FeatureBucket::Fill | FeatureBucket::Thermal | FeatureBucket::Antipad
+        )
     {
-        PaintStage::Base
-    } else if matches!(
-        feature.bucket,
-        FeatureBucket::Fill | FeatureBucket::Thermal | FeatureBucket::Antipad
-    ) {
         PaintStage::Base
     } else {
         PaintStage::Overlay
@@ -716,12 +713,13 @@ fn circle_flash(
         return None;
     }
 
-    match feature.intent.role {
-        FeatureRole::Fiducial | FeatureRole::Hole => Some((feature.center, feature.outer_diameter)),
-        _ if feature.intent.operation == FeatureOperation::Drill => {
-            Some((feature.center, feature.outer_diameter))
-        }
-        _ => None,
+    if feature.is_fiducial()
+        || feature.intent.role == FeatureRole::Hole
+        || feature.intent.operation == FeatureOperation::Drill
+    {
+        Some((feature.center, feature.outer_diameter))
+    } else {
+        None
     }
 }
 
@@ -747,10 +745,10 @@ fn object_attributes(
 fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> {
     match feature.intent.operation {
         FeatureOperation::Drill => return vec!["Other".to_string(), "Drill".to_string()],
-        FeatureOperation::Score if feature.intent.domain == FeatureDomain::VCut => {
+        FeatureOperation::Score if feature.is_vcut() => {
             return vec!["Other".to_string(), "Vcut".to_string()];
         }
-        FeatureOperation::Score if feature.intent.domain == FeatureDomain::Score => {
+        FeatureOperation::Score if feature.is_score() => {
             return vec!["Other".to_string(), "Score".to_string()];
         }
         FeatureOperation::Route | FeatureOperation::Profile => return vec!["Profile".to_string()],
@@ -758,7 +756,7 @@ fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> 
     }
 
     match feature.intent.role {
-        FeatureRole::Fiducial => return fiducial_aperture_function(feature),
+        _ if feature.is_fiducial() => return fiducial_aperture_function(feature),
         FeatureRole::Pad => {
             return match feature.intent.plating {
                 PlatingKind::Plated => vec!["ComponentPad".to_string()],
@@ -773,10 +771,10 @@ fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> 
         FeatureRole::Hole | FeatureRole::Slot | FeatureRole::Cutout => {
             return vec!["Other".to_string()];
         }
-        FeatureRole::ArraySeparation if feature.intent.domain == FeatureDomain::VCut => {
+        FeatureRole::ArraySeparation if feature.is_vcut() => {
             return vec!["Other".to_string(), "Vcut".to_string()];
         }
-        FeatureRole::ArraySeparation if feature.intent.domain == FeatureDomain::Score => {
+        FeatureRole::ArraySeparation if feature.is_score() => {
             return vec!["Other".to_string(), "Score".to_string()];
         }
         FeatureRole::Route | FeatureRole::BoardOutline => return vec!["Profile".to_string()],

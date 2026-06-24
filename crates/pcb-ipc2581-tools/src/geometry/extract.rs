@@ -722,6 +722,7 @@ fn extract_step_layer(
 
     let mut layer_bbox = BBox::empty();
     let layer_polarity = map_polarity(layer.polarity.unwrap_or(Polarity::Positive));
+    let source_step_kind = layout_step_kind(step);
 
     for layer_feature in step
         .layer_features
@@ -791,6 +792,8 @@ fn extract_step_layer(
                 };
 
                 for mut feature in features {
+                    feature.source_step_ref = Some(step.name);
+                    feature.source_step_kind = source_step_kind;
                     complete_feature_intent(layer, &mut feature);
                     push_extracted_feature(
                         &mut doc,
@@ -857,6 +860,8 @@ fn extract_step_layer(
                 let set_id =
                     push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
                 for mut feature in emitted {
+                    feature.source_step_ref = Some(step.name);
+                    feature.source_step_kind = source_step_kind;
                     complete_feature_intent(source_layer, &mut feature);
                     push_extracted_feature(
                         &mut doc,
@@ -3397,6 +3402,14 @@ mod tests {
         assert_eq!(top.features[0].bucket, FeatureBucket::Fiducial);
         assert_eq!(top.features[0].intent.role, FeatureRole::Fiducial);
         assert_eq!(top.features[0].fiducial_kind, FiducialKind::Global);
+        assert!(top.features[0].is_fiducial());
+        assert_eq!(top.features[0].source_step_kind, LayoutStepKind::Panel);
+        assert_eq!(
+            top.features[0]
+                .source_step_ref
+                .map(|step| ipc.resolve(step)),
+            Some("Panel")
+        );
         assert_eq!(top.features[0].pin_ref_count, 1);
         assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
@@ -3405,6 +3418,7 @@ mod tests {
         assert_eq!(vcut.feature_sets[0].spec_ref_count, 1);
         assert_eq!(vcut.features[0].intent.domain, FeatureDomain::VCut);
         assert_eq!(vcut.features[0].intent.role, FeatureRole::ArraySeparation);
+        assert!(vcut.features[0].is_vcut());
     }
 
     #[test]
@@ -3906,6 +3920,12 @@ mod tests {
         assert_eq!(board_step_count(&doc), 1);
         assert_eq!(panel_step_count(&doc), 1);
         assert_eq!(board_instance_count(&doc), 2);
+        let simple_array = simple_board_array_layout(&doc).unwrap();
+        assert_eq!(simple_array.columns, 2);
+        assert_eq!(simple_array.rows, 1);
+        assert_eq!(simple_array.board_step, 1);
+        assert_eq!(simple_array.board_width, 10.0);
+        assert_eq!(simple_array.board_height, 5.0);
         assert_eq!(board_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
         assert_eq!(board_bbox(&doc).unwrap().max, Point::new(10.0, 5.0));
         assert_eq!(panel_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));

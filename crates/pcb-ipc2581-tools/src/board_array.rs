@@ -120,6 +120,7 @@ struct BoardArrayLayerPath {
     data: String,
     filled: bool,
     stroked: bool,
+    vscore: bool,
 }
 
 struct BoardArrayLayerStyle {
@@ -241,6 +242,7 @@ fn feature_paths(
                 data,
                 filled: path.flags.filled,
                 stroked: path.flags.stroked,
+                vscore: feature.is_vscore(),
             })
         })
         .collect()
@@ -360,10 +362,9 @@ fn write_board_paths(
 
 fn write_layer_overlays(svg: &mut String, layer_overlays: &[BoardArrayLayerOverlay]) {
     for overlay in layer_overlays {
-        let style = board_array_layer_style(overlay.function);
         for path in &overlay.paths {
-            let force_stroke =
-                matches!(overlay.function, LayerFunction::VCut | LayerFunction::Score);
+            let style = board_array_layer_style(overlay.function, path.vscore);
+            let force_stroke = path.vscore;
             if force_stroke || (path.stroked && !path.filled) {
                 writeln!(
                     svg,
@@ -390,15 +391,18 @@ fn write_layer_overlays(svg: &mut String, layer_overlays: &[BoardArrayLayerOverl
     }
 }
 
-fn board_array_layer_style(function: LayerFunction) -> BoardArrayLayerStyle {
-    match function {
-        LayerFunction::VCut | LayerFunction::Score => BoardArrayLayerStyle {
+fn board_array_layer_style(function: LayerFunction, vscore: bool) -> BoardArrayLayerStyle {
+    if vscore {
+        return BoardArrayLayerStyle {
             class_name: "vcut-guide array-layer-vscore",
             fill: "none",
             stroke: "#dc2626",
             fill_opacity: 0.0,
             stroke_opacity: 1.0,
-        },
+        };
+    }
+
+    match function {
         LayerFunction::Drill => BoardArrayLayerStyle {
             class_name: "array-layer-drill",
             fill: "#2563eb",

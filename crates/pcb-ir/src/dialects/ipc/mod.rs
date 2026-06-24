@@ -220,6 +220,349 @@ pub fn panel_step_count<Symbol, LayerFunction>(
     layout_steps_by_kind(doc, LayoutStepKind::Panel).count()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayoutMargins {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+/// Derived description of a simple rectangular board array.
+///
+/// This is not independent IR state. It is a convenience view over the IPC
+/// layout graph for the common `array -> board_cell -> board` or
+/// `array -> board` shapes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SimpleBoardArrayLayout {
+    pub array_step: u32,
+    pub array_repeat: u32,
+    pub board_cell_step: Option<u32>,
+    pub board_cell_repeat: Option<u32>,
+    pub board_step: u32,
+    pub columns: u32,
+    pub rows: u32,
+    pub array_bbox: BBox,
+    pub repeated_bbox: BBox,
+    pub board_bbox: BBox,
+    pub board_width: f64,
+    pub board_height: f64,
+    pub pitch_x: Option<f64>,
+    pub pitch_y: Option<f64>,
+    pub board_margin: Option<LayoutMargins>,
+    pub edge_rail_width: Option<f64>,
+    pub margins: LayoutMargins,
+}
+
+const SIMPLE_BOARD_ARRAY_EPSILON: f64 = 1e-6;
+
+pub fn simple_board_array_layout<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Option<SimpleBoardArrayLayout> {
+    let (array_step_index, array_step) = root_panel_step(doc)?;
+    let array_bbox = array_step.bbox;
+    if array_bbox.is_empty() || array_bbox.width() <= 0.0 || array_bbox.height() <= 0.0 {
+        return None;
+    }
+
+    let mut root_repeats = layout_child_repeats(doc, array_step_index, None);
+    let (array_repeat_index, array_repeat) = root_repeats.next()?;
+    if root_repeats.next().is_some()
+        || array_repeat.nx == 0
+        || array_repeat.ny == 0
+        || !simple_array_nearly_zero(array_repeat.angle)
+        || array_repeat.mirror
+    {
+        return None;
+    }
+
+    let child_step = doc.layout.steps.get(array_repeat.child_step as usize)?;
+    match child_step.kind {
+        LayoutStepKind::Board => {
+            simple_direct_board_array(doc, array_step_index, array_repeat_index, array_repeat)
+        }
+        LayoutStepKind::Panel => {
+            simple_board_cell_array(doc, array_step_index, array_repeat_index, array_repeat)
+        }
+        _ => None,
+    }
+}
+
+fn simple_direct_board_array<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    array_step_index: u32,
+    array_repeat_index: u32,
+    repeat: &LayoutRepeat<Symbol>,
+) -> Option<SimpleBoardArrayLayout> {
+    let array_step = doc.layout.steps.get(array_step_index as usize)?;
+    let board_step = doc.layout.steps.get(repeat.child_step as usize)?;
+    if board_step.kind != LayoutStepKind::Board {
+        return None;
+    }
+    let (board_width, board_height) = simple_step_dimensions(board_step)?;
+    let instance_count = layout_repeat_instances(doc, repeat).count() as u32;
+    if instance_count != repeat.nx.saturating_mul(repeat.ny) || repeat.bbox.is_empty() {
+        return None;
+    }
+
+    let pitch_x = (repeat.nx > 1)
+        .then_some(repeat.dx)
+        .filter(|pitch| simple_valid_pitch(*pitch, board_width));
+    let pitch_y = (repeat.ny > 1)
+        .then_some(repeat.dy)
+        .filter(|pitch| simple_valid_pitch(*pitch, board_height));
+    if (repeat.nx > 1 && pitch_x.is_none()) || (repeat.ny > 1 && pitch_y.is_none()) {
+        return None;
+    }
+
+    let margins = simple_margins_between(repeat.bbox, array_step.bbox)?;
+    let horizontal_gap = pitch_x.map(|pitch| simple_clamp_zero(pitch - board_width));
+    let vertical_gap = pitch_y.map(|pitch| simple_clamp_zero(pitch - board_height));
+    let edge_rail_width = simple_edge_rail_width(margins, horizontal_gap, vertical_gap);
+    let board_margin =
+        edge_rail_width.and_then(|edge| simple_board_margin_from_margins(margins, edge));
+
+    Some(SimpleBoardArrayLayout {
+        array_step: array_step_index,
+        array_repeat: array_repeat_index,
+        board_cell_step: None,
+        board_cell_repeat: None,
+        board_step: repeat.child_step,
+        columns: repeat.nx,
+        rows: repeat.ny,
+        array_bbox: array_step.bbox,
+        repeated_bbox: repeat.bbox,
+        board_bbox: board_step.bbox,
+        board_width,
+        board_height,
+        pitch_x,
+        pitch_y,
+        board_margin,
+        edge_rail_width,
+        margins,
+    })
+}
+
+fn simple_board_cell_array<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    array_step_index: u32,
+    array_repeat_index: u32,
+    repeat: &LayoutRepeat<Symbol>,
+) -> Option<SimpleBoardArrayLayout> {
+    if repeat.dx <= 0.0 || repeat.dy <= 0.0 || !repeat.dx.is_finite() || !repeat.dy.is_finite() {
+        return None;
+    }
+
+    let array_step = doc.layout.steps.get(array_step_index as usize)?;
+    let (first_cell_instance, _) = layout_repeat_instances(doc, repeat).next()?;
+    let mut board_repeats = layout_child_repeats(doc, repeat.child_step, Some(first_cell_instance));
+    let (board_repeat_index, board_repeat) = board_repeats.next()?;
+    if board_repeats.next().is_some()
+        || board_repeat.nx != 1
+        || board_repeat.ny != 1
+        || !simple_array_nearly_zero(board_repeat.dx)
+        || !simple_array_nearly_zero(board_repeat.dy)
+        || !simple_array_nearly_zero(board_repeat.angle)
+        || board_repeat.mirror
+    {
+        return None;
+    }
+
+    let board_step = doc.layout.steps.get(board_repeat.child_step as usize)?;
+    if board_step.kind != LayoutStepKind::Board {
+        return None;
+    }
+    let (board_width, board_height) = simple_step_dimensions(board_step)?;
+    if repeat.dx + SIMPLE_BOARD_ARRAY_EPSILON < board_width
+        || repeat.dy + SIMPLE_BOARD_ARRAY_EPSILON < board_height
+    {
+        return None;
+    }
+
+    let board_left = board_repeat.x + board_step.bbox.min.x;
+    let board_bottom = board_repeat.y + board_step.bbox.min.y;
+    let board_margin = simple_board_margin_from_cell(
+        board_left,
+        board_bottom,
+        board_width,
+        board_height,
+        repeat.dx,
+        repeat.dy,
+    )?;
+
+    let cell_array_bbox = simple_repeated_cell_bbox(repeat)?;
+    let edge_margins = simple_margins_between(cell_array_bbox, array_step.bbox)?;
+    let edge_rail_width = simple_average_if_consistent(vec![
+        edge_margins.left,
+        edge_margins.right,
+        edge_margins.bottom,
+        edge_margins.top,
+    ]);
+
+    Some(SimpleBoardArrayLayout {
+        array_step: array_step_index,
+        array_repeat: array_repeat_index,
+        board_cell_step: Some(repeat.child_step),
+        board_cell_repeat: Some(board_repeat_index),
+        board_step: board_repeat.child_step,
+        columns: repeat.nx,
+        rows: repeat.ny,
+        array_bbox: array_step.bbox,
+        repeated_bbox: repeat.bbox,
+        board_bbox: board_step.bbox,
+        board_width,
+        board_height,
+        pitch_x: Some(repeat.dx),
+        pitch_y: Some(repeat.dy),
+        board_margin: Some(board_margin),
+        edge_rail_width,
+        margins: simple_margins_between(repeat.bbox, array_step.bbox)?,
+    })
+}
+
+fn simple_step_dimensions<Symbol>(step: &LayoutStep<Symbol>) -> Option<(f64, f64)> {
+    (!step.bbox.is_empty() && step.bbox.width() > 0.0 && step.bbox.height() > 0.0)
+        .then_some((step.bbox.width(), step.bbox.height()))
+}
+
+fn simple_valid_pitch(pitch: f64, span: f64) -> bool {
+    pitch.is_finite() && pitch + SIMPLE_BOARD_ARRAY_EPSILON >= span && pitch > 0.0
+}
+
+fn simple_repeated_cell_bbox<Symbol>(repeat: &LayoutRepeat<Symbol>) -> Option<BBox> {
+    if repeat.nx == 0 || repeat.ny == 0 {
+        return None;
+    }
+    let width = repeat.nx as f64 * repeat.dx;
+    let height = repeat.ny as f64 * repeat.dy;
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some(BBox {
+        min: Point::new(repeat.x, repeat.y),
+        max: Point::new(repeat.x + width, repeat.y + height),
+    })
+}
+
+fn simple_board_margin_from_cell(
+    board_left: f64,
+    board_bottom: f64,
+    board_width: f64,
+    board_height: f64,
+    cell_width: f64,
+    cell_height: f64,
+) -> Option<LayoutMargins> {
+    let left = board_left;
+    let bottom = board_bottom;
+    let right = cell_width - board_left - board_width;
+    let top = cell_height - board_bottom - board_height;
+    if [left, right, bottom, top]
+        .iter()
+        .any(|value| !value.is_finite() || *value < -SIMPLE_BOARD_ARRAY_EPSILON)
+    {
+        return None;
+    }
+
+    Some(LayoutMargins {
+        top: simple_clamp_zero(top),
+        right: simple_clamp_zero(right),
+        bottom: simple_clamp_zero(bottom),
+        left: simple_clamp_zero(left),
+    })
+}
+
+fn simple_margins_between(inner: BBox, outer: BBox) -> Option<LayoutMargins> {
+    let left = simple_clamp_zero(inner.min.x - outer.min.x);
+    let right = simple_clamp_zero(outer.max.x - inner.max.x);
+    let bottom = simple_clamp_zero(inner.min.y - outer.min.y);
+    let top = simple_clamp_zero(outer.max.y - inner.max.y);
+
+    if [left, right, bottom, top]
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0)
+    {
+        Some(LayoutMargins {
+            top,
+            right,
+            bottom,
+            left,
+        })
+    } else {
+        None
+    }
+}
+
+fn simple_edge_rail_width(
+    margins: LayoutMargins,
+    horizontal_gap: Option<f64>,
+    vertical_gap: Option<f64>,
+) -> Option<f64> {
+    let mut candidates = Vec::new();
+    if let Some(gap) = horizontal_gap {
+        candidates.push((margins.left + margins.right - gap) / 2.0);
+    }
+    if let Some(gap) = vertical_gap {
+        candidates.push((margins.bottom + margins.top - gap) / 2.0);
+    }
+
+    simple_average_if_consistent(candidates)
+}
+
+fn simple_board_margin_from_margins(
+    margins: LayoutMargins,
+    edge_rail_width: f64,
+) -> Option<LayoutMargins> {
+    let left = margins.left - edge_rail_width;
+    let right = margins.right - edge_rail_width;
+    let bottom = margins.bottom - edge_rail_width;
+    let top = margins.top - edge_rail_width;
+    if [left, right, bottom, top]
+        .iter()
+        .any(|value| !value.is_finite() || *value < -SIMPLE_BOARD_ARRAY_EPSILON)
+    {
+        return None;
+    }
+
+    Some(LayoutMargins {
+        top: simple_clamp_zero(top),
+        right: simple_clamp_zero(right),
+        bottom: simple_clamp_zero(bottom),
+        left: simple_clamp_zero(left),
+    })
+}
+
+fn simple_average_if_consistent(candidates: Vec<f64>) -> Option<f64> {
+    if candidates.is_empty()
+        || candidates
+            .iter()
+            .any(|candidate| !candidate.is_finite() || *candidate < -SIMPLE_BOARD_ARRAY_EPSILON)
+    {
+        return None;
+    }
+
+    let average = candidates.iter().sum::<f64>() / candidates.len() as f64;
+    candidates
+        .iter()
+        .all(|candidate| simple_array_nearly_equal(*candidate, average))
+        .then_some(simple_clamp_zero(average))
+}
+
+fn simple_array_nearly_zero(value: f64) -> bool {
+    value.abs() <= SIMPLE_BOARD_ARRAY_EPSILON
+}
+
+fn simple_array_nearly_equal(a: f64, b: f64) -> bool {
+    (a - b).abs() <= SIMPLE_BOARD_ARRAY_EPSILON
+}
+
+fn simple_clamp_zero(value: f64) -> f64 {
+    if simple_array_nearly_zero(value) {
+        0.0
+    } else {
+        value
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfileSet {
     /// The canonical board step profile only.
@@ -545,13 +888,13 @@ fn lower_path_kind(path: &GeometryPath) -> Option<(artwork::ArtworkPath, Artwork
 fn paint_order<Symbol>(feature: &GeometryFeature<Symbol>) -> artwork::PaintOrder {
     let stage = if feature.bucket == FeatureBucket::Cutout {
         artwork::PaintStage::FinalCutout
-    } else if feature.polarity == GeometryPolarity::Negative || feature.flags.clears_previous_in_set
+    } else if feature.polarity == GeometryPolarity::Negative
+        || feature.flags.clears_previous_in_set
+        || matches!(
+            feature.bucket,
+            FeatureBucket::Fill | FeatureBucket::Thermal | FeatureBucket::Antipad
+        )
     {
-        artwork::PaintStage::Base
-    } else if matches!(
-        feature.bucket,
-        FeatureBucket::Fill | FeatureBucket::Thermal | FeatureBucket::Antipad
-    ) {
         artwork::PaintStage::Base
     } else {
         artwork::PaintStage::Overlay
@@ -812,6 +1155,8 @@ pub struct GeometryFeature<Symbol> {
     pub polarity: GeometryPolarity,
     pub net: Option<Symbol>,
     pub source_layer_ref: Option<Symbol>,
+    pub source_step_ref: Option<Symbol>,
+    pub source_step_kind: LayoutStepKind,
     pub set: Option<u32>,
     pub source: SourceRef,
     pub intent: FeatureIntent<Symbol>,
@@ -848,6 +1193,8 @@ impl<Symbol> GeometryFeature<Symbol> {
             polarity,
             net: None,
             source_layer_ref: None,
+            source_step_ref: None,
+            source_step_kind: LayoutStepKind::Unknown,
             set: None,
             source: SourceRef::default(),
             intent: FeatureIntent::default(),
@@ -873,6 +1220,49 @@ impl<Symbol> GeometryFeature<Symbol> {
             pin_ref_count: 0,
             flags: FeatureFlags::default(),
         }
+    }
+
+    pub fn is_fiducial(&self) -> bool {
+        self.intent.role == FeatureRole::Fiducial || self.bucket == FeatureBucket::Fiducial
+    }
+
+    pub fn is_vscore(&self) -> bool {
+        self.intent.role == FeatureRole::ArraySeparation
+            && matches!(
+                self.intent.domain,
+                FeatureDomain::VCut | FeatureDomain::Score
+            )
+    }
+
+    pub fn is_vcut(&self) -> bool {
+        self.intent.role == FeatureRole::ArraySeparation
+            && self.intent.domain == FeatureDomain::VCut
+    }
+
+    pub fn is_score(&self) -> bool {
+        self.intent.role == FeatureRole::ArraySeparation
+            && self.intent.domain == FeatureDomain::Score
+    }
+
+    pub fn is_drill_like(&self) -> bool {
+        matches!(
+            self.intent.operation,
+            FeatureOperation::Drill | FeatureOperation::Route
+        ) || matches!(self.intent.role, FeatureRole::Hole | FeatureRole::Slot)
+    }
+
+    pub fn is_nonplated_tooling_hole(&self) -> bool {
+        self.intent.role == FeatureRole::Hole
+            && self.intent.operation == FeatureOperation::Drill
+            && self.intent.plating == PlatingKind::NonPlated
+    }
+
+    pub fn is_board_step_feature(&self) -> bool {
+        self.source_step_kind == LayoutStepKind::Board
+    }
+
+    pub fn is_array_step_feature(&self) -> bool {
+        self.source_step_kind == LayoutStepKind::Panel
     }
 }
 
