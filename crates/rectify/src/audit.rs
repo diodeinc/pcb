@@ -1,4 +1,4 @@
-//! `pcb rectifier check` / `pcb rectifier fix` — porcelain output for benchmark failures.
+//! `pcb rectify check` / `pcb rectify fix` — porcelain output for benchmark failures.
 //!
 //! Failure tiers (most to least severe):
 //!   1. `rotation_mismatch`  — predicted rotation fails the selected audit mode
@@ -195,7 +195,7 @@ struct AuditSummaryRecord {
 
 pub fn run(args: Args) -> Result<()> {
     if args.paths.is_empty() {
-        bail!("pcb rectifier requires at least one path (file or directory)");
+        bail!("pcb rectify requires at least one path (file or directory)");
     }
     if let Some(jobs) = args.jobs {
         rayon::ThreadPoolBuilder::new()
@@ -227,7 +227,7 @@ pub fn run(args: Args) -> Result<()> {
     let tolerance_mm = args.mode.tolerance_mm();
     if !single_human_output {
         eprintln!(
-            "pcb rectifier (kind={kind_label}, mode={mode_label}): scanning {total} footprints"
+            "pcb rectify (kind={kind_label}, mode={mode_label}): scanning {total} footprints"
         );
         if args.randomize_initial_transform {
             eprintln!(
@@ -380,7 +380,7 @@ pub fn run(args: Args) -> Result<()> {
         bail!("failed to apply {apply_errors} audit correction(s)");
     }
     if args.fail_on_flagged && (flagged > 0 || errors > 0) {
-        bail!("rectifier check found {flagged} flagged footprint(s) and {errors} error(s)");
+        bail!("rectify check found {flagged} flagged footprint(s) and {errors} error(s)");
     }
     Ok(())
 }

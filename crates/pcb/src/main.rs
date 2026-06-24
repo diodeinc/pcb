@@ -16,7 +16,7 @@ const SHIM_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/pcb-la
 const NIGHTLY_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/nightly/latest.json";
 const USER_AGENT: &str = "pcb";
 const STDLIB_ARCHIVE_NAME: &str = "stdlib.tar.zst";
-const TOOLCHAIN_SIDECARS: &[&str] = &["pcb-rectifier"];
+const TOOLCHAIN_SIDECARS: &[&str] = &["rectify"];
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -786,15 +786,18 @@ fn stage_stdlib_archive(base_url: &str, staging_dir: &Path) -> Result<()> {
 fn stage_optional_sidecars(base_url: &str, staging_dir: &Path) -> Result<()> {
     let client = http_client(ARCHIVE_TIMEOUT)?;
     for binary in TOOLCHAIN_SIDECARS {
-        let artifact_name = binary_artifact_name(binary);
-        let url = format!("{}/{}", base_url.trim_end_matches('/'), artifact_name);
-        let Some(bytes) = download_optional_artifact(&client, &url)? else {
-            continue;
-        };
-        verify_checksum(&url, &bytes)?;
-        let dst = staging_dir.join(executable_name(binary));
-        fs::write(&dst, bytes)?;
-        copy_executable_permissions(&dst, &dst)?;
+        for target in download_target_triples().iter().copied() {
+            let artifact_name = binary_artifact_name_for(binary, target);
+            let url = format!("{}/{}", base_url.trim_end_matches('/'), artifact_name);
+            let Some(bytes) = download_optional_artifact(&client, &url)? else {
+                continue;
+            };
+            verify_checksum(&url, &bytes)?;
+            let dst = staging_dir.join(executable_name(binary));
+            fs::write(&dst, bytes)?;
+            copy_executable_permissions(&dst, &dst)?;
+            break;
+        }
     }
     Ok(())
 }

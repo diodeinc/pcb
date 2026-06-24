@@ -255,27 +255,12 @@ fn execute_external(args: Vec<OsString>) -> anyhow::Result<()> {
 
     // First argument is the subcommand name.
     let command = args[0].to_string_lossy();
-    let external_cmd = format!("pcb-{command}");
     let external_args = &args[1..];
+    let candidates = external_command_candidates(&command);
 
     // First search PATH, which supports separately-installed extensions.
-    match run_external_command(&external_cmd, external_args) {
-        Ok(()) => return Ok(()),
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            anyhow::bail!(
-                "Failed to execute external command '{}': {}",
-                external_cmd,
-                e
-            )
-        }
-        Err(_) => {}
-    }
-
-    // Then search next to the currently-running `pcbc` binary. Bundled extension
-    // binaries installed by the `pcb` shim live in that toolchain directory,
-    // which is not necessarily on PATH.
-    if let Some(sibling) = sibling_external_command(&external_cmd) {
-        match run_external_command(sibling, external_args) {
+    for external_cmd in &candidates {
+        match run_external_command(external_cmd, external_args) {
             Ok(()) => return Ok(()),
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                 anyhow::bail!(
@@ -288,9 +273,39 @@ fn execute_external(args: Vec<OsString>) -> anyhow::Result<()> {
         }
     }
 
+    // Then search next to the currently-running `pcbc` binary. Bundled extension
+    // binaries installed by the `pcb` shim live in that toolchain directory,
+    // which is not necessarily on PATH.
+    for external_cmd in &candidates {
+        if let Some(sibling) = sibling_external_command(external_cmd) {
+            match run_external_command(sibling, external_args) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    anyhow::bail!(
+                        "Failed to execute external command '{}': {}",
+                        external_cmd,
+                        e
+                    )
+                }
+                Err(_) => {}
+            }
+        }
+    }
+
     eprintln!("Error: Unknown command '{command}'");
-    eprintln!("No built-in command or external command '{external_cmd}' found");
+    eprintln!(
+        "No built-in command or external command '{}' found",
+        candidates.join("' / '")
+    );
     std::process::exit(1);
+}
+
+fn external_command_candidates(command: &str) -> Vec<String> {
+    if command == "rectify" {
+        vec!["rectify".into()]
+    } else {
+        vec![format!("pcb-{command}")]
+    }
 }
 
 fn run_external_command<S: AsRef<std::ffi::OsStr>>(

@@ -1,4 +1,4 @@
-//! `pcb rectifier` — infer and patch KiCad footprint 3D model rotate/offset from
+//! `pcb rectify` — infer and patch KiCad footprint 3D model rotate/offset from
 //! STEP geometry. Rust port of `research/pose3d/solver.py`.
 
 use std::path::PathBuf;
@@ -19,8 +19,8 @@ mod solver;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "rectifier",
-    bin_name = "pcb rectifier",
+    name = "rectify",
+    bin_name = "pcb rectify",
     about = "Check footprint <-> 3d model alignment in .kicad_mod file"
 )]
 struct Cli {

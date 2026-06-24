@@ -287,7 +287,7 @@ impl BenchStats {
 
 pub fn run(args: Args) -> Result<()> {
     if args.paths.is_empty() {
-        bail!("rectifier bench requires at least one path (file or directory)");
+        bail!("rectify bench requires at least one path (file or directory)");
     }
     if let Some(jobs) = args.jobs {
         rayon::ThreadPoolBuilder::new()
@@ -316,7 +316,7 @@ pub fn run(args: Args) -> Result<()> {
     let mode_label = args.mode.label();
     let kind_label = args.kind.label();
     eprintln!(
-        "rectifier bench ({mode_label}, kind={kind_label}): {total} footprints, ±{tolerance} mm L∞"
+        "rectify bench ({mode_label}, kind={kind_label}): {total} footprints, ±{tolerance} mm L∞"
     );
     if args.randomize_initial_transform {
         eprintln!(
@@ -440,7 +440,7 @@ pub fn run(args: Args) -> Result<()> {
         }
     };
     eprintln!(
-        "rectifier bench summary ({mode_label}, kind={kind_label}): pass={pass}/{inferred} ({:.2}%) \
+        "rectify bench summary ({mode_label}, kind={kind_label}): pass={pass}/{inferred} ({:.2}%) \
          fail={fail} skip={skip} error={error} reward={reward_score:.4} \
          exact_rot={:.2}% p95_l_inf={p95_offset_l_inf_mm:.3} mm",
         pct(pass, inferred),

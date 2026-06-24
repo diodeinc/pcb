@@ -53,14 +53,14 @@ A typical flow:
 5. Represent each functional variant symbol without duplicating order-code variants.
 6. Clean the footprint and embedded STEP against the datasheet.
 7. Ensure the footprint has an embedded STEP: find and embed any referenced local model, otherwise download a matching model and embed it with `pcb embed-step`.
-8. Check the 3D model orientation with `rectifier` and patch it if flagged.
+8. Check the 3D model orientation with `rectify` and patch it if flagged.
 9. Write the primitive API, reference circuitry, or selector logic.
 
 Treat this as the default direction, not a rigid script. Focused patches may only touch one stage.
 
 Functional variants need symbols; order-code variants do not. For example, fixed-output LDO voltages get separate symbols because the selected silicon changes electrical behavior, but tape/reel, temperature grade, RoHS, and packing suffixes do not.
 
-Use `kicad-symbol` for symbol-file structure, editing, `extends`, rendering, and signature rules. Use `rectifier` for footprint STEP/model transform validation and patching. The librarian-level rule is to curate the family symbols before `.zen` work, cover functional variants without duplicating order-code variants, and check every new or modified 3D model transform.
+Use `kicad-symbol` for symbol-file structure, editing, `extends`, rendering, and signature rules. Use `rectify` for footprint STEP/model transform validation and patching. The librarian-level rule is to curate the family symbols before `.zen` work, cover functional variants without duplicating order-code variants, and check every new or modified 3D model transform.
 
 ## Artifact Acquisition
 
@@ -90,18 +90,18 @@ Embed real STEP models with `pcb embed-step`; do not hand-edit model blocks:
 pcb embed-step <footprint.kicad_mod> <model.step>
 ```
 
-After embedding or touching a 3D model, read the `rectifier` skill. Check that the model's stored
+After embedding or touching a 3D model, read the `rectify` skill. Check that the model's stored
 `(rotate ...)`/`(offset ...)` actually lines up the component pins/pads with the
 footprint's pads/holes, and patch it when flagged:
 
 ```bash
-rectifier audit <footprint.kicad_mod>       # flag a wrong-looking stored transform
-rectifier patch <footprint.kicad_mod>       # rewrite the transform in place
-rectifier patch <footprint.kicad_mod> --dry-run   # preview without writing
+pcb rectify check <footprint.kicad_mod>       # flag a wrong-looking stored transform
+pcb rectify fix <footprint.kicad_mod>       # rewrite the transform in place
+pcb rectify fix <footprint.kicad_mod> --dry-run   # preview without writing
 ```
 
-Run `rectifier audit` on every new or modified footprint. If audit flags the
-footprint, run `rectifier patch`, then re-run `rectifier audit` to confirm it
+Run `pcb rectify check` on every new or modified footprint. If audit flags the
+footprint, run `pcb rectify fix`, then re-run `pcb rectify check` to confirm it
 is clean. If it still fails after patching, the model geometry likely does not
 match the footprint; report it instead of forcing a transform.
 
@@ -211,7 +211,7 @@ Before finishing a component package, check the expected completion points:
 - high-quality symbol, following `kicad-symbol`
 - accurate footprint against trusted package data
 - embedded STEP model in the footprint
-- 3D model orientation checked with `rectifier audit` (patched if needed)
+- 3D model orientation checked with `pcb rectify check` (patched if needed)
 - component `.zen` with clean public `io()`s and appropriate interfaces
 - reference circuitry in the component `.zen` when warranted
 - `Layout()` included when the `.zen` contains reference circuitry

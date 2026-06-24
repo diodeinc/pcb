@@ -5662,7 +5662,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rectifier"
+name = "rectify"
 version = "0.4.1"
 dependencies = [
  "anyhow",

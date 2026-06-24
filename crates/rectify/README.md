@@ -1,27 +1,27 @@
-# rectifier
+# rectify
 
 Check and fix KiCad footprint `(model ... (rotate ...) (offset ...))`
 transforms from STEP geometry. Rust port of
 [`research/pose3d/solver.py`](../../../../research/pose3d/solver.py).
 
 Given a `.kicad_mod` file whose `(model ...)` block references a STEP,
-`rectifier` tessellates the mesh, enumerates the 24 axis-aligned rigid poses,
+`rectify` tessellates the mesh, enumerates the 24 axis-aligned rigid poses,
 rasterizes each bottom-projection onto the pad grid, and returns the pose
 whose contact slab best aligns with the footprint's copper pads.
 
 ## Usage
 
 ```bash
-pcb rectifier check path/to/components/              # flag footprints whose stored transform looks wrong
-pcb rectifier check path/to/components/ --jsonl      # flagged rows + correction candidates + summary
-pcb rectifier check path/to/components/ --strict     # exact rotation + L∞ offset ≤ 0.10 mm
-pcb rectifier fix path/to/components/                # patch flagged footprints in place
-pcb rectifier fix path/to/components/ --kind smd     # restrict to SMD-only footprints
+pcb rectify check path/to/components/              # flag footprints whose stored transform looks wrong
+pcb rectify check path/to/components/ --jsonl      # flagged rows + correction candidates + summary
+pcb rectify check path/to/components/ --strict     # exact rotation + L∞ offset ≤ 0.10 mm
+pcb rectify fix path/to/components/                # patch flagged footprints in place
+pcb rectify fix path/to/components/ --kind smd     # restrict to SMD-only footprints
 ```
 
 Low-level solver/debug subcommands are still available on the underlying
-`pcb-rectifier` extension binary (`solve`, `patch`, `audit`, `bench`) but are
-hidden from normal `pcb rectifier --help` output.
+`rectify` extension binary (`solve`, `patch`, `audit`, `bench`) but are
+hidden from normal `pcb rectify --help` output.
 
 Logging is quiet by default; set `RUST_LOG=warn` or a narrower filter to opt in.
 
@@ -130,7 +130,7 @@ rasterization:
 
 ## Benchmarking
 
-Point `pcb-rectifier bench` at a directory of `.kicad_mod` files; every
+Point `rectify bench` at a directory of `.kicad_mod` files; every
 footprint's stored `(rotate ...)` / `(offset ...)` is used as ground
 truth. Files are recursed; paths can also be individual `.kicad_mod`
 files.
@@ -153,22 +153,22 @@ Two preset modes control offset tolerance and rotation strictness:
 
 ```bash
 # Default loose mode (±0.20 mm L∞)
-pcb-rectifier bench ~/code/github/diodeinc/registry/components
+rectify bench ~/code/github/diodeinc/registry/components
 
 # SMD-only loop while tuning the SMD contact pipeline
-pcb-rectifier bench ~/code/github/diodeinc/registry/components --kind smd
+rectify bench ~/code/github/diodeinc/registry/components --kind smd
 
 # Same benchmark with a different deterministic perturbation set
-pcb-rectifier bench ~/code/github/diodeinc/registry/components --initial-transform-seed 2
+rectify bench ~/code/github/diodeinc/registry/components --initial-transform-seed 2
 
 # Legacy benchmark mode: solver sees the stored transform as its initial prior
-pcb-rectifier bench ~/code/github/diodeinc/registry/components --use-stored-initial-transform
+rectify bench ~/code/github/diodeinc/registry/components --use-stored-initial-transform
 
 # Strict mode (±0.10 mm L∞)
-pcb-rectifier bench ~/code/github/diodeinc/registry/components --mode strict
+rectify bench ~/code/github/diodeinc/registry/components --mode strict
 
 # Per-footprint JSON diagnostics (predicted vs stored offset, L∞, etc.)
-pcb-rectifier bench ~/code/github/diodeinc/registry/components --jsonl
+rectify bench ~/code/github/diodeinc/registry/components --jsonl
 ```
 
 `--kind` accepts `all` (default), `smd`, `tht`, or `mixed`. Filtered runs
@@ -209,6 +209,6 @@ Run against your local copy of
 `components/` to establish a baseline for your current registry version:
 
 ```bash
-pcb-rectifier bench ~/code/github/diodeinc/registry/components
-pcb-rectifier bench ~/code/github/diodeinc/registry/components --mode strict
+rectify bench ~/code/github/diodeinc/registry/components
+rectify bench ~/code/github/diodeinc/registry/components --mode strict
 ```
