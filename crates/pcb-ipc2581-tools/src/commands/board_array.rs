@@ -44,7 +44,7 @@ const FIDUCIAL_COPPER_DIAMETER_MM: f64 = 1.0;
 const FIDUCIAL_MASK_OPENING_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_EDGE_OFFSET_MM: f64 = 2.5;
-const FIDUCIAL_EDGE_OFFSET_MM: f64 = 3.0;
+const FIDUCIAL_EDGE_OFFSET_MM: f64 = 3.85;
 const FIDUCIAL_FROM_TOOLING_HOLE_MM: f64 = 5.0;
 const TOP_TOOLING_HOLE_X_INSET_MM: f64 = 5.0;
 const BOTTOM_TOOLING_HOLE_X_INSET_MM: f64 = 10.0;
@@ -845,7 +845,7 @@ fn add_board_cell_fiducials(
 ///
 /// Vertical rules:
 /// - tooling hole centers are 2.5 mm from the top/bottom array edge;
-/// - fiducial centers are 3 mm from the top/bottom array edge.
+/// - fiducial centers are 3.85 mm from the top/bottom array edge.
 fn board_array_tooling_fiducials(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
     let left_edge = spec.margin_x_mm;
     let right_edge =
@@ -2300,7 +2300,7 @@ mod tests {
         }));
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(27.5, 67.0), (42.5, 67.0), (32.5, 3.0), (37.5, 3.0)],
+            vec![(27.5, 66.15), (42.5, 66.15), (32.5, 3.85), (37.5, 3.85)],
         );
         assert_points_close(
             hole_points(&tooling_holes),
@@ -2333,7 +2333,7 @@ mod tests {
         assert_eq!(tooling_holes.len(), 4);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(27.5, 67.0), (52.5, 67.0), (32.5, 3.0), (47.5, 3.0)],
+            vec![(27.5, 66.15), (52.5, 66.15), (32.5, 3.85), (47.5, 3.85)],
         );
         assert_points_close(
             hole_points(&tooling_holes),
