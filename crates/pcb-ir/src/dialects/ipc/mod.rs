@@ -111,8 +111,6 @@ impl<Symbol, LayerFunction> Default for GeometryDocument<Symbol, LayerFunction> 
     }
 }
 
-const PROFILE_STROKE_WIDTH: f64 = 0.1;
-
 pub fn board_bbox<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
 ) -> Option<BBox> {
@@ -519,79 +517,6 @@ pub fn lower_layer_to_artwork<Symbol: Clone, LayerFunction: Clone>(
     artwork.diagnostics.extend(doc.diagnostics.clone());
     artwork::normalize_bounds(&mut artwork);
     artwork
-}
-
-pub fn lower_layer_with_profile_set_to_artwork<Symbol: Clone, LayerFunction: Clone>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-    layer_index: usize,
-    role: LayerRole,
-    side: Side,
-    profile_set: ProfileSet,
-) -> artwork::ArtworkDocument<LayerFunction, Option<Symbol>> {
-    let mut artwork = lower_layer_to_artwork(doc, layer_index, role, side);
-    let layer = &doc.layers[layer_index];
-    let outline_layer = artwork.push_layer(artwork::ArtworkLayer {
-        name: "Profile".to_string(),
-        role: LayerRole::Profile,
-        side: Side::None,
-        object_start: 0,
-        object_count: 0,
-        bbox: BBox::empty(),
-        meta: layer.layer_function.clone(),
-    });
-
-    for occurrence in profile_occurrences_for(doc, profile_set) {
-        push_profile_path_to_artwork(
-            &mut artwork,
-            outline_layer,
-            doc,
-            occurrence.profile.outer_path,
-            occurrence.transform,
-        );
-        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
-            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
-        {
-            push_profile_path_to_artwork(
-                &mut artwork,
-                outline_layer,
-                doc,
-                cutout.path,
-                occurrence.transform,
-            );
-        }
-    }
-
-    artwork::normalize_bounds(&mut artwork);
-    artwork
-}
-
-fn push_profile_path_to_artwork<Symbol, LayerFunction>(
-    artwork: &mut artwork::ArtworkDocument<LayerFunction, Option<Symbol>>,
-    layer_id: u32,
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-    path_index: u32,
-    transform: Affine2,
-) {
-    let payloads = transformed_path_payloads(doc, path_index, transform);
-    let path_id = artwork.push_path(
-        artwork::ArtworkPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round),
-        payloads,
-    );
-    let bbox = artwork.paths[path_id as usize].bbox;
-    artwork.push_object(
-        layer_id,
-        artwork::ArtworkObject {
-            paint: PaintPolarity::Dark,
-            order: artwork::PaintOrder {
-                stage: artwork::PaintStage::Overlay,
-            },
-            geometry: artwork::ArtworkGeometry::Stroke { path: path_id },
-            net: None,
-            bbox,
-            meta: None,
-        },
-    );
-    artwork.layers[layer_id as usize].bbox = artwork.layers[layer_id as usize].bbox.union(bbox);
 }
 
 type ArtworkGeometryFactory = fn(u32) -> artwork::ArtworkGeometry;

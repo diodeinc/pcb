@@ -11,14 +11,15 @@ use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
 use super::lower::lower_artwork_layer;
 use crate::geometry;
 use pcb_ir::common::{
-    Affine2, BBox, LayerRole, LineJoin, PaintPolarity, Point, Side as IrSide, Unit,
+    Affine2, BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Point, Side as IrSide, Unit,
 };
 use pcb_ir::dialects::artwork::{
     ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath, PaintOrder, PaintStage,
 };
 use pcb_ir::dialects::ipc::{
     FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, GeometryFeature,
-    GeometryPath, GeometryPathPaintClass, GeometryPolarity, GeometryView, PlatingKind,
+    GeometryPath, GeometryPathPaintClass, GeometryPolarity, GeometryView, PlatingKind, ProfileSet,
+    profile_occurrences_for, transformed_path_payloads,
 };
 use pcb_ir::dialects::path as common_path;
 
@@ -29,6 +30,23 @@ pub struct GerberX2File {
     pub filename: String,
     pub layer: GerberLayer,
     pub contents: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProfileGerberStyle {
+    stroke_width_mm: f64,
+    line_cap: LineCap,
+    line_join: LineJoin,
+}
+
+impl Default for ProfileGerberStyle {
+    fn default() -> Self {
+        Self {
+            stroke_width_mm: 0.05,
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+        }
+    }
 }
 
 pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<GerberX2File>> {
@@ -54,9 +72,10 @@ pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ge
             ipc,
             &doc,
             0,
-            plan.role.ir_role(),
+            plan.role,
             ir_side(source_layer.side),
             layer_attributes(plan.file_function.clone(), part),
+            view.profile_set(),
         )?;
         let layer = lower_artwork_layer(&artwork)?;
         let contents = write_layer(&layer)?;
@@ -344,15 +363,16 @@ fn artwork_from_ipc_layer(
     ipc: &Ipc2581,
     doc: &IpcGeometryDocument,
     layer_index: usize,
-    role: LayerRole,
+    role: GerberLayerRole,
     side: IrSide,
     meta: LayerAttributes,
+    profile_set: ProfileSet,
 ) -> Result<ArtworkLayer> {
     let layer = &doc.layers[layer_index];
     let mut artwork = ArtworkLayer::new(Unit::Millimeter);
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
         name: layer.name.clone(),
-        role,
+        role: role.ir_role(),
         side,
         object_start: 0,
         object_count: 0,
@@ -365,7 +385,80 @@ fn artwork_from_ipc_layer(
     for feature in features {
         push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
     }
+    if role == GerberLayerRole::Profile && artwork.layers[artwork_layer as usize].object_count == 0
+    {
+        append_profile_fallback(
+            &mut artwork,
+            artwork_layer,
+            doc,
+            profile_set,
+            ProfileGerberStyle::default(),
+        );
+    }
     Ok(artwork)
+}
+
+fn append_profile_fallback(
+    artwork: &mut ArtworkLayer,
+    layer: u32,
+    doc: &IpcGeometryDocument,
+    profile_set: ProfileSet,
+    style: ProfileGerberStyle,
+) {
+    for occurrence in profile_occurrences_for(doc, profile_set) {
+        append_profile_fallback_path(
+            artwork,
+            layer,
+            doc,
+            occurrence.profile.outer_path,
+            occurrence.transform,
+            style,
+        );
+        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
+            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
+        {
+            append_profile_fallback_path(
+                artwork,
+                layer,
+                doc,
+                cutout.path,
+                occurrence.transform,
+                style,
+            );
+        }
+    }
+}
+
+fn append_profile_fallback_path(
+    artwork: &mut ArtworkLayer,
+    layer: u32,
+    doc: &IpcGeometryDocument,
+    path: u32,
+    transform: Affine2,
+    style: ProfileGerberStyle,
+) {
+    let path = artwork.push_path(
+        ArtworkPath::stroked(style.stroke_width_mm, style.line_cap, style.line_join),
+        transformed_path_payloads(doc, path, transform),
+    );
+    let bbox = artwork.paths[path as usize].bbox;
+    artwork.push_object(
+        layer,
+        ArtworkObject {
+            paint: PaintPolarity::Dark,
+            order: PaintOrder {
+                stage: PaintStage::Overlay,
+            },
+            geometry: ArtworkGeometry::Stroke { path },
+            net: None,
+            bbox,
+            meta: ObjectAttributes {
+                aperture_function: Some(vec!["Profile".to_string()]),
+                ..ObjectAttributes::default()
+            },
+        },
+    );
+    artwork.layers[layer as usize].bbox = artwork.layers[layer as usize].bbox.union(bbox);
 }
 
 fn ir_side(side: Option<IpcSide>) -> IrSide {
@@ -858,6 +951,49 @@ mod tests {
             filenames,
             ["V_Cut.gbr", "VCUT_B.gbr", "Score.gbr", "SCORE_B.gbr"]
         );
+    }
+
+    #[test]
+    fn gerber_export_renders_step_profile_only_as_canonical_edge_cuts() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="Edge.Cuts"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
+        let edge_cuts = files
+            .iter()
+            .find(|file| file.filename == "Edge_Cuts.gm1")
+            .unwrap();
+
+        assert!(edge_cuts.contents.contains("%TF.FileFunction,Profile,NP*%"));
+        assert!(edge_cuts.contents.contains("%TA.AperFunction,Profile*%"));
+        assert!(edge_cuts.contents.contains("%ADD10C,0.05*%"));
+        gerberx2::GerberX2::parse(&edge_cuts.contents).unwrap();
     }
 
     #[test]
