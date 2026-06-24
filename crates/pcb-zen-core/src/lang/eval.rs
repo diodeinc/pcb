@@ -708,7 +708,27 @@ impl EvalContextConfig {
                 .expect("try_resolve_workspace called with non-URL spec")
         };
 
-        let (matched_dep, root_path) = match scope.resolve_package_url(&full_url) {
+        let resolved = scope.resolve_package_url(&full_url);
+        let is_declared_dependency = matches!(
+            resolved.as_ref(),
+            Some(PackageUrlResolution::Dependency { .. })
+        );
+        if let Some(target_package_url) = self
+            .resolution
+            .workspace_info
+            .package_url_for_url(&full_url)
+            && scope.package_url() != Some(target_package_url)
+            && !is_declared_dependency
+        {
+            anyhow::bail!(
+                "No declared dependency matches '{}' required by '{}'\n  \
+                Run `pcb sync` to update [dependencies] in pcb.toml",
+                target_package_url,
+                full_url
+            );
+        }
+
+        let (matched_dep, root_path) = match resolved {
             Some(PackageUrlResolution::OwnPackage) => anyhow::bail!(
                 "{} uses package URL '{}' that points into its own package '{}'; use a relative path instead",
                 context.current_file.display(),
@@ -805,6 +825,18 @@ impl EvalContextConfig {
                 .canonicalize(target_scope.root())
                 .unwrap_or_else(|_| target_scope.root().to_path_buf());
             crosses_package_boundary = target_root != canonical_root;
+        }
+        if !crosses_package_boundary
+            && let (Some(current_url), Some(target_url)) = (
+                self.resolution
+                    .workspace_info
+                    .package_url_for_path(self.file_provider(), &context.current_file),
+                self.resolution
+                    .workspace_info
+                    .package_url_for_path(self.file_provider(), &canonical_resolved),
+            )
+        {
+            crosses_package_boundary = current_url != target_url;
         }
 
         if crosses_package_boundary {

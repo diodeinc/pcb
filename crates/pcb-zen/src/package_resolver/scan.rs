@@ -37,7 +37,7 @@ pub(crate) fn scan_package_direct_deps(
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", zen_path.display()))?;
 
         for url in extracted.urls {
-            if let Some(workspace_package_url) = workspace_package_for_url(workspace_info, &url) {
+            if let Some(workspace_package_url) = workspace_info.package_url_for_url(&url) {
                 if workspace_package_url == package_url {
                     anyhow::bail!(
                         "{} uses package URL '{}' that points into its own package '{}'; use a relative path instead",
@@ -157,16 +157,4 @@ fn existing_manifest_dep(url: &str, config: &PcbToml) -> Option<(String, Depende
         .filter(|(module_path, _)| package_url_covers(module_path, url))
         .max_by_key(|(module_path, _)| module_path.len())
         .map(|(module_path, spec)| (module_path.clone(), spec.clone()))
-}
-
-fn workspace_package_for_url<'a>(
-    workspace_info: &'a crate::WorkspaceInfo,
-    url: &str,
-) -> Option<&'a str> {
-    workspace_info
-        .packages
-        .keys()
-        .filter(|package_url| package_url_covers(package_url, url))
-        .max_by_key(|package_url| package_url.len())
-        .map(|package_url| package_url.as_str())
 }

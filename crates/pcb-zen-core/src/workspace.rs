@@ -219,6 +219,38 @@ impl WorkspaceInfo {
             .is_some_and(|base| package_url_covers(base, url))
     }
 
+    /// Return the most specific workspace package URL that contains `url`.
+    pub fn package_url_for_url(&self, url: &str) -> Option<&str> {
+        self.packages
+            .keys()
+            .filter(|package_url| package_url_covers(package_url, url))
+            .max_by_key(|package_url| package_url.len())
+            .map(String::as_str)
+    }
+
+    /// Return the most specific workspace package URL that owns `path`.
+    pub fn package_url_for_path(
+        &self,
+        file_provider: &dyn FileProvider,
+        path: &Path,
+    ) -> Option<&str> {
+        let canonical_path = file_provider
+            .canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf());
+
+        self.packages
+            .iter()
+            .filter_map(|(url, pkg)| {
+                let root = pkg.dir(&self.root);
+                let canonical_root = file_provider.canonicalize(&root).unwrap_or(root);
+                canonical_path
+                    .starts_with(&canonical_root)
+                    .then(|| (url.as_str(), canonical_root.as_os_str().len()))
+            })
+            .max_by_key(|(_, root_len)| *root_len)
+            .map(|(url, _)| url)
+    }
+
     /// Get optional subpath within repository
     pub fn path(&self) -> Option<&str> {
         self.config

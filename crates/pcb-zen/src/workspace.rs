@@ -71,13 +71,9 @@ impl WorkspaceInfoExt for WorkspaceInfo {
     }
 
     fn package_url_for_zen(&self, zen_path: &Path) -> Option<String> {
-        let canon_zen = zen_path.canonicalize().ok()?;
-        // Longest prefix match: find most specific package containing this path
-        self.packages
-            .iter()
-            .filter(|(_, pkg)| canon_zen.starts_with(pkg.dir(&self.root)))
-            .max_by_key(|(_, pkg)| pkg.rel_path.as_os_str().len())
-            .map(|(url, _)| url.clone())
+        let file_provider = DefaultFileProvider::new();
+        self.package_url_for_path(&file_provider, zen_path)
+            .map(str::to_string)
     }
 }
 
