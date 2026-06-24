@@ -35,7 +35,24 @@ const MAX_VCUT_LINES_PER_AXIS: usize = 25;
 const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
 const VCUT_LAYER_BASE_NAME: &str = "V-Score";
-const VCUT_LINE_WIDTH_MM: f64 = 0.025;
+const VCUT_SPEC_BASE_NAME: &str = "Board_Array_VCut";
+const VCUT_MARKER_STROKE_MM: f64 = 0.10;
+const VCUT_CALLOUT_ARROW_LENGTH_MM: f64 = 2.5;
+const VCUT_CALLOUT_ARROW_CLEARANCE_MM: f64 = 0.8;
+const VCUT_CALLOUT_ARROW_HEAD_MM: f64 = 0.45;
+const VCUT_CALLOUT_TEXT_HEIGHT_MM: f64 = 1.2;
+const VCUT_CALLOUT_TEXT_STROKE_MM: f64 = 0.12;
+const VCUT_CALLOUT_TEXT_GAP_MM: f64 = 0.45;
+// KiCad's built-in "KiCad Font" stroke glyph coordinates use Hershey/newstroke units.
+const KICAD_STROKE_FONT_SCALE: f64 = 1.0 / 21.0;
+const KICAD_STROKE_FONT_OFFSET: i32 = -8;
+const KICAD_VCUT_LABEL_GLYPHS: [&str; 5] = [
+    "I[KFR[YF",
+    "E_JSZS",
+    "F[WYVZS[Q[NZLXKVJRJOKKLINGQFSFVGWH",
+    "G]LFLWMYNZP[T[VZWYXWXF",
+    "JZLFXF RR[RF",
+];
 const TOP_COPPER_LAYER_BASE_NAME: &str = "F.Cu";
 const TOP_SOLDERMASK_LAYER_BASE_NAME: &str = "F.Mask";
 const TOOLING_HOLE_LAYER_BASE_NAME: &str = "Board_Array_Drill";
@@ -217,6 +234,7 @@ struct BoardArraySpec {
     array_name: String,
     board_cell_name: String,
     board_name: String,
+    vcut_spec_name: String,
     board_outline_layer_names: Vec<String>,
     content_step_refs: Vec<String>,
     content_layer_refs: Vec<String>,
@@ -252,10 +270,22 @@ impl BoardArrayGeneratedGeometry {
         polarity: Polarity,
         features: Vec<SetFeature>,
     ) {
+        self.add_layer_feature_with_spec_refs(scope, layer_name, polarity, Vec::new(), features);
+    }
+
+    fn add_layer_feature_with_spec_refs(
+        &mut self,
+        scope: GeneratedFeatureScope,
+        layer_name: impl Into<String>,
+        polarity: Polarity,
+        spec_refs: Vec<String>,
+        features: Vec<SetFeature>,
+    ) {
         self.layer_features.push(GeneratedLayerFeature {
             scope,
             layer_name: layer_name.into(),
             polarity,
+            spec_refs,
             features,
         });
     }
@@ -298,6 +328,7 @@ struct GeneratedLayerFeature {
     scope: GeneratedFeatureScope,
     layer_name: String,
     polarity: Polarity,
+    spec_refs: Vec<String>,
     features: Vec<SetFeature>,
 }
 
@@ -330,9 +361,11 @@ fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Resul
 }
 
 fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
+    let generated_spec_xml = write_generated_specs_xml(spec)?;
     let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry)?;
     let generated_steps_xml = write_generated_steps_xml(spec)?;
     let xml = update_content_refs(xml, &spec.content_step_refs, &spec.content_layer_refs)?;
+    let xml = insert_generated_cad_header_specs(&xml, &generated_spec_xml)?;
     let xml = insert_array_cad_data(
         &xml,
         spec,
@@ -408,6 +441,13 @@ fn build_board_array_spec(
     let mut used_step_names = existing_step_names;
     used_step_names.insert(array_name.clone());
     let board_cell_name = unique_name(&used_step_names, "board_cell");
+    let existing_spec_names = ecad
+        .cad_header
+        .specs
+        .keys()
+        .map(|name| ipc.resolve(*name).to_string())
+        .collect::<HashSet<_>>();
+    let vcut_spec_name = unique_name(&existing_spec_names, VCUT_SPEC_BASE_NAME);
     let mut used_layer_names = ecad
         .cad_data
         .layers
@@ -418,6 +458,8 @@ fn build_board_array_spec(
     add_vcut_lines(
         &mut generated_geometry,
         &mut used_layer_names,
+        vcut_spec_name.clone(),
+        array_width,
         vcut_lines(VcutLineSpec {
             columns,
             rows,
@@ -466,6 +508,7 @@ fn build_board_array_spec(
         array_name,
         board_cell_name,
         board_name,
+        vcut_spec_name,
         board_outline_layer_names,
         content_step_refs,
         content_layer_refs,
@@ -653,6 +696,8 @@ fn board_outline_layer_names(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Vec<
 fn add_vcut_lines(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
     used_layer_names: &mut HashSet<String>,
+    vcut_spec_name: String,
+    array_width_mm: f64,
     lines: Vec<VcutLine>,
 ) {
     if lines.is_empty() {
@@ -666,11 +711,18 @@ fn add_vcut_lines(
         Some(Side::None),
         Some(Polarity::Positive),
     ));
+    generated_geometry.add_layer_feature_with_spec_refs(
+        GeneratedFeatureScope::Array,
+        layer_name.clone(),
+        Polarity::Positive,
+        vec![vcut_spec_name],
+        lines.iter().copied().map(vcut_line_feature).collect(),
+    );
     generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         layer_name,
         Polarity::Positive,
-        lines.into_iter().map(vcut_line_feature).collect(),
+        vcut_callout_features(&lines, array_width_mm),
     );
 }
 
@@ -681,9 +733,228 @@ fn vcut_line_feature(line: VcutLine) -> SetFeature {
         end_x: line.end_x_mm,
         end_y: line.end_y_mm,
         line_desc_ref: None,
-        line_width: VCUT_LINE_WIDTH_MM,
+        line_width: VCUT_MARKER_STROKE_MM,
         line_end: Some(LineEnd::Round),
     })
+}
+
+fn vcut_callout_features(lines: &[VcutLine], array_width_mm: f64) -> Vec<SetFeature> {
+    let mut features = Vec::new();
+    let label = vcut_label_geometry();
+    for line in lines {
+        if (line.start_x_mm - line.end_x_mm).abs() <= EPSILON {
+            add_bottom_vcut_callout(&mut features, line.start_x_mm, &label);
+        } else if (line.start_y_mm - line.end_y_mm).abs() <= EPSILON {
+            add_right_vcut_callout(&mut features, array_width_mm, line.start_y_mm, &label);
+        }
+    }
+    features
+}
+
+fn add_bottom_vcut_callout(features: &mut Vec<SetFeature>, x: f64, label: &VcutLabelGeometry) {
+    let arrow_tip = Point::new(x, -VCUT_CALLOUT_ARROW_CLEARANCE_MM);
+    let arrow_start = Point::new(
+        x,
+        -(VCUT_CALLOUT_ARROW_CLEARANCE_MM + VCUT_CALLOUT_ARROW_LENGTH_MM),
+    );
+    add_vcut_annotation_line(features, arrow_start, arrow_tip, VCUT_MARKER_STROKE_MM);
+    add_vcut_annotation_line(
+        features,
+        arrow_tip,
+        Point::new(
+            x - VCUT_CALLOUT_ARROW_HEAD_MM,
+            arrow_tip.y - VCUT_CALLOUT_ARROW_HEAD_MM,
+        ),
+        VCUT_MARKER_STROKE_MM,
+    );
+    add_vcut_annotation_line(
+        features,
+        arrow_tip,
+        Point::new(
+            x + VCUT_CALLOUT_ARROW_HEAD_MM,
+            arrow_tip.y - VCUT_CALLOUT_ARROW_HEAD_MM,
+        ),
+        VCUT_MARKER_STROKE_MM,
+    );
+
+    add_vcut_label(
+        features,
+        label,
+        Point::new(
+            x - 0.5 * label.width_mm,
+            arrow_start.y - VCUT_CALLOUT_TEXT_GAP_MM - label.height_mm,
+        ),
+    );
+}
+
+fn add_right_vcut_callout(
+    features: &mut Vec<SetFeature>,
+    array_width_mm: f64,
+    y: f64,
+    label: &VcutLabelGeometry,
+) {
+    let arrow_tip = Point::new(array_width_mm + VCUT_CALLOUT_ARROW_CLEARANCE_MM, y);
+    let arrow_start = Point::new(
+        array_width_mm + VCUT_CALLOUT_ARROW_CLEARANCE_MM + VCUT_CALLOUT_ARROW_LENGTH_MM,
+        y,
+    );
+    add_vcut_annotation_line(features, arrow_start, arrow_tip, VCUT_MARKER_STROKE_MM);
+    add_vcut_annotation_line(
+        features,
+        arrow_tip,
+        Point::new(
+            arrow_tip.x + VCUT_CALLOUT_ARROW_HEAD_MM,
+            y - VCUT_CALLOUT_ARROW_HEAD_MM,
+        ),
+        VCUT_MARKER_STROKE_MM,
+    );
+    add_vcut_annotation_line(
+        features,
+        arrow_tip,
+        Point::new(
+            arrow_tip.x + VCUT_CALLOUT_ARROW_HEAD_MM,
+            y + VCUT_CALLOUT_ARROW_HEAD_MM,
+        ),
+        VCUT_MARKER_STROKE_MM,
+    );
+
+    add_vcut_label(
+        features,
+        label,
+        Point::new(
+            arrow_start.x + VCUT_CALLOUT_TEXT_GAP_MM,
+            y - 0.5 * label.height_mm,
+        ),
+    );
+}
+
+fn add_vcut_label(features: &mut Vec<SetFeature>, label: &VcutLabelGeometry, lower_left: Point) {
+    for line in &label.lines {
+        add_vcut_annotation_line(
+            features,
+            Point::new(lower_left.x + line.start.x, lower_left.y + line.start.y),
+            Point::new(lower_left.x + line.end.x, lower_left.y + line.end.y),
+            VCUT_CALLOUT_TEXT_STROKE_MM,
+        );
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VcutLabelGeometry {
+    lines: Vec<VcutLabelLine>,
+    width_mm: f64,
+    height_mm: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VcutLabelLine {
+    start: Point,
+    end: Point,
+}
+
+fn vcut_label_geometry() -> VcutLabelGeometry {
+    let mut strokes = Vec::new();
+    let mut cursor = 0.0;
+
+    for raw_glyph in KICAD_VCUT_LABEL_GLYPHS {
+        let glyph = parse_kicad_stroke_glyph(raw_glyph);
+        strokes.extend(glyph.strokes.into_iter().map(|stroke| {
+            stroke
+                .into_iter()
+                .map(|point| Point::new(cursor + point.x, point.y))
+                .collect::<Vec<_>>()
+        }));
+        cursor += glyph.width;
+    }
+
+    let (min_x, min_y, max_x, max_y) = strokes
+        .iter()
+        .flatten()
+        .fold(None, |bounds, point| match bounds {
+            Some((min_x, min_y, max_x, max_y)) => Some((
+                f64::min(min_x, point.x),
+                f64::min(min_y, point.y),
+                f64::max(max_x, point.x),
+                f64::max(max_y, point.y),
+            )),
+            None => Some((point.x, point.y, point.x, point.y)),
+        })
+        .expect("KiCad V-cut label glyphs should produce strokes");
+    let scale = VCUT_CALLOUT_TEXT_HEIGHT_MM / (max_y - min_y);
+    let mut lines = Vec::new();
+    for stroke in strokes {
+        lines.extend(stroke.windows(2).map(|points| VcutLabelLine {
+            start: Point::new((points[0].x - min_x) * scale, (max_y - points[0].y) * scale),
+            end: Point::new((points[1].x - min_x) * scale, (max_y - points[1].y) * scale),
+        }));
+    }
+
+    VcutLabelGeometry {
+        lines,
+        width_mm: (max_x - min_x) * scale,
+        height_mm: VCUT_CALLOUT_TEXT_HEIGHT_MM,
+    }
+}
+
+#[derive(Debug)]
+struct KiCadStrokeGlyph {
+    strokes: Vec<Vec<Point>>,
+    width: f64,
+}
+
+fn parse_kicad_stroke_glyph(raw: &str) -> KiCadStrokeGlyph {
+    let bytes = raw.as_bytes();
+    let glyph_start_x = f64::from(kicad_font_coord(bytes[0])) * KICAD_STROKE_FONT_SCALE;
+    let glyph_end_x = f64::from(kicad_font_coord(bytes[1])) * KICAD_STROKE_FONT_SCALE;
+    let mut strokes = Vec::new();
+    let mut stroke = Vec::new();
+
+    for pair in bytes[2..].chunks_exact(2) {
+        if pair[0] == b' ' && pair[1] == b'R' {
+            if stroke.len() >= 2 {
+                strokes.push(std::mem::take(&mut stroke));
+            } else {
+                stroke.clear();
+            }
+            continue;
+        }
+
+        stroke.push(Point::new(
+            f64::from(kicad_font_coord(pair[0])) * KICAD_STROKE_FONT_SCALE - glyph_start_x,
+            f64::from(kicad_font_coord(pair[1]) + KICAD_STROKE_FONT_OFFSET)
+                * KICAD_STROKE_FONT_SCALE,
+        ));
+    }
+
+    if stroke.len() >= 2 {
+        strokes.push(stroke);
+    }
+
+    KiCadStrokeGlyph {
+        strokes,
+        width: glyph_end_x - glyph_start_x,
+    }
+}
+
+fn kicad_font_coord(value: u8) -> i32 {
+    i32::from(value) - i32::from(b'R')
+}
+
+fn add_vcut_annotation_line(
+    features: &mut Vec<SetFeature>,
+    start: Point,
+    end: Point,
+    line_width: f64,
+) {
+    features.push(SetFeature::Line(Line {
+        start_x: start.x,
+        start_y: start.y,
+        end_x: end.x,
+        end_y: end.y,
+        line_desc_ref: None,
+        line_width,
+        line_end: Some(LineEnd::Round),
+    }));
 }
 
 fn polygon_from_points(points: Vec<Point>) -> Option<Polygon> {
@@ -1243,6 +1514,58 @@ fn write_layer_refs(writer: &mut Writer<Cursor<Vec<u8>>>, layer_refs: &[String])
     Ok(())
 }
 
+fn insert_generated_cad_header_specs(xml: &str, generated_spec_xml: &str) -> Result<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buf = Vec::new();
+    let mut in_cad_header = false;
+    let mut cad_header_depth = 0usize;
+    let mut inserted = false;
+
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Eof => break,
+            Event::Empty(ref e) if e.name().as_ref() == b"CadHeader" => {
+                writer.write_event(Event::Start(e.to_owned()))?;
+                write_raw_xml(&mut writer, Some(generated_spec_xml))?;
+                writer.write_event(Event::End(BytesStart::new("CadHeader").to_end()))?;
+                inserted = true;
+            }
+            Event::Start(ref e) if e.name().as_ref() == b"CadHeader" => {
+                in_cad_header = true;
+                cad_header_depth = 1;
+                writer.write_event(Event::Start(e.to_owned()))?;
+            }
+            Event::Start(ref e) if in_cad_header => {
+                writer.write_event(Event::Start(e.to_owned()))?;
+                cad_header_depth += 1;
+            }
+            Event::Empty(ref e) if in_cad_header => {
+                writer.write_event(Event::Empty(e.to_owned()))?;
+            }
+            Event::End(ref e) if in_cad_header && cad_header_depth == 1 => {
+                write_raw_xml(&mut writer, Some(generated_spec_xml))?;
+                writer.write_event(Event::End(e.to_owned()))?;
+                in_cad_header = false;
+                cad_header_depth = 0;
+                inserted = true;
+            }
+            Event::End(ref e) if in_cad_header => {
+                writer.write_event(Event::End(e.to_owned()))?;
+                cad_header_depth -= 1;
+            }
+            event => writer.write_event(event)?,
+        }
+        buf.clear();
+    }
+
+    if !inserted {
+        bail!("IPC-2581 file has no CadHeader section");
+    }
+
+    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+}
+
 fn insert_array_cad_data(
     xml: &str,
     spec: &BoardArraySpec,
@@ -1411,6 +1734,28 @@ fn write_raw_xml(writer: &mut Writer<Cursor<Vec<u8>>>, xml: Option<&str>) -> Res
     Ok(())
 }
 
+fn write_generated_specs_xml(spec: &BoardArraySpec) -> Result<String> {
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+
+    let mut spec_elem = BytesStart::new("Spec");
+    spec_elem.push_attribute(("name", spec.vcut_spec_name.as_str()));
+    writer.write_event(Event::Start(spec_elem))?;
+
+    let mut vcut = BytesStart::new("V_Cut");
+    vcut.push_attribute(("type", "OFFSET"));
+    writer.write_event(Event::Start(vcut))?;
+
+    let mut property = BytesStart::new("Property");
+    property.push_attribute(("value", "0"));
+    property.push_attribute(("unit", "MM"));
+    writer.write_event(Event::Empty(property))?;
+
+    writer.write_event(Event::End(BytesStart::new("V_Cut").to_end()))?;
+    writer.write_event(Event::End(BytesStart::new("Spec").to_end()))?;
+
+    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+}
+
 fn write_generated_layers_xml(geometry: &BoardArrayGeneratedGeometry) -> Result<Option<String>> {
     if geometry.layers.is_empty() {
         return Ok(None);
@@ -1523,9 +1868,19 @@ fn write_generated_layer_feature(
     let mut set = BytesStart::new("Set");
     set.push_attribute(("polarity", polarity_attr(layer_feature.polarity)));
     writer.write_event(Event::Start(set))?;
+    write_set_spec_refs(writer, &layer_feature.spec_refs)?;
     write_set_features(writer, units, &layer_feature.features, names)?;
     writer.write_event(Event::End(BytesStart::new("Set").to_end()))?;
     writer.write_event(Event::End(BytesStart::new("LayerFeature").to_end()))?;
+    Ok(())
+}
+
+fn write_set_spec_refs(writer: &mut Writer<Cursor<Vec<u8>>>, spec_refs: &[String]) -> Result<()> {
+    for spec_ref in spec_refs {
+        let mut elem = BytesStart::new("SpecRef");
+        elem.push_attribute(("id", spec_ref.as_str()));
+        writer.write_event(Event::Empty(elem))?;
+    }
     Ok(())
 }
 
@@ -1880,8 +2235,8 @@ mod tests {
     use crate::manufacturing::build_manufacturing_package;
     use pcb_ir::common::Point;
     use pcb_ir::dialects::ipc::{
-        FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FiducialKind,
-        GeometryView, LayoutStepKind, PlatingKind,
+        FeatureBucket, FeatureDomain, FeatureIntent, FeatureKind, FeatureOperation, FeatureRole,
+        FeatureSpan, FiducialKind, GeometryView, LayoutStepKind, PlatingKind,
     };
 
     #[test]
@@ -1953,6 +2308,8 @@ mod tests {
             r#"<StepRepeat stepRef="board" x="4.5" y="5.5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
         ));
         assert!(xml.contains(r#"<LayerFeature layerRef="V-Score">"#));
+        assert!(xml.contains(r#"<Spec name="Board_Array_VCut">"#));
+        assert!(xml.contains(r#"<SpecRef id="Board_Array_VCut"/>"#));
         assert!(xml.contains(r#"<Line startX="7.5" startY="0" endX="7.5" endY="100">"#));
         assert!(xml.contains(r#"<Line startX="0" startY="7.5" endX="100" endY="7.5">"#));
 
@@ -1977,12 +2334,13 @@ mod tests {
 
         let vcut = geometry::extract_layer_for_view(&ipc, "V-Score", GeometryView::ArrayFlattened)
             .unwrap();
-        assert_eq!(vcut.features.len(), 24);
+        assert!(vcut.features.len() > 24);
         assert!(
             vcut.features
                 .iter()
                 .all(|feature| feature.intent.domain == FeatureDomain::VCut)
         );
+        assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
     }
 
     #[test]
@@ -2003,10 +2361,11 @@ mod tests {
         let svg = crate::board_array::render_board_array_overview_svg(&accessor)
             .unwrap()
             .unwrap();
-        assert_eq!(svg.matches("vcut-guide").count(), 24);
+        assert!(svg.matches("vcut-guide").count() > 24);
         assert!(svg.contains("stroke='#dc2626'"));
         assert!(!svg.contains("stroke-dasharray"));
         assert!(!svg.contains("class='score-guide'"));
+        assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
 
         let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
 
@@ -2019,7 +2378,7 @@ mod tests {
         assert!(vcut.contents.contains("%TF.Part,Array*%"));
         assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
         assert!(!vcut.contents.contains("G36*"));
-        assert_eq!(vcut.contents.matches("D01*").count(), 24);
+        assert!(vcut.contents.matches("D01*").count() > 24);
 
         let board_package = build_manufacturing_package(&ipc, GeometryView::Board).unwrap();
         assert!(
@@ -2071,7 +2430,8 @@ mod tests {
         assert!(!profile.contents.contains("%ADD11C,1*%"));
         assert!(!profile.contents.contains("G36*"));
         assert!(
-            profile.contents.matches("D01*").count() > vcut.contents.matches("D01*").count(),
+            profile.contents.matches("D01*").count()
+                > geometry::board_array_vscore_lines(&ipc).unwrap().len(),
             "routed reliefs should emit closed contour strokes, not only the V-cut guide lines"
         );
         gerberx2::GerberX2::parse(&profile.contents).unwrap();
@@ -2141,7 +2501,12 @@ mod tests {
             assert_eq!(before_feature.kind, after_feature.kind);
             assert_eq!(before_feature.bucket, after_feature.bucket);
             assert_eq!(before_feature.polarity, after_feature.polarity);
-            assert_eq!(before_feature.intent, after_feature.intent);
+            assert_intent_eq(
+                &before_ipc,
+                &after_ipc,
+                &before_feature.intent,
+                &after_feature.intent,
+            );
             assert_eq!(before_feature.fiducial_kind, after_feature.fiducial_kind);
             assert_eq!(before_feature.bbox, after_feature.bbox);
             assert_eq!(before_feature.path_count, after_feature.path_count);
@@ -2788,6 +3153,37 @@ mod tests {
             (actual.x - expected.x).abs() < 1e-9 && (actual.y - expected.y).abs() < 1e-9,
             "expected {expected:?}, got {actual:?}"
         );
+    }
+
+    fn assert_intent_eq(
+        before_ipc: &Ipc2581,
+        after_ipc: &Ipc2581,
+        before: &FeatureIntent<ipc2581::Symbol>,
+        after: &FeatureIntent<ipc2581::Symbol>,
+    ) {
+        assert_eq!(before.domain, after.domain);
+        assert_eq!(before.role, after.role);
+        assert_eq!(before.operation, after.operation);
+        assert_eq!(before.material, after.material);
+        assert_eq!(before.plating, after.plating);
+        assert_eq!(before.side, after.side);
+        assert_eq!(
+            resolved_feature_span(before_ipc, before.span),
+            resolved_feature_span(after_ipc, after.span)
+        );
+    }
+
+    fn resolved_feature_span(ipc: &Ipc2581, span: FeatureSpan<ipc2581::Symbol>) -> String {
+        match span {
+            FeatureSpan::Unknown => "Unknown".to_string(),
+            FeatureSpan::ThroughBoard => "ThroughBoard".to_string(),
+            FeatureSpan::Layer(layer) => format!("Layer({})", ipc.resolve(layer)),
+            FeatureSpan::FromTo { from, to } => format!(
+                "FromTo({},{})",
+                from.map(|layer| ipc.resolve(layer)).unwrap_or(""),
+                to.map(|layer| ipc.resolve(layer)).unwrap_or("")
+            ),
+        }
     }
 
     fn close(actual: f64, expected: f64) -> bool {

@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::common::{BBox, FillRule, Point};
-use crate::dialects::ipc::{GeometryDocument, GeometryPathPaintClass};
+use crate::dialects::ipc::{GeometryDocument, GeometryPathPaintClass, IpcSpecItemKind};
 use crate::dialects::path::{
     PathCmd, PathOp, PathPayload, PolygonContour, difference_contours, disk_dilate_contours,
     payloads_to_polygon_contours, polygon_contours_to_payloads, simplify_polygon_contours,
@@ -139,11 +139,15 @@ fn vscore_route_reliefs_inner(
     Ok(output)
 }
 
-pub fn vscore_lines_for<Symbol, LayerFunction>(
+pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
 ) -> Vec<VScoreLine> {
     let mut lines = Vec::new();
-    for feature in doc.features.iter().filter(|feature| feature.is_vcut()) {
+    for feature in doc
+        .features
+        .iter()
+        .filter(|feature| feature.is_vcut() && feature_has_vcut_spec(doc, feature))
+    {
         for path in &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         {
@@ -160,6 +164,46 @@ pub fn vscore_lines_for<Symbol, LayerFunction>(
         }
     }
     lines
+}
+
+fn feature_has_vcut_spec<Symbol: PartialEq, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    feature: &crate::dialects::ipc::GeometryFeature<Symbol>,
+) -> bool {
+    let Some(set_index) = feature.set else {
+        return false;
+    };
+    let Some(set) = doc.feature_sets.get(set_index as usize) else {
+        return false;
+    };
+    spec_refs_include_vcut(doc, set.spec_ref_start, set.spec_ref_count)
+        || doc.layers.get(set.layer as usize).is_some_and(|layer| {
+            spec_refs_include_vcut(doc, layer.spec_ref_start, layer.spec_ref_count)
+        })
+}
+
+fn spec_refs_include_vcut<Symbol: PartialEq, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    spec_ref_start: u32,
+    spec_ref_count: u32,
+) -> bool {
+    doc.spec_refs[spec_ref_start as usize..(spec_ref_start + spec_ref_count) as usize]
+        .iter()
+        .any(|spec_ref| spec_is_vcut(doc, &spec_ref.spec))
+}
+
+fn spec_is_vcut<Symbol: PartialEq, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    spec_name: &Symbol,
+) -> bool {
+    doc.specs
+        .iter()
+        .find(|spec| &spec.name == spec_name)
+        .is_some_and(|spec| {
+            doc.spec_items[spec.item_start as usize..(spec.item_start + spec.item_count) as usize]
+                .iter()
+                .any(|item| item.kind == IpcSpecItemKind::VCut)
+        })
 }
 
 fn append_path_line_segments<Symbol, LayerFunction>(

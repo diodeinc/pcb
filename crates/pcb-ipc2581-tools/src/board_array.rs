@@ -586,7 +586,13 @@ mod tests {
     <StepRef name="panel"/>
   </Content>
   <Ecad>
-    <CadHeader units="MILLIMETER"/>
+    <CadHeader units="MILLIMETER">
+      <Spec name="VCut_1">
+        <V_Cut type="OFFSET">
+          <Property value="0" unit="MM"/>
+        </V_Cut>
+      </Spec>
+    </CadHeader>
     <CadData>
       <Step name="board" type="BOARD">
         <Profile>
@@ -668,6 +674,7 @@ mod tests {
         <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
         <LayerFeature layerRef="VCUT">
           <Set>
+            <SpecRef id="VCut_1"/>
             <Features>
               <Line startX="5" startY="0" endX="5" endY="24">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
@@ -712,7 +719,13 @@ mod tests {
     <LayerRef name="VCUT"/>
   </Content>
   <Ecad>
-    <CadHeader units="MILLIMETER"/>
+    <CadHeader units="MILLIMETER">
+      <Spec name="VCut_1">
+        <V_Cut type="OFFSET">
+          <Property value="0" unit="MM"/>
+        </V_Cut>
+      </Spec>
+    </CadHeader>
     <CadData>
       <Layer name="VCUT" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
@@ -740,6 +753,7 @@ mod tests {
         <StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0"/>
         <LayerFeature layerRef="VCUT">
           <Set>
+            <SpecRef id="VCut_1"/>
             <Features>
               <Line startX="5" startY="0" endX="5" endY="20">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
