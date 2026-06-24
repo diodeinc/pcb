@@ -52,7 +52,7 @@ const SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 35.0;
 const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 20.0;
 const MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM: f64 = 5.0;
 const MIN_BOARD_CELL_FIDUCIAL_SPAN_MM: f64 = 30.0;
-const BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM: f64 = 2.5;
+const BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM: f64 = 2.0;
 const PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = TOP_TOOLING_HOLE_X_INSET_MM;
 const SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = BOTTOM_TOOLING_HOLE_X_INSET_MM;
 
@@ -2425,7 +2425,7 @@ mod tests {
         );
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(5.0, 37.5), (35.0, 37.5), (10.0, 2.5), (30.0, 2.5)],
+            vec![(5.0, 38.0), (35.0, 38.0), (10.0, 2.0), (30.0, 2.0)],
         );
 
         let top =
@@ -2475,7 +2475,7 @@ mod tests {
         assert_eq!(top_fiducials.len(), 4);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(2.5, 35.0), (2.5, 5.0), (37.5, 30.0), (37.5, 10.0)],
+            vec![(2.0, 35.0), (2.0, 5.0), (38.0, 30.0), (38.0, 10.0)],
         );
     }
 
