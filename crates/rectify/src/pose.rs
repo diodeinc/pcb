@@ -3,6 +3,7 @@
 //!
 //! Naming mirrors `solver.py` so the two implementations can be diffed.
 
+use glam::{DMat3, DVec3};
 use serde::{Deserialize, Serialize};
 
 /// Integer Euler angles in degrees (each multiple of 90, range `(-180, 180]`).
@@ -36,21 +37,12 @@ fn normalize_deg(a: i32) -> i32 {
     v
 }
 
-/// 3x3 row-major rotation matrix.
-pub type Mat3 = [[f64; 3]; 3];
+/// 3x3 rotation matrix. `glam` stores matrices column-major and applies them
+/// to column vectors (`m * v`), matching the algebra used by the solver.
+pub type Mat3 = DMat3;
 
 pub fn ident() -> Mat3 {
-    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-}
-
-pub fn matmul(a: &Mat3, b: &Mat3) -> Mat3 {
-    let mut out = [[0.0; 3]; 3];
-    for i in 0..3 {
-        for j in 0..3 {
-            out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
-        }
-    }
-    out
+    Mat3::IDENTITY
 }
 
 fn rot_axis(angle_deg: i32, axis: char) -> Mat3 {
@@ -60,9 +52,9 @@ fn rot_axis(angle_deg: i32, axis: char) -> Mat3 {
     let c = a.cos().round();
     let s = a.sin().round();
     match axis {
-        'x' => [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]],
-        'y' => [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]],
-        _ => [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+        'x' => Mat3::from_cols_array(&[1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c]),
+        'y' => Mat3::from_cols_array(&[c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c]),
+        _ => Mat3::from_cols_array(&[c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0]),
     }
 }
 
@@ -79,13 +71,14 @@ pub fn rotation_matrix_kicad(pose: EulerPose) -> Mat3 {
     let mut m = ident();
     // rotation_order = "xyz" in Python; apply x, then y, then z.
     for (axis, angle) in angles {
-        m = matmul(&rot_axis(angle, kicad_axis(axis)), &m);
+        m = rot_axis(angle, kicad_axis(axis)) * m;
     }
     m
 }
 
 /// KiCad's raw STEP import basis: `X' = X, Y' = Z, Z' = -Y`.
-pub const KICAD_IMPORT_BASIS: Mat3 = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]];
+pub const KICAD_IMPORT_BASIS: Mat3 =
+    Mat3::from_cols_array(&[1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0]);
 
 /// Python solver constants: `KICAD_ROTATION_ORDER = "xyz"`,
 /// `KICAD_ROTATION_SIGNS = (-1, 1, -1)`. Re-exposed here so callers that
@@ -114,7 +107,7 @@ pub fn rotation_matrix_from_pose(pose: EulerPose, order: [char; 3], signs: [i32;
             .find(|(k, _)| *k == axis)
             .map(|(_, v)| *v)
             .unwrap_or(0);
-        m = matmul(&rot_axis(angle, kicad_axis(axis)), &m);
+        m = rot_axis(angle, kicad_axis(axis)) * m;
     }
     m
 }
@@ -123,21 +116,11 @@ pub fn rotation_matrix_from_pose(pose: EulerPose, order: [char; 3], signs: [i32;
 /// `matrix_key_for_pose`: `np.rint(matrix).astype(np.int8).tobytes()`.
 pub fn matrix_key_for_pose(pose: EulerPose, order: [char; 3], signs: [i32; 3]) -> [i8; 9] {
     let m = rotation_matrix_from_pose(pose, order, signs);
-    let mut k = [0i8; 9];
-    for i in 0..3 {
-        for j in 0..3 {
-            k[i * 3 + j] = m[i][j].round() as i8;
-        }
-    }
-    k
+    matrix_key(&m)
 }
 
 pub fn apply_mat(m: &Mat3, v: [f64; 3]) -> [f64; 3] {
-    [
-        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
-    ]
+    (*m * DVec3::from_array(v)).to_array()
 }
 
 /// The 24 unique axis-aligned rigid rotations, each expressed as an
@@ -162,10 +145,11 @@ pub fn candidate_poses() -> Vec<EulerPose> {
 }
 
 fn matrix_key(m: &Mat3) -> [i8; 9] {
+    let cols = m.to_cols_array();
     let mut k = [0i8; 9];
-    for i in 0..3 {
-        for j in 0..3 {
-            k[i * 3 + j] = m[i][j].round() as i8;
+    for row in 0..3 {
+        for col in 0..3 {
+            k[row * 3 + col] = cols[col * 3 + row].round() as i8;
         }
     }
     k

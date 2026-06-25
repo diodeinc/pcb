@@ -14,7 +14,7 @@ use rustfft::{Fft, FftPlanner};
 use crate::footprint::{PadKind, PadShape};
 use crate::mesh::MeshData;
 use crate::pose::EulerPose;
-use crate::pose::{KICAD_IMPORT_BASIS, Mat3, apply_mat, matmul, rotation_matrix_kicad};
+use crate::pose::{KICAD_IMPORT_BASIS, Mat3, apply_mat, rotation_matrix_kicad};
 
 pub const RESOLUTION_MM: f64 = 0.10;
 
@@ -316,11 +316,11 @@ pub fn rasterize_mesh_bottom(
     resolution_mm: f64,
 ) -> Option<PoseRaster> {
     let rot = rotation_matrix_kicad(pose);
-    let m = matmul(&rot, &KICAD_IMPORT_BASIS);
+    let m = rot * KICAD_IMPORT_BASIS;
     // The Python `infer_footprint_pose` pipeline uses `audit_frame=True`, which
     // swaps Y/Z of the rotated vertices so the board plane sits on X/Y.
-    let audit: Mat3 = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]];
-    let m = matmul(&audit, &m);
+    let audit: Mat3 = Mat3::from_cols_array(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+    let m = audit * m;
     let triangles = rotate_triangles(mesh, &m);
     if triangles.is_empty() {
         return None;

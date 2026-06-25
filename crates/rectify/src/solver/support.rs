@@ -2,7 +2,7 @@ use ndarray::Array2;
 
 use crate::footprint::FootprintKind;
 use crate::mesh::MeshData;
-use crate::pose::{EulerPose, KICAD_IMPORT_BASIS, Mat3, apply_mat, matmul, rotation_matrix_kicad};
+use crate::pose::{EulerPose, KICAD_IMPORT_BASIS, Mat3, apply_mat, rotation_matrix_kicad};
 use crate::raster::{self, HoleLabelGrid, MaskGrid, PoseRaster};
 
 use super::context::FootprintCtx;
@@ -260,9 +260,9 @@ pub(crate) fn tht_drill_masked_first_contact_surface(
 
 fn mesh_audit_transform_matrix(pose: EulerPose) -> Mat3 {
     let rot = rotation_matrix_kicad(pose);
-    let m = matmul(&rot, &KICAD_IMPORT_BASIS);
-    let audit: Mat3 = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]];
-    matmul(&audit, &m)
+    let m = rot * KICAD_IMPORT_BASIS;
+    let audit: Mat3 = Mat3::from_cols_array(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+    audit * m
 }
 
 fn tht_support_section_score(
