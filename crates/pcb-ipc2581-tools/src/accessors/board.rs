@@ -360,10 +360,29 @@ mod tests {
         assert_close(board_margin.right.mm(), 1.0);
         assert_close(board_margin.bottom.mm(), 1.5);
         assert_close(board_margin.top.mm(), 1.5);
-        assert_close(grid.margins.left.mm(), 5.0);
-        assert_close(grid.margins.right.mm(), 5.0);
-        assert_close(grid.margins.bottom.mm(), 5.5);
-        assert_close(grid.margins.top.mm(), 5.5);
+        assert_close(grid.margins.left.mm(), 4.0);
+        assert_close(grid.margins.right.mm(), 4.0);
+        assert_close(grid.margins.bottom.mm(), 4.0);
+        assert_close(grid.margins.top.mm(), 4.0);
+    }
+
+    #[test]
+    fn board_cell_array_accepts_zero_pitch_on_unused_axis() {
+        let ipc = ipc2581::Ipc2581::parse(generated_single_column_panel_fixture()).unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let layout = accessor.board_layout_info().unwrap();
+        let grid = layout.board_array.as_ref().unwrap().grid.as_ref().unwrap();
+
+        assert_eq!(grid.columns, 1);
+        assert_eq!(grid.rows, 2);
+        assert!(grid.pitch_x.is_none());
+        assert_close(grid.pitch_y.unwrap().mm(), 8.0);
+        let board_margin = grid.board_margin.as_ref().unwrap();
+        assert_close(board_margin.left.mm(), 1.0);
+        assert_close(board_margin.right.mm(), 1.0);
+        assert_close(board_margin.bottom.mm(), 1.5);
+        assert_close(board_margin.top.mm(), 1.5);
     }
 
     fn panel_fixture() -> &'static str {
@@ -417,6 +436,14 @@ mod tests {
         </Profile>
       </Step>
       <Step name="board_cell" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="12" y="0"/>
+            <PolyStepSegment x="12" y="8"/>
+            <PolyStepSegment x="0" y="8"/>
+          </Polygon>
+        </Profile>
         <StepRepeat stepRef="board" x="1" y="1.5" nx="1" ny="1" dx="0" dy="0"/>
       </Step>
       <Step name="panel" type="PALLET">
@@ -429,6 +456,53 @@ mod tests {
           </Polygon>
         </Profile>
         <StepRepeat stepRef="board_cell" x="4" y="4" nx="3" ny="2" dx="12" dy="8"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn generated_single_column_panel_fixture() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="board_cell" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="12" y="0"/>
+            <PolyStepSegment x="12" y="8"/>
+            <PolyStepSegment x="0" y="8"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board" x="1" y="1.5" nx="1" ny="1" dx="0" dy="0"/>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="0" y="24"/>
+            <PolyStepSegment x="20" y="24"/>
+            <PolyStepSegment x="20" y="0"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board_cell" x="4" y="4" nx="1" ny="2" dx="0" dy="8"/>
       </Step>
     </CadData>
   </Ecad>

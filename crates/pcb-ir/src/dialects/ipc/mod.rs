@@ -354,11 +354,19 @@ fn simple_board_cell_array<Symbol, LayerFunction>(
     array_repeat_index: u32,
     repeat: &LayoutRepeat<Symbol>,
 ) -> Option<SimpleBoardArrayLayout> {
-    if repeat.dx <= 0.0 || repeat.dy <= 0.0 || !repeat.dx.is_finite() || !repeat.dy.is_finite() {
+    let array_step = doc.layout.steps.get(array_step_index as usize)?;
+    let board_cell_step = doc.layout.steps.get(repeat.child_step as usize)?;
+    let (cell_width, cell_height) = simple_step_dimensions(board_cell_step)?;
+    let pitch_x = (repeat.nx > 1)
+        .then_some(repeat.dx)
+        .filter(|pitch| simple_valid_pitch(*pitch, cell_width));
+    let pitch_y = (repeat.ny > 1)
+        .then_some(repeat.dy)
+        .filter(|pitch| simple_valid_pitch(*pitch, cell_height));
+    if (repeat.nx > 1 && pitch_x.is_none()) || (repeat.ny > 1 && pitch_y.is_none()) {
         return None;
     }
 
-    let array_step = doc.layout.steps.get(array_step_index as usize)?;
     let (first_cell_instance, _) = layout_repeat_instances(doc, repeat).next()?;
     let mut board_repeats = layout_child_repeats(doc, repeat.child_step, Some(first_cell_instance));
     let (board_repeat_index, board_repeat) = board_repeats.next()?;
@@ -378,25 +386,24 @@ fn simple_board_cell_array<Symbol, LayerFunction>(
         return None;
     }
     let (board_width, board_height) = simple_step_dimensions(board_step)?;
-    if repeat.dx + SIMPLE_BOARD_ARRAY_EPSILON < board_width
-        || repeat.dy + SIMPLE_BOARD_ARRAY_EPSILON < board_height
+    if cell_width + SIMPLE_BOARD_ARRAY_EPSILON < board_width
+        || cell_height + SIMPLE_BOARD_ARRAY_EPSILON < board_height
     {
         return None;
     }
 
-    let board_left = board_repeat.x + board_step.bbox.min.x;
-    let board_bottom = board_repeat.y + board_step.bbox.min.y;
+    let board_left = board_repeat.x + board_step.bbox.min.x - board_cell_step.bbox.min.x;
+    let board_bottom = board_repeat.y + board_step.bbox.min.y - board_cell_step.bbox.min.y;
     let board_margin = simple_board_margin_from_cell(
         board_left,
         board_bottom,
         board_width,
         board_height,
-        repeat.dx,
-        repeat.dy,
+        cell_width,
+        cell_height,
     )?;
 
-    let cell_array_bbox = simple_repeated_cell_bbox(repeat)?;
-    let edge_margins = simple_margins_between(cell_array_bbox, array_step.bbox)?;
+    let edge_margins = simple_margins_between(repeat.bbox, array_step.bbox)?;
     let edge_rail_width = simple_average_if_consistent(vec![
         edge_margins.left,
         edge_margins.right,
@@ -417,8 +424,8 @@ fn simple_board_cell_array<Symbol, LayerFunction>(
         board_bbox: board_step.bbox,
         board_width,
         board_height,
-        pitch_x: Some(repeat.dx),
-        pitch_y: Some(repeat.dy),
+        pitch_x,
+        pitch_y,
         board_margin: Some(board_margin),
         edge_rail_width,
         edge_rail: edge_margins,
@@ -442,21 +449,6 @@ fn simple_step_dimensions<Symbol>(step: &LayoutStep<Symbol>) -> Option<(f64, f64
 
 fn simple_valid_pitch(pitch: f64, span: f64) -> bool {
     pitch.is_finite() && pitch + SIMPLE_BOARD_ARRAY_EPSILON >= span && pitch > 0.0
-}
-
-fn simple_repeated_cell_bbox<Symbol>(repeat: &LayoutRepeat<Symbol>) -> Option<BBox> {
-    if repeat.nx == 0 || repeat.ny == 0 {
-        return None;
-    }
-    let width = repeat.nx as f64 * repeat.dx;
-    let height = repeat.ny as f64 * repeat.dy;
-    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-    Some(BBox {
-        min: Point::new(repeat.x, repeat.y),
-        max: Point::new(repeat.x + width, repeat.y + height),
-    })
 }
 
 fn simple_board_margin_from_cell(

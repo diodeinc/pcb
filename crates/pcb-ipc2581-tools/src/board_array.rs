@@ -959,6 +959,14 @@ mod tests {
         </LayerFeature>
       </Step>
       <Step name="board_cell" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="12" y="0"/>
+            <PolyStepSegment x="12" y="8"/>
+            <PolyStepSegment x="0" y="8"/>
+          </Polygon>
+        </Profile>
         <LayerFeature layerRef="TOP">
           <Set>
             <LocalFiducial>

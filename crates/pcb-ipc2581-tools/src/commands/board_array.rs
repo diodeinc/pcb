@@ -576,19 +576,17 @@ fn build_board_array_spec(
             array_height_mm: array_height,
         },
     );
-    if columns > 1 || rows > 1 {
-        add_board_cell_fiducials(
-            &mut generated_geometry,
-            ipc,
-            ecad,
-            &mut used_layer_names,
-            BoardCellFiducialSpec {
-                board_width_mm: board_width,
-                board_height_mm: board_height,
-                board_margin,
-            },
-        );
-    }
+    add_board_cell_fiducials(
+        &mut generated_geometry,
+        ipc,
+        ecad,
+        &mut used_layer_names,
+        BoardCellFiducialSpec {
+            board_width_mm: board_width,
+            board_height_mm: board_height,
+            board_margin,
+        },
+    );
     let board_outline_layer_names = board_outline_layer_names(ipc, ecad);
     let content_step_refs = content_step_refs(ipc, &array_name, &board_cell_name, &board_name);
     let content_layer_refs =
@@ -1911,6 +1909,11 @@ fn write_board_cell_step_xml(spec: &BoardArraySpec) -> Result<String> {
     writer.write_event(Event::Start(step))?;
 
     write_location_empty(&mut writer, "Datum", 0.0, 0.0, spec.units)?;
+    write_profile(
+        &mut writer,
+        spec.units,
+        &rectangle_polygon(spec.pitch_x_mm, spec.pitch_y_mm),
+    )?;
     write_board_cell_step_repeat(&mut writer, spec)?;
     write_generated_layer_features(&mut writer, spec, GeneratedFeatureScope::BoardCell)?;
 
@@ -1929,14 +1932,15 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
 
     write_location_empty(&mut writer, "Datum", 0.0, 0.0, spec.units)?;
 
-    writer.write_event(Event::Start(BytesStart::new("Profile")))?;
-    let profile = rounded_rectangle_polygon(
-        spec.array_width_mm,
-        spec.array_height_mm,
-        ARRAY_CORNER_RADIUS_MM,
-    );
-    write_polygon(&mut writer, spec.units, &profile)?;
-    writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
+    write_profile(
+        &mut writer,
+        spec.units,
+        &rounded_rectangle_polygon(
+            spec.array_width_mm,
+            spec.array_height_mm,
+            ARRAY_CORNER_RADIUS_MM,
+        ),
+    )?;
 
     write_array_step_repeat(&mut writer, spec)?;
     write_generated_layer_features(&mut writer, spec, GeneratedFeatureScope::Array)?;
@@ -2138,6 +2142,17 @@ fn write_circle(
     Ok(())
 }
 
+fn write_profile(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    polygon: &Polygon,
+) -> Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Profile")))?;
+    write_polygon(writer, units, polygon)?;
+    writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
+    Ok(())
+}
+
 fn write_polygon(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     units: Units,
@@ -2180,6 +2195,17 @@ fn write_poly_step_curve(
     elem.push_attribute(("clockwise", if curve.clockwise { "true" } else { "false" }));
     writer.write_event(Event::Empty(elem))?;
     Ok(())
+}
+
+fn rectangle_polygon(width_mm: f64, height_mm: f64) -> Polygon {
+    Polygon {
+        begin: IpcPoint { x: 0.0, y: 0.0 },
+        steps: vec![
+            poly_segment(width_mm, 0.0),
+            poly_segment(width_mm, height_mm),
+            poly_segment(0.0, height_mm),
+        ],
+    }
 }
 
 fn rounded_rectangle_polygon(width_mm: f64, height_mm: f64, radius_mm: f64) -> Polygon {
@@ -3106,7 +3132,7 @@ mod tests {
     }
 
     #[test]
-    fn board_array_creation_skips_board_cell_fiducials_for_single_board_array() {
+    fn board_array_creation_adds_board_cell_fiducials_when_single_board_array_is_eligible() {
         let input = board_fixture_with_mask_bbox_mm(40.0, 30.0);
         let xml = create_board_array_xml(
             &input,
@@ -3125,8 +3151,15 @@ mod tests {
         .unwrap();
 
         let ipc = Ipc2581::parse(&xml).unwrap();
-        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP").is_empty());
-        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask").is_empty());
+        let top_fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP");
+        let mask_fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask");
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_eq!(mask_fiducials.len(), 4);
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(8.0, 38.0), (42.0, 38.0), (12.0, 2.0), (38.0, 2.0)],
+        );
         assert_eq!(fiducials_on_layer(&ipc, array_step(&ipc), "TOP").len(), 4);
     }
 
