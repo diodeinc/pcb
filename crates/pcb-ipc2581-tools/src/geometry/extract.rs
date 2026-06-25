@@ -1780,8 +1780,13 @@ fn extract_line(
     line: &ipc2581::types::ecad::Line,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let (line_width, line_cap, line_pattern) =
-        resolve_feature_line_style(context, line.line_desc_ref, line.line_width, line.line_end);
+    let (line_width, line_cap, line_pattern) = resolve_feature_line_style(
+        context,
+        line.line_desc_ref,
+        line.line_width,
+        line.line_end,
+        line.line_property,
+    );
 
     push_stroked_polyline(
         doc,
@@ -1813,6 +1818,7 @@ fn extract_feature_polyline(
         polyline.line_desc_ref,
         polyline.line_width,
         polyline.line_end,
+        polyline.line_property,
     );
 
     push_stroked_steps(
@@ -1838,8 +1844,13 @@ fn extract_arc(
     arc: &ipc2581::types::ecad::FeatureArc,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let (line_width, line_cap, line_pattern) =
-        resolve_feature_line_style(context, arc.line_desc_ref, arc.line_width, arc.line_end);
+    let (line_width, line_cap, line_pattern) = resolve_feature_line_style(
+        context,
+        arc.line_desc_ref,
+        arc.line_width,
+        arc.line_end,
+        arc.line_property,
+    );
 
     push_stroked_arc(
         doc,
@@ -1863,6 +1874,7 @@ fn resolve_feature_line_style(
     line_desc_ref: Option<Symbol>,
     inline_width: f64,
     inline_end: Option<LineEnd>,
+    inline_property: Option<LineProperty>,
 ) -> (f64, LineCap, LinePattern) {
     let line_desc =
         line_desc_ref.and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
@@ -1873,7 +1885,11 @@ fn resolve_feature_line_style(
         .map(|desc| map_line_cap(desc.line_end))
         .or_else(|| inline_end.map(map_line_cap))
         .unwrap_or(LineCap::Round);
-    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
+    let line_pattern = map_line_pattern(
+        line_desc
+            .and_then(|desc| desc.line_property)
+            .or(inline_property),
+    );
     (width, line_cap, line_pattern)
 }
 
@@ -3334,15 +3350,84 @@ fn map_line_cap(line_end: LineEnd) -> LineCap {
 
 fn map_line_pattern(line_property: Option<LineProperty>) -> LinePattern {
     match line_property {
-        Some(LineProperty::Dashed) => LinePattern::Dashed,
-        Some(LineProperty::Dotted) => LinePattern::Dotted,
         Some(LineProperty::Solid) | None => LinePattern::Solid,
+        Some(LineProperty::Dotted) => LinePattern::Dotted,
+        Some(LineProperty::Dashed) => LinePattern::Dashed,
+        Some(LineProperty::Center) => LinePattern::Center,
+        Some(LineProperty::Phantom) => LinePattern::Phantom,
+        Some(LineProperty::Erase) => LinePattern::Erase,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maps_all_ipc_line_properties_to_ir_patterns() {
+        assert_eq!(map_line_pattern(None), LinePattern::Solid);
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Solid)),
+            LinePattern::Solid
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Dotted)),
+            LinePattern::Dotted
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Dashed)),
+            LinePattern::Dashed
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Center)),
+            LinePattern::Center
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Phantom)),
+            LinePattern::Phantom
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Erase)),
+            LinePattern::Erase
+        );
+    }
+
+    #[test]
+    fn preserves_inline_feature_line_property() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SILK_SCREEN" side="TOP"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Features>
+              <Line startX="0" startY="0" endX="10" endY="0">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="PHANTOM"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let layer = extract_layer_for_view(&ipc, "TOP", GeometryView::Board).unwrap();
+        let path = &layer.paths[layer.features[0].path_start as usize];
+
+        assert_eq!(path.style.stroke.pattern, LinePattern::Phantom);
+    }
 
     #[test]
     fn carries_spec_refs_fiducials_and_vcut_intent() {
@@ -3526,6 +3611,7 @@ mod tests {
             line_desc_ref: None,
             line_width: 0.2,
             line_end: Some(LineEnd::Round),
+            line_property: None,
         };
 
         let feature = extract_feature_polyline(

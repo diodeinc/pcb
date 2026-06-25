@@ -10,8 +10,8 @@ use ipc2581::types::{
         PlatingStatus, Polarity, SetFeature, Side, StepType,
     },
     primitives::{
-        Circle, LineEnd, Point as IpcPoint, PolyStep, PolyStepSegment, Polygon, StandardPrimitive,
-        Styled,
+        Circle, LineEnd, LineProperty, Point as IpcPoint, PolyStep, PolyStepSegment, Polygon,
+        StandardPrimitive, Styled,
     },
     transform::Location,
 };
@@ -793,6 +793,7 @@ fn vcut_line_feature(line: VcutLine) -> SetFeature {
         line_desc_ref: None,
         line_width: VCUT_MARKER_STROKE_MM,
         line_end: Some(LineEnd::Round),
+        line_property: Some(LineProperty::Solid),
     })
 }
 
@@ -1012,6 +1013,7 @@ fn add_vcut_annotation_line(
         line_desc_ref: None,
         line_width,
         line_end: Some(LineEnd::Round),
+        line_property: Some(LineProperty::Solid),
     }));
 }
 
@@ -2011,6 +2013,9 @@ fn write_line(writer: &mut Writer<Cursor<Vec<u8>>>, units: Units, line: &Line) -
     if let Some(line_end) = line.line_end {
         line_desc.push_attribute(("lineEnd", line_end_attr(line_end)));
     }
+    if let Some(line_property) = line.line_property {
+        line_desc.push_attribute(("lineProperty", line_property_attr(line_property)));
+    }
     writer.write_event(Event::Empty(line_desc))?;
     writer.write_event(Event::End(BytesStart::new("Line").to_end()))?;
     Ok(())
@@ -2195,6 +2200,17 @@ fn line_end_attr(line_end: LineEnd) -> &'static str {
         LineEnd::Round => "ROUND",
         LineEnd::Square => "SQUARE",
         LineEnd::Flat => "FLAT",
+    }
+}
+
+fn line_property_attr(line_property: LineProperty) -> &'static str {
+    match line_property {
+        LineProperty::Solid => "SOLID",
+        LineProperty::Dotted => "DOTTED",
+        LineProperty::Dashed => "DASHED",
+        LineProperty::Center => "CENTER",
+        LineProperty::Phantom => "PHANTOM",
+        LineProperty::Erase => "ERASE",
     }
 }
 

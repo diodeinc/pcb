@@ -410,6 +410,7 @@ pub struct Line {
     pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
+    pub line_property: Option<super::LineProperty>,
 }
 
 /// Open polyline feature preserving straight and curved PolyStep order.
@@ -420,6 +421,7 @@ pub struct FeaturePolyline {
     pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
+    pub line_property: Option<super::LineProperty>,
 }
 
 /// Arc feature preserving center and direction.
@@ -432,6 +434,7 @@ pub struct FeatureArc {
     pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
+    pub line_property: Option<super::LineProperty>,
 }
 
 /// Primitive reference used directly as feature geometry.

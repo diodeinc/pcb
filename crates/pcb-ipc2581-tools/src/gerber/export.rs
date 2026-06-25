@@ -1257,10 +1257,11 @@ fn push_artwork_object(
             (ArtworkGeometry::Region { path }, path)
         }
         Some(GeometryPathPaintClass::Stroked) => {
-            let artwork_path = ArtworkPath::stroked(
+            let artwork_path = ArtworkPath::stroked_with_pattern(
                 path.style.stroke.width,
                 path.style.stroke.line_cap,
                 LineJoin::Round,
+                path.style.stroke.pattern,
             );
             let path = push_artwork_path(artwork, artwork_path, doc, path);
             (ArtworkGeometry::Stroke { path }, path)

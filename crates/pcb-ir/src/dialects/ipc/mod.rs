@@ -889,10 +889,11 @@ fn lower_path_kind(path: &GeometryPath) -> Option<(artwork::ArtworkPath, Artwork
             |path| artwork::ArtworkGeometry::Region { path },
         )),
         Some(GeometryPathPaintClass::Stroked) => Some((
-            artwork::ArtworkPath::stroked(
+            artwork::ArtworkPath::stroked_with_pattern(
                 path.style.stroke.width,
                 path.style.stroke.line_cap,
                 LineJoin::Round,
+                path.style.stroke.pattern,
             ),
             |path| artwork::ArtworkGeometry::Stroke { path },
         )),

@@ -256,6 +256,9 @@ pub enum LineProperty {
     Solid,
     Dashed,
     Dotted,
+    Center,
+    Phantom,
+    Erase,
 }
 
 /// Fill description (fill style and color)

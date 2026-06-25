@@ -290,6 +290,49 @@ mod tests {
     }
 
     #[test]
+    fn parses_all_ipc_line_properties() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="solid"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="SOLID"/></EntryLineDesc>
+      <EntryLineDesc id="dotted"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="DOTTED"/></EntryLineDesc>
+      <EntryLineDesc id="dashed"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="DASHED"/></EntryLineDesc>
+      <EntryLineDesc id="center"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="CENTER"/></EntryLineDesc>
+      <EntryLineDesc id="phantom"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="PHANTOM"/></EntryLineDesc>
+      <EntryLineDesc id="erase"><LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="ERASE"/></EntryLineDesc>
+    </DictionaryLineDesc>
+    <DictionaryColor/>
+    <DictionaryFillDesc units="MILLIMETER"/>
+    <DictionaryStandard units="MILLIMETER"/>
+    <DictionaryUser units="MILLIMETER"/>
+  </Content>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).unwrap();
+        let properties = doc
+            .content()
+            .dictionary_line_desc
+            .entries
+            .iter()
+            .map(|entry| entry.line_desc.line_property)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            properties,
+            vec![
+                Some(types::primitives::LineProperty::Solid),
+                Some(types::primitives::LineProperty::Dotted),
+                Some(types::primitives::LineProperty::Dashed),
+                Some(types::primitives::LineProperty::Center),
+                Some(types::primitives::LineProperty::Phantom),
+                Some(types::primitives::LineProperty::Erase),
+            ]
+        );
+    }
+
+    #[test]
     fn parses_profile_cutouts_as_direct_polygon_contours() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">

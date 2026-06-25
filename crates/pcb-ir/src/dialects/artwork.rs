@@ -531,6 +531,7 @@ pub struct ArtworkPath {
     pub stroke_width: f64,
     pub line_cap: LineCap,
     pub line_join: LineJoin,
+    pub line_pattern: LinePattern,
     pub flags: PathFlags,
 }
 
@@ -544,6 +545,7 @@ impl ArtworkPath {
             stroke_width: 0.0,
             line_cap: LineCap::Round,
             line_join: LineJoin::Round,
+            line_pattern: LinePattern::Solid,
             flags: PathFlags {
                 filled: true,
                 stroked: false,
@@ -552,6 +554,15 @@ impl ArtworkPath {
     }
 
     pub fn stroked(width: f64, line_cap: LineCap, line_join: LineJoin) -> Self {
+        Self::stroked_with_pattern(width, line_cap, line_join, LinePattern::Solid)
+    }
+
+    pub fn stroked_with_pattern(
+        width: f64,
+        line_cap: LineCap,
+        line_join: LineJoin,
+        line_pattern: LinePattern,
+    ) -> Self {
         Self {
             contour_start: 0,
             contour_count: 0,
@@ -560,6 +571,7 @@ impl ArtworkPath {
             stroke_width: width,
             line_cap,
             line_join,
+            line_pattern,
             flags: PathFlags {
                 filled: false,
                 stroked: true,
@@ -630,5 +642,17 @@ mod tests {
         assert_eq!(mask.shapes[0].fill_rule, FillRule::NonZero);
         assert!(!mask.layers[0].bbox.is_empty());
         mask.validate().unwrap();
+    }
+
+    #[test]
+    fn stroked_paths_preserve_line_pattern() {
+        let path = ArtworkPath::stroked_with_pattern(
+            0.1,
+            LineCap::Round,
+            LineJoin::Round,
+            LinePattern::Phantom,
+        );
+
+        assert_eq!(path.line_pattern, LinePattern::Phantom);
     }
 }

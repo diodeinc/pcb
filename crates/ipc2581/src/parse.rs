@@ -303,13 +303,38 @@ impl<'a> Parser<'a> {
     fn parse_line_property(&self, s: &str) -> Result<LineProperty> {
         match s {
             "SOLID" => Ok(LineProperty::Solid),
-            "DASHED" => Ok(LineProperty::Dashed),
             "DOTTED" => Ok(LineProperty::Dotted),
+            "DASHED" => Ok(LineProperty::Dashed),
+            "CENTER" => Ok(LineProperty::Center),
+            "PHANTOM" => Ok(LineProperty::Phantom),
+            "ERASE" => Ok(LineProperty::Erase),
             _ => Err(Ipc2581Error::InvalidAttribute(format!(
                 "Unknown lineProperty: {}",
                 s
             ))),
         }
+    }
+
+    fn parse_feature_line_desc(
+        &self,
+        node: &Node,
+        units: Units,
+    ) -> Result<(f64, Option<LineEnd>, Option<LineProperty>)> {
+        let line_width = self
+            .attr(node, "lineWidth")
+            .map(|s| self.parse_f64_str_with_units(s, units))
+            .transpose()?
+            .unwrap_or(0.25);
+        let line_end = self
+            .attr(node, "lineEnd")
+            .map(|s| self.parse_line_end(s))
+            .transpose()?;
+        let line_property = self
+            .attr(node, "lineProperty")
+            .map(|s| self.parse_line_property(s))
+            .transpose()?;
+
+        Ok((line_width, line_end, line_property))
     }
 
     fn parse_dictionary_fill_desc(&mut self, _node: &Node) -> Result<DictionaryFillDesc> {
@@ -2217,22 +2242,14 @@ impl<'a> Parser<'a> {
 
         let mut line_width = 0.25;
         let mut line_end = None;
+        let mut line_property = None;
         let mut line_desc_ref = None;
 
         for child in self.element_children(node) {
             match self.name(&child) {
                 "LineDesc" => {
-                    line_width = self
-                        .attr(&child, "lineWidth")
-                        .and_then(|s| s.parse::<f64>().ok())
-                        .map(|v| crate::units::to_mm(v, units))
-                        .unwrap_or(0.25);
-                    line_end = self.attr(&child, "lineEnd").and_then(|s| match s {
-                        "ROUND" => Some(LineEnd::Round),
-                        "SQUARE" => Some(LineEnd::Square),
-                        "FLAT" => Some(LineEnd::Flat),
-                        _ => None,
-                    });
+                    (line_width, line_end, line_property) =
+                        self.parse_feature_line_desc(&child, units)?;
                 }
                 "LineDescRef" => {
                     if let Some(id) = self.attr(&child, "id") {
@@ -2251,6 +2268,7 @@ impl<'a> Parser<'a> {
             line_desc_ref,
             line_width,
             line_end,
+            line_property,
         })
     }
 
@@ -2264,22 +2282,14 @@ impl<'a> Parser<'a> {
         let arc = self.parse_user_arc(node, units)?;
         let mut line_width = 0.25;
         let mut line_end = None;
+        let mut line_property = None;
         let mut line_desc_ref = None;
 
         for child in self.element_children(node) {
             match self.name(&child) {
                 "LineDesc" => {
-                    line_width = self
-                        .attr(&child, "lineWidth")
-                        .and_then(|s| s.parse::<f64>().ok())
-                        .map(|v| crate::units::to_mm(v, units))
-                        .unwrap_or(0.25);
-                    line_end = self.attr(&child, "lineEnd").and_then(|s| match s {
-                        "ROUND" => Some(LineEnd::Round),
-                        "SQUARE" => Some(LineEnd::Square),
-                        "FLAT" => Some(LineEnd::Flat),
-                        _ => None,
-                    });
+                    (line_width, line_end, line_property) =
+                        self.parse_feature_line_desc(&child, units)?;
                 }
                 "LineDescRef" => {
                     if let Some(id) = self.attr(&child, "id") {
@@ -2307,6 +2317,7 @@ impl<'a> Parser<'a> {
             line_desc_ref,
             line_width,
             line_end,
+            line_property,
         })
     }
 
@@ -2321,6 +2332,7 @@ impl<'a> Parser<'a> {
         let mut steps = Vec::new();
         let mut line_width = 0.25;
         let mut line_end = None;
+        let mut line_property = None;
         let mut line_desc_ref = None;
 
         for child in self.element_children(node) {
@@ -2385,17 +2397,8 @@ impl<'a> Parser<'a> {
                     }));
                 }
                 "LineDesc" => {
-                    line_width = self
-                        .attr(&child, "lineWidth")
-                        .and_then(|s| s.parse::<f64>().ok())
-                        .map(|v| crate::units::to_mm(v, units))
-                        .unwrap_or(0.25);
-                    line_end = self.attr(&child, "lineEnd").and_then(|s| match s {
-                        "ROUND" => Some(LineEnd::Round),
-                        "SQUARE" => Some(LineEnd::Square),
-                        "FLAT" => Some(LineEnd::Flat),
-                        _ => None,
-                    });
+                    (line_width, line_end, line_property) =
+                        self.parse_feature_line_desc(&child, units)?;
                 }
                 "LineDescRef" => {
                     if let Some(id) = self.attr(&child, "id") {
@@ -2412,6 +2415,7 @@ impl<'a> Parser<'a> {
             line_desc_ref,
             line_width,
             line_end,
+            line_property,
         })
     }
 
