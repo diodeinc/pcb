@@ -135,12 +135,12 @@ enum EditCommands {
 
 #[derive(Subcommand)]
 enum BoardArrayCommands {
-    /// Create a rectangular board array. Generated array size must be 70-260 mm per side.
+    /// Create a rectangular board array. Generated array size must be 70-297 mm per side.
     Create {
         /// Input IPC-2581 XML file
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
-        /// Choose an opinionated A7 board array automatically.
+        /// Choose the smallest fitting A-series board array automatically.
         #[arg(long)]
         auto: bool,
         /// Number of board columns. Must be between 1 and 10. Defaults to 1.

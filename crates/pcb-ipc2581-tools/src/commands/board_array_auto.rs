@@ -2,19 +2,57 @@ use std::cmp::Ordering;
 
 use super::board_array::BoardMarginMm;
 
-const A7_TARGETS_MM: [TargetSizeMm; 2] = [
-    TargetSizeMm {
-        width: 105.0,
-        height: 74.0,
-    },
-    TargetSizeMm {
-        width: 74.0,
-        height: 105.0,
-    },
+const AUTO_SHEETS: [AutoSheetSize; 4] = [
+    AutoSheetSize::A7,
+    AutoSheetSize::A6,
+    AutoSheetSize::A5,
+    AutoSheetSize::A4,
 ];
 const AUTO_BOARD_MARGIN_MM: f64 = 5.0;
 const AUTO_MIN_EDGE_RAIL_MM: f64 = 5.0;
 const AUTO_MAX_GRID_COUNT: u32 = 10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoSheetSize {
+    A7,
+    A6,
+    A5,
+    A4,
+}
+
+impl AutoSheetSize {
+    fn name(self) -> &'static str {
+        match self {
+            Self::A7 => "A7",
+            Self::A6 => "A6",
+            Self::A5 => "A5",
+            Self::A4 => "A4",
+        }
+    }
+
+    fn dimensions_mm(self) -> (f64, f64) {
+        match self {
+            Self::A7 => (74.0, 105.0),
+            Self::A6 => (105.0, 148.0),
+            Self::A5 => (148.0, 210.0),
+            Self::A4 => (210.0, 297.0),
+        }
+    }
+
+    fn targets_mm(self) -> [TargetSizeMm; 2] {
+        let (short, long) = self.dimensions_mm();
+        [
+            TargetSizeMm {
+                width: long,
+                height: short,
+            },
+            TargetSizeMm {
+                width: short,
+                height: long,
+            },
+        ]
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TargetSizeMm {
@@ -24,6 +62,7 @@ pub struct TargetSizeMm {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AutoBoardArrayPlan {
+    pub sheet: AutoSheetSize,
     pub target: TargetSizeMm,
     pub columns: u32,
     pub rows: u32,
@@ -41,21 +80,27 @@ impl std::fmt::Display for AutoBoardArrayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "board bbox {} x {} mm cannot fit in A7 with 5 mm board margins and 5 mm edge rails",
+            "board bbox {} x {} mm cannot fit in {} with 5 mm board margins and 5 mm edge rails",
             fmt_num(self.board_width_mm),
-            fmt_num(self.board_height_mm)
+            fmt_num(self.board_height_mm),
+            AutoSheetSize::A4.name()
         )
     }
 }
 
 impl std::error::Error for AutoBoardArrayError {}
 
-pub fn auto_a7_board_array_plan(
+pub fn auto_board_array_plan(
     board_width_mm: f64,
     board_height_mm: f64,
 ) -> Result<AutoBoardArrayPlan, AutoBoardArrayError> {
-    // For each target T = (W, H), board bbox B = (w, h), board margin m,
-    // and minimum rail r:
+    // Try sheets in ascending A-series size and keep the first sheet that fits:
+    //
+    //   sheets = [A7, A6, A5, A4]
+    //   targets(sheet) = [(long, short), (short, long)]
+    //
+    // For each target T = (W, H), board bbox B = (w, h), board margin m, and
+    // minimum rail r:
     //
     //   C = (w + 2m, h + 2m)
     //   N = (floor((W - 2r) / Cx), floor((H - 2r) / Cy)), clamped to <= 10
@@ -63,17 +108,25 @@ pub fn auto_a7_board_array_plan(
     //
     // A valid plan has Nx, Ny >= 1. The final array dimensions are exactly
     // T because the leftover span is assigned back to the two edge rails.
-    A7_TARGETS_MM
-        .into_iter()
-        .filter_map(|target| plan_for_target(target, board_width_mm, board_height_mm))
-        .max_by(compare_auto_plan)
-        .ok_or(AutoBoardArrayError {
-            board_width_mm,
-            board_height_mm,
-        })
+    for sheet in AUTO_SHEETS {
+        if let Some(plan) = sheet
+            .targets_mm()
+            .into_iter()
+            .filter_map(|target| plan_for_target(sheet, target, board_width_mm, board_height_mm))
+            .max_by(compare_auto_plan)
+        {
+            return Ok(plan);
+        }
+    }
+
+    Err(AutoBoardArrayError {
+        board_width_mm,
+        board_height_mm,
+    })
 }
 
 fn plan_for_target(
+    sheet: AutoSheetSize,
     target: TargetSizeMm,
     board_width_mm: f64,
     board_height_mm: f64,
@@ -96,6 +149,7 @@ fn plan_for_target(
     let rail_y = (target.height - rows as f64 * cell_height) / 2.0;
 
     Some(AutoBoardArrayPlan {
+        sheet,
         target,
         columns,
         rows,
@@ -156,8 +210,9 @@ mod tests {
 
     #[test]
     fn projects_board_bbox_to_maximal_a7_grid() {
-        let plan = auto_a7_board_array_plan(20.0, 10.0).unwrap();
+        let plan = auto_board_array_plan(20.0, 10.0).unwrap();
 
+        assert_eq!(plan.sheet, AutoSheetSize::A7);
         assert_eq!(
             plan.target,
             TargetSizeMm {
@@ -177,8 +232,9 @@ mod tests {
 
     #[test]
     fn chooses_rotated_a7_when_it_fits_more_boards() {
-        let plan = auto_a7_board_array_plan(40.0, 20.0).unwrap();
+        let plan = auto_board_array_plan(40.0, 20.0).unwrap();
 
+        assert_eq!(plan.sheet, AutoSheetSize::A7);
         assert_eq!(
             plan.target,
             TargetSizeMm {
@@ -192,18 +248,69 @@ mod tests {
     }
 
     #[test]
-    fn rejects_board_that_cannot_fit_a7() {
-        let error = auto_a7_board_array_plan(100.0, 80.0).unwrap_err();
+    fn promotes_to_a6_when_board_cannot_fit_a7() {
+        let plan = auto_board_array_plan(70.0, 58.0).unwrap();
+
+        assert_eq!(plan.sheet, AutoSheetSize::A6);
+        assert_eq!(
+            plan.target,
+            TargetSizeMm {
+                width: 105.0,
+                height: 148.0
+            }
+        );
+        assert_eq!((plan.columns, plan.rows), (1, 2));
+        assert_close(finished_width(70.0, &plan), 105.0);
+        assert_close(finished_height(58.0, &plan), 148.0);
+    }
+
+    #[test]
+    fn promotes_to_a5_when_board_cannot_fit_a6() {
+        let plan = auto_board_array_plan(120.0, 90.0).unwrap();
+
+        assert_eq!(plan.sheet, AutoSheetSize::A5);
+        assert_eq!(
+            plan.target,
+            TargetSizeMm {
+                width: 148.0,
+                height: 210.0
+            }
+        );
+        assert_eq!((plan.columns, plan.rows), (1, 2));
+        assert_close(finished_width(120.0, &plan), 148.0);
+        assert_close(finished_height(90.0, &plan), 210.0);
+    }
+
+    #[test]
+    fn promotes_to_a4_when_board_cannot_fit_a5() {
+        let plan = auto_board_array_plan(190.0, 250.0).unwrap();
+
+        assert_eq!(plan.sheet, AutoSheetSize::A4);
+        assert_eq!(
+            plan.target,
+            TargetSizeMm {
+                width: 210.0,
+                height: 297.0
+            }
+        );
+        assert_eq!((plan.columns, plan.rows), (1, 1));
+        assert_close(finished_width(190.0, &plan), 210.0);
+        assert_close(finished_height(250.0, &plan), 297.0);
+    }
+
+    #[test]
+    fn rejects_board_that_cannot_fit_a4() {
+        let error = auto_board_array_plan(278.0, 278.0).unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("cannot fit in A7 with 5 mm board margins and 5 mm edge rails")
+                .contains("cannot fit in A4 with 5 mm board margins and 5 mm edge rails")
         );
     }
 
     #[test]
     fn keeps_grid_axes_within_limit() {
-        let plan = auto_a7_board_array_plan(1.0, 1.0).unwrap();
+        let plan = auto_board_array_plan(1.0, 1.0).unwrap();
         assert!(plan.columns <= AUTO_MAX_GRID_COUNT);
         assert!(plan.rows <= AUTO_MAX_GRID_COUNT);
         assert_close(finished_width(1.0, &plan), plan.target.width);

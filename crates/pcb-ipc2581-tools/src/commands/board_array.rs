@@ -24,14 +24,14 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 
-use super::board_array_auto::auto_a7_board_array_plan;
+use super::board_array_auto::auto_board_array_plan;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
 const EPSILON: f64 = 1e-9;
 const MIN_BOARD_ARRAY_DIMENSION_MM: f64 = 70.0;
-const MAX_BOARD_ARRAY_DIMENSION_MM: f64 = 260.0;
+const MAX_BOARD_ARRAY_DIMENSION_MM: f64 = 297.0;
 const MAX_VCUT_LINES_PER_AXIS: usize = 25;
 const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
@@ -391,7 +391,7 @@ fn create_auto_board_array_xml(xml: &str) -> Result<String> {
 
 fn auto_board_array_options(ipc: &Ipc2581) -> Result<BoardArrayCreateOptions> {
     let board = primary_board_layout(ipc)?;
-    let plan = auto_a7_board_array_plan(board.bbox.width(), board.bbox.height())?;
+    let plan = auto_board_array_plan(board.bbox.width(), board.bbox.height())?;
 
     Ok(BoardArrayCreateOptions {
         columns: plan.columns,
@@ -3226,7 +3226,7 @@ mod tests {
         assert!(
             wide_error
                 .to_string()
-                .contains("array width must be at most 260 mm; got 400 mm")
+                .contains("array width must be at most 297 mm; got 400 mm")
         );
 
         let tall_error = create_board_array_xml(
@@ -3242,7 +3242,7 @@ mod tests {
         assert!(
             tall_error
                 .to_string()
-                .contains("array height must be at most 260 mm; got 400 mm")
+                .contains("array height must be at most 297 mm; got 400 mm")
         );
     }
 
