@@ -813,4 +813,59 @@ mod tests {
         assert_eq!(item.ref_des_list.len(), 1);
         assert_eq!(doc.resolve(item.ref_des_list[0].name), "U4");
     }
+
+    #[test]
+    fn parse_component_preserves_standard_placement_data() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Component refDes="J1" packageRef="CONN_1" part="USB-C" layerRef="B.Cu" layerRefTopside="F.Cu" mountType="THMT" height="1.2">
+          <NonstandardAttribute name="owner" value="diode" type="STRING"/>
+          <Xform xOffset="0.1" yOffset="0.2" rotation="270.0" mirror="true" faceUp="true" scale="1.0"/>
+          <Location x="10.0" y="-2.5"/>
+          <SpecRef id="AssemblySpec"/>
+        </Component>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
+        let component = &doc.ecad().unwrap().cad_data.steps[0].components[0];
+
+        assert_eq!(doc.resolve(component.ref_des.unwrap()), "J1");
+        assert_eq!(doc.resolve(component.package_ref.unwrap()), "CONN_1");
+        assert_eq!(doc.resolve(component.part), "USB-C");
+        assert_eq!(doc.resolve(component.layer_ref), "B.Cu");
+        assert_eq!(
+            component.layer_ref_topside.map(|sym| doc.resolve(sym)),
+            Some("F.Cu")
+        );
+        assert_eq!(component.mount_type, MountType::Thmt);
+        assert_eq!(component.height, Some(1.2));
+        assert_eq!(component.location.x, 10.0);
+        assert_eq!(component.location.y, -2.5);
+
+        let xform = component.xform.unwrap();
+        assert_eq!(xform.x_offset, 0.1);
+        assert_eq!(xform.y_offset, 0.2);
+        assert_eq!(xform.rotation, 270.0);
+        assert!(xform.mirror);
+        assert!(xform.face_up);
+        assert_eq!(xform.scale, 1.0);
+
+        assert_eq!(component.nonstandard_attributes.len(), 1);
+        assert_eq!(
+            doc.resolve(component.nonstandard_attributes[0].name),
+            "owner"
+        );
+        assert_eq!(component.spec_refs.len(), 1);
+        assert_eq!(doc.resolve(component.spec_refs[0]), "AssemblySpec");
+    }
 }

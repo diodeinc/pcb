@@ -1856,25 +1856,90 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_component(&mut self, node: &Node) -> Result<Component> {
-        let ref_des = self.required_attr(node, "refDes", "Component")?;
-        let package_ref = self.required_attr(node, "packageRef", "Component")?;
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        let ref_des = self.optional_attr(node, "refDes");
+        let package_ref = self.optional_attr(node, "packageRef");
+        let mat_des = self.optional_attr(node, "matDes");
         let layer_ref = self.required_attr(node, "layerRef", "Component")?;
+        let layer_ref_topside = self.optional_attr(node, "layerRefTopside");
+        let mount_type = self.parse_mount_type(self.attr(node, "mountType").ok_or(
+            Ipc2581Error::MissingAttribute {
+                element: "Component",
+                attr: "mountType",
+            },
+        )?);
+        let part = self.required_attr(node, "part", "Component")?;
+        let model_ref = self.optional_attr(node, "modelRef");
+        let weight = self.parse_optional_f64_attr(node, "weight")?;
+        let height = self.parse_optional_f64_attr(node, "height")?;
+        let standoff = self.parse_optional_f64_attr(node, "standoff")?;
 
-        let mount_type = self.attr(node, "mountType").map(|s| match s {
-            "SMT" => MountType::Smt,
-            "THT" => MountType::Tht,
-            _ => MountType::Other,
-        });
+        let mut nonstandard_attributes = Vec::new();
+        let mut xform = None;
+        let mut location = None;
+        let mut slot_cavity_ref = None;
+        let mut spec_refs = Vec::new();
 
-        let part = self.attr(node, "part").map(|s| self.interner.intern(s));
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "NonstandardAttribute" => {
+                    nonstandard_attributes.push(self.parse_nonstandard_attribute(&child)?);
+                }
+                "Xform" => {
+                    xform = Some(self.parse_xform(&child, units));
+                }
+                "Location" => {
+                    location = Some(Location {
+                        x: self.parse_f64_attr_with_units(&child, "x", "Location", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "y", "Location", units)?,
+                    });
+                }
+                "SlotCavityRef" => {
+                    slot_cavity_ref = self.optional_attr(&child, "id");
+                }
+                "SpecRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        spec_refs.push(self.interner.intern(id));
+                    }
+                }
+                _ => {}
+            }
+        }
 
         Ok(Component {
             ref_des,
             package_ref,
+            mat_des,
             layer_ref,
             mount_type,
             part,
+            layer_ref_topside,
+            model_ref,
+            weight,
+            height,
+            standoff,
+            location: location.ok_or(Ipc2581Error::MissingElement("Location"))?,
+            xform,
+            nonstandard_attributes,
+            slot_cavity_ref,
+            spec_refs,
         })
+    }
+
+    fn parse_mount_type(&self, value: &str) -> MountType {
+        match value {
+            "SMT" => MountType::Smt,
+            "THMT" => MountType::Thmt,
+            "EMBEDDED" => MountType::Embedded,
+            "PRESSFIT" => MountType::PressFit,
+            "WIRE_BONDED" => MountType::WireBonded,
+            "GLUED" => MountType::Glued,
+            "CLAMPED" => MountType::Clamped,
+            "SOCKETED" => MountType::Socketed,
+            "FORMED" => MountType::Formed,
+            "OTHER" => MountType::Other,
+            _ => MountType::Other,
+        }
     }
 
     fn parse_logical_net(&mut self, node: &Node) -> Result<LogicalNet> {
@@ -2071,7 +2136,7 @@ impl<'a> Parser<'a> {
         };
 
         let mut location = None;
-        let xform = self.parse_xform_child(node);
+        let xform = self.parse_xform_child(node, units);
         let mut shape = None;
         let mut pin_ref = None;
 
@@ -2506,7 +2571,7 @@ impl<'a> Parser<'a> {
             SlotShape::Primitive(self.parse_standard_primitive(&primitive_node, units)?)
         };
 
-        let xform = self.parse_xform_child(node);
+        let xform = self.parse_xform_child(node, units);
 
         let z_axis_dim = has_z_axis_dim(self.doc(), node);
 
@@ -2554,7 +2619,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let xform = self.parse_xform_child(node);
+        let xform = self.parse_xform_child(node, units);
 
         // Parse inline StandardPrimitiveRef if present
         let standard_primitive_ref = self
@@ -3101,14 +3166,16 @@ impl<'a> Parser<'a> {
         Ok(AvlVendor { enterprise_ref })
     }
 
-    fn parse_xform(&self, node: &Node) -> Xform {
+    fn parse_xform(&self, node: &Node, units: Units) -> Xform {
         let x_offset = self
             .attr(node, "xOffset")
-            .and_then(|s| s.parse().ok())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|value| crate::units::to_mm(value, units))
             .unwrap_or(0.0);
         let y_offset = self
             .attr(node, "yOffset")
-            .and_then(|s| s.parse().ok())
+            .and_then(|s| s.parse::<f64>().ok())
+            .map(|value| crate::units::to_mm(value, units))
             .unwrap_or(0.0);
         let rotation = self
             .attr(node, "rotation")
@@ -3116,6 +3183,10 @@ impl<'a> Parser<'a> {
             .unwrap_or(0.0);
         let mirror = self
             .attr(node, "mirror")
+            .map(|s| s == "true")
+            .unwrap_or(false);
+        let face_up = self
+            .attr(node, "faceUp")
             .map(|s| s == "true")
             .unwrap_or(false);
         let scale = self
@@ -3128,14 +3199,15 @@ impl<'a> Parser<'a> {
             y_offset,
             rotation,
             mirror,
+            face_up,
             scale,
         }
     }
 
-    fn parse_xform_child(&self, node: &Node) -> Option<Xform> {
+    fn parse_xform_child(&self, node: &Node, units: Units) -> Option<Xform> {
         self.element_children(node)
             .find(|n| self.name(n) == "Xform")
-            .map(|n| self.parse_xform(&n))
+            .map(|n| self.parse_xform(&n, units))
     }
 }
 

@@ -34,6 +34,21 @@ enum Commands {
         #[arg(long)]
         offline: bool,
     },
+    /// Generate component placement data (CPL)
+    Cpl {
+        /// IPC-2581 XML file to export from
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Output CSV file path. If omitted, writes CSV to stdout.
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+        /// Component side to include
+        #[arg(long, default_value = "both")]
+        side: commands::cpl::CplSideFilter,
+        /// Exclude BOM RefDes entries marked populate=false
+        #[arg(long)]
+        exclude_dnp: bool,
+    },
     /// Edit IPC-2581 data
     Edit {
         #[command(subcommand)]
@@ -191,6 +206,19 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             format,
             offline,
         } => commands::bom::execute(&file, format, offline),
+        Commands::Cpl {
+            file,
+            output,
+            side,
+            exclude_dnp,
+        } => commands::cpl::execute(
+            &file,
+            &commands::cpl::CplOptions {
+                output,
+                side,
+                exclude_dnp,
+            },
+        ),
         Commands::Edit { command } => match command {
             EditCommands::Bom {
                 file,

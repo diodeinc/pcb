@@ -4,3 +4,4 @@ pub mod ipc;
 pub mod mask;
 pub mod nc;
 pub mod path;
+pub mod placement;

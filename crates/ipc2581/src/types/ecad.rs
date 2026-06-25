@@ -214,17 +214,35 @@ pub struct Package {
 /// Component instance on the board
 #[derive(Debug, Clone)]
 pub struct Component {
-    pub ref_des: Symbol,
-    pub package_ref: Symbol,
+    pub ref_des: Option<Symbol>,
+    pub package_ref: Option<Symbol>,
+    pub mat_des: Option<Symbol>,
     pub layer_ref: Symbol,
-    pub mount_type: Option<MountType>,
-    pub part: Option<Symbol>,
+    pub layer_ref_topside: Option<Symbol>,
+    pub mount_type: MountType,
+    pub part: Symbol,
+    pub model_ref: Option<Symbol>,
+    pub weight: Option<f64>,
+    pub height: Option<f64>,
+    pub standoff: Option<f64>,
+    pub location: super::Location,
+    pub xform: Option<super::Xform>,
+    pub nonstandard_attributes: Vec<NonstandardAttribute>,
+    pub slot_cavity_ref: Option<Symbol>,
+    pub spec_refs: Vec<Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MountType {
     Smt,
-    Tht,
+    Thmt,
+    Embedded,
+    PressFit,
+    WireBonded,
+    Glued,
+    Clamped,
+    Socketed,
+    Formed,
     Other,
 }
 

@@ -87,6 +87,14 @@ fn canonical_mount_type(mount_type: Option<ComponentMountType>) -> ComponentMoun
     mount_type.unwrap_or(ComponentMountType::Unknown)
 }
 
+fn map_mount_type(mount_type: ipc2581::types::MountType) -> ComponentMountType {
+    match mount_type {
+        ipc2581::types::MountType::Smt => ComponentMountType::Smt,
+        ipc2581::types::MountType::Thmt => ComponentMountType::Tht,
+        _ => ComponentMountType::Other,
+    }
+}
+
 fn map_layer_side(side: Option<ipc2581::types::Side>) -> ComponentSide {
     match side {
         Some(ipc2581::types::Side::Top) => ComponentSide::Top,
@@ -825,22 +833,19 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
             step.components
                 .iter()
                 .filter_map(|component| {
-                    let designator = ipc.resolve(component.ref_des).to_string();
+                    let designator = ipc.resolve(component.ref_des?).to_string();
                     if designator.is_empty() {
                         return None;
                     }
 
-                    let package = ipc.resolve(component.package_ref).to_string();
+                    let package = component
+                        .package_ref
+                        .map(|package_ref| ipc.resolve(package_ref).to_string())
+                        .unwrap_or_default();
                     let layer_ref = ipc.resolve(component.layer_ref).to_string();
-                    let mount_type = component.mount_type.map(|mt| match mt {
-                        ipc2581::types::MountType::Smt => ComponentMountType::Smt,
-                        ipc2581::types::MountType::Tht => ComponentMountType::Tht,
-                        ipc2581::types::MountType::Other => ComponentMountType::Other,
-                    });
-                    let part_mpn = component
-                        .part
-                        .map(|sym| ipc.resolve(sym).to_string())
-                        .filter(|v| !v.is_empty());
+                    let mount_type = Some(map_mount_type(component.mount_type));
+                    let part_mpn =
+                        Some(ipc.resolve(component.part).to_string()).filter(|v| !v.is_empty());
 
                     Some((designator, (package, layer_ref, mount_type, part_mpn)))
                 })

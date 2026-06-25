@@ -7,6 +7,7 @@ pub mod commands;
 pub mod geometry;
 pub mod gerber;
 pub mod manufacturing;
+pub mod placement;
 mod steps;
 pub mod utils;
 pub mod xnc;

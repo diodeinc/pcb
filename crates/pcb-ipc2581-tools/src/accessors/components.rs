@@ -41,12 +41,9 @@ fn count_components_by_mount_type(step: &Step) -> ComponentStats {
 
     for component in &step.components {
         match component.mount_type {
-            Some(ref mt) => match mt {
-                MountType::Smt => smt_count += 1,
-                MountType::Tht => tht_count += 1,
-                _ => other_count += 1,
-            },
-            None => other_count += 1,
+            MountType::Smt => smt_count += 1,
+            MountType::Thmt => tht_count += 1,
+            _ => other_count += 1,
         }
     }
 
