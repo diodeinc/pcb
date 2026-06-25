@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `pcb --version` now aliases `pcb toolchain show` and reports both shim and active `pcbc` versions.
 - `NotConnected` is now an open-net constructor, not a net type.
 
 ## [0.4.1] - 2026-06-22

@@ -140,7 +140,7 @@ fn is_help_request(args: &[OsString]) -> bool {
 fn is_shim_command(args: &[OsString]) -> bool {
     matches!(
         args.first().and_then(|arg| arg.to_str()),
-        Some("self" | "toolchain")
+        Some("self" | "toolchain" | "--version" | "-V")
     )
 }
 
@@ -172,6 +172,7 @@ fn parse_shim_command(args: &[OsString]) -> Result<ShimCommand> {
         .collect::<Result<_>>()?;
 
     match strings.as_slice() {
+        ["--version" | "-V"] => Ok(ShimCommand::ToolchainShow),
         ["self", "update"] => Ok(ShimCommand::SelfUpdate),
         ["toolchain", "list"] => Ok(ShimCommand::ToolchainList),
         ["toolchain", "show"] => Ok(ShimCommand::ToolchainShow),
@@ -984,6 +985,10 @@ fn toolchain_list() -> Result<()> {
 fn toolchain_show() -> Result<()> {
     println!("shim: {}", env!("CARGO_PKG_VERSION"));
     let selection = select_toolchain(None, false, false)?;
+    let pcbc_version = pcbc_version(&selection.binary)
+        .map(|version| version.to_string())
+        .unwrap_or_else(|| selection.label.clone());
+    println!("pcbc: {pcbc_version}");
     println!("active: {}", selection.label);
     println!("reason: {}", selection.reason);
     println!("binary: {}", selection.binary.display());
@@ -1403,6 +1408,18 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn version_flags_are_shim_toolchain_show_aliases() {
+        for flag in ["--version", "-V"] {
+            let argv = args(&[flag]);
+            assert!(is_shim_command(&argv));
+            assert!(matches!(
+                parse_shim_command(&argv).unwrap(),
+                ShimCommand::ToolchainShow
+            ));
+        }
     }
 
     #[test]
