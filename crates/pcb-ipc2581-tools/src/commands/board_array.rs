@@ -35,6 +35,7 @@ const MAX_BOARD_ARRAY_DIMENSION_MM: f64 = 297.0;
 const MAX_VCUT_LINES_PER_AXIS: usize = 25;
 const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
+const MAX_MANUAL_EDGE_RAIL_WIDTH_MM: f64 = 30.0;
 const VCUT_LAYER_BASE_NAME: &str = "V-Score";
 const VCUT_SPEC_BASE_NAME: &str = "Board_Array_VCut";
 const VCUT_MARKER_STROKE_MM: f64 = 0.10;
@@ -63,11 +64,12 @@ const FIDUCIAL_MASK_OPENING_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_EDGE_OFFSET_MM: f64 = 2.5;
 const FIDUCIAL_EDGE_OFFSET_MM: f64 = 3.85;
-const FIDUCIAL_FROM_TOOLING_HOLE_MM: f64 = 5.0;
-const TOP_TOOLING_HOLE_X_INSET_MM: f64 = 5.0;
-const BOTTOM_TOOLING_HOLE_X_INSET_MM: f64 = 10.0;
-const SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 35.0;
-const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 17.0;
+const TOP_TOOLING_HOLE_X_INSET_MM: f64 = 2.5;
+const TOP_FIDUCIAL_X_INSET_MM: f64 = 8.0;
+const BOTTOM_TOOLING_HOLE_X_INSET_MM: f64 = 6.5;
+const BOTTOM_FIDUCIAL_X_INSET_MM: f64 = 12.0;
+const SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 28.0;
+const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 12.0;
 const MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM: f64 = 5.0;
 const MIN_BOARD_CELL_FIDUCIAL_SPAN_MM: f64 = 17.0;
 const BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM: f64 = 2.0;
@@ -87,6 +89,11 @@ enum BoardArrayCreateValidationError {
         value: f64,
         min: f64,
         max: f64,
+    },
+    MmMin {
+        field: &'static str,
+        value: f64,
+        min: f64,
     },
     ZeroOrMinMm {
         field: &'static str,
@@ -131,6 +138,12 @@ impl std::fmt::Display for BoardArrayCreateValidationError {
                 fmt_num(*max),
                 fmt_num(*value)
             ),
+            Self::MmMin { field, value, min } => write!(
+                f,
+                "{field} must be at least {} mm; got {} mm",
+                fmt_num(*min),
+                fmt_num(*value)
+            ),
             Self::ZeroOrMinMm { field, value, min } => write!(
                 f,
                 "{field} must be 0 mm or at least {} mm; got {} mm",
@@ -167,6 +180,12 @@ pub struct BoardArrayCreateOptions {
     pub rows: u32,
     pub board_margin_mm: BoardMarginMm,
     pub edge_rail_mm: BoardMarginMm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoardArrayValidationMode {
+    Manual,
+    Auto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -378,14 +397,14 @@ pub fn execute_auto(input: &Path, output: &Path) -> Result<()> {
 
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let spec = build_board_array_spec(&ipc, options)?;
+    let spec = build_board_array_spec(&ipc, options, BoardArrayValidationMode::Manual)?;
     write_board_array_xml(xml, &spec)
 }
 
 fn create_auto_board_array_xml(xml: &str) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let options = auto_board_array_options(&ipc)?;
-    let spec = build_board_array_spec(&ipc, &options)?;
+    let spec = build_board_array_spec(&ipc, &options, BoardArrayValidationMode::Auto)?;
     write_board_array_xml(xml, &spec)
 }
 
@@ -451,8 +470,9 @@ fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
 fn build_board_array_spec(
     ipc: &Ipc2581,
     options: &BoardArrayCreateOptions,
+    validation_mode: BoardArrayValidationMode,
 ) -> Result<BoardArraySpec> {
-    validate_options(options)?;
+    validate_options(options, validation_mode)?;
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let primary_step = crate::steps::primary_step(ipc, &ecad.cad_data.steps)
@@ -588,14 +608,27 @@ fn build_board_array_spec(
     })
 }
 
-fn validate_options(options: &BoardArrayCreateOptions) -> Result<()> {
+fn validate_options(
+    options: &BoardArrayCreateOptions,
+    validation_mode: BoardArrayValidationMode,
+) -> Result<()> {
     validate_u32_range("columns", options.columns, 1, 10)?;
     validate_u32_range("rows", options.rows, 1, 10)?;
     for (field, value) in options.board_margin_mm.board_margin_sides() {
         validate_mm_range(field, value, 0.0, 20.0)?;
     }
     for (field, value) in options.edge_rail_mm.edge_rail_sides() {
-        validate_mm_range(field, value, MIN_EDGE_RAIL_WIDTH_MM, 30.0)?;
+        match validation_mode {
+            BoardArrayValidationMode::Manual => validate_mm_range(
+                field,
+                value,
+                MIN_EDGE_RAIL_WIDTH_MM,
+                MAX_MANUAL_EDGE_RAIL_WIDTH_MM,
+            )?,
+            BoardArrayValidationMode::Auto => {
+                validate_mm_min(field, value, MIN_EDGE_RAIL_WIDTH_MM)?
+            }
+        }
     }
     if options.columns > 1 {
         validate_zero_or_min_mm(
@@ -639,6 +672,14 @@ fn validate_mm_range(field: &'static str, value: f64, min: f64, max: f64) -> Res
             max,
         }
         .into())
+    }
+}
+
+fn validate_mm_min(field: &'static str, value: f64, min: f64) -> Result<()> {
+    if value.is_finite() && value + EPSILON >= min {
+        Ok(())
+    } else {
+        Err(BoardArrayCreateValidationError::MmMin { field, value, min }.into())
     }
 }
 
@@ -1166,13 +1207,12 @@ fn add_board_cell_fiducials(
 /// and gaps keeps the top/bottom rail tooling attached to board material.
 ///
 /// Horizontal rules:
-/// - one column requires at least 35 mm board width, because both left and
-///   right pairs share the same board span;
-/// - multiple columns require at least 17 mm board width, because each side's
+/// - one column requires at least 28 mm board width: 12 mm deepest fiducial
+///   inset from each side plus 4 mm center spacing;
+/// - multiple columns require at least 12 mm board width, because each side's
 ///   pair sits over a different outer board column;
-/// - top tooling holes are 5 mm inward from the outer board-column edge;
-/// - bottom tooling holes are 10 mm inward from the outer board-column edge;
-/// - each fiducial is another 5 mm inward from its paired tooling hole.
+/// - top rail centers use 2.5 mm tooling and 8 mm fiducial insets;
+/// - bottom rail centers use 6.5 mm tooling and 12 mm fiducial insets.
 ///
 /// Vertical rules:
 /// - tooling hole centers are 2.5 mm from the top/bottom array edge;
@@ -1185,22 +1225,10 @@ fn board_array_tooling_fiducials(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4
     let bottom_y = FIDUCIAL_EDGE_OFFSET_MM;
 
     [
-        (
-            left_edge + TOP_TOOLING_HOLE_X_INSET_MM + FIDUCIAL_FROM_TOOLING_HOLE_MM,
-            top_y,
-        ),
-        (
-            right_edge - TOP_TOOLING_HOLE_X_INSET_MM - FIDUCIAL_FROM_TOOLING_HOLE_MM,
-            top_y,
-        ),
-        (
-            left_edge + BOTTOM_TOOLING_HOLE_X_INSET_MM + FIDUCIAL_FROM_TOOLING_HOLE_MM,
-            bottom_y,
-        ),
-        (
-            right_edge - BOTTOM_TOOLING_HOLE_X_INSET_MM - FIDUCIAL_FROM_TOOLING_HOLE_MM,
-            bottom_y,
-        ),
+        (left_edge + TOP_FIDUCIAL_X_INSET_MM, top_y),
+        (right_edge - TOP_FIDUCIAL_X_INSET_MM, top_y),
+        (left_edge + BOTTOM_FIDUCIAL_X_INSET_MM, bottom_y),
+        (right_edge - BOTTOM_FIDUCIAL_X_INSET_MM, bottom_y),
     ]
 }
 
@@ -2434,6 +2462,23 @@ mod tests {
     }
 
     #[test]
+    fn auto_create_allows_large_leftover_edge_rails() {
+        let xml =
+            create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(124.0, 110.0)).unwrap();
+
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="38" y="14" nx="1" ny="1" dx="134" dy="120" angle="0.00" mirror="false"/>"#
+        ));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+        assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
+        assert_point_close(panel_step.bbox.max, Point::new(210.0, 148.0));
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 1);
+    }
+
+    #[test]
     fn creates_board_array_with_asymmetric_edge_rails() {
         let xml = create_board_array_xml(
             board_fixture_mm(),
@@ -2648,6 +2693,7 @@ mod tests {
                 board_margin_mm: board_margin(5.0, 5.0),
                 edge_rail_mm: BoardMarginMm::all(5.0),
             },
+            BoardArrayValidationMode::Manual,
         )
         .unwrap();
 
@@ -2752,14 +2798,14 @@ mod tests {
 
     #[test]
     fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
-        let input = board_fixture_with_mask_bbox_mm(35.0, 40.0);
+        let input = board_fixture_with_mask_bbox_mm(28.0, 40.0);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
                 board_margin_mm: board_margin(5.0, 0.0),
-                edge_rail_mm: BoardMarginMm::all(15.0),
+                edge_rail_mm: edge_rail(18.5, 15.0),
             },
         )
         .unwrap();
@@ -2788,24 +2834,24 @@ mod tests {
         }));
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(27.5, 66.15), (42.5, 66.15), (32.5, 3.85), (37.5, 3.85)],
+            vec![(29.0, 66.15), (41.0, 66.15), (33.0, 3.85), (37.0, 3.85)],
         );
         assert_points_close(
             hole_points(&tooling_holes),
-            vec![(22.5, 67.5), (47.5, 67.5), (27.5, 2.5), (42.5, 2.5)],
+            vec![(23.5, 67.5), (46.5, 67.5), (27.5, 2.5), (42.5, 2.5)],
         );
     }
 
     #[test]
     fn board_array_creation_adds_default_tooling_at_multi_column_min_width() {
-        let input = board_fixture_with_mask_bbox_mm(17.0, 40.0);
+        let input = board_fixture_with_mask_bbox_mm(12.0, 40.0);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
                 board_margin_mm: board_margin(5.0, 0.0),
-                edge_rail_mm: BoardMarginMm::all(15.0),
+                edge_rail_mm: edge_rail(18.0, 15.0),
             },
         )
         .unwrap();
@@ -2821,24 +2867,24 @@ mod tests {
         assert_eq!(tooling_holes.len(), 4);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(27.5, 66.15), (46.5, 66.15), (32.5, 3.85), (41.5, 3.85)],
+            vec![(28.5, 66.15), (41.5, 66.15), (32.5, 3.85), (37.5, 3.85)],
         );
         assert_points_close(
             hole_points(&tooling_holes),
-            vec![(22.5, 67.5), (51.5, 67.5), (27.5, 2.5), (46.5, 2.5)],
+            vec![(23.0, 67.5), (47.0, 67.5), (27.0, 2.5), (43.0, 2.5)],
         );
     }
 
     #[test]
     fn board_array_creation_skips_default_tooling_when_board_width_is_too_small() {
-        let input = board_fixture_with_mask_bbox_mm(16.99, 40.0);
+        let input = board_fixture_with_mask_bbox_mm(11.99, 40.0);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
                 board_margin_mm: board_margin(5.0, 0.0),
-                edge_rail_mm: BoardMarginMm::all(15.0),
+                edge_rail_mm: edge_rail(18.5, 15.0),
             },
         )
         .unwrap();
@@ -3268,6 +3314,15 @@ mod tests {
             right: horizontal_gap_mm / 2.0,
             bottom: vertical_gap_mm / 2.0,
             left: horizontal_gap_mm / 2.0,
+        }
+    }
+
+    fn edge_rail(horizontal_mm: f64, vertical_mm: f64) -> BoardMarginMm {
+        BoardMarginMm {
+            top: vertical_mm,
+            right: horizontal_mm,
+            bottom: vertical_mm,
+            left: horizontal_mm,
         }
     }
 
