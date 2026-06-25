@@ -304,10 +304,11 @@ pub fn run(args: Args) -> Result<()> {
     footprints.sort();
     footprints.dedup();
     if args.kind != BenchKindFilter::All {
-        footprints.retain(|path| {
-            footprint::parse(path)
-                .map(|fp| args.kind.matches(fp.footprint_kind()))
-                .unwrap_or(false)
+        footprints.retain(|path| match footprint::parse(path) {
+            Ok(fp) => args.kind.matches(fp.footprint_kind()),
+            // Keep malformed footprints in filtered runs so they are reported
+            // as errors rather than silently disappearing from the benchmark.
+            Err(_) => true,
         });
     }
 
@@ -605,7 +606,12 @@ fn try_evaluate(
 ) -> EvalRecord {
     let mut fp: FootprintData = match footprint::parse(path) {
         Ok(f) => f,
-        Err(_) => return empty_record("skip"),
+        Err(err) => {
+            return EvalRecord {
+                error: Some(format!("{err:#}")),
+                ..empty_record("error")
+            };
+        }
     };
     let footprint_kind = fp.footprint_kind();
     let footprint_kind_label = footprint_kind.label();
@@ -800,8 +806,8 @@ fn drill_shapes_match_under_z_rotation(
     let mut source_size = source.size;
     if matches!(
         source.kind,
-        PadKind::Rect | PadKind::RoundRect | PadKind::Trapezoid
-    ) || (matches!(source.kind, PadKind::Oval) && delta_z.rem_euclid(180) != 0)
+        PadKind::Rect | PadKind::RoundRect | PadKind::Trapezoid | PadKind::Oval
+    ) && delta_z.rem_euclid(180) != 0
     {
         source_size = [source.size[1], source.size[0]];
     }

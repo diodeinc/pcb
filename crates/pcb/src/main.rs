@@ -573,8 +573,9 @@ fn read_workspace_pcb_version(path: &Path) -> Result<Option<String>> {
 fn ensure_installed(version: &Version) -> Result<PathBuf> {
     ensure_supported_target()?;
 
-    let binary = installed_binary_path(version);
-    if binary.is_file() {
+    let install_dir = installed_dir(version);
+    let binary = install_dir.join(pcbc_binary_name());
+    if binary.is_file() && optional_sidecars_present(&install_dir) {
         return Ok(binary);
     }
 
@@ -585,6 +586,7 @@ fn ensure_installed(version: &Version) -> Result<PathBuf> {
     let mut lock = fslock::LockFile::open(&lock_path)?;
     lock.lock()?;
     let result = if binary.is_file() {
+        ensure_optional_sidecars(version, &install_dir)?;
         Ok(binary)
     } else {
         install_toolchain(version)
@@ -598,6 +600,7 @@ fn ensure_nightly_installed(release: &NightlyRelease) -> Result<(NightlyReceipt,
 
     if let Some((receipt, binary)) = installed_nightly_toolchain()?
         && receipt.sha == release.sha
+        && optional_sidecars_present(&nightly_dir())
     {
         return Ok((receipt, binary));
     }
@@ -611,12 +614,35 @@ fn ensure_nightly_installed(release: &NightlyRelease) -> Result<(NightlyReceipt,
     let result = if let Some((receipt, binary)) = installed_nightly_toolchain()?
         && receipt.sha == release.sha
     {
+        ensure_optional_nightly_sidecars(release)?;
         Ok((receipt, binary))
     } else {
         install_nightly(release)
     };
     lock.unlock()?;
     result
+}
+
+fn optional_sidecars_present(install_dir: &Path) -> bool {
+    TOOLCHAIN_SIDECARS
+        .iter()
+        .all(|binary| install_dir.join(executable_name(binary)).is_file())
+}
+
+fn ensure_optional_sidecars(version: &Version, install_dir: &Path) -> Result<()> {
+    if !optional_sidecars_present(install_dir) {
+        let release_base_url = format!("{RELEASE_BASE_URL}/v{version}");
+        stage_optional_sidecars(&release_base_url, install_dir)?;
+    }
+    Ok(())
+}
+
+fn ensure_optional_nightly_sidecars(release: &NightlyRelease) -> Result<()> {
+    let install_dir = nightly_dir();
+    if !optional_sidecars_present(&install_dir) {
+        stage_optional_sidecars(&release.base_url, &install_dir)?;
+    }
+    Ok(())
 }
 
 fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)> {
@@ -1295,10 +1321,6 @@ fn pcbc_version(binary: &Path) -> Option<Version> {
     let stdout = String::from_utf8(output.stdout).ok()?;
     let version = stdout.split_whitespace().last()?;
     Version::parse(version).ok()
-}
-
-fn installed_binary_path(version: &Version) -> PathBuf {
-    installed_dir(version).join(pcbc_binary_name())
 }
 
 fn installed_dir(version: &Version) -> PathBuf {

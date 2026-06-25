@@ -212,10 +212,11 @@ pub fn run(args: Args) -> Result<()> {
     footprints.sort();
     footprints.dedup();
     if args.kind != AuditKindFilter::All {
-        footprints.retain(|path| {
-            footprint::parse(path)
-                .map(|fp| args.kind.matches(fp.footprint_kind()))
-                .unwrap_or(false)
+        footprints.retain(|path| match footprint::parse(path) {
+            Ok(fp) => args.kind.matches(fp.footprint_kind()),
+            // Keep malformed footprints in filtered runs so they are reported
+            // as errors rather than silently disappearing from the audit.
+            Err(_) => true,
         });
     }
 
