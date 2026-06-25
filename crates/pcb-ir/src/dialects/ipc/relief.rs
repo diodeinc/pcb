@@ -1,3 +1,31 @@
+//! V-score relief geometry.
+//!
+//! A V-score can separate the portions of a board boundary that lie directly on
+//! a score line. Boundary material that does not overlap a score line must be
+//! routed out. We model that routed material as regularized planar set
+//! operations over `ContourSet`.
+//!
+//! For each board instance:
+//!
+//! - `B` is the protected finished-board material for the whole array.
+//! - `C_i` is the rectangular score cell bounded by the nearest V-score lines.
+//! - `B'_i` is the instance board after tolerance-scale score alignment.
+//! - `P_i = C_i \ B'_i` is sacrificial dead-space material in that cell.
+//! - `D_r` is a disk whose radius is the route-tool radius.
+//!
+//! Tool awareness is the usual configuration-space construction for a
+//! translating disk tool. Tool centers are legal only where the swept disk will
+//! not touch protected finished-board material:
+//!
+//! ```text
+//! T_i = (P_i ⊕ D_r) \ (B ⊕ D_r)
+//! W_i = (T_i ⊕ D_r) \ B
+//! R_i = P_i ∪ W_i
+//! ```
+//!
+//! `T_i` is the legal tool-center region, `W_i` is the swept tool area, and
+//! `R_i` is the material-removal region emitted as closed profile contours.
+
 use std::fmt;
 
 use crate::common::{BBox, FillRule, Point};
@@ -124,26 +152,28 @@ fn vscore_route_reliefs_inner(
     }
 
     let protected_material = protected_board_material(input)?;
-    let mut output = VScoreReliefOutput::default();
+    let mut debug = VScoreReliefDebug::default();
     let mut relief_contours = Vec::new();
     for boundary in &input.board_boundaries {
-        append_boundary_pocket_reliefs(
-            boundary,
-            &protected_material,
-            input,
-            include_debug,
-            &mut output,
-            &mut relief_contours,
-        )?;
+        let Some(boundary_relief) = boundary_pocket_relief(boundary, &protected_material, input)?
+        else {
+            continue;
+        };
+        if include_debug {
+            debug.entries.push(boundary_relief.debug_entry(boundary));
+        }
+        relief_contours.extend(boundary_relief.geometry.material_removal.contours);
     }
     let relief_region = ContourSet::new(relief_contours, FillRule::NonZero, input.tolerance_mm);
     let relief_payloads = relief_region.to_payloads();
     if include_debug {
-        output.debug.merged_relief_contours = relief_payloads.clone();
+        debug.merged_relief_contours = relief_payloads.clone();
     }
-    output.relief_contours = relief_payloads;
 
-    Ok(output)
+    Ok(VScoreReliefOutput {
+        relief_contours: relief_payloads,
+        debug,
+    })
 }
 
 pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
@@ -262,14 +292,11 @@ fn append_contour_line_segments(cmds: &[PathCmd], lines: &mut Vec<VScoreLine>) {
     }
 }
 
-fn append_boundary_pocket_reliefs(
+fn boundary_pocket_relief(
     boundary: &PathPayload,
     protected_material: &ContourSet,
     input: &VScoreReliefInput,
-    include_debug: bool,
-    output: &mut VScoreReliefOutput,
-    merged_relief_contours: &mut Vec<PolygonContour>,
-) -> Result<(), VScoreReliefError> {
+) -> Result<Option<BoundaryRelief>, VScoreReliefError> {
     if boundary.bbox.is_empty()
         || boundary.bbox.width() <= input.tolerance_mm
         || boundary.bbox.height() <= input.tolerance_mm
@@ -283,11 +310,11 @@ fn append_boundary_pocket_reliefs(
     let Some(score_cell) =
         score_cell_for_boundary(boundary.bbox, &input.score_lines, score_tolerance)?
     else {
-        return Ok(());
+        return Ok(None);
     };
     let score_cell_path = rectangle_payload(score_cell);
 
-    let geometry = route_relief_geometry(
+    let geometry = compute_relief_geometry(
         boundary,
         protected_material,
         score_cell,
@@ -303,30 +330,42 @@ fn append_boundary_pocket_reliefs(
         ));
     }
 
-    let relief_payloads = include_debug.then(|| geometry.relief.to_payloads());
-    if include_debug {
-        output.debug.entries.push(VScoreReliefDebugEntry {
+    Ok(Some(BoundaryRelief {
+        score_cell: score_cell_path,
+        geometry,
+    }))
+}
+
+#[derive(Debug, Clone)]
+struct BoundaryRelief {
+    score_cell: PathPayload,
+    geometry: ReliefGeometry,
+}
+
+impl BoundaryRelief {
+    fn debug_entry(&self, boundary: &PathPayload) -> VScoreReliefDebugEntry {
+        VScoreReliefDebugEntry {
             board_boundary: vec![boundary.clone()],
-            score_cell: score_cell_path,
-            dead_space_pockets: geometry.dead_space.to_payloads(),
-            legal_tool_centers: geometry.legal_tool_centers.to_payloads(),
-            relief_contours: relief_payloads.unwrap_or_default(),
-        });
+            score_cell: self.score_cell.clone(),
+            dead_space_pockets: self.geometry.dead_space.to_payloads(),
+            legal_tool_centers: self.geometry.legal_tool_centers.to_payloads(),
+            relief_contours: self.geometry.material_removal.to_payloads(),
+        }
     }
-    if !geometry.relief.is_empty() {
-        merged_relief_contours.extend(geometry.relief.contours);
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone)]
 struct ReliefGeometry {
     dead_space: ContourSet,
     legal_tool_centers: ContourSet,
-    relief: ContourSet,
+    material_removal: ContourSet,
 }
 
-fn route_relief_geometry(
+/// Compute `P_i`, `T_i`, and `R_i` for one board instance.
+///
+/// The returned `material_removal` is a filled region. Callers emit its
+/// boundary (`∂R_i`) as closed profile contours.
+fn compute_relief_geometry(
     boundary: &PathPayload,
     protected_material: &ContourSet,
     score_cell: BBox,
@@ -334,38 +373,57 @@ fn route_relief_geometry(
     score_tolerance: f64,
     area_tolerance: f64,
 ) -> ReliefGeometry {
+    // C_i: the V-score cell around this board instance.
     let score_cell_region = ContourSet::rectangle(score_cell, FillRule::NonZero, area_tolerance);
+    // B_i: this board instance before score-alignment tolerance is applied.
     let current_board = ContourSet::from_payloads(
         std::slice::from_ref(boundary),
         FillRule::NonZero,
         area_tolerance,
     );
+    // B'_i: absorb tolerance-scale slivers along score-cell edges so tiny
+    // source/score mismatches do not become false relief pockets.
     let aligned_board = score_aligned_board_region(current_board, score_cell, score_tolerance);
+    // P_i = C_i \ B'_i.
     let dead_space = score_cell_region.difference(&aligned_board);
-
-    // Let B be protected finished-board material, C the V-score cell around
-    // this board, P = C \ B' the sacrificial dead-space pocket after score
-    // alignment has absorbed tolerance-scale edge slivers into B', and D_r a
-    // disk with the route-tool radius. Legal tool centers are
-    // (P (+) D_r) \ (B (+) D_r): centers may sit in nearby sacrificial material,
-    // but their disk sweep cannot touch protected boards. The emitted relief is
-    // the full material-removal pocket, P union ((legal_centers (+) D_r) \ B).
-    let sacrificial_center_window = dead_space.clone().disk_dilate(tool_radius);
-    let protected_clearance = protected_material.clone().disk_dilate(tool_radius);
-    let legal_tool_centers = sacrificial_center_window.difference(&protected_clearance);
-    let tool_sweep = legal_tool_centers
-        .clone()
-        .disk_dilate(tool_radius)
-        .difference(protected_material);
-    let relief = dead_space.clone().union(&tool_sweep);
+    let (legal_tool_centers, material_removal) =
+        tool_aware_material_removal(&dead_space, protected_material, tool_radius);
 
     ReliefGeometry {
         dead_space,
         legal_tool_centers,
-        relief,
+        material_removal,
     }
 }
 
+/// Compute the tool-center free region and resulting material-removal region.
+///
+/// This is the configuration-space obstacle form of a circular router bit:
+/// inflate protected material by the tool radius, subtract that forbidden
+/// center region from the sacrificial center window, then inflate the legal
+/// centers back into the physical tool sweep.
+fn tool_aware_material_removal(
+    dead_space: &ContourSet,
+    protected_material: &ContourSet,
+    tool_radius: f64,
+) -> (ContourSet, ContourSet) {
+    // T_i = (P_i ⊕ D_r) \ (B ⊕ D_r).
+    let sacrificial_center_window = dead_space.clone().disk_dilate(tool_radius);
+    let protected_clearance = protected_material.clone().disk_dilate(tool_radius);
+    let legal_tool_centers = sacrificial_center_window.difference(&protected_clearance);
+
+    // W_i = (T_i ⊕ D_r) \ B.
+    let tool_sweep = legal_tool_centers
+        .clone()
+        .disk_dilate(tool_radius)
+        .difference(protected_material);
+
+    // R_i = P_i ∪ W_i.
+    let material_removal = dead_space.clone().union(&tool_sweep);
+    (legal_tool_centers, material_removal)
+}
+
+/// Finished-board material that the route tool must not touch.
 fn protected_board_material(input: &VScoreReliefInput) -> Result<ContourSet, VScoreReliefError> {
     let board_contours = finished_board_contours(&input.board_boundaries)?;
     let board_region = ContourSet::new(board_contours, FillRule::NonZero, input.tolerance_mm);
@@ -377,6 +435,11 @@ fn protected_board_material(input: &VScoreReliefInput) -> Result<ContourSet, VSc
     Ok(board_region.difference(&cutout_region))
 }
 
+/// Snap tolerance-scale boundary slivers onto score-cell edges.
+///
+/// This regularizes tiny source/export mismatches, such as an edge that should
+/// lie on a V-score but is offset by numeric tolerance. Real recesses remain
+/// outside the aligned board and become dead-space pockets.
 fn score_aligned_board_region(
     board: ContourSet,
     score_cell: BBox,

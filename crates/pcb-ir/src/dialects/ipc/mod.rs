@@ -958,7 +958,14 @@ pub fn transformed_path_bbox<Symbol, LayerFunction>(
 
 #[derive(Debug, Clone, Default)]
 pub struct BoardArrayFabricationProfile {
+    /// Exterior profile contours for the generated board array.
     pub array_outlines: Vec<Vec<common_path::PathPayload>>,
+    /// Closed material-removal contours inside the array profile.
+    ///
+    /// This is the regularized union of source profile cutouts, repeated board
+    /// cutouts, and V-score relief regions. Keeping it as one unioned planar
+    /// region means overlapping cutouts/reliefs collapse before downstream
+    /// Gerber/SVG/profile export sees them.
     pub material_removal: Vec<common_path::PathPayload>,
 }
 
@@ -1045,6 +1052,9 @@ fn compose_board_array_fabrication_profile(
     score_lines: &[relief::VScoreLine],
     include_relief_debug: bool,
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
+    // M = source cutouts ∪ board cutouts ∪ V-score relief material.
+    // Store M as a `ContourSet` until the end so every contribution is merged
+    // with the same regularized Boolean union.
     let mut material_removal =
         common_path::ContourSet::empty(FillRule::NonZero, relief::DEFAULT_RELIEF_TOLERANCE_MM);
 

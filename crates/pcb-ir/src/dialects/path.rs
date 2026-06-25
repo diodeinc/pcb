@@ -33,9 +33,14 @@ impl ContourImage {
     }
 }
 
-/// Filled planar region plus the geometric assumptions needed to operate on
-/// it. This keeps boolean/dilation code at the path dialect level instead of
-/// spreading raw contour plumbing through format-specific code.
+/// Regularized filled planar point set represented by polygon contours.
+///
+/// `ContourSet` is the path dialect's computational-geometry workhorse. Its
+/// operations are regularized set operations over filled regions:
+/// union (`A ∪ B`), difference (`A \ B`), intersection (`A ∩ B`), and disk
+/// dilation (`A ⊕ D_r`, a Minkowski sum with a radius-`r` disk). Keeping these
+/// operations here lets IPC, Gerber, SVG, and other dialects share the same
+/// geometry semantics instead of reimplementing contour plumbing per format.
 #[derive(Debug, Clone)]
 pub struct ContourSet {
     pub bbox: BBox,
@@ -81,6 +86,7 @@ impl ContourSet {
         self.contours.is_empty()
     }
 
+    /// Regularized union: `self ∪ other`.
     pub fn union(mut self, other: &Self) -> Self {
         debug_assert_eq!(self.fill_rule, other.fill_rule);
         self.contours.extend(other.contours.clone());
@@ -94,6 +100,7 @@ impl ContourSet {
         *self = current.union(other);
     }
 
+    /// Regularized difference: `self \ cutters`.
     pub fn difference(self, cutters: &Self) -> Self {
         debug_assert_eq!(self.fill_rule, cutters.fill_rule);
         Self::new(
@@ -103,6 +110,7 @@ impl ContourSet {
         )
     }
 
+    /// Regularized intersection: `self ∩ clip`.
     pub fn intersection(self, clip: &Self) -> Self {
         debug_assert_eq!(self.fill_rule, clip.fill_rule);
         Self::new(
@@ -112,6 +120,7 @@ impl ContourSet {
         )
     }
 
+    /// Minkowski sum with a disk: `self ⊕ D_radius`.
     pub fn disk_dilate(self, radius: f64) -> Self {
         Self::new(
             disk_dilate_contours(self.contours, radius, self.fill_rule),
