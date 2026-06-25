@@ -236,46 +236,15 @@ pub fn rasterize_pad_labels(pads: &[PadShape], resolution_mm: f64) -> Option<Pad
     let eps = resolution_mm * POLY_EPS_FRAC;
     for (idx, poly) in polys.iter().enumerate() {
         let pad_id = (idx + 1) as u16;
-        let [pb_min_x, pb_min_y, pb_max_x, pb_max_y] = poly.bounds;
-        let col0 =
-            (((pb_min_x - eps - bounds[0]) / resolution_mm).floor() as isize).max(0) as usize;
-        let col1 = (((pb_max_x + eps - bounds[0]) / resolution_mm).ceil() as isize)
-            .min(width as isize)
-            .max(0) as usize;
-        let row0 =
-            (((pb_min_y - eps - bounds[1]) / resolution_mm).floor() as isize).max(0) as usize;
-        let row1 = (((pb_max_y + eps - bounds[1]) / resolution_mm).ceil() as isize)
-            .min(height as isize)
-            .max(0) as usize;
-        for r in row0..row1 {
-            let y = bounds[1] + ((r as f64) + 0.5) * resolution_mm;
-            for c in col0..col1 {
-                let x = bounds[0] + ((c as f64) + 0.5) * resolution_mm;
-                if point_inside_polygon(poly, x, y, eps) {
-                    if labels[(r, c)] == 0 {
-                        labels[(r, c)] = pad_id;
-                    }
-                    // Count per-pad area based on geometry (inclusive union).
-                    // We count the first-touched pad to match `labels`, so only
-                    // bump the count if this pixel is this pad's first claim.
-                    if labels[(r, c)] == pad_id {
-                        areas[idx] += 1;
-                    }
-                }
-            }
-        }
-    }
-    // Deduplicate: the loop above double-counts pixels that were claimed by
-    // an earlier pad and then hit again by a later pad. Recount directly from
-    // the final label grid to get clean per-pad areas.
-    for a in areas.iter_mut() {
-        *a = 0;
-    }
-    for &l in labels.iter() {
-        if l == 0 {
-            continue;
-        }
-        areas[(l - 1) as usize] += 1;
+        rasterize_polygon_label_into(
+            poly,
+            bounds,
+            resolution_mm,
+            eps,
+            &mut labels,
+            pad_id,
+            &mut areas[idx],
+        );
     }
     Some(PadLabelGrid {
         labels,
@@ -283,6 +252,88 @@ pub fn rasterize_pad_labels(pads: &[PadShape], resolution_mm: f64) -> Option<Pad
         bounds,
         resolution_mm,
     })
+}
+
+fn rasterize_polygon_label_into(
+    poly: &Polygon,
+    grid_bounds: [f64; 4],
+    resolution_mm: f64,
+    eps: f64,
+    labels: &mut Array2<u16>,
+    label: u16,
+    area_px: &mut u32,
+) {
+    let (grid_h, grid_w) = labels.dim();
+    let [grid_min_x, grid_min_y, _, _] = grid_bounds;
+    let [pb_min_x, pb_min_y, pb_max_x, pb_max_y] = poly.bounds;
+    let row0 = (((pb_min_y - eps - grid_min_y) / resolution_mm).floor() as isize)
+        .max(0)
+        .min(grid_h as isize) as usize;
+    let row1 = (((pb_max_y + eps - grid_min_y) / resolution_mm).ceil() as isize)
+        .max(0)
+        .min(grid_h as isize) as usize;
+    let col0 = (((pb_min_x - eps - grid_min_x) / resolution_mm).floor() as isize)
+        .max(0)
+        .min(grid_w as isize) as usize;
+    let col1 = (((pb_max_x + eps - grid_min_x) / resolution_mm).ceil() as isize)
+        .max(0)
+        .min(grid_w as isize) as usize;
+    if row1 <= row0 || col1 <= col0 {
+        return;
+    }
+
+    let mut xs = Vec::new();
+    for r in row0..row1 {
+        let y = grid_min_y + ((r as f64) + 0.5) * resolution_mm;
+        for ring in &poly.rings {
+            scanline_intersections(ring, y, &mut xs);
+            for span in xs.chunks_exact(2) {
+                let start = first_col_with_center_gt(span[0], grid_min_x, resolution_mm)
+                    .max(col0 as isize)
+                    .min(col1 as isize) as usize;
+                let end = first_col_with_center_ge(span[1], grid_min_x, resolution_mm)
+                    .max(col0 as isize)
+                    .min(col1 as isize) as usize;
+                if end <= start {
+                    continue;
+                }
+                for c in start..end {
+                    if labels[(r, c)] == 0 {
+                        labels[(r, c)] = label;
+                        *area_px += 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn scanline_intersections(ring: &[[f64; 2]], y: f64, xs: &mut Vec<f64>) {
+    xs.clear();
+    let n = ring.len();
+    if n < 3 {
+        return;
+    }
+    let mut j = n - 1;
+    for i in 0..n {
+        let xi = ring[i][0];
+        let yi = ring[i][1];
+        let xj = ring[j][0];
+        let yj = ring[j][1];
+        if (yi > y) != (yj > y) {
+            xs.push((xj - xi) * (y - yi) / (yj - yi + f64::EPSILON) + xi);
+        }
+        j = i;
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+}
+
+fn first_col_with_center_gt(x: f64, grid_min_x: f64, resolution_mm: f64) -> isize {
+    (((x - grid_min_x) / resolution_mm - 0.5).floor() as isize) + 1
+}
+
+fn first_col_with_center_ge(x: f64, grid_min_x: f64, resolution_mm: f64) -> isize {
+    ((x - grid_min_x) / resolution_mm - 0.5).ceil() as isize
 }
 
 /// Rasterize a union of pad shapes onto a fixed grid.
@@ -1383,4 +1434,105 @@ pub fn component_pixel_counts(labels: &Array2<u32>, count: u32) -> Vec<u32> {
         counts[(l - 1) as usize] += 1;
     }
     counts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn brute_label(poly: &Polygon, bounds: [f64; 4], resolution_mm: f64) -> Array2<u16> {
+        let (width, height) = bounds_to_grid_size(bounds, resolution_mm);
+        let mut labels = Array2::<u16>::zeros((height, width));
+        let eps = resolution_mm * POLY_EPS_FRAC;
+        let [pb_min_x, pb_min_y, pb_max_x, pb_max_y] = poly.bounds;
+        let col0 =
+            (((pb_min_x - eps - bounds[0]) / resolution_mm).floor() as isize).max(0) as usize;
+        let col1 = (((pb_max_x + eps - bounds[0]) / resolution_mm).ceil() as isize)
+            .min(width as isize)
+            .max(0) as usize;
+        let row0 =
+            (((pb_min_y - eps - bounds[1]) / resolution_mm).floor() as isize).max(0) as usize;
+        let row1 = (((pb_max_y + eps - bounds[1]) / resolution_mm).ceil() as isize)
+            .min(height as isize)
+            .max(0) as usize;
+        for r in row0..row1 {
+            let y = bounds[1] + ((r as f64) + 0.5) * resolution_mm;
+            for c in col0..col1 {
+                let x = bounds[0] + ((c as f64) + 0.5) * resolution_mm;
+                if point_inside_polygon(poly, x, y, eps) {
+                    labels[(r, c)] = 1;
+                }
+            }
+        }
+        labels
+    }
+
+    #[test]
+    fn scanline_pad_label_matches_point_in_polygon_for_pad_shapes() {
+        let pads = [
+            PadShape {
+                kind: PadKind::Rect,
+                at: [0.13, -0.07],
+                size: [1.7, 0.9],
+                angle_deg: 23.0,
+            },
+            PadShape {
+                kind: PadKind::Circle,
+                at: [0.11, 0.19],
+                size: [1.3, 1.3],
+                angle_deg: 0.0,
+            },
+            PadShape {
+                kind: PadKind::Oval,
+                at: [-0.21, 0.17],
+                size: [2.1, 0.8],
+                angle_deg: -31.0,
+            },
+        ];
+        let resolution_mm = 0.17;
+        for pad in pads {
+            let poly = pad_to_polygon(&pad);
+            let bounds = poly.bounds;
+            let (width, height) = bounds_to_grid_size(bounds, resolution_mm);
+            let mut labels = Array2::<u16>::zeros((height, width));
+            let mut area = 0;
+            rasterize_polygon_label_into(
+                &poly,
+                bounds,
+                resolution_mm,
+                resolution_mm * POLY_EPS_FRAC,
+                &mut labels,
+                1,
+                &mut area,
+            );
+            let brute = brute_label(&poly, bounds, resolution_mm);
+            assert_eq!(labels, brute);
+            assert_eq!(
+                area,
+                brute.iter().filter(|&&label| label == 1).count() as u32
+            );
+        }
+    }
+
+    #[test]
+    fn pad_labels_keep_lowest_pad_id_for_overlaps() {
+        let pads = vec![
+            PadShape {
+                kind: PadKind::Rect,
+                at: [0.0, 0.0],
+                size: [1.0, 1.0],
+                angle_deg: 0.0,
+            },
+            PadShape {
+                kind: PadKind::Rect,
+                at: [0.0, 0.0],
+                size: [1.0, 1.0],
+                angle_deg: 0.0,
+            },
+        ];
+        let labels = rasterize_pad_labels(&pads, 0.25).expect("labels");
+        assert!(labels.labels.iter().any(|&label| label == 1));
+        assert!(!labels.labels.iter().any(|&label| label == 2));
+        assert_eq!(labels.areas_px[1], 0);
+    }
 }
