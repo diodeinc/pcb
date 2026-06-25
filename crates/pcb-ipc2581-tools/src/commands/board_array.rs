@@ -10,8 +10,8 @@ use ipc2581::types::{
         PlatingStatus, Polarity, SetFeature, Side, StepType,
     },
     primitives::{
-        Circle, LineEnd, LineProperty, Point as IpcPoint, PolyStep, PolyStepSegment, Polygon,
-        StandardPrimitive, Styled,
+        Circle, LineEnd, LineProperty, Point as IpcPoint, PolyStep, PolyStepCurve, PolyStepSegment,
+        Polygon, StandardPrimitive, Styled,
     },
     transform::Location,
 };
@@ -62,8 +62,11 @@ const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
 const FIDUCIAL_COPPER_DIAMETER_MM: f64 = 1.0;
 const FIDUCIAL_MASK_OPENING_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_DIAMETER_MM: f64 = 2.0;
+const CORNER_TOOLING_HOLE_DIAMETER_MM: f64 = 2.1;
 const TOOLING_HOLE_EDGE_OFFSET_MM: f64 = 2.5;
 const FIDUCIAL_EDGE_OFFSET_MM: f64 = 3.85;
+const ARRAY_CORNER_RADIUS_MM: f64 = 3.0;
+const ARRAY_CORNER_TOOLING_HOLE_INSET_MM: f64 = 3.0;
 const TOP_TOOLING_HOLE_X_INSET_MM: f64 = 2.5;
 const TOP_FIDUCIAL_X_INSET_MM: f64 = 8.0;
 const BOTTOM_TOOLING_HOLE_X_INSET_MM: f64 = 6.5;
@@ -553,6 +556,12 @@ fn build_board_array_spec(
             array_width_mm: array_width,
             array_height_mm: array_height,
         })?,
+    );
+    add_board_array_corner_tooling(
+        &mut generated_geometry,
+        &mut used_layer_names,
+        array_width,
+        array_height,
     );
     add_board_array_tooling(
         &mut generated_geometry,
@@ -1058,36 +1067,6 @@ fn add_vcut_annotation_line(
     }));
 }
 
-fn polygon_from_points(points: Vec<Point>) -> Option<Polygon> {
-    let mut points = points
-        .into_iter()
-        .filter(|point| point.is_finite())
-        .collect::<Vec<_>>();
-    if points.len() > 1 && points[0].distance_to(*points.last().unwrap()) <= EPSILON {
-        points.pop();
-    }
-    if points.len() < 3 {
-        return None;
-    }
-    let begin = IpcPoint {
-        x: points[0].x,
-        y: points[0].y,
-    };
-    let mut steps = points[1..]
-        .iter()
-        .map(|point| {
-            PolyStep::Segment(PolyStepSegment {
-                point: IpcPoint {
-                    x: point.x,
-                    y: point.y,
-                },
-            })
-        })
-        .collect::<Vec<_>>();
-    steps.push(PolyStep::Segment(PolyStepSegment { point: begin }));
-    Some(Polygon { begin, steps })
-}
-
 struct BoardArrayToolingSpec {
     columns: u32,
     board_width_mm: f64,
@@ -1117,13 +1096,7 @@ fn add_board_array_tooling(
     let top_soldermask_layer_name =
         ensure_top_soldermask_layer_name(generated_geometry, ipc, ecad, used_layer_names);
     let tooling_hole_layer_name =
-        reserve_unique_name(used_layer_names, TOOLING_HOLE_LAYER_BASE_NAME);
-    generated_geometry.add_layer(GeneratedLayer::new(
-        tooling_hole_layer_name.clone(),
-        LayerFunction::Drill,
-        Some(Side::All),
-        Some(Polarity::Positive),
-    ));
+        ensure_tooling_hole_layer_name(generated_geometry, used_layer_names);
 
     let fiducials = board_array_tooling_fiducials(&spec);
     generated_geometry.add_layer_feature(
@@ -1151,6 +1124,25 @@ fn add_board_array_tooling(
         tooling_hole_layer_name,
         Polarity::Positive,
         round_nonplated_hole_features(board_array_tooling_holes(&spec), TOOLING_HOLE_DIAMETER_MM),
+    );
+}
+
+fn add_board_array_corner_tooling(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    used_layer_names: &mut HashSet<String>,
+    array_width_mm: f64,
+    array_height_mm: f64,
+) {
+    let tooling_hole_layer_name =
+        ensure_tooling_hole_layer_name(generated_geometry, used_layer_names);
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
+        tooling_hole_layer_name,
+        Polarity::Positive,
+        round_nonplated_hole_features(
+            board_array_corner_tooling_holes(array_width_mm, array_height_mm),
+            CORNER_TOOLING_HOLE_DIAMETER_MM,
+        ),
     );
 }
 
@@ -1244,6 +1236,16 @@ fn board_array_tooling_holes(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
         (right_edge - TOP_TOOLING_HOLE_X_INSET_MM, top_y),
         (left_edge + BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
         (right_edge - BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
+    ]
+}
+
+fn board_array_corner_tooling_holes(array_width_mm: f64, array_height_mm: f64) -> [(f64, f64); 4] {
+    let inset = ARRAY_CORNER_TOOLING_HOLE_INSET_MM;
+    [
+        (inset, inset),
+        (array_width_mm - inset, inset),
+        (array_width_mm - inset, array_height_mm - inset),
+        (inset, array_height_mm - inset),
     ]
 }
 
@@ -1368,6 +1370,27 @@ fn ensure_top_soldermask_layer_name(
         ));
         layer_name
     })
+}
+
+fn ensure_tooling_hole_layer_name(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    used_layer_names: &mut HashSet<String>,
+) -> String {
+    if let Some(layer) = generated_geometry.layers.iter().find(|layer| {
+        layer.layer_function == LayerFunction::Drill
+            && layer.name.starts_with(TOOLING_HOLE_LAYER_BASE_NAME)
+    }) {
+        return layer.name.clone();
+    }
+
+    let layer_name = reserve_unique_name(used_layer_names, TOOLING_HOLE_LAYER_BASE_NAME);
+    generated_geometry.add_layer(GeneratedLayer::new(
+        layer_name.clone(),
+        LayerFunction::Drill,
+        Some(Side::All),
+        Some(Polarity::Positive),
+    ));
+    layer_name
 }
 
 fn top_copper_layer_name(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Option<String> {
@@ -1907,11 +1930,12 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     write_location_empty(&mut writer, "Datum", 0.0, 0.0, spec.units)?;
 
     writer.write_event(Event::Start(BytesStart::new("Profile")))?;
-    write_polygon(
-        &mut writer,
-        spec.units,
-        &rectangle_polygon(spec.array_width_mm, spec.array_height_mm),
-    )?;
+    let profile = rounded_rectangle_polygon(
+        spec.array_width_mm,
+        spec.array_height_mm,
+        ARRAY_CORNER_RADIUS_MM,
+    );
+    write_polygon(&mut writer, spec.units, &profile)?;
     writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
 
     write_array_step_repeat(&mut writer, spec)?;
@@ -2132,21 +2156,70 @@ fn write_polygon(
                     units,
                 )?;
             }
-            PolyStep::Curve(_) => bail!("generated board array polygons must be line segments"),
+            PolyStep::Curve(curve) => write_poly_step_curve(writer, units, curve)?,
         }
     }
     writer.write_event(Event::End(BytesStart::new("Polygon").to_end()))?;
     Ok(())
 }
 
-fn rectangle_polygon(width_mm: f64, height_mm: f64) -> Polygon {
-    polygon_from_points(vec![
-        Point::new(0.0, 0.0),
-        Point::new(0.0, height_mm),
-        Point::new(width_mm, height_mm),
-        Point::new(width_mm, 0.0),
-    ])
-    .expect("non-degenerate rectangle should produce a polygon")
+fn write_poly_step_curve(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    curve: &PolyStepCurve,
+) -> Result<()> {
+    let x = fmt_units(curve.point.x, units);
+    let y = fmt_units(curve.point.y, units);
+    let center_x = fmt_units(curve.center.x, units);
+    let center_y = fmt_units(curve.center.y, units);
+    let mut elem = BytesStart::new("PolyStepCurve");
+    elem.push_attribute(("x", x.as_str()));
+    elem.push_attribute(("y", y.as_str()));
+    elem.push_attribute(("centerX", center_x.as_str()));
+    elem.push_attribute(("centerY", center_y.as_str()));
+    elem.push_attribute(("clockwise", if curve.clockwise { "true" } else { "false" }));
+    writer.write_event(Event::Empty(elem))?;
+    Ok(())
+}
+
+fn rounded_rectangle_polygon(width_mm: f64, height_mm: f64, radius_mm: f64) -> Polygon {
+    let radius = radius_mm.min(width_mm / 2.0).min(height_mm / 2.0);
+    let begin = IpcPoint { x: 0.0, y: radius };
+    Polygon {
+        begin,
+        steps: vec![
+            poly_segment(0.0, height_mm - radius),
+            poly_curve(radius, height_mm, radius, height_mm - radius),
+            poly_segment(width_mm - radius, height_mm),
+            poly_curve(
+                width_mm,
+                height_mm - radius,
+                width_mm - radius,
+                height_mm - radius,
+            ),
+            poly_segment(width_mm, radius),
+            poly_curve(width_mm - radius, 0.0, width_mm - radius, radius),
+            poly_segment(radius, 0.0),
+            poly_curve(0.0, radius, radius, radius),
+        ],
+    }
+}
+
+fn poly_segment(x: f64, y: f64) -> PolyStep {
+    PolyStep::Segment(PolyStepSegment {
+        point: IpcPoint { x, y },
+    })
+}
+
+fn poly_curve(x: f64, y: f64, center_x: f64, center_y: f64) -> PolyStep {
+    PolyStep::Curve(PolyStepCurve {
+        point: IpcPoint { x, y },
+        center: IpcPoint {
+            x: center_x,
+            y: center_y,
+        },
+        clockwise: true,
+    })
 }
 
 fn round_fiducial(kind: IpcFiducialKind, x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
@@ -2382,7 +2455,7 @@ mod tests {
     }
 
     #[test]
-    fn creates_rectangular_panel_step_from_board_bbox() {
+    fn creates_rounded_panel_step_from_board_bbox() {
         let xml = create_board_array_xml(
             board_fixture_mm(),
             &BoardArrayCreateOptions {
@@ -2412,6 +2485,9 @@ mod tests {
         assert!(xml.contains(r#"<LayerFeature layerRef="V-Score">"#));
         assert!(xml.contains(r#"<Spec name="Board_Array_VCut">"#));
         assert!(xml.contains(r#"<SpecRef id="Board_Array_VCut"/>"#));
+        assert!(xml.contains(
+            r#"<PolyStepCurve x="3" y="100" centerX="3" centerY="97" clockwise="true"/>"#
+        ));
         assert!(xml.contains(r#"<Line startX="7.5" startY="0" endX="7.5" endY="100">"#));
         assert!(xml.contains(r#"<Line startX="0" startY="7.5" endX="100" endY="7.5">"#));
 
@@ -2737,9 +2813,8 @@ mod tests {
         assert_eq!(xml.matches("<GlobalFiducial>").count(), 2);
         assert!(xml.contains(r#"<Circle diameter="1"/>"#));
         assert!(xml.contains(r#"<Circle diameter="2"/>"#));
-        assert!(xml.contains(
-            r#"<Hole name="array_tooling_hole_0" type="CIRCLE" diameter="2" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="20" y="20"/>"#
-        ));
+        assert!(xml.contains(r#"diameter="2" platingStatus="NONPLATED""#));
+        assert!(xml.contains(r#"x="20" y="20""#));
 
         let parsed = Ipc2581::parse(&xml).unwrap();
         let top =
@@ -2815,10 +2890,13 @@ mod tests {
         let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
         let mask_fiducials = fiducials_on_layer(&ipc, step, "F.Mask");
         let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
+        let corner_holes = holes_with_diameter(&tooling_holes, CORNER_TOOLING_HOLE_DIAMETER_MM);
+        let rail_holes = holes_with_diameter(&tooling_holes, TOOLING_HOLE_DIAMETER_MM);
 
         assert_eq!(top_fiducials.len(), 4);
         assert_eq!(mask_fiducials.len(), 4);
-        assert_eq!(tooling_holes.len(), 4);
+        assert_eq!(corner_holes.len(), 4);
+        assert_eq!(rail_holes.len(), 4);
         assert!(
             top_fiducials
                 .iter()
@@ -2829,15 +2907,18 @@ mod tests {
                 .iter()
                 .all(|fiducial| close(fiducial_diameter(fiducial), 2.0))
         );
-        assert!(tooling_holes.iter().all(|hole| {
-            close(hole.diameter, 2.0) && hole.plating_status == PlatingStatus::NonPlated
-        }));
+        assert!(
+            tooling_holes
+                .iter()
+                .all(|hole| hole.plating_status == PlatingStatus::NonPlated)
+        );
+        assert_corner_holes(&corner_holes, 70.0, 70.0);
         assert_points_close(
             fiducial_points(&top_fiducials),
             vec![(29.0, 66.15), (41.0, 66.15), (33.0, 3.85), (37.0, 3.85)],
         );
         assert_points_close(
-            hole_points(&tooling_holes),
+            hole_points(&rail_holes),
             vec![(23.5, 67.5), (46.5, 67.5), (27.5, 2.5), (42.5, 2.5)],
         );
     }
@@ -2861,16 +2942,20 @@ mod tests {
         let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
         let mask_fiducials = fiducials_on_layer(&ipc, step, "F.Mask");
         let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
+        let corner_holes = holes_with_diameter(&tooling_holes, CORNER_TOOLING_HOLE_DIAMETER_MM);
+        let rail_holes = holes_with_diameter(&tooling_holes, TOOLING_HOLE_DIAMETER_MM);
 
         assert_eq!(top_fiducials.len(), 4);
         assert_eq!(mask_fiducials.len(), 4);
-        assert_eq!(tooling_holes.len(), 4);
+        assert_eq!(corner_holes.len(), 4);
+        assert_eq!(rail_holes.len(), 4);
+        assert_corner_holes(&corner_holes, 70.0, 70.0);
         assert_points_close(
             fiducial_points(&top_fiducials),
             vec![(28.5, 66.15), (41.5, 66.15), (32.5, 3.85), (37.5, 3.85)],
         );
         assert_points_close(
-            hole_points(&tooling_holes),
+            hole_points(&rail_holes),
             vec![(23.0, 67.5), (47.0, 67.5), (27.0, 2.5), (43.0, 2.5)],
         );
     }
@@ -2895,10 +2980,11 @@ mod tests {
             ecad.cad_data
                 .layers
                 .iter()
-                .all(|layer| ipc.resolve(layer.name) != TOOLING_HOLE_LAYER_BASE_NAME)
+                .any(|layer| ipc.resolve(layer.name) == TOOLING_HOLE_LAYER_BASE_NAME)
         );
 
         let step = array_step(&ipc);
+        let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
         let fiducial_count = step
             .layer_features
             .iter()
@@ -2913,7 +2999,13 @@ mod tests {
             .count();
 
         assert_eq!(fiducial_count, 0);
-        assert_eq!(hole_count, 0);
+        assert_eq!(hole_count, 4);
+        assert!(
+            tooling_holes
+                .iter()
+                .all(|hole| close(hole.diameter, CORNER_TOOLING_HOLE_DIAMETER_MM))
+        );
+        assert_corner_holes(&tooling_holes, 70.98, 70.0);
     }
 
     #[test]
@@ -3099,8 +3191,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(xml.contains(r#"<PolyStepSegment x="0" y="3"/>"#));
-        assert!(xml.contains(r#"<PolyStepSegment x="3" y="3"/>"#));
+        assert!(xml.contains(r#"<PolyStepSegment x="0" y="2.88189"/>"#));
+        assert!(xml.contains(
+            r#"<PolyStepCurve x="0.11811" y="3" centerX="0.11811" centerY="2.88189" clockwise="true"/>"#
+        ));
         assert!(xml.contains(
             r#"<StepRepeat stepRef="board_cell" x="1" y="1" nx="1" ny="1" dx="1" dy="1" angle="0.00" mirror="false"/>"#
         ));
@@ -3444,6 +3538,27 @@ mod tests {
 
     fn hole_points(holes: &[&Hole]) -> Vec<(f64, f64)> {
         holes.iter().map(|hole| (hole.x, hole.y)).collect()
+    }
+
+    fn holes_with_diameter<'a>(holes: &[&'a Hole], diameter_mm: f64) -> Vec<&'a Hole> {
+        holes
+            .iter()
+            .copied()
+            .filter(|hole| close(hole.diameter, diameter_mm))
+            .collect()
+    }
+
+    fn assert_corner_holes(holes: &[&Hole], array_width_mm: f64, array_height_mm: f64) {
+        let inset = ARRAY_CORNER_TOOLING_HOLE_INSET_MM;
+        assert_points_close(
+            hole_points(holes),
+            vec![
+                (inset, inset),
+                (array_width_mm - inset, inset),
+                (array_width_mm - inset, array_height_mm - inset),
+                (inset, array_height_mm - inset),
+            ],
+        );
     }
 
     fn assert_points_close(actual: Vec<(f64, f64)>, expected: Vec<(f64, f64)>) {

@@ -110,14 +110,14 @@ fn render_board_array_svg(
         array_height,
         OVERVIEW_STROKE_WIDTH_MM,
     );
-    writeln!(
-        svg,
-        "  <rect class='board-array-outline' x='0' y='0' width='{}' height='{}' fill='none' stroke='#111827' stroke-width='{}'/>",
-        fmt_num(array_width),
-        fmt_num(array_height),
-        fmt_num(OVERVIEW_STROKE_WIDTH_MM)
-    )
-    .unwrap();
+    if let Some(outline_path) = board_array_outline_path(doc, array_height) {
+        writeln!(
+            svg,
+            "  <path class='board-array-outline' d='{outline_path}' fill='none' stroke='#111827' stroke-width='{}'/>",
+            fmt_num(OVERVIEW_STROKE_WIDTH_MM)
+        )
+        .unwrap();
+    }
 
     write_board_paths(
         &mut svg,
@@ -236,6 +236,11 @@ fn board_instance_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<String
     }
 
     paths
+}
+
+fn board_array_outline_path(doc: &GeometryDocument, panel_height: f64) -> Option<String> {
+    let (_, step) = pcb_ir::dialects::ipc::root_panel_step(doc)?;
+    step_profile_path_data(doc, step, y_flip_transform(panel_height))
 }
 
 fn y_flip_transform(panel_height: f64) -> Affine2 {
@@ -673,6 +678,8 @@ mod tests {
         assert_eq!(svg.matches("class='board-outline'").count(), 3 * 2);
         assert!(svg.contains("fill='#f1f5f9'"));
         assert!(svg.contains("stroke='#064e3b'"));
+        assert!(svg.contains("class='board-array-outline'"));
+        assert!(!svg.contains("class='board-array-outline' x="));
         assert!(!svg.contains("class='vcut-guide'"));
         assert!(!svg.contains("class='score-guide'"));
         assert!(svg.contains("class='rail-guide'"));
@@ -680,6 +687,58 @@ mod tests {
         let board_outline_start = svg.find("class='board-outline'").unwrap();
         let rail_start = svg.find("class='rail-guide'").unwrap();
         assert!(rail_start < board_outline_start);
+    }
+
+    #[test]
+    fn renders_board_array_overview_from_array_profile() {
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="3"/>
+            <PolyStepSegment x="0" y="21"/>
+            <PolyStepCurve x="3" y="24" centerX="3" centerY="21" clockwise="true"/>
+            <PolyStepSegment x="41" y="24"/>
+            <PolyStepCurve x="44" y="21" centerX="41" centerY="21" clockwise="true"/>
+            <PolyStepSegment x="44" y="3"/>
+            <PolyStepCurve x="41" y="0" centerX="41" centerY="3" clockwise="true"/>
+            <PolyStepSegment x="3" y="0"/>
+            <PolyStepCurve x="0" y="3" centerX="3" centerY="3" clockwise="true"/>
+          </Polygon>
+        </Profile>
+        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
+
+        assert!(svg.contains("class='board-array-outline'"));
+        assert!(svg.contains(" A3 3"));
+        assert!(!svg.contains("class='board-array-outline' x="));
     }
 
     #[test]
