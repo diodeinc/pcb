@@ -11,7 +11,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added IPC-2581 board array creation, viewing, and export support to `pcb ipc`.
-- Auto board-array creation now chooses the smallest fitting A-series sheet from A7 through A4.
 
 ### Changed
 
