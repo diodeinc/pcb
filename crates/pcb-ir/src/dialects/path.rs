@@ -70,8 +70,18 @@ impl ContourSet {
     }
 
     pub fn from_filled_payloads(payloads: &[PathPayload], tolerance: f64) -> Self {
-        let contours =
-            simplify_polygon_contours(payloads_to_polygon_contours(payloads), FillRule::EvenOdd);
+        // Fill each payload independently, then union the payloads. A payload may
+        // contain nested contours, but sibling payloads are separate features;
+        // applying even-odd across the whole list would XOR duplicate layer data.
+        let contours = payloads
+            .iter()
+            .flat_map(|payload| {
+                simplify_polygon_contours(
+                    payloads_to_polygon_contours(std::slice::from_ref(payload)),
+                    FillRule::EvenOdd,
+                )
+            })
+            .collect();
         Self::new(contours, FillRule::NonZero, tolerance)
     }
 
@@ -836,6 +846,29 @@ mod tests {
         assert_close(a.bbox.min.y, b.bbox.min.y);
         assert_close(a.bbox.max.x, b.bbox.max.x);
         assert_close(a.bbox.max.y, b.bbox.max.y);
+    }
+
+    #[test]
+    fn filled_payload_region_unions_duplicate_payloads() {
+        let clockwise = rectangle_payload(rect(0.0, 0.0, 10.0, 5.0));
+        let counter_clockwise = PathPayload {
+            bbox: clockwise.bbox,
+            cmds: vec![
+                PathCmd::move_to(Point::new(0.0, 5.0)),
+                PathCmd::line_to(Point::new(10.0, 5.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(0.0, 0.0)),
+                PathCmd::close(),
+            ],
+        };
+
+        let region = ContourSet::from_filled_payloads(&[clockwise, counter_clockwise], 0.001);
+
+        assert!(!region.is_empty());
+        assert_close(region.bbox.min.x, 0.0);
+        assert_close(region.bbox.min.y, 0.0);
+        assert_close(region.bbox.max.x, 10.0);
+        assert_close(region.bbox.max.y, 5.0);
     }
 
     fn line_payload(start: Point, end: Point) -> PathPayload {

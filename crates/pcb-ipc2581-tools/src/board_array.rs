@@ -4,9 +4,7 @@ use anyhow::{Context, Result};
 use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
 use pcb_ir::common::{Affine2, BBox, Point, arc_sweep_radians};
-use pcb_ir::dialects::ipc::{
-    GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp, board_array_fabrication_profile,
-};
+use pcb_ir::dialects::ipc::{GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp};
 use pcb_ir::dialects::path::PathPayload;
 
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
@@ -205,7 +203,7 @@ fn board_array_profile_paths(
     array_height: f64,
 ) -> Result<BoardArrayProfileSvgPaths> {
     let score_lines = crate::geometry::board_array_vscore_lines(ipc)?;
-    let profile = board_array_fabrication_profile(doc, &score_lines)?;
+    let profile = crate::geometry::board_array_fabrication_profile(ipc, doc, &score_lines)?;
     let transform = y_flip_transform(array_height);
 
     Ok(BoardArrayProfileSvgPaths {

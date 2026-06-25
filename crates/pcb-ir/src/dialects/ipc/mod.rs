@@ -977,23 +977,61 @@ struct BoardArrayFabricationProfileInput {
     board_cutouts: Vec<common_path::PathPayload>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct BoardArrayReliefFeatures {
+    /// Through-board features that interrupt V-score separation.
+    ///
+    /// For non-plated holes/slots this is the mechanical aperture. For plated
+    /// holes/slots this is the actual pad/copper envelope, so score reliefs are
+    /// derived from source geometry instead of clearance guesses.
+    pub score_blockers: Vec<common_path::PathPayload>,
+}
+
 pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     score_lines: &[relief::VScoreLine],
 ) -> Result<BoardArrayFabricationProfile, relief::VScoreReliefError> {
-    Ok(board_array_fabrication_profile_inner(doc, score_lines, false)?.0)
+    Ok(board_array_fabrication_profile_inner(
+        doc,
+        score_lines,
+        BoardArrayReliefFeatures::default(),
+        false,
+    )?
+    .0)
+}
+
+pub fn board_array_fabrication_profile_with_relief_features<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+    relief_features: BoardArrayReliefFeatures,
+) -> Result<BoardArrayFabricationProfile, relief::VScoreReliefError> {
+    Ok(board_array_fabrication_profile_inner(doc, score_lines, relief_features, false)?.0)
 }
 
 pub fn board_array_fabrication_profile_with_debug<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     score_lines: &[relief::VScoreLine],
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
-    board_array_fabrication_profile_inner(doc, score_lines, true)
+    board_array_fabrication_profile_inner(
+        doc,
+        score_lines,
+        BoardArrayReliefFeatures::default(),
+        true,
+    )
+}
+
+pub fn board_array_fabrication_profile_with_relief_features_and_debug<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+    relief_features: BoardArrayReliefFeatures,
+) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
+    board_array_fabrication_profile_inner(doc, score_lines, relief_features, true)
 }
 
 fn board_array_fabrication_profile_inner<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     score_lines: &[relief::VScoreLine],
+    relief_features: BoardArrayReliefFeatures,
     include_relief_debug: bool,
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
     if root_panel_step(doc).is_none() {
@@ -1004,7 +1042,12 @@ fn board_array_fabrication_profile_inner<Symbol, LayerFunction>(
     }
 
     let input = collect_board_array_fabrication_profile_input(doc);
-    compose_board_array_fabrication_profile(input, score_lines, include_relief_debug)
+    compose_board_array_fabrication_profile(
+        input,
+        score_lines,
+        relief_features,
+        include_relief_debug,
+    )
 }
 
 fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
@@ -1050,6 +1093,7 @@ fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
 fn compose_board_array_fabrication_profile(
     input: BoardArrayFabricationProfileInput,
     score_lines: &[relief::VScoreLine],
+    relief_features: BoardArrayReliefFeatures,
     include_relief_debug: bool,
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
     // M = source cutouts ∪ board cutouts ∪ V-score relief material.
@@ -1071,6 +1115,7 @@ fn compose_board_array_fabrication_profile(
         let relief_input = relief::VScoreReliefInput {
             board_boundaries: input.board_boundaries,
             board_cutouts: input.board_cutouts,
+            score_blockers: relief_features.score_blockers,
             score_lines: score_lines.to_vec(),
             tool_diameter_mm: relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
             tolerance_mm: relief::DEFAULT_RELIEF_TOLERANCE_MM,
@@ -1363,6 +1408,7 @@ pub struct IpcSpecRef<Symbol> {
 pub struct GeometryFeatureSet<Symbol> {
     pub layer: u32,
     pub source_set_index: u32,
+    pub source_geometry_ref: Option<Symbol>,
     pub net: Option<Symbol>,
     pub polarity: GeometryPolarity,
     pub spec_ref_start: u32,

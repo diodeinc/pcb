@@ -43,6 +43,7 @@ pub const DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM: f64 = 0.10;
 pub struct VScoreReliefInput {
     pub board_boundaries: Vec<PathPayload>,
     pub board_cutouts: Vec<PathPayload>,
+    pub score_blockers: Vec<PathPayload>,
     pub score_lines: Vec<VScoreLine>,
     pub tool_diameter_mm: f64,
     pub tolerance_mm: f64,
@@ -53,6 +54,7 @@ impl VScoreReliefInput {
         Self {
             board_boundaries,
             board_cutouts: Vec::new(),
+            score_blockers: Vec::new(),
             score_lines,
             tool_diameter_mm: DEFAULT_ROUTE_TOOL_DIAMETER_MM,
             tolerance_mm: DEFAULT_RELIEF_TOLERANCE_MM,
@@ -294,7 +296,7 @@ fn append_contour_line_segments(cmds: &[PathCmd], lines: &mut Vec<VScoreLine>) {
 
 fn boundary_pocket_relief(
     boundary: &PathPayload,
-    protected_material: &ContourSet,
+    base_protected_material: &ContourSet,
     input: &VScoreReliefInput,
 ) -> Result<Option<BoundaryRelief>, VScoreReliefError> {
     if boundary.bbox.is_empty()
@@ -313,10 +315,22 @@ fn boundary_pocket_relief(
         return Ok(None);
     };
     let score_cell_path = rectangle_payload(score_cell);
+    let score_blockers = score_blockers_for_cell(
+        &input.score_blockers,
+        score_cell,
+        score_tolerance,
+        input.tolerance_mm,
+    );
+    let protected_material = if score_blockers.is_empty() {
+        base_protected_material.clone()
+    } else {
+        base_protected_material.clone().difference(&score_blockers)
+    };
 
     let geometry = compute_relief_geometry(
         boundary,
-        protected_material,
+        &protected_material,
+        &score_blockers,
         score_cell,
         input.tool_diameter_mm / 2.0,
         score_tolerance,
@@ -368,6 +382,7 @@ struct ReliefGeometry {
 fn compute_relief_geometry(
     boundary: &PathPayload,
     protected_material: &ContourSet,
+    score_blockers: &ContourSet,
     score_cell: BBox,
     tool_radius: f64,
     score_tolerance: f64,
@@ -383,7 +398,8 @@ fn compute_relief_geometry(
     );
     // B'_i: absorb tolerance-scale slivers along score-cell edges so tiny
     // source/score mismatches do not become false relief pockets.
-    let aligned_board = score_aligned_board_region(current_board, score_cell, score_tolerance);
+    let aligned_board = score_aligned_board_region(current_board, score_cell, score_tolerance)
+        .difference(score_blockers);
     // P_i = C_i \ B'_i.
     let dead_space = score_cell_region.difference(&aligned_board);
     let (legal_tool_centers, material_removal) =
@@ -426,13 +442,41 @@ fn tool_aware_material_removal(
 /// Finished-board material that the route tool must not touch.
 fn protected_board_material(input: &VScoreReliefInput) -> Result<ContourSet, VScoreReliefError> {
     let board_contours = finished_board_contours(&input.board_boundaries)?;
-    let board_region = ContourSet::new(board_contours, FillRule::NonZero, input.tolerance_mm);
-    if input.board_cutouts.is_empty() {
-        return Ok(board_region);
+    let mut board_region = ContourSet::new(board_contours, FillRule::NonZero, input.tolerance_mm);
+    if !input.board_cutouts.is_empty() {
+        let cutout_region =
+            ContourSet::from_filled_payloads(&input.board_cutouts, input.tolerance_mm);
+        board_region = board_region.difference(&cutout_region);
     }
+    Ok(board_region)
+}
 
-    let cutout_region = ContourSet::from_filled_payloads(&input.board_cutouts, input.tolerance_mm);
-    Ok(board_region.difference(&cutout_region))
+fn score_blockers_for_cell(
+    score_blockers: &[PathPayload],
+    score_cell: BBox,
+    score_tolerance: f64,
+    area_tolerance: f64,
+) -> ContourSet {
+    if score_blockers.is_empty() {
+        return ContourSet::empty(FillRule::NonZero, area_tolerance);
+    }
+    let score_strip = score_cell_strip_region(
+        score_cell,
+        score_tolerance,
+        FillRule::NonZero,
+        area_tolerance,
+    );
+    let selected = score_blockers
+        .iter()
+        .filter(|payload| payload.bbox.intersects(score_strip.bbox))
+        .filter(|payload| {
+            !ContourSet::from_filled_payloads(std::slice::from_ref(payload), area_tolerance)
+                .intersection(&score_strip)
+                .is_empty()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    ContourSet::from_filled_payloads(&selected, area_tolerance)
 }
 
 /// Snap tolerance-scale boundary slivers onto score-cell edges.
@@ -658,6 +702,52 @@ mod tests {
         assert_eq!(output.debug.entries.len(), 1);
         assert!(output.debug.entries[0].dead_space_pockets.is_empty());
         assert!(output.debug.entries[0].legal_tool_centers.is_empty());
+    }
+
+    #[test]
+    fn score_edge_blocker_creates_relief() {
+        let mut input = VScoreReliefInput::new(
+            path(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 5.0)),
+                PathCmd::line_to(Point::new(0.0, 5.0)),
+                PathCmd::close(),
+            ]),
+            rectangle_score_lines(10.0, 5.0),
+        );
+        input.score_blockers = vec![rectangle_payload(BBox {
+            min: Point::new(0.0, 2.0),
+            max: Point::new(1.2, 3.0),
+        })];
+
+        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+
+        assert!(!output.relief_contours.is_empty());
+        assert!(!output.debug.entries[0].dead_space_pockets.is_empty());
+    }
+
+    #[test]
+    fn internal_score_blocker_is_ignored() {
+        let mut input = VScoreReliefInput::new(
+            path(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 5.0)),
+                PathCmd::line_to(Point::new(0.0, 5.0)),
+                PathCmd::close(),
+            ]),
+            rectangle_score_lines(10.0, 5.0),
+        );
+        input.score_blockers = vec![rectangle_payload(BBox {
+            min: Point::new(4.0, 2.0),
+            max: Point::new(6.0, 3.0),
+        })];
+
+        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+
+        assert!(output.relief_contours.is_empty());
+        assert!(output.debug.entries[0].dead_space_pockets.is_empty());
     }
 
     #[test]

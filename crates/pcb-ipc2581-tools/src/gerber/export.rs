@@ -23,8 +23,7 @@ use pcb_ir::dialects::artwork::{
 use pcb_ir::dialects::ipc::{
     BoardArrayFabricationProfile, FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole,
     FiducialKind, GeometryFeature, GeometryPath, GeometryPathPaintClass, GeometryPolarity,
-    GeometryView, PlatingKind, ProfileSet, board_array_fabrication_profile,
-    board_array_fabrication_profile_with_debug, profile_occurrences_for, relief,
+    GeometryView, PlatingKind, ProfileSet, profile_occurrences_for, relief,
     transformed_path_payloads,
 };
 use pcb_ir::dialects::path as common_path;
@@ -491,11 +490,11 @@ fn board_array_profile_gerber_file(
     let score_lines = geometry::board_array_vscore_lines(ipc)?;
     let profile = if let Some(debug_dir) = relief_debug_dir {
         let (profile, relief_debug) =
-            board_array_fabrication_profile_with_debug(&doc, &score_lines)?;
+            geometry::board_array_fabrication_profile_with_debug(ipc, &doc, &score_lines)?;
         write_vscore_relief_debug(debug_dir, &relief_debug)?;
         profile
     } else {
-        board_array_fabrication_profile(&doc, &score_lines)?
+        geometry::board_array_fabrication_profile(ipc, &doc, &score_lines)?
     };
     if profile.array_outlines.is_empty() && profile.material_removal.is_empty() {
         return Ok(None);

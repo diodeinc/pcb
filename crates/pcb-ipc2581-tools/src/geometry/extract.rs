@@ -187,6 +187,7 @@ fn push_feature_set_record(
     doc.feature_sets.push(GeometryFeatureSet {
         layer,
         source_set_index,
+        source_geometry_ref: set.geometry,
         net: set.net,
         polarity,
         spec_ref_start,
@@ -829,6 +830,7 @@ fn extract_step_layer(
                                 set_index: set_index as u32,
                                 feature_index: feature_index as u32,
                             },
+                            set.geometry,
                             hole,
                             &mut doc,
                         );
@@ -848,6 +850,7 @@ fn extract_step_layer(
                                 set_index: set_index as u32,
                                 feature_index: feature_index as u32,
                             },
+                            set.geometry,
                             slot,
                             &mut doc,
                         )?;
@@ -961,6 +964,7 @@ fn append_transformed_layer(
                 .source_set_index
                 .checked_add(source_set_offset)
                 .context("Panel source feature set index overflow")?,
+            source_geometry_ref: source_set.source_geometry_ref,
             net: source_set.net,
             polarity: source_set.polarity,
             spec_ref_start,
@@ -2093,6 +2097,7 @@ fn stroked_path(style: StrokedFeatureStyle, bbox: BBox) -> GeometryPath {
 
 fn extract_hole(
     source: SourceRef,
+    padstack_ref: Option<Symbol>,
     hole: &ipc2581::types::Hole,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
@@ -2117,6 +2122,7 @@ fn extract_hole(
     feature.path_count = path_count;
     feature.center = center;
     feature.outer_diameter = hole.diameter;
+    feature.padstack_ref = padstack_ref;
     feature.intent.plating = plating_kind(hole.plating_status);
     feature.flags.lowered_to_paths = true;
     feature
@@ -2125,6 +2131,7 @@ fn extract_hole(
 fn extract_slot(
     context: &ExtractContext<'_>,
     source: SourceRef,
+    padstack_ref: Option<Symbol>,
     slot: &ipc2581::types::Slot,
     doc: &mut GeometryDocument,
 ) -> Result<GeometryFeature> {
@@ -2167,6 +2174,7 @@ fn extract_slot(
         feature.outer_diameter = width.min(height) * feature.scale;
         feature.stroke_width = feature.outer_diameter;
     }
+    feature.padstack_ref = padstack_ref;
     feature.intent.plating = plating_kind(slot.plating_status);
     feature.flags.lowered_to_paths = true;
     Ok(feature)
