@@ -53,7 +53,7 @@ A typical flow:
 5. Represent each functional variant symbol without duplicating order-code variants.
 6. Clean the footprint and embedded STEP against the datasheet.
 7. Ensure the footprint has an embedded STEP: find and embed any referenced local model, otherwise download a matching model and embed it with `pcb embed-step`.
-8. Check the 3D model orientation with `rectify` and patch it if flagged.
+8. Check the 3D model orientation with `pcb rectify check`. If flagged try to patch with `pcb rectify fix`.
 9. Write the primitive API, reference circuitry, or selector logic.
 
 Treat this as the default direction, not a rigid script. Focused patches may only touch one stage.
