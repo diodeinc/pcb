@@ -5,8 +5,7 @@ use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
 use pcb_ir::common::{Affine2, BBox, Point, arc_sweep_radians};
 use pcb_ir::dialects::ipc::{
-    BoardArrayFabricationProfilePathRole, GeometryView, LayoutStep, LayoutStepKind, PathCmd,
-    PathOp, board_array_fabrication_profile,
+    GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp, board_array_fabrication_profile,
 };
 use pcb_ir::dialects::path::PathPayload;
 
@@ -61,11 +60,12 @@ fn render_board_array_svg(
         return Ok(None);
     }
 
-    let board_paths = board_instance_paths(doc, array_height);
-    if board_paths.is_empty() {
+    let board_fill_paths = board_instance_paths(doc, array_height, true);
+    let board_outline_paths = board_instance_paths(doc, array_height, false);
+    if board_outline_paths.is_empty() {
         return Ok(None);
     }
-    let relief_paths = board_array_profile_relief_paths(ipc, doc, array_height)?;
+    let profile_paths = board_array_profile_paths(ipc, doc, array_height)?;
     let viewbox = overview_viewbox(array_width, array_height, layer_overlays);
     let viewbox_width = viewbox.width();
     let viewbox_height = viewbox.height();
@@ -99,10 +99,15 @@ fn render_board_array_svg(
     )
     .unwrap();
 
-    write_board_paths(&mut svg, &board_paths, "board-fill", "#f1f5f9", "none", 0.0);
+    write_board_paths(
+        &mut svg,
+        &board_fill_paths,
+        "board-fill",
+        "#f1f5f9",
+        "none",
+        0.0,
+    );
 
-    write_layer_overlays(&mut svg, layer_overlays);
-    write_profile_relief_paths(&mut svg, &relief_paths);
     write_rail_guides(
         &mut svg,
         grid,
@@ -110,7 +115,7 @@ fn render_board_array_svg(
         array_height,
         OVERVIEW_STROKE_WIDTH_MM,
     );
-    if let Some(outline_path) = board_array_outline_path(doc, array_height) {
+    for outline_path in &profile_paths.array_outlines {
         writeln!(
             svg,
             "  <path class='board-array-outline' d='{outline_path}' fill='none' stroke='#111827' stroke-width='{}'/>",
@@ -121,12 +126,14 @@ fn render_board_array_svg(
 
     write_board_paths(
         &mut svg,
-        &board_paths,
+        &board_outline_paths,
         "board-outline",
         "none",
         "#064e3b",
         OVERVIEW_STROKE_WIDTH_MM,
     );
+    write_profile_cutout_paths(&mut svg, &profile_paths.material_removal);
+    write_layer_overlays(&mut svg, layer_overlays);
 
     writeln!(svg, "</svg>").unwrap();
     Ok(Some(svg))
@@ -187,21 +194,36 @@ fn board_array_layer_overlays(
         .collect()
 }
 
-fn board_array_profile_relief_paths(
+struct BoardArrayProfileSvgPaths {
+    array_outlines: Vec<String>,
+    material_removal: Vec<String>,
+}
+
+fn board_array_profile_paths(
     ipc: &Ipc2581,
     doc: &GeometryDocument,
     array_height: f64,
-) -> Result<Vec<String>> {
+) -> Result<BoardArrayProfileSvgPaths> {
     let score_lines = crate::geometry::board_array_vscore_lines(ipc)?;
     let profile = board_array_fabrication_profile(doc, &score_lines)?;
     let transform = y_flip_transform(array_height);
 
-    Ok(profile
-        .paths
+    Ok(BoardArrayProfileSvgPaths {
+        array_outlines: payload_groups_path_data(&profile.array_outlines, transform),
+        material_removal: payloads_path_data(&profile.material_removal, transform)
+            .into_iter()
+            .collect(),
+    })
+}
+
+fn payload_groups_path_data(
+    payload_groups: &[Vec<PathPayload>],
+    transform: Affine2,
+) -> Vec<String> {
+    payload_groups
         .iter()
-        .filter(|path| path.role == BoardArrayFabricationProfilePathRole::VScoreRelief)
-        .filter_map(|path| payloads_path_data(&path.payloads, transform))
-        .collect())
+        .filter_map(|payloads| payloads_path_data(payloads, transform))
+        .collect()
 }
 
 fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayerPath> {
@@ -217,7 +239,11 @@ fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayer
         .collect()
 }
 
-fn board_instance_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<String> {
+fn board_instance_paths(
+    doc: &GeometryDocument,
+    panel_height: f64,
+    include_cutouts: bool,
+) -> Vec<String> {
     let flip_y = y_flip_transform(panel_height);
     let mut paths = Vec::new();
 
@@ -230,17 +256,12 @@ fn board_instance_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<String
         }
 
         let transform = flip_y.concat(instance.transform);
-        if let Some(path) = step_profile_path_data(doc, step, transform) {
+        if let Some(path) = step_profile_path_data(doc, step, transform, include_cutouts) {
             paths.push(path);
         }
     }
 
     paths
-}
-
-fn board_array_outline_path(doc: &GeometryDocument, panel_height: f64) -> Option<String> {
-    let (_, step) = pcb_ir::dialects::ipc::root_panel_step(doc)?;
-    step_profile_path_data(doc, step, y_flip_transform(panel_height))
 }
 
 fn y_flip_transform(panel_height: f64) -> Affine2 {
@@ -258,11 +279,15 @@ fn step_profile_path_data(
     doc: &GeometryDocument,
     step: &LayoutStep<ipc2581::Symbol>,
     transform: Affine2,
+    include_cutouts: bool,
 ) -> Option<String> {
     let mut path_data = String::new();
     for profile_index in step.profile_start..step.profile_start + step.profile_count {
         let profile = doc.profiles.get(profile_index as usize)?;
         append_transformed_path_data(&mut path_data, doc, profile.outer_path, transform)?;
+        if !include_cutouts {
+            continue;
+        }
         for cutout in &doc.profile_cutouts
             [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
         {
@@ -485,11 +510,11 @@ fn write_layer_overlays(svg: &mut String, layer_overlays: &[BoardArrayLayerOverl
     }
 }
 
-fn write_profile_relief_paths(svg: &mut String, paths: &[String]) {
+fn write_profile_cutout_paths(svg: &mut String, paths: &[String]) {
     for path in paths {
         writeln!(
             svg,
-            "  <path class='board-array-profile-relief' d='{path}' fill='none' stroke='#111827' stroke-width='{}' stroke-linejoin='round' opacity='0.9'/>",
+            "  <path class='board-array-profile-cutout' d='{path}' fill='#ffffff' stroke='#111827' stroke-width='{}' stroke-linejoin='round' fill-rule='nonzero' opacity='0.95'/>",
             fmt_num(OVERVIEW_STROKE_WIDTH_MM)
         )
         .unwrap();
@@ -808,7 +833,7 @@ mod tests {
 
         let vcut_start = svg.find("vcut-guide").unwrap();
         let board_outline_start = svg.find("class='board-outline'").unwrap();
-        assert!(vcut_start < board_outline_start);
+        assert!(board_outline_start < vcut_start);
     }
 
     #[test]
@@ -842,6 +867,12 @@ mod tests {
             <PolyStepSegment x="4" y="10"/>
             <PolyStepSegment x="0" y="10"/>
           </Polygon>
+          <Cutout>
+            <PolyBegin x="0" y="2"/>
+            <PolyStepSegment x="2" y="2"/>
+            <PolyStepSegment x="2" y="4"/>
+            <PolyStepSegment x="0" y="4"/>
+          </Cutout>
         </Profile>
       </Step>
       <Step name="panel" type="PALLET">
@@ -883,9 +914,15 @@ mod tests {
 
         let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
 
-        assert!(svg.contains("class='board-array-profile-relief'"));
+        assert!(svg.contains("class='board-array-profile-cutout'"));
+        assert!(svg.contains("fill='#ffffff'"));
         assert!(svg.contains("stroke='#111827'"));
         assert!(svg.contains(" Z"));
+        let board_outline = svg
+            .lines()
+            .find(|line| line.contains("class='board-outline'"))
+            .unwrap();
+        assert_eq!(board_outline.matches(" M").count(), 0);
     }
 
     #[test]

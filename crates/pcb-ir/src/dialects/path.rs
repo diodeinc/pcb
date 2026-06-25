@@ -64,6 +64,12 @@ impl ContourSet {
         Self::new(payloads_to_polygon_contours(payloads), fill_rule, tolerance)
     }
 
+    pub fn from_filled_payloads(payloads: &[PathPayload], tolerance: f64) -> Self {
+        let contours =
+            simplify_polygon_contours(payloads_to_polygon_contours(payloads), FillRule::EvenOdd);
+        Self::new(contours, FillRule::NonZero, tolerance)
+    }
+
     pub fn rectangle(bbox: BBox, fill_rule: FillRule, tolerance: f64) -> Self {
         if bbox.is_empty() {
             return Self::empty(fill_rule, tolerance);
@@ -79,6 +85,13 @@ impl ContourSet {
         debug_assert_eq!(self.fill_rule, other.fill_rule);
         self.contours.extend(other.contours.clone());
         Self::new(self.contours, self.fill_rule, self.tolerance)
+    }
+
+    pub fn union_assign(&mut self, other: &Self) {
+        let fill_rule = self.fill_rule;
+        let tolerance = self.tolerance;
+        let current = std::mem::replace(self, Self::empty(fill_rule, tolerance));
+        *self = current.union(other);
     }
 
     pub fn difference(self, cutters: &Self) -> Self {
@@ -789,6 +802,31 @@ mod tests {
         assert!(!expanded.is_empty());
         assert_close(expanded.bbox.min.x, 4.5);
         assert_close(expanded.bbox.max.x, 10.5);
+    }
+
+    #[test]
+    fn filled_payload_region_is_winding_insensitive() {
+        let clockwise = rectangle_payload(rect(0.0, 0.0, 10.0, 5.0));
+        let counter_clockwise = PathPayload {
+            bbox: clockwise.bbox,
+            cmds: vec![
+                PathCmd::move_to(Point::new(0.0, 5.0)),
+                PathCmd::line_to(Point::new(10.0, 5.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(0.0, 0.0)),
+                PathCmd::close(),
+            ],
+        };
+
+        let a = ContourSet::from_filled_payloads(&[clockwise], 0.001);
+        let b = ContourSet::from_filled_payloads(&[counter_clockwise], 0.001);
+
+        assert!(!a.is_empty());
+        assert!(!b.is_empty());
+        assert_close(a.bbox.min.x, b.bbox.min.x);
+        assert_close(a.bbox.min.y, b.bbox.min.y);
+        assert_close(a.bbox.max.x, b.bbox.max.x);
+        assert_close(a.bbox.max.y, b.bbox.max.y);
     }
 
     fn line_payload(start: Point, end: Point) -> PathPayload {

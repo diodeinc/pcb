@@ -13,16 +13,18 @@ pub const DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM: f64 = 0.10;
 
 #[derive(Debug, Clone)]
 pub struct VScoreReliefInput {
-    pub board_boundary: Vec<PathPayload>,
+    pub board_boundaries: Vec<PathPayload>,
+    pub board_cutouts: Vec<PathPayload>,
     pub score_lines: Vec<VScoreLine>,
     pub tool_diameter_mm: f64,
     pub tolerance_mm: f64,
 }
 
 impl VScoreReliefInput {
-    pub fn new(board_boundary: Vec<PathPayload>, score_lines: Vec<VScoreLine>) -> Self {
+    pub fn new(board_boundaries: Vec<PathPayload>, score_lines: Vec<VScoreLine>) -> Self {
         Self {
-            board_boundary,
+            board_boundaries,
+            board_cutouts: Vec::new(),
             score_lines,
             tool_diameter_mm: DEFAULT_ROUTE_TOOL_DIAMETER_MM,
             tolerance_mm: DEFAULT_RELIEF_TOLERANCE_MM,
@@ -37,20 +39,16 @@ pub struct VScoreLine {
     pub width: f64,
 }
 
-#[derive(Debug, Clone)]
-pub struct RouteRelief {
-    pub contours: Vec<PathPayload>,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct VScoreReliefOutput {
-    pub reliefs: Vec<RouteRelief>,
+    pub relief_contours: Vec<PathPayload>,
     pub debug: VScoreReliefDebug,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct VScoreReliefDebug {
     pub entries: Vec<VScoreReliefDebugEntry>,
+    pub merged_relief_contours: Vec<PathPayload>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,8 +94,8 @@ impl std::error::Error for VScoreReliefError {}
 
 pub fn vscore_route_reliefs(
     input: &VScoreReliefInput,
-) -> Result<Vec<RouteRelief>, VScoreReliefError> {
-    Ok(vscore_route_reliefs_inner(input, false)?.reliefs)
+) -> Result<Vec<PathPayload>, VScoreReliefError> {
+    Ok(vscore_route_reliefs_inner(input, false)?.relief_contours)
 }
 
 pub fn vscore_route_reliefs_with_debug(
@@ -121,21 +119,29 @@ fn vscore_route_reliefs_inner(
     if !input.tolerance_mm.is_finite() || input.tolerance_mm <= 0.0 {
         return Err(VScoreReliefError::InvalidTolerance(input.tolerance_mm));
     }
-    if input.board_boundary.is_empty() {
+    if input.board_boundaries.is_empty() {
         return Err(VScoreReliefError::EmptyBoundary);
     }
 
-    let board_contours = finished_board_contours(&input.board_boundary)?;
+    let protected_material = protected_board_material(input)?;
     let mut output = VScoreReliefOutput::default();
-    for boundary in &input.board_boundary {
+    let mut relief_contours = Vec::new();
+    for boundary in &input.board_boundaries {
         append_boundary_pocket_reliefs(
             boundary,
-            &board_contours,
+            &protected_material,
             input,
             include_debug,
             &mut output,
+            &mut relief_contours,
         )?;
     }
+    let relief_region = ContourSet::new(relief_contours, FillRule::NonZero, input.tolerance_mm);
+    let relief_payloads = relief_region.to_payloads();
+    if include_debug {
+        output.debug.merged_relief_contours = relief_payloads.clone();
+    }
+    output.relief_contours = relief_payloads;
 
     Ok(output)
 }
@@ -258,10 +264,11 @@ fn append_contour_line_segments(cmds: &[PathCmd], lines: &mut Vec<VScoreLine>) {
 
 fn append_boundary_pocket_reliefs(
     boundary: &PathPayload,
-    protected_boards: &[PolygonContour],
+    protected_material: &ContourSet,
     input: &VScoreReliefInput,
     include_debug: bool,
     output: &mut VScoreReliefOutput,
+    merged_relief_contours: &mut Vec<PolygonContour>,
 ) -> Result<(), VScoreReliefError> {
     if boundary.bbox.is_empty()
         || boundary.bbox.width() <= input.tolerance_mm
@@ -282,40 +289,38 @@ fn append_boundary_pocket_reliefs(
 
     let geometry = route_relief_geometry(
         boundary,
-        protected_boards,
+        protected_material,
         score_cell,
         input.tool_diameter_mm / 2.0,
         score_tolerance,
         input.tolerance_mm,
     );
     let has_dead_space = !geometry.dead_space.is_empty();
-    let relief_payloads = geometry.relief.to_payloads();
 
-    if has_dead_space && relief_payloads.is_empty() {
+    if has_dead_space && geometry.legal_tool_centers.is_empty() {
         return Err(VScoreReliefError::InvalidBoundary(
             "V-score relief pocket is too small for the route tool",
         ));
     }
 
+    let relief_payloads = include_debug.then(|| geometry.relief.to_payloads());
     if include_debug {
         output.debug.entries.push(VScoreReliefDebugEntry {
             board_boundary: vec![boundary.clone()],
             score_cell: score_cell_path,
             dead_space_pockets: geometry.dead_space.to_payloads(),
             legal_tool_centers: geometry.legal_tool_centers.to_payloads(),
-            relief_contours: relief_payloads.clone(),
+            relief_contours: relief_payloads.unwrap_or_default(),
         });
     }
-    if !relief_payloads.is_empty() {
-        output.reliefs.push(RouteRelief {
-            contours: relief_payloads,
-        });
+    if !geometry.relief.is_empty() {
+        merged_relief_contours.extend(geometry.relief.contours);
     }
     Ok(())
 }
 
 #[derive(Debug, Clone)]
-struct RouteReliefGeometry {
+struct ReliefGeometry {
     dead_space: ContourSet,
     legal_tool_centers: ContourSet,
     relief: ContourSet,
@@ -323,20 +328,18 @@ struct RouteReliefGeometry {
 
 fn route_relief_geometry(
     boundary: &PathPayload,
-    protected_boards: &[PolygonContour],
+    protected_material: &ContourSet,
     score_cell: BBox,
     tool_radius: f64,
     score_tolerance: f64,
     area_tolerance: f64,
-) -> RouteReliefGeometry {
+) -> ReliefGeometry {
     let score_cell_region = ContourSet::rectangle(score_cell, FillRule::NonZero, area_tolerance);
     let current_board = ContourSet::from_payloads(
         std::slice::from_ref(boundary),
         FillRule::NonZero,
         area_tolerance,
     );
-    let protected_boards =
-        ContourSet::new(protected_boards.to_vec(), FillRule::NonZero, area_tolerance);
     let aligned_board = score_aligned_board_region(current_board, score_cell, score_tolerance);
     let dead_space = score_cell_region.difference(&aligned_board);
 
@@ -346,20 +349,32 @@ fn route_relief_geometry(
     // disk with the route-tool radius. Legal tool centers are
     // (P (+) D_r) \ (B (+) D_r): centers may sit in nearby sacrificial material,
     // but their disk sweep cannot touch protected boards. The emitted relief is
-    // the actual swept material, (legal_centers (+) D_r) \ B.
+    // the full material-removal pocket, P union ((legal_centers (+) D_r) \ B).
     let sacrificial_center_window = dead_space.clone().disk_dilate(tool_radius);
-    let protected_clearance = protected_boards.clone().disk_dilate(tool_radius);
+    let protected_clearance = protected_material.clone().disk_dilate(tool_radius);
     let legal_tool_centers = sacrificial_center_window.difference(&protected_clearance);
-    let relief = legal_tool_centers
+    let tool_sweep = legal_tool_centers
         .clone()
         .disk_dilate(tool_radius)
-        .difference(&protected_boards);
+        .difference(protected_material);
+    let relief = dead_space.clone().union(&tool_sweep);
 
-    RouteReliefGeometry {
+    ReliefGeometry {
         dead_space,
         legal_tool_centers,
         relief,
     }
+}
+
+fn protected_board_material(input: &VScoreReliefInput) -> Result<ContourSet, VScoreReliefError> {
+    let board_contours = finished_board_contours(&input.board_boundaries)?;
+    let board_region = ContourSet::new(board_contours, FillRule::NonZero, input.tolerance_mm);
+    if input.board_cutouts.is_empty() {
+        return Ok(board_region);
+    }
+
+    let cutout_region = ContourSet::from_filled_payloads(&input.board_cutouts, input.tolerance_mm);
+    Ok(board_region.difference(&cutout_region))
 }
 
 fn score_aligned_board_region(
@@ -576,7 +591,7 @@ mod tests {
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
 
-        assert!(output.reliefs.is_empty());
+        assert!(output.relief_contours.is_empty());
         assert_eq!(output.debug.entries.len(), 1);
         assert!(output.debug.entries[0].dead_space_pockets.is_empty());
         assert!(output.debug.entries[0].legal_tool_centers.is_empty());
@@ -599,29 +614,52 @@ mod tests {
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
-        let reliefs = &output.reliefs;
+        let relief_contours = &output.relief_contours;
         let debug = &output.debug.entries[0];
 
-        assert_eq!(reliefs.len(), 1);
+        assert!(!relief_contours.is_empty());
         assert!(!payloads_bbox(&debug.dead_space_pockets).is_empty());
         assert!(!payloads_bbox(&debug.legal_tool_centers).is_empty());
-        assert!(reliefs.iter().all(|relief| !relief.contours.is_empty()));
-        assert!(
-            reliefs
-                .iter()
-                .flat_map(|relief| &relief.contours)
-                .all(|contour| contour
-                    .cmds
-                    .last()
-                    .is_some_and(|cmd| cmd.op == PathOp::Close))
-        );
+        assert!(relief_contours.iter().all(|contour| {
+            contour
+                .cmds
+                .last()
+                .is_some_and(|cmd| cmd.op == PathOp::Close)
+        }));
         let pocket_bbox = payloads_bbox(&debug.dead_space_pockets);
         assert!(pocket_bbox.min.x <= 4.0 + DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM);
         assert_close(pocket_bbox.min.y, 3.0);
         assert!(pocket_bbox.max.x >= 6.0 - DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM);
         assert_close(pocket_bbox.max.y, 5.0);
-        let relief_bbox = payloads_bbox(&reliefs[0].contours);
+        let relief_bbox = payloads_bbox(relief_contours);
         assert!(relief_bbox.max.y > pocket_bbox.max.y);
+    }
+
+    #[test]
+    fn overlapping_relief_regions_are_merged_before_emit() {
+        let boundary = path(vec![
+            PathCmd::move_to(Point::new(0.0, 0.0)),
+            PathCmd::line_to(Point::new(10.0, 0.0)),
+            PathCmd::line_to(Point::new(10.0, 5.0)),
+            PathCmd::line_to(Point::new(6.0, 5.0)),
+            PathCmd::line_to(Point::new(5.0, 3.0)),
+            PathCmd::line_to(Point::new(4.0, 5.0)),
+            PathCmd::line_to(Point::new(0.0, 5.0)),
+            PathCmd::close(),
+        ]);
+        let mut board_boundary = boundary.clone();
+        board_boundary.extend(boundary);
+        let input = VScoreReliefInput::new(board_boundary, rectangle_score_lines(10.0, 5.0));
+
+        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+
+        assert_eq!(output.debug.entries.len(), 2);
+        assert!(!output.relief_contours.is_empty());
+        assert!(!output.debug.merged_relief_contours.is_empty());
+        assert_eq!(
+            payloads_bbox(&output.relief_contours),
+            payloads_bbox(&output.debug.merged_relief_contours)
+        );
     }
 
     #[test]
@@ -658,12 +696,11 @@ mod tests {
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
-        let reliefs = &output.reliefs;
+        let relief_contours = &output.relief_contours;
 
-        assert_eq!(reliefs.len(), 1);
+        assert!(!relief_contours.is_empty());
         assert!(
-            reliefs[0]
-                .contours
+            relief_contours
                 .iter()
                 .flat_map(|contour| &contour.cmds)
                 .any(|cmd| cmd.op == PathOp::Close)
@@ -692,13 +729,13 @@ mod tests {
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
-        let reliefs = &output.reliefs;
+        let relief_contours = &output.relief_contours;
         let debug = &output.debug.entries[0];
 
-        assert_eq!(reliefs.len(), 1);
+        assert!(!relief_contours.is_empty());
         assert!(!payloads_bbox(&debug.legal_tool_centers).is_empty());
         let pocket_bbox = payloads_bbox(&debug.dead_space_pockets);
-        let relief_bbox = payloads_bbox(&reliefs[0].contours);
+        let relief_bbox = payloads_bbox(relief_contours);
         assert!(relief_bbox.min.x < pocket_bbox.min.x);
         assert!(relief_bbox.min.y < pocket_bbox.min.y);
         assert!(relief_bbox.max.x > pocket_bbox.max.x);
@@ -722,11 +759,11 @@ mod tests {
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
-        let reliefs = &output.reliefs;
+        let relief_contours = &output.relief_contours;
 
-        assert_eq!(reliefs.len(), 1);
+        assert!(!relief_contours.is_empty());
         assert!(!payloads_bbox(&output.debug.entries[0].legal_tool_centers).is_empty());
-        assert!(!payloads_bbox(&reliefs[0].contours).is_empty());
+        assert!(!payloads_bbox(relief_contours).is_empty());
     }
 
     #[test]
@@ -744,7 +781,7 @@ mod tests {
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
 
-        assert!(output.reliefs.is_empty());
+        assert!(output.relief_contours.is_empty());
         assert!(output.debug.entries[0].dead_space_pockets.is_empty());
     }
 
@@ -766,7 +803,7 @@ mod tests {
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
         let pocket_bbox = payloads_bbox(&output.debug.entries[0].dead_space_pockets);
 
-        assert!(!output.reliefs.is_empty());
+        assert!(!output.relief_contours.is_empty());
         assert!(pocket_bbox.min.x < 8.1);
         assert!(pocket_bbox.min.y < 8.1);
         assert_close(pocket_bbox.max.x, 10.0);
@@ -792,9 +829,8 @@ mod tests {
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
         let relief_bbox = output
-            .reliefs
+            .relief_contours
             .iter()
-            .flat_map(|relief| &relief.contours)
             .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox));
 
         assert!(!relief_bbox.is_empty());

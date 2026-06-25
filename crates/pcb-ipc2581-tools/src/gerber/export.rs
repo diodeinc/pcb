@@ -497,7 +497,7 @@ fn board_array_profile_gerber_file(
     } else {
         board_array_fabrication_profile(&doc, &score_lines)?
     };
-    if profile.paths.is_empty() {
+    if profile.array_outlines.is_empty() && profile.material_removal.is_empty() {
         return Ok(None);
     }
 
@@ -553,13 +553,17 @@ fn render_vscore_relief_debug_svg(debug: &relief::VScoreReliefDebug) -> Option<S
         return None;
     }
 
-    let bbox = debug.entries.iter().fold(BBox::empty(), |bbox, entry| {
-        bbox.union(payloads_bbox(&entry.board_boundary))
-            .union(entry.score_cell.bbox)
-            .union(payloads_bbox(&entry.dead_space_pockets))
-            .union(payloads_bbox(&entry.legal_tool_centers))
-            .union(payloads_bbox(&entry.relief_contours))
-    });
+    let bbox = debug
+        .entries
+        .iter()
+        .fold(BBox::empty(), |bbox, entry| {
+            bbox.union(payloads_bbox(&entry.board_boundary))
+                .union(entry.score_cell.bbox)
+                .union(payloads_bbox(&entry.dead_space_pockets))
+                .union(payloads_bbox(&entry.legal_tool_centers))
+                .union(payloads_bbox(&entry.relief_contours))
+        })
+        .union(payloads_bbox(&debug.merged_relief_contours));
     if bbox.is_empty() {
         return None;
     }
@@ -648,6 +652,18 @@ fn render_vscore_relief_debug_svg(debug: &relief::VScoreReliefDebug) -> Option<S
             },
         );
     }
+    write_debug_path(
+        &mut svg,
+        debug.entries.len(),
+        &debug.merged_relief_contours,
+        DebugSvgPathStyle {
+            class_name: "merged-relief-contour",
+            fill: "none",
+            stroke: "#7c3aed",
+            stroke_width: "0.14",
+            extra_attrs: "",
+        },
+    );
 
     writeln!(svg, "  </g>").unwrap();
     writeln!(svg, "</svg>").unwrap();
@@ -816,8 +832,11 @@ fn append_board_array_profile(
     profile: &BoardArrayFabricationProfile,
     style: ProfileGerberStyle,
 ) {
-    for path in &profile.paths {
-        append_profile_payloads(artwork, layer, path.payloads.clone(), style);
+    for outline in &profile.array_outlines {
+        append_profile_payloads(artwork, layer, outline.clone(), style);
+    }
+    if !profile.material_removal.is_empty() {
+        append_profile_payloads(artwork, layer, profile.material_removal.clone(), style);
     }
 }
 
@@ -958,13 +977,7 @@ fn standard_flash_aperture(
     ipc: &Ipc2581,
     feature: &GeometryFeature<ipc2581::Symbol>,
 ) -> Option<(ArtworkAperture, Point, BBox)> {
-    if feature.polarity != GeometryPolarity::Positive
-        || feature.path_count == 0
-        || !(matches!(
-            feature.intent.role,
-            FeatureRole::Pad | FeatureRole::Via | FeatureRole::Hole
-        ) || feature.is_fiducial())
-    {
+    if !standard_flash_feature_is_eligible(feature) {
         return None;
     }
 
@@ -1002,6 +1015,15 @@ fn standard_flash_aperture(
     let at = feature.center;
     let bbox = flash_bbox(at, aperture);
     Some((aperture, at, bbox))
+}
+
+fn standard_flash_feature_is_eligible(feature: &GeometryFeature<ipc2581::Symbol>) -> bool {
+    feature.polarity == GeometryPolarity::Positive
+        && feature.path_count != 0
+        && (matches!(
+            feature.intent.role,
+            FeatureRole::Pad | FeatureRole::Via | FeatureRole::Hole
+        ) || feature.is_fiducial())
 }
 
 fn standard_primitive_for_feature<'a>(

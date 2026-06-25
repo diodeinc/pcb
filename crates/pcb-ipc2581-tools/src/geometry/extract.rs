@@ -2179,6 +2179,11 @@ fn lower_standard_primitive(
     transform: Affine2,
     bucket: FeatureBucket,
 ) -> Result<PrimitivePaint> {
+    let paint = primitive_paint(primitive);
+    if standard_primitive_has_no_area(primitive) {
+        return Ok(paint);
+    }
+
     let path_start = doc.paths.len() as u32;
     match primitive {
         StandardPrimitive::Circle(circle) => {
@@ -2334,7 +2339,6 @@ fn lower_standard_primitive(
         );
     }
 
-    let paint = primitive_paint(primitive);
     match paint {
         PrimitivePaint::Fill => {}
         PrimitivePaint::Hollow => {
@@ -2355,6 +2359,47 @@ fn lower_standard_primitive(
     }
 
     Ok(paint)
+}
+
+fn standard_primitive_has_no_area(primitive: &StandardPrimitive) -> bool {
+    match primitive {
+        StandardPrimitive::Circle(circle) => circle.shape.diameter <= 0.0,
+        StandardPrimitive::Ellipse(ellipse) => {
+            ellipse.shape.size.width <= 0.0 || ellipse.shape.size.height <= 0.0
+        }
+        StandardPrimitive::Oval(oval) => {
+            oval.shape.size.width <= 0.0 || oval.shape.size.height <= 0.0
+        }
+        StandardPrimitive::RectCenter(rect) => {
+            rect.shape.size.width <= 0.0 || rect.shape.size.height <= 0.0
+        }
+        StandardPrimitive::RectCorner(rect) => {
+            rect.shape.upper_right.x <= rect.shape.lower_left.x
+                || rect.shape.upper_right.y <= rect.shape.lower_left.y
+        }
+        StandardPrimitive::RectRound(rect) => {
+            rect.shape.size.width <= 0.0 || rect.shape.size.height <= 0.0
+        }
+        StandardPrimitive::RectCham(rect) => {
+            rect.shape.size.width <= 0.0 || rect.shape.size.height <= 0.0
+        }
+        StandardPrimitive::Diamond(diamond) => {
+            diamond.shape.size.width <= 0.0 || diamond.shape.size.height <= 0.0
+        }
+        StandardPrimitive::Hexagon(hexagon) => hexagon.shape.point_to_point <= 0.0,
+        StandardPrimitive::Octagon(octagon) => octagon.shape.point_to_point <= 0.0,
+        StandardPrimitive::Triangle(triangle) => {
+            triangle.shape.base <= 0.0 || triangle.shape.height <= 0.0
+        }
+        StandardPrimitive::Donut(donut) => {
+            donut.shape.outer_diameter <= 0.0
+                || donut.shape.inner_diameter >= donut.shape.outer_diameter
+        }
+        StandardPrimitive::Thermal(thermal) => thermal.shape.outer_diameter <= 0.0,
+        StandardPrimitive::Butterfly(_)
+        | StandardPrimitive::Contour(_)
+        | StandardPrimitive::Moire(_) => false,
+    }
 }
 
 fn lower_user_primitive(
@@ -3561,6 +3606,46 @@ mod tests {
 
         assert_eq!(primitive_paint(&circle), PrimitivePaint::Hollow);
         assert_eq!(primitive_paint(&rect), PrimitivePaint::Void);
+    }
+
+    #[test]
+    fn zero_area_standard_primitive_emits_no_paths() {
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
+        )
+        .unwrap();
+        let context = ExtractContext {
+            ipc: &ipc,
+            padstacks: HashMap::new(),
+            line_descs: HashMap::new(),
+            standard_primitives: HashMap::new(),
+            user_primitives: HashMap::new(),
+        };
+        let mut doc = GeometryDocument::new();
+        let primitive = ipc2581::types::StandardPrimitive::RectCenter(ipc2581::types::Styled {
+            shape: ipc2581::types::RectCenter {
+                size: ipc2581::types::Size {
+                    width: 0.0,
+                    height: 1.0,
+                },
+            },
+            fill_property: None,
+            line_desc_ref: None,
+        });
+
+        let paint = lower_standard_primitive(
+            &context,
+            &mut doc,
+            &primitive,
+            Affine2::identity(),
+            FeatureBucket::Fill,
+        )
+        .unwrap();
+
+        assert_eq!(paint, PrimitivePaint::Fill);
+        assert!(doc.paths.is_empty());
+        assert!(doc.contours.is_empty());
+        assert!(doc.path_cmds.is_empty());
     }
 
     #[test]

@@ -966,21 +966,16 @@ pub fn transformed_path_bbox<Symbol, LayerFunction>(
 
 #[derive(Debug, Clone, Default)]
 pub struct BoardArrayFabricationProfile {
-    pub paths: Vec<BoardArrayFabricationProfilePath>,
+    pub array_outlines: Vec<Vec<common_path::PathPayload>>,
+    pub material_removal: Vec<common_path::PathPayload>,
 }
 
-#[derive(Debug, Clone)]
-pub struct BoardArrayFabricationProfilePath {
-    pub role: BoardArrayFabricationProfilePathRole,
-    pub payloads: Vec<common_path::PathPayload>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BoardArrayFabricationProfilePathRole {
-    ArrayOutline,
-    ArrayCutout,
-    BoardCutout,
-    VScoreRelief,
+#[derive(Debug, Clone, Default)]
+struct BoardArrayFabricationProfileInput {
+    array_outlines: Vec<Vec<common_path::PathPayload>>,
+    source_material_removal: Vec<Vec<common_path::PathPayload>>,
+    board_boundaries: Vec<common_path::PathPayload>,
+    board_cutouts: Vec<common_path::PathPayload>,
 }
 
 pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
@@ -1002,56 +997,78 @@ fn board_array_fabrication_profile_inner<Symbol, LayerFunction>(
     score_lines: &[relief::VScoreLine],
     include_relief_debug: bool,
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
-    let mut profile = BoardArrayFabricationProfile::default();
     if root_panel_step(doc).is_none() {
-        return Ok((profile, relief::VScoreReliefDebug::default()));
+        return Ok((
+            BoardArrayFabricationProfile::default(),
+            relief::VScoreReliefDebug::default(),
+        ));
     }
+
+    let input = collect_board_array_fabrication_profile_input(doc);
+    compose_board_array_fabrication_profile(input, score_lines, include_relief_debug)
+}
+
+fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> BoardArrayFabricationProfileInput {
+    let mut input = BoardArrayFabricationProfileInput::default();
 
     for occurrence in profile_occurrences_for(doc, ProfileSet::RootOnly) {
-        profile.paths.push(BoardArrayFabricationProfilePath {
-            role: BoardArrayFabricationProfilePathRole::ArrayOutline,
-            payloads: transformed_path_payloads(
-                doc,
-                occurrence.profile.outer_path,
-                occurrence.transform,
-            ),
-        });
-        push_board_array_profile_cutouts(
-            &mut profile,
+        input.array_outlines.push(transformed_path_payloads(
             doc,
-            occurrence.profile,
+            occurrence.profile.outer_path,
             occurrence.transform,
-            BoardArrayFabricationProfilePathRole::ArrayCutout,
-        );
+        ));
+        input
+            .source_material_removal
+            .extend(transformed_profile_cutout_payloads(
+                doc,
+                occurrence.profile,
+                occurrence.transform,
+            ));
     }
 
-    let board_occurrences = profile_occurrences_for(doc, ProfileSet::FabricationOutlines)
+    for occurrence in profile_occurrences_for(doc, ProfileSet::FabricationOutlines)
         .into_iter()
         .filter(|occurrence| occurrence.role == ProfileOccurrenceRole::BoardInstance)
-        .collect::<Vec<_>>();
-    let mut board_boundaries = Vec::new();
-    for occurrence in &board_occurrences {
-        push_board_array_profile_cutouts(
-            &mut profile,
-            doc,
-            occurrence.profile,
-            occurrence.transform,
-            BoardArrayFabricationProfilePathRole::BoardCutout,
-        );
-        if score_lines.is_empty() {
-            continue;
-        }
-        board_boundaries.extend(transformed_path_payloads(
+    {
+        let cutouts =
+            transformed_profile_cutout_payloads(doc, occurrence.profile, occurrence.transform);
+        input
+            .board_cutouts
+            .extend(cutouts.iter().flatten().cloned());
+        input.source_material_removal.extend(cutouts);
+        input.board_boundaries.extend(transformed_path_payloads(
             doc,
             occurrence.profile.outer_path,
             occurrence.transform,
         ));
     }
 
+    input
+}
+
+fn compose_board_array_fabrication_profile(
+    input: BoardArrayFabricationProfileInput,
+    score_lines: &[relief::VScoreLine],
+    include_relief_debug: bool,
+) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
+    let mut material_removal =
+        common_path::ContourSet::empty(FillRule::NonZero, relief::DEFAULT_RELIEF_TOLERANCE_MM);
+
+    for payloads in &input.source_material_removal {
+        union_filled_payloads(
+            &mut material_removal,
+            payloads,
+            relief::DEFAULT_RELIEF_TOLERANCE_MM,
+        );
+    }
+
     let mut relief_debug = relief::VScoreReliefDebug::default();
-    if !score_lines.is_empty() && !board_boundaries.is_empty() {
+    if !score_lines.is_empty() && !input.board_boundaries.is_empty() {
         let relief_input = relief::VScoreReliefInput {
-            board_boundary: board_boundaries,
+            board_boundaries: input.board_boundaries,
+            board_cutouts: input.board_cutouts,
             score_lines: score_lines.to_vec(),
             tool_diameter_mm: relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
             tolerance_mm: relief::DEFAULT_RELIEF_TOLERANCE_MM,
@@ -1059,35 +1076,111 @@ fn board_array_fabrication_profile_inner<Symbol, LayerFunction>(
         let reliefs = if include_relief_debug {
             let output = relief::vscore_route_reliefs_with_debug(&relief_input)?;
             relief_debug = output.debug;
-            output.reliefs
+            output.relief_contours
         } else {
             relief::vscore_route_reliefs(&relief_input)?
         };
-        for relief in reliefs {
-            profile.paths.push(BoardArrayFabricationProfilePath {
-                role: BoardArrayFabricationProfilePathRole::VScoreRelief,
-                payloads: relief.contours,
-            });
-        }
+        union_filled_payloads(
+            &mut material_removal,
+            &reliefs,
+            relief::DEFAULT_RELIEF_TOLERANCE_MM,
+        );
     }
 
-    Ok((profile, relief_debug))
+    Ok((
+        BoardArrayFabricationProfile {
+            array_outlines: input.array_outlines,
+            material_removal: material_removal.to_payloads(),
+        },
+        relief_debug,
+    ))
 }
 
-fn push_board_array_profile_cutouts<Symbol, LayerFunction>(
-    profile: &mut BoardArrayFabricationProfile,
+fn union_filled_payloads(
+    region: &mut common_path::ContourSet,
+    payloads: &[common_path::PathPayload],
+    tolerance: f64,
+) {
+    region.union_assign(&common_path::ContourSet::from_filled_payloads(
+        payloads, tolerance,
+    ));
+}
+
+fn transformed_profile_cutout_payloads<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     step_profile: &StepProfile,
     transform: Affine2,
-    role: BoardArrayFabricationProfilePathRole,
-) {
-    for cutout in &doc.profile_cutouts[step_profile.cutout_start as usize
+) -> Vec<Vec<common_path::PathPayload>> {
+    doc.profile_cutouts[step_profile.cutout_start as usize
         ..(step_profile.cutout_start + step_profile.cutout_count) as usize]
-    {
-        profile.paths.push(BoardArrayFabricationProfilePath {
-            role,
-            payloads: transformed_path_payloads(doc, cutout.path, transform),
-        });
+        .iter()
+        .map(|cutout| transformed_path_payloads(doc, cutout.path, transform))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn material_removal_union_is_winding_insensitive() {
+        let mut region = common_path::ContourSet::empty(FillRule::NonZero, 0.001);
+
+        union_filled_payloads(
+            &mut region,
+            &[reversed_rectangle_payload(0.0, 0.0, 2.0, 2.0)],
+            0.001,
+        );
+        union_filled_payloads(&mut region, &[rectangle_payload(1.0, 0.0, 4.0, 2.0)], 0.001);
+
+        let bbox = region
+            .to_payloads()
+            .iter()
+            .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox));
+        assert_eq!(bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(bbox.max, Point::new(4.0, 2.0));
+    }
+
+    fn rectangle_payload(
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+    ) -> common_path::PathPayload {
+        common_path::PathPayload {
+            bbox: BBox {
+                min: Point::new(min_x, min_y),
+                max: Point::new(max_x, max_y),
+            },
+            cmds: vec![
+                PathCmd::move_to(Point::new(min_x, min_y)),
+                PathCmd::line_to(Point::new(max_x, min_y)),
+                PathCmd::line_to(Point::new(max_x, max_y)),
+                PathCmd::line_to(Point::new(min_x, max_y)),
+                PathCmd::close(),
+            ],
+        }
+    }
+
+    fn reversed_rectangle_payload(
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+    ) -> common_path::PathPayload {
+        common_path::PathPayload {
+            bbox: BBox {
+                min: Point::new(min_x, min_y),
+                max: Point::new(max_x, max_y),
+            },
+            cmds: vec![
+                PathCmd::move_to(Point::new(min_x, max_y)),
+                PathCmd::line_to(Point::new(max_x, max_y)),
+                PathCmd::line_to(Point::new(max_x, min_y)),
+                PathCmd::line_to(Point::new(min_x, min_y)),
+                PathCmd::close(),
+            ],
+        }
     }
 }
 
