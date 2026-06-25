@@ -33,6 +33,85 @@ impl ContourImage {
     }
 }
 
+/// Filled planar region plus the geometric assumptions needed to operate on
+/// it. This keeps boolean/dilation code at the path dialect level instead of
+/// spreading raw contour plumbing through format-specific code.
+#[derive(Debug, Clone)]
+pub struct ContourSet {
+    pub bbox: BBox,
+    pub contours: Vec<PolygonContour>,
+    pub fill_rule: FillRule,
+    pub tolerance: f64,
+}
+
+impl ContourSet {
+    pub fn new(contours: Vec<PolygonContour>, fill_rule: FillRule, tolerance: f64) -> Self {
+        let contours =
+            filter_significant_contours(simplify_polygon_contours(contours, fill_rule), tolerance);
+        Self {
+            bbox: polygon_contours_bbox(&contours),
+            contours,
+            fill_rule,
+            tolerance,
+        }
+    }
+
+    pub fn empty(fill_rule: FillRule, tolerance: f64) -> Self {
+        Self::new(Vec::new(), fill_rule, tolerance)
+    }
+
+    pub fn from_payloads(payloads: &[PathPayload], fill_rule: FillRule, tolerance: f64) -> Self {
+        Self::new(payloads_to_polygon_contours(payloads), fill_rule, tolerance)
+    }
+
+    pub fn rectangle(bbox: BBox, fill_rule: FillRule, tolerance: f64) -> Self {
+        if bbox.is_empty() {
+            return Self::empty(fill_rule, tolerance);
+        }
+        Self::from_payloads(&[rectangle_payload(bbox)], fill_rule, tolerance)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.contours.is_empty()
+    }
+
+    pub fn union(mut self, other: &Self) -> Self {
+        debug_assert_eq!(self.fill_rule, other.fill_rule);
+        self.contours.extend(other.contours.clone());
+        Self::new(self.contours, self.fill_rule, self.tolerance)
+    }
+
+    pub fn difference(self, cutters: &Self) -> Self {
+        debug_assert_eq!(self.fill_rule, cutters.fill_rule);
+        Self::new(
+            difference_contours(self.contours, cutters.contours.clone()),
+            self.fill_rule,
+            self.tolerance,
+        )
+    }
+
+    pub fn intersection(self, clip: &Self) -> Self {
+        debug_assert_eq!(self.fill_rule, clip.fill_rule);
+        Self::new(
+            intersection_contours(self.contours, clip.contours.clone()),
+            self.fill_rule,
+            self.tolerance,
+        )
+    }
+
+    pub fn disk_dilate(self, radius: f64) -> Self {
+        Self::new(
+            disk_dilate_contours(self.contours, radius, self.fill_rule),
+            self.fill_rule,
+            self.tolerance,
+        )
+    }
+
+    pub fn to_payloads(&self) -> Vec<PathPayload> {
+        polygon_contours_to_payloads(self.contours.clone())
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct PaintComposer {
     image: Vec<PolygonContour>,
@@ -347,6 +426,20 @@ pub fn difference_contours(
     polygon_shapes_to_polygon_contours(difference_contour_shapes(subject, cutters))
 }
 
+pub fn intersection_contours(
+    subject: Vec<PolygonContour>,
+    clip: Vec<PolygonContour>,
+) -> Vec<PolygonContour> {
+    if subject.is_empty() || clip.is_empty() {
+        return Vec::new();
+    }
+    polygon_shapes_to_polygon_contours(subject.overlay(
+        &clip,
+        OverlayRule::Intersect,
+        OverlayFillRule::NonZero,
+    ))
+}
+
 pub fn difference_contour_shapes(
     subject: Vec<PolygonContour>,
     cutters: Vec<PolygonContour>,
@@ -409,6 +502,41 @@ pub fn overlay_fill_rule(fill_rule: FillRule) -> OverlayFillRule {
 
 pub fn polygon_shapes_to_polygon_contours(shapes: Vec<Vec<PolygonContour>>) -> Vec<PolygonContour> {
     shapes.into_iter().flatten().collect()
+}
+
+fn filter_significant_contours(
+    mut contours: Vec<PolygonContour>,
+    tolerance: f64,
+) -> Vec<PolygonContour> {
+    if tolerance > 0.0 {
+        let min_area = tolerance.powi(2);
+        contours.retain(|contour| polygon_contour_area(contour).abs() > min_area);
+    }
+    contours
+}
+
+fn polygon_contour_area(contour: &PolygonContour) -> f64 {
+    if contour.len() < 3 {
+        return 0.0;
+    }
+    let mut area = 0.0;
+    for index in 0..contour.len() {
+        let [x0, y0] = contour[index];
+        let [x1, y1] = contour[(index + 1) % contour.len()];
+        area += x0 * y1 - x1 * y0;
+    }
+    area / 2.0
+}
+
+fn rectangle_payload(bbox: BBox) -> PathPayload {
+    let cmds = vec![
+        PathCmd::move_to(Point::new(bbox.min.x, bbox.min.y)),
+        PathCmd::line_to(Point::new(bbox.max.x, bbox.min.y)),
+        PathCmd::line_to(Point::new(bbox.max.x, bbox.max.y)),
+        PathCmd::line_to(Point::new(bbox.min.x, bbox.max.y)),
+        PathCmd::close(),
+    ];
+    PathPayload { bbox, cmds }
 }
 
 fn payloads_to_kurbo(payloads: &[PathPayload]) -> BezPath {
@@ -648,12 +776,34 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn contour_set_composes_region_operations() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), FillRule::NonZero, 0.001);
+        let inner = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), FillRule::NonZero, 0.001);
+        let clip = ContourSet::rectangle(rect(5.0, 0.0, 10.0, 10.0), FillRule::NonZero, 0.001);
+
+        let ring = outer.difference(&inner);
+        let clipped = ring.intersection(&clip);
+        let expanded = clipped.disk_dilate(0.5);
+
+        assert!(!expanded.is_empty());
+        assert_close(expanded.bbox.min.x, 4.5);
+        assert_close(expanded.bbox.max.x, 10.5);
+    }
+
     fn line_payload(start: Point, end: Point) -> PathPayload {
         let mut bbox = BBox::from_point(start);
         bbox.include_point(end);
         PathPayload {
             bbox,
             cmds: vec![PathCmd::move_to(start), PathCmd::line_to(end)],
+        }
+    }
+
+    fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> BBox {
+        BBox {
+            min: Point::new(min_x, min_y),
+            max: Point::new(max_x, max_y),
         }
     }
 
