@@ -9,7 +9,7 @@ use ipc2581::Ipc2581;
 use pcb_ir::dialects::placement::{ComponentPlacement, PlacementDocument, PlacementSide};
 
 use crate::accessors::IpcAccessor;
-use crate::placement::extract_primary_step_placements;
+use crate::placement::extract_single_board_placements;
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CplSideFilter {
@@ -28,7 +28,7 @@ pub struct CplOptions {
 pub fn execute(file: &Path, options: &CplOptions) -> Result<()> {
     let ipc = Ipc2581::parse_file(file)?;
     let accessor = IpcAccessor::new(&ipc);
-    let placements = extract_primary_step_placements(&accessor)?;
+    let placements = extract_single_board_placements(&accessor)?;
     let cpl = emit_cpl_csv(&placements, options);
 
     if let Some(output) = &options.output {
