@@ -16,6 +16,11 @@ const SHIM_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/pcb-la
 const NIGHTLY_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/nightly/latest.json";
 const USER_AGENT: &str = "pcb";
 const STDLIB_ARCHIVE_NAME: &str = "stdlib.tar.zst";
+const TOOLCHAIN_SIDECARS: &[&str] = &["pcb-rectify"];
+/// Written into an install directory once optional sidecar staging has been
+/// attempted, so later commands don't re-lock and re-hit the network on every
+/// invocation for toolchain versions whose release does not ship the sidecars.
+const SIDECAR_CHECK_MARKER: &str = ".sidecars-checked";
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -482,8 +487,13 @@ fn fetch_release_versions(force_refresh: bool) -> Result<Vec<Version>> {
         return Ok(cache.versions);
     }
 
+    // Discover only *complete* releases. CI writes a per-version completion
+    // marker at `pcb/index/v<semver>` as the final, atomic step of publishing,
+    // so a version appears here only after all of its artifacts are uploaded.
+    // Listing `pcb/` directly would instead reveal a version as soon as its
+    // first object landed, letting the shim resolve a half-published release.
     let url = format!(
-        "{RELEASE_LIST_URL}?list-type=2&prefix=pcb/&delimiter=/&_pcb_cache_bust={}",
+        "{RELEASE_LIST_URL}?list-type=2&prefix=pcb/index/&_pcb_cache_bust={}",
         unix_timestamp()
     );
     let body = download_text(&http_client(METADATA_TIMEOUT)?, &url)?;
@@ -493,21 +503,24 @@ fn fetch_release_versions(force_refresh: bool) -> Result<Vec<Version>> {
     Ok(versions)
 }
 
+/// Parse complete-release versions from an S3 `ListObjectsV2` response over the
+/// `pcb/index/` prefix. Each fully-published version has a marker object keyed
+/// `pcb/index/v<semver>`, written by CI as the last step of a release, so this
+/// only ever yields releases whose artifacts are fully uploaded.
 fn parse_release_versions(xml: &str) -> Vec<Version> {
     let mut versions = Vec::new();
     let mut rest = xml;
-    while let Some(start) = rest.find("<Prefix>") {
-        rest = &rest[start + "<Prefix>".len()..];
-        let Some(end) = rest.find("</Prefix>") else {
+    while let Some(start) = rest.find("<Key>") {
+        rest = &rest[start + "<Key>".len()..];
+        let Some(end) = rest.find("</Key>") else {
             break;
         };
-        let prefix = &rest[..end];
-        rest = &rest[end + "</Prefix>".len()..];
+        let key = &rest[..end];
+        rest = &rest[end + "</Key>".len()..];
 
-        let raw = prefix
-            .strip_prefix("pcb/v")
-            .and_then(|value| value.strip_suffix('/'));
-        let Some(raw) = raw else { continue };
+        let Some(raw) = key.strip_prefix("pcb/index/v") else {
+            continue;
+        };
         if let Ok(version) = Version::parse(raw) {
             versions.push(version);
         }
@@ -572,8 +585,9 @@ fn read_workspace_pcb_version(path: &Path) -> Result<Option<String>> {
 fn ensure_installed(version: &Version) -> Result<PathBuf> {
     ensure_supported_target()?;
 
-    let binary = installed_binary_path(version);
-    if binary.is_file() {
+    let install_dir = installed_dir(version);
+    let binary = install_dir.join(pcbc_binary_name());
+    if binary.is_file() && optional_sidecars_present(&install_dir) {
         return Ok(binary);
     }
 
@@ -584,6 +598,7 @@ fn ensure_installed(version: &Version) -> Result<PathBuf> {
     let mut lock = fslock::LockFile::open(&lock_path)?;
     lock.lock()?;
     let result = if binary.is_file() {
+        ensure_optional_sidecars(version, &install_dir);
         Ok(binary)
     } else {
         install_toolchain(version)
@@ -597,6 +612,7 @@ fn ensure_nightly_installed(release: &NightlyRelease) -> Result<(NightlyReceipt,
 
     if let Some((receipt, binary)) = installed_nightly_toolchain()?
         && receipt.sha == release.sha
+        && optional_sidecars_present(&nightly_dir())
     {
         return Ok((receipt, binary));
     }
@@ -610,12 +626,39 @@ fn ensure_nightly_installed(release: &NightlyRelease) -> Result<(NightlyReceipt,
     let result = if let Some((receipt, binary)) = installed_nightly_toolchain()?
         && receipt.sha == release.sha
     {
+        ensure_optional_nightly_sidecars(release);
         Ok((receipt, binary))
     } else {
         install_nightly(release)
     };
     lock.unlock()?;
     result
+}
+
+fn optional_sidecars_present(install_dir: &Path) -> bool {
+    // Once staging has been attempted, a marker file is written even when the
+    // release does not ship the sidecars. Treat that as "present" so we never
+    // re-acquire the install lock or re-download on every subsequent command.
+    if install_dir.join(SIDECAR_CHECK_MARKER).is_file() {
+        return true;
+    }
+    TOOLCHAIN_SIDECARS
+        .iter()
+        .all(|binary| install_dir.join(executable_name(binary)).is_file())
+}
+
+fn ensure_optional_sidecars(version: &Version, install_dir: &Path) {
+    if !optional_sidecars_present(install_dir) {
+        let release_base_url = format!("{RELEASE_BASE_URL}/v{version}");
+        stage_optional_sidecars(&release_base_url, install_dir);
+    }
+}
+
+fn ensure_optional_nightly_sidecars(release: &NightlyRelease) {
+    let install_dir = nightly_dir();
+    if !optional_sidecars_present(&install_dir) {
+        stage_optional_sidecars(&release.base_url, &install_dir);
+    }
 }
 
 fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)> {
@@ -675,6 +718,7 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
         serde_json::to_vec_pretty(&receipt)?,
     )?;
     stage_stdlib_archive(&release.base_url, &staging_dir)?;
+    stage_optional_sidecars(&release.base_url, &staging_dir);
 
     if install_dir.exists() {
         fs::remove_dir_all(&install_dir)?;
@@ -747,7 +791,9 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
         staging_dir.join("receipt.json"),
         serde_json::to_vec_pretty(&receipt)?,
     )?;
-    stage_stdlib_archive(&format!("{RELEASE_BASE_URL}/v{version}"), &staging_dir)?;
+    let release_base_url = format!("{RELEASE_BASE_URL}/v{version}");
+    stage_stdlib_archive(&release_base_url, &staging_dir)?;
+    stage_optional_sidecars(&release_base_url, &staging_dir);
 
     if install_dir.exists() {
         fs::remove_dir_all(&install_dir)?;
@@ -776,6 +822,51 @@ fn stage_stdlib_archive(base_url: &str, staging_dir: &Path) -> Result<()> {
         stdlib_dir.join("interfaces.zen").is_file(),
         "stdlib archive {url} did not contain interfaces.zen at the archive root"
     );
+    Ok(())
+}
+
+/// Best-effort staging of optional sidecar binaries (e.g. `rectify`).
+///
+/// Sidecars must never block core `pcb`/`pcbc` usage, so download, checksum,
+/// and write failures are logged and swallowed rather than propagated. On a
+/// completed attempt -- whether the sidecars were fetched or the release simply
+/// does not ship them -- a marker file is written so later commands
+/// short-circuit in `optional_sidecars_present` instead of re-locking and
+/// re-downloading. A hard (likely transient) failure leaves no marker so the
+/// next invocation retries.
+fn stage_optional_sidecars(base_url: &str, staging_dir: &Path) {
+    match try_stage_optional_sidecars(base_url, staging_dir) {
+        Ok(()) => {
+            let marker = staging_dir.join(SIDECAR_CHECK_MARKER);
+            if let Err(err) = fs::write(&marker, b"") {
+                eprintln!(
+                    "warning: failed to record sidecar check marker {}: {err}",
+                    marker.display()
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("warning: skipping optional sidecar binaries: {err:#}");
+        }
+    }
+}
+
+fn try_stage_optional_sidecars(base_url: &str, staging_dir: &Path) -> Result<()> {
+    let client = http_client(ARCHIVE_TIMEOUT)?;
+    for binary in TOOLCHAIN_SIDECARS {
+        for target in download_target_triples().iter().copied() {
+            let artifact_name = binary_artifact_name_for(binary, target);
+            let url = format!("{}/{}", base_url.trim_end_matches('/'), artifact_name);
+            let Some(bytes) = download_optional_artifact(&client, &url)? else {
+                continue;
+            };
+            verify_checksum(&url, &bytes)?;
+            let dst = staging_dir.join(executable_name(binary));
+            fs::write(&dst, bytes)?;
+            copy_executable_permissions(&dst, &dst)?;
+            break;
+        }
+    }
     Ok(())
 }
 
@@ -1274,10 +1365,6 @@ fn pcbc_version(binary: &Path) -> Option<Version> {
     Version::parse(version).ok()
 }
 
-fn installed_binary_path(version: &Version) -> PathBuf {
-    installed_dir(version).join(pcbc_binary_name())
-}
-
 fn installed_dir(version: &Version) -> PathBuf {
     toolchains_dir()
         .join(version.to_string())
@@ -1343,6 +1430,11 @@ fn binary_artifact_name_for(binary: &str, target: &str) -> String {
 fn toolchain_archive_name_for(binary: &str, target: &str) -> String {
     let ext = if cfg!(windows) { "zip" } else { "tar.xz" };
     format!("{binary}-{target}.{ext}")
+}
+
+fn executable_name(binary: &str) -> String {
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    format!("{binary}{ext}")
 }
 
 fn pcbc_binary_name() -> &'static str {
@@ -1447,15 +1539,151 @@ mod tests {
         ));
     }
 
+    /// Spawn a throwaway HTTP server that mimics the release bucket layout for
+    /// sidecar artifacts. Serves `<artifact>.zst` and `<artifact>.sha256` when
+    /// `artifact_zst` / `sha256` are `Some`, and 404s otherwise. Returns a
+    /// `base_url` of the form the real flow uses (`.../pcb/v<version>`).
+    fn spawn_fake_release_server(artifact_zst: Option<Vec<u8>>, sha256: Option<String>) -> String {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { continue };
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 1024];
+                loop {
+                    match stream.read(&mut tmp) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&tmp[..n]);
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                    }
+                }
+                let req = String::from_utf8_lossy(&buf);
+                let path = req
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("")
+                    .to_string();
+                let (status, body): (&str, Vec<u8>) = if path.ends_with(".zst") {
+                    match &artifact_zst {
+                        Some(bytes) => ("200 OK", bytes.clone()),
+                        None => ("404 Not Found", Vec::new()),
+                    }
+                } else if path.ends_with(".sha256") {
+                    match &sha256 {
+                        Some(text) => ("200 OK", text.clone().into_bytes()),
+                        None => ("404 Not Found", Vec::new()),
+                    }
+                } else {
+                    // Uncompressed artifact fallback is never served here.
+                    ("404 Not Found", Vec::new())
+                };
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+        format!("http://127.0.0.1:{port}/pcb/vtest")
+    }
+
     #[test]
-    fn release_listing_parser_extracts_only_version_prefixes() {
+    fn stage_optional_sidecars_installs_published_artifact() {
+        // A release that publishes `rectify-<target>.zst` (+ `.sha256`) should
+        // be downloaded, verified, decompressed, and installed beside `pcbc`.
+        let payload = b"#!/bin/sh\necho fake-rectify\n".to_vec();
+        let zst = zstd::encode_all(Cursor::new(payload.clone()), 0).unwrap();
+        let digest = sha256_hex(&payload);
+        let base_url = spawn_fake_release_server(Some(zst), Some(format!("{digest}\n")));
+
+        let staging = tempfile::tempdir().unwrap();
+        stage_optional_sidecars(&base_url, staging.path());
+
+        let installed = staging.path().join(executable_name("pcb-rectify"));
+        assert!(
+            installed.is_file(),
+            "pcb-rectify sidecar should be installed"
+        );
+        assert_eq!(fs::read(&installed).unwrap(), payload);
+        assert!(
+            staging.path().join(SIDECAR_CHECK_MARKER).is_file(),
+            "a completed staging attempt should write the marker"
+        );
+        assert!(optional_sidecars_present(staging.path()));
+    }
+
+    #[test]
+    fn stage_optional_sidecars_absent_artifact_marks_without_binary() {
+        // A release that does not ship the sidecar (every 404) must not error,
+        // must install nothing, and must still write the marker so later
+        // commands short-circuit instead of re-downloading on every invocation.
+        let base_url = spawn_fake_release_server(None, None);
+        let staging = tempfile::tempdir().unwrap();
+        stage_optional_sidecars(&base_url, staging.path());
+
+        assert!(
+            !staging
+                .path()
+                .join(executable_name("pcb-rectify"))
+                .is_file(),
+            "no sidecar should be installed when the release lacks the artifact"
+        );
+        assert!(
+            staging.path().join(SIDECAR_CHECK_MARKER).is_file(),
+            "a confirmed-unavailable attempt should still write the marker"
+        );
+        assert!(optional_sidecars_present(staging.path()));
+    }
+
+    #[test]
+    fn stage_optional_sidecars_checksum_failure_leaves_no_marker() {
+        // A hard (likely transient) failure must be best-effort -- it must not
+        // install a corrupt binary and must NOT write the marker, so the next
+        // invocation retries.
+        let payload = b"real-bytes".to_vec();
+        let zst = zstd::encode_all(Cursor::new(payload), 0).unwrap();
+        let wrong = sha256_hex(b"different-bytes");
+        let base_url = spawn_fake_release_server(Some(zst), Some(format!("{wrong}\n")));
+
+        let staging = tempfile::tempdir().unwrap();
+        stage_optional_sidecars(&base_url, staging.path());
+
+        assert!(
+            !staging
+                .path()
+                .join(executable_name("pcb-rectify"))
+                .is_file()
+        );
+        assert!(
+            !staging.path().join(SIDECAR_CHECK_MARKER).is_file(),
+            "a hard failure should leave no marker so the next run retries"
+        );
+        assert!(!optional_sidecars_present(staging.path()));
+    }
+
+    #[test]
+    fn release_index_parser_extracts_only_complete_versions() {
+        // ListObjectsV2 over `pcb/index/`: one marker object per complete
+        // release, plus noise that must be ignored (the folder placeholder and
+        // any non-version keys).
         let xml = r#"
             <ListBucketResult>
-              <CommonPrefixes><Prefix>pcb/latest/</Prefix></CommonPrefixes>
-              <CommonPrefixes><Prefix>pcb/nightly/</Prefix></CommonPrefixes>
-              <CommonPrefixes><Prefix>pcb/v0.3.82/</Prefix></CommonPrefixes>
-              <CommonPrefixes><Prefix>pcb/v0.3.83/</Prefix></CommonPrefixes>
-              <CommonPrefixes><Prefix>pcb/v0.4.0-beta.1/</Prefix></CommonPrefixes>
+              <Contents><Key>pcb/index/</Key></Contents>
+              <Contents><Key>pcb/index/v0.3.82</Key></Contents>
+              <Contents><Key>pcb/index/v0.3.83</Key></Contents>
+              <Contents><Key>pcb/index/v0.4.0-beta.1</Key></Contents>
+              <Contents><Key>pcb/index/not-a-version</Key></Contents>
             </ListBucketResult>
         "#;
 

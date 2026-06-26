@@ -1,0 +1,39 @@
+[package]
+name = "rectify"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+description = "Infer and patch KiCad footprint 3D model rotate/offset from STEP geometry"
+
+[[bin]]
+name = "pcb-rectify"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+glam = { workspace = true }
+
+pcb-sexpr = { workspace = true }
+
+# Foxtrot STEP parsing + tessellation
+triangulate = { workspace = true }
+
+base64 = { workspace = true }
+zstd = { workspace = true }
+regex = { workspace = true }
+
+# Numerics: raster grids, FFT-based mask correlation, parallel pose scan
+ndarray = { workspace = true }
+rustfft = { workspace = true }
+num-complex = { workspace = true }
+rayon = { workspace = true }
+
+# CLI progress bars for `bench` / `audit` batches.
+indicatif = { workspace = true, features = ["rayon"] }

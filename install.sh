@@ -69,7 +69,7 @@ install_local() {
   fi
 
   target_dir="$source_dir/target"
-  cargo build --release -p pcb -p pcbc --manifest-path "$source_dir/Cargo.toml" --target-dir "$target_dir"
+  cargo build --release -p pcb -p pcbc -p rectify --manifest-path "$source_dir/Cargo.toml" --target-dir "$target_dir"
 
   local_target_dir="$data_dir/toolchains/local/$target"
   stdlib_dir="$local_target_dir/lib/std"
@@ -81,6 +81,7 @@ install_local() {
 
   mkdir -p "$local_target_dir/lib"
   install -m 755 "$target_dir/release/pcbc" "$local_target_dir/pcbc"
+  install -m 755 "$target_dir/release/pcb-rectify" "$local_target_dir/pcb-rectify"
   rm -f "$install_dir/pcbc"
   rm -rf "$stdlib_dir"
   cp -R "$source_dir/lib/std" "$stdlib_dir"
@@ -89,6 +90,7 @@ install_local() {
 
   echo "Installed local pcb to $install_dir/pcb"
   echo "Installed local pcbc to $local_target_dir/pcbc"
+  echo "Installed local pcb-rectify to $local_target_dir/pcb-rectify"
   echo "Installed local stdlib to $stdlib_dir"
 }
 

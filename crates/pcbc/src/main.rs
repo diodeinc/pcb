@@ -244,44 +244,96 @@ fn run() -> anyhow::Result<()> {
         Commands::Ipc2581(args) => ipc2581::execute(args),
         Commands::Gerber(args) => gerber::execute(args),
         Commands::Kq(args) => kq::execute(args),
-        Commands::External(args) => {
-            if args.is_empty() {
-                anyhow::bail!("No external command specified");
+        Commands::External(args) => execute_external(args),
+    }
+}
+
+fn execute_external(args: Vec<OsString>) -> anyhow::Result<()> {
+    if args.is_empty() {
+        anyhow::bail!("No external command specified");
+    }
+
+    // First argument is the subcommand name.
+    let command = args[0].to_string_lossy();
+    let external_args = &args[1..];
+    let candidates = external_command_candidates(&command);
+
+    // First search PATH, which supports separately-installed extensions.
+    for external_cmd in &candidates {
+        match run_external_command(external_cmd, external_args) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                anyhow::bail!(
+                    "Failed to execute external command '{}': {}",
+                    external_cmd,
+                    e
+                )
             }
+            Err(_) => {}
+        }
+    }
 
-            // First argument is the subcommand name
-            let command = args[0].to_string_lossy();
-            let external_cmd = format!("pcb-{command}");
-
-            // Try to find and execute the external command
-            match Command::new(&external_cmd).args(&args[1..]).status() {
-                Ok(status) => {
-                    // Forward the exit status
-                    if !status.success() {
-                        match status.code() {
-                            Some(code) => std::process::exit(code),
-                            None => anyhow::bail!(
-                                "External command '{}' terminated by signal",
-                                external_cmd
-                            ),
-                        }
-                    }
-                    Ok(())
+    // Then search next to the currently-running `pcbc` binary. Bundled extension
+    // binaries installed by the `pcb` shim live in that toolchain directory,
+    // which is not necessarily on PATH.
+    for external_cmd in &candidates {
+        if let Some(sibling) = sibling_external_command(external_cmd) {
+            match run_external_command(sibling, external_args) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                    anyhow::bail!(
+                        "Failed to execute external command '{}': {}",
+                        external_cmd,
+                        e
+                    )
                 }
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        eprintln!("Error: Unknown command '{command}'");
-                        eprintln!("No built-in command or external command '{external_cmd}' found");
-                        std::process::exit(1);
-                    } else {
-                        anyhow::bail!(
-                            "Failed to execute external command '{}': {}",
-                            external_cmd,
-                            e
-                        )
-                    }
-                }
+                Err(_) => {}
             }
         }
     }
+
+    eprintln!("Error: Unknown command '{command}'");
+    eprintln!(
+        "No built-in command or external command '{}' found",
+        candidates.join("' / '")
+    );
+    std::process::exit(1);
+}
+
+fn external_command_candidates(command: &str) -> Vec<String> {
+    // Both first-party bundled sidecars (e.g. `pcb-rectify`) and third-party
+    // extensions follow the `pcb-<command>` naming convention. Bundled sidecars
+    // are installed next to `pcbc` in the toolchain dir and found by the sibling
+    // search; extensions are found on PATH.
+    vec![format!("pcb-{command}")]
+}
+
+fn run_external_command<S: AsRef<std::ffi::OsStr>>(
+    program: S,
+    args: &[OsString],
+) -> std::io::Result<()> {
+    let status = Command::new(program).args(args).status()?;
+    if !status.success() {
+        match status.code() {
+            Some(code) => std::process::exit(code),
+            None => {
+                return Err(std::io::Error::other(
+                    "External command terminated by signal",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sibling_external_command(command: &str) -> Option<std::path::PathBuf> {
+    let current = std::env::current_exe().ok()?;
+    let parent = current.parent()?;
+    let binary_name = if cfg!(windows) {
+        format!("{command}.exe")
+    } else {
+        command.to_string()
+    };
+    let sibling = parent.join(binary_name);
+    sibling.is_file().then_some(sibling)
 }

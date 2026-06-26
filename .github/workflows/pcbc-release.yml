@@ -160,6 +160,7 @@ jobs:
             export CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
           fi
           cargo build --profile dist -p pcbc --bin pcbc --target "$TARGET"
+          cargo build --profile dist -p rectify --bin pcb-rectify --target "$TARGET"
 
       - name: Prepare artifacts
         shell: bash
@@ -168,19 +169,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          exe=pcbc
-          artifact="pcbc-$TARGET"
-          if [[ "$TARGET" == *windows* ]]; then
-            exe=pcbc.exe
-            artifact="$artifact.exe"
-          fi
-          cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
-          zstd -q -f -3 "artifacts/$artifact" -o "artifacts/$artifact.zst"
-          if command -v shasum >/dev/null; then
-            shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
-          else
-            sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
-          fi
+          for bin in pcbc pcb-rectify; do
+            exe="$bin"
+            artifact="$bin-$TARGET"
+            if [[ "$TARGET" == *windows* ]]; then
+              exe="$bin.exe"
+              artifact="$artifact.exe"
+            fi
+            cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
+            zstd -q -f -3 "artifacts/$artifact" -o "artifacts/$artifact.zst"
+            if command -v shasum >/dev/null; then
+              shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
+            else
+              sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
+            fi
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -211,13 +214,27 @@ jobs:
       - name: Upload artifacts to S3
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         run: |
-          # Upload the stdlib first: the shim discovers a release as soon as any
-          # object exists under its prefix and requires stdlib.tar.zst to install.
+          # Upload every artifact first. None of this is discoverable yet: the
+          # shim only resolves versions that have a completion marker under
+          # pcb/index/ (written by the next step), so a partially-synced release
+          # is invisible.
           aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ needs.prepare.outputs.tag }}/" \
-            --exclude "*" --include "stdlib.tar.zst*" \
             --cache-control "public, max-age=31536000, immutable"
-          aws s3 sync artifacts/ "s3://diode-pcb-releases/pcb/${{ needs.prepare.outputs.tag }}/" \
-            --cache-control "public, max-age=31536000, immutable"
+
+      - name: Publish release completion marker
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        run: |
+          # Single atomic PutObject that "commits" the release. Written last, so
+          # the shim never resolves a half-uploaded version. The shim only keys
+          # off the marker's presence; the body is informational.
+          jq -n \
+            --arg version "${{ needs.prepare.outputs.version }}" \
+            --arg tag "${{ needs.prepare.outputs.tag }}" \
+            --arg published_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{ version: $version, tag: $tag, published_at: $published_at }' > release.json
+          aws s3 cp release.json "s3://diode-pcb-releases/pcb/index/${{ needs.prepare.outputs.tag }}" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/json"
 
       - name: Create GitHub release
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
