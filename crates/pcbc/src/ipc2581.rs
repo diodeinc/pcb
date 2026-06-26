@@ -158,6 +158,9 @@ enum BoardArrayCommands {
         /// Choose the smallest fitting A-series board array automatically.
         #[arg(long)]
         auto: bool,
+        /// Force auto board array generation to one A-series sheet size. Implies --auto.
+        #[arg(long)]
+        sheet: Option<commands::board_array_auto::AutoSheetSize>,
         /// Number of board columns. Must be between 1 and 10. Defaults to 1.
         #[arg(long)]
         columns: Option<u32>,
@@ -231,21 +234,24 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             BoardArrayCommands::Create {
                 input,
                 auto,
+                sheet,
                 columns,
                 rows,
                 board_margin,
                 edge_rail,
                 output,
             } => {
-                if auto {
+                if auto || sheet.is_some() {
                     if columns.is_some()
                         || rows.is_some()
                         || !board_margin.is_empty()
                         || !edge_rail.is_empty()
                     {
-                        anyhow::bail!("--auto cannot be combined with manual board array options");
+                        anyhow::bail!(
+                            "--auto/--sheet cannot be combined with manual board array options"
+                        );
                     }
-                    commands::board_array::execute_auto(&input, &output)
+                    commands::board_array::execute_auto(&input, &output, sheet)
                 } else {
                     let board_margin_mm = if board_margin.is_empty() {
                         commands::board_array::BoardMarginMm::all(5.0)

@@ -24,7 +24,9 @@ use quick_xml::{
     events::{BytesStart, Event},
 };
 
-use super::board_array_auto::auto_board_array_plan;
+use super::board_array_auto::{
+    AutoSheetSize, auto_board_array_plan, auto_board_array_plan_for_sheet,
+};
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
@@ -390,9 +392,9 @@ pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -
     Ok(())
 }
 
-pub fn execute_auto(input: &Path, output: &Path) -> Result<()> {
+pub fn execute_auto(input: &Path, output: &Path, sheet: Option<AutoSheetSize>) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let updated_xml = create_auto_board_array_xml(&content)?;
+    let updated_xml = create_auto_board_array_xml_with_sheet(&content, sheet)?;
     file_utils::save_ipc_file(output, &updated_xml)?;
     eprintln!("✓ Created IPC-2581 board array at {}", output.display());
     Ok(())
@@ -404,17 +406,37 @@ fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Resul
     write_board_array_xml(xml, &spec)
 }
 
+#[cfg(test)]
 fn create_auto_board_array_xml(xml: &str) -> Result<String> {
+    create_auto_board_array_xml_with_sheet(xml, None)
+}
+
+fn create_auto_board_array_xml_with_sheet(
+    xml: &str,
+    sheet: Option<AutoSheetSize>,
+) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let options = auto_board_array_options(&ipc)?;
+    let options = auto_board_array_options(&ipc, sheet)?;
     let spec = build_board_array_spec(&ipc, &options, BoardArrayValidationMode::Auto)?;
     write_board_array_xml(xml, &spec)
 }
 
-fn auto_board_array_options(ipc: &Ipc2581) -> Result<BoardArrayCreateOptions> {
+fn auto_board_array_options(
+    ipc: &Ipc2581,
+    sheet: Option<AutoSheetSize>,
+) -> Result<BoardArrayCreateOptions> {
     let board = primary_board_layout(ipc)?;
     let board_margin = auto_board_margin(ipc, board.bbox)?;
-    let plan = auto_board_array_plan(board.bbox.width(), board.bbox.height(), board_margin)?;
+    let plan = if let Some(sheet) = sheet {
+        auto_board_array_plan_for_sheet(
+            board.bbox.width(),
+            board.bbox.height(),
+            board_margin,
+            sheet,
+        )?
+    } else {
+        auto_board_array_plan(board.bbox.width(), board.bbox.height(), board_margin)?
+    };
 
     Ok(BoardArrayCreateOptions {
         columns: plan.columns,
@@ -2601,6 +2623,24 @@ mod tests {
         assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
         assert_point_close(panel_step.bbox.max, Point::new(105.0, 74.0));
         assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 12);
+    }
+
+    #[test]
+    fn auto_create_projects_board_to_requested_a5_array() {
+        let xml =
+            create_auto_board_array_xml_with_sheet(board_fixture_mm(), Some(AutoSheetSize::A5))
+                .unwrap();
+
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="5" y="14" nx="10" ny="6" dx="20" dy="20" angle="0.00" mirror="false"/>"#
+        ));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+        assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
+        assert_point_close(panel_step.bbox.max, Point::new(210.0, 148.0));
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 60);
     }
 
     #[test]

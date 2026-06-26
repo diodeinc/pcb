@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 
+use clap::ValueEnum;
+
 use super::board_array::BoardMarginMm;
 
 const AUTO_SHEETS: [AutoSheetSize; 4] = [
@@ -11,7 +13,7 @@ const AUTO_SHEETS: [AutoSheetSize; 4] = [
 const AUTO_MIN_EDGE_RAIL_MM: f64 = 5.0;
 const AUTO_MAX_GRID_COUNT: u32 = 10;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoSheetSize {
     A7,
     A6,
@@ -20,7 +22,7 @@ pub enum AutoSheetSize {
 }
 
 impl AutoSheetSize {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::A7 => "A7",
             Self::A6 => "A6",
@@ -74,6 +76,7 @@ pub struct AutoBoardArrayError {
     board_width_mm: f64,
     board_height_mm: f64,
     board_margin_mm: BoardMarginMm,
+    sheet: AutoSheetSize,
 }
 
 impl std::fmt::Display for AutoBoardArrayError {
@@ -83,7 +86,7 @@ impl std::fmt::Display for AutoBoardArrayError {
             "board bbox {} x {} mm cannot fit in {} with board margins {} and 5 mm edge rails",
             fmt_num(self.board_width_mm),
             fmt_num(self.board_height_mm),
-            AutoSheetSize::A4.name(),
+            self.sheet.name(),
             fmt_margin(self.board_margin_mm)
         )
     }
@@ -111,19 +114,7 @@ pub fn auto_board_array_plan(
     // A valid plan has Nx, Ny >= 1. The final array dimensions are exactly
     // T because the leftover span is assigned back to the two edge rails.
     for sheet in AUTO_SHEETS {
-        if let Some(plan) = sheet
-            .targets_mm()
-            .into_iter()
-            .filter_map(|target| {
-                plan_for_target(
-                    sheet,
-                    target,
-                    board_width_mm,
-                    board_height_mm,
-                    board_margin_mm,
-                )
-            })
-            .max_by(compare_auto_plan)
+        if let Some(plan) = plan_for_sheet(sheet, board_width_mm, board_height_mm, board_margin_mm)
         {
             return Ok(plan);
         }
@@ -133,7 +124,45 @@ pub fn auto_board_array_plan(
         board_width_mm,
         board_height_mm,
         board_margin_mm,
+        sheet: AutoSheetSize::A4,
     })
+}
+
+pub fn auto_board_array_plan_for_sheet(
+    board_width_mm: f64,
+    board_height_mm: f64,
+    board_margin_mm: BoardMarginMm,
+    sheet: AutoSheetSize,
+) -> Result<AutoBoardArrayPlan, AutoBoardArrayError> {
+    plan_for_sheet(sheet, board_width_mm, board_height_mm, board_margin_mm).ok_or(
+        AutoBoardArrayError {
+            board_width_mm,
+            board_height_mm,
+            board_margin_mm,
+            sheet,
+        },
+    )
+}
+
+fn plan_for_sheet(
+    sheet: AutoSheetSize,
+    board_width_mm: f64,
+    board_height_mm: f64,
+    board_margin_mm: BoardMarginMm,
+) -> Option<AutoBoardArrayPlan> {
+    sheet
+        .targets_mm()
+        .into_iter()
+        .filter_map(|target| {
+            plan_for_target(
+                sheet,
+                target,
+                board_width_mm,
+                board_height_mm,
+                board_margin_mm,
+            )
+        })
+        .max_by(compare_auto_plan)
 }
 
 fn plan_for_target(
@@ -266,6 +295,29 @@ mod tests {
         assert_close(plan.edge_rail_mm.right, 7.5);
         assert_close(plan.edge_rail_mm.bottom, 7.0);
         assert_close(plan.edge_rail_mm.top, 7.0);
+        assert_close(finished_width(20.0, &plan), plan.target.width);
+        assert_close(finished_height(10.0, &plan), plan.target.height);
+    }
+
+    #[test]
+    fn projects_board_bbox_to_requested_sheet() {
+        let plan = auto_board_array_plan_for_sheet(
+            20.0,
+            10.0,
+            BoardMarginMm::all(AUTO_BOARD_MARGIN_MM),
+            AutoSheetSize::A5,
+        )
+        .unwrap();
+
+        assert_eq!(plan.sheet, AutoSheetSize::A5);
+        assert_eq!(
+            plan.target,
+            TargetSizeMm {
+                width: 148.0,
+                height: 210.0
+            }
+        );
+        assert_eq!((plan.columns, plan.rows), (4, 10));
         assert_close(finished_width(20.0, &plan), plan.target.width);
         assert_close(finished_height(10.0, &plan), plan.target.height);
     }
