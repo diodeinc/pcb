@@ -21,7 +21,7 @@ pcb rectify fix path/to/components/ --kind smd     # restrict to SMD-only footpr
 ```
 
 Low-level solver/debug subcommands are still available on the underlying
-`rectify` extension binary (`solve`, `patch`, `audit`, `bench`) but are
+`pcb-rectify` extension binary (`solve`, `patch`, `audit`, `bench`) but are
 hidden from normal `pcb rectify --help` output.
 
 Logging is quiet by default; set `RUST_LOG=warn` or a narrower filter to opt in.
@@ -222,7 +222,7 @@ rasterization:
 
 ## Benchmarking
 
-Point `rectify bench` at a directory of `.kicad_mod` files; every
+Point `pcb-rectify bench` at a directory of `.kicad_mod` files; every
 footprint's stored `(rotate ...)` / `(offset ...)` is used as ground
 truth. Files are recursed; paths can also be individual `.kicad_mod`
 files.
@@ -245,22 +245,22 @@ Two preset modes control offset tolerance and rotation strictness:
 
 ```bash
 # Default loose mode (±0.20 mm L∞)
-rectify bench ~/code/github/diodeinc/registry/components
+pcb-rectify bench ~/code/github/diodeinc/registry/components
 
 # SMD-only loop while tuning the SMD contact pipeline
-rectify bench ~/code/github/diodeinc/registry/components --kind smd
+pcb-rectify bench ~/code/github/diodeinc/registry/components --kind smd
 
 # Same benchmark with a different deterministic perturbation set
-rectify bench ~/code/github/diodeinc/registry/components --initial-transform-seed 2
+pcb-rectify bench ~/code/github/diodeinc/registry/components --initial-transform-seed 2
 
 # Legacy benchmark mode: solver sees the stored transform as its initial prior
-rectify bench ~/code/github/diodeinc/registry/components --use-stored-initial-transform
+pcb-rectify bench ~/code/github/diodeinc/registry/components --use-stored-initial-transform
 
 # Strict mode (±0.10 mm L∞)
-rectify bench ~/code/github/diodeinc/registry/components --mode strict
+pcb-rectify bench ~/code/github/diodeinc/registry/components --mode strict
 
 # Per-footprint JSON diagnostics (predicted vs stored offset, L∞, etc.)
-rectify bench ~/code/github/diodeinc/registry/components --jsonl
+pcb-rectify bench ~/code/github/diodeinc/registry/components --jsonl
 ```
 
 `--kind` accepts `all` (default), `smd`, `tht`, or `mixed`. Filtered runs
@@ -301,6 +301,6 @@ Run against your local copy of
 `components/` to establish a baseline for your current registry version:
 
 ```bash
-rectify bench ~/code/github/diodeinc/registry/components
-rectify bench ~/code/github/diodeinc/registry/components --mode strict
+pcb-rectify bench ~/code/github/diodeinc/registry/components
+pcb-rectify bench ~/code/github/diodeinc/registry/components --mode strict
 ```

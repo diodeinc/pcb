@@ -15,7 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `NotConnected` is now an open-net constructor, not a net type.
-- Added `pcb rectify check` and `pcb rectify fix`, backed by a bundled `rectify` sidecar binary, to check and patch KiCad footprint 3D model `(rotate ...)`/`(offset ...)` transforms by matching tessellated STEP geometry against the footprint's pads and holes.
+- Added `pcb rectify check` and `pcb rectify fix`, backed by a bundled `pcb-rectify` sidecar binary, to check and patch KiCad footprint 3D model `(rotate ...)`/`(offset ...)` transforms by matching tessellated STEP geometry against the footprint's pads and holes.
 
 ## [0.4.1] - 2026-06-22
 

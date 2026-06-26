@@ -26,13 +26,13 @@ pcb rectify fix <footprint.kicad_mod>
 Preview the legacy patch path without writing:
 
 ```bash
-rectify patch <footprint.kicad_mod> --dry-run
+pcb-rectify patch <footprint.kicad_mod> --dry-run
 ```
 
 Inspect the top inferred pose as JSON:
 
 ```bash
-rectify solve <footprint.kicad_mod>
+pcb-rectify solve <footprint.kicad_mod>
 ```
 
 ## Workflow

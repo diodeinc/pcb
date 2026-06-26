@@ -301,11 +301,11 @@ fn execute_external(args: Vec<OsString>) -> anyhow::Result<()> {
 }
 
 fn external_command_candidates(command: &str) -> Vec<String> {
-    if command == "rectify" {
-        vec!["rectify".into()]
-    } else {
-        vec![format!("pcb-{command}")]
-    }
+    // Both first-party bundled sidecars (e.g. `pcb-rectify`) and third-party
+    // extensions follow the `pcb-<command>` naming convention. Bundled sidecars
+    // are installed next to `pcbc` in the toolchain dir and found by the sibling
+    // search; extensions are found on PATH.
+    vec![format!("pcb-{command}")]
 }
 
 fn run_external_command<S: AsRef<std::ffi::OsStr>>(

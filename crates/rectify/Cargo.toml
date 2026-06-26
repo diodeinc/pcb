@@ -8,7 +8,7 @@ authors = { workspace = true }
 description = "Infer and patch KiCad footprint 3D model rotate/offset from STEP geometry"
 
 [[bin]]
-name = "rectify"
+name = "pcb-rectify"
 path = "src/main.rs"
 
 [dependencies]

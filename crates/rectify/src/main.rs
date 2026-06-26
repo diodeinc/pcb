@@ -19,7 +19,7 @@ mod solver;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "rectify",
+    name = "pcb-rectify",
     bin_name = "pcb rectify",
     about = "Check footprint <-> 3d model alignment in .kicad_mod file"
 )]

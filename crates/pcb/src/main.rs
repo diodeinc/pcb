@@ -16,7 +16,7 @@ const SHIM_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/pcb-la
 const NIGHTLY_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/nightly/latest.json";
 const USER_AGENT: &str = "pcb";
 const STDLIB_ARCHIVE_NAME: &str = "stdlib.tar.zst";
-const TOOLCHAIN_SIDECARS: &[&str] = &["rectify"];
+const TOOLCHAIN_SIDECARS: &[&str] = &["pcb-rectify"];
 /// Written into an install directory once optional sidecar staging has been
 /// attempted, so later commands don't re-lock and re-hit the network on every
 /// invocation for toolchain versions whose release does not ship the sidecars.

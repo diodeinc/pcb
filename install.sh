@@ -81,7 +81,7 @@ install_local() {
 
   mkdir -p "$local_target_dir/lib"
   install -m 755 "$target_dir/release/pcbc" "$local_target_dir/pcbc"
-  install -m 755 "$target_dir/release/rectify" "$local_target_dir/rectify"
+  install -m 755 "$target_dir/release/pcb-rectify" "$local_target_dir/pcb-rectify"
   rm -f "$install_dir/pcbc"
   rm -rf "$stdlib_dir"
   cp -R "$source_dir/lib/std" "$stdlib_dir"
@@ -90,7 +90,7 @@ install_local() {
 
   echo "Installed local pcb to $install_dir/pcb"
   echo "Installed local pcbc to $local_target_dir/pcbc"
-  echo "Installed local rectify to $local_target_dir/rectify"
+  echo "Installed local pcb-rectify to $local_target_dir/pcb-rectify"
   echo "Installed local stdlib to $stdlib_dir"
 }
 
