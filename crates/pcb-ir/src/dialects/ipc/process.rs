@@ -32,32 +32,42 @@ where
     normalize_bounds(doc);
 }
 
-/// Resolve source geometry into composed fabrication artwork.
+/// Resolve IPC-specific paint semantics while preserving native artwork shapes.
 ///
-/// This is intentionally destructive: it outlines strokes, applies boolean
-/// union/difference, resolves voids, and may convert arcs into polygon
-/// contours. Use it only when a target needs final painted artwork.
-pub fn compose_for_artwork_export<S, L>(doc: &mut GeometryDocument<S, L>)
+/// IPC feature-set voids, negative polarity, and layer cutouts are semantic
+/// operators on source features, not generic ordered artwork objects. Resolve
+/// those before lowering to source-independent artwork, but do not outline
+/// strokes or flatten unrelated positive features.
+pub fn normalize_for_artwork<S, L>(doc: &mut GeometryDocument<S, L>)
 where
     S: Copy + Eq + Hash + Clone,
     L: Clone,
 {
     normalize_preserving(doc);
-    outline_stroked_paths(doc);
-    union_feature_filled_paths(doc);
-    coalesce_related_trace_features(doc);
     resolve_set_voids(doc);
     resolve_negative_polarity(doc);
     subtract_layer_cutouts(doc);
     normalize_bounds(doc);
 }
 
+/// Resolve source geometry into a composed rendering image.
+///
+/// This is intentionally destructive: it outlines strokes, applies boolean
+/// union/difference, resolves voids, and may convert arcs into polygon
+/// contours. Use it only when a target needs a final painted image.
 pub fn compose_for_rendering<S, L>(doc: &mut GeometryDocument<S, L>)
 where
     S: Copy + Eq + Hash + Clone,
     L: Clone,
 {
-    compose_for_artwork_export(doc);
+    normalize_preserving(doc);
+    expand_stroked_paths_to_fills(doc);
+    union_feature_filled_paths(doc);
+    coalesce_related_trace_features(doc);
+    resolve_set_voids(doc);
+    resolve_negative_polarity(doc);
+    subtract_layer_cutouts(doc);
+    normalize_bounds(doc);
 }
 
 pub fn prune_unpainted_paths<S, L>(doc: &mut GeometryDocument<S, L>) {
@@ -315,7 +325,7 @@ pub fn compose_feature_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
     }
 }
 
-pub fn outline_stroked_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
+pub fn expand_stroked_paths_to_fills<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
     let feature_count = doc.features.len();
     for feature_index in 0..feature_count {
         let feature = doc.features[feature_index].clone();
@@ -333,7 +343,7 @@ pub fn outline_stroked_paths<S: Clone, L>(doc: &mut GeometryDocument<S, L>) {
         let new_path_start = doc.paths.len() as u32;
         for path in paths {
             if path.flags.stroked {
-                if let Some(contours) = stroked_path_outline(doc, &path) {
+                if let Some(contours) = stroked_path_fill(doc, &path) {
                     doc.push_compound_path(
                         GeometryPath::filled(FillRule::NonZero, BBox::empty()),
                         contours,
@@ -641,12 +651,14 @@ fn replace_feature_with_compound_path<S, L>(
     let feature = &mut doc.features[feature_index];
     feature.path_start = path_id;
     feature.path_count = 1;
+    feature.primitive_ref = None;
 }
 
 fn clear_feature_paths<S, L>(doc: &mut GeometryDocument<S, L>, feature_index: usize) {
     let feature = &mut doc.features[feature_index];
     feature.path_start = doc.paths.len() as u32;
     feature.path_count = 0;
+    feature.primitive_ref = None;
 }
 
 fn path_contours<S, L>(doc: &GeometryDocument<S, L>, path: &GeometryPath) -> Vec<ContourPayload> {
@@ -724,15 +736,17 @@ fn feature_polygon_contours<S, L>(
         .collect()
 }
 
-fn stroked_path_outline<S, L>(
+fn stroked_path_fill<S, L>(
     doc: &GeometryDocument<S, L>,
     path: &GeometryPath,
 ) -> Option<Vec<ContourPayload>> {
-    common_path::outline_stroke(
+    common_path::stroke_to_fill(
         &path_payloads(doc, path),
-        path.style.stroke.width,
-        path.style.stroke.line_cap,
-        LineJoin::Round,
+        common_path::StrokeToFillStyle::new(
+            path.style.stroke.width,
+            path.style.stroke.line_cap,
+            LineJoin::Round,
+        ),
     )
 }
 
@@ -807,7 +821,7 @@ mod tests {
             ..copper_trace_feature()
         });
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         assert_eq!(doc.features[0].path_count, 1);
         let path = &doc.paths[doc.features[0].path_start as usize];
@@ -875,7 +889,7 @@ mod tests {
             bbox: BBox::empty(),
         });
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         let feature_paths = &doc.paths[doc.features[0].path_start as usize
             ..(doc.features[0].path_start + doc.features[0].path_count) as usize];
@@ -934,7 +948,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 3);
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         assert_eq!(doc.features[0].path_count, 1);
         assert_eq!(doc.features[1].path_count, 0);
@@ -975,7 +989,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 2);
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         let feature = &doc.features[0];
         let path = &doc.paths[feature.path_start as usize];
@@ -1016,7 +1030,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 2);
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
 
         let trace = &doc.features[0];
         let path = &doc.paths[trace.path_start as usize];
@@ -1024,6 +1038,126 @@ mod tests {
         assert!(path.contour_count >= 2);
         assert_eq!(path.bbox.min.x, -0.5);
         assert_eq!(path.bbox.max.x, 4.5);
+    }
+
+    #[test]
+    fn splits_primitive_path_runs_by_paint_class() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 1.0, 1.0),
+        );
+        doc.push_path(
+            GeometryPath::stroked(0.2, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(2.0, 0.0)),
+                PathCmd::line_to(Point::new(3.0, 0.0)),
+            ],
+        );
+        let mut feature = GeometryFeature::new(
+            FeatureKind::Primitive,
+            FeatureBucket::Fill,
+            GeometryPolarity::Positive,
+        );
+        feature.path_count = 2;
+        feature.flags.lowered_to_paths = true;
+
+        let features = split_primitive_feature_path_runs(&doc, feature).unwrap();
+
+        assert_eq!(features.len(), 2);
+        assert_eq!(features[0].bucket, FeatureBucket::Fill);
+        assert_eq!(features[0].path_start, 0);
+        assert_eq!(features[0].path_count, 1);
+        assert_eq!(features[1].bucket, FeatureBucket::Trace);
+        assert_eq!(features[1].path_start, 1);
+        assert_eq!(features[1].path_count, 1);
+    }
+
+    #[test]
+    fn artwork_ready_validation_rejects_mixed_feature_paint_classes() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 1.0, 1.0),
+        );
+        doc.push_path(
+            GeometryPath::stroked(0.2, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(2.0, 0.0)),
+                PathCmd::line_to(Point::new(3.0, 0.0)),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 2,
+            ..GeometryFeature::new(
+                FeatureKind::Primitive,
+                FeatureBucket::Fill,
+                GeometryPolarity::Positive,
+            )
+        });
+
+        let error = validate_artwork_ready(&doc).unwrap_err();
+
+        assert!(error.contains("mixes Filled and Stroked paths"));
+    }
+
+    #[test]
+    fn artwork_ready_validation_rejects_unresolved_negative_polarity() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::filled(FillRule::NonZero, BBox::empty()),
+            rect_cmds(0.0, 0.0, 1.0, 1.0),
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..GeometryFeature::new(
+                FeatureKind::Polygon,
+                FeatureBucket::Fill,
+                GeometryPolarity::Negative,
+            )
+        });
+
+        let error = validate_artwork_ready(&doc).unwrap_err();
+
+        assert!(error.contains("unresolved negative polarity"));
+    }
+
+    #[test]
+    fn artwork_ready_validation_rejects_non_circular_arcs() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::stroked(0.2, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(1.0, 0.0)),
+                PathCmd::arc_to(Point::new(0.0, 2.0), Point::new(0.0, 0.0), false),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..copper_trace_feature()
+        });
+
+        let error = validate_artwork_ready(&doc).unwrap_err();
+
+        assert!(error.contains("non-circular arc radii"));
+    }
+
+    #[test]
+    fn artwork_ready_validation_accepts_source_precision_arc_radius_noise() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            GeometryPath::stroked(0.2, LineCap::Round, BBox::empty()),
+            [
+                PathCmd::move_to(Point::new(0.250024, 0.0)),
+                PathCmd::arc_to(Point::new(0.0, 0.249977), Point::new(0.0, 0.0), false),
+            ],
+        );
+        doc.features.push(GeometryFeature {
+            path_count: 1,
+            ..copper_trace_feature()
+        });
+
+        validate_artwork_ready(&doc).unwrap();
     }
 
     #[test]
@@ -1052,7 +1186,7 @@ mod tests {
         });
         push_test_layer(&mut doc, 0, 2);
 
-        compose_for_artwork_export(&mut doc);
+        compose_for_rendering(&mut doc);
         flatten_layers_to_masks(&mut doc);
 
         assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);

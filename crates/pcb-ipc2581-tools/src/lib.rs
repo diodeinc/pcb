@@ -6,8 +6,11 @@ pub mod board_array;
 pub mod commands;
 pub mod geometry;
 pub mod gerber;
+pub mod manufacturing;
+pub mod placement;
 mod steps;
 pub mod utils;
+pub mod xnc;
 
 // Re-export ipc2581 for external use
 pub use ipc2581;

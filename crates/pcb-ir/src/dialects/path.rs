@@ -6,6 +6,7 @@ use i_overlay::float::single::SingleFloatOverlay;
 use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 
 pub type PolygonContour = Vec<[f64; 2]>;
+pub type PolygonShape = Vec<PolygonContour>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaintOp {
@@ -29,6 +30,117 @@ impl ContourImage {
 
     pub fn is_empty(&self) -> bool {
         self.contours.is_empty()
+    }
+}
+
+/// Regularized filled planar point set represented by polygon contours.
+///
+/// `ContourSet` is the path dialect's computational-geometry workhorse. Its
+/// operations are regularized set operations over filled regions:
+/// union (`A ∪ B`), difference (`A \ B`), intersection (`A ∩ B`), and disk
+/// dilation (`A ⊕ D_r`, a Minkowski sum with a radius-`r` disk). Keeping these
+/// operations here lets IPC, Gerber, SVG, and other dialects share the same
+/// geometry semantics instead of reimplementing contour plumbing per format.
+#[derive(Debug, Clone)]
+pub struct ContourSet {
+    pub bbox: BBox,
+    pub contours: Vec<PolygonContour>,
+    pub fill_rule: FillRule,
+    pub tolerance: f64,
+}
+
+impl ContourSet {
+    pub fn new(contours: Vec<PolygonContour>, fill_rule: FillRule, tolerance: f64) -> Self {
+        let contours =
+            filter_significant_contours(simplify_polygon_contours(contours, fill_rule), tolerance);
+        Self {
+            bbox: polygon_contours_bbox(&contours),
+            contours,
+            fill_rule,
+            tolerance,
+        }
+    }
+
+    pub fn empty(fill_rule: FillRule, tolerance: f64) -> Self {
+        Self::new(Vec::new(), fill_rule, tolerance)
+    }
+
+    pub fn from_payloads(payloads: &[PathPayload], fill_rule: FillRule, tolerance: f64) -> Self {
+        Self::new(payloads_to_polygon_contours(payloads), fill_rule, tolerance)
+    }
+
+    pub fn from_filled_payloads(payloads: &[PathPayload], tolerance: f64) -> Self {
+        // Fill each payload independently, then union the payloads. A payload may
+        // contain nested contours, but sibling payloads are separate features;
+        // applying even-odd across the whole list would XOR duplicate layer data.
+        let contours = payloads
+            .iter()
+            .flat_map(|payload| {
+                simplify_polygon_contours(
+                    payloads_to_polygon_contours(std::slice::from_ref(payload)),
+                    FillRule::EvenOdd,
+                )
+            })
+            .collect();
+        Self::new(contours, FillRule::NonZero, tolerance)
+    }
+
+    pub fn rectangle(bbox: BBox, fill_rule: FillRule, tolerance: f64) -> Self {
+        if bbox.is_empty() {
+            return Self::empty(fill_rule, tolerance);
+        }
+        Self::from_payloads(&[rectangle_payload(bbox)], fill_rule, tolerance)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.contours.is_empty()
+    }
+
+    /// Regularized union: `self ∪ other`.
+    pub fn union(mut self, other: &Self) -> Self {
+        debug_assert_eq!(self.fill_rule, other.fill_rule);
+        self.contours.extend(other.contours.clone());
+        Self::new(self.contours, self.fill_rule, self.tolerance)
+    }
+
+    pub fn union_assign(&mut self, other: &Self) {
+        let fill_rule = self.fill_rule;
+        let tolerance = self.tolerance;
+        let current = std::mem::replace(self, Self::empty(fill_rule, tolerance));
+        *self = current.union(other);
+    }
+
+    /// Regularized difference: `self \ cutters`.
+    pub fn difference(self, cutters: &Self) -> Self {
+        debug_assert_eq!(self.fill_rule, cutters.fill_rule);
+        Self::new(
+            difference_contours(self.contours, cutters.contours.clone()),
+            self.fill_rule,
+            self.tolerance,
+        )
+    }
+
+    /// Regularized intersection: `self ∩ clip`.
+    pub fn intersection(self, clip: &Self) -> Self {
+        debug_assert_eq!(self.fill_rule, clip.fill_rule);
+        Self::new(
+            intersection_contours(self.contours, clip.contours.clone()),
+            self.fill_rule,
+            self.tolerance,
+        )
+    }
+
+    /// Minkowski sum with a disk: `self ⊕ D_radius`.
+    pub fn disk_dilate(self, radius: f64) -> Self {
+        Self::new(
+            disk_dilate_contours(self.contours, radius, self.fill_rule),
+            self.fill_rule,
+            self.tolerance,
+        )
+    }
+
+    pub fn to_payloads(&self) -> Vec<PathPayload> {
+        polygon_contours_to_payloads(self.contours.clone())
     }
 }
 
@@ -254,24 +366,60 @@ pub fn transform_cmds(
     (bbox, transformed_cmds)
 }
 
-pub fn outline_stroke(
+/// Style for converting a stroked centerline into filled geometry.
+///
+/// Geometrically this is the Minkowski sum of the source path and the stroke
+/// aperture implied by the style. For the normal PCB/Gerber case that aperture
+/// is a disk with radius `width / 2`, with caps and joins controlling endpoint
+/// and vertex treatment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StrokeToFillStyle {
+    pub width: f64,
+    pub line_cap: LineCap,
+    pub line_join: LineJoin,
+}
+
+impl StrokeToFillStyle {
+    pub fn new(width: f64, line_cap: LineCap, line_join: LineJoin) -> Self {
+        Self {
+            width,
+            line_cap,
+            line_join,
+        }
+    }
+}
+
+/// Convert stroked centerlines/arcs into filled contours.
+///
+/// Use this for rendering, boolean composition, comparison, and fallback
+/// targets that cannot represent native strokes. Gerber export should prefer
+/// native draw/arc objects where possible.
+pub fn stroke_to_fill(
     payloads: &[PathPayload],
-    width: f64,
-    line_cap: LineCap,
-    line_join: LineJoin,
+    style: StrokeToFillStyle,
 ) -> Option<Vec<PathPayload>> {
-    if width <= 0.0 {
+    if style.width <= 0.0 {
         return None;
     }
     let source = payloads_to_kurbo(payloads);
     if source.elements().is_empty() {
         return None;
     }
-    let stroke = Stroke::new(width)
-        .with_join(kurbo_join(line_join))
-        .with_caps(kurbo_cap(line_cap));
+    let stroke = Stroke::new(style.width)
+        .with_join(kurbo_join(style.line_join))
+        .with_caps(kurbo_cap(style.line_cap));
     let outline = kurbo::stroke(source, &stroke, &StrokeOpts::default(), 0.01);
-    let contours = kurbo_path_to_payloads(&outline);
+    let mut contours = kurbo_path_to_payloads(&outline);
+    for contour in &mut contours {
+        if contour
+            .cmds
+            .last()
+            .is_none_or(|cmd| cmd.op != PathOp::Close)
+        {
+            contour.cmds.push(PathCmd::close());
+            contour.bbox = contour_bbox(&contour.cmds);
+        }
+    }
     (!contours.is_empty()).then_some(contours)
 }
 
@@ -307,14 +455,57 @@ pub fn difference_contours(
     subject: Vec<PolygonContour>,
     cutters: Vec<PolygonContour>,
 ) -> Vec<PolygonContour> {
-    if subject.is_empty() || cutters.is_empty() {
-        return subject;
+    polygon_shapes_to_polygon_contours(difference_contour_shapes(subject, cutters))
+}
+
+pub fn intersection_contours(
+    subject: Vec<PolygonContour>,
+    clip: Vec<PolygonContour>,
+) -> Vec<PolygonContour> {
+    if subject.is_empty() || clip.is_empty() {
+        return Vec::new();
     }
     polygon_shapes_to_polygon_contours(subject.overlay(
-        &cutters,
-        OverlayRule::Difference,
+        &clip,
+        OverlayRule::Intersect,
         OverlayFillRule::NonZero,
     ))
+}
+
+pub fn difference_contour_shapes(
+    subject: Vec<PolygonContour>,
+    cutters: Vec<PolygonContour>,
+) -> Vec<PolygonShape> {
+    if subject.is_empty() || cutters.is_empty() {
+        return subject.simplify_shape(OverlayFillRule::NonZero);
+    }
+    subject.overlay(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
+}
+
+/// Approximate the Minkowski sum of filled contours and a disk.
+///
+/// This is the standard "buffer out" operation used for manufacturability
+/// checks. It unions the original filled region with a round stroke around its
+/// boundary, then simplifies with the requested fill rule.
+pub fn disk_dilate_contours(
+    contours: Vec<PolygonContour>,
+    radius: f64,
+    fill_rule: FillRule,
+) -> Vec<PolygonContour> {
+    let contours = simplify_polygon_contours(contours, fill_rule);
+    if contours.is_empty() || radius <= 0.0 {
+        return contours;
+    }
+
+    let mut dilated = contours.clone();
+    let boundary = polygon_contours_to_payloads(contours);
+    if let Some(stroke) = stroke_to_fill(
+        &boundary,
+        StrokeToFillStyle::new(2.0 * radius, LineCap::Round, LineJoin::Round),
+    ) {
+        dilated.extend(payloads_to_polygon_contours(&stroke));
+    }
+    union_contours(dilated, fill_rule)
 }
 
 pub fn polygon_contours_to_payloads(contours: Vec<PolygonContour>) -> Vec<PathPayload> {
@@ -343,6 +534,41 @@ pub fn overlay_fill_rule(fill_rule: FillRule) -> OverlayFillRule {
 
 pub fn polygon_shapes_to_polygon_contours(shapes: Vec<Vec<PolygonContour>>) -> Vec<PolygonContour> {
     shapes.into_iter().flatten().collect()
+}
+
+fn filter_significant_contours(
+    mut contours: Vec<PolygonContour>,
+    tolerance: f64,
+) -> Vec<PolygonContour> {
+    if tolerance > 0.0 {
+        let min_area = tolerance.powi(2);
+        contours.retain(|contour| polygon_contour_area(contour).abs() > min_area);
+    }
+    contours
+}
+
+fn polygon_contour_area(contour: &PolygonContour) -> f64 {
+    if contour.len() < 3 {
+        return 0.0;
+    }
+    let mut area = 0.0;
+    for index in 0..contour.len() {
+        let [x0, y0] = contour[index];
+        let [x1, y1] = contour[(index + 1) % contour.len()];
+        area += x0 * y1 - x1 * y0;
+    }
+    area / 2.0
+}
+
+fn rectangle_payload(bbox: BBox) -> PathPayload {
+    let cmds = vec![
+        PathCmd::move_to(Point::new(bbox.min.x, bbox.min.y)),
+        PathCmd::line_to(Point::new(bbox.max.x, bbox.min.y)),
+        PathCmd::line_to(Point::new(bbox.max.x, bbox.max.y)),
+        PathCmd::line_to(Point::new(bbox.min.x, bbox.max.y)),
+        PathCmd::close(),
+    ];
+    PathPayload { bbox, cmds }
 }
 
 fn payloads_to_kurbo(payloads: &[PathPayload]) -> BezPath {
@@ -539,4 +765,132 @@ fn kurbo_point(point: Point) -> kurbo::Point {
 
 fn ir_point(point: kurbo::Point) -> Point {
     Point::new(point.x, point.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stroke_to_fill_rejects_non_positive_width() {
+        let source = vec![line_payload(Point::new(0.0, 0.0), Point::new(1.0, 0.0))];
+
+        assert!(
+            stroke_to_fill(
+                &source,
+                StrokeToFillStyle::new(0.0, LineCap::Round, LineJoin::Round)
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn stroke_to_fill_expands_centerline_by_half_width() {
+        let source = vec![line_payload(Point::new(0.0, 0.0), Point::new(10.0, 0.0))];
+        let fill = stroke_to_fill(
+            &source,
+            StrokeToFillStyle::new(2.0, LineCap::Butt, LineJoin::Round),
+        )
+        .expect("stroke should expand to fill geometry");
+        let bbox = fill
+            .iter()
+            .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox));
+
+        assert_close(bbox.min.x, 0.0);
+        assert_close(bbox.min.y, -1.0);
+        assert_close(bbox.max.x, 10.0);
+        assert_close(bbox.max.y, 1.0);
+        assert!(fill.iter().all(|payload| {
+            payload
+                .cmds
+                .last()
+                .is_some_and(|cmd| cmd.op == PathOp::Close)
+        }));
+    }
+
+    #[test]
+    fn contour_set_composes_region_operations() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), FillRule::NonZero, 0.001);
+        let inner = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), FillRule::NonZero, 0.001);
+        let clip = ContourSet::rectangle(rect(5.0, 0.0, 10.0, 10.0), FillRule::NonZero, 0.001);
+
+        let ring = outer.difference(&inner);
+        let clipped = ring.intersection(&clip);
+        let expanded = clipped.disk_dilate(0.5);
+
+        assert!(!expanded.is_empty());
+        assert_close(expanded.bbox.min.x, 4.5);
+        assert_close(expanded.bbox.max.x, 10.5);
+    }
+
+    #[test]
+    fn filled_payload_region_is_winding_insensitive() {
+        let clockwise = rectangle_payload(rect(0.0, 0.0, 10.0, 5.0));
+        let counter_clockwise = PathPayload {
+            bbox: clockwise.bbox,
+            cmds: vec![
+                PathCmd::move_to(Point::new(0.0, 5.0)),
+                PathCmd::line_to(Point::new(10.0, 5.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(0.0, 0.0)),
+                PathCmd::close(),
+            ],
+        };
+
+        let a = ContourSet::from_filled_payloads(&[clockwise], 0.001);
+        let b = ContourSet::from_filled_payloads(&[counter_clockwise], 0.001);
+
+        assert!(!a.is_empty());
+        assert!(!b.is_empty());
+        assert_close(a.bbox.min.x, b.bbox.min.x);
+        assert_close(a.bbox.min.y, b.bbox.min.y);
+        assert_close(a.bbox.max.x, b.bbox.max.x);
+        assert_close(a.bbox.max.y, b.bbox.max.y);
+    }
+
+    #[test]
+    fn filled_payload_region_unions_duplicate_payloads() {
+        let clockwise = rectangle_payload(rect(0.0, 0.0, 10.0, 5.0));
+        let counter_clockwise = PathPayload {
+            bbox: clockwise.bbox,
+            cmds: vec![
+                PathCmd::move_to(Point::new(0.0, 5.0)),
+                PathCmd::line_to(Point::new(10.0, 5.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(0.0, 0.0)),
+                PathCmd::close(),
+            ],
+        };
+
+        let region = ContourSet::from_filled_payloads(&[clockwise, counter_clockwise], 0.001);
+
+        assert!(!region.is_empty());
+        assert_close(region.bbox.min.x, 0.0);
+        assert_close(region.bbox.min.y, 0.0);
+        assert_close(region.bbox.max.x, 10.0);
+        assert_close(region.bbox.max.y, 5.0);
+    }
+
+    fn line_payload(start: Point, end: Point) -> PathPayload {
+        let mut bbox = BBox::from_point(start);
+        bbox.include_point(end);
+        PathPayload {
+            bbox,
+            cmds: vec![PathCmd::move_to(start), PathCmd::line_to(end)],
+        }
+    }
+
+    fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> BBox {
+        BBox {
+            min: Point::new(min_x, min_y),
+            max: Point::new(max_x, max_y),
+        }
+    }
+
+    fn assert_close(left: f64, right: f64) {
+        assert!(
+            (left - right).abs() <= 1e-9,
+            "expected {left} to be close to {right}"
+        );
+    }
 }

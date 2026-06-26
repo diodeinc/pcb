@@ -2,7 +2,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
-    LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, gerber, utils,
+    LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, manufacturing, utils,
 };
 
 #[derive(Args)]
@@ -33,6 +33,21 @@ enum Commands {
         /// Run in offline mode without fetching part availability
         #[arg(long)]
         offline: bool,
+    },
+    /// Generate component placement data (CPL)
+    Cpl {
+        /// IPC-2581 XML file to export from
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Output CSV file path. If omitted, writes CSV to stdout.
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+        /// Component side to include
+        #[arg(long, default_value = "both")]
+        side: commands::cpl::CplSideFilter,
+        /// Exclude BOM RefDes entries marked populate=false
+        #[arg(long)]
+        exclude_dnp: bool,
     },
     /// Edit IPC-2581 data
     Edit {
@@ -100,17 +115,20 @@ enum Commands {
         #[arg(long)]
         flat: bool,
     },
-    /// Export IPC-2581 fabrication layers as Gerber X2 files
+    /// Export IPC-2581 fabrication layers as manufacturing files
     Gerber {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to export. Gerber supports board or board-array.
+        /// Layout target to export. Manufacturing export supports board or board-array.
         #[arg(long, default_value = "board")]
         layout_target: GerberLayoutTarget,
-        /// Output directory, or a .zip file for an archived Gerber package
+        /// Output directory, or a .zip file for an archived manufacturing package
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
+        /// Write V-score relief debug SVGs to this directory.
+        #[arg(long, hide = true, value_hint = clap::ValueHint::DirPath)]
+        debug_reliefs: Option<PathBuf>,
     },
 }
 
@@ -132,26 +150,29 @@ enum EditCommands {
 
 #[derive(Subcommand)]
 enum BoardArrayCommands {
-    /// Create a rectangular board array. Generated array size must be 70-260 mm per side.
+    /// Create a rectangular board array. Generated array size must be 70-297 mm per side.
     Create {
         /// Input IPC-2581 XML file
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
-        /// Number of board columns. Must be between 1 and 10.
+        /// Choose the smallest fitting A-series board array automatically.
         #[arg(long)]
-        columns: u32,
-        /// Number of board rows. Must be between 1 and 10.
+        auto: bool,
+        /// Force auto board array generation to one A-series sheet size. Implies --auto.
         #[arg(long)]
-        rows: u32,
-        /// Spacing between board columns, in millimeters. Must be 0 or between 5 and 20.
+        sheet: Option<commands::board_array_auto::AutoSheetSize>,
+        /// Number of board columns. Must be between 1 and 10. Defaults to 1.
         #[arg(long)]
-        column_spacing: f64,
-        /// Spacing between board rows, in millimeters. Must be 0 or between 5 and 20.
+        columns: Option<u32>,
+        /// Number of board rows. Must be between 1 and 10. Defaults to 1.
         #[arg(long)]
-        row_spacing: f64,
-        /// Uniform edge rail width, in millimeters. Must be between 5 and 30.
-        #[arg(long)]
-        edge_rail_width: f64,
+        rows: Option<u32>,
+        /// Board margin in millimeters. Defaults to 5. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
+        #[arg(long, num_args = 1..=4, value_name = "MARGIN")]
+        board_margin: Vec<f64>,
+        /// Edge rail in millimeters. Defaults to 5. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
+        #[arg(long, num_args = 1..=4, value_name = "RAIL")]
+        edge_rail: Vec<f64>,
         /// Output IPC-2581 XML file
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
@@ -188,6 +209,19 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             format,
             offline,
         } => commands::bom::execute(&file, format, offline),
+        Commands::Cpl {
+            file,
+            output,
+            side,
+            exclude_dnp,
+        } => commands::cpl::execute(
+            &file,
+            &commands::cpl::CplOptions {
+                output,
+                side,
+                exclude_dnp,
+            },
+        ),
         Commands::Edit { command } => match command {
             EditCommands::Bom {
                 file,
@@ -199,23 +233,51 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
         Commands::BoardArray { command } => match command {
             BoardArrayCommands::Create {
                 input,
+                auto,
+                sheet,
                 columns,
                 rows,
-                column_spacing,
-                row_spacing,
-                edge_rail_width,
+                board_margin,
+                edge_rail,
                 output,
-            } => commands::board_array::execute(
-                &input,
-                &output,
-                &commands::board_array::BoardArrayCreateOptions {
-                    columns,
-                    rows,
-                    column_spacing_mm: column_spacing,
-                    row_spacing_mm: row_spacing,
-                    edge_rail_width_mm: edge_rail_width,
-                },
-            ),
+            } => {
+                if auto || sheet.is_some() {
+                    if columns.is_some()
+                        || rows.is_some()
+                        || !board_margin.is_empty()
+                        || !edge_rail.is_empty()
+                    {
+                        anyhow::bail!(
+                            "--auto/--sheet cannot be combined with manual board array options"
+                        );
+                    }
+                    commands::board_array::execute_auto(&input, &output, sheet)
+                } else {
+                    let board_margin_mm = if board_margin.is_empty() {
+                        commands::board_array::BoardMarginMm::all(5.0)
+                    } else {
+                        commands::board_array::BoardMarginMm::from_css_shorthand(&board_margin)?
+                    };
+                    let edge_rail_mm = if edge_rail.is_empty() {
+                        commands::board_array::BoardMarginMm::all(5.0)
+                    } else {
+                        commands::board_array::BoardMarginMm::from_css_shorthand_named(
+                            "edge rail",
+                            &edge_rail,
+                        )?
+                    };
+                    commands::board_array::execute(
+                        &input,
+                        &output,
+                        &commands::board_array::BoardArrayCreateOptions {
+                            columns: columns.unwrap_or(1),
+                            rows: rows.unwrap_or(1),
+                            board_margin_mm,
+                            edge_rail_mm,
+                        },
+                    )
+                }
+            }
         },
         Commands::View {
             input,
@@ -259,17 +321,19 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             file,
             layout_target,
             output,
+            debug_reliefs,
         } => {
-            let set = gerber::execute_file_with_options(
+            let package = manufacturing::execute_file_with_options(
                 &file,
-                &gerber::GerberExportOptions {
+                &manufacturing::ManufacturingExportOptions {
                     output: output.clone(),
                     view: layout_target.into(),
+                    relief_debug_dir: debug_reliefs,
                 },
             )?;
             println!(
-                "✓ IPC-2581 exported {} Gerber X2 file(s) to {}",
-                set.files.len(),
+                "✓ IPC-2581 exported {} manufacturing file(s) to {}",
+                package.files.len(),
                 output.display()
             );
             Ok(())

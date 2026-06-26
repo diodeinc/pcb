@@ -15,8 +15,11 @@ pub enum LineJoin {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LinePattern {
     Solid,
-    Dashed,
     Dotted,
+    Dashed,
+    Center,
+    Phantom,
+    Erase,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

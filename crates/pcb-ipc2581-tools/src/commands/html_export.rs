@@ -55,7 +55,7 @@ pub fn generate_html(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<
     let template = env.get_template("html")?;
 
     // Extract data
-    let board_summary = extract_board_summary(accessor, unit_format);
+    let board_summary = extract_board_summary(accessor, unit_format)?;
     let stackup = extract_stackup_data(accessor, unit_format);
     let rendered_layers = extract_rendered_layers(accessor)?;
     let version = env!("CARGO_PKG_VERSION");
@@ -114,11 +114,8 @@ struct BoardSummary {
 
 #[derive(Serialize)]
 struct BoardArraySummary {
-    step_name: String,
     width: Option<String>,
     height: Option<String>,
-    board_count: usize,
-    board_instances: usize,
     grid: Option<BoardArrayGridSummary>,
     drill_holes: Option<String>,
     overview_svg: Option<String>,
@@ -128,9 +125,8 @@ struct BoardArraySummary {
 struct BoardArrayGridSummary {
     columns: u32,
     rows: u32,
-    column_spacing: Option<String>,
-    row_spacing: Option<String>,
-    edge_rail_width: Option<String>,
+    board_margin: Option<String>,
+    edge_rail: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -190,10 +186,10 @@ struct Color {
     hex: String,
 }
 
-fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> BoardSummary {
+fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<BoardSummary> {
     let layout = accessor.board_layout_info();
     let design_name = layout.as_ref().and_then(|layout| layout.board_name.clone());
-    let array_overview_svg = crate::board_array::render_board_array_overview_svg(accessor);
+    let array_overview_svg = crate::board_array::render_board_array_overview_svg(accessor)?;
 
     let (width, height) = if let Some(dims) = layout
         .as_ref()
@@ -214,23 +210,18 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
                 .map(|dims| formatted_dimensions(dims.width_mm(), dims.height_mm(), unit_format))
                 .unwrap_or((None, None));
             BoardArraySummary {
-                step_name: board_array.step_name.clone(),
                 width,
                 height,
-                board_count: board_array.board_count,
-                board_instances: board_array.board_instances,
                 grid: board_array.grid.as_ref().map(|grid| BoardArrayGridSummary {
                     columns: grid.columns,
                     rows: grid.rows,
-                    column_spacing: grid
-                        .column_spacing
-                        .map(|spacing| format_length(spacing.mm(), unit_format)),
-                    row_spacing: grid
-                        .row_spacing
-                        .map(|spacing| format_length(spacing.mm(), unit_format)),
-                    edge_rail_width: grid
-                        .edge_rail_width
-                        .map(|width| format_length(width.mm(), unit_format)),
+                    board_margin: grid.board_margin.as_ref().map(|margin| {
+                        margin.format_shorthand(|value| format_length(value, unit_format))
+                    }),
+                    edge_rail: Some(
+                        grid.edge_rail
+                            .format_shorthand(|value| format_length(value, unit_format)),
+                    ),
                 }),
                 drill_holes: accessor
                     .board_array_drill_stats()
@@ -260,7 +251,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
     let nets = accessor.net_stats().map(|stats| stats.count);
     let drill_holes = accessor.board_drill_stats().and_then(format_drill_count);
 
-    BoardSummary {
+    Ok(BoardSummary {
         design_name,
         width,
         height,
@@ -270,7 +261,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Boa
         components,
         nets,
         drill_holes,
-    }
+    })
 }
 
 fn format_drill_count(drills: crate::accessors::DrillStats) -> Option<String> {
@@ -565,9 +556,9 @@ mod tests {
         assert!(board_summary < array_summary);
         assert!(array_summary < file_info);
         assert!(!html[board_summary..array_summary].contains("Array Step:"));
-        assert!(html.contains("Array Step:"));
-        assert!(html.contains("Array Boards:"));
-        assert!(html.contains("1 instance from 1 board step"));
+        assert!(!html.contains("Array Step:"));
+        assert!(!html.contains("Array Boards:"));
+        assert!(!html.contains("1 instance from 1 board step"));
         assert!(html.contains("Array Grid:"));
         assert!(html.contains("data-board-array-overview='true'"));
     }
@@ -603,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn html_renders_array_local_layers_in_board_array_summary_only() {
+    fn html_renders_array_support_layers_in_board_array_summary_only() {
         let ipc = ipc2581::Ipc2581::parse(array_layer_render_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 

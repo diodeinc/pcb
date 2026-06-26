@@ -1,7 +1,9 @@
-use crate::dialects::gerber::*;
+use crate::common::*;
+use crate::dialects::artwork::{self, ArtworkDocument};
+use crate::dialects::mask::MaskDocument;
 use crate::dialects::path as common_path;
 
-/// Tolerances for comparing two processed Gerber geometry documents.
+/// Tolerances for comparing two Gerber layer images.
 ///
 /// The comparison is intended for smoke tests where two different export paths
 /// should describe the same layer image but are not expected to produce bytewise
@@ -25,6 +27,7 @@ impl Default for GeometryCompareTolerance {
 pub struct GeometryCompareReport {
     pub reference: GeometrySummary,
     pub candidate: GeometrySummary,
+    pub difference: GeometryDifferenceSummary,
     pub mismatches: Vec<String>,
 }
 
@@ -39,23 +42,43 @@ pub struct GeometrySummary {
     pub file_function: Vec<String>,
     pub bbox: BBox,
     pub area_mm2: f64,
-    pub feature_count: usize,
+    pub object_count: usize,
     pub path_count: usize,
 }
 
-/// Compare two processed layer geometries using manufacturing-relevant summary
-/// metrics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryDifferenceSummary {
+    pub reference_only: DirectionalDifferenceSummary,
+    pub candidate_only: DirectionalDifferenceSummary,
+    pub symmetric_area_mm2: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DirectionalDifferenceSummary {
+    pub area_mm2: f64,
+    pub components: Vec<DifferenceComponentSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DifferenceComponentSummary {
+    pub bbox: BBox,
+    pub area_mm2: f64,
+}
+
+/// Compare two layer artworks using manufacturing-relevant final-image metrics.
 ///
-/// Call `process::compose_for_rendering` on both inputs first. This helper assumes
-/// strokes and clear polarity have already been resolved into the final layer
-/// image, then compares the final image bounds and filled area. It intentionally
-/// does not compare object counts or command streams, because idiomatic exports
-/// may use different apertures/regions while preserving geometry.
+/// The object stream is composed using Gerber dark/clear paint semantics before
+/// comparison. Object counts and command streams are reported for diagnostics,
+/// but image bounds, area, and symmetric difference determine the match.
 pub fn compare_documents<A, B>(
-    reference: &GeometryDocument<A>,
-    candidate: &GeometryDocument<B>,
+    reference: &ArtworkDocument<Vec<String>, A>,
+    candidate: &ArtworkDocument<Vec<String>, B>,
     tolerance: GeometryCompareTolerance,
-) -> GeometryCompareReport {
+) -> GeometryCompareReport
+where
+    A: Clone,
+    B: Clone,
+{
     let reference_summary = summarize(reference);
     let candidate_summary = summarize(candidate);
     let mut mismatches = Vec::new();
@@ -83,27 +106,37 @@ pub fn compare_documents<A, B>(
         ));
     }
 
-    let symmetric_difference_area = symmetric_difference_area(reference, candidate);
-    if symmetric_difference_area > tolerance.area_mm2 {
+    let difference = difference_summary(reference, candidate);
+    if difference.symmetric_area_mm2 > tolerance.area_mm2 {
         mismatches.push(format!(
-            "symmetric difference area is {symmetric_difference_area:.6} mm², tolerance={:.6}",
-            tolerance.area_mm2
+            "symmetric difference area is {:.6} mm², tolerance={:.6}",
+            difference.symmetric_area_mm2, tolerance.area_mm2
         ));
     }
 
     GeometryCompareReport {
         reference: reference_summary,
         candidate: candidate_summary,
+        difference,
         mismatches,
     }
 }
 
-pub fn summarize<A>(doc: &GeometryDocument<A>) -> GeometrySummary {
+pub fn summarize<A: Clone>(doc: &ArtworkDocument<Vec<String>, A>) -> GeometrySummary {
+    let mask = artwork::compose_to_mask(doc);
     GeometrySummary {
-        file_function: doc.file_function.clone(),
-        bbox: doc.bbox,
-        area_mm2: filled_area(doc),
-        feature_count: doc.features.len(),
+        file_function: doc
+            .layers
+            .first()
+            .map(|layer| layer.meta.clone())
+            .unwrap_or_default(),
+        bbox: mask
+            .layers
+            .first()
+            .map(|layer| layer.bbox)
+            .unwrap_or_else(BBox::empty),
+        area_mm2: polygon_area(&document_image_contours(&mask)),
+        object_count: doc.objects.len(),
         path_count: doc.paths.len(),
     }
 }
@@ -141,49 +174,91 @@ fn compare_bbox(
     }
 }
 
-fn filled_area<A>(doc: &GeometryDocument<A>) -> f64 {
-    polygon_area(&document_image_contours(doc))
+fn difference_summary<A, B>(
+    reference: &ArtworkDocument<Vec<String>, A>,
+    candidate: &ArtworkDocument<Vec<String>, B>,
+) -> GeometryDifferenceSummary
+where
+    A: Clone,
+    B: Clone,
+{
+    let reference = document_image_contours(&artwork::compose_to_mask(reference));
+    let candidate = document_image_contours(&artwork::compose_to_mask(candidate));
+    let reference_only = directional_difference_summary(reference.clone(), candidate.clone());
+    let candidate_only = directional_difference_summary(candidate, reference);
+    let symmetric_area_mm2 = reference_only.area_mm2 + candidate_only.area_mm2;
+    GeometryDifferenceSummary {
+        reference_only,
+        candidate_only,
+        symmetric_area_mm2,
+    }
 }
 
-fn symmetric_difference_area<A, B>(
-    reference: &GeometryDocument<A>,
-    candidate: &GeometryDocument<B>,
-) -> f64 {
-    let reference = document_image_contours(reference);
-    let candidate = document_image_contours(candidate);
-    polygon_area(&common_path::difference_contours(
-        reference.clone(),
-        candidate.clone(),
-    )) + polygon_area(&common_path::difference_contours(candidate, reference))
+fn directional_difference_summary(
+    subject: Vec<common_path::PolygonContour>,
+    cutters: Vec<common_path::PolygonContour>,
+) -> DirectionalDifferenceSummary {
+    let mut components = common_path::difference_contour_shapes(subject, cutters)
+        .into_iter()
+        .filter_map(difference_component_summary)
+        .collect::<Vec<_>>();
+    components.sort_by(|left, right| right.area_mm2.total_cmp(&left.area_mm2));
+    let area_mm2 = components
+        .iter()
+        .map(|component| component.area_mm2)
+        .sum::<f64>();
+    DirectionalDifferenceSummary {
+        area_mm2,
+        components,
+    }
 }
 
-fn document_image_contours<A>(doc: &GeometryDocument<A>) -> Vec<common_path::PolygonContour> {
+fn difference_component_summary(
+    shape: common_path::PolygonShape,
+) -> Option<DifferenceComponentSummary> {
+    if shape.is_empty() {
+        return None;
+    }
+    let area_mm2 = shape_area(&shape);
+    if area_mm2 <= 1e-9 {
+        return None;
+    }
+    Some(DifferenceComponentSummary {
+        bbox: common_path::polygon_contours_bbox(&shape),
+        area_mm2,
+    })
+}
+
+fn document_image_contours<LayerMeta>(
+    mask: &MaskDocument<LayerMeta>,
+) -> Vec<common_path::PolygonContour> {
     let mut contours = Vec::new();
-    for feature in &doc.features {
-        for path in &doc.paths
-            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
-        {
-            if !path.flags.filled {
-                continue;
-            }
-            for contour in &doc.contours
-                [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
-            {
-                contours.extend(common_path::payloads_to_polygon_contours(&[
-                    common_path::PathPayload {
-                        bbox: contour.bbox,
-                        cmds: doc.path_cmds[contour.cmd_start as usize
-                            ..(contour.cmd_start + contour.cmd_count) as usize]
-                            .to_vec(),
-                    },
-                ]));
-            }
-        }
+    let Some(layer) = mask.layers.first() else {
+        return contours;
+    };
+    for shape in
+        &mask.shapes[layer.shape_start as usize..(layer.shape_start + layer.shape_count) as usize]
+    {
+        let payloads = mask.contours
+            [shape.contour_start as usize..(shape.contour_start + shape.contour_count) as usize]
+            .iter()
+            .map(|contour| common_path::PathPayload {
+                bbox: contour.bbox,
+                cmds: mask.path_cmds
+                    [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
+                    .to_vec(),
+            })
+            .collect::<Vec<_>>();
+        contours.extend(common_path::payloads_to_polygon_contours(&payloads));
     }
     common_path::union_contours(contours, FillRule::NonZero)
 }
 
 fn polygon_area(contours: &[common_path::PolygonContour]) -> f64 {
+    shape_area(contours)
+}
+
+fn shape_area(contours: &[common_path::PolygonContour]) -> f64 {
     contours
         .iter()
         .map(|contour| {
@@ -215,12 +290,14 @@ fn signed_area(points: &[Point]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialects::artwork::{ArtworkGeometry, ArtworkLayer, ArtworkObject, ArtworkPath};
+    use crate::dialects::path::PathCmd;
 
     #[test]
     fn compares_processed_geometry_summaries_with_tolerance() {
-        let mut reference = triangle_doc("Top");
+        let reference = triangle_doc("Top");
         let mut candidate = triangle_doc("Top");
-        candidate.bbox.max.x += 0.005;
+        candidate.layers[0].bbox.max.x += 0.005;
 
         let report = compare_documents(
             &reference,
@@ -232,8 +309,9 @@ mod tests {
         );
         assert!(report.is_match(), "{:#?}", report.mismatches);
 
-        reference.file_function = vec!["Copper".to_string(), "L1".to_string(), "Top".to_string()];
-        candidate.file_function = vec!["Copper".to_string(), "L2".to_string(), "Inr".to_string()];
+        let mut reference = reference;
+        reference.layers[0].meta = vec!["Copper".to_string(), "L1".to_string(), "Top".to_string()];
+        candidate.layers[0].meta = vec!["Copper".to_string(), "L2".to_string(), "Inr".to_string()];
         let report = compare_documents(&reference, &candidate, GeometryCompareTolerance::default());
         assert!(!report.is_match());
         assert!(report.mismatches[0].contains("file function differs"));
@@ -247,7 +325,7 @@ mod tests {
             cmd.p0.x += 0.25;
             cmd.p1.x += 0.25;
         }
-        super::process::normalize_bounds(&mut candidate);
+        artwork::normalize_bounds(&mut candidate);
 
         let report = compare_documents(
             &reference,
@@ -294,15 +372,34 @@ mod tests {
         );
     }
 
-    fn triangle_doc(side: &str) -> GeometryDocument {
-        let mut doc = GeometryDocument::new(vec![
-            "Copper".to_string(),
-            "L1".to_string(),
-            side.to_string(),
-        ]);
+    #[test]
+    fn dark_flash_does_not_reduce_self_cut_region_area() {
+        let reference = self_cut_even_odd_doc(false);
+        let candidate = self_cut_even_odd_doc(true);
+
+        let reference_area = summarize(&reference).area_mm2;
+        let candidate_area = summarize(&candidate).area_mm2;
+
+        assert!(
+            candidate_area >= reference_area,
+            "adding a dark flash reduced area: reference={reference_area}, candidate={candidate_area}"
+        );
+    }
+
+    fn triangle_doc(side: &str) -> ArtworkDocument<Vec<String>, ()> {
+        let mut doc = ArtworkDocument::new(Unit::Millimeter);
+        let layer = doc.push_layer(ArtworkLayer {
+            name: "Copper".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            object_start: 0,
+            object_count: 0,
+            bbox: BBox::empty(),
+            meta: vec!["Copper".to_string(), "L1".to_string(), side.to_string()],
+        });
         let path = doc.push_path(
-            GeometryPath::filled(FillRule::NonZero),
-            vec![ContourPayload {
+            ArtworkPath::filled(FillRule::NonZero),
+            vec![common_path::PathPayload {
                 bbox: BBox {
                     min: Point::new(0.0, 0.0),
                     max: Point::new(1.0, 1.0),
@@ -315,24 +412,82 @@ mod tests {
                 ],
             }],
         );
-        let mut feature =
-            GeometryFeature::new(FeatureKind::Composite, FeatureBucket::Fill, Polarity::Dark);
-        feature.path_start = path;
-        feature.path_count = 1;
-        doc.features.push(feature);
-        super::process::normalize_bounds(&mut doc);
+        doc.push_object(
+            layer,
+            ArtworkObject::new(PaintPolarity::Dark, ArtworkGeometry::Region { path }),
+        );
+        artwork::normalize_bounds(&mut doc);
         doc
     }
 
-    fn cubic_doc(c1: Point, c2: Point) -> GeometryDocument {
-        let mut doc = GeometryDocument::new(vec![
-            "Copper".to_string(),
-            "L1".to_string(),
-            "Top".to_string(),
-        ]);
+    fn self_cut_even_odd_doc(with_flash: bool) -> ArtworkDocument<Vec<String>, ()> {
+        let mut doc = ArtworkDocument::new(Unit::Millimeter);
+        let layer = doc.push_layer(ArtworkLayer {
+            name: "Copper".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            object_start: 0,
+            object_count: 0,
+            bbox: BBox::empty(),
+            meta: vec!["Copper".to_string(), "L1".to_string(), "Top".to_string()],
+        });
         let path = doc.push_path(
-            GeometryPath::filled(FillRule::NonZero),
-            vec![ContourPayload {
+            ArtworkPath::filled(FillRule::EvenOdd),
+            vec![common_path::PathPayload {
+                bbox: BBox {
+                    min: Point::new(0.0, 0.0),
+                    max: Point::new(4.0, 4.0),
+                },
+                cmds: vec![
+                    PathCmd::move_to(Point::new(0.0, 0.0)),
+                    PathCmd::line_to(Point::new(4.0, 0.0)),
+                    PathCmd::line_to(Point::new(4.0, 4.0)),
+                    PathCmd::line_to(Point::new(0.0, 4.0)),
+                    PathCmd::line_to(Point::new(0.0, 0.0)),
+                    PathCmd::line_to(Point::new(1.0, 1.0)),
+                    PathCmd::line_to(Point::new(3.0, 1.0)),
+                    PathCmd::line_to(Point::new(3.0, 3.0)),
+                    PathCmd::line_to(Point::new(1.0, 3.0)),
+                    PathCmd::line_to(Point::new(1.0, 1.0)),
+                    PathCmd::line_to(Point::new(0.0, 0.0)),
+                    PathCmd::close(),
+                ],
+            }],
+        );
+        doc.push_object(
+            layer,
+            ArtworkObject::new(PaintPolarity::Dark, ArtworkGeometry::Region { path }),
+        );
+        if with_flash {
+            doc.push_object(
+                layer,
+                ArtworkObject::new(
+                    PaintPolarity::Dark,
+                    ArtworkGeometry::CircleFlash {
+                        at: Point::new(2.0, 2.0),
+                        diameter: 0.5,
+                    },
+                ),
+            );
+        }
+        artwork::normalize_bounds(&mut doc);
+        doc
+    }
+
+    fn cubic_doc(c1: Point, c2: Point) -> ArtworkDocument<Vec<String>, ()> {
+        let mut doc = ArtworkDocument::new(Unit::Millimeter);
+        let layer = doc.push_layer(ArtworkLayer {
+            name: "Copper".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            object_start: 0,
+            object_count: 0,
+            bbox: BBox::empty(),
+            meta: vec!["Copper".to_string(), "L1".to_string(), "Top".to_string()],
+        });
+        let path = doc.push_path(
+            ArtworkPath::filled(FillRule::NonZero),
+            vec![common_path::PathPayload {
                 bbox: BBox {
                     min: Point::new(0.0, 0.0),
                     max: Point::new(1.0, 1.0),
@@ -345,12 +500,11 @@ mod tests {
                 ],
             }],
         );
-        let mut feature =
-            GeometryFeature::new(FeatureKind::Composite, FeatureBucket::Fill, Polarity::Dark);
-        feature.path_start = path;
-        feature.path_count = 1;
-        doc.features.push(feature);
-        super::process::normalize_bounds(&mut doc);
+        doc.push_object(
+            layer,
+            ArtworkObject::new(PaintPolarity::Dark, ArtworkGeometry::Region { path }),
+        );
+        artwork::normalize_bounds(&mut doc);
         doc
     }
 }

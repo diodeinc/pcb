@@ -4422,6 +4422,7 @@ dependencies = [
  "jiff",
  "log",
  "minijinja",
+ "natord",
  "pcb-diode-api",
  "pcb-ir",
  "pcb-sch",

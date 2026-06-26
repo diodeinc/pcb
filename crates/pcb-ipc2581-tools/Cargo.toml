@@ -17,6 +17,7 @@ gerberx2 = { workspace = true }
 jiff = { workspace = true }
 log = { workspace = true }
 minijinja = { workspace = true }
+natord = { workspace = true }
 pcb-ir = { workspace = true }
 pcb-sch = { workspace = true, features = ["table"] }
 serde = { workspace = true }

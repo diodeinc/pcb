@@ -16,6 +16,8 @@ pub struct Xform {
     pub rotation: f64,
     /// Mirror across y-axis (default: false)
     pub mirror: bool,
+    /// Component face-up placement flag (default: false)
+    pub face_up: bool,
     /// Scale factor (default: 1.0)
     pub scale: f64,
 }
@@ -27,6 +29,7 @@ impl Default for Xform {
             y_offset: 0.0,
             rotation: 0.0,
             mirror: false,
+            face_up: false,
             scale: 1.0,
         }
     }

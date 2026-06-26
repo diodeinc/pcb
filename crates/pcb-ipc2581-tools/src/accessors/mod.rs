@@ -13,8 +13,8 @@ mod stackup;
 
 // Re-export types
 pub use board::{
-    BoardArrayDimensions, BoardArrayGridInfo, BoardArrayInfo, BoardArrayMargins, BoardDimensions,
-    StackupInfo,
+    BoardArrayBoardMargin, BoardArrayDimensions, BoardArrayGridInfo, BoardArrayInfo,
+    BoardArrayMargins, BoardDimensions, StackupInfo,
 };
 pub use bom::{AvlLookup, BomStats, CharacteristicsData};
 pub use components::ComponentStats;

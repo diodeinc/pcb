@@ -214,17 +214,35 @@ pub struct Package {
 /// Component instance on the board
 #[derive(Debug, Clone)]
 pub struct Component {
-    pub ref_des: Symbol,
-    pub package_ref: Symbol,
+    pub ref_des: Option<Symbol>,
+    pub package_ref: Option<Symbol>,
+    pub mat_des: Option<Symbol>,
     pub layer_ref: Symbol,
-    pub mount_type: Option<MountType>,
-    pub part: Option<Symbol>,
+    pub layer_ref_topside: Option<Symbol>,
+    pub mount_type: MountType,
+    pub part: Symbol,
+    pub model_ref: Option<Symbol>,
+    pub weight: Option<f64>,
+    pub height: Option<f64>,
+    pub standoff: Option<f64>,
+    pub location: super::Location,
+    pub xform: Option<super::Xform>,
+    pub nonstandard_attributes: Vec<NonstandardAttribute>,
+    pub slot_cavity_ref: Option<Symbol>,
+    pub spec_refs: Vec<Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MountType {
     Smt,
-    Tht,
+    Thmt,
+    Embedded,
+    PressFit,
+    WireBonded,
+    Glued,
+    Clamped,
+    Socketed,
+    Formed,
     Other,
 }
 
@@ -410,6 +428,7 @@ pub struct Line {
     pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
+    pub line_property: Option<super::LineProperty>,
 }
 
 /// Open polyline feature preserving straight and curved PolyStep order.
@@ -420,6 +439,7 @@ pub struct FeaturePolyline {
     pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
+    pub line_property: Option<super::LineProperty>,
 }
 
 /// Arc feature preserving center and direction.
@@ -432,6 +452,7 @@ pub struct FeatureArc {
     pub line_desc_ref: Option<Symbol>,
     pub line_width: f64,
     pub line_end: Option<super::LineEnd>,
+    pub line_property: Option<super::LineProperty>,
 }
 
 /// Primitive reference used directly as feature geometry.
@@ -488,6 +509,7 @@ pub struct Pad {
     pub standard_primitive_ref: Option<Symbol>,
     /// Inline user primitive override (takes precedence over padstack definition)
     pub user_primitive_ref: Option<Symbol>,
+    pub pin_ref: Option<PinRef>,
 }
 
 /// Trace represents a copper trace or line on a layer

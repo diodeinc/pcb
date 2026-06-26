@@ -192,7 +192,10 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Result<Bom> {
         && let Some(step) = ecad.cad_data.steps.first()
     {
         for component in &step.components {
-            let ref_des = ipc.resolve(component.ref_des).to_string();
+            let Some(ref_des_symbol) = component.ref_des else {
+                continue;
+            };
+            let ref_des = ipc.resolve(ref_des_symbol).to_string();
 
             // Skip empty designators (invalid/placeholder entries)
             if ref_des.is_empty() {
@@ -201,10 +204,13 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Result<Bom> {
 
             let path = format!("ipc::{}", ref_des);
 
-            let package = Some(ipc.resolve(component.package_ref).to_string());
+            let package = component
+                .package_ref
+                .map(|package_ref| ipc.resolve(package_ref).to_string())
+                .filter(|package| !package.is_empty());
 
             let entry = BomEntry {
-                mpn: component.part.map(|s| ipc.resolve(s).to_string()),
+                mpn: Some(ipc.resolve(component.part).to_string()).filter(|part| !part.is_empty()),
                 alternatives: Vec::new(),
                 manufacturer: None,
                 package,

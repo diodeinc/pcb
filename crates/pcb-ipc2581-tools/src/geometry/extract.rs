@@ -187,6 +187,7 @@ fn push_feature_set_record(
     doc.feature_sets.push(GeometryFeatureSet {
         layer,
         source_set_index,
+        source_geometry_ref: set.geometry,
         net: set.net,
         polarity,
         spec_ref_start,
@@ -417,15 +418,25 @@ pub fn extract_layer_for_view(
 
     let step = match view {
         GeometryView::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
-        GeometryView::ArrayLocal | GeometryView::ArrayFlattened | GeometryView::LayoutSymbolic => {
-            primary_step
-        }
+        GeometryView::ArrayLocal
+        | GeometryView::ArraySupport
+        | GeometryView::ArrayFlattened
+        | GeometryView::LayoutSymbolic => primary_step,
     };
 
     let mut doc = match view {
         GeometryView::Board => {
             extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
         }
+        GeometryView::ArraySupport if is_panel_step(step) => extract_panel_layer(
+            ipc,
+            &ecad.cad_data.steps,
+            &ecad.cad_data.layers,
+            step,
+            layer,
+            layer_name,
+            PanelLayerMode::SupportOnly,
+        )?,
         GeometryView::ArrayFlattened if is_panel_step(step) => extract_panel_layer(
             ipc,
             &ecad.cad_data.steps,
@@ -433,14 +444,18 @@ pub fn extract_layer_for_view(
             step,
             layer,
             layer_name,
+            PanelLayerMode::Flattened,
         )?,
-        GeometryView::ArrayLocal | GeometryView::ArrayFlattened | GeometryView::LayoutSymbolic => {
+        GeometryView::ArrayLocal
+        | GeometryView::ArraySupport
+        | GeometryView::ArrayFlattened
+        | GeometryView::LayoutSymbolic => {
             extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
         }
     };
 
     match view {
-        GeometryView::Board | GeometryView::ArrayLocal => {
+        GeometryView::Board | GeometryView::ArrayLocal | GeometryView::ArraySupport => {
             append_step_only_layout_geometry(&mut doc, step)
         }
         GeometryView::ArrayFlattened | GeometryView::LayoutSymbolic => {
@@ -531,6 +546,7 @@ fn extract_panel_layer(
     panel: &Step,
     layer: &Layer,
     layer_name: &str,
+    mode: PanelLayerMode,
 ) -> Result<GeometryDocument> {
     let mut doc = GeometryDocument::new();
     let feature_start = doc.features.len() as u32;
@@ -551,6 +567,7 @@ fn extract_panel_layer(
         },
         panel,
         Affine2::identity(),
+        mode,
         &mut stack,
     )?);
 
@@ -582,14 +599,25 @@ struct LayerMaterializeContext<'a> {
     layer_name: &'a str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelLayerMode {
+    SupportOnly,
+    Flattened,
+}
+
 fn append_step_layer_tree(
     doc: &mut GeometryDocument,
     append_state: &mut LayerAppendState,
     context: LayerMaterializeContext<'_>,
     step: &Step,
     transform: Affine2,
+    mode: PanelLayerMode,
     stack: &mut Vec<Symbol>,
 ) -> Result<BBox> {
+    if mode == PanelLayerMode::SupportOnly && is_board_step(step) {
+        return Ok(BBox::empty());
+    }
+
     let step_doc = extract_step_layer(
         context.ipc,
         step,
@@ -629,6 +657,7 @@ fn append_step_layer_tree(
                     context,
                     source_step,
                     instance_transform,
+                    mode,
                     stack,
                 )?);
             }
@@ -694,6 +723,7 @@ fn extract_step_layer(
 
     let mut layer_bbox = BBox::empty();
     let layer_polarity = map_polarity(layer.polarity.unwrap_or(Polarity::Positive));
+    let source_step_kind = layout_step_kind(step);
 
     for layer_feature in step
         .layer_features
@@ -710,31 +740,37 @@ fn extract_step_layer(
                     set_index: set_index as u32,
                     feature_index: feature_index as u32,
                 };
-                let feature = match set_feature {
+                let features = match set_feature {
                     SetFeature::Pad(pad) => extract_pad(
                         &context, layer.name, set.net, polarity, source, pad, &mut doc,
-                    )?,
+                    )?
+                    .into_iter()
+                    .collect(),
                     SetFeature::Fiducial(fiducial) => {
                         extract_fiducial(&context, set.net, polarity, source, fiducial, &mut doc)?
+                            .into_iter()
+                            .collect()
                     }
                     SetFeature::Trace(trace) => {
                         extract_trace(&context, set.net, polarity, source, trace, &mut doc)
+                            .into_iter()
+                            .collect()
                     }
                     SetFeature::UserPrimitive(primitive) => extract_inline_user_primitive(
                         &context, set.net, polarity, source, primitive, &mut doc,
-                    ),
-                    SetFeature::Polygon(polygon) => Some(extract_polygon(
+                    )?,
+                    SetFeature::Polygon(polygon) => vec![extract_polygon(
                         set.net, polarity, source, polygon, &mut doc,
-                    )),
-                    SetFeature::Line(line) => Some(extract_line(
+                    )],
+                    SetFeature::Line(line) => vec![extract_line(
                         &context, set.net, polarity, source, line, &mut doc,
-                    )),
-                    SetFeature::Arc(arc) => Some(extract_arc(
+                    )],
+                    SetFeature::Arc(arc) => vec![extract_arc(
                         &context, set.net, polarity, source, arc, &mut doc,
-                    )),
-                    SetFeature::Polyline(polyline) => Some(extract_feature_polyline(
+                    )],
+                    SetFeature::Polyline(polyline) => vec![extract_feature_polyline(
                         &context, set.net, polarity, source, polyline, &mut doc,
-                    )),
+                    )],
                     SetFeature::StandardPrimitiveRef(primitive_ref) => extract_feature_primitive(
                         &context,
                         set.net,
@@ -753,10 +789,12 @@ fn extract_step_layer(
                         FeaturePrimitiveKind::User,
                         &mut doc,
                     )?,
-                    SetFeature::Hole(_) | SetFeature::Slot(_) => None,
+                    SetFeature::Hole(_) | SetFeature::Slot(_) => Vec::new(),
                 };
 
-                if let Some(mut feature) = feature {
+                for mut feature in features {
+                    feature.source_step_ref = Some(step.name);
+                    feature.source_step_kind = source_step_kind;
                     complete_feature_intent(layer, &mut feature);
                     push_extracted_feature(
                         &mut doc,
@@ -792,6 +830,7 @@ fn extract_step_layer(
                                 set_index: set_index as u32,
                                 feature_index: feature_index as u32,
                             },
+                            set.geometry,
                             hole,
                             &mut doc,
                         );
@@ -811,6 +850,7 @@ fn extract_step_layer(
                                 set_index: set_index as u32,
                                 feature_index: feature_index as u32,
                             },
+                            set.geometry,
                             slot,
                             &mut doc,
                         )?;
@@ -823,6 +863,8 @@ fn extract_step_layer(
                 let set_id =
                     push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
                 for mut feature in emitted {
+                    feature.source_step_ref = Some(step.name);
+                    feature.source_step_kind = source_step_kind;
                     complete_feature_intent(source_layer, &mut feature);
                     push_extracted_feature(
                         &mut doc,
@@ -922,6 +964,7 @@ fn append_transformed_layer(
                 .source_set_index
                 .checked_add(source_set_offset)
                 .context("Panel source feature set index overflow")?,
+            source_geometry_ref: source_set.source_geometry_ref,
             net: source_set.net,
             polarity: source_set.polarity,
             spec_ref_start,
@@ -1278,6 +1321,10 @@ fn slot_applies_to_layer(
     layers: &[Layer],
     slot: &ipc2581::types::Slot,
 ) -> bool {
+    if source_layer.name != target_layer.name && target_layer.layer_function.is_fabrication() {
+        return false;
+    }
+
     if slot.z_axis_dim {
         return source_layer.name == target_layer.name;
     }
@@ -1295,7 +1342,7 @@ fn layer_span_applies_to_layer(
     }
 
     let Some(span) = source_layer.span else {
-        return true;
+        return false;
     };
 
     let Some(target_index) = layer_index(layers, target_layer.name) else {
@@ -1350,8 +1397,7 @@ fn extract_pad(
 
     let bucket = match padstack.hole_def.as_ref().map(|hole| hole.plating_status) {
         Some(PlatingStatus::Via) => FeatureBucket::Via,
-        Some(PlatingStatus::Plated) => FeatureBucket::Pth,
-        Some(PlatingStatus::NonPlated) => return Ok(None),
+        Some(PlatingStatus::Plated | PlatingStatus::NonPlated) => FeatureBucket::Pth,
         None => FeatureBucket::Smd,
     };
 
@@ -1427,6 +1473,15 @@ fn extract_pad(
     feature.flags.expanded_padstack = true;
     feature.flags.lowered_to_paths = true;
     feature.flags.clears_previous_in_set = paint == PrimitivePaint::Void;
+    if let Some(pin_ref) = &pad.pin_ref {
+        feature.pin_ref_start = doc.pin_refs.len() as u32;
+        doc.pin_refs.push(IpcPinRef {
+            component_ref: pin_ref.component_ref,
+            pin: pin_ref.pin,
+            title: pin_ref.title,
+        });
+        feature.pin_ref_count = 1;
+    }
 
     Ok(Some(feature))
 }
@@ -1477,7 +1532,7 @@ fn extract_feature_primitive(
     primitive_ref: &ipc2581::types::ecad::FeaturePrimitiveRef,
     primitive_kind: FeaturePrimitiveKind,
     doc: &mut GeometryDocument,
-) -> Result<Option<GeometryFeature>> {
+) -> Result<Vec<GeometryFeature>> {
     let transform = Affine2::placement(
         Point::new(primitive_ref.x, primitive_ref.y),
         0.0,
@@ -1493,7 +1548,7 @@ fn extract_feature_primitive(
                     "Skipping feature because standard primitive '{}' is missing",
                     context.ipc.resolve(primitive_ref.id)
                 ));
-                return Ok(None);
+                return Ok(Vec::new());
             };
             lower_standard_primitive(context, doc, primitive, transform, FeatureBucket::Fill)?
         }
@@ -1503,24 +1558,24 @@ fn extract_feature_primitive(
                     "Skipping feature because user primitive '{}' is missing",
                     context.ipc.resolve(primitive_ref.id)
                 ));
-                return Ok(None);
+                return Ok(Vec::new());
             };
             lower_user_primitive(context, doc, primitive, transform)
         }
     };
 
-    Ok(primitive_feature_from_paths(
+    primitive_features_from_paths(
         doc,
-        PrimitiveFeatureSpec {
+        primitive_path_feature(
             net,
             polarity,
             source,
             transform,
             path_start,
             paint,
-            primitive_ref: Some(primitive_ref.id),
-        },
-    ))
+            Some(primitive_ref.id),
+        ),
+    )
 }
 
 fn extract_inline_user_primitive(
@@ -1530,26 +1585,17 @@ fn extract_inline_user_primitive(
     source: SourceRef,
     primitive: &ipc2581::types::ecad::FeatureUserPrimitive,
     doc: &mut GeometryDocument,
-) -> Option<GeometryFeature> {
+) -> Result<Vec<GeometryFeature>> {
     let transform = Affine2::placement(Point::new(primitive.x, primitive.y), 0.0, false, 1.0);
     let path_start = doc.paths.len() as u32;
     let paint = lower_user_primitive(context, doc, &primitive.primitive, transform);
-    primitive_feature_from_paths(
+    primitive_features_from_paths(
         doc,
-        PrimitiveFeatureSpec {
-            net,
-            polarity,
-            source,
-            transform,
-            path_start,
-            paint,
-            primitive_ref: None,
-        },
+        primitive_path_feature(net, polarity, source, transform, path_start, paint, None),
     )
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PrimitiveFeatureSpec {
+fn primitive_path_feature(
     net: Option<Symbol>,
     polarity: GeometryPolarity,
     source: SourceRef,
@@ -1557,26 +1603,7 @@ struct PrimitiveFeatureSpec {
     path_start: u32,
     paint: PrimitivePaint,
     primitive_ref: Option<Symbol>,
-}
-
-fn primitive_feature_from_paths(
-    doc: &GeometryDocument,
-    spec: PrimitiveFeatureSpec,
-) -> Option<GeometryFeature> {
-    let PrimitiveFeatureSpec {
-        net,
-        polarity,
-        source,
-        transform,
-        path_start,
-        paint,
-        primitive_ref,
-    } = spec;
-    let path_count = doc.paths.len() as u32 - path_start;
-    if path_count == 0 {
-        return None;
-    }
-
+) -> GeometryFeature {
     let mut feature = GeometryFeature::new(
         FeatureKind::Primitive,
         FeatureBucket::Fill,
@@ -1589,12 +1616,23 @@ fn primitive_feature_from_paths(
     feature.net = net;
     feature.source = source;
     feature.transform = transform;
-    feature.bbox = paths_bbox(doc, path_start, path_count);
     feature.path_start = path_start;
-    feature.path_count = path_count;
     feature.primitive_ref = primitive_ref;
     feature.flags.lowered_to_paths = true;
-    Some(feature)
+    feature
+}
+
+fn primitive_features_from_paths(
+    doc: &GeometryDocument,
+    mut feature: GeometryFeature,
+) -> Result<Vec<GeometryFeature>> {
+    feature.path_count = doc.paths.len() as u32 - feature.path_start;
+    if feature.path_count == 0 {
+        return Ok(Vec::new());
+    }
+    split_primitive_feature_path_runs(doc, feature).map_err(|error| {
+        anyhow::anyhow!("failed to split IPC primitive into homogeneous path features: {error}")
+    })
 }
 
 fn extract_fiducial(
@@ -1746,8 +1784,13 @@ fn extract_line(
     line: &ipc2581::types::ecad::Line,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let (line_width, line_cap, line_pattern) =
-        resolve_feature_line_style(context, line.line_desc_ref, line.line_width, line.line_end);
+    let (line_width, line_cap, line_pattern) = resolve_feature_line_style(
+        context,
+        line.line_desc_ref,
+        line.line_width,
+        line.line_end,
+        line.line_property,
+    );
 
     push_stroked_polyline(
         doc,
@@ -1779,6 +1822,7 @@ fn extract_feature_polyline(
         polyline.line_desc_ref,
         polyline.line_width,
         polyline.line_end,
+        polyline.line_property,
     );
 
     push_stroked_steps(
@@ -1804,8 +1848,13 @@ fn extract_arc(
     arc: &ipc2581::types::ecad::FeatureArc,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
-    let (line_width, line_cap, line_pattern) =
-        resolve_feature_line_style(context, arc.line_desc_ref, arc.line_width, arc.line_end);
+    let (line_width, line_cap, line_pattern) = resolve_feature_line_style(
+        context,
+        arc.line_desc_ref,
+        arc.line_width,
+        arc.line_end,
+        arc.line_property,
+    );
 
     push_stroked_arc(
         doc,
@@ -1829,6 +1878,7 @@ fn resolve_feature_line_style(
     line_desc_ref: Option<Symbol>,
     inline_width: f64,
     inline_end: Option<LineEnd>,
+    inline_property: Option<LineProperty>,
 ) -> (f64, LineCap, LinePattern) {
     let line_desc =
         line_desc_ref.and_then(|line_desc_ref| context.line_descs.get(&line_desc_ref).copied());
@@ -1839,7 +1889,11 @@ fn resolve_feature_line_style(
         .map(|desc| map_line_cap(desc.line_end))
         .or_else(|| inline_end.map(map_line_cap))
         .unwrap_or(LineCap::Round);
-    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
+    let line_pattern = map_line_pattern(
+        line_desc
+            .and_then(|desc| desc.line_property)
+            .or(inline_property),
+    );
     (width, line_cap, line_pattern)
 }
 
@@ -2043,6 +2097,7 @@ fn stroked_path(style: StrokedFeatureStyle, bbox: BBox) -> GeometryPath {
 
 fn extract_hole(
     source: SourceRef,
+    padstack_ref: Option<Symbol>,
     hole: &ipc2581::types::Hole,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
@@ -2067,6 +2122,7 @@ fn extract_hole(
     feature.path_count = path_count;
     feature.center = center;
     feature.outer_diameter = hole.diameter;
+    feature.padstack_ref = padstack_ref;
     feature.intent.plating = plating_kind(hole.plating_status);
     feature.flags.lowered_to_paths = true;
     feature
@@ -2075,17 +2131,22 @@ fn extract_hole(
 fn extract_slot(
     context: &ExtractContext<'_>,
     source: SourceRef,
+    padstack_ref: Option<Symbol>,
     slot: &ipc2581::types::Slot,
     doc: &mut GeometryDocument,
 ) -> Result<GeometryFeature> {
     let placement = ipc_placement(Point::new(slot.x, slot.y), slot.xform);
     let path_start = doc.paths.len() as u32;
+    let mut primitive_size = None;
 
     match &slot.shape {
         SlotShape::Outline(polygon) => {
             push_polygon_path(doc, polygon, placement.transform, FillRule::NonZero);
         }
         SlotShape::Primitive(primitive) => {
+            if let StandardPrimitive::Oval(oval) = primitive {
+                primitive_size = Some((oval.shape.size.width, oval.shape.size.height));
+            }
             let _ = lower_standard_primitive(
                 context,
                 doc,
@@ -2107,6 +2168,13 @@ fn extract_slot(
     feature.path_start = path_start;
     feature.path_count = path_count;
     apply_ipc_placement(&mut feature, placement);
+    if let Some((width, height)) = primitive_size {
+        feature.width = width;
+        feature.height = height;
+        feature.outer_diameter = width.min(height) * feature.scale;
+        feature.stroke_width = feature.outer_diameter;
+    }
+    feature.padstack_ref = padstack_ref;
     feature.intent.plating = plating_kind(slot.plating_status);
     feature.flags.lowered_to_paths = true;
     Ok(feature)
@@ -2119,6 +2187,11 @@ fn lower_standard_primitive(
     transform: Affine2,
     bucket: FeatureBucket,
 ) -> Result<PrimitivePaint> {
+    let paint = primitive_paint(primitive);
+    if standard_primitive_has_no_area(primitive) {
+        return Ok(paint);
+    }
+
     let path_start = doc.paths.len() as u32;
     match primitive {
         StandardPrimitive::Circle(circle) => {
@@ -2274,7 +2347,6 @@ fn lower_standard_primitive(
         );
     }
 
-    let paint = primitive_paint(primitive);
     match paint {
         PrimitivePaint::Fill => {}
         PrimitivePaint::Hollow => {
@@ -2295,6 +2367,47 @@ fn lower_standard_primitive(
     }
 
     Ok(paint)
+}
+
+fn standard_primitive_has_no_area(primitive: &StandardPrimitive) -> bool {
+    match primitive {
+        StandardPrimitive::Circle(circle) => circle.shape.diameter <= 0.0,
+        StandardPrimitive::Ellipse(ellipse) => {
+            ellipse.shape.size.width <= 0.0 || ellipse.shape.size.height <= 0.0
+        }
+        StandardPrimitive::Oval(oval) => {
+            oval.shape.size.width <= 0.0 || oval.shape.size.height <= 0.0
+        }
+        StandardPrimitive::RectCenter(rect) => {
+            rect.shape.size.width <= 0.0 || rect.shape.size.height <= 0.0
+        }
+        StandardPrimitive::RectCorner(rect) => {
+            rect.shape.upper_right.x <= rect.shape.lower_left.x
+                || rect.shape.upper_right.y <= rect.shape.lower_left.y
+        }
+        StandardPrimitive::RectRound(rect) => {
+            rect.shape.size.width <= 0.0 || rect.shape.size.height <= 0.0
+        }
+        StandardPrimitive::RectCham(rect) => {
+            rect.shape.size.width <= 0.0 || rect.shape.size.height <= 0.0
+        }
+        StandardPrimitive::Diamond(diamond) => {
+            diamond.shape.size.width <= 0.0 || diamond.shape.size.height <= 0.0
+        }
+        StandardPrimitive::Hexagon(hexagon) => hexagon.shape.point_to_point <= 0.0,
+        StandardPrimitive::Octagon(octagon) => octagon.shape.point_to_point <= 0.0,
+        StandardPrimitive::Triangle(triangle) => {
+            triangle.shape.base <= 0.0 || triangle.shape.height <= 0.0
+        }
+        StandardPrimitive::Donut(donut) => {
+            donut.shape.outer_diameter <= 0.0
+                || donut.shape.inner_diameter >= donut.shape.outer_diameter
+        }
+        StandardPrimitive::Thermal(thermal) => thermal.shape.outer_diameter <= 0.0,
+        StandardPrimitive::Butterfly(_)
+        | StandardPrimitive::Contour(_)
+        | StandardPrimitive::Moire(_) => false,
+    }
 }
 
 fn lower_user_primitive(
@@ -2803,6 +2916,7 @@ fn push_rounded_rect_path(
     }
 
     let k = 0.552_284_749_830_793_6;
+    let use_arcs = affine_preserves_circles(transform);
     let [upper_right, lower_right, lower_left, upper_left] = corners;
     let mut cmds = Vec::new();
 
@@ -2816,11 +2930,19 @@ fn push_rounded_rect_path(
         -hh,
     )));
     if lower_right {
-        cmds.push(PathCmd::cubic_to(
-            Point::new(hw - r + k * r, -hh),
-            Point::new(hw, -hh + r - k * r),
-            Point::new(hw, -hh + r),
-        ));
+        if use_arcs {
+            cmds.push(PathCmd::arc_to(
+                Point::new(hw, -hh + r),
+                Point::new(hw - r, -hh + r),
+                false,
+            ));
+        } else {
+            cmds.push(PathCmd::cubic_to(
+                Point::new(hw - r + k * r, -hh),
+                Point::new(hw, -hh + r - k * r),
+                Point::new(hw, -hh + r),
+            ));
+        }
     }
 
     cmds.push(PathCmd::line_to(Point::new(
@@ -2828,11 +2950,19 @@ fn push_rounded_rect_path(
         hh - if upper_right { r } else { 0.0 },
     )));
     if upper_right {
-        cmds.push(PathCmd::cubic_to(
-            Point::new(hw, hh - r + k * r),
-            Point::new(hw - r + k * r, hh),
-            Point::new(hw - r, hh),
-        ));
+        if use_arcs {
+            cmds.push(PathCmd::arc_to(
+                Point::new(hw - r, hh),
+                Point::new(hw - r, hh - r),
+                false,
+            ));
+        } else {
+            cmds.push(PathCmd::cubic_to(
+                Point::new(hw, hh - r + k * r),
+                Point::new(hw - r + k * r, hh),
+                Point::new(hw - r, hh),
+            ));
+        }
     }
 
     cmds.push(PathCmd::line_to(Point::new(
@@ -2840,11 +2970,19 @@ fn push_rounded_rect_path(
         hh,
     )));
     if upper_left {
-        cmds.push(PathCmd::cubic_to(
-            Point::new(-hw + r - k * r, hh),
-            Point::new(-hw, hh - r + k * r),
-            Point::new(-hw, hh - r),
-        ));
+        if use_arcs {
+            cmds.push(PathCmd::arc_to(
+                Point::new(-hw, hh - r),
+                Point::new(-hw + r, hh - r),
+                false,
+            ));
+        } else {
+            cmds.push(PathCmd::cubic_to(
+                Point::new(-hw + r - k * r, hh),
+                Point::new(-hw, hh - r + k * r),
+                Point::new(-hw, hh - r),
+            ));
+        }
     }
 
     cmds.push(PathCmd::line_to(Point::new(
@@ -2852,11 +2990,19 @@ fn push_rounded_rect_path(
         -hh + if lower_left { r } else { 0.0 },
     )));
     if lower_left {
-        cmds.push(PathCmd::cubic_to(
-            Point::new(-hw, -hh + r - k * r),
-            Point::new(-hw + r - k * r, -hh),
-            Point::new(-hw + r, -hh),
-        ));
+        if use_arcs {
+            cmds.push(PathCmd::arc_to(
+                Point::new(-hw + r, -hh),
+                Point::new(-hw + r, -hh + r),
+                false,
+            ));
+        } else {
+            cmds.push(PathCmd::cubic_to(
+                Point::new(-hw, -hh + r - k * r),
+                Point::new(-hw + r - k * r, -hh),
+                Point::new(-hw + r, -hh),
+            ));
+        }
     }
     cmds.push(PathCmd::close());
 
@@ -2922,8 +3068,38 @@ fn push_regular_polygon_path(
 }
 
 fn push_ellipse_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, height: f64) {
-    let (bbox, cmds) = ellipse_contour(transform, width, height);
+    let (bbox, cmds) = if nearly_equal(width, height) && affine_preserves_circles(transform) {
+        circle_contour(transform, width)
+    } else {
+        ellipse_contour(transform, width, height)
+    };
     doc.push_path(GeometryPath::filled(FillRule::NonZero, bbox), cmds);
+}
+
+fn circle_contour(transform: Affine2, diameter: f64) -> (BBox, Vec<PathCmd>) {
+    let radius = diameter / 2.0;
+    let center = transform.transform_point(Point::default());
+    let points = [
+        transform.transform_point(Point::new(radius, 0.0)),
+        transform.transform_point(Point::new(0.0, radius)),
+        transform.transform_point(Point::new(-radius, 0.0)),
+        transform.transform_point(Point::new(0.0, -radius)),
+        transform.transform_point(Point::new(radius, 0.0)),
+    ];
+    let clockwise = transform.determinant() < 0.0;
+    let mut bbox = BBox::empty();
+    for pair in points.windows(2) {
+        bbox.include_circular_arc(pair[0], pair[1], center, clockwise);
+    }
+    let cmds = vec![
+        PathCmd::move_to(points[0]),
+        PathCmd::arc_to(points[1], center, clockwise),
+        PathCmd::arc_to(points[2], center, clockwise),
+        PathCmd::arc_to(points[3], center, clockwise),
+        PathCmd::arc_to(points[4], center, clockwise),
+        PathCmd::close(),
+    ];
+    (bbox, cmds)
 }
 
 fn ellipse_contour(transform: Affine2, width: f64, height: f64) -> (BBox, Vec<PathCmd>) {
@@ -3046,6 +3222,22 @@ fn transform_path_cmds(
 ) -> (BBox, Vec<PathCmd>) {
     pcb_ir::dialects::path::transform_cmds(cmds, transform)
 }
+
+fn affine_preserves_circles(transform: Affine2) -> bool {
+    let sx = transform.m00.hypot(transform.m10);
+    let sy = transform.m01.hypot(transform.m11);
+    let dot = transform.m00 * transform.m01 + transform.m10 * transform.m11;
+    sx > GEOMETRY_EPSILON
+        && sy > GEOMETRY_EPSILON
+        && nearly_equal(sx, sy)
+        && dot.abs() <= GEOMETRY_EPSILON * sx.max(sy).max(1.0)
+}
+
+fn nearly_equal(left: f64, right: f64) -> bool {
+    (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
+}
+
+const GEOMETRY_EPSILON: f64 = 1e-9;
 
 fn push_donut_path(
     doc: &mut GeometryDocument,
@@ -3211,15 +3403,84 @@ fn map_line_cap(line_end: LineEnd) -> LineCap {
 
 fn map_line_pattern(line_property: Option<LineProperty>) -> LinePattern {
     match line_property {
-        Some(LineProperty::Dashed) => LinePattern::Dashed,
-        Some(LineProperty::Dotted) => LinePattern::Dotted,
         Some(LineProperty::Solid) | None => LinePattern::Solid,
+        Some(LineProperty::Dotted) => LinePattern::Dotted,
+        Some(LineProperty::Dashed) => LinePattern::Dashed,
+        Some(LineProperty::Center) => LinePattern::Center,
+        Some(LineProperty::Phantom) => LinePattern::Phantom,
+        Some(LineProperty::Erase) => LinePattern::Erase,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maps_all_ipc_line_properties_to_ir_patterns() {
+        assert_eq!(map_line_pattern(None), LinePattern::Solid);
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Solid)),
+            LinePattern::Solid
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Dotted)),
+            LinePattern::Dotted
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Dashed)),
+            LinePattern::Dashed
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Center)),
+            LinePattern::Center
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Phantom)),
+            LinePattern::Phantom
+        );
+        assert_eq!(
+            map_line_pattern(Some(LineProperty::Erase)),
+            LinePattern::Erase
+        );
+    }
+
+    #[test]
+    fn preserves_inline_feature_line_property() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SILK_SCREEN" side="TOP"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Features>
+              <Line startX="0" startY="0" endX="10" endY="0">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND" lineProperty="PHANTOM"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let layer = extract_layer_for_view(&ipc, "TOP", GeometryView::Board).unwrap();
+        let path = &layer.paths[layer.features[0].path_start as usize];
+
+        assert_eq!(path.style.stroke.pattern, LinePattern::Phantom);
+    }
 
     #[test]
     fn carries_spec_refs_fiducials_and_vcut_intent() {
@@ -3283,6 +3544,14 @@ mod tests {
         assert_eq!(top.features[0].bucket, FeatureBucket::Fiducial);
         assert_eq!(top.features[0].intent.role, FeatureRole::Fiducial);
         assert_eq!(top.features[0].fiducial_kind, FiducialKind::Global);
+        assert!(top.features[0].is_fiducial());
+        assert_eq!(top.features[0].source_step_kind, LayoutStepKind::Panel);
+        assert_eq!(
+            top.features[0]
+                .source_step_ref
+                .map(|step| ipc.resolve(step)),
+            Some("Panel")
+        );
         assert_eq!(top.features[0].pin_ref_count, 1);
         assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
@@ -3291,6 +3560,7 @@ mod tests {
         assert_eq!(vcut.feature_sets[0].spec_ref_count, 1);
         assert_eq!(vcut.features[0].intent.domain, FeatureDomain::VCut);
         assert_eq!(vcut.features[0].intent.role, FeatureRole::ArraySeparation);
+        assert!(vcut.features[0].is_vcut());
     }
 
     #[test]
@@ -3347,6 +3617,46 @@ mod tests {
     }
 
     #[test]
+    fn zero_area_standard_primitive_emits_no_paths() {
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
+        )
+        .unwrap();
+        let context = ExtractContext {
+            ipc: &ipc,
+            padstacks: HashMap::new(),
+            line_descs: HashMap::new(),
+            standard_primitives: HashMap::new(),
+            user_primitives: HashMap::new(),
+        };
+        let mut doc = GeometryDocument::new();
+        let primitive = ipc2581::types::StandardPrimitive::RectCenter(ipc2581::types::Styled {
+            shape: ipc2581::types::RectCenter {
+                size: ipc2581::types::Size {
+                    width: 0.0,
+                    height: 1.0,
+                },
+            },
+            fill_property: None,
+            line_desc_ref: None,
+        });
+
+        let paint = lower_standard_primitive(
+            &context,
+            &mut doc,
+            &primitive,
+            Affine2::identity(),
+            FeatureBucket::Fill,
+        )
+        .unwrap();
+
+        assert_eq!(paint, PrimitivePaint::Fill);
+        assert!(doc.paths.is_empty());
+        assert!(doc.contours.is_empty());
+        assert!(doc.path_cmds.is_empty());
+    }
+
+    #[test]
     fn lowers_trace_poly_step_curves_as_arcs() {
         let mut doc = GeometryDocument::new();
         let trace = ipc2581::types::Trace {
@@ -3394,6 +3704,7 @@ mod tests {
             line_desc_ref: None,
             line_width: 0.2,
             line_end: Some(LineEnd::Round),
+            line_property: None,
         };
 
         let feature = extract_feature_polyline(
@@ -3460,6 +3771,8 @@ mod tests {
         assert_eq!(doc.paths[0].style.stroke.width, 0.1);
         assert_eq!(doc.paths[0].bbox.min, Point::new(-0.7, -0.7));
         assert_eq!(doc.paths[0].bbox.max, Point::new(0.7, 0.7));
+        assert!(doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+        assert!(!doc.path_cmds.iter().any(|cmd| cmd.op == PathOp::CubicTo));
     }
 
     #[test]
@@ -3523,6 +3836,57 @@ mod tests {
     }
 
     #[test]
+    fn extracts_inline_stroked_user_primitive_as_trace_feature() {
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
+        )
+        .unwrap();
+        let context = ExtractContext {
+            ipc: &ipc,
+            padstacks: HashMap::new(),
+            line_descs: HashMap::new(),
+            standard_primitives: HashMap::new(),
+            user_primitives: HashMap::new(),
+        };
+        let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
+            primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
+                shapes: vec![ipc2581::types::UserShape {
+                    shape: UserShapeType::Line(ipc2581::types::primitives::Line {
+                        start: ipc2581::types::Point { x: 0.0, y: 0.0 },
+                        end: ipc2581::types::Point { x: 1.0, y: 0.0 },
+                    }),
+                    line_desc: Some(ipc2581::types::LineDesc {
+                        line_width: 0.2,
+                        line_end: LineEnd::Round,
+                        line_property: None,
+                    }),
+                    line_desc_ref: None,
+                    fill_desc: None,
+                }],
+            }),
+            x: 10.0,
+            y: 20.0,
+        };
+        let mut doc = GeometryDocument::new();
+
+        let features = extract_inline_user_primitive(
+            &context,
+            None,
+            GeometryPolarity::Positive,
+            SourceRef::default(),
+            &primitive,
+            &mut doc,
+        )
+        .unwrap();
+
+        assert_eq!(features.len(), 1);
+        let feature = &features[0];
+        assert_eq!(feature.bucket, FeatureBucket::Trace);
+        assert_eq!(feature.path_count, 1);
+        assert!(doc.paths[feature.path_start as usize].flags.stroked);
+    }
+
+    #[test]
     fn lowers_inline_user_contour_as_compound_path_at_feature_location() {
         let ipc = Ipc2581::parse(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
@@ -3563,7 +3927,7 @@ mod tests {
         };
         let mut doc = GeometryDocument::new();
 
-        let feature = extract_inline_user_primitive(
+        let features = extract_inline_user_primitive(
             &context,
             None,
             GeometryPolarity::Positive,
@@ -3571,13 +3935,79 @@ mod tests {
             &primitive,
             &mut doc,
         )
-        .expect("inline user primitive should lower");
+        .unwrap();
 
+        assert_eq!(features.len(), 1);
+        let feature = &features[0];
         assert_eq!(feature.path_count, 1);
         assert_eq!(doc.paths[0].style.fill.rule, FillRule::EvenOdd);
         assert_eq!(doc.paths[0].contour_count, 2);
         assert_eq!(doc.paths[0].bbox.min, Point::new(10.0, 20.0));
         assert_eq!(doc.paths[0].bbox.max, Point::new(12.0, 22.0));
+    }
+
+    #[test]
+    fn splits_mixed_inline_user_primitive_into_trace_and_fill_features() {
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
+        )
+        .unwrap();
+        let context = ExtractContext {
+            ipc: &ipc,
+            padstacks: HashMap::new(),
+            line_descs: HashMap::new(),
+            standard_primitives: HashMap::new(),
+            user_primitives: HashMap::new(),
+        };
+        let primitive = ipc2581::types::ecad::FeatureUserPrimitive {
+            primitive: UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
+                shapes: vec![
+                    ipc2581::types::UserShape {
+                        shape: UserShapeType::Line(ipc2581::types::primitives::Line {
+                            start: ipc2581::types::Point { x: 0.0, y: 0.0 },
+                            end: ipc2581::types::Point { x: 2.0, y: 0.0 },
+                        }),
+                        line_desc: Some(ipc2581::types::LineDesc {
+                            line_width: 0.2,
+                            line_end: LineEnd::Round,
+                            line_property: None,
+                        }),
+                        line_desc_ref: None,
+                        fill_desc: None,
+                    },
+                    ipc2581::types::UserShape {
+                        shape: UserShapeType::Contour(ipc2581::types::Contour {
+                            polygon: rect_polygon(0.0, 1.0, 2.0, 3.0),
+                            cutouts: Vec::new(),
+                        }),
+                        line_desc: None,
+                        line_desc_ref: None,
+                        fill_desc: None,
+                    },
+                ],
+            }),
+            x: 10.0,
+            y: 20.0,
+        };
+        let mut doc = GeometryDocument::new();
+
+        let features = extract_inline_user_primitive(
+            &context,
+            None,
+            GeometryPolarity::Positive,
+            SourceRef::default(),
+            &primitive,
+            &mut doc,
+        )
+        .unwrap();
+
+        assert_eq!(features.len(), 2);
+        assert_eq!(features[0].bucket, FeatureBucket::Trace);
+        assert_eq!(features[0].path_count, 1);
+        assert_eq!(features[1].bucket, FeatureBucket::Fill);
+        assert_eq!(features[1].path_count, 1);
+        assert!(doc.paths[features[0].path_start as usize].flags.stroked);
+        assert!(doc.paths[features[1].path_start as usize].flags.filled);
     }
 
     #[test]
@@ -3673,6 +4103,12 @@ mod tests {
         assert_eq!(board_step_count(&doc), 1);
         assert_eq!(panel_step_count(&doc), 1);
         assert_eq!(board_instance_count(&doc), 2);
+        let simple_array = simple_board_array_layout(&doc).unwrap();
+        assert_eq!(simple_array.columns, 2);
+        assert_eq!(simple_array.rows, 1);
+        assert_eq!(simple_array.board_step, 1);
+        assert_eq!(simple_array.board_width, 10.0);
+        assert_eq!(simple_array.board_height, 5.0);
         assert_eq!(board_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
         assert_eq!(board_bbox(&doc).unwrap().max, Point::new(10.0, 5.0));
         assert_eq!(panel_bbox(&doc).unwrap().min, Point::new(0.0, 0.0));
@@ -3885,7 +4321,7 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
             .expect("synthetic panel fixture should parse");
         let mut doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
-        pcb_ir::dialects::ipc::process::compose_for_artwork_export(&mut doc);
+        pcb_ir::dialects::ipc::process::compose_for_rendering(&mut doc);
 
         let layer = &doc.layers[0];
         let traces = doc.features
@@ -3955,6 +4391,53 @@ mod tests {
     }
 
     #[test]
+    fn rounded_rect_preserves_arcs_when_transform_preserves_circles() {
+        let mut doc = GeometryDocument::new();
+
+        push_rounded_rect_path(&mut doc, Affine2::identity(), 10.0, 6.0, 1.0, [true; 4]);
+
+        let path = &doc.paths[0];
+        let contour = &doc.contours[path.contour_start as usize];
+        let cmds = &doc.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
+
+        assert_eq!(cmds.iter().filter(|cmd| cmd.op == PathOp::ArcTo).count(), 4);
+        assert!(!cmds.iter().any(|cmd| cmd.op == PathOp::CubicTo));
+    }
+
+    #[test]
+    fn rounded_rect_uses_cubics_when_transform_distorts_circles() {
+        let mut doc = GeometryDocument::new();
+
+        push_rounded_rect_path(
+            &mut doc,
+            Affine2 {
+                m00: 2.0,
+                m01: 0.0,
+                m02: 0.0,
+                m10: 0.0,
+                m11: 1.0,
+                m12: 0.0,
+            },
+            10.0,
+            6.0,
+            1.0,
+            [true; 4],
+        );
+
+        let path = &doc.paths[0];
+        let contour = &doc.contours[path.contour_start as usize];
+        let cmds = &doc.path_cmds
+            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
+
+        assert_eq!(
+            cmds.iter().filter(|cmd| cmd.op == PathOp::CubicTo).count(),
+            4
+        );
+        assert!(!cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+    }
+
+    #[test]
     fn slot_cavity_span_controls_target_layers() {
         let mut interner = ipc2581::Interner::new();
         let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
@@ -3989,6 +4472,18 @@ mod tests {
         let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
         let layers = [l1.clone(), route.clone()];
         let slot = test_slot(true);
+
+        assert!(!slot_applies_to_layer(&route, &l1, &layers, &slot));
+        assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
+    }
+
+    #[test]
+    fn unspanned_route_slot_stays_on_route_layer() {
+        let mut interner = ipc2581::Interner::new();
+        let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
+        let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
+        let layers = [l1.clone(), route.clone()];
+        let slot = test_slot(false);
 
         assert!(!slot_applies_to_layer(&route, &l1, &layers, &slot));
         assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
@@ -4040,6 +4535,59 @@ mod tests {
         );
         assert!((slot.bbox.width() - 0.60).abs() < 1e-6);
         assert!((slot.bbox.height() - 1.70).abs() < 1e-6);
+    }
+
+    #[test]
+    fn extracts_nonplated_padstack_artwork_on_soldermask_layers() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="F.Mask"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="mask_opening">
+        <Circle diameter="0.9906"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="npth_mask">
+          <PadstackHoleDef name="npth" diameter="0.9906" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+          <PadstackPadDef layerRef="F.Mask" padUse="REGULAR">
+            <StandardPrimitiveRef id="mask_opening"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="F.Mask">
+          <Set>
+            <Pad padstackDefRef="npth_mask">
+              <Location x="117.065" y="-133.14"/>
+              <PinRef componentRef="J3" pin="NPTH0"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let doc = extract_layer(&ipc, "F.Mask").unwrap();
+
+        assert_eq!(doc.features.len(), 1);
+        let feature = &doc.features[0];
+        assert_eq!(feature.bucket, FeatureBucket::Pth);
+        assert_eq!(feature.intent.domain, FeatureDomain::Soldermask);
+        assert_eq!(feature.intent.plating, PlatingKind::NonPlated);
+        assert_eq!(feature.pin_ref_count, 1);
+        assert!((feature.bbox.width() - 0.9906).abs() < 1e-6);
+        assert!((feature.bbox.height() - 0.9906).abs() < 1e-6);
     }
 
     fn test_layer(
@@ -4303,11 +4851,9 @@ mod tests {
             <PolyStepSegment x="0" y="10"/>
           </Polygon>
           <Cutout>
-            <Polygon>
-              <PolyBegin x="6" y="5"/>
-              <PolyStepCurve x="4" y="5" centerX="5" centerY="5" clockwise="false"/>
-              <PolyStepCurve x="6" y="5" centerX="5" centerY="5" clockwise="false"/>
-            </Polygon>
+            <PolyBegin x="6" y="5"/>
+            <PolyStepCurve x="4" y="5" centerX="5" centerY="5" clockwise="false"/>
+            <PolyStepCurve x="6" y="5" centerX="5" centerY="5" clockwise="false"/>
           </Cutout>
         </Profile>
       </Step>

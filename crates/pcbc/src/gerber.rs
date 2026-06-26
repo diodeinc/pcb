@@ -12,6 +12,21 @@ pub struct GerberArgs {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Compare two Gerber X2 layers after lowering to final rendered geometry
+    Compare {
+        /// Reference Gerber layer file
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        reference: PathBuf,
+        /// Candidate Gerber layer file
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        candidate: PathBuf,
+        /// Bounding-box tolerance in millimeters
+        #[arg(long, default_value_t = 0.01)]
+        bbox_tolerance_mm: f64,
+        /// Area and symmetric-difference tolerance in square millimeters
+        #[arg(long, default_value_t = 0.01)]
+        area_tolerance_mm2: f64,
+    },
     /// Render a single Gerber X2 layer to SVG, PNG, or terminal graphics
     Render {
         /// Gerber layer file to render
@@ -41,6 +56,17 @@ enum RenderTarget {
 
 pub fn execute(args: GerberArgs) -> Result<()> {
     match args.command {
+        Commands::Compare {
+            reference,
+            candidate,
+            bbox_tolerance_mm,
+            area_tolerance_mm2,
+        } => compare(
+            &reference,
+            &candidate,
+            bbox_tolerance_mm,
+            area_tolerance_mm2,
+        ),
         Commands::Render {
             file,
             output,
@@ -49,12 +75,87 @@ pub fn execute(args: GerberArgs) -> Result<()> {
     }
 }
 
+fn compare(
+    reference: &Path,
+    candidate: &Path,
+    bbox_tolerance_mm: f64,
+    area_tolerance_mm2: f64,
+) -> Result<()> {
+    let reference_geometry = load_geometry(reference)?;
+    let candidate_geometry = load_geometry(candidate)?;
+    let report = pcb_ir::dialects::gerber::compare::compare_documents(
+        &reference_geometry,
+        &candidate_geometry,
+        pcb_ir::dialects::gerber::compare::GeometryCompareTolerance {
+            bbox_mm: bbox_tolerance_mm,
+            area_mm2: area_tolerance_mm2,
+        },
+    );
+
+    println!(
+        "reference area {:.6} mm², candidate area {:.6} mm², delta {:.6} mm²",
+        report.reference.area_mm2,
+        report.candidate.area_mm2,
+        report.candidate.area_mm2 - report.reference.area_mm2
+    );
+    println!(
+        "reference bbox [{:.6},{:.6}]..[{:.6},{:.6}], candidate bbox [{:.6},{:.6}]..[{:.6},{:.6}]",
+        report.reference.bbox.min.x,
+        report.reference.bbox.min.y,
+        report.reference.bbox.max.x,
+        report.reference.bbox.max.y,
+        report.candidate.bbox.min.x,
+        report.candidate.bbox.min.y,
+        report.candidate.bbox.max.x,
+        report.candidate.bbox.max.y
+    );
+    println!(
+        "reference objects {}, paths {}; candidate objects {}, paths {}",
+        report.reference.object_count,
+        report.reference.path_count,
+        report.candidate.object_count,
+        report.candidate.path_count
+    );
+    println!(
+        "reference-only area {:.6} mm², candidate-only area {:.6} mm², symmetric difference {:.6} mm²",
+        report.difference.reference_only.area_mm2,
+        report.difference.candidate_only.area_mm2,
+        report.difference.symmetric_area_mm2
+    );
+
+    if report.is_match() {
+        println!("✓ Gerber geometry matches within tolerance");
+        Ok(())
+    } else {
+        for mismatch in &report.mismatches {
+            println!("mismatch: {mismatch}");
+        }
+        print_difference_components("reference-only", &report.difference.reference_only);
+        print_difference_components("candidate-only", &report.difference.candidate_only);
+        bail!("Gerber geometry differs")
+    }
+}
+
+fn print_difference_components(
+    label: &str,
+    summary: &pcb_ir::dialects::gerber::compare::DirectionalDifferenceSummary,
+) {
+    for (index, component) in summary.components.iter().take(12).enumerate() {
+        println!(
+            "{label} component {}: area {:.6} mm², bbox [{:.6},{:.6}]..[{:.6},{:.6}]",
+            index + 1,
+            component.area_mm2,
+            component.bbox.min.x,
+            component.bbox.min.y,
+            component.bbox.max.x,
+            component.bbox.max.y
+        );
+    }
+}
+
 fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()> {
     let target = resolve_target(output, format)?;
-    let gerber = gerberx2::GerberX2::parse_file(file)
-        .with_context(|| format!("Failed to parse Gerber file {}", file.display()))?;
-    let mut geometry = gerberx2::geometry::extract_document(&gerber);
-    pcb_ir::dialects::gerber::process::compose_for_rendering(&mut geometry);
+    let geometry = load_geometry(file)?;
 
     for diagnostic in &geometry.diagnostics {
         eprintln!("warning: {}", diagnostic.message);
@@ -92,6 +193,12 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
     }
 
     Ok(())
+}
+
+fn load_geometry(file: &Path) -> Result<gerberx2::geometry::GerberArtworkDocument> {
+    let gerber = gerberx2::GerberX2::parse_file(file)
+        .with_context(|| format!("Failed to parse Gerber file {}", file.display()))?;
+    Ok(gerberx2::geometry::extract_document(&gerber))
 }
 
 fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderTarget> {

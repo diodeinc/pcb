@@ -6,30 +6,57 @@ use anyhow::{Context, Result, bail};
 use ipc2581::types::{
     Units,
     ecad::{
-        Fiducial, FiducialKind, FiducialShape, Hole, LayerFunction, Line, PlatingStatus, Polarity,
-        SetFeature, Side, StepType,
+        Fiducial, FiducialKind as IpcFiducialKind, FiducialShape, Hole, LayerFunction, Line,
+        PlatingStatus, Polarity, SetFeature, Side, StepType,
     },
-    primitives::{Circle, LineEnd, StandardPrimitive, Styled},
+    primitives::{
+        Circle, LineEnd, LineProperty, Point as IpcPoint, PolyStep, PolyStepCurve, PolyStepSegment,
+        Polygon, StandardPrimitive, Styled,
+    },
     transform::Location,
 };
-use pcb_ir::dialects::ipc::{LayoutStepKind, root_step};
+use pcb_ir::{
+    common::{BBox, Point},
+    dialects::ipc::{LayoutStepKind, root_step},
+};
 use quick_xml::{
     Reader, Writer,
     events::{BytesStart, Event},
 };
 
+use super::board_array_auto::{
+    AutoSheetSize, auto_board_array_plan, auto_board_array_plan_for_sheet,
+};
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
 const EPSILON: f64 = 1e-9;
 const MIN_BOARD_ARRAY_DIMENSION_MM: f64 = 70.0;
-const MAX_BOARD_ARRAY_DIMENSION_MM: f64 = 260.0;
+const MAX_BOARD_ARRAY_DIMENSION_MM: f64 = 297.0;
 const MAX_VCUT_LINES_PER_AXIS: usize = 25;
 const MIN_VCUT_CLEARANCE_MM: f64 = 5.0;
 const MIN_EDGE_RAIL_WIDTH_MM: f64 = 5.0;
+const MAX_MANUAL_EDGE_RAIL_WIDTH_MM: f64 = 30.0;
 const VCUT_LAYER_BASE_NAME: &str = "V-Score";
-const VCUT_LINE_WIDTH_MM: f64 = 0.025;
+const VCUT_SPEC_BASE_NAME: &str = "Board_Array_VCut";
+const VCUT_MARKER_STROKE_MM: f64 = 0.10;
+const VCUT_CALLOUT_ARROW_LENGTH_MM: f64 = 2.5;
+const VCUT_CALLOUT_ARROW_CLEARANCE_MM: f64 = 0.8;
+const VCUT_CALLOUT_ARROW_HEAD_MM: f64 = 0.45;
+const VCUT_CALLOUT_TEXT_HEIGHT_MM: f64 = 1.2;
+const VCUT_CALLOUT_TEXT_STROKE_MM: f64 = 0.12;
+const VCUT_CALLOUT_TEXT_GAP_MM: f64 = 0.45;
+// KiCad's built-in "KiCad Font" stroke glyph coordinates use Hershey/newstroke units.
+const KICAD_STROKE_FONT_SCALE: f64 = 1.0 / 21.0;
+const KICAD_STROKE_FONT_OFFSET: i32 = -8;
+const KICAD_VCUT_LABEL_GLYPHS: [&str; 5] = [
+    "I[KFR[YF",
+    "E_JSZS",
+    "F[WYVZS[Q[NZLXKVJRJOKKLINGQFSFVGWH",
+    "G]LFLWMYNZP[T[VZWYXWXF",
+    "JZLFXF RR[RF",
+];
 const TOP_COPPER_LAYER_BASE_NAME: &str = "F.Cu";
 const TOP_SOLDERMASK_LAYER_BASE_NAME: &str = "F.Mask";
 const TOOLING_HOLE_LAYER_BASE_NAME: &str = "Board_Array_Drill";
@@ -37,13 +64,22 @@ const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
 const FIDUCIAL_COPPER_DIAMETER_MM: f64 = 1.0;
 const FIDUCIAL_MASK_OPENING_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_DIAMETER_MM: f64 = 2.0;
+const CORNER_TOOLING_HOLE_DIAMETER_MM: f64 = 2.1;
 const TOOLING_HOLE_EDGE_OFFSET_MM: f64 = 2.5;
 const FIDUCIAL_EDGE_OFFSET_MM: f64 = 3.85;
-const FIDUCIAL_FROM_TOOLING_HOLE_MM: f64 = 5.0;
-const TOP_TOOLING_HOLE_X_INSET_MM: f64 = 5.0;
-const BOTTOM_TOOLING_HOLE_X_INSET_MM: f64 = 10.0;
-const SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 35.0;
-const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 20.0;
+const ARRAY_CORNER_RADIUS_MM: f64 = 3.0;
+const ARRAY_CORNER_TOOLING_HOLE_INSET_MM: f64 = 3.0;
+const PRIMARY_TOOLING_HOLE_SPAN_INSET_MM: f64 = 2.5;
+const PRIMARY_FIDUCIAL_SPAN_INSET_MM: f64 = 8.0;
+const SECONDARY_TOOLING_HOLE_SPAN_INSET_MM: f64 = 6.5;
+const SECONDARY_FIDUCIAL_SPAN_INSET_MM: f64 = 12.0;
+const SINGLE_BOARD_TOOLING_MIN_SPAN_MM: f64 = 28.0;
+const MULTI_BOARD_TOOLING_MIN_SPAN_MM: f64 = 12.0;
+const MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM: f64 = 5.0;
+const MIN_BOARD_CELL_FIDUCIAL_SPAN_MM: f64 = 17.0;
+const BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM: f64 = 2.0;
+const PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = 3.0;
+const SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM: f64 = 7.0;
 
 #[derive(Debug, Clone, PartialEq)]
 enum BoardArrayCreateValidationError {
@@ -58,6 +94,11 @@ enum BoardArrayCreateValidationError {
         value: f64,
         min: f64,
         max: f64,
+    },
+    MmMin {
+        field: &'static str,
+        value: f64,
+        min: f64,
     },
     ZeroOrMinMm {
         field: &'static str,
@@ -102,6 +143,12 @@ impl std::fmt::Display for BoardArrayCreateValidationError {
                 fmt_num(*max),
                 fmt_num(*value)
             ),
+            Self::MmMin { field, value, min } => write!(
+                f,
+                "{field} must be at least {} mm; got {} mm",
+                fmt_num(*min),
+                fmt_num(*value)
+            ),
             Self::ZeroOrMinMm { field, value, min } => write!(
                 f,
                 "{field} must be 0 mm or at least {} mm; got {} mm",
@@ -136,21 +183,105 @@ impl std::error::Error for BoardArrayCreateValidationError {}
 pub struct BoardArrayCreateOptions {
     pub columns: u32,
     pub rows: u32,
-    pub column_spacing_mm: f64,
-    pub row_spacing_mm: f64,
-    pub edge_rail_width_mm: f64,
+    pub board_margin_mm: BoardMarginMm,
+    pub edge_rail_mm: BoardMarginMm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoardArrayValidationMode {
+    Manual,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoardMarginMm {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+impl BoardMarginMm {
+    pub fn all(value: f64) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    pub fn from_css_shorthand(values: &[f64]) -> Result<Self> {
+        Self::from_css_shorthand_named("board margin", values)
+    }
+
+    pub fn from_css_shorthand_named(name: &'static str, values: &[f64]) -> Result<Self> {
+        match values {
+            [all] => Ok(Self::all(*all)),
+            [vertical, horizontal] => Ok(Self {
+                top: *vertical,
+                right: *horizontal,
+                bottom: *vertical,
+                left: *horizontal,
+            }),
+            [top, horizontal, bottom] => Ok(Self {
+                top: *top,
+                right: *horizontal,
+                bottom: *bottom,
+                left: *horizontal,
+            }),
+            [top, right, bottom, left] => Ok(Self {
+                top: *top,
+                right: *right,
+                bottom: *bottom,
+                left: *left,
+            }),
+            _ => bail!("{name} expects 1 to 4 values"),
+        }
+    }
+
+    fn horizontal_gap(self) -> f64 {
+        self.left + self.right
+    }
+
+    fn vertical_gap(self) -> f64 {
+        self.top + self.bottom
+    }
+
+    fn board_margin_sides(self) -> [(&'static str, f64); 4] {
+        [
+            ("board margin top", self.top),
+            ("board margin right", self.right),
+            ("board margin bottom", self.bottom),
+            ("board margin left", self.left),
+        ]
+    }
+
+    fn edge_rail_sides(self) -> [(&'static str, f64); 4] {
+        [
+            ("edge rail top", self.top),
+            ("edge rail right", self.right),
+            ("edge rail bottom", self.bottom),
+            ("edge rail left", self.left),
+        ]
+    }
 }
 
 #[derive(Debug, Clone)]
 struct BoardArraySpec {
     array_name: String,
+    board_cell_name: String,
     board_name: String,
+    vcut_spec_name: String,
+    board_outline_layer_names: Vec<String>,
     content_step_refs: Vec<String>,
     content_layer_refs: Vec<String>,
     columns: u32,
     rows: u32,
-    repeat_x_mm: f64,
-    repeat_y_mm: f64,
+    array_repeat_x_mm: f64,
+    array_repeat_y_mm: f64,
+    board_repeat_x_mm: f64,
+    board_repeat_y_mm: f64,
     pitch_x_mm: f64,
     pitch_y_mm: f64,
     array_width_mm: f64,
@@ -160,63 +291,41 @@ struct BoardArraySpec {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct BoardArrayGeneratedGeometry {
-    pub layers: Vec<GeneratedLayer>,
-    pub layer_features: Vec<GeneratedLayerFeature>,
+struct BoardArrayGeneratedGeometry {
+    layers: Vec<GeneratedLayer>,
+    layer_features: Vec<GeneratedLayerFeature>,
 }
 
 impl BoardArrayGeneratedGeometry {
-    pub fn add_layer(&mut self, layer: GeneratedLayer) {
+    fn add_layer(&mut self, layer: GeneratedLayer) {
         self.layers.push(layer);
     }
 
-    pub fn add_layer_feature(
+    fn add_layer_feature(
         &mut self,
+        scope: GeneratedFeatureScope,
         layer_name: impl Into<String>,
         polarity: Polarity,
         features: Vec<SetFeature>,
     ) {
+        self.add_layer_feature_with_spec_refs(scope, layer_name, polarity, Vec::new(), features);
+    }
+
+    fn add_layer_feature_with_spec_refs(
+        &mut self,
+        scope: GeneratedFeatureScope,
+        layer_name: impl Into<String>,
+        polarity: Polarity,
+        spec_refs: Vec<String>,
+        features: Vec<SetFeature>,
+    ) {
         self.layer_features.push(GeneratedLayerFeature {
+            scope,
             layer_name: layer_name.into(),
             polarity,
+            spec_refs,
             features,
         });
-    }
-
-    pub fn add_round_global_fiducial(
-        &mut self,
-        layer_name: impl Into<String>,
-        x_mm: f64,
-        y_mm: f64,
-        diameter_mm: f64,
-    ) {
-        self.add_layer_feature(
-            layer_name,
-            Polarity::Positive,
-            vec![SetFeature::Fiducial(round_global_fiducial(
-                x_mm,
-                y_mm,
-                diameter_mm,
-            ))],
-        );
-    }
-
-    pub fn add_round_nonplated_hole(
-        &mut self,
-        layer_name: impl Into<String>,
-        x_mm: f64,
-        y_mm: f64,
-        diameter_mm: f64,
-    ) {
-        self.add_layer_feature(
-            layer_name,
-            Polarity::Positive,
-            vec![SetFeature::Hole(round_nonplated_hole(
-                x_mm,
-                y_mm,
-                diameter_mm,
-            ))],
-        );
     }
 
     fn referenced_layer_names(&self) -> impl Iterator<Item = &str> {
@@ -229,15 +338,15 @@ impl BoardArrayGeneratedGeometry {
 }
 
 #[derive(Debug, Clone)]
-pub struct GeneratedLayer {
-    pub name: String,
-    pub layer_function: LayerFunction,
-    pub side: Option<Side>,
-    pub polarity: Option<Polarity>,
+struct GeneratedLayer {
+    name: String,
+    layer_function: LayerFunction,
+    side: Option<Side>,
+    polarity: Option<Polarity>,
 }
 
 impl GeneratedLayer {
-    pub fn new(
+    fn new(
         name: impl Into<String>,
         layer_function: LayerFunction,
         side: Option<Side>,
@@ -253,10 +362,18 @@ impl GeneratedLayer {
 }
 
 #[derive(Debug, Clone)]
-pub struct GeneratedLayerFeature {
-    pub layer_name: String,
-    pub polarity: Polarity,
-    pub features: Vec<SetFeature>,
+struct GeneratedLayerFeature {
+    scope: GeneratedFeatureScope,
+    layer_name: String,
+    polarity: Polarity,
+    spec_refs: Vec<String>,
+    features: Vec<SetFeature>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneratedFeatureScope {
+    Array,
+    BoardCell,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -275,17 +392,111 @@ pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -
     Ok(())
 }
 
+pub fn execute_auto(input: &Path, output: &Path, sheet: Option<AutoSheetSize>) -> Result<()> {
+    let content = file_utils::load_ipc_file(input)?;
+    let updated_xml = create_auto_board_array_xml_with_sheet(&content, sheet)?;
+    file_utils::save_ipc_file(output, &updated_xml)?;
+    eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+    Ok(())
+}
+
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let spec = build_board_array_spec(&ipc, options)?;
+    let spec = build_board_array_spec(&ipc, options, BoardArrayValidationMode::Manual)?;
     write_board_array_xml(xml, &spec)
 }
 
+#[cfg(test)]
+fn create_auto_board_array_xml(xml: &str) -> Result<String> {
+    create_auto_board_array_xml_with_sheet(xml, None)
+}
+
+fn create_auto_board_array_xml_with_sheet(
+    xml: &str,
+    sheet: Option<AutoSheetSize>,
+) -> Result<String> {
+    let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
+    let options = auto_board_array_options(&ipc, sheet)?;
+    let spec = build_board_array_spec(&ipc, &options, BoardArrayValidationMode::Auto)?;
+    write_board_array_xml(xml, &spec)
+}
+
+fn auto_board_array_options(
+    ipc: &Ipc2581,
+    sheet: Option<AutoSheetSize>,
+) -> Result<BoardArrayCreateOptions> {
+    let board = primary_board_layout(ipc)?;
+    let board_margin = auto_board_margin(ipc, board.bbox)?;
+    let plan = if let Some(sheet) = sheet {
+        auto_board_array_plan_for_sheet(
+            board.bbox.width(),
+            board.bbox.height(),
+            board_margin,
+            sheet,
+        )?
+    } else {
+        auto_board_array_plan(board.bbox.width(), board.bbox.height(), board_margin)?
+    };
+
+    Ok(BoardArrayCreateOptions {
+        columns: plan.columns,
+        rows: plan.rows,
+        board_margin_mm: plan.board_margin_mm,
+        edge_rail_mm: plan.edge_rail_mm,
+    })
+}
+
+fn auto_board_margin(ipc: &Ipc2581, board_bbox: BBox) -> Result<BoardMarginMm> {
+    let safe_bbox = board_bbox.union(board_courtyard_bbox(ipc)?);
+    Ok(BoardMarginMm {
+        top: (safe_bbox.max.y - board_bbox.max.y).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
+        right: (safe_bbox.max.x - board_bbox.max.x).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
+        bottom: (board_bbox.min.y - safe_bbox.min.y).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
+        left: (board_bbox.min.x - safe_bbox.min.x).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
+    })
+}
+
+fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let mut bbox = BBox::empty();
+
+    for layer in ecad
+        .cad_data
+        .layers
+        .iter()
+        .filter(|layer| layer.layer_function == LayerFunction::Courtyard)
+    {
+        let layer_name = ipc.resolve(layer.name);
+        let doc = geometry::extract_layer_for_view(
+            ipc,
+            layer_name,
+            pcb_ir::dialects::ipc::GeometryView::Board,
+        )
+        .with_context(|| format!("failed to extract IPC-2581 courtyard layer '{layer_name}'"))?;
+        for feature in doc
+            .features
+            .iter()
+            .filter(|feature| feature.source_layer_ref == Some(layer.name))
+        {
+            bbox = bbox.union(feature.bbox);
+        }
+    }
+
+    Ok(bbox)
+}
+
 fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
+    let generated_spec_xml = write_generated_specs_xml(spec)?;
     let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry)?;
-    let array_step_xml = write_array_step_xml(spec)?;
+    let generated_steps_xml = write_generated_steps_xml(spec)?;
     let xml = update_content_refs(xml, &spec.content_step_refs, &spec.content_layer_refs)?;
-    let xml = insert_array_cad_data(&xml, generated_layer_xml.as_deref(), &array_step_xml)?;
+    let xml = insert_generated_cad_header_specs(&xml, &generated_spec_xml)?;
+    let xml = insert_array_cad_data(
+        &xml,
+        spec,
+        generated_layer_xml.as_deref(),
+        &generated_steps_xml,
+    )?;
     let xml = crate::utils::history::append_file_revision(&xml, "Created board array")?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
@@ -293,25 +504,13 @@ fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
     Ok(xml)
 }
 
-fn build_board_array_spec(
-    ipc: &Ipc2581,
-    options: &BoardArrayCreateOptions,
-) -> Result<BoardArraySpec> {
-    validate_options(options)?;
+#[derive(Debug, Clone, Copy)]
+struct PrimaryBoardLayout {
+    source_step_ref: ipc2581::Symbol,
+    bbox: pcb_ir::common::BBox,
+}
 
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let primary_step = crate::steps::primary_step(ipc, &ecad.cad_data.steps)
-        .context("IPC-2581 ECAD section has no Step")?;
-
-    if is_panel_step(primary_step) {
-        bail!(
-            "primary IPC-2581 step is already a board array; board array create expects a board step"
-        );
-    }
-    if !is_board_step(primary_step) {
-        bail!("primary IPC-2581 step is not a board step");
-    }
-
+fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
     let layout = geometry::extract_layout(ipc)?;
     let (_, root) = root_step(&layout).context("IPC-2581 board step has no layout root")?;
     if root.kind != LayoutStepKind::Board {
@@ -327,19 +526,55 @@ fn build_board_array_spec(
         bail!("primary IPC-2581 board Profile outline has zero size");
     }
 
+    Ok(PrimaryBoardLayout {
+        source_step_ref: root.source_step_ref,
+        bbox: root.bbox,
+    })
+}
+
+fn build_board_array_spec(
+    ipc: &Ipc2581,
+    options: &BoardArrayCreateOptions,
+    validation_mode: BoardArrayValidationMode,
+) -> Result<BoardArraySpec> {
+    validate_options(options, validation_mode)?;
+
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let primary_step = crate::steps::primary_step(ipc, &ecad.cad_data.steps)
+        .context("IPC-2581 ECAD section has no Step")?;
+
+    if is_panel_step(primary_step) {
+        bail!(
+            "primary IPC-2581 step is already a board array; board array create expects a board step"
+        );
+    }
+    if !is_board_step(primary_step) {
+        bail!("primary IPC-2581 step is not a board step");
+    }
+
+    let root = primary_board_layout(ipc)?;
+    let board_width = root.bbox.width();
+    let board_height = root.bbox.height();
+
     let columns = options.columns;
     let rows = options.rows;
-    let margin_x = options.column_spacing_mm + options.edge_rail_width_mm;
-    let margin_y = options.row_spacing_mm + options.edge_rail_width_mm;
-    let pitch_x = board_width + options.column_spacing_mm;
-    let pitch_y = board_height + options.row_spacing_mm;
+    let board_margin = options.board_margin_mm;
+    let edge_rail = options.edge_rail_mm;
+    let margin_x = edge_rail.left + board_margin.left;
+    let margin_y = edge_rail.bottom + board_margin.bottom;
+    let pitch_x = board_width + board_margin.horizontal_gap();
+    let pitch_y = board_height + board_margin.vertical_gap();
     let array_width = columns as f64 * board_width
-        + (columns + 1) as f64 * options.column_spacing_mm
-        + 2.0 * options.edge_rail_width_mm;
+        + columns as f64 * board_margin.horizontal_gap()
+        + edge_rail.left
+        + edge_rail.right;
     let array_height = rows as f64 * board_height
-        + (rows + 1) as f64 * options.row_spacing_mm
-        + 2.0 * options.edge_rail_width_mm;
+        + rows as f64 * board_margin.vertical_gap()
+        + edge_rail.bottom
+        + edge_rail.top;
     validate_array_dimensions(array_width, array_height)?;
+    let board_repeat_x = board_margin.left - root.bbox.min.x;
+    let board_repeat_y = board_margin.bottom - root.bbox.min.y;
 
     let board_name = ipc.resolve(root.source_step_ref).to_string();
     let existing_step_names = ecad
@@ -349,6 +584,16 @@ fn build_board_array_spec(
         .map(|step| ipc.resolve(step.name).to_string())
         .collect::<HashSet<_>>();
     let array_name = unique_name(&existing_step_names, "array");
+    let mut used_step_names = existing_step_names;
+    used_step_names.insert(array_name.clone());
+    let board_cell_name = unique_name(&used_step_names, "board_cell");
+    let existing_spec_names = ecad
+        .cad_header
+        .specs
+        .keys()
+        .map(|name| ipc.resolve(*name).to_string())
+        .collect::<HashSet<_>>();
+    let vcut_spec_name = unique_name(&existing_spec_names, VCUT_SPEC_BASE_NAME);
     let mut used_layer_names = ecad
         .cad_data
         .layers
@@ -359,6 +604,8 @@ fn build_board_array_spec(
     add_vcut_lines(
         &mut generated_geometry,
         &mut used_layer_names,
+        vcut_spec_name.clone(),
+        array_width,
         vcut_lines(VcutLineSpec {
             columns,
             rows,
@@ -372,31 +619,63 @@ fn build_board_array_spec(
             array_height_mm: array_height,
         })?,
     );
+    add_board_array_corner_tooling(
+        &mut generated_geometry,
+        &mut used_layer_names,
+        array_width,
+        array_height,
+    );
     add_board_array_tooling(
         &mut generated_geometry,
         ipc,
         ecad,
         &mut used_layer_names,
         BoardArrayToolingSpec {
+            orientation: board_array_tooling_orientation(array_width, array_height),
             columns,
+            rows,
             board_width_mm: board_width,
+            board_height_mm: board_height,
             margin_x_mm: margin_x,
+            margin_y_mm: margin_y,
             pitch_x_mm: pitch_x,
+            pitch_y_mm: pitch_y,
+            array_width_mm: array_width,
             array_height_mm: array_height,
         },
     );
+    add_board_cell_fiducials(
+        &mut generated_geometry,
+        ipc,
+        ecad,
+        &mut used_layer_names,
+        BoardCellFiducialSpec {
+            board_width_mm: board_width,
+            board_height_mm: board_height,
+            board_margin,
+        },
+    );
+    let board_outline_layer_names = board_outline_layer_names(ipc, ecad);
+    let content_step_refs = content_step_refs(ipc, &array_name, &board_cell_name, &board_name);
+    let content_layer_refs =
+        content_layer_refs(ipc, &generated_geometry, &board_outline_layer_names);
 
     Ok(BoardArraySpec {
-        array_name: array_name.clone(),
-        board_name: board_name.clone(),
-        content_step_refs: content_step_refs(ipc, &array_name, &board_name),
-        content_layer_refs: content_layer_refs(ipc, &generated_geometry),
+        array_name,
+        board_cell_name,
+        board_name,
+        vcut_spec_name,
+        board_outline_layer_names,
+        content_step_refs,
+        content_layer_refs,
         columns,
         rows,
-        repeat_x_mm: margin_x - root.bbox.min.x,
-        repeat_y_mm: margin_y - root.bbox.min.y,
-        pitch_x_mm: if columns > 1 { pitch_x } else { 0.0 },
-        pitch_y_mm: if rows > 1 { pitch_y } else { 0.0 },
+        array_repeat_x_mm: edge_rail.left,
+        array_repeat_y_mm: edge_rail.bottom,
+        board_repeat_x_mm: board_repeat_x,
+        board_repeat_y_mm: board_repeat_y,
+        pitch_x_mm: pitch_x,
+        pitch_y_mm: pitch_y,
         array_width_mm: array_width,
         array_height_mm: array_height,
         generated_geometry,
@@ -404,23 +683,42 @@ fn build_board_array_spec(
     })
 }
 
-fn validate_options(options: &BoardArrayCreateOptions) -> Result<()> {
+fn validate_options(
+    options: &BoardArrayCreateOptions,
+    validation_mode: BoardArrayValidationMode,
+) -> Result<()> {
     validate_u32_range("columns", options.columns, 1, 10)?;
     validate_u32_range("rows", options.rows, 1, 10)?;
-    validate_mm_range("column spacing", options.column_spacing_mm, 0.0, 20.0)?;
-    validate_mm_range("row spacing", options.row_spacing_mm, 0.0, 20.0)?;
-    validate_mm_range(
-        "edge rail width",
-        options.edge_rail_width_mm,
-        MIN_EDGE_RAIL_WIDTH_MM,
-        30.0,
-    )?;
-    validate_zero_or_min_mm(
-        "column spacing",
-        options.column_spacing_mm,
-        MIN_VCUT_CLEARANCE_MM,
-    )?;
-    validate_zero_or_min_mm("row spacing", options.row_spacing_mm, MIN_VCUT_CLEARANCE_MM)?;
+    for (field, value) in options.board_margin_mm.board_margin_sides() {
+        validate_mm_range(field, value, 0.0, 20.0)?;
+    }
+    for (field, value) in options.edge_rail_mm.edge_rail_sides() {
+        match validation_mode {
+            BoardArrayValidationMode::Manual => validate_mm_range(
+                field,
+                value,
+                MIN_EDGE_RAIL_WIDTH_MM,
+                MAX_MANUAL_EDGE_RAIL_WIDTH_MM,
+            )?,
+            BoardArrayValidationMode::Auto => {
+                validate_mm_min(field, value, MIN_EDGE_RAIL_WIDTH_MM)?
+            }
+        }
+    }
+    if options.columns > 1 {
+        validate_zero_or_min_mm(
+            "horizontal board clearance",
+            options.board_margin_mm.horizontal_gap(),
+            MIN_VCUT_CLEARANCE_MM,
+        )?;
+    }
+    if options.rows > 1 {
+        validate_zero_or_min_mm(
+            "vertical board clearance",
+            options.board_margin_mm.vertical_gap(),
+            MIN_VCUT_CLEARANCE_MM,
+        )?;
+    }
     Ok(())
 }
 
@@ -449,6 +747,14 @@ fn validate_mm_range(field: &'static str, value: f64, min: f64, max: f64) -> Res
             max,
         }
         .into())
+    }
+}
+
+fn validate_mm_min(field: &'static str, value: f64, min: f64) -> Result<()> {
+    if value.is_finite() && value + EPSILON >= min {
+        Ok(())
+    } else {
+        Err(BoardArrayCreateValidationError::MmMin { field, value, min }.into())
     }
 }
 
@@ -506,9 +812,16 @@ fn unique_name(existing_names: &HashSet<String>, base: &str) -> String {
         .expect("unbounded name search should find an unused name")
 }
 
-fn content_step_refs(ipc: &Ipc2581, array_name: &str, board_name: &str) -> Vec<String> {
+fn content_step_refs(
+    ipc: &Ipc2581,
+    array_name: &str,
+    board_cell_name: &str,
+    board_name: &str,
+) -> Vec<String> {
     let mut refs = vec![array_name.to_string()];
     let mut seen = HashSet::from([array_name.to_string()]);
+    refs.push(board_cell_name.to_string());
+    seen.insert(board_cell_name.to_string());
     for step_ref in &ipc.content().step_refs {
         let name = ipc.resolve(*step_ref).to_string();
         if seen.insert(name.clone()) {
@@ -524,11 +837,15 @@ fn content_step_refs(ipc: &Ipc2581, array_name: &str, board_name: &str) -> Vec<S
 fn content_layer_refs(
     ipc: &Ipc2581,
     generated_geometry: &BoardArrayGeneratedGeometry,
+    removed_layer_names: &[String],
 ) -> Vec<String> {
     let mut refs = Vec::new();
     let mut seen = HashSet::new();
     for layer_ref in &ipc.content().layer_refs {
         let name = ipc.resolve(*layer_ref).to_string();
+        if removed_layer_names.iter().any(|removed| removed == &name) {
+            continue;
+        }
         if seen.insert(name.clone()) {
             refs.push(name);
         }
@@ -541,9 +858,20 @@ fn content_layer_refs(
     refs
 }
 
+fn board_outline_layer_names(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Vec<String> {
+    ecad.cad_data
+        .layers
+        .iter()
+        .filter(|layer| layer.layer_function == LayerFunction::BoardOutline)
+        .map(|layer| ipc.resolve(layer.name).to_string())
+        .collect()
+}
+
 fn add_vcut_lines(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
     used_layer_names: &mut HashSet<String>,
+    vcut_spec_name: String,
+    array_width_mm: f64,
     lines: Vec<VcutLine>,
 ) {
     if lines.is_empty() {
@@ -557,10 +885,18 @@ fn add_vcut_lines(
         Some(Side::None),
         Some(Polarity::Positive),
     ));
+    generated_geometry.add_layer_feature_with_spec_refs(
+        GeneratedFeatureScope::Array,
+        layer_name.clone(),
+        Polarity::Positive,
+        vec![vcut_spec_name],
+        lines.iter().copied().map(vcut_line_feature).collect(),
+    );
     generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
         layer_name,
         Polarity::Positive,
-        lines.into_iter().map(vcut_line_feature).collect(),
+        vcut_callout_features(&lines, array_width_mm),
     );
 }
 
@@ -571,17 +907,261 @@ fn vcut_line_feature(line: VcutLine) -> SetFeature {
         end_x: line.end_x_mm,
         end_y: line.end_y_mm,
         line_desc_ref: None,
-        line_width: VCUT_LINE_WIDTH_MM,
+        line_width: VCUT_MARKER_STROKE_MM,
         line_end: Some(LineEnd::Round),
+        line_property: Some(LineProperty::Solid),
     })
 }
 
+fn vcut_callout_features(lines: &[VcutLine], array_width_mm: f64) -> Vec<SetFeature> {
+    let mut features = Vec::new();
+    let label = vcut_label_geometry();
+    for line in lines {
+        if (line.start_x_mm - line.end_x_mm).abs() <= EPSILON {
+            add_bottom_vcut_callout(&mut features, line.start_x_mm, &label);
+        } else if (line.start_y_mm - line.end_y_mm).abs() <= EPSILON {
+            add_right_vcut_callout(&mut features, array_width_mm, line.start_y_mm, &label);
+        }
+    }
+    features
+}
+
+fn add_bottom_vcut_callout(features: &mut Vec<SetFeature>, x: f64, label: &VcutLabelGeometry) {
+    let arrow_tip = Point::new(x, -VCUT_CALLOUT_ARROW_CLEARANCE_MM);
+    let arrow_start = Point::new(
+        x,
+        -(VCUT_CALLOUT_ARROW_CLEARANCE_MM + VCUT_CALLOUT_ARROW_LENGTH_MM),
+    );
+    add_vcut_annotation_line(features, arrow_start, arrow_tip, VCUT_MARKER_STROKE_MM);
+    add_vcut_annotation_line(
+        features,
+        arrow_tip,
+        Point::new(
+            x - VCUT_CALLOUT_ARROW_HEAD_MM,
+            arrow_tip.y - VCUT_CALLOUT_ARROW_HEAD_MM,
+        ),
+        VCUT_MARKER_STROKE_MM,
+    );
+    add_vcut_annotation_line(
+        features,
+        arrow_tip,
+        Point::new(
+            x + VCUT_CALLOUT_ARROW_HEAD_MM,
+            arrow_tip.y - VCUT_CALLOUT_ARROW_HEAD_MM,
+        ),
+        VCUT_MARKER_STROKE_MM,
+    );
+
+    add_vcut_label(
+        features,
+        label,
+        Point::new(
+            x - 0.5 * label.width_mm,
+            arrow_start.y - VCUT_CALLOUT_TEXT_GAP_MM - label.height_mm,
+        ),
+    );
+}
+
+fn add_right_vcut_callout(
+    features: &mut Vec<SetFeature>,
+    array_width_mm: f64,
+    y: f64,
+    label: &VcutLabelGeometry,
+) {
+    let arrow_tip = Point::new(array_width_mm + VCUT_CALLOUT_ARROW_CLEARANCE_MM, y);
+    let arrow_start = Point::new(
+        array_width_mm + VCUT_CALLOUT_ARROW_CLEARANCE_MM + VCUT_CALLOUT_ARROW_LENGTH_MM,
+        y,
+    );
+    add_vcut_annotation_line(features, arrow_start, arrow_tip, VCUT_MARKER_STROKE_MM);
+    add_vcut_annotation_line(
+        features,
+        arrow_tip,
+        Point::new(
+            arrow_tip.x + VCUT_CALLOUT_ARROW_HEAD_MM,
+            y - VCUT_CALLOUT_ARROW_HEAD_MM,
+        ),
+        VCUT_MARKER_STROKE_MM,
+    );
+    add_vcut_annotation_line(
+        features,
+        arrow_tip,
+        Point::new(
+            arrow_tip.x + VCUT_CALLOUT_ARROW_HEAD_MM,
+            y + VCUT_CALLOUT_ARROW_HEAD_MM,
+        ),
+        VCUT_MARKER_STROKE_MM,
+    );
+
+    add_vcut_label(
+        features,
+        label,
+        Point::new(
+            arrow_start.x + VCUT_CALLOUT_TEXT_GAP_MM,
+            y - 0.5 * label.height_mm,
+        ),
+    );
+}
+
+fn add_vcut_label(features: &mut Vec<SetFeature>, label: &VcutLabelGeometry, lower_left: Point) {
+    for line in &label.lines {
+        add_vcut_annotation_line(
+            features,
+            Point::new(lower_left.x + line.start.x, lower_left.y + line.start.y),
+            Point::new(lower_left.x + line.end.x, lower_left.y + line.end.y),
+            VCUT_CALLOUT_TEXT_STROKE_MM,
+        );
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VcutLabelGeometry {
+    lines: Vec<VcutLabelLine>,
+    width_mm: f64,
+    height_mm: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VcutLabelLine {
+    start: Point,
+    end: Point,
+}
+
+fn vcut_label_geometry() -> VcutLabelGeometry {
+    let mut strokes = Vec::new();
+    let mut cursor = 0.0;
+
+    for raw_glyph in KICAD_VCUT_LABEL_GLYPHS {
+        let glyph = parse_kicad_stroke_glyph(raw_glyph);
+        strokes.extend(glyph.strokes.into_iter().map(|stroke| {
+            stroke
+                .into_iter()
+                .map(|point| Point::new(cursor + point.x, point.y))
+                .collect::<Vec<_>>()
+        }));
+        cursor += glyph.width;
+    }
+
+    let (min_x, min_y, max_x, max_y) = strokes
+        .iter()
+        .flatten()
+        .fold(None, |bounds, point| match bounds {
+            Some((min_x, min_y, max_x, max_y)) => Some((
+                f64::min(min_x, point.x),
+                f64::min(min_y, point.y),
+                f64::max(max_x, point.x),
+                f64::max(max_y, point.y),
+            )),
+            None => Some((point.x, point.y, point.x, point.y)),
+        })
+        .expect("KiCad V-cut label glyphs should produce strokes");
+    let scale = VCUT_CALLOUT_TEXT_HEIGHT_MM / (max_y - min_y);
+    let mut lines = Vec::new();
+    for stroke in strokes {
+        lines.extend(stroke.windows(2).map(|points| VcutLabelLine {
+            start: Point::new((points[0].x - min_x) * scale, (max_y - points[0].y) * scale),
+            end: Point::new((points[1].x - min_x) * scale, (max_y - points[1].y) * scale),
+        }));
+    }
+
+    VcutLabelGeometry {
+        lines,
+        width_mm: (max_x - min_x) * scale,
+        height_mm: VCUT_CALLOUT_TEXT_HEIGHT_MM,
+    }
+}
+
+#[derive(Debug)]
+struct KiCadStrokeGlyph {
+    strokes: Vec<Vec<Point>>,
+    width: f64,
+}
+
+fn parse_kicad_stroke_glyph(raw: &str) -> KiCadStrokeGlyph {
+    let bytes = raw.as_bytes();
+    let glyph_start_x = f64::from(kicad_font_coord(bytes[0])) * KICAD_STROKE_FONT_SCALE;
+    let glyph_end_x = f64::from(kicad_font_coord(bytes[1])) * KICAD_STROKE_FONT_SCALE;
+    let mut strokes = Vec::new();
+    let mut stroke = Vec::new();
+
+    for pair in bytes[2..].chunks_exact(2) {
+        if pair[0] == b' ' && pair[1] == b'R' {
+            if stroke.len() >= 2 {
+                strokes.push(std::mem::take(&mut stroke));
+            } else {
+                stroke.clear();
+            }
+            continue;
+        }
+
+        stroke.push(Point::new(
+            f64::from(kicad_font_coord(pair[0])) * KICAD_STROKE_FONT_SCALE - glyph_start_x,
+            f64::from(kicad_font_coord(pair[1]) + KICAD_STROKE_FONT_OFFSET)
+                * KICAD_STROKE_FONT_SCALE,
+        ));
+    }
+
+    if stroke.len() >= 2 {
+        strokes.push(stroke);
+    }
+
+    KiCadStrokeGlyph {
+        strokes,
+        width: glyph_end_x - glyph_start_x,
+    }
+}
+
+fn kicad_font_coord(value: u8) -> i32 {
+    i32::from(value) - i32::from(b'R')
+}
+
+fn add_vcut_annotation_line(
+    features: &mut Vec<SetFeature>,
+    start: Point,
+    end: Point,
+    line_width: f64,
+) {
+    features.push(SetFeature::Line(Line {
+        start_x: start.x,
+        start_y: start.y,
+        end_x: end.x,
+        end_y: end.y,
+        line_desc_ref: None,
+        line_width,
+        line_end: Some(LineEnd::Round),
+        line_property: Some(LineProperty::Solid),
+    }));
+}
+
 struct BoardArrayToolingSpec {
+    orientation: BoardArrayToolingOrientation,
     columns: u32,
+    rows: u32,
     board_width_mm: f64,
+    board_height_mm: f64,
     margin_x_mm: f64,
+    margin_y_mm: f64,
     pitch_x_mm: f64,
+    pitch_y_mm: f64,
+    array_width_mm: f64,
     array_height_mm: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoardArrayToolingOrientation {
+    TopBottom,
+    LeftRight,
+}
+
+fn board_array_tooling_orientation(
+    array_width_mm: f64,
+    array_height_mm: f64,
+) -> BoardArrayToolingOrientation {
+    if array_width_mm > array_height_mm {
+        BoardArrayToolingOrientation::LeftRight
+    } else {
+        BoardArrayToolingOrientation::TopBottom
+    }
 }
 
 fn add_board_array_tooling(
@@ -591,16 +1171,299 @@ fn add_board_array_tooling(
     used_layer_names: &mut HashSet<String>,
     spec: BoardArrayToolingSpec,
 ) {
-    let min_width = if spec.columns == 1 {
-        SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM
-    } else {
-        MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM
+    let (span_count, board_span) = match spec.orientation {
+        BoardArrayToolingOrientation::TopBottom => (spec.columns, spec.board_width_mm),
+        BoardArrayToolingOrientation::LeftRight => (spec.rows, spec.board_height_mm),
     };
-    if spec.board_width_mm + EPSILON < min_width {
+    let min_span = if span_count == 1 {
+        SINGLE_BOARD_TOOLING_MIN_SPAN_MM
+    } else {
+        MULTI_BOARD_TOOLING_MIN_SPAN_MM
+    };
+    if board_span + EPSILON < min_span {
         return;
     }
 
-    let top_copper_layer_name = top_copper_layer_name(ipc, ecad).unwrap_or_else(|| {
+    let top_copper_layer_name =
+        ensure_top_copper_layer_name(generated_geometry, ipc, ecad, used_layer_names);
+    let top_soldermask_layer_name =
+        ensure_top_soldermask_layer_name(generated_geometry, ipc, ecad, used_layer_names);
+    let tooling_hole_layer_name =
+        ensure_tooling_hole_layer_name(generated_geometry, used_layer_names);
+
+    let fiducials = board_array_tooling_fiducials(&spec);
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
+        top_copper_layer_name,
+        Polarity::Positive,
+        round_fiducial_features(
+            IpcFiducialKind::Global,
+            fiducials,
+            FIDUCIAL_COPPER_DIAMETER_MM,
+        ),
+    );
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
+        top_soldermask_layer_name,
+        Polarity::Positive,
+        round_fiducial_features(
+            IpcFiducialKind::Global,
+            fiducials,
+            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
+        ),
+    );
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
+        tooling_hole_layer_name,
+        Polarity::Positive,
+        round_nonplated_hole_features(board_array_tooling_holes(&spec), TOOLING_HOLE_DIAMETER_MM),
+    );
+}
+
+fn add_board_array_corner_tooling(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    used_layer_names: &mut HashSet<String>,
+    array_width_mm: f64,
+    array_height_mm: f64,
+) {
+    let tooling_hole_layer_name =
+        ensure_tooling_hole_layer_name(generated_geometry, used_layer_names);
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
+        tooling_hole_layer_name,
+        Polarity::Positive,
+        round_nonplated_hole_features(
+            board_array_corner_tooling_holes(array_width_mm, array_height_mm),
+            CORNER_TOOLING_HOLE_DIAMETER_MM,
+        ),
+    );
+}
+
+struct BoardCellFiducialSpec {
+    board_width_mm: f64,
+    board_height_mm: f64,
+    board_margin: BoardMarginMm,
+}
+
+fn add_board_cell_fiducials(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
+    used_layer_names: &mut HashSet<String>,
+    spec: BoardCellFiducialSpec,
+) {
+    let Some(fiducials) = board_cell_fiducials(&spec) else {
+        return;
+    };
+
+    let top_copper_layer_name =
+        ensure_top_copper_layer_name(generated_geometry, ipc, ecad, used_layer_names);
+    let top_soldermask_layer_name =
+        ensure_top_soldermask_layer_name(generated_geometry, ipc, ecad, used_layer_names);
+
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::BoardCell,
+        top_copper_layer_name,
+        Polarity::Positive,
+        round_fiducial_features(
+            IpcFiducialKind::Local,
+            fiducials,
+            FIDUCIAL_COPPER_DIAMETER_MM,
+        ),
+    );
+    generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::BoardCell,
+        top_soldermask_layer_name,
+        Polarity::Positive,
+        round_fiducial_features(
+            IpcFiducialKind::Local,
+            fiducials,
+            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
+        ),
+    );
+}
+
+/// Place board array tooling on the shorter pair of array rails.
+///
+/// The generated board array uses a rectangular profile with the lower-left
+/// array corner at (0, 0). Fiducials and tooling holes live in the outer 5 mm
+/// rail band even when the configured edge rail is wider. They are placed over
+/// board columns for top/bottom rails and over board rows for left/right rails,
+/// so removing side rails and gaps keeps the rail tooling attached to board
+/// material.
+///
+/// Span rules:
+/// - one board in the tooling axis requires at least 28 mm board span: 12 mm
+///   deepest fiducial inset from each side plus 4 mm center spacing;
+/// - multiple boards in the tooling axis require at least 12 mm board span,
+///   because each side's pair sits over a different outer board;
+/// - primary rail centers use 2.5 mm tooling and 8 mm fiducial span insets;
+/// - secondary rail centers use 6.5 mm tooling and 12 mm fiducial span insets.
+///
+/// Rail-depth rules:
+/// - tooling hole centers are 2.5 mm from the array edge;
+/// - fiducial centers are 3.85 mm from the array edge.
+fn board_array_tooling_fiducials(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
+    board_array_tooling_points(
+        spec,
+        FIDUCIAL_EDGE_OFFSET_MM,
+        PRIMARY_FIDUCIAL_SPAN_INSET_MM,
+        SECONDARY_FIDUCIAL_SPAN_INSET_MM,
+    )
+}
+
+fn board_array_tooling_holes(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
+    board_array_tooling_points(
+        spec,
+        TOOLING_HOLE_EDGE_OFFSET_MM,
+        PRIMARY_TOOLING_HOLE_SPAN_INSET_MM,
+        SECONDARY_TOOLING_HOLE_SPAN_INSET_MM,
+    )
+}
+
+fn board_array_tooling_points(
+    spec: &BoardArrayToolingSpec,
+    rail_depth_mm: f64,
+    primary_span_inset_mm: f64,
+    secondary_span_inset_mm: f64,
+) -> [(f64, f64); 4] {
+    match spec.orientation {
+        BoardArrayToolingOrientation::TopBottom => {
+            let left_edge = spec.margin_x_mm;
+            let right_edge = spec.margin_x_mm
+                + (spec.columns - 1) as f64 * spec.pitch_x_mm
+                + spec.board_width_mm;
+            let top_y = spec.array_height_mm - rail_depth_mm;
+            let bottom_y = rail_depth_mm;
+
+            [
+                (left_edge + primary_span_inset_mm, top_y),
+                (right_edge - primary_span_inset_mm, top_y),
+                (left_edge + secondary_span_inset_mm, bottom_y),
+                (right_edge - secondary_span_inset_mm, bottom_y),
+            ]
+        }
+        BoardArrayToolingOrientation::LeftRight => {
+            let bottom_edge = spec.margin_y_mm;
+            let top_edge =
+                spec.margin_y_mm + (spec.rows - 1) as f64 * spec.pitch_y_mm + spec.board_height_mm;
+            let left_x = rail_depth_mm;
+            let right_x = spec.array_width_mm - rail_depth_mm;
+
+            [
+                (left_x, top_edge - primary_span_inset_mm),
+                (left_x, bottom_edge + primary_span_inset_mm),
+                (right_x, top_edge - secondary_span_inset_mm),
+                (right_x, bottom_edge + secondary_span_inset_mm),
+            ]
+        }
+    }
+}
+
+fn board_array_corner_tooling_holes(array_width_mm: f64, array_height_mm: f64) -> [(f64, f64); 4] {
+    let inset = ARRAY_CORNER_TOOLING_HOLE_INSET_MM;
+    [
+        (inset, inset),
+        (array_width_mm - inset, inset),
+        (array_width_mm - inset, array_height_mm - inset),
+        (inset, array_height_mm - inset),
+    ]
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoardCellFiducialOrientation {
+    TopBottom,
+    LeftRight,
+}
+
+/// Place four board fiducials in each board cell's margin.
+///
+/// Eligibility is checked per orientation: top/bottom needs enough horizontal
+/// board span and top/bottom margins; left/right needs enough vertical board
+/// span and left/right margins. Prefer the board's longer dimension, then fall
+/// back to the other eligible orientation. Offsets along the board span are
+/// measured from the board bbox; offsets into the margin are measured from the
+/// board-cell outer edge. The primary side is top/left and uses a 3 mm span
+/// inset; the opposite side uses 7 mm.
+fn board_cell_fiducials(spec: &BoardCellFiducialSpec) -> Option<[(f64, f64); 4]> {
+    let orientation = board_cell_fiducial_orientation(spec)?;
+    let board_left = spec.board_margin.left;
+    let board_right = spec.board_margin.left + spec.board_width_mm;
+    let board_bottom = spec.board_margin.bottom;
+    let board_top = spec.board_margin.bottom + spec.board_height_mm;
+    let cell_right = board_right + spec.board_margin.right;
+    let cell_top = board_top + spec.board_margin.top;
+
+    match orientation {
+        BoardCellFiducialOrientation::TopBottom => Some([
+            (
+                board_left + PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+                cell_top - BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
+            ),
+            (
+                board_right - PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+                cell_top - BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
+            ),
+            (
+                board_left + SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+                BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
+            ),
+            (
+                board_right - SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+                BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
+            ),
+        ]),
+        BoardCellFiducialOrientation::LeftRight => Some([
+            (
+                BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
+                board_top - PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+            ),
+            (
+                BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
+                board_bottom + PRIMARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+            ),
+            (
+                cell_right - BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
+                board_top - SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+            ),
+            (
+                cell_right - BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM,
+                board_bottom + SECONDARY_BOARD_CELL_FIDUCIAL_SPAN_INSET_MM,
+            ),
+        ]),
+    }
+}
+
+fn board_cell_fiducial_orientation(
+    spec: &BoardCellFiducialSpec,
+) -> Option<BoardCellFiducialOrientation> {
+    let top_bottom = spec.board_width_mm + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_SPAN_MM
+        && spec.board_margin.top + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM
+        && spec.board_margin.bottom + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM;
+    let left_right = spec.board_height_mm + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_SPAN_MM
+        && spec.board_margin.left + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM
+        && spec.board_margin.right + EPSILON >= MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM;
+
+    if spec.board_width_mm >= spec.board_height_mm {
+        if top_bottom {
+            Some(BoardCellFiducialOrientation::TopBottom)
+        } else {
+            left_right.then_some(BoardCellFiducialOrientation::LeftRight)
+        }
+    } else if left_right {
+        Some(BoardCellFiducialOrientation::LeftRight)
+    } else {
+        top_bottom.then_some(BoardCellFiducialOrientation::TopBottom)
+    }
+}
+
+fn ensure_top_copper_layer_name(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
+    used_layer_names: &mut HashSet<String>,
+) -> String {
+    top_copper_layer_name(ipc, ecad).unwrap_or_else(|| {
         let layer_name = reserve_unique_name(used_layer_names, TOP_COPPER_LAYER_BASE_NAME);
         generated_geometry.add_layer(GeneratedLayer::new(
             layer_name.clone(),
@@ -609,8 +1472,16 @@ fn add_board_array_tooling(
             Some(Polarity::Positive),
         ));
         layer_name
-    });
-    let top_soldermask_layer_name = top_soldermask_layer_name(ipc, ecad).unwrap_or_else(|| {
+    })
+}
+
+fn ensure_top_soldermask_layer_name(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
+    used_layer_names: &mut HashSet<String>,
+) -> String {
+    top_soldermask_layer_name(ipc, ecad).unwrap_or_else(|| {
         let layer_name = reserve_unique_name(used_layer_names, TOP_SOLDERMASK_LAYER_BASE_NAME);
         generated_geometry.add_layer(GeneratedLayer::new(
             layer_name.clone(),
@@ -619,94 +1490,28 @@ fn add_board_array_tooling(
             Some(Polarity::Positive),
         ));
         layer_name
-    });
-    let tooling_hole_layer_name =
-        reserve_unique_name(used_layer_names, TOOLING_HOLE_LAYER_BASE_NAME);
+    })
+}
+
+fn ensure_tooling_hole_layer_name(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    used_layer_names: &mut HashSet<String>,
+) -> String {
+    if let Some(layer) = generated_geometry.layers.iter().find(|layer| {
+        layer.layer_function == LayerFunction::Drill
+            && layer.name.starts_with(TOOLING_HOLE_LAYER_BASE_NAME)
+    }) {
+        return layer.name.clone();
+    }
+
+    let layer_name = reserve_unique_name(used_layer_names, TOOLING_HOLE_LAYER_BASE_NAME);
     generated_geometry.add_layer(GeneratedLayer::new(
-        tooling_hole_layer_name.clone(),
+        layer_name.clone(),
         LayerFunction::Drill,
         Some(Side::All),
         Some(Polarity::Positive),
     ));
-
-    let fiducials = board_array_tooling_fiducials(&spec);
-    generated_geometry.add_layer_feature(
-        top_copper_layer_name,
-        Polarity::Positive,
-        round_global_fiducial_features(fiducials, FIDUCIAL_COPPER_DIAMETER_MM),
-    );
-    generated_geometry.add_layer_feature(
-        top_soldermask_layer_name,
-        Polarity::Positive,
-        round_global_fiducial_features(fiducials, FIDUCIAL_MASK_OPENING_DIAMETER_MM),
-    );
-    generated_geometry.add_layer_feature(
-        tooling_hole_layer_name,
-        Polarity::Positive,
-        round_nonplated_hole_features(board_array_tooling_holes(&spec), TOOLING_HOLE_DIAMETER_MM),
-    );
-}
-
-/// Place board array tooling on the top and bottom edge rails over board columns.
-///
-/// The generated board array uses a rectangular profile with the lower-left
-/// array corner at (0, 0). Fiducials and tooling holes live in the outer 5 mm
-/// rail band even when the configured edge rail is wider. They are not placed
-/// on left/right rails or over column spacing, so removing side rails and
-/// column gaps keeps the top/bottom rail tooling attached to board material.
-///
-/// Horizontal rules:
-/// - one column requires at least 35 mm board width, because both left and
-///   right pairs share the same board span;
-/// - multiple columns require at least 20 mm board width, because each side's
-///   pair sits over a different outer board column;
-/// - top tooling holes are 5 mm inward from the outer board-column edge;
-/// - bottom tooling holes are 10 mm inward from the outer board-column edge;
-/// - each fiducial is another 5 mm inward from its paired tooling hole.
-///
-/// Vertical rules:
-/// - tooling hole centers are 2.5 mm from the top/bottom array edge;
-/// - fiducial centers are 3.85 mm from the top/bottom array edge.
-fn board_array_tooling_fiducials(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
-    let left_edge = spec.margin_x_mm;
-    let right_edge =
-        spec.margin_x_mm + (spec.columns - 1) as f64 * spec.pitch_x_mm + spec.board_width_mm;
-    let top_y = spec.array_height_mm - FIDUCIAL_EDGE_OFFSET_MM;
-    let bottom_y = FIDUCIAL_EDGE_OFFSET_MM;
-
-    [
-        (
-            left_edge + TOP_TOOLING_HOLE_X_INSET_MM + FIDUCIAL_FROM_TOOLING_HOLE_MM,
-            top_y,
-        ),
-        (
-            right_edge - TOP_TOOLING_HOLE_X_INSET_MM - FIDUCIAL_FROM_TOOLING_HOLE_MM,
-            top_y,
-        ),
-        (
-            left_edge + BOTTOM_TOOLING_HOLE_X_INSET_MM + FIDUCIAL_FROM_TOOLING_HOLE_MM,
-            bottom_y,
-        ),
-        (
-            right_edge - BOTTOM_TOOLING_HOLE_X_INSET_MM - FIDUCIAL_FROM_TOOLING_HOLE_MM,
-            bottom_y,
-        ),
-    ]
-}
-
-fn board_array_tooling_holes(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
-    let left_edge = spec.margin_x_mm;
-    let right_edge =
-        spec.margin_x_mm + (spec.columns - 1) as f64 * spec.pitch_x_mm + spec.board_width_mm;
-    let top_y = spec.array_height_mm - TOOLING_HOLE_EDGE_OFFSET_MM;
-    let bottom_y = TOOLING_HOLE_EDGE_OFFSET_MM;
-
-    [
-        (left_edge + TOP_TOOLING_HOLE_X_INSET_MM, top_y),
-        (right_edge - TOP_TOOLING_HOLE_X_INSET_MM, top_y),
-        (left_edge + BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
-        (right_edge - BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
-    ]
+    layer_name
 }
 
 fn top_copper_layer_name(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Option<String> {
@@ -941,8 +1746,61 @@ fn write_layer_refs(writer: &mut Writer<Cursor<Vec<u8>>>, layer_refs: &[String])
     Ok(())
 }
 
+fn insert_generated_cad_header_specs(xml: &str, generated_spec_xml: &str) -> Result<String> {
+    let mut reader = Reader::from_str(xml);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buf = Vec::new();
+    let mut in_cad_header = false;
+    let mut cad_header_depth = 0usize;
+    let mut inserted = false;
+
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Eof => break,
+            Event::Empty(ref e) if e.name().as_ref() == b"CadHeader" => {
+                writer.write_event(Event::Start(e.to_owned()))?;
+                write_raw_xml(&mut writer, Some(generated_spec_xml))?;
+                writer.write_event(Event::End(BytesStart::new("CadHeader").to_end()))?;
+                inserted = true;
+            }
+            Event::Start(ref e) if e.name().as_ref() == b"CadHeader" => {
+                in_cad_header = true;
+                cad_header_depth = 1;
+                writer.write_event(Event::Start(e.to_owned()))?;
+            }
+            Event::Start(ref e) if in_cad_header => {
+                writer.write_event(Event::Start(e.to_owned()))?;
+                cad_header_depth += 1;
+            }
+            Event::Empty(ref e) if in_cad_header => {
+                writer.write_event(Event::Empty(e.to_owned()))?;
+            }
+            Event::End(ref e) if in_cad_header && cad_header_depth == 1 => {
+                write_raw_xml(&mut writer, Some(generated_spec_xml))?;
+                writer.write_event(Event::End(e.to_owned()))?;
+                in_cad_header = false;
+                cad_header_depth = 0;
+                inserted = true;
+            }
+            Event::End(ref e) if in_cad_header => {
+                writer.write_event(Event::End(e.to_owned()))?;
+                cad_header_depth -= 1;
+            }
+            event => writer.write_event(event)?,
+        }
+        buf.clear();
+    }
+
+    if !inserted {
+        bail!("IPC-2581 file has no CadHeader section");
+    }
+
+    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+}
+
 fn insert_array_cad_data(
     xml: &str,
+    spec: &BoardArraySpec,
     generated_layer_xml: Option<&str>,
     array_step_xml: &str,
 ) -> Result<String> {
@@ -953,9 +1811,25 @@ fn insert_array_cad_data(
     let mut cad_data_depth = 0usize;
     let mut panel_step_inserted = false;
     let mut generated_layers_inserted = generated_layer_xml.is_none();
+    let mut source_board_step_depth = None;
+    let mut skip_depth = 0usize;
 
     loop {
-        match reader.read_event_into(&mut buf)? {
+        let event = reader.read_event_into(&mut buf)?;
+        if skip_depth > 0 {
+            match event {
+                Event::Start(_) => skip_depth += 1,
+                Event::End(_) => skip_depth -= 1,
+                Event::Eof => {
+                    bail!("unexpected end of IPC-2581 while removing board outline layer feature")
+                }
+                _ => {}
+            }
+            buf.clear();
+            continue;
+        }
+
+        match event {
             Event::Eof => break,
             Event::Start(ref e) if e.name().as_ref() == b"CadData" => {
                 in_cad_data = true;
@@ -970,6 +1844,28 @@ fn insert_array_cad_data(
                     write_raw_xml(&mut writer, generated_layer_xml)?;
                     generated_layers_inserted = true;
                 }
+                if cad_data_depth == 1
+                    && e.name().as_ref() == b"Layer"
+                    && cad_data_layer_is_board_outline(e, &spec.board_outline_layer_names)?
+                {
+                    skip_depth = 1;
+                    buf.clear();
+                    continue;
+                }
+                if cad_data_depth == 1
+                    && e.name().as_ref() == b"Step"
+                    && start_attr_eq(e, b"name", &spec.board_name)?
+                {
+                    source_board_step_depth = Some(cad_data_depth + 1);
+                }
+                if source_board_step_depth.is_some()
+                    && e.name().as_ref() == b"LayerFeature"
+                    && layer_feature_is_board_outline(e, &spec.board_outline_layer_names)?
+                {
+                    skip_depth = 1;
+                    buf.clear();
+                    continue;
+                }
                 writer.write_event(Event::Start(e.to_owned()))?;
                 cad_data_depth += 1;
             }
@@ -980,6 +1876,20 @@ fn insert_array_cad_data(
                 {
                     write_raw_xml(&mut writer, generated_layer_xml)?;
                     generated_layers_inserted = true;
+                }
+                if cad_data_depth == 1
+                    && e.name().as_ref() == b"Layer"
+                    && cad_data_layer_is_board_outline(e, &spec.board_outline_layer_names)?
+                {
+                    buf.clear();
+                    continue;
+                }
+                if source_board_step_depth.is_some()
+                    && e.name().as_ref() == b"LayerFeature"
+                    && layer_feature_is_board_outline(e, &spec.board_outline_layer_names)?
+                {
+                    buf.clear();
+                    continue;
                 }
                 writer.write_event(Event::Empty(e.to_owned()))?;
             }
@@ -996,6 +1906,9 @@ fn insert_array_cad_data(
             }
             Event::End(ref e) if in_cad_data => {
                 writer.write_event(Event::End(e.to_owned()))?;
+                if source_board_step_depth == Some(cad_data_depth) && e.name().as_ref() == b"Step" {
+                    source_board_step_depth = None;
+                }
                 cad_data_depth -= 1;
             }
             event => writer.write_event(event)?,
@@ -1010,11 +1923,69 @@ fn insert_array_cad_data(
     Ok(String::from_utf8(writer.into_inner().into_inner())?)
 }
 
+fn cad_data_layer_is_board_outline(
+    e: &BytesStart,
+    board_outline_layer_names: &[String],
+) -> Result<bool> {
+    let Some(name) = start_attr_value(e, b"name")? else {
+        return Ok(false);
+    };
+    Ok(board_outline_layer_names.iter().any(|layer| layer == &name))
+}
+
+fn layer_feature_is_board_outline(
+    e: &BytesStart,
+    board_outline_layer_names: &[String],
+) -> Result<bool> {
+    let Some(layer_ref) = start_attr_value(e, b"layerRef")? else {
+        return Ok(false);
+    };
+    Ok(board_outline_layer_names
+        .iter()
+        .any(|name| name == &layer_ref))
+}
+
+fn start_attr_eq(e: &BytesStart, key: &[u8], value: &str) -> Result<bool> {
+    Ok(start_attr_value(e, key)?.as_deref() == Some(value))
+}
+
+fn start_attr_value(e: &BytesStart, key: &[u8]) -> Result<Option<String>> {
+    for attr in e.attributes() {
+        let attr = attr?;
+        if attr.key.as_ref() == key {
+            return Ok(Some(String::from_utf8(attr.value.into_owned())?));
+        }
+    }
+    Ok(None)
+}
+
 fn write_raw_xml(writer: &mut Writer<Cursor<Vec<u8>>>, xml: Option<&str>) -> Result<()> {
     if let Some(xml) = xml {
         writer.get_mut().write_all(xml.as_bytes())?;
     }
     Ok(())
+}
+
+fn write_generated_specs_xml(spec: &BoardArraySpec) -> Result<String> {
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+
+    let mut spec_elem = BytesStart::new("Spec");
+    spec_elem.push_attribute(("name", spec.vcut_spec_name.as_str()));
+    writer.write_event(Event::Start(spec_elem))?;
+
+    let mut vcut = BytesStart::new("V_Cut");
+    vcut.push_attribute(("type", "OFFSET"));
+    writer.write_event(Event::Start(vcut))?;
+
+    let mut property = BytesStart::new("Property");
+    property.push_attribute(("value", "0"));
+    property.push_attribute(("unit", "MM"));
+    writer.write_event(Event::Empty(property))?;
+
+    writer.write_event(Event::End(BytesStart::new("V_Cut").to_end()))?;
+    writer.write_event(Event::End(BytesStart::new("Spec").to_end()))?;
+
+    Ok(String::from_utf8(writer.into_inner().into_inner())?)
 }
 
 fn write_generated_layers_xml(geometry: &BoardArrayGeneratedGeometry) -> Result<Option<String>> {
@@ -1046,6 +2017,34 @@ fn write_generated_layer_xml(
     Ok(())
 }
 
+fn write_generated_steps_xml(spec: &BoardArraySpec) -> Result<String> {
+    let mut xml = write_board_cell_step_xml(spec)?;
+    xml.push_str(&write_array_step_xml(spec)?);
+    Ok(xml)
+}
+
+fn write_board_cell_step_xml(spec: &BoardArraySpec) -> Result<String> {
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+
+    let mut step = BytesStart::new("Step");
+    step.push_attribute(("name", spec.board_cell_name.as_str()));
+    step.push_attribute(("type", "PALLET"));
+    writer.write_event(Event::Start(step))?;
+
+    write_location_empty(&mut writer, "Datum", 0.0, 0.0, spec.units)?;
+    write_profile(
+        &mut writer,
+        spec.units,
+        &rectangle_polygon(spec.pitch_x_mm, spec.pitch_y_mm),
+    )?;
+    write_board_cell_step_repeat(&mut writer, spec)?;
+    write_generated_layer_features(&mut writer, spec, GeneratedFeatureScope::BoardCell)?;
+
+    writer.write_event(Event::End(BytesStart::new("Step").to_end()))?;
+
+    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+}
+
 fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     let mut writer = Writer::new(Cursor::new(Vec::new()));
 
@@ -1056,36 +2055,18 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
 
     write_location_empty(&mut writer, "Datum", 0.0, 0.0, spec.units)?;
 
-    writer.write_event(Event::Start(BytesStart::new("Profile")))?;
-    writer.write_event(Event::Start(BytesStart::new("Polygon")))?;
-    write_location_empty(&mut writer, "PolyBegin", 0.0, 0.0, spec.units)?;
-    write_location_empty(
+    write_profile(
         &mut writer,
-        "PolyStepSegment",
-        0.0,
-        spec.array_height_mm,
         spec.units,
+        &rounded_rectangle_polygon(
+            spec.array_width_mm,
+            spec.array_height_mm,
+            ARRAY_CORNER_RADIUS_MM,
+        ),
     )?;
-    write_location_empty(
-        &mut writer,
-        "PolyStepSegment",
-        spec.array_width_mm,
-        spec.array_height_mm,
-        spec.units,
-    )?;
-    write_location_empty(
-        &mut writer,
-        "PolyStepSegment",
-        spec.array_width_mm,
-        0.0,
-        spec.units,
-    )?;
-    write_location_empty(&mut writer, "PolyStepSegment", 0.0, 0.0, spec.units)?;
-    writer.write_event(Event::End(BytesStart::new("Polygon").to_end()))?;
-    writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
 
-    write_step_repeat(&mut writer, spec)?;
-    write_generated_layer_features(&mut writer, spec)?;
+    write_array_step_repeat(&mut writer, spec)?;
+    write_generated_layer_features(&mut writer, spec, GeneratedFeatureScope::Array)?;
 
     writer.write_event(Event::End(BytesStart::new("Step").to_end()))?;
 
@@ -1095,15 +2076,16 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
 fn write_generated_layer_features(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     spec: &BoardArraySpec,
+    scope: GeneratedFeatureScope,
 ) -> Result<()> {
-    let mut generated_hole_index = 0usize;
-    for layer_feature in &spec.generated_geometry.layer_features {
-        write_generated_layer_feature(
-            writer,
-            spec.units,
-            layer_feature,
-            &mut generated_hole_index,
-        )?;
+    let mut names = GeneratedNameState::default();
+    for layer_feature in spec
+        .generated_geometry
+        .layer_features
+        .iter()
+        .filter(|layer_feature| layer_feature.scope == scope)
+    {
+        write_generated_layer_feature(writer, spec.units, layer_feature, &mut names)?;
     }
     Ok(())
 }
@@ -1112,7 +2094,7 @@ fn write_generated_layer_feature(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     units: Units,
     layer_feature: &GeneratedLayerFeature,
-    generated_hole_index: &mut usize,
+    names: &mut GeneratedNameState,
 ) -> Result<()> {
     if layer_feature.features.is_empty() {
         return Ok(());
@@ -1125,17 +2107,32 @@ fn write_generated_layer_feature(
     let mut set = BytesStart::new("Set");
     set.push_attribute(("polarity", polarity_attr(layer_feature.polarity)));
     writer.write_event(Event::Start(set))?;
-    write_set_features(writer, units, &layer_feature.features, generated_hole_index)?;
+    write_set_spec_refs(writer, &layer_feature.spec_refs)?;
+    write_set_features(writer, units, &layer_feature.features, names)?;
     writer.write_event(Event::End(BytesStart::new("Set").to_end()))?;
     writer.write_event(Event::End(BytesStart::new("LayerFeature").to_end()))?;
     Ok(())
+}
+
+fn write_set_spec_refs(writer: &mut Writer<Cursor<Vec<u8>>>, spec_refs: &[String]) -> Result<()> {
+    for spec_ref in spec_refs {
+        let mut elem = BytesStart::new("SpecRef");
+        elem.push_attribute(("id", spec_ref.as_str()));
+        writer.write_event(Event::Empty(elem))?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct GeneratedNameState {
+    hole_index: usize,
 }
 
 fn write_set_features(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     units: Units,
     features: &[SetFeature],
-    generated_hole_index: &mut usize,
+    names: &mut GeneratedNameState,
 ) -> Result<()> {
     let mut features_open = false;
     for feature in features {
@@ -1153,7 +2150,7 @@ fn write_set_features(
             }
             SetFeature::Hole(hole) => {
                 close_features_element(writer, &mut features_open)?;
-                write_hole(writer, units, hole, generated_hole_index)?;
+                write_hole(writer, units, hole, names)?;
             }
             _ => bail!("generated board array layer feature has unsupported feature kind"),
         }
@@ -1195,6 +2192,9 @@ fn write_line(writer: &mut Writer<Cursor<Vec<u8>>>, units: Units, line: &Line) -
     if let Some(line_end) = line.line_end {
         line_desc.push_attribute(("lineEnd", line_end_attr(line_end)));
     }
+    if let Some(line_property) = line.line_property {
+        line_desc.push_attribute(("lineProperty", line_property_attr(line_property)));
+    }
     writer.write_event(Event::Empty(line_desc))?;
     writer.write_event(Event::End(BytesStart::new("Line").to_end()))?;
     Ok(())
@@ -1232,13 +2232,13 @@ fn write_hole(
     writer: &mut Writer<Cursor<Vec<u8>>>,
     units: Units,
     hole: &Hole,
-    generated_hole_index: &mut usize,
+    names: &mut GeneratedNameState,
 ) -> Result<()> {
     let diameter = fmt_units(hole.diameter, units);
     let x = fmt_units(hole.x, units);
     let y = fmt_units(hole.y, units);
-    let generated_name = format!("{GENERATED_HOLE_NAME_PREFIX}_{}", *generated_hole_index);
-    *generated_hole_index += 1;
+    let generated_name = format!("{GENERATED_HOLE_NAME_PREFIX}_{}", names.hole_index);
+    names.hole_index += 1;
 
     let mut elem = BytesStart::new("Hole");
     elem.push_attribute(("name", generated_name.as_str()));
@@ -1265,9 +2265,115 @@ fn write_circle(
     Ok(())
 }
 
-fn round_global_fiducial(x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
+fn write_profile(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    polygon: &Polygon,
+) -> Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Profile")))?;
+    write_polygon(writer, units, polygon)?;
+    writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
+    Ok(())
+}
+
+fn write_polygon(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    polygon: &Polygon,
+) -> Result<()> {
+    writer.write_event(Event::Start(BytesStart::new("Polygon")))?;
+    write_location_empty(writer, "PolyBegin", polygon.begin.x, polygon.begin.y, units)?;
+    for step in &polygon.steps {
+        match step {
+            PolyStep::Segment(segment) => {
+                write_location_empty(
+                    writer,
+                    "PolyStepSegment",
+                    segment.point.x,
+                    segment.point.y,
+                    units,
+                )?;
+            }
+            PolyStep::Curve(curve) => write_poly_step_curve(writer, units, curve)?,
+        }
+    }
+    writer.write_event(Event::End(BytesStart::new("Polygon").to_end()))?;
+    Ok(())
+}
+
+fn write_poly_step_curve(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    units: Units,
+    curve: &PolyStepCurve,
+) -> Result<()> {
+    let x = fmt_units(curve.point.x, units);
+    let y = fmt_units(curve.point.y, units);
+    let center_x = fmt_units(curve.center.x, units);
+    let center_y = fmt_units(curve.center.y, units);
+    let mut elem = BytesStart::new("PolyStepCurve");
+    elem.push_attribute(("x", x.as_str()));
+    elem.push_attribute(("y", y.as_str()));
+    elem.push_attribute(("centerX", center_x.as_str()));
+    elem.push_attribute(("centerY", center_y.as_str()));
+    elem.push_attribute(("clockwise", if curve.clockwise { "true" } else { "false" }));
+    writer.write_event(Event::Empty(elem))?;
+    Ok(())
+}
+
+fn rectangle_polygon(width_mm: f64, height_mm: f64) -> Polygon {
+    Polygon {
+        begin: IpcPoint { x: 0.0, y: 0.0 },
+        steps: vec![
+            poly_segment(width_mm, 0.0),
+            poly_segment(width_mm, height_mm),
+            poly_segment(0.0, height_mm),
+        ],
+    }
+}
+
+fn rounded_rectangle_polygon(width_mm: f64, height_mm: f64, radius_mm: f64) -> Polygon {
+    let radius = radius_mm.min(width_mm / 2.0).min(height_mm / 2.0);
+    let begin = IpcPoint { x: 0.0, y: radius };
+    Polygon {
+        begin,
+        steps: vec![
+            poly_segment(0.0, height_mm - radius),
+            poly_curve(radius, height_mm, radius, height_mm - radius),
+            poly_segment(width_mm - radius, height_mm),
+            poly_curve(
+                width_mm,
+                height_mm - radius,
+                width_mm - radius,
+                height_mm - radius,
+            ),
+            poly_segment(width_mm, radius),
+            poly_curve(width_mm - radius, 0.0, width_mm - radius, radius),
+            poly_segment(radius, 0.0),
+            poly_curve(0.0, radius, radius, radius),
+        ],
+    }
+}
+
+fn poly_segment(x: f64, y: f64) -> PolyStep {
+    PolyStep::Segment(PolyStepSegment {
+        point: IpcPoint { x, y },
+    })
+}
+
+fn poly_curve(x: f64, y: f64, center_x: f64, center_y: f64) -> PolyStep {
+    PolyStep::Curve(PolyStepCurve {
+        point: IpcPoint { x, y },
+        center: IpcPoint {
+            x: center_x,
+            y: center_y,
+        },
+        clockwise: true,
+    })
+}
+
+fn round_fiducial(kind: IpcFiducialKind, x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
     Fiducial {
-        kind: FiducialKind::Global,
+        kind,
         location: Location { x: x_mm, y: y_mm },
         xform: None,
         shape: FiducialShape::Primitive(StandardPrimitive::Circle(Styled {
@@ -1281,13 +2387,14 @@ fn round_global_fiducial(x_mm: f64, y_mm: f64, diameter_mm: f64) -> Fiducial {
     }
 }
 
-fn round_global_fiducial_features(
+fn round_fiducial_features(
+    kind: IpcFiducialKind,
     points: impl IntoIterator<Item = (f64, f64)>,
     diameter_mm: f64,
 ) -> Vec<SetFeature> {
     points
         .into_iter()
-        .map(|(x, y)| SetFeature::Fiducial(round_global_fiducial(x, y, diameter_mm)))
+        .map(|(x, y)| SetFeature::Fiducial(round_fiducial(kind, x, y, diameter_mm)))
         .collect()
 }
 
@@ -1311,12 +2418,12 @@ fn round_nonplated_hole_features(
         .collect()
 }
 
-fn fiducial_element_name(kind: FiducialKind) -> &'static str {
+fn fiducial_element_name(kind: IpcFiducialKind) -> &'static str {
     match kind {
-        FiducialKind::BadBoardMark => "BadBoardMark",
-        FiducialKind::Global => "GlobalFiducial",
-        FiducialKind::GoodPanelMark => "GoodPanelMark",
-        FiducialKind::Local => "LocalFiducial",
+        IpcFiducialKind::BadBoardMark => "BadBoardMark",
+        IpcFiducialKind::Global => "GlobalFiducial",
+        IpcFiducialKind::GoodPanelMark => "GoodPanelMark",
+        IpcFiducialKind::Local => "LocalFiducial",
     }
 }
 
@@ -1346,6 +2453,17 @@ fn line_end_attr(line_end: LineEnd) -> &'static str {
     }
 }
 
+fn line_property_attr(line_property: LineProperty) -> &'static str {
+    match line_property {
+        LineProperty::Solid => "SOLID",
+        LineProperty::Dotted => "DOTTED",
+        LineProperty::Dashed => "DASHED",
+        LineProperty::Center => "CENTER",
+        LineProperty::Phantom => "PHANTOM",
+        LineProperty::Erase => "ERASE",
+    }
+}
+
 fn plating_status_attr(plating_status: PlatingStatus) -> &'static str {
     match plating_status {
         PlatingStatus::Plated => "PLATED",
@@ -1370,22 +2488,46 @@ fn write_location_empty(
     Ok(())
 }
 
-fn write_step_repeat(writer: &mut Writer<Cursor<Vec<u8>>>, spec: &BoardArraySpec) -> Result<()> {
-    let x = fmt_units(spec.repeat_x_mm, spec.units);
-    let y = fmt_units(spec.repeat_y_mm, spec.units);
+fn write_array_step_repeat(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    spec: &BoardArraySpec,
+) -> Result<()> {
+    let x = fmt_units(spec.array_repeat_x_mm, spec.units);
+    let y = fmt_units(spec.array_repeat_y_mm, spec.units);
     let dx = fmt_units(spec.pitch_x_mm, spec.units);
     let dy = fmt_units(spec.pitch_y_mm, spec.units);
     let nx = spec.columns.to_string();
     let ny = spec.rows.to_string();
 
     let mut repeat = BytesStart::new("StepRepeat");
-    repeat.push_attribute(("stepRef", spec.board_name.as_str()));
+    repeat.push_attribute(("stepRef", spec.board_cell_name.as_str()));
     repeat.push_attribute(("x", x.as_str()));
     repeat.push_attribute(("y", y.as_str()));
     repeat.push_attribute(("nx", nx.as_str()));
     repeat.push_attribute(("ny", ny.as_str()));
     repeat.push_attribute(("dx", dx.as_str()));
     repeat.push_attribute(("dy", dy.as_str()));
+    repeat.push_attribute(("angle", "0.00"));
+    repeat.push_attribute(("mirror", "false"));
+    writer.write_event(Event::Empty(repeat))?;
+    Ok(())
+}
+
+fn write_board_cell_step_repeat(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    spec: &BoardArraySpec,
+) -> Result<()> {
+    let x = fmt_units(spec.board_repeat_x_mm, spec.units);
+    let y = fmt_units(spec.board_repeat_y_mm, spec.units);
+
+    let mut repeat = BytesStart::new("StepRepeat");
+    repeat.push_attribute(("stepRef", spec.board_name.as_str()));
+    repeat.push_attribute(("x", x.as_str()));
+    repeat.push_attribute(("y", y.as_str()));
+    repeat.push_attribute(("nx", "1"));
+    repeat.push_attribute(("ny", "1"));
+    repeat.push_attribute(("dx", "0"));
+    repeat.push_attribute(("dy", "0"));
     repeat.push_attribute(("angle", "0.00"));
     repeat.push_attribute(("mirror", "false"));
     writer.write_event(Event::Empty(repeat))?;
@@ -1414,60 +2556,223 @@ fn fmt_num(value: f64) -> String {
 mod tests {
     use super::*;
     use crate::accessors::IpcAccessor;
-    use crate::gerber::{GerberExportOptions, export_gerber_x2};
+    use crate::manufacturing::build_manufacturing_package;
     use pcb_ir::common::Point;
     use pcb_ir::dialects::ipc::{
-        FeatureBucket, FeatureDomain, FeatureKind, FeatureOperation, FeatureRole, FiducialKind,
-        GeometryView, PlatingKind,
+        FeatureBucket, FeatureDomain, FeatureIntent, FeatureKind, FeatureOperation, FeatureRole,
+        FeatureSpan, FiducialKind, GeometryView, LayoutStepKind, PlatingKind,
     };
+
     #[test]
-    fn creates_rectangular_panel_step_from_board_bbox() {
+    fn parses_board_margin_css_shorthand() {
+        let cases = [
+            (&[1.0][..], BoardMarginMm::all(1.0)),
+            (
+                &[1.0, 2.0][..],
+                BoardMarginMm {
+                    top: 1.0,
+                    right: 2.0,
+                    bottom: 1.0,
+                    left: 2.0,
+                },
+            ),
+            (
+                &[1.0, 2.0, 3.0][..],
+                BoardMarginMm {
+                    top: 1.0,
+                    right: 2.0,
+                    bottom: 3.0,
+                    left: 2.0,
+                },
+            ),
+            (
+                &[1.0, 2.0, 3.0, 4.0][..],
+                BoardMarginMm {
+                    top: 1.0,
+                    right: 2.0,
+                    bottom: 3.0,
+                    left: 4.0,
+                },
+            ),
+        ];
+
+        for (values, expected) in cases {
+            assert_eq!(BoardMarginMm::from_css_shorthand(values).unwrap(), expected);
+        }
+        assert!(BoardMarginMm::from_css_shorthand(&[]).is_err());
+        assert!(BoardMarginMm::from_css_shorthand(&[1.0, 2.0, 3.0, 4.0, 5.0]).is_err());
+    }
+
+    #[test]
+    fn creates_rounded_panel_step_from_board_bbox() {
         let xml = create_board_array_xml(
             board_fixture_mm(),
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap();
 
         assert!(xml.contains(r#"<StepRef name="array"/>"#));
+        assert!(xml.contains(r#"<StepRef name="board_cell"/>"#));
         assert!(xml.contains(r#"<StepRef name="board"/>"#));
         assert!(xml.contains(r#"<LayerRef name="V-Score"/>"#));
         assert!(xml.contains(
             r#"<Layer name="V-Score" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>"#
         ));
         assert!(xml.contains(r#"<Step name="array" type="PALLET">"#));
+        assert!(xml.contains(r#"<Step name="board_cell" type="PALLET">"#));
         assert!(xml.contains(
-            r#"<StepRepeat stepRef="board" x="12" y="13" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
+            r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board" x="4.5" y="5.5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
         ));
         assert!(xml.contains(r#"<LayerFeature layerRef="V-Score">"#));
-        assert!(xml.contains(r#"<Line startX="10" startY="0" endX="10" endY="105">"#));
-        assert!(xml.contains(r#"<Line startX="0" startY="10" endX="105" endY="10">"#));
+        assert!(xml.contains(r#"<Spec name="Board_Array_VCut">"#));
+        assert!(xml.contains(r#"<SpecRef id="Board_Array_VCut"/>"#));
+        assert!(xml.contains(
+            r#"<PolyStepCurve x="3" y="100" centerX="3" centerY="97" clockwise="true"/>"#
+        ));
+        assert!(xml.contains(r#"<Line startX="7.5" startY="0" endX="7.5" endY="100">"#));
+        assert!(xml.contains(r#"<Line startX="0" startY="7.5" endX="100" endY="7.5">"#));
 
         let ipc = Ipc2581::parse(&xml).unwrap();
         let layout = geometry::extract_layout(&ipc).unwrap();
         let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
         assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
-        assert_point_close(panel_step.bbox.max, Point::new(105.0, 105.0));
+        assert_point_close(panel_step.bbox.max, Point::new(100.0, 100.0));
         assert_eq!(pcb_ir::dialects::ipc::board_step_count(&layout), 1);
         assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 36);
 
-        let first_instance = &layout.layout.instances[0];
-        assert_point_close(first_instance.bbox.min, Point::new(10.0, 10.0));
-        assert_point_close(first_instance.bbox.max, Point::new(20.0, 20.0));
+        let first_instance = layout
+            .layout
+            .instances
+            .iter()
+            .find(|instance| {
+                layout.layout.steps[instance.child_step as usize].kind == LayoutStepKind::Board
+            })
+            .unwrap();
+        assert_point_close(first_instance.bbox.min, Point::new(7.5, 7.5));
+        assert_point_close(first_instance.bbox.max, Point::new(17.5, 17.5));
 
         let vcut = geometry::extract_layer_for_view(&ipc, "V-Score", GeometryView::ArrayFlattened)
             .unwrap();
-        assert_eq!(vcut.features.len(), 24);
+        assert!(vcut.features.len() > 24);
         assert!(
             vcut.features
                 .iter()
                 .all(|feature| feature.intent.domain == FeatureDomain::VCut)
         );
+        assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
+    }
+
+    #[test]
+    fn auto_create_projects_board_to_a7_array() {
+        let xml = create_auto_board_array_xml(board_fixture_mm()).unwrap();
+
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="12.5" y="7" nx="4" ny="3" dx="20" dy="20" angle="0.00" mirror="false"/>"#
+        ));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+        assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
+        assert_point_close(panel_step.bbox.max, Point::new(105.0, 74.0));
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 12);
+    }
+
+    #[test]
+    fn auto_create_projects_board_to_requested_a5_array() {
+        let xml =
+            create_auto_board_array_xml_with_sheet(board_fixture_mm(), Some(AutoSheetSize::A5))
+                .unwrap();
+
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="5" y="14" nx="10" ny="6" dx="20" dy="20" angle="0.00" mirror="false"/>"#
+        ));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+        assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
+        assert_point_close(panel_step.bbox.max, Point::new(210.0, 148.0));
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 60);
+    }
+
+    #[test]
+    fn auto_create_derives_board_margin_from_courtyard_overhang() {
+        let input = board_fixture_with_courtyard_overhang_mm();
+        let ipc = Ipc2581::parse(input).unwrap();
+        let board = primary_board_layout(&ipc).unwrap();
+        let margin = auto_board_margin(&ipc, board.bbox).unwrap();
+
+        assert_eq!(
+            margin,
+            BoardMarginMm {
+                top: 7.0,
+                right: 8.0,
+                bottom: 6.0,
+                left: 7.0,
+            }
+        );
+
+        let xml = create_auto_board_array_xml(input).unwrap();
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="12" y="6.5" nx="2" ny="4" dx="25" dy="23" angle="0.00" mirror="false"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board" x="7" y="6" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
+        ));
+    }
+
+    #[test]
+    fn auto_create_allows_large_leftover_edge_rails() {
+        let xml =
+            create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(124.0, 110.0)).unwrap();
+
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="38" y="14" nx="1" ny="1" dx="134" dy="120" angle="0.00" mirror="false"/>"#
+        ));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+        assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
+        assert_point_close(panel_step.bbox.max, Point::new(210.0, 148.0));
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 1);
+    }
+
+    #[test]
+    fn creates_board_array_with_asymmetric_edge_rails() {
+        let xml = create_board_array_xml(
+            board_fixture_mm(),
+            &BoardArrayCreateOptions {
+                columns: 6,
+                rows: 6,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm {
+                    top: 8.0,
+                    right: 6.0,
+                    bottom: 5.0,
+                    left: 7.0,
+                },
+            },
+        )
+        .unwrap();
+
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="7" y="5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
+        ));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+        assert_point_close(panel_step.bbox.max, Point::new(103.0, 103.0));
     }
 
     #[test]
@@ -1477,36 +2782,31 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap();
         let ipc = Ipc2581::parse(&xml).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = crate::board_array::render_board_array_overview_svg(&accessor).unwrap();
-        assert_eq!(svg.matches("vcut-guide").count(), 24);
+        let svg = crate::board_array::render_board_array_overview_svg(&accessor)
+            .unwrap()
+            .unwrap();
+        assert!(svg.matches("vcut-guide").count() > 24);
         assert!(svg.contains("stroke='#dc2626'"));
+        assert!(svg.contains("stroke-width='0.12'"));
+        assert!(svg.contains("stroke-linecap='round'"));
         assert!(!svg.contains("stroke-dasharray"));
         assert!(!svg.contains("class='score-guide'"));
+        let viewbox = svg_viewbox(&svg);
+        assert!(viewbox.0 + viewbox.2 > 100.0);
+        assert!(viewbox.1 + viewbox.3 > 100.0);
+        assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
 
-        let output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-created-board-array-vcuts-gerber-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&output_dir);
-        let set = export_gerber_x2(
-            &ipc,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::ArrayFlattened,
-            },
-        )
-        .unwrap();
+        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
 
-        let vcut = set
+        let vcut = package
             .files
             .iter()
             .find(|file| file.filename == "V_Cut.gbr")
@@ -1514,7 +2814,98 @@ mod tests {
         assert!(vcut.contents.contains("%TF.FileFunction,Vcut,Top/Bot*%"));
         assert!(vcut.contents.contains("%TF.Part,Array*%"));
         assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
-        assert_eq!(vcut.contents.matches("D01*").count(), 24);
+        assert!(!vcut.contents.contains("G36*"));
+        assert!(vcut.contents.matches("D01*").count() > 24);
+
+        let board_package = build_manufacturing_package(&ipc, GeometryView::Board).unwrap();
+        assert!(
+            board_package
+                .files
+                .iter()
+                .all(|file| file.filename != "V_Cut.gbr")
+        );
+    }
+
+    #[test]
+    fn created_board_array_profile_gerber_derives_vscore_reliefs() {
+        let xml = create_board_array_xml(
+            rounded_corner_board_fixture_mm(),
+            &BoardArrayCreateOptions {
+                columns: 6,
+                rows: 6,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
+            },
+        )
+        .unwrap();
+
+        assert!(!xml.contains("<SlotCavity"));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let vcut = package
+            .files
+            .iter()
+            .find(|file| file.filename == "V_Cut.gbr")
+            .unwrap();
+        assert!(!vcut.contents.contains("G36*"));
+        assert!(
+            package
+                .files
+                .iter()
+                .all(|file| file.filename != "Edge_Cuts.gm1")
+        );
+        let profile = package
+            .files
+            .iter()
+            .find(|file| file.filename == "Board_Array_Profile.gm1")
+            .unwrap();
+        assert!(profile.contents.contains("%TF.FileFunction,Profile,NP*%"));
+        assert!(profile.contents.contains("%TF.Part,Array*%"));
+        assert!(profile.contents.contains("%TA.AperFunction,Profile*%"));
+        assert!(profile.contents.contains("%ADD10C,0.05*%"));
+        assert!(!profile.contents.contains("%ADD11C,1*%"));
+        assert!(!profile.contents.contains("G36*"));
+        assert!(
+            profile.contents.matches("D01*").count()
+                > geometry::board_array_vscore_lines(&ipc).unwrap().len(),
+            "routed reliefs should emit closed contour strokes, not only the V-cut guide lines"
+        );
+        gerberx2::GerberX2::parse(&profile.contents).unwrap();
+    }
+
+    #[test]
+    fn board_array_creation_drops_source_board_outline_layer_features() {
+        let xml = create_board_array_xml(
+            board_fixture_with_edge_cuts_layer_mm(),
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 2,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
+            },
+        )
+        .unwrap();
+
+        assert!(xml.contains(r#"<LayerFeature layerRef="TOP">"#));
+        assert!(!xml.contains(r#"<LayerRef name="Edge.Cuts""#));
+        assert!(!xml.contains(r#"<Layer name="Edge.Cuts""#));
+        assert!(!xml.contains(r#"<LayerFeature layerRef="Edge.Cuts">"#));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
+        assert!(
+            package
+                .files
+                .iter()
+                .all(|file| file.filename != "Edge_Cuts.gm1")
+        );
+        assert!(
+            package
+                .files
+                .iter()
+                .any(|file| file.filename == "Board_Array_Profile.gm1")
+        );
     }
 
     #[test]
@@ -1529,9 +2920,8 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap();
@@ -1548,7 +2938,12 @@ mod tests {
             assert_eq!(before_feature.kind, after_feature.kind);
             assert_eq!(before_feature.bucket, after_feature.bucket);
             assert_eq!(before_feature.polarity, after_feature.polarity);
-            assert_eq!(before_feature.intent, after_feature.intent);
+            assert_intent_eq(
+                &before_ipc,
+                &after_ipc,
+                &before_feature.intent,
+                &after_feature.intent,
+            );
             assert_eq!(before_feature.fiducial_kind, after_feature.fiducial_kind);
             assert_eq!(before_feature.bbox, after_feature.bbox);
             assert_eq!(before_feature.path_count, after_feature.path_count);
@@ -1564,26 +2959,42 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
+            BoardArrayValidationMode::Manual,
         )
         .unwrap();
 
-        spec.generated_geometry
-            .add_round_global_fiducial("TOP", 12.5, 12.5, 1.0);
-        spec.generated_geometry
-            .add_round_global_fiducial("F.Mask", 12.5, 12.5, 2.0);
+        spec.generated_geometry.add_layer_feature(
+            GeneratedFeatureScope::Array,
+            "TOP",
+            Polarity::Positive,
+            round_fiducial_features(IpcFiducialKind::Global, [(12.5, 12.5)], 1.0),
+        );
+        spec.generated_geometry.add_layer_feature(
+            GeneratedFeatureScope::Array,
+            "F.Mask",
+            Polarity::Positive,
+            round_fiducial_features(IpcFiducialKind::Global, [(12.5, 12.5)], 2.0),
+        );
         spec.generated_geometry.add_layer(GeneratedLayer::new(
             "Array_Drill",
             LayerFunction::Drill,
             Some(Side::All),
             Some(Polarity::Positive),
         ));
-        spec.generated_geometry
-            .add_round_nonplated_hole("Array_Drill", 20.0, 20.0, 2.0);
-        spec.content_layer_refs = content_layer_refs(&ipc, &spec.generated_geometry);
+        spec.generated_geometry.add_layer_feature(
+            GeneratedFeatureScope::Array,
+            "Array_Drill",
+            Polarity::Positive,
+            round_nonplated_hole_features([(20.0, 20.0)], 2.0),
+        );
+        spec.content_layer_refs = content_layer_refs(
+            &ipc,
+            &spec.generated_geometry,
+            &spec.board_outline_layer_names,
+        );
 
         let xml = write_board_array_xml(input, &spec).unwrap();
 
@@ -1595,9 +3006,8 @@ mod tests {
         assert_eq!(xml.matches("<GlobalFiducial>").count(), 2);
         assert!(xml.contains(r#"<Circle diameter="1"/>"#));
         assert!(xml.contains(r#"<Circle diameter="2"/>"#));
-        assert!(xml.contains(
-            r#"<Hole name="array_tooling_hole_0" type="CIRCLE" diameter="2" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="20" y="20"/>"#
-        ));
+        assert!(xml.contains(r#"diameter="2" platingStatus="NONPLATED""#));
+        assert!(xml.contains(r#"x="20" y="20""#));
 
         let parsed = Ipc2581::parse(&xml).unwrap();
         let top =
@@ -1618,33 +3028,21 @@ mod tests {
         assert_eq!(drill.features[0].intent.operation, FeatureOperation::Drill);
         assert_eq!(drill.features[0].intent.plating, PlatingKind::NonPlated);
 
-        let output_dir = std::env::temp_dir().join(format!(
-            "pcb-ipc-board-array-tooling-gerber-test-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&output_dir);
-        let set = export_gerber_x2(
-            &parsed,
-            &GerberExportOptions {
-                output: output_dir,
-                view: GeometryView::ArrayFlattened,
-            },
-        )
-        .unwrap();
-        let top = set
+        let package = build_manufacturing_package(&parsed, GeometryView::ArrayFlattened).unwrap();
+        let top = package
             .files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
-        let mask = set
+        let mask = package
             .files
             .iter()
             .find(|file| file.filename == "F_Mask.gts")
             .unwrap();
-        let drill = set
+        let drill = package
             .files
             .iter()
-            .find(|file| file.filename == "Drill.gbr")
+            .find(|file| file.filename == "NPTH.drl")
             .unwrap();
 
         assert!(
@@ -1655,23 +3053,27 @@ mod tests {
             mask.contents
                 .contains("%TA.AperFunction,FiducialPad,Global*%")
         );
-        assert!(drill.contents.contains("%TA.AperFunction,Other,Drill*%"));
-        assert!(drill.contents.contains("D03*"));
+        assert!(drill.contents.contains("; #@! TF.FileFunction,NonPlated"));
+        assert!(
+            drill
+                .contents
+                .contains("; #@! TA.AperFunction,NonPlated,NPTH,ComponentDrill")
+        );
+        assert!(drill.contents.contains("X20.0Y20.0"));
         assert!(!top.contents.contains("%TA.AperFunction,Other,Drill*%"));
         assert!(!mask.contents.contains("%TA.AperFunction,Other,Drill*%"));
     }
 
     #[test]
     fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
-        let input = board_fixture_with_mask_bbox_mm(35.0, 40.0);
+        let input = board_fixture_with_mask_bbox_mm(28.0, 40.0);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 0.0,
-                edge_rail_width_mm: 15.0,
+                board_margin_mm: board_margin(5.0, 0.0),
+                edge_rail_mm: edge_rail(18.5, 15.0),
             },
         )
         .unwrap();
@@ -1681,10 +3083,13 @@ mod tests {
         let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
         let mask_fiducials = fiducials_on_layer(&ipc, step, "F.Mask");
         let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
+        let corner_holes = holes_with_diameter(&tooling_holes, CORNER_TOOLING_HOLE_DIAMETER_MM);
+        let rail_holes = holes_with_diameter(&tooling_holes, TOOLING_HOLE_DIAMETER_MM);
 
         assert_eq!(top_fiducials.len(), 4);
         assert_eq!(mask_fiducials.len(), 4);
-        assert_eq!(tooling_holes.len(), 4);
+        assert_eq!(corner_holes.len(), 4);
+        assert_eq!(rail_holes.len(), 4);
         assert!(
             top_fiducials
                 .iter()
@@ -1695,30 +3100,32 @@ mod tests {
                 .iter()
                 .all(|fiducial| close(fiducial_diameter(fiducial), 2.0))
         );
-        assert!(tooling_holes.iter().all(|hole| {
-            close(hole.diameter, 2.0) && hole.plating_status == PlatingStatus::NonPlated
-        }));
+        assert!(
+            tooling_holes
+                .iter()
+                .all(|hole| hole.plating_status == PlatingStatus::NonPlated)
+        );
+        assert_corner_holes(&corner_holes, 70.0, 70.0);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(30.0, 66.15), (45.0, 66.15), (35.0, 3.85), (40.0, 3.85)],
+            vec![(29.0, 66.15), (41.0, 66.15), (33.0, 3.85), (37.0, 3.85)],
         );
         assert_points_close(
-            hole_points(&tooling_holes),
-            vec![(25.0, 67.5), (50.0, 67.5), (30.0, 2.5), (45.0, 2.5)],
+            hole_points(&rail_holes),
+            vec![(23.5, 67.5), (46.5, 67.5), (27.5, 2.5), (42.5, 2.5)],
         );
     }
 
     #[test]
     fn board_array_creation_adds_default_tooling_at_multi_column_min_width() {
-        let input = board_fixture_with_mask_bbox_mm(20.0, 40.0);
+        let input = board_fixture_with_mask_bbox_mm(12.0, 40.0);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 0.0,
-                edge_rail_width_mm: 15.0,
+                board_margin_mm: board_margin(5.0, 0.0),
+                edge_rail_mm: edge_rail(18.0, 15.0),
             },
         )
         .unwrap();
@@ -1728,31 +3135,69 @@ mod tests {
         let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
         let mask_fiducials = fiducials_on_layer(&ipc, step, "F.Mask");
         let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
+        let corner_holes = holes_with_diameter(&tooling_holes, CORNER_TOOLING_HOLE_DIAMETER_MM);
+        let rail_holes = holes_with_diameter(&tooling_holes, TOOLING_HOLE_DIAMETER_MM);
 
         assert_eq!(top_fiducials.len(), 4);
         assert_eq!(mask_fiducials.len(), 4);
-        assert_eq!(tooling_holes.len(), 4);
+        assert_eq!(corner_holes.len(), 4);
+        assert_eq!(rail_holes.len(), 4);
+        assert_corner_holes(&corner_holes, 70.0, 70.0);
         assert_points_close(
             fiducial_points(&top_fiducials),
-            vec![(30.0, 66.15), (55.0, 66.15), (35.0, 3.85), (50.0, 3.85)],
+            vec![(28.5, 66.15), (41.5, 66.15), (32.5, 3.85), (37.5, 3.85)],
         );
         assert_points_close(
-            hole_points(&tooling_holes),
-            vec![(25.0, 67.5), (60.0, 67.5), (30.0, 2.5), (55.0, 2.5)],
+            hole_points(&rail_holes),
+            vec![(23.0, 67.5), (47.0, 67.5), (27.0, 2.5), (43.0, 2.5)],
+        );
+    }
+
+    #[test]
+    fn board_array_creation_places_array_tooling_on_left_right_for_landscape_arrays() {
+        let input = board_fixture_with_mask_bbox_mm(40.0, 28.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 1,
+                board_margin_mm: board_margin(5.0, 0.0),
+                edge_rail_mm: edge_rail(15.0, 21.0),
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let step = array_step(&ipc);
+        let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
+        let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
+        let corner_holes = holes_with_diameter(&tooling_holes, CORNER_TOOLING_HOLE_DIAMETER_MM);
+        let rail_holes = holes_with_diameter(&tooling_holes, TOOLING_HOLE_DIAMETER_MM);
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_eq!(corner_holes.len(), 4);
+        assert_eq!(rail_holes.len(), 4);
+        assert_corner_holes(&corner_holes, 75.0, 70.0);
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(3.85, 41.0), (3.85, 29.0), (71.15, 37.0), (71.15, 33.0)],
+        );
+        assert_points_close(
+            hole_points(&rail_holes),
+            vec![(2.5, 46.5), (2.5, 23.5), (72.5, 42.5), (72.5, 27.5)],
         );
     }
 
     #[test]
     fn board_array_creation_skips_default_tooling_when_board_width_is_too_small() {
-        let input = board_fixture_with_mask_bbox_mm(19.0, 40.0);
+        let input = board_fixture_with_mask_bbox_mm(11.99, 40.0);
         let xml = create_board_array_xml(
             &input,
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 0.0,
-                edge_rail_width_mm: 15.0,
+                board_margin_mm: board_margin(5.0, 0.0),
+                edge_rail_mm: edge_rail(18.5, 20.0),
             },
         )
         .unwrap();
@@ -1763,10 +3208,11 @@ mod tests {
             ecad.cad_data
                 .layers
                 .iter()
-                .all(|layer| ipc.resolve(layer.name) != TOOLING_HOLE_LAYER_BASE_NAME)
+                .any(|layer| ipc.resolve(layer.name) == TOOLING_HOLE_LAYER_BASE_NAME)
         );
 
         let step = array_step(&ipc);
+        let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
         let fiducial_count = step
             .layer_features
             .iter()
@@ -1781,7 +3227,190 @@ mod tests {
             .count();
 
         assert_eq!(fiducial_count, 0);
-        assert_eq!(hole_count, 0);
+        assert_eq!(hole_count, 4);
+        assert!(
+            tooling_holes
+                .iter()
+                .all(|hole| close(hole.diameter, CORNER_TOOLING_HOLE_DIAMETER_MM))
+        );
+        assert_corner_holes(&tooling_holes, 70.98, 80.0);
+    }
+
+    #[test]
+    fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
+        let input = board_fixture_with_mask_bbox_mm(40.0, 30.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 1,
+                board_margin_mm: BoardMarginMm {
+                    top: 5.0,
+                    right: 0.0,
+                    bottom: 5.0,
+                    left: 0.0,
+                },
+                edge_rail_mm: BoardMarginMm::all(15.0),
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let cell = board_cell_step(&ipc);
+        let top_fiducials = fiducials_on_layer(&ipc, cell, "TOP");
+        let mask_fiducials = fiducials_on_layer(&ipc, cell, "F.Mask");
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_eq!(mask_fiducials.len(), 4);
+        assert!(
+            top_fiducials
+                .iter()
+                .all(|fiducial| fiducial.kind == IpcFiducialKind::Local)
+        );
+        assert!(
+            top_fiducials
+                .iter()
+                .all(|fiducial| close(fiducial_diameter(fiducial), 1.0))
+        );
+        assert!(
+            mask_fiducials
+                .iter()
+                .all(|fiducial| close(fiducial_diameter(fiducial), 2.0))
+        );
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
+        );
+
+        let top =
+            geometry::extract_layer_for_view(&ipc, "TOP", GeometryView::ArrayFlattened).unwrap();
+        assert_eq!(
+            top.features
+                .iter()
+                .filter(|feature| feature.fiducial_kind == FiducialKind::Local)
+                .count(),
+            8
+        );
+
+        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let top = package
+            .files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert!(
+            top.contents
+                .contains("%TA.AperFunction,FiducialPad,Local*%")
+        );
+    }
+
+    #[test]
+    fn board_array_creation_adds_board_cell_fiducials_on_left_right_margins() {
+        let input = board_fixture_with_mask_bbox_mm(30.0, 40.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 2,
+                board_margin_mm: BoardMarginMm {
+                    top: 0.0,
+                    right: 5.0,
+                    bottom: 0.0,
+                    left: 5.0,
+                },
+                edge_rail_mm: BoardMarginMm::all(15.0),
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let top_fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP");
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(2.0, 37.0), (2.0, 3.0), (38.0, 33.0), (38.0, 7.0)],
+        );
+    }
+
+    #[test]
+    fn board_array_creation_adds_board_cell_fiducials_when_single_board_array_is_eligible() {
+        let input = board_fixture_with_mask_bbox_mm(40.0, 30.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 1,
+                board_margin_mm: BoardMarginMm {
+                    top: 5.0,
+                    right: 5.0,
+                    bottom: 5.0,
+                    left: 5.0,
+                },
+                edge_rail_mm: BoardMarginMm::all(15.0),
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let top_fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP");
+        let mask_fiducials = fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask");
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_eq!(mask_fiducials.len(), 4);
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(8.0, 38.0), (42.0, 38.0), (12.0, 2.0), (38.0, 2.0)],
+        );
+        assert_eq!(fiducials_on_layer(&ipc, array_step(&ipc), "TOP").len(), 4);
+    }
+
+    #[test]
+    fn board_array_creation_skips_board_cell_fiducials_without_eligible_margin() {
+        let input = board_fixture_with_mask_bbox_mm(40.0, 35.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 1,
+                board_margin_mm: BoardMarginMm {
+                    top: 4.99,
+                    right: 0.0,
+                    bottom: 4.99,
+                    left: 0.0,
+                },
+                edge_rail_mm: BoardMarginMm::all(15.0),
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP").is_empty());
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask").is_empty());
+    }
+
+    #[test]
+    fn board_array_creation_skips_board_cell_fiducials_without_eligible_span() {
+        let input = board_fixture_with_mask_bbox_mm(16.99, 16.99);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 1,
+                board_margin_mm: BoardMarginMm {
+                    top: 5.0,
+                    right: 5.0,
+                    bottom: 5.0,
+                    left: 5.0,
+                },
+                edge_rail_mm: BoardMarginMm::all(30.0),
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "TOP").is_empty());
+        assert!(fiducials_on_layer(&ipc, board_cell_step(&ipc), "F.Mask").is_empty());
     }
 
     #[test]
@@ -1791,17 +3420,21 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 0.0,
-                edge_rail_width_mm: 25.4,
+                board_margin_mm: board_margin(0.0, 0.0),
+                edge_rail_mm: BoardMarginMm::all(25.4),
             },
         )
         .unwrap();
 
-        assert!(xml.contains(r#"<PolyStepSegment x="0" y="3"/>"#));
-        assert!(xml.contains(r#"<PolyStepSegment x="3" y="3"/>"#));
+        assert!(xml.contains(r#"<PolyStepSegment x="0" y="2.88189"/>"#));
         assert!(xml.contains(
-            r#"<StepRepeat stepRef="board" x="1" y="1" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
+            r#"<PolyStepCurve x="0.11811" y="3" centerX="0.11811" centerY="2.88189" clockwise="true"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="1" y="1" nx="1" ny="1" dx="1" dy="1" angle="0.00" mirror="false"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
         ));
     }
 
@@ -1812,9 +3445,8 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 0.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(0.0, 0.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -1833,9 +3465,8 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 11,
                 rows: 1,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 0.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(0.0, 0.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
@@ -1848,39 +3479,37 @@ mod tests {
     }
 
     #[test]
-    fn rejects_small_spacing_and_edge_rail_width() {
-        let column_error = create_board_array_xml(
+    fn rejects_small_clearance_and_edge_rail() {
+        let horizontal_gap_error = create_board_array_xml(
             board_fixture_mm(),
             &BoardArrayCreateOptions {
                 columns: 2,
                 rows: 1,
-                column_spacing_mm: 4.99,
-                row_spacing_mm: 0.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(4.99, 0.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
         assert!(
-            column_error
+            horizontal_gap_error
                 .to_string()
-                .contains("column spacing must be 0 mm or at least 5 mm")
+                .contains("horizontal board clearance must be 0 mm or at least 5 mm")
         );
 
-        let row_error = create_board_array_xml(
+        let vertical_gap_error = create_board_array_xml(
             board_fixture_mm(),
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 2,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 4.99,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(0.0, 4.99),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
         assert!(
-            row_error
+            vertical_gap_error
                 .to_string()
-                .contains("row spacing must be 0 mm or at least 5 mm")
+                .contains("vertical board clearance must be 0 mm or at least 5 mm")
         );
 
         let rail_error = create_board_array_xml(
@@ -1888,16 +3517,15 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 1,
-                column_spacing_mm: 0.0,
-                row_spacing_mm: 0.0,
-                edge_rail_width_mm: 0.0,
+                board_margin_mm: board_margin(0.0, 0.0),
+                edge_rail_mm: BoardMarginMm::all(0.0),
             },
         )
         .unwrap_err();
         assert!(
             rail_error
                 .to_string()
-                .contains("edge rail width must be between 5 and 30 mm; got 0 mm")
+                .contains("edge rail top must be between 5 and 30 mm; got 0 mm")
         );
     }
 
@@ -1949,16 +3577,15 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 3,
                 rows: 2,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
         assert!(
             narrow_error
                 .to_string()
-                .contains("array width must be at least 70 mm; got 60 mm")
+                .contains("array width must be at least 70 mm; got 55 mm")
         );
 
         let short_error = create_board_array_xml(
@@ -1966,16 +3593,15 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 4,
                 rows: 2,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
         assert!(
             short_error
                 .to_string()
-                .contains("array height must be at least 70 mm; got 45 mm")
+                .contains("array height must be at least 70 mm; got 40 mm")
         );
 
         let wide_error = create_board_array_xml(
@@ -1983,16 +3609,15 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 6,
                 rows: 1,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
         assert!(
             wide_error
                 .to_string()
-                .contains("array width must be at most 260 mm; got 405 mm")
+                .contains("array width must be at most 297 mm; got 400 mm")
         );
 
         let tall_error = create_board_array_xml(
@@ -2000,17 +3625,48 @@ mod tests {
             &BoardArrayCreateOptions {
                 columns: 1,
                 rows: 6,
-                column_spacing_mm: 5.0,
-                row_spacing_mm: 5.0,
-                edge_rail_width_mm: 5.0,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
             },
         )
         .unwrap_err();
         assert!(
             tall_error
                 .to_string()
-                .contains("array height must be at most 260 mm; got 405 mm")
+                .contains("array height must be at most 297 mm; got 400 mm")
         );
+    }
+
+    fn board_margin(horizontal_gap_mm: f64, vertical_gap_mm: f64) -> BoardMarginMm {
+        BoardMarginMm {
+            top: vertical_gap_mm / 2.0,
+            right: horizontal_gap_mm / 2.0,
+            bottom: vertical_gap_mm / 2.0,
+            left: horizontal_gap_mm / 2.0,
+        }
+    }
+
+    fn edge_rail(horizontal_mm: f64, vertical_mm: f64) -> BoardMarginMm {
+        BoardMarginMm {
+            top: vertical_mm,
+            right: horizontal_mm,
+            bottom: vertical_mm,
+            left: horizontal_mm,
+        }
+    }
+
+    fn svg_viewbox(svg: &str) -> (f64, f64, f64, f64) {
+        let value = svg
+            .split("viewBox='")
+            .nth(1)
+            .and_then(|rest| rest.split('\'').next())
+            .expect("SVG should have a viewBox");
+        let values = value
+            .split_whitespace()
+            .map(|part| part.parse::<f64>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(values.len(), 4);
+        (values[0], values[1], values[2], values[3])
     }
 
     fn assert_point_close(actual: Point, expected: Point) {
@@ -2018,6 +3674,37 @@ mod tests {
             (actual.x - expected.x).abs() < 1e-9 && (actual.y - expected.y).abs() < 1e-9,
             "expected {expected:?}, got {actual:?}"
         );
+    }
+
+    fn assert_intent_eq(
+        before_ipc: &Ipc2581,
+        after_ipc: &Ipc2581,
+        before: &FeatureIntent<ipc2581::Symbol>,
+        after: &FeatureIntent<ipc2581::Symbol>,
+    ) {
+        assert_eq!(before.domain, after.domain);
+        assert_eq!(before.role, after.role);
+        assert_eq!(before.operation, after.operation);
+        assert_eq!(before.material, after.material);
+        assert_eq!(before.plating, after.plating);
+        assert_eq!(before.side, after.side);
+        assert_eq!(
+            resolved_feature_span(before_ipc, before.span),
+            resolved_feature_span(after_ipc, after.span)
+        );
+    }
+
+    fn resolved_feature_span(ipc: &Ipc2581, span: FeatureSpan<ipc2581::Symbol>) -> String {
+        match span {
+            FeatureSpan::Unknown => "Unknown".to_string(),
+            FeatureSpan::ThroughBoard => "ThroughBoard".to_string(),
+            FeatureSpan::Layer(layer) => format!("Layer({})", ipc.resolve(layer)),
+            FeatureSpan::FromTo { from, to } => format!(
+                "FromTo({},{})",
+                from.map(|layer| ipc.resolve(layer)).unwrap_or(""),
+                to.map(|layer| ipc.resolve(layer)).unwrap_or("")
+            ),
+        }
     }
 
     fn close(actual: f64, expected: f64) -> bool {
@@ -2031,6 +3718,16 @@ mod tests {
             .steps
             .iter()
             .find(|step| ipc.resolve(step.name) == "array")
+            .unwrap()
+    }
+
+    fn board_cell_step(ipc: &Ipc2581) -> &ipc2581::types::ecad::Step {
+        ipc.ecad()
+            .unwrap()
+            .cad_data
+            .steps
+            .iter()
+            .find(|step| ipc.resolve(step.name) == "board_cell")
             .unwrap()
     }
 
@@ -2076,6 +3773,27 @@ mod tests {
 
     fn hole_points(holes: &[&Hole]) -> Vec<(f64, f64)> {
         holes.iter().map(|hole| (hole.x, hole.y)).collect()
+    }
+
+    fn holes_with_diameter<'a>(holes: &[&'a Hole], diameter_mm: f64) -> Vec<&'a Hole> {
+        holes
+            .iter()
+            .copied()
+            .filter(|hole| close(hole.diameter, diameter_mm))
+            .collect()
+    }
+
+    fn assert_corner_holes(holes: &[&Hole], array_width_mm: f64, array_height_mm: f64) {
+        let inset = ARRAY_CORNER_TOOLING_HOLE_INSET_MM;
+        assert_points_close(
+            hole_points(holes),
+            vec![
+                (inset, inset),
+                (array_width_mm - inset, inset),
+                (array_width_mm - inset, array_height_mm - inset),
+                (inset, array_height_mm - inset),
+            ],
+        );
     }
 
     fn assert_points_close(actual: Vec<(f64, f64)>, expected: Vec<(f64, f64)>) {
@@ -2128,6 +3846,36 @@ mod tests {
 </IPC-2581>"#
     }
 
+    fn rounded_corner_board_fixture_mm() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="4" y="10"/>
+            <PolyStepCurve x="0" y="6" centerX="4" centerY="6" clockwise="false"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
     fn board_fixture_with_mask_bbox_mm(width_mm: f64, height_mm: f64) -> String {
         format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -2158,6 +3906,50 @@ mod tests {
   </Ecad>
 </IPC-2581>"#
         )
+    }
+
+    fn board_fixture_with_courtyard_overhang_mm() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="F.Courtyard"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="F.Courtyard">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Polygon>
+                <PolyBegin x="-2" y="-1"/>
+                <PolyStepSegment x="13" y="-1"/>
+                <PolyStepSegment x="13" y="12"/>
+                <PolyStepSegment x="-2" y="12"/>
+                <PolyStepSegment x="-2" y="-1"/>
+              </Polygon>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
     }
 
     fn board_fixture_with_mask_mm() -> &'static str {
@@ -2218,6 +4010,55 @@ mod tests {
             <Features>
               <Line startX="0" startY="0" endX="5" endY="0">
                 <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn board_fixture_with_edge_cuts_layer_mm() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="Edge.Cuts"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="40" y="0"/>
+            <PolyStepSegment x="40" y="40"/>
+            <PolyStepSegment x="0" y="40"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="TOP">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Line startX="1" startY="1" endX="5" endY="1">
+                <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="Edge.Cuts">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Line startX="0" startY="0" endX="40" endY="0">
+                <LineDesc lineWidth="0.05" lineEnd="ROUND"/>
               </Line>
             </Features>
           </Set>

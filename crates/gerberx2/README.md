@@ -84,6 +84,6 @@ The intended smoke test for IPC-2581 export is geometry-level comparison between
 
 1. `layout.kicad_pcb` → KiCad Gerber X2 export.
 2. `layout.kicad_pcb` → KiCad IPC-2581 export → `gerberx2` writer export.
-3. Parse both Gerber sets, process both into final `pcb_ir::dialects::gerber::GeometryDocument`s, and compare each matching layer with `pcb_ir::dialects::gerber::compare::compare_documents`.
+3. Parse both Gerber sets into `pcb_ir::dialects::artwork::ArtworkDocument`s, then compare each matching layer with `pcb_ir::dialects::gerber::compare::compare_documents`.
 
 This comparison deliberately allows different command streams/aperture tables, but fails on layer function, final image bounds, or filled area drift beyond tolerance.

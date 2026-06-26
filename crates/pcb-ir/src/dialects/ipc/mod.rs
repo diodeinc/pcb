@@ -1,6 +1,8 @@
+pub mod relief;
+
 use crate::common::*;
 pub use crate::dialects::path::{PathCmd, PathOp};
-use crate::dialects::{geom, path as common_path};
+use crate::dialects::{artwork, path as common_path};
 
 #[derive(Debug, Clone)]
 pub struct GeometryDocument<Symbol, LayerFunction> {
@@ -111,8 +113,6 @@ impl<Symbol, LayerFunction> Default for GeometryDocument<Symbol, LayerFunction> 
     }
 }
 
-const PROFILE_STROKE_WIDTH: f64 = 0.1;
-
 pub fn board_bbox<Symbol, LayerFunction>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
 ) -> Option<BBox> {
@@ -222,6 +222,354 @@ pub fn panel_step_count<Symbol, LayerFunction>(
     layout_steps_by_kind(doc, LayoutStepKind::Panel).count()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayoutMargins {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+/// Derived description of a simple rectangular board array.
+///
+/// This is not independent IR state. It is a convenience view over the IPC
+/// layout graph for the common `array -> board_cell -> board` or
+/// `array -> board` shapes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SimpleBoardArrayLayout {
+    pub array_step: u32,
+    pub array_repeat: u32,
+    pub board_cell_step: Option<u32>,
+    pub board_cell_repeat: Option<u32>,
+    pub board_step: u32,
+    pub columns: u32,
+    pub rows: u32,
+    pub array_bbox: BBox,
+    pub repeated_bbox: BBox,
+    pub board_bbox: BBox,
+    pub board_width: f64,
+    pub board_height: f64,
+    pub pitch_x: Option<f64>,
+    pub pitch_y: Option<f64>,
+    pub board_margin: Option<LayoutMargins>,
+    pub edge_rail_width: Option<f64>,
+    pub edge_rail: LayoutMargins,
+    pub margins: LayoutMargins,
+}
+
+const SIMPLE_BOARD_ARRAY_EPSILON: f64 = 1e-6;
+
+pub fn simple_board_array_layout<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Option<SimpleBoardArrayLayout> {
+    let (array_step_index, array_step) = root_panel_step(doc)?;
+    let array_bbox = array_step.bbox;
+    if array_bbox.is_empty() || array_bbox.width() <= 0.0 || array_bbox.height() <= 0.0 {
+        return None;
+    }
+
+    let mut root_repeats = layout_child_repeats(doc, array_step_index, None);
+    let (array_repeat_index, array_repeat) = root_repeats.next()?;
+    if root_repeats.next().is_some()
+        || array_repeat.nx == 0
+        || array_repeat.ny == 0
+        || !simple_array_nearly_zero(array_repeat.angle)
+        || array_repeat.mirror
+    {
+        return None;
+    }
+
+    let child_step = doc.layout.steps.get(array_repeat.child_step as usize)?;
+    match child_step.kind {
+        LayoutStepKind::Board => {
+            simple_direct_board_array(doc, array_step_index, array_repeat_index, array_repeat)
+        }
+        LayoutStepKind::Panel => {
+            simple_board_cell_array(doc, array_step_index, array_repeat_index, array_repeat)
+        }
+        _ => None,
+    }
+}
+
+fn simple_direct_board_array<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    array_step_index: u32,
+    array_repeat_index: u32,
+    repeat: &LayoutRepeat<Symbol>,
+) -> Option<SimpleBoardArrayLayout> {
+    let array_step = doc.layout.steps.get(array_step_index as usize)?;
+    let board_step = doc.layout.steps.get(repeat.child_step as usize)?;
+    if board_step.kind != LayoutStepKind::Board {
+        return None;
+    }
+    let (board_width, board_height) = simple_step_dimensions(board_step)?;
+    let instance_count = layout_repeat_instances(doc, repeat).count() as u32;
+    if instance_count != repeat.nx.saturating_mul(repeat.ny) || repeat.bbox.is_empty() {
+        return None;
+    }
+
+    let pitch_x = (repeat.nx > 1)
+        .then_some(repeat.dx)
+        .filter(|pitch| simple_valid_pitch(*pitch, board_width));
+    let pitch_y = (repeat.ny > 1)
+        .then_some(repeat.dy)
+        .filter(|pitch| simple_valid_pitch(*pitch, board_height));
+    if (repeat.nx > 1 && pitch_x.is_none()) || (repeat.ny > 1 && pitch_y.is_none()) {
+        return None;
+    }
+
+    let margins = simple_margins_between(repeat.bbox, array_step.bbox)?;
+    let horizontal_gap = pitch_x.map(|pitch| simple_clamp_zero(pitch - board_width));
+    let vertical_gap = pitch_y.map(|pitch| simple_clamp_zero(pitch - board_height));
+    let edge_rail_width = simple_edge_rail_width(margins, horizontal_gap, vertical_gap);
+    let board_margin =
+        edge_rail_width.and_then(|edge| simple_board_margin_from_margins(margins, edge));
+    let edge_rail = edge_rail_width.map(simple_margins_all).unwrap_or(margins);
+
+    Some(SimpleBoardArrayLayout {
+        array_step: array_step_index,
+        array_repeat: array_repeat_index,
+        board_cell_step: None,
+        board_cell_repeat: None,
+        board_step: repeat.child_step,
+        columns: repeat.nx,
+        rows: repeat.ny,
+        array_bbox: array_step.bbox,
+        repeated_bbox: repeat.bbox,
+        board_bbox: board_step.bbox,
+        board_width,
+        board_height,
+        pitch_x,
+        pitch_y,
+        board_margin,
+        edge_rail_width,
+        edge_rail,
+        margins,
+    })
+}
+
+fn simple_board_cell_array<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    array_step_index: u32,
+    array_repeat_index: u32,
+    repeat: &LayoutRepeat<Symbol>,
+) -> Option<SimpleBoardArrayLayout> {
+    let array_step = doc.layout.steps.get(array_step_index as usize)?;
+    let board_cell_step = doc.layout.steps.get(repeat.child_step as usize)?;
+    let (cell_width, cell_height) = simple_step_dimensions(board_cell_step)?;
+    let pitch_x = (repeat.nx > 1)
+        .then_some(repeat.dx)
+        .filter(|pitch| simple_valid_pitch(*pitch, cell_width));
+    let pitch_y = (repeat.ny > 1)
+        .then_some(repeat.dy)
+        .filter(|pitch| simple_valid_pitch(*pitch, cell_height));
+    if (repeat.nx > 1 && pitch_x.is_none()) || (repeat.ny > 1 && pitch_y.is_none()) {
+        return None;
+    }
+
+    let (first_cell_instance, _) = layout_repeat_instances(doc, repeat).next()?;
+    let mut board_repeats = layout_child_repeats(doc, repeat.child_step, Some(first_cell_instance));
+    let (board_repeat_index, board_repeat) = board_repeats.next()?;
+    if board_repeats.next().is_some()
+        || board_repeat.nx != 1
+        || board_repeat.ny != 1
+        || !simple_array_nearly_zero(board_repeat.dx)
+        || !simple_array_nearly_zero(board_repeat.dy)
+        || !simple_array_nearly_zero(board_repeat.angle)
+        || board_repeat.mirror
+    {
+        return None;
+    }
+
+    let board_step = doc.layout.steps.get(board_repeat.child_step as usize)?;
+    if board_step.kind != LayoutStepKind::Board {
+        return None;
+    }
+    let (board_width, board_height) = simple_step_dimensions(board_step)?;
+    if cell_width + SIMPLE_BOARD_ARRAY_EPSILON < board_width
+        || cell_height + SIMPLE_BOARD_ARRAY_EPSILON < board_height
+    {
+        return None;
+    }
+
+    let board_left = board_repeat.x + board_step.bbox.min.x - board_cell_step.bbox.min.x;
+    let board_bottom = board_repeat.y + board_step.bbox.min.y - board_cell_step.bbox.min.y;
+    let board_margin = simple_board_margin_from_cell(
+        board_left,
+        board_bottom,
+        board_width,
+        board_height,
+        cell_width,
+        cell_height,
+    )?;
+
+    let edge_margins = simple_margins_between(repeat.bbox, array_step.bbox)?;
+    let edge_rail_width = simple_average_if_consistent(vec![
+        edge_margins.left,
+        edge_margins.right,
+        edge_margins.bottom,
+        edge_margins.top,
+    ]);
+
+    Some(SimpleBoardArrayLayout {
+        array_step: array_step_index,
+        array_repeat: array_repeat_index,
+        board_cell_step: Some(repeat.child_step),
+        board_cell_repeat: Some(board_repeat_index),
+        board_step: board_repeat.child_step,
+        columns: repeat.nx,
+        rows: repeat.ny,
+        array_bbox: array_step.bbox,
+        repeated_bbox: repeat.bbox,
+        board_bbox: board_step.bbox,
+        board_width,
+        board_height,
+        pitch_x,
+        pitch_y,
+        board_margin: Some(board_margin),
+        edge_rail_width,
+        edge_rail: edge_margins,
+        margins: simple_margins_between(repeat.bbox, array_step.bbox)?,
+    })
+}
+
+fn simple_margins_all(value: f64) -> LayoutMargins {
+    LayoutMargins {
+        top: value,
+        right: value,
+        bottom: value,
+        left: value,
+    }
+}
+
+fn simple_step_dimensions<Symbol>(step: &LayoutStep<Symbol>) -> Option<(f64, f64)> {
+    (!step.bbox.is_empty() && step.bbox.width() > 0.0 && step.bbox.height() > 0.0)
+        .then_some((step.bbox.width(), step.bbox.height()))
+}
+
+fn simple_valid_pitch(pitch: f64, span: f64) -> bool {
+    pitch.is_finite() && pitch + SIMPLE_BOARD_ARRAY_EPSILON >= span && pitch > 0.0
+}
+
+fn simple_board_margin_from_cell(
+    board_left: f64,
+    board_bottom: f64,
+    board_width: f64,
+    board_height: f64,
+    cell_width: f64,
+    cell_height: f64,
+) -> Option<LayoutMargins> {
+    let left = board_left;
+    let bottom = board_bottom;
+    let right = cell_width - board_left - board_width;
+    let top = cell_height - board_bottom - board_height;
+    if [left, right, bottom, top]
+        .iter()
+        .any(|value| !value.is_finite() || *value < -SIMPLE_BOARD_ARRAY_EPSILON)
+    {
+        return None;
+    }
+
+    Some(LayoutMargins {
+        top: simple_clamp_zero(top),
+        right: simple_clamp_zero(right),
+        bottom: simple_clamp_zero(bottom),
+        left: simple_clamp_zero(left),
+    })
+}
+
+fn simple_margins_between(inner: BBox, outer: BBox) -> Option<LayoutMargins> {
+    let left = simple_clamp_zero(inner.min.x - outer.min.x);
+    let right = simple_clamp_zero(outer.max.x - inner.max.x);
+    let bottom = simple_clamp_zero(inner.min.y - outer.min.y);
+    let top = simple_clamp_zero(outer.max.y - inner.max.y);
+
+    if [left, right, bottom, top]
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0)
+    {
+        Some(LayoutMargins {
+            top,
+            right,
+            bottom,
+            left,
+        })
+    } else {
+        None
+    }
+}
+
+fn simple_edge_rail_width(
+    margins: LayoutMargins,
+    horizontal_gap: Option<f64>,
+    vertical_gap: Option<f64>,
+) -> Option<f64> {
+    let mut candidates = Vec::new();
+    if let Some(gap) = horizontal_gap {
+        candidates.push((margins.left + margins.right - gap) / 2.0);
+    }
+    if let Some(gap) = vertical_gap {
+        candidates.push((margins.bottom + margins.top - gap) / 2.0);
+    }
+
+    simple_average_if_consistent(candidates)
+}
+
+fn simple_board_margin_from_margins(
+    margins: LayoutMargins,
+    edge_rail_width: f64,
+) -> Option<LayoutMargins> {
+    let left = margins.left - edge_rail_width;
+    let right = margins.right - edge_rail_width;
+    let bottom = margins.bottom - edge_rail_width;
+    let top = margins.top - edge_rail_width;
+    if [left, right, bottom, top]
+        .iter()
+        .any(|value| !value.is_finite() || *value < -SIMPLE_BOARD_ARRAY_EPSILON)
+    {
+        return None;
+    }
+
+    Some(LayoutMargins {
+        top: simple_clamp_zero(top),
+        right: simple_clamp_zero(right),
+        bottom: simple_clamp_zero(bottom),
+        left: simple_clamp_zero(left),
+    })
+}
+
+fn simple_average_if_consistent(candidates: Vec<f64>) -> Option<f64> {
+    if candidates.is_empty()
+        || candidates
+            .iter()
+            .any(|candidate| !candidate.is_finite() || *candidate < -SIMPLE_BOARD_ARRAY_EPSILON)
+    {
+        return None;
+    }
+
+    let average = candidates.iter().sum::<f64>() / candidates.len() as f64;
+    candidates
+        .iter()
+        .all(|candidate| simple_array_nearly_equal(*candidate, average))
+        .then_some(simple_clamp_zero(average))
+}
+
+fn simple_array_nearly_zero(value: f64) -> bool {
+    value.abs() <= SIMPLE_BOARD_ARRAY_EPSILON
+}
+
+fn simple_array_nearly_equal(a: f64, b: f64) -> bool {
+    (a - b).abs() <= SIMPLE_BOARD_ARRAY_EPSILON
+}
+
+fn simple_clamp_zero(value: f64) -> f64 {
+    if simple_array_nearly_zero(value) {
+        0.0
+    } else {
+        value
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProfileSet {
     /// The canonical board step profile only.
@@ -244,6 +592,8 @@ pub enum GeometryView {
     Board,
     /// Root array-step geometry only, with no repeated child board materialization.
     ArrayLocal,
+    /// Root array and nested non-board array support geometry, excluding board materialization.
+    ArraySupport,
     /// Root array-step geometry plus repeated child board/sub-array geometry in array coordinates.
     ArrayFlattened,
     /// Root-step geometry plus the symbolic layout graph, without repeated feature materialization.
@@ -255,6 +605,7 @@ impl GeometryView {
         match self {
             Self::Board => ProfileSet::BoardOutlines,
             Self::ArrayLocal => ProfileSet::RootOnly,
+            Self::ArraySupport => ProfileSet::RootOnly,
             Self::ArrayFlattened => ProfileSet::FabricationOutlines,
             Self::LayoutSymbolic => ProfileSet::LayoutBoundaries,
         }
@@ -474,15 +825,15 @@ fn instance_depth<Symbol, LayerFunction>(
     depth
 }
 
-pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
+pub fn lower_layer_to_artwork<Symbol: Clone, LayerFunction: Clone>(
     doc: &GeometryDocument<Symbol, LayerFunction>,
     layer_index: usize,
     role: LayerRole,
     side: Side,
-) -> geom::GeomDocument<LayerFunction, Option<Symbol>> {
-    let mut geom = geom::GeomDocument::new(Unit::Millimeter);
+) -> artwork::ArtworkDocument<LayerFunction, Option<Symbol>> {
+    let mut artwork = artwork::ArtworkDocument::new(Unit::Millimeter);
     let layer = &doc.layers[layer_index];
-    let geom_layer = geom.push_layer(geom::GeomLayer {
+    let artwork_layer = artwork.push_layer(artwork::ArtworkLayer {
         name: layer.name.clone(),
         role,
         side,
@@ -498,15 +849,17 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
         for path in &doc.paths
             [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
         {
-            let Some(geom_path) = lower_path_kind(path) else {
+            let Some((artwork_path, geometry)) = lower_path_kind(path) else {
                 continue;
             };
-            let path_id = geom.push_path(geom_path, path_payloads(doc, path));
-            geom.push_object(
-                geom_layer,
-                geom::GeomObject {
+            let path_id = artwork.push_path(artwork_path, path_payloads(doc, path));
+            artwork.push_object(
+                artwork_layer,
+                artwork::ArtworkObject {
                     paint: paint_polarity(feature.polarity),
-                    path: path_id,
+                    order: paint_order(feature),
+                    geometry: geometry(path_id),
+                    net: None,
                     bbox: path.bbox,
                     meta: feature.net.clone(),
                 },
@@ -514,90 +867,47 @@ pub fn lower_layer_to_geom<Symbol: Clone, LayerFunction: Clone>(
         }
     }
 
-    geom.diagnostics.extend(doc.diagnostics.clone());
-    geom
+    artwork.diagnostics.extend(doc.diagnostics.clone());
+    artwork::normalize_bounds(&mut artwork);
+    artwork
 }
 
-pub fn lower_layer_with_profile_set_to_geom<Symbol: Clone, LayerFunction: Clone>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-    layer_index: usize,
-    role: LayerRole,
-    side: Side,
-    profile_set: ProfileSet,
-) -> geom::GeomDocument<LayerFunction, Option<Symbol>> {
-    let mut geom = lower_layer_to_geom(doc, layer_index, role, side);
-    let layer = &doc.layers[layer_index];
-    let outline_layer = geom.push_layer(geom::GeomLayer {
-        name: "Profile".to_string(),
-        role: LayerRole::Profile,
-        side: Side::None,
-        object_start: 0,
-        object_count: 0,
-        bbox: BBox::empty(),
-        meta: layer.layer_function.clone(),
-    });
+type ArtworkGeometryFactory = fn(u32) -> artwork::ArtworkGeometry;
 
-    for occurrence in profile_occurrences_for(doc, profile_set) {
-        push_profile_path_to_geom(
-            &mut geom,
-            outline_layer,
-            doc,
-            occurrence.profile.outer_path,
-            occurrence.transform,
-        );
-        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
-            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
-        {
-            push_profile_path_to_geom(
-                &mut geom,
-                outline_layer,
-                doc,
-                cutout.path,
-                occurrence.transform,
-            );
-        }
+fn lower_path_kind(path: &GeometryPath) -> Option<(artwork::ArtworkPath, ArtworkGeometryFactory)> {
+    match path.paint_class().ok()? {
+        Some(GeometryPathPaintClass::Filled) => Some((
+            artwork::ArtworkPath::filled(path.style.fill.rule),
+            |path| artwork::ArtworkGeometry::Region { path },
+        )),
+        Some(GeometryPathPaintClass::Stroked) => Some((
+            artwork::ArtworkPath::stroked_with_pattern(
+                path.style.stroke.width,
+                path.style.stroke.line_cap,
+                LineJoin::Round,
+                path.style.stroke.pattern,
+            ),
+            |path| artwork::ArtworkGeometry::Stroke { path },
+        )),
+        None => None,
     }
-
-    geom
 }
 
-fn push_profile_path_to_geom<Symbol, LayerFunction>(
-    geom: &mut geom::GeomDocument<LayerFunction, Option<Symbol>>,
-    layer_id: u32,
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-    path_index: u32,
-    transform: Affine2,
-) {
-    let payloads = transformed_path_payloads(doc, path_index, transform);
-    let path_id = geom.push_path(
-        geom::GeomPath::stroked(PROFILE_STROKE_WIDTH, LineCap::Round, LineJoin::Round),
-        payloads,
-    );
-    let bbox = geom.paths[path_id as usize].bbox;
-    geom.push_object(
-        layer_id,
-        geom::GeomObject {
-            paint: PaintPolarity::Dark,
-            path: path_id,
-            bbox,
-            meta: None,
-        },
-    );
-    geom.layers[layer_id as usize].bbox = geom.layers[layer_id as usize].bbox.union(bbox);
-}
-
-fn lower_path_kind(path: &GeometryPath) -> Option<geom::GeomPath> {
-    if path.flags.filled {
-        Some(geom::GeomPath::filled(path.style.fill.rule))
-    } else if path.flags.stroked {
-        Some(geom::GeomPath::stroked(
-            path.style.stroke.width,
-            path.style.stroke.line_cap,
-            LineJoin::Round,
-        ))
+fn paint_order<Symbol>(feature: &GeometryFeature<Symbol>) -> artwork::PaintOrder {
+    let stage = if feature.bucket == FeatureBucket::Cutout {
+        artwork::PaintStage::FinalCutout
+    } else if feature.polarity == GeometryPolarity::Negative
+        || feature.flags.clears_previous_in_set
+        || matches!(
+            feature.bucket,
+            FeatureBucket::Fill | FeatureBucket::Thermal | FeatureBucket::Antipad
+        )
+    {
+        artwork::PaintStage::Base
     } else {
-        None
-    }
+        artwork::PaintStage::Overlay
+    };
+    artwork::PaintOrder { stage }
 }
 
 fn path_payloads<Symbol, LayerFunction>(
@@ -644,6 +954,281 @@ pub fn transformed_path_bbox<Symbol, LayerFunction>(
     transformed_path_payloads(doc, path_index, transform)
         .iter()
         .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BoardArrayFabricationProfile {
+    /// Exterior profile contours for the generated board array.
+    pub array_outlines: Vec<Vec<common_path::PathPayload>>,
+    /// Closed material-removal contours inside the array profile.
+    ///
+    /// This is the regularized union of source profile cutouts, repeated board
+    /// cutouts, and V-score relief regions. Keeping it as one unioned planar
+    /// region means overlapping cutouts/reliefs collapse before downstream
+    /// Gerber/SVG/profile export sees them.
+    pub material_removal: Vec<common_path::PathPayload>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct BoardArrayFabricationProfileInput {
+    array_outlines: Vec<Vec<common_path::PathPayload>>,
+    source_material_removal: Vec<Vec<common_path::PathPayload>>,
+    board_boundaries: Vec<common_path::PathPayload>,
+    board_cutouts: Vec<common_path::PathPayload>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BoardArrayReliefFeatures {
+    /// Through-board features that interrupt V-score separation.
+    ///
+    /// For non-plated holes/slots this is the mechanical aperture. For plated
+    /// holes/slots this is the actual pad/copper envelope, so score reliefs are
+    /// derived from source geometry instead of clearance guesses.
+    pub score_blockers: Vec<common_path::PathPayload>,
+}
+
+pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+) -> Result<BoardArrayFabricationProfile, relief::VScoreReliefError> {
+    Ok(board_array_fabrication_profile_inner(
+        doc,
+        score_lines,
+        BoardArrayReliefFeatures::default(),
+        false,
+    )?
+    .0)
+}
+
+pub fn board_array_fabrication_profile_with_relief_features<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+    relief_features: BoardArrayReliefFeatures,
+) -> Result<BoardArrayFabricationProfile, relief::VScoreReliefError> {
+    Ok(board_array_fabrication_profile_inner(doc, score_lines, relief_features, false)?.0)
+}
+
+pub fn board_array_fabrication_profile_with_debug<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
+    board_array_fabrication_profile_inner(
+        doc,
+        score_lines,
+        BoardArrayReliefFeatures::default(),
+        true,
+    )
+}
+
+pub fn board_array_fabrication_profile_with_relief_features_and_debug<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+    relief_features: BoardArrayReliefFeatures,
+) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
+    board_array_fabrication_profile_inner(doc, score_lines, relief_features, true)
+}
+
+fn board_array_fabrication_profile_inner<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    score_lines: &[relief::VScoreLine],
+    relief_features: BoardArrayReliefFeatures,
+    include_relief_debug: bool,
+) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
+    if root_panel_step(doc).is_none() {
+        return Ok((
+            BoardArrayFabricationProfile::default(),
+            relief::VScoreReliefDebug::default(),
+        ));
+    }
+
+    let input = collect_board_array_fabrication_profile_input(doc);
+    compose_board_array_fabrication_profile(
+        input,
+        score_lines,
+        relief_features,
+        include_relief_debug,
+    )
+}
+
+fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> BoardArrayFabricationProfileInput {
+    let mut input = BoardArrayFabricationProfileInput::default();
+
+    for occurrence in profile_occurrences_for(doc, ProfileSet::RootOnly) {
+        input.array_outlines.push(transformed_path_payloads(
+            doc,
+            occurrence.profile.outer_path,
+            occurrence.transform,
+        ));
+        input
+            .source_material_removal
+            .extend(transformed_profile_cutout_payloads(
+                doc,
+                occurrence.profile,
+                occurrence.transform,
+            ));
+    }
+
+    for occurrence in profile_occurrences_for(doc, ProfileSet::FabricationOutlines)
+        .into_iter()
+        .filter(|occurrence| occurrence.role == ProfileOccurrenceRole::BoardInstance)
+    {
+        let cutouts =
+            transformed_profile_cutout_payloads(doc, occurrence.profile, occurrence.transform);
+        input
+            .board_cutouts
+            .extend(cutouts.iter().flatten().cloned());
+        input.source_material_removal.extend(cutouts);
+        input.board_boundaries.extend(transformed_path_payloads(
+            doc,
+            occurrence.profile.outer_path,
+            occurrence.transform,
+        ));
+    }
+
+    input
+}
+
+fn compose_board_array_fabrication_profile(
+    input: BoardArrayFabricationProfileInput,
+    score_lines: &[relief::VScoreLine],
+    relief_features: BoardArrayReliefFeatures,
+    include_relief_debug: bool,
+) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
+    // M = source cutouts ∪ board cutouts ∪ V-score relief material.
+    // Store M as a `ContourSet` until the end so every contribution is merged
+    // with the same regularized Boolean union.
+    let mut material_removal =
+        common_path::ContourSet::empty(FillRule::NonZero, relief::DEFAULT_RELIEF_TOLERANCE_MM);
+
+    for payloads in &input.source_material_removal {
+        union_filled_payloads(
+            &mut material_removal,
+            payloads,
+            relief::DEFAULT_RELIEF_TOLERANCE_MM,
+        );
+    }
+
+    let mut relief_debug = relief::VScoreReliefDebug::default();
+    if !score_lines.is_empty() && !input.board_boundaries.is_empty() {
+        let relief_input = relief::VScoreReliefInput {
+            board_boundaries: input.board_boundaries,
+            board_cutouts: input.board_cutouts,
+            score_blockers: relief_features.score_blockers,
+            score_lines: score_lines.to_vec(),
+            tool_diameter_mm: relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
+            tolerance_mm: relief::DEFAULT_RELIEF_TOLERANCE_MM,
+        };
+        let reliefs = if include_relief_debug {
+            let output = relief::vscore_route_reliefs_with_debug(&relief_input)?;
+            relief_debug = output.debug;
+            output.relief_contours
+        } else {
+            relief::vscore_route_reliefs(&relief_input)?
+        };
+        union_filled_payloads(
+            &mut material_removal,
+            &reliefs,
+            relief::DEFAULT_RELIEF_TOLERANCE_MM,
+        );
+    }
+
+    Ok((
+        BoardArrayFabricationProfile {
+            array_outlines: input.array_outlines,
+            material_removal: material_removal.to_payloads(),
+        },
+        relief_debug,
+    ))
+}
+
+fn union_filled_payloads(
+    region: &mut common_path::ContourSet,
+    payloads: &[common_path::PathPayload],
+    tolerance: f64,
+) {
+    region.union_assign(&common_path::ContourSet::from_filled_payloads(
+        payloads, tolerance,
+    ));
+}
+
+fn transformed_profile_cutout_payloads<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    step_profile: &StepProfile,
+    transform: Affine2,
+) -> Vec<Vec<common_path::PathPayload>> {
+    doc.profile_cutouts[step_profile.cutout_start as usize
+        ..(step_profile.cutout_start + step_profile.cutout_count) as usize]
+        .iter()
+        .map(|cutout| transformed_path_payloads(doc, cutout.path, transform))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn material_removal_union_is_winding_insensitive() {
+        let mut region = common_path::ContourSet::empty(FillRule::NonZero, 0.001);
+
+        union_filled_payloads(
+            &mut region,
+            &[reversed_rectangle_payload(0.0, 0.0, 2.0, 2.0)],
+            0.001,
+        );
+        union_filled_payloads(&mut region, &[rectangle_payload(1.0, 0.0, 4.0, 2.0)], 0.001);
+
+        let bbox = region
+            .to_payloads()
+            .iter()
+            .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox));
+        assert_eq!(bbox.min, Point::new(0.0, 0.0));
+        assert_eq!(bbox.max, Point::new(4.0, 2.0));
+    }
+
+    fn rectangle_payload(
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+    ) -> common_path::PathPayload {
+        common_path::PathPayload {
+            bbox: BBox {
+                min: Point::new(min_x, min_y),
+                max: Point::new(max_x, max_y),
+            },
+            cmds: vec![
+                PathCmd::move_to(Point::new(min_x, min_y)),
+                PathCmd::line_to(Point::new(max_x, min_y)),
+                PathCmd::line_to(Point::new(max_x, max_y)),
+                PathCmd::line_to(Point::new(min_x, max_y)),
+                PathCmd::close(),
+            ],
+        }
+    }
+
+    fn reversed_rectangle_payload(
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+    ) -> common_path::PathPayload {
+        common_path::PathPayload {
+            bbox: BBox {
+                min: Point::new(min_x, min_y),
+                max: Point::new(max_x, max_y),
+            },
+            cmds: vec![
+                PathCmd::move_to(Point::new(min_x, max_y)),
+                PathCmd::line_to(Point::new(max_x, max_y)),
+                PathCmd::line_to(Point::new(max_x, min_y)),
+                PathCmd::line_to(Point::new(min_x, min_y)),
+                PathCmd::close(),
+            ],
+        }
+    }
 }
 
 fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
@@ -823,6 +1408,7 @@ pub struct IpcSpecRef<Symbol> {
 pub struct GeometryFeatureSet<Symbol> {
     pub layer: u32,
     pub source_set_index: u32,
+    pub source_geometry_ref: Option<Symbol>,
     pub net: Option<Symbol>,
     pub polarity: GeometryPolarity,
     pub spec_ref_start: u32,
@@ -853,6 +1439,8 @@ pub struct GeometryFeature<Symbol> {
     pub polarity: GeometryPolarity,
     pub net: Option<Symbol>,
     pub source_layer_ref: Option<Symbol>,
+    pub source_step_ref: Option<Symbol>,
+    pub source_step_kind: LayoutStepKind,
     pub set: Option<u32>,
     pub source: SourceRef,
     pub intent: FeatureIntent<Symbol>,
@@ -889,6 +1477,8 @@ impl<Symbol> GeometryFeature<Symbol> {
             polarity,
             net: None,
             source_layer_ref: None,
+            source_step_ref: None,
+            source_step_kind: LayoutStepKind::Unknown,
             set: None,
             source: SourceRef::default(),
             intent: FeatureIntent::default(),
@@ -914,6 +1504,66 @@ impl<Symbol> GeometryFeature<Symbol> {
             pin_ref_count: 0,
             flags: FeatureFlags::default(),
         }
+    }
+
+    pub fn is_fiducial(&self) -> bool {
+        self.intent.role == FeatureRole::Fiducial || self.bucket == FeatureBucket::Fiducial
+    }
+
+    pub fn is_vscore(&self) -> bool {
+        self.intent.role == FeatureRole::ArraySeparation
+            && matches!(
+                self.intent.domain,
+                FeatureDomain::VCut | FeatureDomain::Score
+            )
+    }
+
+    pub fn is_vcut(&self) -> bool {
+        self.intent.role == FeatureRole::ArraySeparation
+            && self.intent.domain == FeatureDomain::VCut
+    }
+
+    pub fn is_score(&self) -> bool {
+        self.intent.role == FeatureRole::ArraySeparation
+            && self.intent.domain == FeatureDomain::Score
+    }
+
+    pub fn is_drill_like(&self) -> bool {
+        matches!(
+            self.intent.operation,
+            FeatureOperation::Drill | FeatureOperation::Route
+        ) || matches!(self.intent.role, FeatureRole::Hole | FeatureRole::Slot)
+    }
+
+    pub fn is_nonplated_tooling_hole(&self) -> bool {
+        self.intent.role == FeatureRole::Hole
+            && self.intent.operation == FeatureOperation::Drill
+            && self.intent.plating == PlatingKind::NonPlated
+    }
+
+    pub fn is_board_step_feature(&self) -> bool {
+        self.source_step_kind == LayoutStepKind::Board
+    }
+
+    pub fn is_array_step_feature(&self) -> bool {
+        self.source_step_kind == LayoutStepKind::Panel
+    }
+}
+
+impl<Symbol: Clone> GeometryFeature<Symbol> {
+    pub fn with_path_range(
+        &self,
+        bucket: FeatureBucket,
+        path_start: u32,
+        path_count: u32,
+        bbox: BBox,
+    ) -> Self {
+        let mut feature = self.clone();
+        feature.bucket = bucket;
+        feature.bbox = bbox;
+        feature.path_start = path_start;
+        feature.path_count = path_count;
+        feature
     }
 }
 
@@ -1051,6 +1701,30 @@ impl GeometryPath {
             flags: PathFlags::default(),
         }
     }
+
+    pub fn paint_class(&self) -> Result<Option<GeometryPathPaintClass>, String> {
+        match (self.flags.filled, self.flags.stroked) {
+            (true, false) => Ok(Some(GeometryPathPaintClass::Filled)),
+            (false, true) => Ok(Some(GeometryPathPaintClass::Stroked)),
+            (false, false) => Ok(None),
+            (true, true) => Err("path is both filled and stroked".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GeometryPathPaintClass {
+    Filled,
+    Stroked,
+}
+
+impl GeometryPathPaintClass {
+    pub fn primitive_bucket(self) -> FeatureBucket {
+        match self {
+            Self::Filled => FeatureBucket::Fill,
+            Self::Stroked => FeatureBucket::Trace,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1058,6 +1732,233 @@ pub struct GeometryContour {
     pub cmd_start: u32,
     pub cmd_count: u32,
     pub bbox: BBox,
+}
+
+pub fn split_primitive_feature_path_runs<Symbol: Clone, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    feature: GeometryFeature<Symbol>,
+) -> Result<Vec<GeometryFeature<Symbol>>, String> {
+    let path_end = checked_range_end(
+        "feature paths",
+        feature.path_start,
+        feature.path_count,
+        doc.paths.len(),
+    )?;
+    let mut features = Vec::new();
+    let mut run_start = feature.path_start;
+    let mut run_class = None;
+
+    for path_index in feature.path_start..path_end {
+        let path = &doc.paths[path_index as usize];
+        let class = path.paint_class().map_err(|error| {
+            format!(
+                "feature source {:?} path {path_index} has invalid paint flags: {error}",
+                feature.source
+            )
+        })?;
+        if class == run_class {
+            continue;
+        }
+
+        if let Some(class) = run_class {
+            push_primitive_path_run(&mut features, doc, &feature, run_start, path_index, class);
+        }
+        run_start = path_index;
+        run_class = class;
+    }
+
+    if let Some(class) = run_class {
+        push_primitive_path_run(&mut features, doc, &feature, run_start, path_end, class);
+    }
+
+    Ok(features)
+}
+
+fn push_primitive_path_run<Symbol: Clone, LayerFunction>(
+    features: &mut Vec<GeometryFeature<Symbol>>,
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    feature: &GeometryFeature<Symbol>,
+    run_start: u32,
+    run_end: u32,
+    class: GeometryPathPaintClass,
+) {
+    if run_start == run_end {
+        return;
+    }
+    features.push(feature.with_path_range(
+        class.primitive_bucket(),
+        run_start,
+        run_end - run_start,
+        paths_bbox(doc, run_start, run_end - run_start),
+    ));
+}
+
+pub fn validate_artwork_ready<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Result<(), String> {
+    validate_homogeneous_features(doc)?;
+    for (feature_index, feature) in doc.features.iter().enumerate() {
+        if feature.path_count == 0 {
+            continue;
+        }
+        if feature.flags.clears_previous_in_set {
+            return Err(format!(
+                "feature {feature_index} still has unresolved set-void clear semantics"
+            ));
+        }
+        if feature.bucket != FeatureBucket::Cutout && feature.polarity != GeometryPolarity::Positive
+        {
+            return Err(format!(
+                "feature {feature_index} still has unresolved negative polarity"
+            ));
+        }
+        validate_feature_arcs(doc, feature_index, feature)?;
+    }
+    Ok(())
+}
+
+pub fn validate_homogeneous_features<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+) -> Result<(), String> {
+    for (feature_index, feature) in doc.features.iter().enumerate() {
+        let path_end = checked_range_end(
+            "feature paths",
+            feature.path_start,
+            feature.path_count,
+            doc.paths.len(),
+        )
+        .map_err(|error| format!("feature {feature_index}: {error}"))?;
+        let mut feature_class = None;
+        for path_index in feature.path_start..path_end {
+            let path_class = doc.paths[path_index as usize]
+                .paint_class()
+                .map_err(|error| format!("feature {feature_index} path {path_index}: {error}"))?
+                .ok_or_else(|| format!("feature {feature_index} path {path_index} is unpainted"))?;
+
+            match feature_class {
+                Some(previous) if previous != path_class => {
+                    return Err(format!(
+                        "feature {feature_index} mixes {previous:?} and {path_class:?} paths"
+                    ));
+                }
+                None => feature_class = Some(path_class),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_feature_arcs<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    feature_index: usize,
+    feature: &GeometryFeature<Symbol>,
+) -> Result<(), String> {
+    let path_end = checked_range_end(
+        "feature paths",
+        feature.path_start,
+        feature.path_count,
+        doc.paths.len(),
+    )
+    .map_err(|error| format!("feature {feature_index}: {error}"))?;
+    for path_index in feature.path_start..path_end {
+        validate_path_arcs(doc, feature_index, path_index)?;
+    }
+    Ok(())
+}
+
+fn validate_path_arcs<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    feature_index: usize,
+    path_index: u32,
+) -> Result<(), String> {
+    let path = &doc.paths[path_index as usize];
+    let contour_end = checked_range_end(
+        "path contours",
+        path.contour_start,
+        path.contour_count,
+        doc.contours.len(),
+    )
+    .map_err(|error| format!("feature {feature_index} path {path_index}: {error}"))?;
+    for contour_index in path.contour_start..contour_end {
+        let contour = &doc.contours[contour_index as usize];
+        let cmd_end = checked_range_end(
+            "contour commands",
+            contour.cmd_start,
+            contour.cmd_count,
+            doc.path_cmds.len(),
+        )
+        .map_err(|error| {
+            format!("feature {feature_index} path {path_index} contour {contour_index}: {error}")
+        })?;
+        let mut current = Point::default();
+        for cmd_index in contour.cmd_start..cmd_end {
+            let cmd = doc.path_cmds[cmd_index as usize];
+            match cmd.op {
+                PathOp::MoveTo | PathOp::LineTo => current = cmd.p0,
+                PathOp::ArcTo => {
+                    validate_arc_command(feature_index, path_index, cmd_index, current, cmd)?;
+                    current = cmd.p0;
+                }
+                PathOp::CubicTo => current = cmd.p2,
+                PathOp::Close => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_arc_command(
+    feature_index: usize,
+    path_index: u32,
+    cmd_index: u32,
+    start: Point,
+    cmd: PathCmd,
+) -> Result<(), String> {
+    let start_radius = start.distance_to(cmd.p1);
+    let end_radius = cmd.p0.distance_to(cmd.p1);
+    if start_radius <= 0.0 || end_radius <= 0.0 {
+        return Err(format!(
+            "feature {feature_index} path {path_index} command {cmd_index} has a zero-radius arc"
+        ));
+    }
+    if !arc_radii_nearly_equal(start_radius, end_radius) {
+        return Err(format!(
+            "feature {feature_index} path {path_index} command {cmd_index} has non-circular arc radii {start_radius} and {end_radius}"
+        ));
+    }
+    Ok(())
+}
+
+fn checked_range_end(label: &str, start: u32, count: u32, len: usize) -> Result<u32, String> {
+    let end = start
+        .checked_add(count)
+        .ok_or_else(|| format!("{label} range overflows"))?;
+    if end as usize > len {
+        return Err(format!(
+            "{label} range {start}..{end} exceeds available length {len}"
+        ));
+    }
+    Ok(end)
+}
+
+fn paths_bbox<Symbol, LayerFunction>(
+    doc: &GeometryDocument<Symbol, LayerFunction>,
+    path_start: u32,
+    path_count: u32,
+) -> BBox {
+    doc.paths[path_start as usize..(path_start + path_count) as usize]
+        .iter()
+        .fold(BBox::empty(), |bbox, path| bbox.union(path.bbox))
+}
+
+const GEOMETRY_EPSILON: f64 = 1e-9;
+const ARC_RADIUS_ABSOLUTE_TOLERANCE_MM: f64 = 1e-4;
+
+fn arc_radii_nearly_equal(left: f64, right: f64) -> bool {
+    (left - right).abs()
+        <= ARC_RADIUS_ABSOLUTE_TOLERANCE_MM
+            .max(GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
