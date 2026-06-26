@@ -17,6 +17,10 @@ const NIGHTLY_LATEST_RELEASE_URL: &str = "https://pcb.api.diode.computer/pcb/nig
 const USER_AGENT: &str = "pcb";
 const STDLIB_ARCHIVE_NAME: &str = "stdlib.tar.zst";
 const TOOLCHAIN_SIDECARS: &[&str] = &["rectify"];
+/// Written into an install directory once optional sidecar staging has been
+/// attempted, so later commands don't re-lock and re-hit the network on every
+/// invocation for toolchain versions whose release does not ship the sidecars.
+const SIDECAR_CHECK_MARKER: &str = ".sidecars-checked";
 const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -586,7 +590,7 @@ fn ensure_installed(version: &Version) -> Result<PathBuf> {
     let mut lock = fslock::LockFile::open(&lock_path)?;
     lock.lock()?;
     let result = if binary.is_file() {
-        ensure_optional_sidecars(version, &install_dir)?;
+        ensure_optional_sidecars(version, &install_dir);
         Ok(binary)
     } else {
         install_toolchain(version)
@@ -614,7 +618,7 @@ fn ensure_nightly_installed(release: &NightlyRelease) -> Result<(NightlyReceipt,
     let result = if let Some((receipt, binary)) = installed_nightly_toolchain()?
         && receipt.sha == release.sha
     {
-        ensure_optional_nightly_sidecars(release)?;
+        ensure_optional_nightly_sidecars(release);
         Ok((receipt, binary))
     } else {
         install_nightly(release)
@@ -624,25 +628,29 @@ fn ensure_nightly_installed(release: &NightlyRelease) -> Result<(NightlyReceipt,
 }
 
 fn optional_sidecars_present(install_dir: &Path) -> bool {
+    // Once staging has been attempted, a marker file is written even when the
+    // release does not ship the sidecars. Treat that as "present" so we never
+    // re-acquire the install lock or re-download on every subsequent command.
+    if install_dir.join(SIDECAR_CHECK_MARKER).is_file() {
+        return true;
+    }
     TOOLCHAIN_SIDECARS
         .iter()
         .all(|binary| install_dir.join(executable_name(binary)).is_file())
 }
 
-fn ensure_optional_sidecars(version: &Version, install_dir: &Path) -> Result<()> {
+fn ensure_optional_sidecars(version: &Version, install_dir: &Path) {
     if !optional_sidecars_present(install_dir) {
         let release_base_url = format!("{RELEASE_BASE_URL}/v{version}");
-        stage_optional_sidecars(&release_base_url, install_dir)?;
+        stage_optional_sidecars(&release_base_url, install_dir);
     }
-    Ok(())
 }
 
-fn ensure_optional_nightly_sidecars(release: &NightlyRelease) -> Result<()> {
+fn ensure_optional_nightly_sidecars(release: &NightlyRelease) {
     let install_dir = nightly_dir();
     if !optional_sidecars_present(&install_dir) {
-        stage_optional_sidecars(&release.base_url, &install_dir)?;
+        stage_optional_sidecars(&release.base_url, &install_dir);
     }
-    Ok(())
 }
 
 fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)> {
@@ -702,7 +710,7 @@ fn install_nightly(release: &NightlyRelease) -> Result<(NightlyReceipt, PathBuf)
         serde_json::to_vec_pretty(&receipt)?,
     )?;
     stage_stdlib_archive(&release.base_url, &staging_dir)?;
-    stage_optional_sidecars(&release.base_url, &staging_dir)?;
+    stage_optional_sidecars(&release.base_url, &staging_dir);
 
     if install_dir.exists() {
         fs::remove_dir_all(&install_dir)?;
@@ -777,7 +785,7 @@ fn install_toolchain(version: &Version) -> Result<PathBuf> {
     )?;
     let release_base_url = format!("{RELEASE_BASE_URL}/v{version}");
     stage_stdlib_archive(&release_base_url, &staging_dir)?;
-    stage_optional_sidecars(&release_base_url, &staging_dir)?;
+    stage_optional_sidecars(&release_base_url, &staging_dir);
 
     if install_dir.exists() {
         fs::remove_dir_all(&install_dir)?;
@@ -809,7 +817,33 @@ fn stage_stdlib_archive(base_url: &str, staging_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn stage_optional_sidecars(base_url: &str, staging_dir: &Path) -> Result<()> {
+/// Best-effort staging of optional sidecar binaries (e.g. `rectify`).
+///
+/// Sidecars must never block core `pcb`/`pcbc` usage, so download, checksum,
+/// and write failures are logged and swallowed rather than propagated. On a
+/// completed attempt -- whether the sidecars were fetched or the release simply
+/// does not ship them -- a marker file is written so later commands
+/// short-circuit in `optional_sidecars_present` instead of re-locking and
+/// re-downloading. A hard (likely transient) failure leaves no marker so the
+/// next invocation retries.
+fn stage_optional_sidecars(base_url: &str, staging_dir: &Path) {
+    match try_stage_optional_sidecars(base_url, staging_dir) {
+        Ok(()) => {
+            let marker = staging_dir.join(SIDECAR_CHECK_MARKER);
+            if let Err(err) = fs::write(&marker, b"") {
+                eprintln!(
+                    "warning: failed to record sidecar check marker {}: {err}",
+                    marker.display()
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("warning: skipping optional sidecar binaries: {err:#}");
+        }
+    }
+}
+
+fn try_stage_optional_sidecars(base_url: &str, staging_dir: &Path) -> Result<()> {
     let client = http_client(ARCHIVE_TIMEOUT)?;
     for binary in TOOLCHAIN_SIDECARS {
         for target in download_target_triples().iter().copied() {
