@@ -487,8 +487,13 @@ fn fetch_release_versions(force_refresh: bool) -> Result<Vec<Version>> {
         return Ok(cache.versions);
     }
 
+    // Discover only *complete* releases. CI writes a per-version completion
+    // marker at `pcb/index/v<semver>` as the final, atomic step of publishing,
+    // so a version appears here only after all of its artifacts are uploaded.
+    // Listing `pcb/` directly would instead reveal a version as soon as its
+    // first object landed, letting the shim resolve a half-published release.
     let url = format!(
-        "{RELEASE_LIST_URL}?list-type=2&prefix=pcb/&delimiter=/&_pcb_cache_bust={}",
+        "{RELEASE_LIST_URL}?list-type=2&prefix=pcb/index/&_pcb_cache_bust={}",
         unix_timestamp()
     );
     let body = download_text(&http_client(METADATA_TIMEOUT)?, &url)?;
@@ -498,21 +503,24 @@ fn fetch_release_versions(force_refresh: bool) -> Result<Vec<Version>> {
     Ok(versions)
 }
 
+/// Parse complete-release versions from an S3 `ListObjectsV2` response over the
+/// `pcb/index/` prefix. Each fully-published version has a marker object keyed
+/// `pcb/index/v<semver>`, written by CI as the last step of a release, so this
+/// only ever yields releases whose artifacts are fully uploaded.
 fn parse_release_versions(xml: &str) -> Vec<Version> {
     let mut versions = Vec::new();
     let mut rest = xml;
-    while let Some(start) = rest.find("<Prefix>") {
-        rest = &rest[start + "<Prefix>".len()..];
-        let Some(end) = rest.find("</Prefix>") else {
+    while let Some(start) = rest.find("<Key>") {
+        rest = &rest[start + "<Key>".len()..];
+        let Some(end) = rest.find("</Key>") else {
             break;
         };
-        let prefix = &rest[..end];
-        rest = &rest[end + "</Prefix>".len()..];
+        let key = &rest[..end];
+        rest = &rest[end + "</Key>".len()..];
 
-        let raw = prefix
-            .strip_prefix("pcb/v")
-            .and_then(|value| value.strip_suffix('/'));
-        let Some(raw) = raw else { continue };
+        let Some(raw) = key.strip_prefix("pcb/index/v") else {
+            continue;
+        };
         if let Ok(version) = Version::parse(raw) {
             versions.push(version);
         }
@@ -1665,14 +1673,17 @@ mod tests {
     }
 
     #[test]
-    fn release_listing_parser_extracts_only_version_prefixes() {
+    fn release_index_parser_extracts_only_complete_versions() {
+        // ListObjectsV2 over `pcb/index/`: one marker object per complete
+        // release, plus noise that must be ignored (the folder placeholder and
+        // any non-version keys).
         let xml = r#"
             <ListBucketResult>
-              <CommonPrefixes><Prefix>pcb/latest/</Prefix></CommonPrefixes>
-              <CommonPrefixes><Prefix>pcb/nightly/</Prefix></CommonPrefixes>
-              <CommonPrefixes><Prefix>pcb/v0.3.82/</Prefix></CommonPrefixes>
-              <CommonPrefixes><Prefix>pcb/v0.3.83/</Prefix></CommonPrefixes>
-              <CommonPrefixes><Prefix>pcb/v0.4.0-beta.1/</Prefix></CommonPrefixes>
+              <Contents><Key>pcb/index/</Key></Contents>
+              <Contents><Key>pcb/index/v0.3.82</Key></Contents>
+              <Contents><Key>pcb/index/v0.3.83</Key></Contents>
+              <Contents><Key>pcb/index/v0.4.0-beta.1</Key></Contents>
+              <Contents><Key>pcb/index/not-a-version</Key></Contents>
             </ListBucketResult>
         "#;
 
