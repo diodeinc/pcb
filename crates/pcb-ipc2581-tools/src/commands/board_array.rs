@@ -16,7 +16,7 @@ use ipc2581::types::{
     transform::Location,
 };
 use pcb_ir::{
-    common::Point,
+    common::{BBox, Point},
     dialects::ipc::{LayoutStepKind, root_step},
 };
 use quick_xml::{
@@ -413,7 +413,8 @@ fn create_auto_board_array_xml(xml: &str) -> Result<String> {
 
 fn auto_board_array_options(ipc: &Ipc2581) -> Result<BoardArrayCreateOptions> {
     let board = primary_board_layout(ipc)?;
-    let plan = auto_board_array_plan(board.bbox.width(), board.bbox.height())?;
+    let board_margin = auto_board_margin(ipc, board.bbox)?;
+    let plan = auto_board_array_plan(board.bbox.width(), board.bbox.height(), board_margin)?;
 
     Ok(BoardArrayCreateOptions {
         columns: plan.columns,
@@ -421,6 +422,45 @@ fn auto_board_array_options(ipc: &Ipc2581) -> Result<BoardArrayCreateOptions> {
         board_margin_mm: plan.board_margin_mm,
         edge_rail_mm: plan.edge_rail_mm,
     })
+}
+
+fn auto_board_margin(ipc: &Ipc2581, board_bbox: BBox) -> Result<BoardMarginMm> {
+    let safe_bbox = board_bbox.union(board_courtyard_bbox(ipc)?);
+    Ok(BoardMarginMm {
+        top: (safe_bbox.max.y - board_bbox.max.y).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
+        right: (safe_bbox.max.x - board_bbox.max.x).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
+        bottom: (board_bbox.min.y - safe_bbox.min.y).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
+        left: (board_bbox.min.x - safe_bbox.min.x).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
+    })
+}
+
+fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let mut bbox = BBox::empty();
+
+    for layer in ecad
+        .cad_data
+        .layers
+        .iter()
+        .filter(|layer| layer.layer_function == LayerFunction::Courtyard)
+    {
+        let layer_name = ipc.resolve(layer.name);
+        let doc = geometry::extract_layer_for_view(
+            ipc,
+            layer_name,
+            pcb_ir::dialects::ipc::GeometryView::Board,
+        )
+        .with_context(|| format!("failed to extract IPC-2581 courtyard layer '{layer_name}'"))?;
+        for feature in doc
+            .features
+            .iter()
+            .filter(|feature| feature.source_layer_ref == Some(layer.name))
+        {
+            bbox = bbox.union(feature.bbox);
+        }
+    }
+
+    Ok(bbox)
 }
 
 fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
@@ -2564,6 +2604,32 @@ mod tests {
     }
 
     #[test]
+    fn auto_create_derives_board_margin_from_courtyard_overhang() {
+        let input = board_fixture_with_courtyard_overhang_mm();
+        let ipc = Ipc2581::parse(input).unwrap();
+        let board = primary_board_layout(&ipc).unwrap();
+        let margin = auto_board_margin(&ipc, board.bbox).unwrap();
+
+        assert_eq!(
+            margin,
+            BoardMarginMm {
+                top: 7.0,
+                right: 8.0,
+                bottom: 6.0,
+                left: 7.0,
+            }
+        );
+
+        let xml = create_auto_board_array_xml(input).unwrap();
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="12" y="6.5" nx="2" ny="4" dx="25" dy="23" angle="0.00" mirror="false"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board" x="7" y="6" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
+        ));
+    }
+
+    #[test]
     fn auto_create_allows_large_leftover_edge_rails() {
         let xml =
             create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(124.0, 110.0)).unwrap();
@@ -3704,6 +3770,50 @@ mod tests {
   </Ecad>
 </IPC-2581>"#
         )
+    }
+
+    fn board_fixture_with_courtyard_overhang_mm() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="F.Courtyard"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="F.Courtyard">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Polygon>
+                <PolyBegin x="-2" y="-1"/>
+                <PolyStepSegment x="13" y="-1"/>
+                <PolyStepSegment x="13" y="12"/>
+                <PolyStepSegment x="-2" y="12"/>
+                <PolyStepSegment x="-2" y="-1"/>
+              </Polygon>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
     }
 
     fn board_fixture_with_mask_mm() -> &'static str {

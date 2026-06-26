@@ -126,7 +126,7 @@ struct BoardArrayGridSummary {
     columns: u32,
     rows: u32,
     board_margin: Option<String>,
-    edge_rail_width: Option<String>,
+    edge_rail: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -218,7 +218,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Res
                     board_margin: grid.board_margin.as_ref().map(|margin| {
                         margin.format_shorthand(|value| format_length(value, unit_format))
                     }),
-                    edge_rail_width: Some(
+                    edge_rail: Some(
                         grid.edge_rail
                             .format_shorthand(|value| format_length(value, unit_format)),
                     ),

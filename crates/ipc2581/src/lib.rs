@@ -868,4 +868,29 @@ mod tests {
         assert_eq!(component.spec_refs.len(), 1);
         assert_eq!(doc.resolve(component.spec_refs[0]), "AssemblySpec");
     }
+
+    #[test]
+    fn parse_component_accepts_tht_mount_type_alias() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Component refDes="J1" part="CONN" layerRef="F.Cu" mountType="THT">
+          <Location x="0" y="0"/>
+        </Component>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
+        let component = &doc.ecad().unwrap().cad_data.steps[0].components[0];
+
+        assert_eq!(component.mount_type, MountType::Thmt);
+    }
 }

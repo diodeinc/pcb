@@ -1929,7 +1929,7 @@ impl<'a> Parser<'a> {
     fn parse_mount_type(&self, value: &str) -> MountType {
         match value {
             "SMT" => MountType::Smt,
-            "THMT" => MountType::Thmt,
+            "THMT" | "THT" => MountType::Thmt,
             "EMBEDDED" => MountType::Embedded,
             "PRESSFIT" => MountType::PressFit,
             "WIRE_BONDED" => MountType::WireBonded,
