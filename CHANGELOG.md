@@ -9,17 +9,13 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ## [Unreleased]
 
 ### Added
+
+- Added IPC-2581 board array creation, viewing, and export support to `pcb ipc`.
 - Added `pcb rectify check` and `pcb rectify fix`, backed by a bundled `pcb-rectify` sidecar binary, to check and patch KiCad footprint 3D model `(rotate ...)`/`(offset ...)` transforms by matching tessellated STEP geometry against the footprint's pads and holes.
 
 ### Fixed
+
 - `pcb` toolchain resolution now only considers fully-published releases. Releases are gated on a `pcb/index/<version>` completion marker written as the final step of publishing, so the shim never resolves or downloads a release whose artifacts are still uploading.
-
-### Added
-
-- Added IPC-2581 board array creation, viewing, and export support to `pcb ipc`.
-
-### Changed
-
 - `NotConnected` is now an open-net constructor, not a net type.
 
 ## [0.4.1] - 2026-06-22
