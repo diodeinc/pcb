@@ -1531,6 +1531,139 @@ mod tests {
         ));
     }
 
+    /// Spawn a throwaway HTTP server that mimics the release bucket layout for
+    /// sidecar artifacts. Serves `<artifact>.zst` and `<artifact>.sha256` when
+    /// `artifact_zst` / `sha256` are `Some`, and 404s otherwise. Returns a
+    /// `base_url` of the form the real flow uses (`.../pcb/v<version>`).
+    fn spawn_fake_release_server(artifact_zst: Option<Vec<u8>>, sha256: Option<String>) -> String {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { continue };
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 1024];
+                loop {
+                    match stream.read(&mut tmp) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            buf.extend_from_slice(&tmp[..n]);
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                    }
+                }
+                let req = String::from_utf8_lossy(&buf);
+                let path = req
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("")
+                    .to_string();
+                let (status, body): (&str, Vec<u8>) = if path.ends_with(".zst") {
+                    match &artifact_zst {
+                        Some(bytes) => ("200 OK", bytes.clone()),
+                        None => ("404 Not Found", Vec::new()),
+                    }
+                } else if path.ends_with(".sha256") {
+                    match &sha256 {
+                        Some(text) => ("200 OK", text.clone().into_bytes()),
+                        None => ("404 Not Found", Vec::new()),
+                    }
+                } else {
+                    // Uncompressed artifact fallback is never served here.
+                    ("404 Not Found", Vec::new())
+                };
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+        format!("http://127.0.0.1:{port}/pcb/vtest")
+    }
+
+    #[test]
+    fn stage_optional_sidecars_installs_published_artifact() {
+        // A release that publishes `rectify-<target>.zst` (+ `.sha256`) should
+        // be downloaded, verified, decompressed, and installed beside `pcbc`.
+        let payload = b"#!/bin/sh\necho fake-rectify\n".to_vec();
+        let zst = zstd::encode_all(Cursor::new(payload.clone()), 0).unwrap();
+        let digest = sha256_hex(&payload);
+        let base_url = spawn_fake_release_server(Some(zst), Some(format!("{digest}\n")));
+
+        let staging = tempfile::tempdir().unwrap();
+        stage_optional_sidecars(&base_url, staging.path());
+
+        let installed = staging.path().join(executable_name("pcb-rectify"));
+        assert!(
+            installed.is_file(),
+            "pcb-rectify sidecar should be installed"
+        );
+        assert_eq!(fs::read(&installed).unwrap(), payload);
+        assert!(
+            staging.path().join(SIDECAR_CHECK_MARKER).is_file(),
+            "a completed staging attempt should write the marker"
+        );
+        assert!(optional_sidecars_present(staging.path()));
+    }
+
+    #[test]
+    fn stage_optional_sidecars_absent_artifact_marks_without_binary() {
+        // A release that does not ship the sidecar (every 404) must not error,
+        // must install nothing, and must still write the marker so later
+        // commands short-circuit instead of re-downloading on every invocation.
+        let base_url = spawn_fake_release_server(None, None);
+        let staging = tempfile::tempdir().unwrap();
+        stage_optional_sidecars(&base_url, staging.path());
+
+        assert!(
+            !staging
+                .path()
+                .join(executable_name("pcb-rectify"))
+                .is_file(),
+            "no sidecar should be installed when the release lacks the artifact"
+        );
+        assert!(
+            staging.path().join(SIDECAR_CHECK_MARKER).is_file(),
+            "a confirmed-unavailable attempt should still write the marker"
+        );
+        assert!(optional_sidecars_present(staging.path()));
+    }
+
+    #[test]
+    fn stage_optional_sidecars_checksum_failure_leaves_no_marker() {
+        // A hard (likely transient) failure must be best-effort -- it must not
+        // install a corrupt binary and must NOT write the marker, so the next
+        // invocation retries.
+        let payload = b"real-bytes".to_vec();
+        let zst = zstd::encode_all(Cursor::new(payload), 0).unwrap();
+        let wrong = sha256_hex(b"different-bytes");
+        let base_url = spawn_fake_release_server(Some(zst), Some(format!("{wrong}\n")));
+
+        let staging = tempfile::tempdir().unwrap();
+        stage_optional_sidecars(&base_url, staging.path());
+
+        assert!(
+            !staging
+                .path()
+                .join(executable_name("pcb-rectify"))
+                .is_file()
+        );
+        assert!(
+            !staging.path().join(SIDECAR_CHECK_MARKER).is_file(),
+            "a hard failure should leave no marker so the next run retries"
+        );
+        assert!(!optional_sidecars_present(staging.path()));
+    }
+
     #[test]
     fn release_listing_parser_extracts_only_version_prefixes() {
         let xml = r#"
