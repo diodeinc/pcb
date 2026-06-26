@@ -69,12 +69,12 @@ const TOOLING_HOLE_EDGE_OFFSET_MM: f64 = 2.5;
 const FIDUCIAL_EDGE_OFFSET_MM: f64 = 3.85;
 const ARRAY_CORNER_RADIUS_MM: f64 = 3.0;
 const ARRAY_CORNER_TOOLING_HOLE_INSET_MM: f64 = 3.0;
-const TOP_TOOLING_HOLE_X_INSET_MM: f64 = 2.5;
-const TOP_FIDUCIAL_X_INSET_MM: f64 = 8.0;
-const BOTTOM_TOOLING_HOLE_X_INSET_MM: f64 = 6.5;
-const BOTTOM_FIDUCIAL_X_INSET_MM: f64 = 12.0;
-const SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 28.0;
-const MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM: f64 = 12.0;
+const PRIMARY_TOOLING_HOLE_SPAN_INSET_MM: f64 = 2.5;
+const PRIMARY_FIDUCIAL_SPAN_INSET_MM: f64 = 8.0;
+const SECONDARY_TOOLING_HOLE_SPAN_INSET_MM: f64 = 6.5;
+const SECONDARY_FIDUCIAL_SPAN_INSET_MM: f64 = 12.0;
+const SINGLE_BOARD_TOOLING_MIN_SPAN_MM: f64 = 28.0;
+const MULTI_BOARD_TOOLING_MIN_SPAN_MM: f64 = 12.0;
 const MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM: f64 = 5.0;
 const MIN_BOARD_CELL_FIDUCIAL_SPAN_MM: f64 = 17.0;
 const BOARD_CELL_FIDUCIAL_MARGIN_INSET_MM: f64 = 2.0;
@@ -631,10 +631,16 @@ fn build_board_array_spec(
         ecad,
         &mut used_layer_names,
         BoardArrayToolingSpec {
+            orientation: board_array_tooling_orientation(array_width, array_height),
             columns,
+            rows,
             board_width_mm: board_width,
+            board_height_mm: board_height,
             margin_x_mm: margin_x,
+            margin_y_mm: margin_y,
             pitch_x_mm: pitch_x,
+            pitch_y_mm: pitch_y,
+            array_width_mm: array_width,
             array_height_mm: array_height,
         },
     );
@@ -1128,11 +1134,34 @@ fn add_vcut_annotation_line(
 }
 
 struct BoardArrayToolingSpec {
+    orientation: BoardArrayToolingOrientation,
     columns: u32,
+    rows: u32,
     board_width_mm: f64,
+    board_height_mm: f64,
     margin_x_mm: f64,
+    margin_y_mm: f64,
     pitch_x_mm: f64,
+    pitch_y_mm: f64,
+    array_width_mm: f64,
     array_height_mm: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoardArrayToolingOrientation {
+    TopBottom,
+    LeftRight,
+}
+
+fn board_array_tooling_orientation(
+    array_width_mm: f64,
+    array_height_mm: f64,
+) -> BoardArrayToolingOrientation {
+    if array_width_mm > array_height_mm {
+        BoardArrayToolingOrientation::LeftRight
+    } else {
+        BoardArrayToolingOrientation::TopBottom
+    }
 }
 
 fn add_board_array_tooling(
@@ -1142,12 +1171,16 @@ fn add_board_array_tooling(
     used_layer_names: &mut HashSet<String>,
     spec: BoardArrayToolingSpec,
 ) {
-    let min_width = if spec.columns == 1 {
-        SINGLE_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM
-    } else {
-        MULTI_COLUMN_TOOLING_MIN_BOARD_WIDTH_MM
+    let (span_count, board_span) = match spec.orientation {
+        BoardArrayToolingOrientation::TopBottom => (spec.columns, spec.board_width_mm),
+        BoardArrayToolingOrientation::LeftRight => (spec.rows, spec.board_height_mm),
     };
-    if spec.board_width_mm + EPSILON < min_width {
+    let min_span = if span_count == 1 {
+        SINGLE_BOARD_TOOLING_MIN_SPAN_MM
+    } else {
+        MULTI_BOARD_TOOLING_MIN_SPAN_MM
+    };
+    if board_span + EPSILON < min_span {
         return;
     }
 
@@ -1250,53 +1283,81 @@ fn add_board_cell_fiducials(
     );
 }
 
-/// Place board array tooling on the top and bottom edge rails over board columns.
+/// Place board array tooling on the shorter pair of array rails.
 ///
 /// The generated board array uses a rectangular profile with the lower-left
 /// array corner at (0, 0). Fiducials and tooling holes live in the outer 5 mm
-/// rail band even when the configured edge rail is wider. They are not placed
-/// on left/right rails or over horizontal board gaps, so removing side rails
-/// and gaps keeps the top/bottom rail tooling attached to board material.
+/// rail band even when the configured edge rail is wider. They are placed over
+/// board columns for top/bottom rails and over board rows for left/right rails,
+/// so removing side rails and gaps keeps the rail tooling attached to board
+/// material.
 ///
-/// Horizontal rules:
-/// - one column requires at least 28 mm board width: 12 mm deepest fiducial
-///   inset from each side plus 4 mm center spacing;
-/// - multiple columns require at least 12 mm board width, because each side's
-///   pair sits over a different outer board column;
-/// - top rail centers use 2.5 mm tooling and 8 mm fiducial insets;
-/// - bottom rail centers use 6.5 mm tooling and 12 mm fiducial insets.
+/// Span rules:
+/// - one board in the tooling axis requires at least 28 mm board span: 12 mm
+///   deepest fiducial inset from each side plus 4 mm center spacing;
+/// - multiple boards in the tooling axis require at least 12 mm board span,
+///   because each side's pair sits over a different outer board;
+/// - primary rail centers use 2.5 mm tooling and 8 mm fiducial span insets;
+/// - secondary rail centers use 6.5 mm tooling and 12 mm fiducial span insets.
 ///
-/// Vertical rules:
-/// - tooling hole centers are 2.5 mm from the top/bottom array edge;
-/// - fiducial centers are 3.85 mm from the top/bottom array edge.
+/// Rail-depth rules:
+/// - tooling hole centers are 2.5 mm from the array edge;
+/// - fiducial centers are 3.85 mm from the array edge.
 fn board_array_tooling_fiducials(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
-    let left_edge = spec.margin_x_mm;
-    let right_edge =
-        spec.margin_x_mm + (spec.columns - 1) as f64 * spec.pitch_x_mm + spec.board_width_mm;
-    let top_y = spec.array_height_mm - FIDUCIAL_EDGE_OFFSET_MM;
-    let bottom_y = FIDUCIAL_EDGE_OFFSET_MM;
-
-    [
-        (left_edge + TOP_FIDUCIAL_X_INSET_MM, top_y),
-        (right_edge - TOP_FIDUCIAL_X_INSET_MM, top_y),
-        (left_edge + BOTTOM_FIDUCIAL_X_INSET_MM, bottom_y),
-        (right_edge - BOTTOM_FIDUCIAL_X_INSET_MM, bottom_y),
-    ]
+    board_array_tooling_points(
+        spec,
+        FIDUCIAL_EDGE_OFFSET_MM,
+        PRIMARY_FIDUCIAL_SPAN_INSET_MM,
+        SECONDARY_FIDUCIAL_SPAN_INSET_MM,
+    )
 }
 
 fn board_array_tooling_holes(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
-    let left_edge = spec.margin_x_mm;
-    let right_edge =
-        spec.margin_x_mm + (spec.columns - 1) as f64 * spec.pitch_x_mm + spec.board_width_mm;
-    let top_y = spec.array_height_mm - TOOLING_HOLE_EDGE_OFFSET_MM;
-    let bottom_y = TOOLING_HOLE_EDGE_OFFSET_MM;
+    board_array_tooling_points(
+        spec,
+        TOOLING_HOLE_EDGE_OFFSET_MM,
+        PRIMARY_TOOLING_HOLE_SPAN_INSET_MM,
+        SECONDARY_TOOLING_HOLE_SPAN_INSET_MM,
+    )
+}
 
-    [
-        (left_edge + TOP_TOOLING_HOLE_X_INSET_MM, top_y),
-        (right_edge - TOP_TOOLING_HOLE_X_INSET_MM, top_y),
-        (left_edge + BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
-        (right_edge - BOTTOM_TOOLING_HOLE_X_INSET_MM, bottom_y),
-    ]
+fn board_array_tooling_points(
+    spec: &BoardArrayToolingSpec,
+    rail_depth_mm: f64,
+    primary_span_inset_mm: f64,
+    secondary_span_inset_mm: f64,
+) -> [(f64, f64); 4] {
+    match spec.orientation {
+        BoardArrayToolingOrientation::TopBottom => {
+            let left_edge = spec.margin_x_mm;
+            let right_edge = spec.margin_x_mm
+                + (spec.columns - 1) as f64 * spec.pitch_x_mm
+                + spec.board_width_mm;
+            let top_y = spec.array_height_mm - rail_depth_mm;
+            let bottom_y = rail_depth_mm;
+
+            [
+                (left_edge + primary_span_inset_mm, top_y),
+                (right_edge - primary_span_inset_mm, top_y),
+                (left_edge + secondary_span_inset_mm, bottom_y),
+                (right_edge - secondary_span_inset_mm, bottom_y),
+            ]
+        }
+        BoardArrayToolingOrientation::LeftRight => {
+            let bottom_edge = spec.margin_y_mm;
+            let top_edge =
+                spec.margin_y_mm + (spec.rows - 1) as f64 * spec.pitch_y_mm + spec.board_height_mm;
+            let left_x = rail_depth_mm;
+            let right_x = spec.array_width_mm - rail_depth_mm;
+
+            [
+                (left_x, top_edge - primary_span_inset_mm),
+                (left_x, bottom_edge + primary_span_inset_mm),
+                (right_x, top_edge - secondary_span_inset_mm),
+                (right_x, bottom_edge + secondary_span_inset_mm),
+            ]
+        }
+    }
 }
 
 fn board_array_corner_tooling_holes(array_width_mm: f64, array_height_mm: f64) -> [(f64, f64); 4] {
@@ -3093,6 +3154,41 @@ mod tests {
     }
 
     #[test]
+    fn board_array_creation_places_array_tooling_on_left_right_for_landscape_arrays() {
+        let input = board_fixture_with_mask_bbox_mm(40.0, 28.0);
+        let xml = create_board_array_xml(
+            &input,
+            &BoardArrayCreateOptions {
+                columns: 1,
+                rows: 1,
+                board_margin_mm: board_margin(5.0, 0.0),
+                edge_rail_mm: edge_rail(15.0, 21.0),
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let step = array_step(&ipc);
+        let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
+        let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
+        let corner_holes = holes_with_diameter(&tooling_holes, CORNER_TOOLING_HOLE_DIAMETER_MM);
+        let rail_holes = holes_with_diameter(&tooling_holes, TOOLING_HOLE_DIAMETER_MM);
+
+        assert_eq!(top_fiducials.len(), 4);
+        assert_eq!(corner_holes.len(), 4);
+        assert_eq!(rail_holes.len(), 4);
+        assert_corner_holes(&corner_holes, 75.0, 70.0);
+        assert_points_close(
+            fiducial_points(&top_fiducials),
+            vec![(3.85, 41.0), (3.85, 29.0), (71.15, 37.0), (71.15, 33.0)],
+        );
+        assert_points_close(
+            hole_points(&rail_holes),
+            vec![(2.5, 46.5), (2.5, 23.5), (72.5, 42.5), (72.5, 27.5)],
+        );
+    }
+
+    #[test]
     fn board_array_creation_skips_default_tooling_when_board_width_is_too_small() {
         let input = board_fixture_with_mask_bbox_mm(11.99, 40.0);
         let xml = create_board_array_xml(
@@ -3101,7 +3197,7 @@ mod tests {
                 columns: 2,
                 rows: 1,
                 board_margin_mm: board_margin(5.0, 0.0),
-                edge_rail_mm: edge_rail(18.5, 15.0),
+                edge_rail_mm: edge_rail(18.5, 20.0),
             },
         )
         .unwrap();
@@ -3137,7 +3233,7 @@ mod tests {
                 .iter()
                 .all(|hole| close(hole.diameter, CORNER_TOOLING_HOLE_DIAMETER_MM))
         );
-        assert_corner_holes(&tooling_holes, 70.98, 70.0);
+        assert_corner_holes(&tooling_holes, 70.98, 80.0);
     }
 
     #[test]
