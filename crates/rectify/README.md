@@ -6,8 +6,9 @@ transforms from STEP geometry. Rust port of
 
 Given a `.kicad_mod` file whose `(model ...)` block references a STEP,
 `rectify` tessellates the mesh, enumerates the 24 axis-aligned rigid poses,
-rasterizes each bottom-projection onto the pad grid, and returns the pose
-whose contact slab best aligns with the footprint's copper pads.
+rasterizes each pose into a bottom-height image, extracts contact or pin
+features from that image, and returns the pose/offset whose extracted features
+best align with the footprint's pads and/or drilled holes.
 
 ## Usage
 
@@ -24,6 +25,97 @@ Low-level solver/debug subcommands are still available on the underlying
 hidden from normal `pcb rectify --help` output.
 
 Logging is quiet by default; set `RUST_LOG=warn` or a narrower filter to opt in.
+
+## How it works, in plain language
+
+`rectify` treats the footprint and the STEP model as two independent drawings
+of the same physical part, then asks: "which rotation and offset make the 3D
+model's physical contact features land on the footprint's pads or holes?"
+
+### SMD-only footprints: contact extraction → pad alignment
+
+The SMD-only path is the simplest case. The footprint has copper pads but no
+through holes, so the model features we care about are the bits of the package
+that should touch those pads: gull-wing leads, QFN lands, chip-resistor
+terminations, diode leads, and similar metal contacts.
+
+For each of the 24 axis-aligned rotations that KiCad can represent cleanly,
+`rectify`:
+
+1. Tessellates the STEP model into triangles.
+2. Rotates the mesh into the candidate pose.
+3. Rasterizes the posed mesh into a 0.10 mm/pixel **bottom-height image**.
+   Each pixel stores the lowest model Z seen at that X/Y location.
+4. Builds a **contact slab** from that image: all pixels whose bottom Z is close
+   to the lowest model surface. This is the SMD feature-extraction step.
+5. Builds a footprint-side **pad mask** from the KiCad copper pads.
+6. Proposes translations that could move the model contact slab onto the pad
+   mask:
+   - align contact and pad bounding-box centers;
+   - use FFT mask correlation to find high-overlap shifts;
+   - match sparse pad/contact anchor points;
+   - refine the best proposal by bounding box.
+7. Scores each translation by rewarding contact pixels on pads and penalizing
+   contact pixels outside pads.
+8. Keeps the best-scoring rotation + translation.
+
+In short:
+
+```text
+STEP model → bottom-height raster → contact mask
+KiCad footprint → pad mask
+contact mask + pad mask → best rotation/offset
+```
+
+The generic term for extracting the contact mask is **geometric feature
+extraction**. For SMD footprints, the more specific term used here is
+**contact extraction**.
+
+### THT-only footprints: pin-island extraction → hole alignment
+
+Through-hole footprints are different from SMD footprints: the important model
+features are not flat contacts sitting on copper pads, but pins that pass
+through drilled holes in the board.
+
+For THT-only footprints, `rectify` uses the footprint's **connected drill
+holes** as the target. Mechanical / non-connected holes are kept for tie-breaker
+scoring, but they do not steer the main pin alignment.
+
+For each candidate rotation, the THT path:
+
+1. Rasterizes the posed STEP model into the same bottom-height image.
+2. Takes several low Z cross-sections above the first model contact:
+   `0.40`, `0.70`, `1.00`, `1.50`, and `2.00` mm.
+3. Treats each cross-section as a candidate **pin mask**.
+4. Splits that pin mask into connected components, or **pin islands**.
+5. Compares the number of pin islands with the number of connected footprint
+   holes. A mask with roughly one island per hole is preferred.
+6. Uses FFT mask correlation to propose translations that align the pin mask to
+   the connected-hole mask.
+7. Scores each translation by rewarding:
+   - holes touched by pin pixels;
+   - good per-hole fill ratio;
+   - similar pin-island count and hole count;
+   - model body projection landing plausibly on the footprint;
+   - mechanical peg/contact features landing in mechanical holes, when present.
+8. Penalizes pin pixels outside connected holes and unfilled connected holes.
+9. Keeps the best-scoring rotation + translation.
+
+In short:
+
+```text
+STEP model → bottom-height raster → low cross-section masks → pin islands
+KiCad footprint → connected-hole mask
+pin islands + connected holes → best rotation/offset
+```
+
+The specific feature-extraction term here is **pin-island extraction**: identify
+connected blobs in low model cross-sections that likely correspond to
+through-hole pins. Those island labels are not semantic pin numbers; they are
+just connected raster components used for scoring and alignment.
+
+Mixed footprints combine the two ideas: pin / hole alignment is usually the main
+translation signal, while body/contact features are also scored against pads.
 
 ## Pipeline
 
