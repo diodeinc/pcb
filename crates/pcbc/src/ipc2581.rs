@@ -173,8 +173,8 @@ enum BoardArrayCommands {
         /// Edge rail in millimeters. Defaults to 5. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
         #[arg(long, num_args = 1..=4, value_name = "RAIL")]
         edge_rail: Vec<f64>,
-        /// Output IPC-2581 XML file
-        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        /// Output IPC-2581 XML file, or '-' for stdout
+        #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
     },
 }

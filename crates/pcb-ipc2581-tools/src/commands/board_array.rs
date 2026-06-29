@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{Cursor, Write};
+use std::io::{self, Cursor, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -388,16 +388,26 @@ struct VcutLine {
 pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
     let updated_xml = create_board_array_xml(&content, options)?;
-    file_utils::save_ipc_file(output, &updated_xml)?;
-    eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+    write_board_array_output(output, &updated_xml)?;
     Ok(())
 }
 
 pub fn execute_auto(input: &Path, output: &Path, sheet: Option<AutoSheetSize>) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
     let updated_xml = create_auto_board_array_xml_with_sheet(&content, sheet)?;
-    file_utils::save_ipc_file(output, &updated_xml)?;
-    eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+    write_board_array_output(output, &updated_xml)?;
+    Ok(())
+}
+
+fn write_board_array_output(output: &Path, content: &str) -> Result<()> {
+    if output.as_os_str() == "-" {
+        io::stdout().lock().write_all(content.as_bytes())?;
+        eprintln!("✓ Created IPC-2581 board array on stdout");
+    } else {
+        file_utils::save_ipc_file(output, content)?;
+        eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+    }
+
     Ok(())
 }
 
