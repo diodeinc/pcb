@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::{Cursor, Write};
+use std::io::{self, Cursor, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -25,7 +25,8 @@ use quick_xml::{
 };
 
 use super::board_array_auto::{
-    AutoBoardArrayPlan, AutoSheetSize, auto_board_array_plan, auto_board_array_plan_for_sheet,
+    AutoBoardArrayPlan, AutoSheetSize, TargetSizeMm, auto_board_array_plan,
+    auto_board_array_plan_for_sheet,
 };
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
@@ -287,8 +288,47 @@ struct BoardArraySpec {
     pitch_y_mm: f64,
     array_width_mm: f64,
     array_height_mm: f64,
+    board_margin_mm: BoardMarginMm,
+    edge_rail_mm: BoardMarginMm,
+    panelization: BoardArrayPanelizationMetadata,
     generated_geometry: BoardArrayGeneratedGeometry,
     units: Units,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BoardArrayPanelizationMetadata {
+    mode: BoardArrayPanelizationMode,
+    sheet: Option<AutoSheetSize>,
+    sheet_target_mm: Option<TargetSizeMm>,
+}
+
+impl BoardArrayPanelizationMetadata {
+    fn for_auto_plan(mode: BoardArrayPanelizationMode, plan: AutoBoardArrayPlan) -> Self {
+        Self {
+            mode,
+            sheet: Some(plan.sheet),
+            sheet_target_mm: Some(plan.target),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoardArrayPanelizationMode {
+    Manual,
+    Auto,
+    AutoSheet,
+    AutoMinimumPanel,
+}
+
+impl BoardArrayPanelizationMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Auto => "auto",
+            Self::AutoSheet => "auto_sheet",
+            Self::AutoMinimumPanel => "auto_minimum_panel",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -388,22 +428,41 @@ struct VcutLine {
 pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
     let updated_xml = create_board_array_xml(&content, options)?;
-    file_utils::save_ipc_file(output, &updated_xml)?;
-    eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+    write_board_array_output(output, &updated_xml)?;
     Ok(())
 }
 
 pub fn execute_auto(input: &Path, output: &Path, sheet: Option<AutoSheetSize>) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
     let updated_xml = create_auto_board_array_xml_with_sheet(&content, sheet)?;
-    file_utils::save_ipc_file(output, &updated_xml)?;
-    eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+    write_board_array_output(output, &updated_xml)?;
+    Ok(())
+}
+
+fn write_board_array_output(output: &Path, content: &str) -> Result<()> {
+    if output.as_os_str() == "-" {
+        io::stdout().lock().write_all(content.as_bytes())?;
+        eprintln!("✓ Created IPC-2581 board array on stdout");
+    } else {
+        file_utils::save_ipc_file(output, content)?;
+        eprintln!("✓ Created IPC-2581 board array at {}", output.display());
+    }
+
     Ok(())
 }
 
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let spec = build_board_array_spec(&ipc, options, BoardArrayValidationMode::Manual)?;
+    let spec = build_board_array_spec(
+        &ipc,
+        options,
+        BoardArrayValidationMode::Manual,
+        BoardArrayPanelizationMetadata {
+            mode: BoardArrayPanelizationMode::Manual,
+            sheet: None,
+            sheet_target_mm: None,
+        },
+    )?;
     write_board_array_xml(xml, &spec)
 }
 
@@ -417,36 +476,57 @@ fn create_auto_board_array_xml_with_sheet(
     sheet: Option<AutoSheetSize>,
 ) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let (options, validation_mode) = auto_board_array_options(&ipc, sheet)?;
-    let spec = build_board_array_spec(&ipc, &options, validation_mode)?;
+    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet)?;
+    let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization)?;
     write_board_array_xml(xml, &spec)
 }
 
 fn auto_board_array_options(
     ipc: &Ipc2581,
     sheet: Option<AutoSheetSize>,
-) -> Result<(BoardArrayCreateOptions, BoardArrayValidationMode)> {
+) -> Result<(
+    BoardArrayCreateOptions,
+    BoardArrayValidationMode,
+    BoardArrayPanelizationMetadata,
+)> {
     let board = primary_board_layout(ipc)?;
     let board_margin = auto_board_margin(ipc, board.bbox)?;
     let board_width = board.bbox.width();
     let board_height = board.bbox.height();
 
     match sheet {
-        Some(sheet) => Ok((
-            options_for_auto_plan(auto_board_array_plan_for_sheet(
-                board_width,
-                board_height,
-                board_margin,
-                sheet,
-            )?),
-            BoardArrayValidationMode::Auto,
-        )),
+        Some(sheet) => {
+            let plan =
+                auto_board_array_plan_for_sheet(board_width, board_height, board_margin, sheet)?;
+            let options = options_for_auto_plan(plan);
+            let panelization = BoardArrayPanelizationMetadata::for_auto_plan(
+                BoardArrayPanelizationMode::AutoSheet,
+                plan,
+            );
+            Ok((options, BoardArrayValidationMode::Auto, panelization))
+        }
         None => match auto_board_array_plan(board_width, board_height, board_margin) {
-            Ok(plan) => Ok((options_for_auto_plan(plan), BoardArrayValidationMode::Auto)),
-            Err(_) => Ok((
-                minimum_single_board_auto_options(board_margin),
-                BoardArrayValidationMode::AutoMinimumPanel,
-            )),
+            Ok(plan) => {
+                let options = options_for_auto_plan(plan);
+                let panelization = BoardArrayPanelizationMetadata::for_auto_plan(
+                    BoardArrayPanelizationMode::Auto,
+                    plan,
+                );
+                Ok((options, BoardArrayValidationMode::Auto, panelization))
+            }
+            Err(_) => {
+                let options = minimum_single_board_auto_options(board_margin);
+                let panelization = BoardArrayPanelizationMetadata {
+                    mode: BoardArrayPanelizationMode::AutoMinimumPanel,
+                    sheet: None,
+                    sheet_target_mm: None,
+                };
+                Ok((
+                    options,
+                    BoardArrayValidationMode::AutoMinimumPanel,
+                    panelization,
+                ))
+            }
         },
     }
 }
@@ -559,6 +639,7 @@ fn build_board_array_spec(
     ipc: &Ipc2581,
     options: &BoardArrayCreateOptions,
     validation_mode: BoardArrayValidationMode,
+    panelization: BoardArrayPanelizationMetadata,
 ) -> Result<BoardArraySpec> {
     validate_options(options, validation_mode)?;
 
@@ -701,6 +782,9 @@ fn build_board_array_spec(
         pitch_y_mm: pitch_y,
         array_width_mm: array_width,
         array_height_mm: array_height,
+        board_margin_mm: board_margin,
+        edge_rail_mm: edge_rail,
+        panelization,
         generated_geometry,
         units: ecad.cad_header.units,
     })
@@ -2101,6 +2185,7 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     step.push_attribute(("type", "PALLET"));
     writer.write_event(Event::Start(step))?;
 
+    write_panelization_metadata(&mut writer, spec)?;
     write_location_empty(&mut writer, "Datum", 0.0, 0.0, spec.units)?;
 
     write_profile(
@@ -2119,6 +2204,82 @@ fn write_array_step_xml(spec: &BoardArraySpec) -> Result<String> {
     writer.write_event(Event::End(BytesStart::new("Step").to_end()))?;
 
     Ok(String::from_utf8(writer.into_inner().into_inner())?)
+}
+
+fn write_panelization_metadata(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    spec: &BoardArraySpec,
+) -> Result<()> {
+    let metadata = spec.panelization;
+
+    write_metadata_integer(writer, "diode.panelize.schema_version", 1)?;
+    write_metadata_string(writer, "diode.panelize.mode", metadata.mode.as_str())?;
+    if let Some(sheet) = metadata.sheet {
+        write_metadata_string(writer, "diode.panelize.sheet", sheet.name())?;
+    }
+    if let Some(target) = metadata.sheet_target_mm {
+        write_metadata_double(writer, "diode.panelize.sheet_width_mm", target.width)?;
+        write_metadata_double(writer, "diode.panelize.sheet_height_mm", target.height)?;
+    }
+
+    write_metadata_integer(writer, "diode.panelize.columns", spec.columns)?;
+    write_metadata_integer(writer, "diode.panelize.rows", spec.rows)?;
+    write_margin_metadata(writer, "diode.panelize.board_margin", spec.board_margin_mm)?;
+    write_margin_metadata(writer, "diode.panelize.edge_rail", spec.edge_rail_mm)?;
+
+    Ok(())
+}
+
+fn write_margin_metadata(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    prefix: &str,
+    margin: BoardMarginMm,
+) -> Result<()> {
+    write_metadata_double(writer, &format!("{prefix}_top_mm"), margin.top)?;
+    write_metadata_double(writer, &format!("{prefix}_right_mm"), margin.right)?;
+    write_metadata_double(writer, &format!("{prefix}_bottom_mm"), margin.bottom)?;
+    write_metadata_double(writer, &format!("{prefix}_left_mm"), margin.left)?;
+    Ok(())
+}
+
+fn write_metadata_integer(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    name: &str,
+    value: u32,
+) -> Result<()> {
+    let value = value.to_string();
+    write_metadata_attribute(writer, name, "INTEGER", &value)
+}
+
+fn write_metadata_double(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    name: &str,
+    value: f64,
+) -> Result<()> {
+    let value = fmt_num(value);
+    write_metadata_attribute(writer, name, "DOUBLE", &value)
+}
+
+fn write_metadata_string(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    name: &str,
+    value: &str,
+) -> Result<()> {
+    write_metadata_attribute(writer, name, "STRING", value)
+}
+
+fn write_metadata_attribute(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    name: &str,
+    property_type: &str,
+    value: &str,
+) -> Result<()> {
+    let mut elem = BytesStart::new("NonstandardAttribute");
+    elem.push_attribute(("name", name));
+    elem.push_attribute(("type", property_type));
+    elem.push_attribute(("value", value));
+    writer.write_event(Event::Empty(elem))?;
+    Ok(())
 }
 
 fn write_generated_layer_features(
@@ -2672,6 +2833,24 @@ mod tests {
             r#"<Layer name="V-Score" layerFunction="V_CUT" side="NONE" polarity="POSITIVE"/>"#
         ));
         assert!(xml.contains(r#"<Step name="array" type="PALLET">"#));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.schema_version" type="INTEGER" value="1"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="manual"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.columns" type="INTEGER" value="6"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.rows" type="INTEGER" value="6"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.board_margin_top_mm" type="DOUBLE" value="2.5"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.edge_rail_left_mm" type="DOUBLE" value="5"/>"#
+        ));
         assert!(xml.contains(r#"<Step name="board_cell" type="PALLET">"#));
         assert!(xml.contains(
             r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="6" ny="6" dx="15" dy="15" angle="0.00" mirror="false"/>"#
@@ -2744,6 +2923,24 @@ mod tests {
         assert!(xml.contains(
             r#"<StepRepeat stepRef="board_cell" x="12.5" y="7" nx="4" ny="3" dx="20" dy="20" angle="0.00" mirror="false"/>"#
         ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.sheet" type="STRING" value="A7"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.sheet_width_mm" type="DOUBLE" value="105"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.sheet_height_mm" type="DOUBLE" value="74"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.edge_rail_left_mm" type="DOUBLE" value="12.5"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.edge_rail_top_mm" type="DOUBLE" value="7"/>"#
+        ));
 
         let ipc = Ipc2581::parse(&xml).unwrap();
         let layout = geometry::extract_layout(&ipc).unwrap();
@@ -2761,6 +2958,18 @@ mod tests {
 
         assert!(xml.contains(
             r#"<StepRepeat stepRef="board_cell" x="5" y="14" nx="10" ny="6" dx="20" dy="20" angle="0.00" mirror="false"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto_sheet"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.sheet" type="STRING" value="A5"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.sheet_width_mm" type="DOUBLE" value="210"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.sheet_height_mm" type="DOUBLE" value="148"/>"#
         ));
 
         let ipc = Ipc2581::parse(&xml).unwrap();
@@ -2847,6 +3056,9 @@ mod tests {
         ));
         assert!(xml.contains(
             r#"<StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto_minimum_panel"/>"#
         ));
 
         let ipc = Ipc2581::parse(&xml).unwrap();
@@ -3075,15 +3287,21 @@ mod tests {
     fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
         let input = board_fixture_with_mask_mm();
         let ipc = Ipc2581::parse(input).unwrap();
+        let options = BoardArrayCreateOptions {
+            columns: 6,
+            rows: 6,
+            board_margin_mm: board_margin(5.0, 5.0),
+            edge_rail_mm: BoardMarginMm::all(5.0),
+        };
         let mut spec = build_board_array_spec(
             &ipc,
-            &BoardArrayCreateOptions {
-                columns: 6,
-                rows: 6,
-                board_margin_mm: board_margin(5.0, 5.0),
-                edge_rail_mm: BoardMarginMm::all(5.0),
-            },
+            &options,
             BoardArrayValidationMode::Manual,
+            BoardArrayPanelizationMetadata {
+                mode: BoardArrayPanelizationMode::Manual,
+                sheet: None,
+                sheet_target_mm: None,
+            },
         )
         .unwrap();
 
