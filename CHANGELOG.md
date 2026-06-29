@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- IPC-2581 mutations now create a history record when the source file does not already have one, including board array creation.
+
 ## [0.4.2] - 2026-06-26
 
 ### Added
