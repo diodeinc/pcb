@@ -234,21 +234,21 @@ impl WorkspaceInfo {
         file_provider: &dyn FileProvider,
         path: &Path,
     ) -> Option<&str> {
+        let canonical_workspace_root = file_provider
+            .canonicalize(&self.root)
+            .unwrap_or_else(|_| self.root.clone());
         let canonical_path = file_provider
             .canonicalize(path)
             .unwrap_or_else(|_| path.to_path_buf());
+        let workspace_relative = canonical_path
+            .strip_prefix(&canonical_workspace_root)
+            .ok()?;
 
         self.packages
             .iter()
-            .filter_map(|(url, pkg)| {
-                let root = pkg.dir(&self.root);
-                let canonical_root = file_provider.canonicalize(&root).unwrap_or(root);
-                canonical_path
-                    .starts_with(&canonical_root)
-                    .then(|| (url.as_str(), canonical_root.as_os_str().len()))
-            })
-            .max_by_key(|(_, root_len)| *root_len)
-            .map(|(url, _)| url)
+            .filter(|(_, pkg)| workspace_relative.starts_with(&pkg.rel_path))
+            .max_by_key(|(_, pkg)| pkg.rel_path.as_os_str().len())
+            .map(|(url, _)| url.as_str())
     }
 
     /// Get optional subpath within repository
@@ -724,6 +724,44 @@ exclude = ["modules/ignored/**"]
         assert!(info.errors.is_empty());
         assert!(info.packages.contains_key("a/b/c/d/e/f/g/h"));
         assert!(!info.packages.contains_key("a/b/c/d/e/f/g/h/i"));
+    }
+
+    #[test]
+    fn test_package_url_for_path_uses_most_specific_package() {
+        let files = HashMap::from([
+            (
+                "/repo/pcb.toml".to_string(),
+                "[workspace]\npcb-version = \"0.4\"\n".to_string(),
+            ),
+            (
+                "/repo/modules/parent/pcb.toml".to_string(),
+                "[dependencies]\n".to_string(),
+            ),
+            (
+                "/repo/modules/parent/child/pcb.toml".to_string(),
+                "[dependencies]\n".to_string(),
+            ),
+            (
+                "/repo/modules/parent/child/board.zen".to_string(),
+                "".to_string(),
+            ),
+        ]);
+        let provider = InMemoryFileProvider::new(files);
+
+        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
+
+        assert_eq!(
+            info.package_url_for_path(&provider, Path::new("/repo/modules/parent/child/board.zen")),
+            Some("modules/parent/child")
+        );
+        assert_eq!(
+            info.package_url_for_path(&provider, Path::new("/repo/modules/parent/local.zen")),
+            Some("modules/parent")
+        );
+        assert_eq!(
+            info.package_url_for_path(&provider, Path::new("/repo/modules/parental/board.zen")),
+            None
+        );
     }
 
     #[test]
