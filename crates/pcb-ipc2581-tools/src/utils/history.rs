@@ -22,17 +22,26 @@ const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - Updates HistoryRecord/@software to "pcb"
 /// - Preserves HistoryRecord/@origination
 /// - Preserves ALL existing FileRevision elements
+/// - Creates a HistoryRecord if the file does not already have one
 /// - Appends NEW FileRevision element with:
 ///   - Incremented fileRevisionId
 ///   - Descriptive comment about what changed
 ///   - SoftwarePackage element with pcb version info
 pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String> {
+    let now = jiff::Timestamp::now().to_string();
+
+    if has_history_record(original_xml)? {
+        append_to_history_record(original_xml, comment, &now)
+    } else {
+        insert_history_record(original_xml, comment, &now)
+    }
+}
+
+fn append_to_history_record(original_xml: &str, comment: &str, now: &str) -> Result<String> {
     let mut reader = Reader::from_str(original_xml);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut buf = Vec::new();
 
-    // Current timestamp in ISO 8601 format
-    let now = jiff::Timestamp::now().to_string();
     let mut in_history_record = false;
     let mut next_revision_id = 1u32;
 
@@ -43,7 +52,13 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
             // Update HistoryRecord attributes
             Event::Start(ref e) if e.name().as_ref() == b"HistoryRecord" => {
                 in_history_record = true;
-                writer.write_event(Event::Start(update_history_attributes(e, &now)?))?;
+                writer.write_event(Event::Start(update_history_attributes(e, now)?))?;
+            }
+
+            Event::Empty(ref e) if e.name().as_ref() == b"HistoryRecord" => {
+                writer.write_event(Event::Start(initial_history_attributes(e, now)?))?;
+                write_file_revision(&mut writer, next_revision_id, comment)?;
+                writer.write_event(Event::End(BytesStart::new("HistoryRecord").to_end()))?;
             }
 
             // Track FileRevision IDs as we encounter them
@@ -65,6 +80,101 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
     }
 
     Ok(String::from_utf8(writer.into_inner().into_inner())?)
+}
+
+fn insert_history_record(original_xml: &str, comment: &str, now: &str) -> Result<String> {
+    let mut reader = Reader::from_str(original_xml);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buf = Vec::new();
+    let mut inserted = false;
+    let mut depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Eof => break,
+            Event::Start(ref e) => {
+                if should_insert_history_before(inserted, depth, e.name().as_ref()) {
+                    write_history_record(&mut writer, now, comment)?;
+                    inserted = true;
+                }
+                writer.write_event(Event::Start(e.to_owned()))?;
+                depth += 1;
+            }
+            Event::Empty(ref e) => {
+                if should_insert_history_before(inserted, depth, e.name().as_ref()) {
+                    write_history_record(&mut writer, now, comment)?;
+                    inserted = true;
+                }
+                writer.write_event(Event::Empty(e.to_owned()))?;
+            }
+            Event::End(ref e) => {
+                if !inserted && depth == 1 && e.name().as_ref() == b"IPC-2581" {
+                    write_history_record(&mut writer, now, comment)?;
+                    inserted = true;
+                }
+                writer.write_event(Event::End(e.to_owned()))?;
+                depth = depth.saturating_sub(1);
+            }
+            e => writer.write_event(e)?,
+        }
+        buf.clear();
+    }
+
+    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+}
+
+fn has_history_record(xml: &str) -> Result<bool> {
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Eof => return Ok(false),
+            Event::Start(ref e) | Event::Empty(ref e) if e.name().as_ref() == b"HistoryRecord" => {
+                return Ok(true);
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+fn should_insert_history_before(inserted: bool, depth: usize, element_name: &[u8]) -> bool {
+    !inserted && depth == 1 && !matches!(element_name, b"Content" | b"LogisticHeader")
+}
+
+fn write_history_record(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    now: &str,
+    comment: &str,
+) -> Result<()> {
+    let mut history = BytesStart::new("HistoryRecord");
+    history.push_attribute(("number", "1"));
+    history.push_attribute(("origination", now));
+    history.push_attribute(("software", "pcb"));
+    history.push_attribute(("lastChange", now));
+    writer.write_event(Event::Start(history))?;
+
+    write_file_revision(writer, 1, comment)?;
+
+    writer.write_event(Event::End(BytesStart::new("HistoryRecord").to_end()))?;
+    Ok(())
+}
+
+fn initial_history_attributes<'a>(e: &BytesStart, now: &'a str) -> Result<BytesStart<'a>> {
+    let mut elem = BytesStart::new("HistoryRecord");
+    elem.push_attribute(("number", "1"));
+    for attr in e.attributes() {
+        let attr = attr?;
+        let key = attr.key.as_ref();
+        match key {
+            b"number" => {}
+            b"lastChange" => elem.push_attribute(("lastChange", now)),
+            b"software" => elem.push_attribute(("software", "pcb")),
+            _ => elem.push_attribute(attr),
+        }
+    }
+    Ok(elem)
 }
 
 fn update_history_attributes<'a>(e: &BytesStart, now: &'a str) -> Result<BytesStart<'a>> {
@@ -198,5 +308,44 @@ mod tests {
         // New revision appended as ID 4
         assert!(result.contains("fileRevisionId=\"4\""));
         assert!(result.contains("Third edit"));
+    }
+
+    #[test]
+    fn test_creates_history_record_when_missing() {
+        let original = r#"<?xml version="1.0"?>
+<IPC-2581>
+  <Content/>
+  <Ecad/>
+</IPC-2581>"#;
+
+        let result = append_file_revision(original, "Created board array").unwrap();
+
+        assert!(result.contains("<HistoryRecord number=\"1\""));
+        assert!(result.contains("software=\"pcb\""));
+        assert!(result.contains("fileRevisionId=\"1\""));
+        assert!(result.contains("Created board array"));
+        assert!(result.contains("vendor=\"Diode\""));
+
+        let content_idx = result.find("<Content").unwrap();
+        let history_idx = result.find("<HistoryRecord").unwrap();
+        let ecad_idx = result.find("<Ecad").unwrap();
+        assert!(content_idx < history_idx);
+        assert!(history_idx < ecad_idx);
+    }
+
+    #[test]
+    fn test_expands_empty_history_record() {
+        let original = r#"<?xml version="1.0"?>
+<IPC-2581>
+  <Content/>
+  <HistoryRecord number="1" origination="2025-10-23T16:30:12" software="KiCad EDA" lastChange="2025-10-23T16:30:12"/>
+  <Ecad/>
+</IPC-2581>"#;
+
+        let result = append_file_revision(original, "Created board array").unwrap();
+
+        assert!(result.contains("<HistoryRecord number=\"1\""));
+        assert!(result.contains("fileRevisionId=\"1\""));
+        assert!(result.contains("Created board array"));
     }
 }

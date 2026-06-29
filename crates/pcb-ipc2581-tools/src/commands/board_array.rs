@@ -2671,6 +2671,25 @@ mod tests {
     }
 
     #[test]
+    fn board_array_creation_adds_history_record() {
+        let xml = create_board_array_xml(
+            board_fixture_mm(),
+            &BoardArrayCreateOptions {
+                columns: 6,
+                rows: 6,
+                board_margin_mm: board_margin(5.0, 5.0),
+                edge_rail_mm: BoardMarginMm::all(5.0),
+            },
+        )
+        .unwrap();
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        assert!(ipc.history_record().is_some());
+        assert!(xml.contains(r#"<HistoryRecord number="1""#));
+        assert!(xml.contains("Created board array"));
+    }
+
+    #[test]
     fn auto_create_projects_board_to_a7_array() {
         let xml = create_auto_board_array_xml(board_fixture_mm()).unwrap();
 
