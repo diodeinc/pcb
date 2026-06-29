@@ -164,7 +164,7 @@ pub fn extract_document(gerber: &GerberX2) -> GerberArtworkDocument {
                     FeatureKind::Region,
                     classify_bucket(object, FeatureKind::Region),
                 );
-                push_feature_paths(&mut doc, layer, meta, vec![region_path(contours)]);
+                push_feature_paths(&mut doc, layer, meta, region_paths(contours));
             }
         }
     }
@@ -284,7 +284,10 @@ fn push_feature_paths(
 
     let mut composer = common_path::PaintComposer::default();
     for extracted in paths {
-        let contours = common_path::payloads_to_polygon_contours(&extracted.contours);
+        let contours = common_path::simplify_polygon_contours(
+            common_path::payloads_to_polygon_contours(&extracted.contours),
+            extracted.path.fill_rule,
+        );
         if contours.is_empty() {
             continue;
         }
@@ -450,13 +453,15 @@ fn sample_steps(length: f64) -> usize {
     (length / SWEEP_SAMPLE_MM).ceil().max(1.0) as usize
 }
 
-fn region_path(contours: &[gerber::Contour]) -> ExtractedPath {
-    let contours = contours.iter().map(region_contour).collect();
-    ExtractedPath {
-        paint: PaintPolarity::Dark,
-        path: ArtworkPath::filled(FillRule::NonZero),
-        contours,
-    }
+fn region_paths(contours: &[gerber::Contour]) -> Vec<ExtractedPath> {
+    contours
+        .iter()
+        .map(|contour| ExtractedPath {
+            paint: PaintPolarity::Dark,
+            path: ArtworkPath::filled(FillRule::EvenOdd),
+            contours: vec![region_contour(contour)],
+        })
+        .collect()
 }
 
 fn region_contour(contour: &gerber::Contour) -> common_path::PathPayload {

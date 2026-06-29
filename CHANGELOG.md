@@ -8,10 +8,15 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added a manual KiCad SVG vs IPC-2581 to Gerber SVG raster diff script for checking copper export regressions.
+
 ### Fixed
 
 - IPC-2581 mutations now create a history record when the source file does not already have one, including board array creation.
 - Fixed a `pcb build` performance regression in large workspaces with many packages.
+- IPC-2581 to Gerber export now emits compound region holes as local Gerber cut-ins.
 
 ## [0.4.2] - 2026-06-26
 

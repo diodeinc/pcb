@@ -441,6 +441,22 @@ fn artwork_composition_applies_clear_polarity_cutouts() {
 }
 
 #[test]
+fn region_contour_orientation_does_not_create_holes() {
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%\n%MOMM*%\nG36*\nG01*\nX0Y0D02*\nX4000000Y0D01*\nX4000000Y4000000D01*\nX0Y4000000D01*\nX0Y0D01*\nX1000000Y1000000D02*\nX1000000Y3000000D01*\nX3000000Y3000000D01*\nX3000000Y1000000D01*\nX1000000Y1000000D01*\nG37*\nM02*\n",
+    )
+    .unwrap();
+
+    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+    assert!(
+        close(summary.area_mm2, 16.0),
+        "region contours are filled independently; area was {}",
+        summary.area_mm2
+    );
+}
+
+#[test]
 fn artwork_composition_keeps_clear_polarity_semantics_after_overlapping_dark_runs() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,4.0X4.0*%\n%ADD11R,2.0X2.0*%\nD10*\nX0Y0D03*\nX0Y0D03*\n%LPC*%\nD11*\nX0Y0D03*\nM02*\n",

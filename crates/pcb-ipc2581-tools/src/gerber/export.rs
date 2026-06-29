@@ -1518,7 +1518,7 @@ mod tests {
     }
 
     #[test]
-    fn gerber_export_places_pad_flashes_after_local_fill_clear_regions() {
+    fn gerber_export_places_pad_flashes_after_local_fill_cut_ins() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1588,13 +1588,16 @@ mod tests {
                 .objects()
                 .iter()
                 .all(|object| object.polarity == pcb_ir::dialects::gerber::Polarity::Dark),
-            "compound region holes should stay object-local, not global clear polarity"
+            "positive compound region holes should not export as layer-global clear regions"
         );
         let region_index = parsed
             .objects()
             .iter()
-            .position(|object| matches!(object.kind, gerberx2::ObjectKind::Region { .. }))
-            .expect("compound fill should export as a region");
+            .position(|object| {
+                object.polarity == pcb_ir::dialects::gerber::Polarity::Dark
+                    && matches!(object.kind, gerberx2::ObjectKind::Region { .. })
+            })
+            .expect("compound fill should export as a dark local cut-in region");
         let pad_flash_index = parsed
             .objects()
             .iter()
@@ -1612,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    fn gerber_export_places_multi_contour_traces_after_local_fill_clear_regions() {
+    fn gerber_export_places_multi_contour_traces_after_local_fill_cut_ins() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1676,7 +1679,7 @@ mod tests {
             .unwrap();
         assert!(
             !copper.contents.contains("%LPC*%"),
-            "compound region holes should stay object-local, not global clear polarity"
+            "positive compound region holes should not export as layer-global clear regions"
         );
         let fill_end_index = copper
             .contents
@@ -1945,7 +1948,7 @@ mod tests {
             .unwrap();
         assert!(
             !silk.contents.contains("%LPC*%"),
-            "compound region holes should stay object-local, not global clear polarity"
+            "positive compound region holes should not export as layer-global clear regions"
         );
         let parsed = gerberx2::GerberX2::parse(&silk.contents).unwrap();
         let geometry = gerberx2::geometry::extract_document(&parsed);
