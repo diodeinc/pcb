@@ -25,7 +25,7 @@ use quick_xml::{
 };
 
 use super::board_array_auto::{
-    AutoSheetSize, auto_board_array_plan, auto_board_array_plan_for_sheet,
+    AutoBoardArrayPlan, AutoSheetSize, auto_board_array_plan, auto_board_array_plan_for_sheet,
 };
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
@@ -191,6 +191,7 @@ pub struct BoardArrayCreateOptions {
 enum BoardArrayValidationMode {
     Manual,
     Auto,
+    AutoMinimumPanel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -416,34 +417,56 @@ fn create_auto_board_array_xml_with_sheet(
     sheet: Option<AutoSheetSize>,
 ) -> Result<String> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let options = auto_board_array_options(&ipc, sheet)?;
-    let spec = build_board_array_spec(&ipc, &options, BoardArrayValidationMode::Auto)?;
+    let (options, validation_mode) = auto_board_array_options(&ipc, sheet)?;
+    let spec = build_board_array_spec(&ipc, &options, validation_mode)?;
     write_board_array_xml(xml, &spec)
 }
 
 fn auto_board_array_options(
     ipc: &Ipc2581,
     sheet: Option<AutoSheetSize>,
-) -> Result<BoardArrayCreateOptions> {
+) -> Result<(BoardArrayCreateOptions, BoardArrayValidationMode)> {
     let board = primary_board_layout(ipc)?;
     let board_margin = auto_board_margin(ipc, board.bbox)?;
-    let plan = if let Some(sheet) = sheet {
-        auto_board_array_plan_for_sheet(
-            board.bbox.width(),
-            board.bbox.height(),
-            board_margin,
-            sheet,
-        )?
-    } else {
-        auto_board_array_plan(board.bbox.width(), board.bbox.height(), board_margin)?
-    };
+    let board_width = board.bbox.width();
+    let board_height = board.bbox.height();
 
-    Ok(BoardArrayCreateOptions {
+    match sheet {
+        Some(sheet) => Ok((
+            options_for_auto_plan(auto_board_array_plan_for_sheet(
+                board_width,
+                board_height,
+                board_margin,
+                sheet,
+            )?),
+            BoardArrayValidationMode::Auto,
+        )),
+        None => match auto_board_array_plan(board_width, board_height, board_margin) {
+            Ok(plan) => Ok((options_for_auto_plan(plan), BoardArrayValidationMode::Auto)),
+            Err(_) => Ok((
+                minimum_single_board_auto_options(board_margin),
+                BoardArrayValidationMode::AutoMinimumPanel,
+            )),
+        },
+    }
+}
+
+fn options_for_auto_plan(plan: AutoBoardArrayPlan) -> BoardArrayCreateOptions {
+    BoardArrayCreateOptions {
         columns: plan.columns,
         rows: plan.rows,
         board_margin_mm: plan.board_margin_mm,
         edge_rail_mm: plan.edge_rail_mm,
-    })
+    }
+}
+
+fn minimum_single_board_auto_options(board_margin: BoardMarginMm) -> BoardArrayCreateOptions {
+    BoardArrayCreateOptions {
+        columns: 1,
+        rows: 1,
+        board_margin_mm: board_margin,
+        edge_rail_mm: BoardMarginMm::all(MIN_EDGE_RAIL_WIDTH_MM),
+    }
 }
 
 fn auto_board_margin(ipc: &Ipc2581, board_bbox: BBox) -> Result<BoardMarginMm> {
@@ -572,7 +595,7 @@ fn build_board_array_spec(
         + rows as f64 * board_margin.vertical_gap()
         + edge_rail.bottom
         + edge_rail.top;
-    validate_array_dimensions(array_width, array_height)?;
+    validate_array_dimensions(array_width, array_height, validation_mode)?;
     let board_repeat_x = board_margin.left - root.bbox.min.x;
     let board_repeat_y = board_margin.bottom - root.bbox.min.y;
 
@@ -690,7 +713,7 @@ fn validate_options(
     validate_u32_range("columns", options.columns, 1, 10)?;
     validate_u32_range("rows", options.rows, 1, 10)?;
     for (field, value) in options.board_margin_mm.board_margin_sides() {
-        validate_mm_range(field, value, 0.0, 20.0)?;
+        validate_mm_min(field, value, 0.0)?;
     }
     for (field, value) in options.edge_rail_mm.edge_rail_sides() {
         match validation_mode {
@@ -700,7 +723,7 @@ fn validate_options(
                 MIN_EDGE_RAIL_WIDTH_MM,
                 MAX_MANUAL_EDGE_RAIL_WIDTH_MM,
             )?,
-            BoardArrayValidationMode::Auto => {
+            BoardArrayValidationMode::Auto | BoardArrayValidationMode::AutoMinimumPanel => {
                 validate_mm_min(field, value, MIN_EDGE_RAIL_WIDTH_MM)?
             }
         }
@@ -766,12 +789,24 @@ fn validate_zero_or_min_mm(field: &'static str, value: f64, min: f64) -> Result<
     }
 }
 
-fn validate_array_dimensions(width_mm: f64, height_mm: f64) -> Result<()> {
-    validate_array_dimension("width", width_mm)?;
-    validate_array_dimension("height", height_mm)
+fn validate_array_dimensions(
+    width_mm: f64,
+    height_mm: f64,
+    validation_mode: BoardArrayValidationMode,
+) -> Result<()> {
+    validate_array_dimension("width", width_mm, validation_mode)?;
+    validate_array_dimension("height", height_mm, validation_mode)
 }
 
-fn validate_array_dimension(axis: &'static str, value: f64) -> Result<()> {
+fn validate_array_dimension(
+    axis: &'static str,
+    value: f64,
+    validation_mode: BoardArrayValidationMode,
+) -> Result<()> {
+    if validation_mode == BoardArrayValidationMode::AutoMinimumPanel {
+        return validate_minimum_panel_array_dimension(axis, value);
+    }
+
     if !value.is_finite() || value + EPSILON < MIN_BOARD_ARRAY_DIMENSION_MM {
         Err(BoardArrayCreateValidationError::ArrayDimensionMin {
             axis,
@@ -788,6 +823,19 @@ fn validate_array_dimension(axis: &'static str, value: f64) -> Result<()> {
         .into())
     } else {
         Ok(())
+    }
+}
+
+fn validate_minimum_panel_array_dimension(axis: &'static str, value: f64) -> Result<()> {
+    if value.is_finite() && value > EPSILON {
+        Ok(())
+    } else {
+        Err(BoardArrayCreateValidationError::ArrayDimensionMin {
+            axis,
+            value,
+            min: 0.0,
+        }
+        .into())
     }
 }
 
@@ -2750,6 +2798,29 @@ mod tests {
     }
 
     #[test]
+    fn auto_create_allows_large_computed_board_margins() {
+        let input = board_fixture_with_large_courtyard_overhang_mm();
+        let ipc = Ipc2581::parse(input).unwrap();
+        let board = primary_board_layout(&ipc).unwrap();
+        let margin = auto_board_margin(&ipc, board.bbox).unwrap();
+
+        assert_eq!(
+            margin,
+            BoardMarginMm {
+                top: 5.0,
+                right: 26.0,
+                bottom: 5.0,
+                left: 5.0,
+            }
+        );
+
+        let xml = create_auto_board_array_xml(input).unwrap();
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 6);
+    }
+
+    #[test]
     fn auto_create_allows_large_leftover_edge_rails() {
         let xml =
             create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(124.0, 110.0)).unwrap();
@@ -2764,6 +2835,37 @@ mod tests {
         assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
         assert_point_close(panel_step.bbox.max, Point::new(210.0, 148.0));
         assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 1);
+    }
+
+    #[test]
+    fn auto_create_falls_back_to_minimum_single_board_panel_when_a4_does_not_fit() {
+        let xml =
+            create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(278.0, 10.0)).unwrap();
+
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board_cell" x="5" y="5" nx="1" ny="1" dx="288" dy="20" angle="0.00" mirror="false"/>"#
+        ));
+        assert!(xml.contains(
+            r#"<StepRepeat stepRef="board" x="5" y="5" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>"#
+        ));
+
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let layout = geometry::extract_layout(&ipc).unwrap();
+        let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
+        assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
+        assert_point_close(panel_step.bbox.max, Point::new(298.0, 30.0));
+        assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 1);
+    }
+
+    #[test]
+    fn auto_create_requested_sheet_still_errors_when_sheet_does_not_fit() {
+        let error = create_auto_board_array_xml_with_sheet(
+            &board_fixture_with_mask_bbox_mm(278.0, 278.0),
+            Some(AutoSheetSize::A4),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("cannot fit in A4"));
     }
 
     #[test]
@@ -3961,6 +4063,50 @@ mod tests {
                 <PolyStepSegment x="13" y="12"/>
                 <PolyStepSegment x="-2" y="12"/>
                 <PolyStepSegment x="-2" y="-1"/>
+              </Polygon>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+    }
+
+    fn board_fixture_with_large_courtyard_overhang_mm() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="F.Courtyard"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="F.Courtyard">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Polygon>
+                <PolyBegin x="0" y="0"/>
+                <PolyStepSegment x="31" y="0"/>
+                <PolyStepSegment x="31" y="10"/>
+                <PolyStepSegment x="0" y="10"/>
+                <PolyStepSegment x="0" y="0"/>
               </Polygon>
             </Features>
           </Set>
