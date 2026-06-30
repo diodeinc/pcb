@@ -16,6 +16,9 @@ use std::time::Duration;
 
 use crate::WorkspaceContext;
 
+const AUTHENTICATION_FAILED_MESSAGE: &str =
+    "Authentication failed. Run `pcb auth login` to sign in.";
+
 /// Response from creating a release.
 #[derive(Debug)]
 pub struct ReleaseResult {
@@ -130,7 +133,7 @@ fn stage_artifact(
         .context("Failed to connect to Diode API")?;
 
     let resp = check_response(resp, |status, msg| match status {
-        StatusCode::UNAUTHORIZED => "Authentication failed. Run `pcb login` to sign in.".into(),
+        StatusCode::UNAUTHORIZED => AUTHENTICATION_FAILED_MESSAGE.into(),
         StatusCode::BAD_REQUEST => format!("Invalid request: {msg}"),
         _ => format!("Failed to get upload URL ({status}): {msg}"),
     })?;
@@ -176,7 +179,7 @@ fn create_release(
         .context("Failed to connect to Diode API")?;
 
     let resp = check_response(resp, |status, msg| match status {
-        StatusCode::UNAUTHORIZED => "Authentication failed. Run `pcb login` to sign in.".into(),
+        StatusCode::UNAUTHORIZED => AUTHENTICATION_FAILED_MESSAGE.into(),
         StatusCode::NOT_FOUND if msg.contains("artifact") => {
             "Staged artifact not found. The upload may have expired.".into()
         }
@@ -220,7 +223,7 @@ fn create_preview(
         .context("Failed to connect to Diode API")?;
 
     let resp = check_response(resp, |status, msg| match status {
-        StatusCode::UNAUTHORIZED => "Authentication failed. Run `pcb login` to sign in.".into(),
+        StatusCode::UNAUTHORIZED => AUTHENTICATION_FAILED_MESSAGE.into(),
         StatusCode::NOT_FOUND if msg.contains("artifact") => {
             "Staged artifact not found. The upload may have expired.".into()
         }
