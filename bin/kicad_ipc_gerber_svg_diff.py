@@ -3,7 +3,7 @@
 # requires-python = ">=3.10"
 # dependencies = ["pillow>=10"]
 # ///
-"""Compare KiCad F.Cu SVG against IPC-2581 -> Gerber -> SVG output."""
+"""Compare KiCad Gerber render against IPC-2581 -> Gerber render output."""
 
 from __future__ import annotations
 
@@ -46,6 +46,11 @@ def main() -> int:
         fail(f"expected a .kicad_pcb file, got {layout}")
 
     kicad_cli = resolve_command(args.kicad_cli, "kicad-cli")
+    kicad_python = (
+        resolve_kicad_python(args.kicad_python, kicad_cli)
+        if args.refill_zones
+        else None
+    )
     rsvg_convert = resolve_command(args.rsvg_convert, "rsvg-convert")
     layer = cast(str, args.layer)
     gerber_name = cast(str | None, args.gerber_file) or GERBER_BY_LAYER.get(layer)
@@ -61,8 +66,12 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     paths = OutputPaths(out_dir, layer, gerber_name)
-    run_kicad_svg(kicad_cli, layout, layer, paths.kicad_svg)
-    run_kicad_ipc(kicad_cli, layout, paths.ipc_xml)
+    prepared_layout = prepare_layout_for_exports(
+        layout, paths.prepared_layout, kicad_python
+    )
+    run_kicad_gerber(kicad_cli, prepared_layout, layer, paths.kicad_gerber_dir)
+    kicad_gerber_layer = find_exported_kicad_gerber(paths.kicad_gerber_dir)
+    run_kicad_ipc(kicad_cli, prepared_layout, paths.ipc_xml)
     run_pcbc(
         args,
         [
@@ -84,11 +93,22 @@ def main() -> int:
         args,
         ["gerber", "render", "--output", str(paths.ipc_gerber_svg), str(gerber_layer)],
     )
+    run_pcbc(
+        args,
+        [
+            "gerber",
+            "render",
+            "--output",
+            str(paths.kicad_gerber_svg),
+            str(kicad_gerber_layer),
+        ],
+    )
     ensure_svg_size_from_viewbox(paths.ipc_gerber_svg, paths.ipc_gerber_sized_svg)
+    ensure_svg_size_from_viewbox(paths.kicad_gerber_svg, paths.kicad_gerber_sized_svg)
 
     rasterize_svg(
         rsvg_convert,
-        paths.kicad_svg,
+        paths.kicad_gerber_sized_svg,
         paths.kicad_png,
         args.px_per_mm,
     )
@@ -114,18 +134,19 @@ def main() -> int:
         or report.largest_component_mm2 > args.max_component_diff_mm2
     )
     if failed:
-        print("FAIL: SVG raster diff exceeds tolerance", file=sys.stderr)
+        print("FAIL: Gerber raster diff exceeds tolerance", file=sys.stderr)
         return 1
 
-    print("PASS: SVG raster diff is within tolerance")
+    print("PASS: Gerber raster diff is within tolerance")
     return 0
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate KiCad SVG and IPC-2581 -> Gerber -> SVG output for a "
-            ".kicad_pcb file, rasterize both, and fail on significant copper diff."
+            "Generate KiCad Gerber and IPC-2581 -> Gerber output for a "
+            ".kicad_pcb file, render both to SVG, rasterize both, and fail on "
+            "significant copper diff."
         )
     )
     parser.add_argument("layout", type=Path, help="Path to a .kicad_pcb file")
@@ -175,6 +196,20 @@ def parse_args() -> argparse.Namespace:
         help="Path to kicad-cli; defaults to KICAD_CLI or PATH lookup",
     )
     parser.add_argument(
+        "--kicad-python",
+        default=os.environ.get("KICAD_PYTHON"),
+        help=(
+            "Path to a Python interpreter with pcbnew; defaults to KICAD_PYTHON "
+            "or the Python bundled with the KiCad app"
+        ),
+    )
+    parser.add_argument(
+        "--no-refill-zones",
+        dest="refill_zones",
+        action="store_false",
+        help="Export from a copied board without refilling zones first",
+    )
+    parser.add_argument(
         "--rsvg-convert",
         default=os.environ.get("RSVG_CONVERT"),
         help="Path to rsvg-convert; defaults to RSVG_CONVERT or PATH lookup",
@@ -195,7 +230,7 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Do not clear the output directory before running",
     )
-    parser.set_defaults(clean=True)
+    parser.set_defaults(clean=True, refill_zones=True)
     return parser.parse_args()
 
 
@@ -203,10 +238,13 @@ class OutputPaths:
     def __init__(self, out_dir: Path, layer: str, gerber_file: str) -> None:
         safe_layer = layer.replace(".", "_")
         self.out_dir = out_dir
+        self.prepared_layout = out_dir / "prepared-layout.kicad_pcb"
         self.ipc_xml = out_dir / "layout.ipc2581.xml"
         self.gerber_zip = out_dir / "ipc-gerbers.zip"
         self.gerber_dir = out_dir / "ipc-gerbers"
-        self.kicad_svg = out_dir / f"kicad-{safe_layer}.svg"
+        self.kicad_gerber_dir = out_dir / "kicad-gerbers"
+        self.kicad_gerber_svg = out_dir / f"kicad-gerber-{safe_layer}.svg"
+        self.kicad_gerber_sized_svg = out_dir / f"kicad-gerber-{safe_layer}.sized.svg"
         self.kicad_png = out_dir / f"kicad-{safe_layer}.png"
         self.kicad_mask_png = out_dir / f"kicad-{safe_layer}.mask.png"
         self.ipc_gerber_svg = out_dir / f"ipc-gerber-{safe_layer}.svg"
@@ -262,25 +300,75 @@ class DiffReport:
         return self.largest_component_px / self.px_per_mm2
 
 
-def run_kicad_svg(kicad_cli: str, layout: Path, layer: str, output: Path) -> None:
+def run_kicad_gerber(
+    kicad_cli: str, layout: Path, layer: str, output_dir: Path
+) -> None:
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True)
     run(
         [
             kicad_cli,
             "pcb",
             "export",
-            "svg",
+            "gerbers",
             "--layers",
             layer,
-            "--mode-single",
-            "--page-size-mode",
-            "2",
-            "--exclude-drawing-sheet",
             "--check-zones",
             "--output",
-            str(output),
+            str(output_dir),
             str(layout),
         ]
     )
+
+
+def prepare_layout_for_exports(
+    layout: Path, prepared_layout: Path, kicad_python: str | None
+) -> Path:
+    shutil.copy2(layout, prepared_layout)
+    copy_companion_file(layout, prepared_layout, ".kicad_pro")
+    if kicad_python is not None:
+        refill_zones(kicad_python, prepared_layout)
+    return prepared_layout
+
+
+def copy_companion_file(layout: Path, prepared_layout: Path, suffix: str) -> None:
+    source = layout.with_suffix(suffix)
+    if source.exists():
+        shutil.copy2(source, prepared_layout.with_suffix(suffix))
+
+
+def refill_zones(kicad_python: str, layout: Path) -> None:
+    script = """
+try:
+    import wx
+    wx.Log.SetLogLevel(wx.LOG_Error)
+    _wx_app = wx.GetApp() or wx.App(False)
+except Exception:
+    _wx_app = None
+
+import pcbnew
+import sys
+
+layout = sys.argv[1]
+board = pcbnew.LoadBoard(layout)
+filler = pcbnew.ZONE_FILLER(board)
+filler.Fill(board.Zones())
+pcbnew.SaveBoard(layout, board)
+"""
+    run([kicad_python, "-c", script, str(layout)])
+
+
+def find_exported_kicad_gerber(output_dir: Path) -> Path:
+    files = [
+        path
+        for path in output_dir.iterdir()
+        if path.is_file() and path.suffix.lower() != ".gbrjob"
+    ]
+    if len(files) != 1:
+        names = ", ".join(path.name for path in files) or "none"
+        fail(f"expected exactly one KiCad Gerber in {output_dir}, got {names}")
+    return files[0]
 
 
 def run_kicad_ipc(kicad_cli: str, layout: Path, output: Path) -> None:
@@ -359,15 +447,16 @@ def compare_rasters(
     alpha_threshold: int,
     px_per_mm: int,
 ) -> DiffReport:
-    reference = trim_to_painted_bbox(alpha_mask(reference_png, alpha_threshold))
-    candidate = trim_to_painted_bbox(alpha_mask(candidate_png, alpha_threshold))
-    reference.save(paths.kicad_mask_png)
-    candidate.save(paths.ipc_gerber_mask_png)
+    reference = alpha_mask(reference_png, alpha_threshold)
+    candidate = alpha_mask(candidate_png, alpha_threshold)
+    ensure_nonempty_mask(reference, "KiCad Gerber", reference_png)
+    ensure_nonempty_mask(candidate, "IPC Gerber", candidate_png)
     if reference.size != candidate.size:
         fail(
-            "trimmed raster sizes differ: "
-            f"KiCad {reference.size}, IPC Gerber {candidate.size}"
+            f"raster sizes differ: KiCad {reference.size}, IPC Gerber {candidate.size}"
         )
+    reference.save(paths.kicad_mask_png)
+    candidate.save(paths.ipc_gerber_mask_png)
 
     only_reference = ImageChops.subtract(reference, candidate)
     only_candidate = ImageChops.subtract(candidate, reference)
@@ -411,11 +500,9 @@ def alpha_mask(png: Path, threshold: int) -> Image.Image:
     )
 
 
-def trim_to_painted_bbox(mask: Image.Image) -> Image.Image:
-    bbox = mask.getbbox()
-    if bbox is None:
-        fail("rasterized SVG contains no painted pixels")
-    return mask.crop(bbox)
+def ensure_nonempty_mask(mask: Image.Image, label: str, source_png: Path) -> None:
+    if mask.getbbox() is None:
+        fail(f"{label} raster contains no painted pixels: {source_png}")
 
 
 def count_painted(mask: Image.Image) -> int:
@@ -476,7 +563,7 @@ def write_panel(output: Path, report: DiffReport) -> None:
     )
     draw = ImageDraw.Draw(panel)
     draw.rectangle([0, 0, image_width, header_height], fill=(245, 245, 245))
-    draw.text((18, 14), "KiCad SVG vs IPC -> Gerber -> SVG", fill=(20, 20, 20))
+    draw.text((18, 14), "KiCad Gerber vs IPC -> Gerber", fill=(20, 20, 20))
     draw.text(
         (18, 42),
         (
@@ -509,7 +596,9 @@ def print_report(
     paths: OutputPaths, report: DiffReport, args: argparse.Namespace
 ) -> None:
     print(f"Artifacts: {paths.out_dir}")
-    print(f"KiCad SVG: {paths.kicad_svg}")
+    print(f"Prepared layout: {paths.prepared_layout}")
+    print(f"KiCad Gerber dir: {paths.kicad_gerber_dir}")
+    print(f"KiCad Gerber SVG: {paths.kicad_gerber_svg}")
     print(f"IPC XML: {paths.ipc_xml}")
     print(f"Gerber ZIP: {paths.gerber_zip}")
     print(f"IPC Gerber SVG: {paths.ipc_gerber_svg}")
@@ -554,6 +643,59 @@ def resolve_command(value: str | None, fallback: str) -> str:
         if Path(mac_path).exists():
             return mac_path
     fail(f"command not found: {fallback}")
+
+
+def resolve_kicad_python(value: str | None, kicad_cli: str) -> str:
+    candidates: list[str] = []
+    if value:
+        candidates.append(resolve_command(value, value))
+    else:
+        app_python = kicad_app_python(kicad_cli)
+        if app_python is not None:
+            candidates.append(str(app_python))
+        python3 = shutil.which("python3")
+        if python3:
+            candidates.append(python3)
+
+    for candidate in candidates:
+        if python_imports_pcbnew(candidate):
+            return candidate
+
+    fail(
+        "could not find a Python interpreter with pcbnew; pass --kicad-python "
+        "or use --no-refill-zones"
+    )
+
+
+def kicad_app_python(kicad_cli: str) -> Path | None:
+    kicad_cli_path = Path(kicad_cli).resolve()
+    for parent in kicad_cli_path.parents:
+        if parent.name != "KiCad.app":
+            continue
+        candidate = (
+            parent
+            / "Contents"
+            / "Frameworks"
+            / "Python.framework"
+            / "Versions"
+            / "Current"
+            / "bin"
+            / "python3"
+        )
+        return candidate if candidate.exists() else None
+    return None
+
+
+def python_imports_pcbnew(python: str) -> bool:
+    return (
+        subprocess.run(
+            [python, "-c", "import pcbnew"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
 
 
 def run(command: Sequence[str], cwd: Path | None = None) -> None:
