@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Fast, idempotent orb resume hook. Amp blocks on this for at most 10s, so do
+# no heavy work here. See https://ampcode.com/manual/orbs for the contract.
+set -euo pipefail
+
+mkdir -p .amp
+date -u +%FT%TZ > .amp/resume-last-ran.txt
