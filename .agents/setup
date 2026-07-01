@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Orb setup for the pcb repo. Runs once in a fresh clone before the agent starts.
+# See https://ampcode.com/manual/orbs for the contract.
+set -euo pipefail
+
+# --- Rust toolchain (pinned to stable by rust-toolchain.toml) ----------------
+if ! command -v cargo >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal
+  # shellcheck disable=SC1091
+  source "$HOME/.cargo/env"
+fi
+
+# --- uv (standalone installer; installs to ~/.local/bin) ---------------------
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
