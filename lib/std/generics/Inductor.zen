@@ -91,9 +91,9 @@ def _spice_args(value, package, dcr=None):
         cp_val = Capacitance("100pF")
 
     return {
-        "LVAL": str(lval),
-        "RDC": str(rdc_val),
-        "CP": str(cp_val),
+        "LVAL": lval.spice(),
+        "RDC": rdc_val.spice(),
+        "CP": cp_val.spice(),
     }
 
 
