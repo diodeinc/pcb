@@ -437,7 +437,7 @@ removing imports or changing dependency versions.
 
 ```bash
 pcb sync                    # Sync packages under the current workspace/package
-pcb sync --offline          # Use only already cached package data
+pcb sync --check            # CI guard: fail if pcb.toml or vendor/ is out of sync
 pcb sync -v                 # Print changed manifests
 ```
 

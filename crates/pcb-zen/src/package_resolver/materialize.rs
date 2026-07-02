@@ -60,3 +60,11 @@ pub fn vendor_selected(
     crate::resolve::vendor_package_roots(workspace, package_roots, &[], None, prune)?;
     Ok(())
 }
+
+pub fn plan_vendor_selected(
+    workspace: &crate::WorkspaceInfo,
+    package_roots: &BTreeSet<(String, String)>,
+    prune: bool,
+) -> Result<crate::resolve::VendorPlan> {
+    crate::resolve::plan_vendor_package_roots(workspace, package_roots, &[], None, prune)
+}
