@@ -390,6 +390,7 @@ impl PhysicalValue {
         let diff_param_spec = single_param_spec(PhysicalValue::get_type_starlark_repr());
         let matches_param_spec = single_param_spec(Ty::any());
         let abs_param_spec = no_param_spec();
+        let spice_param_spec = no_param_spec();
         let within_param_spec = single_param_spec(Ty::any()); // Accepts any type like is_in()
 
         SortedMap::from_iter([
@@ -402,6 +403,10 @@ impl PhysicalValue {
             (
                 "__str__".to_string(),
                 Ty::callable(str_param_spec, Ty::string()),
+            ),
+            (
+                "spice".to_string(),
+                Ty::callable(spice_param_spec, Ty::string()),
             ),
             (
                 "with_tolerance".to_string(),
@@ -1099,6 +1104,33 @@ fn scale_to_si(raw: Decimal) -> (Decimal, &'static str) {
     (raw, "")
 }
 
+const NGSPICE_PREFIXES: [(i32, &str); 10] = [
+    (12, "T"),
+    (9, "G"),
+    (6, "meg"),
+    (3, "k"),
+    (0, ""),
+    (-3, "m"),
+    (-6, "u"),
+    (-9, "n"),
+    (-12, "p"),
+    (-15, "f"),
+];
+
+fn scale_to_ngspice(raw: Decimal) -> (Decimal, &'static str) {
+    if raw.is_zero() {
+        return (raw, "");
+    }
+    for &(exp, sym) in &NGSPICE_PREFIXES {
+        let factor = pow10(exp);
+        if raw.abs() >= factor {
+            return (raw / factor, sym);
+        }
+    }
+    // Smaller than femto: emit the raw decimal; ngspice reads the bare number.
+    (raw, "")
+}
+
 fn fmt_significant(x: Decimal) -> String {
     let formatted = format!("{}", x);
 
@@ -1568,6 +1600,12 @@ impl std::fmt::Display for PhysicalValue {
 }
 
 impl PhysicalValue {
+    /// Format with ngspice-compatible suffixes (like "meg" for mega)
+    pub fn to_spice_string(&self) -> String {
+        let (scaled, prefix) = scale_to_ngspice(self.nominal);
+        format!("{}{}", fmt_significant(scaled), prefix)
+    }
+
     /// Format as point value (no tolerance suffix)
     fn fmt_point_value(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.fmt_point_value_with_suffix(f, "")
@@ -1725,6 +1763,11 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
         #[starlark(require = pos)] _arg: Value<'v>,
     ) -> starlark::Result<String> {
         Ok(this.to_string())
+    }
+
+    /// Format the nominal value for a SPICE netlist (ngspice scale factors)
+    fn spice<'v>(this: &PhysicalValue) -> starlark::Result<String> {
+        Ok(this.to_spice_string())
     }
 
     /// Returns a new PhysicalValue with symmetric tolerance applied to nominal
@@ -2429,6 +2472,29 @@ mod tests {
         assert!(
             (result.nominal - Decimal::from_f64(expected_val).unwrap()).abs() < Decimal::new(1, 6)
         );
+    }
+
+    #[test]
+    fn test_spice_format() {
+        // ngspice netlist formatting: number + ngspice scale factor, no unit.
+        // Crucially, mega must be "meg" (ngspice reads 'M'/'m' as milli).
+        for (input, expected) in [
+            ("2MOhm", "2meg"),
+            ("10kOhm", "10k"),
+            ("50mOhm", "50m"),
+            ("0.5nH", "500p"),
+            ("0.05pF", "50f"),
+            ("1F", "1"),
+            ("100nF", "100n"),
+            ("4.7uF", "4.7u"),
+            ("0", "0"),
+        ] {
+            assert_eq!(
+                PhysicalValue::from_str(input).unwrap().to_spice_string(),
+                expected,
+                "input={input}"
+            );
+        }
     }
 
     #[test]

@@ -71,19 +71,19 @@ def _spice_args(impedance, frequency, dcr):
 
     if rac <= 0 or freq <= 0:
         return {
-            "RDC": str(rdc),
+            "RDC": rdc.spice(),
             "L": "0",
-            "RAC": str(rac),
+            "RAC": rac.spice(),
             "CP": "0",
         }
 
     l_val = rac / (2 * pi * freq)
     cp_val = 1.0 / (2 * pi * freq * rac)
     return {
-        "RDC": str(rdc),
-        "L": str(l_val),
-        "RAC": str(rac),
-        "CP": str(cp_val),
+        "RDC": rdc.spice(),
+        "L": l_val.spice(),
+        "RAC": rac.spice(),
+        "CP": cp_val.spice(),
     }
 
 
