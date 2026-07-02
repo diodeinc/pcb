@@ -46,7 +46,8 @@ pub struct SyncArgs {
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 
-    /// Verify manifests and vendor/ are in sync; write nothing, exit non-zero on drift
+    /// Verify pcb.toml and vendor/ are in sync across the whole workspace
+    /// without modifying them; exit non-zero on drift
     #[arg(long = "check")]
     pub check: bool,
 }
@@ -109,7 +110,9 @@ pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
     let workspace = get_workspace_info(&DefaultFileProvider::new(), cwd)?;
     validate_workspace(&workspace)?;
 
-    let targets = discover_add_targets(&workspace, cwd)?;
+    // --check always verifies the whole workspace, regardless of cwd.
+    let scope = if args.check { &workspace.root } else { cwd };
+    let targets = discover_add_targets(&workspace, scope)?;
     let mode = if args.check {
         SyncMode::Check
     } else {
@@ -120,7 +123,7 @@ pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
         &targets,
         args.verbose,
         None,
-        is_workspace_root(&workspace, cwd),
+        is_workspace_root(&workspace, scope),
         mode,
     )
 }
@@ -210,7 +213,7 @@ fn load_single_target_workspace(command_name: &str) -> Result<(WorkspaceInfo, Ad
 }
 
 fn build_target_graph(workspace: &WorkspaceInfo, target: &AddTarget) -> Result<DepGraph> {
-    let mut resolver = PackageResolver::new(workspace.clone(), false)?;
+    let mut resolver = PackageResolver::new(workspace.clone())?;
     resolver.build_package_graph(&target.package_url)
 }
 
@@ -435,8 +438,7 @@ fn run_resolution(
     prune_vendor: bool,
     mode: SyncMode,
 ) -> Result<()> {
-    ensure_workspace_cache_symlink(&workspace.root)?;
-    let mut resolver = PackageResolver::new(workspace.clone(), false)?;
+    let mut resolver = PackageResolver::new(workspace.clone())?;
     let mut selected_remote = BTreeSet::new();
     let mut manifest_edits = Vec::new();
 
@@ -494,16 +496,19 @@ fn report_sync_drift(
     }
 
     for edit in manifest_edits {
-        println!(
+        eprintln!(
             "would update {}",
             workspace_relative_path(&workspace.root, &edit.path).display()
         );
     }
     for copy in &vendor_plan.copies {
-        println!("would vendor {}/{}", copy.module_path, copy.version);
+        eprintln!(
+            "would vendor {}",
+            workspace_relative_path(&workspace.root, &copy.dst).display()
+        );
     }
     for prune in &vendor_plan.prunes {
-        println!(
+        eprintln!(
             "would prune {}",
             workspace_relative_path(&workspace.root, prune).display()
         );

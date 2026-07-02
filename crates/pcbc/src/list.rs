@@ -62,7 +62,7 @@ fn list_updates() -> Result<()> {
         bail!("`pcb list -m -u` must be run from a package directory.");
     };
 
-    let mut resolver = PackageResolver::new(workspace.clone(), false)?;
+    let mut resolver = PackageResolver::new(workspace.clone())?;
     let resolution = resolver.resolve_package(&target.package_url)?;
 
     for dep_id in &resolution.direct_remote_ids {

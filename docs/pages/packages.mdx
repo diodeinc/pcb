@@ -444,6 +444,11 @@ pcb sync -v                 # Print changed manifests
 The command also downloads selected packages into the cache and vendors packages
 matched by `[workspace].vendor`.
 
+`pcb sync --check` always verifies the whole workspace, regardless of the
+current directory, and writes neither `pcb.toml` nor `vendor/`. It detects
+missing or stale vendored package versions; it does not verify the contents of
+vendored versions that are already present.
+
 ### pcb add
 
 Adds or upgrades a direct dependency for the package in the current directory.

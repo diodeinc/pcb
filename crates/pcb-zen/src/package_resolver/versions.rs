@@ -10,23 +10,11 @@ use semver::Version;
 
 #[derive(Default)]
 pub struct SpecVersionResolver {
-    offline: bool,
     source_repos: BTreeMap<String, PathBuf>,
     base_versions: BTreeMap<String, BTreeMap<String, Version>>,
 }
 
 impl SpecVersionResolver {
-    pub fn new(offline: bool) -> Self {
-        Self {
-            offline,
-            ..Self::default()
-        }
-    }
-
-    pub(crate) fn is_offline(&self) -> bool {
-        self.offline
-    }
-
     pub(crate) fn resolve_spec(
         &mut self,
         module_path: &str,
@@ -39,14 +27,6 @@ impl SpecVersionResolver {
     }
 
     pub fn resolve_ref_or_branch(&mut self, module_path: &str, selector: &str) -> Result<Version> {
-        if self.offline {
-            bail!(
-                "Cannot resolve {}@{} in offline mode",
-                module_path,
-                selector
-            );
-        }
-
         match self.generate_pseudo_version(module_path, selector) {
             Ok(version) => Ok(version),
             Err(rev_err) => {

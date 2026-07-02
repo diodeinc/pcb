@@ -26,8 +26,6 @@ pub struct VendorResult {
 }
 
 pub struct VendorCopy {
-    pub module_path: String,
-    pub version: String,
     pub src: PathBuf,
     pub dst: PathBuf,
 }
@@ -36,7 +34,6 @@ pub struct VendorPlan {
     pub vendor_dir: PathBuf,
     pub copies: Vec<VendorCopy>,
     pub prunes: Vec<PathBuf>,
-    patterns_configured: bool,
 }
 
 impl VendorPlan {
@@ -45,11 +42,7 @@ impl VendorPlan {
     }
 
     pub fn apply(&self) -> Result<VendorResult> {
-        let mut package_count = 0;
         for copy in &self.copies {
-            if copy.dst.exists() {
-                continue;
-            }
             copy_canonical_files(
                 &copy.src,
                 &copy.dst,
@@ -57,22 +50,17 @@ impl VendorPlan {
                     exclude_nested_packages: true,
                 }),
             )?;
-            package_count += 1;
         }
 
-        let mut pruned_count = 0;
         for root in &self.prunes {
-            if !root.exists() {
-                continue;
-            }
+            log::debug!("Pruning stale vendor path: {}", root.display());
             fs::remove_dir_all(root)?;
-            pruned_count += 1;
             remove_empty_ancestors_until(&self.vendor_dir, root)?;
         }
 
         Ok(VendorResult {
-            package_count,
-            pruned_count,
+            package_count: self.copies.len(),
+            pruned_count: self.prunes.len(),
             vendor_dir: self.vendor_dir.clone(),
         })
     }
@@ -125,17 +113,14 @@ pub fn vendor_package_roots(
     target_vendor_dir: Option<&Path>,
     prune: bool,
 ) -> Result<VendorResult> {
-    let plan = plan_vendor_package_roots(
+    plan_vendor_package_roots(
         workspace_info,
         package_roots,
         additional_patterns,
         target_vendor_dir,
         prune,
-    )?;
-    if plan.patterns_configured {
-        fs::create_dir_all(&plan.vendor_dir)?;
-    }
-    plan.apply()
+    )?
+    .apply()
 }
 
 #[instrument(name = "plan_vendor_package_roots", skip_all)]
@@ -166,7 +151,6 @@ pub fn plan_vendor_package_roots(
             vendor_dir,
             copies: Vec::new(),
             prunes: Vec::new(),
-            patterns_configured: false,
         });
     }
     log::debug!("Vendor patterns: {:?}", patterns);
@@ -205,12 +189,7 @@ pub fn plan_vendor_package_roots(
             continue;
         };
 
-        copies.push(VendorCopy {
-            module_path: path.clone(),
-            version: version.clone(),
-            src,
-            dst,
-        });
+        copies.push(VendorCopy { src, dst });
     }
 
     let prunes = if prune {
@@ -223,7 +202,6 @@ pub fn plan_vendor_package_roots(
         vendor_dir,
         copies,
         prunes,
-        patterns_configured: true,
     })
 }
 
@@ -262,39 +240,6 @@ fn remove_empty_ancestors_until(base: &Path, removed_root: &Path) -> Result<()> 
         current = parent;
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemotePackageVendorStatus {
-    AlreadyPresent,
-    Copied,
-    MissingSource,
-}
-
-pub fn copy_remote_package_to_vendor(
-    workspace_vendor: &Path,
-    cache_dir: &Path,
-    module_path: &str,
-    version: &str,
-    dst: &Path,
-) -> Result<RemotePackageVendorStatus> {
-    if dst.exists() {
-        return Ok(RemotePackageVendorStatus::AlreadyPresent);
-    }
-
-    let Some(src) = remote_package_vendor_source(workspace_vendor, cache_dir, module_path, version)
-    else {
-        return Ok(RemotePackageVendorStatus::MissingSource);
-    };
-
-    copy_canonical_files(
-        &src,
-        dst,
-        Some(CanonicalTarOptions {
-            exclude_nested_packages: true,
-        }),
-    )?;
-    Ok(RemotePackageVendorStatus::Copied)
 }
 
 /// Recursively copy a directory, excluding hidden directories/files and symlinks.
@@ -391,8 +336,7 @@ fn collect_stale_dir(
             } else if ancestors.contains(&child_rel) {
                 collect_stale_dir(base, &child_rel, desired_roots, ancestors, stale_roots)?;
             } else {
-                // Not needed - prune entire subtree
-                log::debug!("Pruning stale vendor path: {}", child_rel.display());
+                // Not needed - stale root, prune entire subtree on apply
                 stale_roots.push(entry.path());
             }
         }

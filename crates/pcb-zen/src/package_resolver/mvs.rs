@@ -147,13 +147,13 @@ pub struct PackageResolver {
 }
 
 impl PackageResolver {
-    pub fn new(workspace: crate::WorkspaceInfo, offline: bool) -> Result<Self> {
+    pub fn new(workspace: crate::WorkspaceInfo) -> Result<Self> {
         let package_index = WorkspacePackageIndex::new(&workspace);
         Ok(Self {
             cache_index: CacheIndex::open()?,
-            manifest_loader: ManifestLoader::new(workspace.clone(), offline),
+            manifest_loader: ManifestLoader::new(workspace.clone(), false),
             workspace,
-            spec_resolver: SpecVersionResolver::new(offline),
+            spec_resolver: SpecVersionResolver::default(),
             package_index,
             package_states: BTreeMap::new(),
         })
@@ -208,12 +208,7 @@ impl PackageResolver {
         &self,
         selected_remote: impl IntoIterator<Item = (&'a ResolvedDepId, &'a Version)>,
     ) -> Result<BTreeSet<(String, String)>> {
-        materialize_selected(
-            &self.workspace,
-            selected_remote,
-            self.spec_resolver.is_offline(),
-            &self.cache_index,
-        )
+        materialize_selected(&self.workspace, selected_remote, false, &self.cache_index)
     }
 
     pub fn build_package_graph(&mut self, package_url: &str) -> Result<DepGraph> {
@@ -244,7 +239,6 @@ impl PackageResolver {
             &package_dir,
             &current_config,
             &self.cache_index,
-            self.spec_resolver.is_offline(),
         )
         .with_context(|| format!("while scanning package {}", package_url))?;
         if let Some(direct_overrides) = direct_overrides {

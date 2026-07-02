@@ -55,10 +55,18 @@ fn write_simple_resistor_package(repo: &mut FixtureRepo, module_source: &str) {
         .write("SimpleResistor/test.kicad_mod", TEST_KICAD_MOD);
 }
 
-fn seed_simple_resistor_repo(sandbox: &mut Sandbox, commit_message: &str) -> String {
+fn seed_simple_resistor_repo(
+    sandbox: &mut Sandbox,
+    commit_message: &str,
+    tag: Option<&str>,
+) -> String {
     let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
     write_simple_resistor_package(&mut fixture, SIMPLE_RESISTOR_ZEN);
-    fixture.commit(commit_message).push_mirror();
+    fixture.commit(commit_message);
+    if let Some(tag) = tag {
+        fixture.tag(tag, false);
+    }
+    fixture.push_mirror();
     fixture.rev_parse_head()
 }
 
@@ -145,15 +153,6 @@ Lib(name = "X", P1 = Net("P1"))
     );
 }
 
-fn seed_tagged_simple_resistor_repo(sandbox: &mut Sandbox) {
-    let mut fixture = sandbox.git_fixture("https://github.com/mycompany/components.git");
-    write_simple_resistor_package(&mut fixture, SIMPLE_RESISTOR_ZEN);
-    fixture
-        .commit("Add SimpleResistor package")
-        .tag("SimpleResistor/v1.0.0", false)
-        .push_mirror();
-}
-
 fn write_vendored_simple_resistor_workspace(sandbox: &mut Sandbox) -> &mut Sandbox {
     sandbox
         .write(
@@ -190,7 +189,7 @@ x = kOhm(10)
 fn test_sync_pins_branch_dep_to_rev_and_builds() {
     let mut sandbox = Sandbox::new();
 
-    let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package");
+    let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package", None);
 
     let pcb_toml = r#"[workspace]
 pcb-version = "0.4"
@@ -548,7 +547,7 @@ P1 = io(Net)
 fn test_branch_only_dep_hydrates_before_read_only_and_offline() {
     let mut sandbox = Sandbox::new();
 
-    let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package");
+    let head_rev = seed_simple_resistor_repo(&mut sandbox, "Add SimpleResistor package", None);
 
     let pcb_toml = r#"[workspace]
 pcb-version = "0.4"
@@ -743,7 +742,11 @@ fn test_sync_check_detects_manifest_drift() {
 fn test_sync_check_detects_vendor_drift() {
     let mut sandbox = Sandbox::new();
 
-    seed_tagged_simple_resistor_repo(&mut sandbox);
+    seed_simple_resistor_repo(
+        &mut sandbox,
+        "Add SimpleResistor package",
+        Some("SimpleResistor/v1.0.0"),
+    );
     write_vendored_simple_resistor_workspace(&mut sandbox).sync();
 
     let vendored = sandbox
@@ -760,8 +763,12 @@ fn test_sync_check_detects_vendor_drift() {
     );
     assert!(
         missing_output
-            .contains("would vendor github.com/mycompany/components/SimpleResistor/1.0.0"),
+            .contains("would vendor vendor/github.com/mycompany/components/SimpleResistor/1.0.0"),
         "expected missing vendor report:\n{missing_output}"
+    );
+    assert!(
+        !vendored.exists(),
+        "sync --check must not re-vendor the missing package"
     );
 
     sandbox.sync();
@@ -783,6 +790,10 @@ fn test_sync_check_detects_vendor_drift() {
             .contains("would prune vendor/github.com/mycompany/components/SimpleResistor/9.9.9"),
         "expected stale vendor report:\n{stale_output}"
     );
+    assert!(
+        stale.exists(),
+        "sync --check must not prune the stale package"
+    );
 
     sandbox.sync();
     let clean_result = run_sync_check(&mut sandbox);
@@ -790,6 +801,37 @@ fn test_sync_check_detects_vendor_drift() {
     assert!(
         clean_result.status.success(),
         "expected sync --check to pass after vendor sync:\n{clean_output}"
+    );
+}
+
+#[test]
+fn test_sync_check_from_subdirectory_checks_whole_workspace() {
+    let mut sandbox = Sandbox::new();
+
+    seed_simple_resistor_repo(
+        &mut sandbox,
+        "Add SimpleResistor package",
+        Some("SimpleResistor/v1.0.0"),
+    );
+    write_vendored_simple_resistor_workspace(&mut sandbox).sync();
+
+    let stale = sandbox
+        .default_cwd()
+        .join("vendor/github.com/mycompany/components/SimpleResistor/9.9.9");
+    std::fs::create_dir_all(&stale).expect("create stale vendored package");
+    std::fs::write(stale.join("pcb.toml"), "[dependencies]\n")
+        .expect("write stale vendored manifest");
+
+    sandbox.cwd("sub");
+    let result = run_sync_check(&mut sandbox);
+    let output = command_output(&result);
+    assert!(
+        !result.status.success(),
+        "expected sync --check from a subdirectory to detect workspace drift:\n{output}"
+    );
+    assert!(
+        output.contains("would prune vendor/github.com/mycompany/components/SimpleResistor/9.9.9"),
+        "expected stale vendor report from a subdirectory:\n{output}"
     );
 }
 

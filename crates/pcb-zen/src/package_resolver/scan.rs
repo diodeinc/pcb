@@ -24,7 +24,6 @@ pub(crate) fn scan_package_direct_deps(
     package_dir: &Path,
     current_config: &PcbToml,
     index: &CacheIndex,
-    offline: bool,
 ) -> Result<ScannedDirectDeps> {
     let file_provider = DefaultFileProvider::new();
     let mut scanned = ScannedDirectDeps::default();
@@ -50,7 +49,7 @@ pub(crate) fn scan_package_direct_deps(
                 continue;
             }
 
-            add_remote_dep(&mut scanned.remote, &url, current_config, index, offline)?;
+            add_remote_dep(&mut scanned.remote, &url, current_config, index)?;
         }
 
         for rel_path in extracted.relative_paths {
@@ -125,18 +124,10 @@ fn add_remote_dep(
     url: &str,
     current_config: &PcbToml,
     index: &CacheIndex,
-    offline: bool,
 ) -> Result<()> {
     if let Some((module_path, spec)) = existing_manifest_dep(url, current_config) {
         remote.entry(module_path).or_insert(spec);
         return Ok(());
-    }
-
-    if offline {
-        anyhow::bail!(
-            "Cannot discover package root for '{}' in offline mode; add it to [dependencies] first",
-            url
-        );
     }
 
     let Some(candidate) = index.find_remote_package(url)? else {

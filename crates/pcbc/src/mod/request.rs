@@ -24,13 +24,9 @@ pub(crate) fn resolve_direct_dependency_request(
         .direct
         .get(module_path)
         .and_then(dependency_lane);
-    let version = resolve_requested_version(
-        module_path,
-        requested_version,
-        current_lane.as_deref(),
-        false,
-    )
-    .with_context(|| format!("Failed to resolve requested dependency {}", module_path))?;
+    let version =
+        resolve_requested_version(module_path, requested_version, current_lane.as_deref())
+            .with_context(|| format!("Failed to resolve requested dependency {}", module_path))?;
     Ok((
         module_path.to_string(),
         DependencySpec::Version(version.to_string()),
@@ -83,11 +79,10 @@ fn resolve_requested_version(
     module_path: &str,
     requested_version: RequestedVersion,
     current_lane: Option<&str>,
-    offline: bool,
 ) -> Result<Version> {
     match requested_version {
         RequestedVersion::RefOrBranch(selector) => {
-            SpecVersionResolver::new(offline).resolve_ref_or_branch(module_path, &selector)
+            SpecVersionResolver::default().resolve_ref_or_branch(module_path, &selector)
         }
         RequestedVersion::Latest => {
             let versions = available_versions_for_module(module_path)?;

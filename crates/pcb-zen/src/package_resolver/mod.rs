@@ -7,7 +7,7 @@ mod resolve;
 mod scan;
 mod versions;
 
-pub use materialize::{plan_vendor_selected, vendor_selected};
+pub use materialize::plan_vendor_selected;
 pub use mvs::{DepGraph, DepGraphNode, PackageResolution, PackageResolver};
 pub use pcb_zen_core::resolution::{
     FrozenDepId as ResolvedDepId, compatibility_lane, parse_lane_qualified_key,
