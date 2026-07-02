@@ -8,6 +8,19 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added `pcb sync --check` to fail CI when hydrated `pcb.toml` manifests or vendored package versions are out of sync. The check covers the whole workspace regardless of the current directory.
+
+### Changed
+
+- `pcb sync` now applies manifest and vendor updates only after the whole workspace resolves; a resolution failure no longer leaves partially hydrated manifests.
+- `pcb sync` and `pcb vendor` no longer create an empty `vendor/` directory when no packages match the vendor patterns.
+
+### Removed
+
+- Removed `pcb sync --offline`; use `pcb build --offline` with a synced manifest for offline reproducibility.
+
 ## [0.4.3] - 2026-06-29
 
 ### Added

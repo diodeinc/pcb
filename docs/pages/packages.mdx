@@ -437,12 +437,17 @@ removing imports or changing dependency versions.
 
 ```bash
 pcb sync                    # Sync packages under the current workspace/package
-pcb sync --offline          # Use only already cached package data
+pcb sync --check            # CI guard: fail if pcb.toml or vendor/ is out of sync
 pcb sync -v                 # Print changed manifests
 ```
 
 The command also downloads selected packages into the cache and vendors packages
 matched by `[workspace].vendor`.
+
+`pcb sync --check` always verifies the whole workspace, regardless of the
+current directory, and writes neither `pcb.toml` nor `vendor/`. It detects
+missing or stale vendored package versions; it does not verify the contents of
+vendored versions that are already present.
 
 ### pcb add
 

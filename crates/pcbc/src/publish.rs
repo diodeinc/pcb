@@ -881,7 +881,7 @@ fn sync_dependency_wave(
 
     let had_commits = guard.has_commits;
     guard.has_commits = true;
-    sync_targets(workspace, &targets, false, false, false)?;
+    sync_targets(workspace, &targets, false, false)?;
     if !git::has_uncommitted_changes(&workspace.root)? {
         guard.has_commits = had_commits;
         return Ok(false);
