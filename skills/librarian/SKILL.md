@@ -159,7 +159,9 @@ Name the Zener package from the functional MPN pattern, not the full orderable S
 
 Examples: `DP83867ISRGZR` -> `DP83867`; `TPS3430WDRCR` -> `TPS3430WDRC`; `SN74LXC1T45DRYR` / `SN74AXC1T45QDRYRQ1` -> `SN74x1T45-DRY`.
 
-For selectable families, use a compact table/list of variants with MPN, symbol, limits, and properties. Filter by `config()` values, use the first match as `part=`, and put remaining drop-in matches in `properties={"alternatives": ...}`.
+For selectable families, use a compact table/list of variants with MPN, symbol, limits, and properties. Filter by `config()` values, use the first match as `part=`, and put remaining drop-in equivalents *of that same selection* in `properties={"alternatives": ...}`.
+
+`alternatives` is for parts a sourcing system may freely swap in without changing behavior, footprint, or fit. Functional/mechanical variants that `config()` chooses between are mutually exclusive; true equivalents are second sources or order-code siblings (tape/reel, RoHS, temp grade) of the selected variant.
 
 ## Sourceability And Style
 
