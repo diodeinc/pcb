@@ -73,12 +73,14 @@ pub fn execute(file: &Path, format: OutputFormat, offline: bool) -> Result<()> {
         let spinner = Spinner::builder(format!("{file_name}: Fetching availability")).start();
         let ctx = pcb_diode_api::WorkspaceContext::from_path(file);
 
-        let token = ctx
-            .token()
+        let token = pcb_diode_api::auth::get_api_token_with_context(&ctx)
             .context("Not authenticated. Run `pcb auth login` to authenticate.")?;
 
         if let Err(e) = pcb_diode_api::fetch_and_populate_availability_with_context(
-            &ctx, &token, &mut bom, false,
+            &ctx,
+            token.as_deref(),
+            &mut bom,
+            false,
         ) {
             log::warn!("Failed to fetch availability data: {}", e);
         }

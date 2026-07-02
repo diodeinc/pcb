@@ -186,7 +186,7 @@ pub struct SandboxLockGuard {
 
 impl SandboxClient {
     pub fn new(ctx: WorkspaceContext) -> Result<Self> {
-        ctx.token()?;
+        crate::auth::get_api_token_with_context(&ctx)?;
         let api_base_url = ctx.api_base_url().trim_end_matches('/').to_string();
         Ok(Self {
             api_base_url,
@@ -230,9 +230,7 @@ impl SandboxClient {
             encoded_absolute_path(path)?
         ));
         let response = self
-            .http
-            .get(url)
-            .bearer_auth(self.auth_token()?)
+            .authenticated(self.http.get(url))?
             .send()
             .context("Failed to read sandbox file")?;
         let response = self.ensure_success(response)?;
@@ -241,13 +239,11 @@ impl SandboxClient {
 
     pub fn write_file(&self, sandbox_id: &str, path: &str, bytes: &[u8]) -> Result<()> {
         let response = self
-            .http
-            .put(self.url(&format!(
+            .authenticated(self.http.put(self.url(&format!(
                 "/api/sandboxes/{}/fs/write{}",
                 encode_segment(sandbox_id),
                 encoded_absolute_path(path)?
-            )))
-            .bearer_auth(self.auth_token()?)
+            ))))?
             .header(CONTENT_TYPE, "application/octet-stream")
             .body(bytes.to_vec())
             .send()
@@ -330,9 +326,7 @@ impl SandboxClient {
 
     fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
         let response = self
-            .http
-            .get(self.url(path))
-            .bearer_auth(self.auth_token()?)
+            .authenticated(self.http.get(self.url(path)))?
             .send()
             .context("Sandbox GET request failed")?;
         self.ensure_success(response)?
@@ -346,9 +340,7 @@ impl SandboxClient {
         body: &B,
     ) -> Result<T> {
         let response = self
-            .http
-            .post(self.url(path))
-            .bearer_auth(self.auth_token()?)
+            .authenticated(self.http.post(self.url(path)))?
             .json(body)
             .send()
             .context("Sandbox POST request failed")?;
@@ -377,8 +369,11 @@ impl SandboxClient {
         format!("{}{}", self.api_base_url, path)
     }
 
-    fn auth_token(&self) -> Result<String> {
-        self.ctx.token()
+    fn authenticated(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> Result<reqwest::blocking::RequestBuilder> {
+        crate::auth::apply_api_auth_with_context(&self.ctx, request)
     }
 }
 
@@ -535,13 +530,11 @@ fn write_lock_file(client: &SandboxClient, sandbox_id: &str, lock: &SandboxLockF
 
 fn delete_lock_file(client: &SandboxClient, sandbox_id: &str) -> Result<()> {
     let response = client
-        .http
-        .delete(client.url(&format!(
+        .authenticated(client.http.delete(client.url(&format!(
             "/api/sandboxes/{}/fs/file{}",
             encode_segment(sandbox_id),
             encoded_absolute_path(SANDBOX_LOCK_FILE_PATH)?
-        )))
-        .bearer_auth(client.auth_token()?)
+        ))))?
         .send()
         .context("Failed to delete sandbox lock file")?;
     if response.status() == StatusCode::NOT_FOUND {
@@ -557,13 +550,11 @@ fn read_file_if_exists(
     path: &str,
 ) -> Result<Option<Vec<u8>>> {
     let response = client
-        .http
-        .get(client.url(&format!(
+        .authenticated(client.http.get(client.url(&format!(
             "/api/sandboxes/{}/fs/file{}",
             encode_segment(sandbox_id),
             encoded_absolute_path(path)?
-        )))
-        .bearer_auth(client.auth_token()?)
+        ))))?
         .send()
         .context("Failed to read sandbox file")?;
     if response.status() == StatusCode::NOT_FOUND {

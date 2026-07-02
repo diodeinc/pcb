@@ -117,16 +117,14 @@ pub(crate) fn calculate_sha256(path: &Path) -> Result<String> {
 
 pub(crate) fn request_upload_url(
     client: &Client,
-    token: &str,
+    token: Option<&str>,
     base_url: &str,
     sha256: &str,
     filename: &str,
 ) -> Result<UploadUrlResponse> {
     let url = format!("{}/api/scan/upload-url", base_url);
 
-    let response = client
-        .post(&url)
-        .bearer_auth(token)
+    let response = crate::auth::apply_bearer_auth(client.post(&url), token)
         .json(&UploadUrlRequest {
             sha256: sha256.to_string(),
             filename: filename.to_string(),
@@ -142,7 +140,7 @@ pub(crate) fn request_upload_url(
 
 pub(crate) fn process_local_pdf(
     client: &Client,
-    auth_token: &str,
+    auth_token: Option<&str>,
     file_path: &Path,
     file_sha256: Option<&str>,
     model: Option<&str>,
@@ -190,7 +188,7 @@ pub(crate) fn upload_pdf(client: &Client, upload_url: &str, file_path: &Path) ->
 
 pub(crate) fn request_process(
     client: &Client,
-    token: &str,
+    token: Option<&str>,
     base_url: &str,
     source_path: Option<&str>,
     source_url: Option<&str>,
@@ -202,9 +200,7 @@ pub(crate) fn request_process(
 
     let url = format!("{}/api/scan/process", base_url);
 
-    let response = client
-        .post(&url)
-        .bearer_auth(token)
+    let response = crate::auth::apply_bearer_auth(client.post(&url), token)
         .json(&ProcessRequest {
             source_path: source_path.map(ToOwned::to_owned),
             source_url: source_url.map(ToOwned::to_owned),
@@ -365,7 +361,7 @@ pub struct ScanArgs {
 pub fn execute(args: ScanArgs) -> Result<()> {
     let input = parse_scan_input(&args.input)?;
 
-    let token = crate::auth::get_valid_token()?;
+    let token = crate::auth::get_api_token()?;
     let (resolve_input, input_pdf_path) = match input {
         ScanInput::LocalPdf(file) => (
             crate::datasheet::ResolveDatasheetInput::PdfPath(file.clone()),
@@ -377,7 +373,7 @@ pub fn execute(args: ScanArgs) -> Result<()> {
         ),
     };
     let spinner = Spinner::builder("Resolving datasheet...").start();
-    let response = crate::datasheet::resolve_datasheet(&token, &resolve_input)?;
+    let response = crate::datasheet::resolve_datasheet(token.as_deref(), &resolve_input)?;
     let pdf_path = input_pdf_path
         .unwrap_or_else(|| PathBuf::from(&response.pdf_path))
         .display()

@@ -1704,7 +1704,7 @@ pub fn run_with_mode_and_registry_index(
 /// Run the TUI in WebComponents mode only (for pcb new component)
 pub fn run_web_components_only() -> Result<TuiResult> {
     // Check authentication first
-    crate::auth::get_valid_token()?;
+    crate::auth::get_api_token()?;
 
     run_with_preflight(Preflight::web_only())
 }

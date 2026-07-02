@@ -3,7 +3,7 @@ use atomicwrites::{AtomicFile, OverwriteBehavior};
 use clap::{Args, Subcommand};
 use fslock::LockFile;
 use rand::Rng;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, RequestBuilder};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -14,6 +14,7 @@ use crate::WorkspaceContext;
 use crate::aws_auth::{self, AwsDiodeToken};
 
 const NOT_AUTHENTICATED_MESSAGE: &str = "Not authenticated. Run `pcb auth login` to authenticate.";
+const DIODE_API_AUTH_NONE: &str = "none";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthTokens {
@@ -227,6 +228,44 @@ pub fn get_valid_token() -> Result<String> {
     get_valid_token_with_context(&ctx)
 }
 
+pub(crate) fn api_auth_disabled() -> bool {
+    std::env::var("DIODE_API_AUTH")
+        .is_ok_and(|value| value.eq_ignore_ascii_case(DIODE_API_AUTH_NONE))
+}
+
+pub fn get_api_token_with_context(ctx: &WorkspaceContext) -> Result<Option<String>> {
+    if api_auth_disabled() {
+        Ok(None)
+    } else {
+        get_valid_token_with_context(ctx).map(Some)
+    }
+}
+
+pub fn get_api_token() -> Result<Option<String>> {
+    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
+    get_api_token_with_context(&ctx)
+}
+
+pub(crate) fn apply_bearer_auth(request: RequestBuilder, token: Option<&str>) -> RequestBuilder {
+    if api_auth_disabled() {
+        request
+    } else if let Some(token) = token {
+        request.bearer_auth(token)
+    } else {
+        request
+    }
+}
+
+pub(crate) fn apply_api_auth_with_context(
+    ctx: &WorkspaceContext,
+    request: RequestBuilder,
+) -> Result<RequestBuilder> {
+    Ok(apply_bearer_auth(
+        request,
+        get_api_token_with_context(ctx)?.as_deref(),
+    ))
+}
+
 pub fn login_with_context(ctx: &WorkspaceContext) -> Result<()> {
     let code: String = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
@@ -304,6 +343,12 @@ pub fn logout() -> Result<()> {
 
 pub fn status_with_context(ctx: &WorkspaceContext) -> Result<()> {
     println!("Authentication Status:");
+    if api_auth_disabled() {
+        println!("  Status: API auth disabled");
+        println!("  Method: DIODE_API_AUTH=none");
+        return Ok(());
+    }
+
     match load_tokens_with_context(ctx)? {
         Some(tokens) => {
             println!("  Status: Logged in");
@@ -457,6 +502,14 @@ mod tests {
             }
             Self { key, previous }
         }
+
+        fn set_str(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
     }
 
     impl Drop for EnvGuard {
@@ -515,6 +568,15 @@ mod tests {
         assert_eq!(token, "aws-service-token");
         assert_eq!(refresh_calls.get(), 0);
         assert_eq!(aws_calls.get(), 1);
+    }
+
+    #[test]
+    #[serial]
+    fn api_auth_none_returns_no_api_token() {
+        let (_tempdir, _config_guard, ctx) = isolated_context();
+        let _auth_guard = EnvGuard::set_str("DIODE_API_AUTH", "none");
+
+        assert_eq!(get_api_token_with_context(&ctx).unwrap(), None);
     }
 
     #[test]

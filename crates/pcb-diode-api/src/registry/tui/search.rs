@@ -852,14 +852,14 @@ pub fn spawn_worker(
 /// Spawn the component search worker thread (online API search)
 ///
 /// This worker handles searches for new components from online sources.
-/// It caches the auth token lazily on first request.
+/// It caches API auth lazily on first request.
 pub fn spawn_component_worker(
     query_rx: Receiver<ComponentSearchQuery>,
     result_tx: Sender<ComponentSearchResults>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        // Cache auth token (fetched lazily on first request)
         let mut auth_token: Option<String> = None;
+        let mut auth_checked = false;
 
         while let Ok(mut query) = query_rx.recv() {
             // Coalesce rapid queries - keep only the latest
@@ -880,10 +880,9 @@ pub fn spawn_component_worker(
                 continue;
             }
 
-            // Get auth token (lazy)
-            if auth_token.is_none() {
-                match crate::auth::get_valid_token() {
-                    Ok(token) => auth_token = Some(token),
+            if !auth_checked {
+                match crate::auth::get_api_token() {
+                    Ok(token) => auth_token = token,
                     Err(e) => {
                         let _ = result_tx.send(ComponentSearchResults {
                             query_id: query.id,
@@ -894,13 +893,13 @@ pub fn spawn_component_worker(
                         continue;
                     }
                 }
+                auth_checked = true;
             }
-
-            let token = auth_token.as_ref().unwrap();
 
             // Execute search
             let start = Instant::now();
-            let search_result = crate::component::search_components(token, query_text);
+            let search_result =
+                crate::component::search_components(auth_token.as_deref(), query_text);
             let duration = start.elapsed();
 
             let (results, error) = match search_result {
@@ -915,6 +914,7 @@ pub fn spawn_component_worker(
                 Err(e) => {
                     // Clear cached token on auth errors so we retry
                     if e.to_string().contains("401") || e.to_string().contains("403") {
+                        auth_checked = false;
                         auth_token = None;
                     }
                     (Vec::new(), Some(e.to_string()))
@@ -966,6 +966,7 @@ pub fn spawn_availability_worker(
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut auth_token: Option<String> = None;
+        let mut auth_checked = false;
         while let Ok(mut queue) = req_rx.recv() {
             while let Ok(next) = req_rx.try_recv() {
                 queue = next;
@@ -975,11 +976,12 @@ pub fn spawn_availability_worker(
                 let chunk_len = queue.len().min(AVAILABILITY_WORKER_CHUNK_SIZE);
                 let chunk: Vec<_> = queue.drain(..chunk_len).collect();
 
-                let response = if auth_token.is_none() {
-                    match crate::auth::get_valid_token() {
+                let response = if !auth_checked {
+                    match crate::auth::get_api_token() {
                         Ok(token) => {
-                            auth_token = Some(token);
-                            fetch_pricing_chunk(auth_token.as_deref().unwrap(), &chunk)
+                            auth_token = token;
+                            auth_checked = true;
+                            fetch_pricing_chunk(auth_token.as_deref(), &chunk)
                         }
                         Err(e) => {
                             log::warn!("Pricing auth failed: {}", e);
@@ -990,7 +992,7 @@ pub fn spawn_availability_worker(
                         }
                     }
                 } else {
-                    fetch_pricing_chunk(auth_token.as_deref().unwrap(), &chunk)
+                    fetch_pricing_chunk(auth_token.as_deref(), &chunk)
                 };
 
                 let _ = resp_tx.send(response);
@@ -1003,7 +1005,7 @@ pub fn spawn_availability_worker(
     })
 }
 
-fn fetch_pricing_chunk(auth_token: &str, chunk: &[AvailabilityRequest]) -> PricingResponse {
+fn fetch_pricing_chunk(auth_token: Option<&str>, chunk: &[AvailabilityRequest]) -> PricingResponse {
     let groups: Vec<_> = chunk
         .iter()
         .map(|request| request.lookups.clone())

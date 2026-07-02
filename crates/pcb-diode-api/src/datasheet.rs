@@ -126,7 +126,7 @@ pub fn parse_resolve_request(args: Option<&Value>) -> Result<ResolveDatasheetInp
 }
 
 pub fn resolve_datasheet(
-    auth_token: &str,
+    auth_token: Option<&str>,
     input: &ResolveDatasheetInput,
 ) -> Result<ResolveDatasheetResponse> {
     let client = build_scan_client()?;
@@ -159,7 +159,7 @@ pub fn resolve_datasheet(
 
 fn resolve_source_url_datasheet(
     client: &Client,
-    auth_token: &str,
+    auth_token: Option<&str>,
     canonical_url: String,
 ) -> Result<ResolveDatasheetResponse> {
     let url_cache_dir = url_pdf_cache_dir(&canonical_url)?;
@@ -181,7 +181,7 @@ fn resolve_source_url_datasheet(
 
 fn execute_resolve_execution(
     client: &Client,
-    auth_token: &str,
+    auth_token: Option<&str>,
     execution: ResolveExecution,
     prefetched_process: Option<crate::scan::ProcessResponse>,
 ) -> Result<ResolveDatasheetResponse> {
@@ -249,7 +249,7 @@ fn execute_resolve_execution(
 
 fn fetch_url_pdf_via_backend(
     client: &Client,
-    auth_token: &str,
+    auth_token: Option<&str>,
     canonical_url: &str,
     url_cache_dir: &Path,
 ) -> Result<(crate::scan::ProcessResponse, PathBuf)> {

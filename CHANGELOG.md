@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added `pcb sync --check` to fail CI when hydrated `pcb.toml` manifests or vendored package versions are out of sync. The check covers the whole workspace regardless of the current directory.
+- Added `DIODE_API_AUTH=none` to send Diode API requests without attaching client auth, for proxy-injected authentication.
 
 ### Changed
 

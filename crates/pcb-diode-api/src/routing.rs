@@ -90,7 +90,7 @@ pub fn start_routing(
     project_path: &Path,
     request: &StartRoutingRequest,
 ) -> Result<String> {
-    let token = ctx.token()?;
+    let token = crate::auth::get_api_token_with_context(ctx)?;
     let url = format!("{}/api/routing", ctx.api_base_url());
 
     // Build multipart form
@@ -106,9 +106,7 @@ pub fn start_routing(
     }
 
     let client = create_client()?;
-    let response = client
-        .post(&url)
-        .bearer_auth(&token)
+    let response = crate::auth::apply_bearer_auth(client.post(&url), token.as_deref())
         .multipart(form)
         .send()
         .context("Failed to send routing request")?;
@@ -134,13 +132,11 @@ pub fn start_routing(
 /// # Returns
 /// Current job status including routing statistics
 pub fn get_routing_status(ctx: &WorkspaceContext, job_id: &str) -> Result<RoutingJob> {
-    let token = ctx.token()?;
+    let token = crate::auth::get_api_token_with_context(ctx)?;
     let url = format!("{}/api/routing/{}", ctx.api_base_url(), job_id);
 
     let client = create_client()?;
-    let response = client
-        .get(&url)
-        .bearer_auth(&token)
+    let response = crate::auth::apply_bearer_auth(client.get(&url), token.as_deref())
         .send()
         .context("Failed to get routing status")?;
 
@@ -163,7 +159,7 @@ pub fn get_routing_status(ctx: &WorkspaceContext, job_id: &str) -> Result<Routin
 /// # Returns
 /// The SES file contents as bytes
 pub fn download_routing_result(ctx: &WorkspaceContext, job_id: &str) -> Result<Vec<u8>> {
-    let token = ctx.token()?;
+    let token = crate::auth::get_api_token_with_context(ctx)?;
     let url = format!(
         "{}/api/routing/{}/download?format=ses",
         ctx.api_base_url(),
@@ -171,9 +167,7 @@ pub fn download_routing_result(ctx: &WorkspaceContext, job_id: &str) -> Result<V
     );
 
     let client = create_client()?;
-    let response = client
-        .get(&url)
-        .bearer_auth(&token)
+    let response = crate::auth::apply_bearer_auth(client.get(&url), token.as_deref())
         .send()
         .context("Failed to download routing result")?;
 
@@ -192,13 +186,11 @@ pub fn download_routing_result(ctx: &WorkspaceContext, job_id: &str) -> Result<V
 ///
 /// The best result found so far remains available for download.
 pub fn stop_routing(ctx: &WorkspaceContext, job_id: &str) -> Result<()> {
-    let token = ctx.token()?;
+    let token = crate::auth::get_api_token_with_context(ctx)?;
     let url = format!("{}/api/routing/{}/stop", ctx.api_base_url(), job_id);
 
     let client = create_client()?;
-    let response = client
-        .post(&url)
-        .bearer_auth(&token)
+    let response = crate::auth::apply_bearer_auth(client.post(&url), token.as_deref())
         .send()
         .context("Failed to stop routing")?;
 

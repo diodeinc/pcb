@@ -91,15 +91,16 @@ struct DownloadResponseMetadata {
     manufacturer: Option<String>,
 }
 
-pub fn search_components(auth_token: &str, mpn: &str) -> Result<Vec<ComponentSearchResult>> {
+pub fn search_components(
+    auth_token: Option<&str>,
+    mpn: &str,
+) -> Result<Vec<ComponentSearchResult>> {
     let api_base_url = crate::get_api_base_url();
     let url = format!("{}/api/component/search", api_base_url);
 
     let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
 
-    let response = client
-        .post(&url)
-        .bearer_auth(auth_token)
+    let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
         .json(&SearchRequest {
             mpn: mpn.to_string(),
         })
@@ -112,15 +113,16 @@ pub fn search_components(auth_token: &str, mpn: &str) -> Result<Vec<ComponentSea
     Ok(response.json()?)
 }
 
-pub fn download_component(auth_token: &str, component_id: &str) -> Result<ComponentDownloadResult> {
+pub fn download_component(
+    auth_token: Option<&str>,
+    component_id: &str,
+) -> Result<ComponentDownloadResult> {
     let api_base_url = crate::get_api_base_url();
     let url = format!("{}/api/component/download", api_base_url);
 
     let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
 
-    let response = client
-        .post(&url)
-        .bearer_auth(auth_token)
+    let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
         .json(&DownloadRequest {
             component_id: component_id.to_string(),
         })
@@ -434,7 +436,7 @@ fn process_component_datasheet(
 }
 
 pub fn add_component_to_workspace(
-    auth_token: &str,
+    auth_token: Option<&str>,
     component_id: &str,
     part_number: Option<&str>,
     workspace_root: &std::path::Path,
@@ -1276,9 +1278,9 @@ fn add_component_with_feedback(
     part_number: Option<&str>,
     manufacturer: Option<&str>,
 ) -> Result<()> {
-    let token = crate::auth::get_valid_token()?;
+    let token = crate::auth::get_api_token()?;
     let result = add_component_to_workspace(
-        &token,
+        token.as_deref(),
         component_id,
         part_number,
         workspace_root,
@@ -1763,10 +1765,11 @@ fn registry_symbol_search_availability(
         return std::collections::HashMap::new();
     }
 
-    let Ok(token) = crate::auth::get_valid_token() else {
+    let Ok(token) = crate::auth::get_api_token() else {
         return std::collections::HashMap::new();
     };
-    let pricing = crate::bom::fetch_pricing_grouped_batch(&token, &groups).unwrap_or_default();
+    let pricing =
+        crate::bom::fetch_pricing_grouped_batch(token.as_deref(), &groups).unwrap_or_default();
 
     pricing
         .into_iter()
@@ -1787,10 +1790,11 @@ fn kicad_symbol_search_availability(
         return std::collections::HashMap::new();
     }
 
-    let Ok(token) = crate::auth::get_valid_token() else {
+    let Ok(token) = crate::auth::get_api_token() else {
         return std::collections::HashMap::new();
     };
-    let pricing = crate::bom::fetch_pricing_grouped_batch(&token, &groups).unwrap_or_default();
+    let pricing =
+        crate::bom::fetch_pricing_grouped_batch(token.as_deref(), &groups).unwrap_or_default();
 
     let mut map = std::collections::HashMap::new();
     for (result_idx, availability) in pricing.into_iter().enumerate() {
@@ -1835,7 +1839,7 @@ pub struct ComponentResult {
 
 /// Search for components and fetch availability data in batch
 pub fn search_components_with_availability(
-    auth_token: &str,
+    auth_token: Option<&str>,
     query: &str,
 ) -> Result<Vec<ComponentResult>> {
     let results = filter_component_search_results(search_components(auth_token, query)?);
@@ -1908,8 +1912,8 @@ fn filter_component_search_results(
 fn execute_web_search(query: &str, json: bool) -> Result<()> {
     use crate::registry::tui::display::WebComponentDisplay;
 
-    let token = crate::auth::get_valid_token()?;
-    let results = search_components_with_availability(&token, query)?;
+    let token = crate::auth::get_api_token()?;
+    let results = search_components_with_availability(token.as_deref(), query)?;
 
     if results.is_empty() {
         if json {

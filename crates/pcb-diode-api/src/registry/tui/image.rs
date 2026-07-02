@@ -189,8 +189,8 @@ fn load_or_fetch_registry_image(client: &Client, sha256: &str) -> Result<ImageRe
         return Ok(ImageResult::Ready(bytes));
     }
 
-    let token = crate::auth::get_valid_token().context("image auth failed")?;
-    let Some(url) = resolve_registry_image_url(client, &token, &sha256)? else {
+    let token = crate::auth::get_api_token().context("image auth failed")?;
+    let Some(url) = resolve_registry_image_url(client, token.as_deref(), &sha256)? else {
         return Ok(ImageResult::Missing);
     };
 
@@ -260,16 +260,14 @@ struct SignedImageResponse {
 
 fn resolve_registry_image_url(
     client: &Client,
-    token: &str,
+    token: Option<&str>,
     sha256: &str,
 ) -> Result<Option<String>> {
     let endpoint = format!(
         "{}/api/registries/images/{sha256}",
         crate::get_api_base_url()
     );
-    let response = client
-        .get(endpoint)
-        .bearer_auth(token)
+    let response = crate::auth::apply_bearer_auth(client.get(endpoint), token)
         .send()
         .context("failed to resolve registry image URL")?;
 
