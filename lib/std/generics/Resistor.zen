@@ -90,9 +90,9 @@ def _spice_args(value, package, esl=None, cp=None):
     }
 
     return {
-        "RVAL": str(value),
-        "ESL": str(esl or esl_table.get(package, Inductance("0.5nH"))),
-        "CP": str(cp or cp_table.get(package, Capacitance("0.05pF"))),
+        "RVAL": value.spice(),
+        "ESL": (esl or esl_table.get(package, Inductance("0.5nH"))).spice(),
+        "CP": (cp or cp_table.get(package, Capacitance("0.05pF"))).spice(),
     }
 
 
