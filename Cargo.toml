@@ -11,11 +11,11 @@ authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
 glam = "0.33"
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
-allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
-pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
+allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
+pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
 
 ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.20" }
 ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.20" }
