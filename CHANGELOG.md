@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added `pcb sync --check` to fail CI when hydrated `pcb.toml` manifests or `vendor/` are out of sync.
+
+### Removed
+
+- Removed `pcb sync --offline`; use `pcb build --offline` with a synced manifest for offline reproducibility.
+
 ## [0.4.3] - 2026-06-29
 
 ### Added
