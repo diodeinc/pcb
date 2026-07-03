@@ -1,42 +1,65 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pillow>=10"]
+# dependencies = ["pillow>=10", "numpy>=1.26", "scipy>=1.11"]
 # ///
-"""Compare KiCad Gerber render against IPC-2581 -> Gerber render output."""
+"""Validate the IPC-2581 -> Gerber/drill conversion against KiCad as an oracle.
+
+For a .kicad_pcb file this script:
+
+1. exports Gerbers and Excellon drills directly from KiCad (the oracle),
+2. exports IPC-2581 from KiCad and converts it to Gerbers/XNC with pcbc,
+3. renders each Gerber pair to SVG with pcbc, rasterizes both into a shared
+   viewport, and fails on significant raster XOR area, and
+4. parses both drill file sets and fails on unmatched holes or slots.
+
+By default every layer present in the pcbc export is compared (copper,
+mask, paste, silkscreen, edge cuts) plus the drill files.
+"""
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
 import zipfile
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NoReturn, cast
+from typing import NoReturn
 from xml.etree import ElementTree as ET
 
-from PIL import Image, ImageChops, ImageDraw
+import numpy as np
+from PIL import Image, ImageDraw
+from scipy import ndimage
 
+Image.MAX_IMAGE_PIXELS = None  # our own renders; sizes are capped below
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SVG_NAMESPACE = "http://www.w3.org/2000/svg"
 DEFAULT_PX_PER_MM = 100
+MAX_RASTER_PIXELS = 150_000_000
 DEFAULT_TOTAL_TOLERANCE_MM2 = 5.0
 DEFAULT_COMPONENT_TOLERANCE_MM2 = 0.5
+DRILL_POSITION_TOLERANCE_MM = 0.01
+DRILL_DIAMETER_TOLERANCE_MM = 0.01
 
-GERBER_BY_LAYER = {
-    "F.Cu": "F_Cu.gtl",
-    "B.Cu": "B_Cu.gbl",
-    "F.Mask": "F_Mask.gts",
-    "B.Mask": "B_Mask.gbs",
-    "F.Paste": "F_Paste.gtp",
-    "B.Paste": "B_Paste.gbp",
-    "F.SilkS": "F_SilkS.gto",
-    "B.SilkS": "B_SilkS.gbo",
+# pcbc export filename -> KiCad layer name, for the fixed-name layers.
+KICAD_LAYER_BY_GERBER = {
+    "F_Cu.gtl": "F.Cu",
+    "B_Cu.gbl": "B.Cu",
+    "F_Mask.gts": "F.Mask",
+    "B_Mask.gbs": "B.Mask",
+    "F_Paste.gtp": "F.Paste",
+    "B_Paste.gbp": "B.Paste",
+    "F_SilkS.gto": "F.SilkS",
+    "B_SilkS.gbo": "B.SilkS",
+    "Edge_Cuts.gm1": "Edge.Cuts",
 }
+INNER_COPPER_RE = re.compile(r"In(\d+)_Cu\.gbr$")
 
 
 def main() -> int:
@@ -52,10 +75,6 @@ def main() -> int:
         else None
     )
     rsvg_convert = resolve_command(args.rsvg_convert, "rsvg-convert")
-    layer = cast(str, args.layer)
-    gerber_name = cast(str | None, args.gerber_file) or GERBER_BY_LAYER.get(layer)
-    if gerber_name is None:
-        fail(f"no default Gerber filename for layer {layer!r}; pass --gerber-file")
 
     out_dir = (
         args.output_dir
@@ -65,13 +84,14 @@ def main() -> int:
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    paths = OutputPaths(out_dir, layer, gerber_name)
     prepared_layout = prepare_layout_for_exports(
-        layout, paths.prepared_layout, kicad_python
+        layout, out_dir / "prepared-layout.kicad_pcb", kicad_python
     )
-    run_kicad_gerber(kicad_cli, prepared_layout, layer, paths.kicad_gerber_dir)
-    kicad_gerber_layer = find_exported_kicad_gerber(paths.kicad_gerber_dir)
-    run_kicad_ipc(kicad_cli, prepared_layout, paths.ipc_xml)
+
+    # pcbc pipeline: KiCad IPC-2581 -> Gerber/XNC package.
+    ipc_xml = out_dir / "layout.ipc2581.xml"
+    run([kicad_cli, "pcb", "export", "ipc2581", "--output", str(ipc_xml), str(prepared_layout)])
+    gerber_zip = out_dir / "ipc-gerbers.zip"
     run_pcbc(
         args,
         [
@@ -80,80 +100,74 @@ def main() -> int:
             "--layout-target",
             args.layout_target,
             "--output",
-            str(paths.gerber_zip),
-            str(paths.ipc_xml),
+            str(gerber_zip),
+            str(ipc_xml),
         ],
     )
-    unzip_to(paths.gerber_zip, paths.gerber_dir)
-    gerber_layer = paths.gerber_dir / gerber_name
-    if not gerber_layer.is_file():
-        fail(f"Gerber export did not create {gerber_name}; see {paths.gerber_dir}")
+    ipc_gerber_dir = out_dir / "ipc-gerbers"
+    unzip_to(gerber_zip, ipc_gerber_dir)
 
-    run_pcbc(
-        args,
-        ["gerber", "render", "--output", str(paths.ipc_gerber_svg), str(gerber_layer)],
-    )
-    run_pcbc(
-        args,
-        [
-            "gerber",
-            "render",
-            "--output",
-            str(paths.kicad_gerber_svg),
-            str(kicad_gerber_layer),
-        ],
-    )
-    ensure_svg_size_from_viewbox(paths.ipc_gerber_svg, paths.ipc_gerber_sized_svg)
-    ensure_svg_size_from_viewbox(paths.kicad_gerber_svg, paths.kicad_gerber_sized_svg)
+    comparisons = select_layers(ipc_gerber_dir, args.layers)
+    if not comparisons:
+        fail(f"no comparable Gerber layers found in {ipc_gerber_dir}")
 
-    rasterize_svg(
-        rsvg_convert,
-        paths.kicad_gerber_sized_svg,
-        paths.kicad_png,
-        args.px_per_mm,
-    )
-    rasterize_svg(
-        rsvg_convert,
-        paths.ipc_gerber_sized_svg,
-        paths.ipc_gerber_png,
-        args.px_per_mm,
+    # KiCad oracle exports, one invocation for all layers.
+    kicad_gerber_dir = out_dir / "kicad-gerbers"
+    run_kicad_gerbers(
+        kicad_cli,
+        prepared_layout,
+        [kicad_layer for kicad_layer, _ in comparisons],
+        kicad_gerber_dir,
     )
 
-    report = compare_rasters(
-        paths.kicad_png,
-        paths.ipc_gerber_png,
-        paths,
-        args.alpha_threshold,
-        args.px_per_mm,
-    )
-    write_panel(paths.diff_panel_png, report)
-    print_report(paths, report, args)
+    results: list[LayerResult] = []
+    for kicad_layer, gerber_name in comparisons:
+        results.append(
+            compare_layer(
+                args,
+                rsvg_convert,
+                out_dir,
+                kicad_layer,
+                kicad_gerber_file(kicad_gerber_dir, kicad_layer),
+                ipc_gerber_dir / gerber_name,
+            )
+        )
 
-    failed = (
-        report.diff_mm2 > args.max_total_diff_mm2
-        or report.largest_component_mm2 > args.max_component_diff_mm2
-    )
+    drill_result = None
+    if args.drills:
+        drill_result = compare_drills(kicad_cli, prepared_layout, out_dir, ipc_gerber_dir)
+
+    print()
+    print(f"Artifacts: {out_dir}")
+    failed = print_summary(results, drill_result, args)
     if failed:
-        print("FAIL: Gerber raster diff exceeds tolerance", file=sys.stderr)
+        print("FAIL: KiCad oracle comparison exceeds tolerance", file=sys.stderr)
         return 1
-
-    print("PASS: Gerber raster diff is within tolerance")
+    print("PASS: all compared layers and drills match KiCad within tolerance")
     return 0
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate KiCad Gerber and IPC-2581 -> Gerber output for a "
-            ".kicad_pcb file, render both to SVG, rasterize both, and fail on "
-            "significant copper diff."
+            "Compare pcbc's IPC-2581 -> Gerber/drill conversion against "
+            "KiCad's directly exported artifacts for a .kicad_pcb file."
         )
     )
     parser.add_argument("layout", type=Path, help="Path to a .kicad_pcb file")
-    parser.add_argument("--layer", default="F.Cu", help="KiCad layer to compare")
     parser.add_argument(
-        "--gerber-file",
-        help="Expected Gerber filename inside the IPC Gerber package; inferred for common layers",
+        "--layers",
+        default="all",
+        help=(
+            "Comma-separated KiCad layer names to compare (e.g. F.Cu,B.Mask), "
+            "or 'all' for every layer present in the pcbc export"
+        ),
+    )
+    parser.add_argument(
+        "--no-drills",
+        dest="drills",
+        action="store_false",
+        help="Skip the Excellon/XNC drill comparison",
     )
     parser.add_argument(
         "--layout-target",
@@ -170,25 +184,28 @@ def parse_args() -> argparse.Namespace:
         "--px-per-mm",
         type=int,
         default=DEFAULT_PX_PER_MM,
-        help="Rasterization resolution; 100 means 10,000 pixels per mm^2",
+        help=(
+            "Rasterization resolution; automatically reduced when a layer "
+            f"would exceed {MAX_RASTER_PIXELS:,} pixels"
+        ),
     )
     parser.add_argument(
         "--max-total-diff-mm2",
         type=float,
         default=DEFAULT_TOTAL_TOLERANCE_MM2,
-        help="Fail when total XOR area exceeds this value",
+        help="Fail when a layer's total XOR area exceeds this value",
     )
     parser.add_argument(
         "--max-component-diff-mm2",
         type=float,
         default=DEFAULT_COMPONENT_TOLERANCE_MM2,
-        help="Fail when the largest connected XOR component exceeds this value",
+        help="Fail when a layer's largest connected XOR component exceeds this value",
     )
     parser.add_argument(
         "--alpha-threshold",
         type=int,
         default=8,
-        help="Alpha value above which a raster pixel counts as painted copper",
+        help="Alpha value above which a raster pixel counts as painted",
     )
     parser.add_argument(
         "--kicad-cli",
@@ -230,78 +247,521 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Do not clear the output directory before running",
     )
-    parser.set_defaults(clean=True, refill_zones=True)
+    parser.set_defaults(clean=True, refill_zones=True, drills=True)
     return parser.parse_args()
 
 
-class OutputPaths:
-    def __init__(self, out_dir: Path, layer: str, gerber_file: str) -> None:
-        safe_layer = layer.replace(".", "_")
-        self.out_dir = out_dir
-        self.prepared_layout = out_dir / "prepared-layout.kicad_pcb"
-        self.ipc_xml = out_dir / "layout.ipc2581.xml"
-        self.gerber_zip = out_dir / "ipc-gerbers.zip"
-        self.gerber_dir = out_dir / "ipc-gerbers"
-        self.kicad_gerber_dir = out_dir / "kicad-gerbers"
-        self.kicad_gerber_svg = out_dir / f"kicad-gerber-{safe_layer}.svg"
-        self.kicad_gerber_sized_svg = out_dir / f"kicad-gerber-{safe_layer}.sized.svg"
-        self.kicad_png = out_dir / f"kicad-{safe_layer}.png"
-        self.kicad_mask_png = out_dir / f"kicad-{safe_layer}.mask.png"
-        self.ipc_gerber_svg = out_dir / f"ipc-gerber-{safe_layer}.svg"
-        self.ipc_gerber_sized_svg = out_dir / f"ipc-gerber-{safe_layer}.sized.svg"
-        self.ipc_gerber_png = out_dir / f"ipc-gerber-{safe_layer}.png"
-        self.ipc_gerber_mask_png = out_dir / f"ipc-gerber-{safe_layer}.mask.png"
-        self.diff_png = out_dir / f"kicad-vs-ipc-gerber-{safe_layer}.diff.png"
-        self.xor_png = out_dir / f"kicad-vs-ipc-gerber-{safe_layer}.xor.png"
-        self.diff_panel_png = out_dir / f"kicad-vs-ipc-gerber-{safe_layer}.panel.png"
-        self.gerber_file = gerber_file
+# --- Layer selection -------------------------------------------------------
 
 
-class DiffReport:
-    def __init__(
-        self,
-        *,
-        size: tuple[int, int],
-        reference_area_px: int,
-        candidate_area_px: int,
-        diff_px: int,
-        px_per_mm: int,
-        components: list[tuple[int, tuple[int, int, int, int]]],
-    ) -> None:
-        self.size = size
-        self.reference_area_px = reference_area_px
-        self.candidate_area_px = candidate_area_px
-        self.diff_px = diff_px
-        self.px_per_mm = px_per_mm
-        self.components = components
+def select_layers(ipc_gerber_dir: Path, layers_arg: str) -> list[tuple[str, str]]:
+    """Return `(kicad_layer, pcbc_gerber_name)` pairs to compare."""
+    available: dict[str, str] = {}
+    for path in sorted(ipc_gerber_dir.iterdir()):
+        kicad_layer = KICAD_LAYER_BY_GERBER.get(path.name)
+        if kicad_layer is None:
+            inner = INNER_COPPER_RE.fullmatch(path.name)
+            if inner is None:
+                continue
+            # pcbc numbers inner copper by absolute stack position (top = 1);
+            # KiCad numbers inner layers from 1.
+            kicad_layer = f"In{int(inner.group(1)) - 1}.Cu"
+        available[kicad_layer] = path.name
 
-    @property
-    def px_per_mm2(self) -> int:
-        return self.px_per_mm * self.px_per_mm
+    if layers_arg == "all":
+        return sorted(available.items(), key=lambda item: layer_sort_key(item[0]))
 
-    @property
-    def reference_area_mm2(self) -> float:
-        return self.reference_area_px / self.px_per_mm2
-
-    @property
-    def candidate_area_mm2(self) -> float:
-        return self.candidate_area_px / self.px_per_mm2
-
-    @property
-    def diff_mm2(self) -> float:
-        return self.diff_px / self.px_per_mm2
-
-    @property
-    def largest_component_px(self) -> int:
-        return self.components[0][0] if self.components else 0
-
-    @property
-    def largest_component_mm2(self) -> float:
-        return self.largest_component_px / self.px_per_mm2
+    selected = []
+    for name in layers_arg.split(","):
+        name = name.strip()
+        if not name:
+            continue
+        if name not in available:
+            fail(
+                f"layer {name!r} has no matching file in {ipc_gerber_dir}; "
+                f"available: {', '.join(sorted(available))}"
+            )
+        selected.append((name, available[name]))
+    return selected
 
 
-def run_kicad_gerber(
-    kicad_cli: str, layout: Path, layer: str, output_dir: Path
+def layer_sort_key(kicad_layer: str) -> tuple[int, int, str]:
+    order = ["F.Cu", "In", "B.Cu", "F.Mask", "B.Mask", "F.Paste", "B.Paste",
+             "F.SilkS", "B.SilkS", "Edge.Cuts"]
+    inner = re.fullmatch(r"In(\d+)\.Cu", kicad_layer)
+    if inner:
+        return (order.index("In"), int(inner.group(1)), kicad_layer)
+    return (order.index(kicad_layer) if kicad_layer in order else len(order), 0, kicad_layer)
+
+
+# --- Per-layer raster comparison -------------------------------------------
+
+
+@dataclass
+class LayerResult:
+    layer: str
+    px_per_mm: int
+    kicad_area_mm2: float
+    ipc_area_mm2: float
+    diff_mm2: float
+    largest_component_mm2: float
+    component_count: int
+    panel: Path
+
+    def failed(self, args: argparse.Namespace) -> bool:
+        return (
+            self.diff_mm2 > args.max_total_diff_mm2
+            or self.largest_component_mm2 > args.max_component_diff_mm2
+        )
+
+
+def compare_layer(
+    args: argparse.Namespace,
+    rsvg_convert: str,
+    out_dir: Path,
+    kicad_layer: str,
+    kicad_gerber: Path,
+    ipc_gerber: Path,
+) -> LayerResult:
+    safe = kicad_layer.replace(".", "_")
+    kicad_svg = out_dir / f"kicad-gerber-{safe}.svg"
+    ipc_svg = out_dir / f"ipc-gerber-{safe}.svg"
+    run_pcbc(args, ["gerber", "render", "--output", str(kicad_svg), str(kicad_gerber)])
+    run_pcbc(args, ["gerber", "render", "--output", str(ipc_svg), str(ipc_gerber)])
+
+    width_mm, height_mm = unify_svg_viewports(kicad_svg, ipc_svg)
+    px_per_mm = effective_px_per_mm(args.px_per_mm, width_mm, height_mm)
+
+    kicad_png = out_dir / f"kicad-{safe}.png"
+    ipc_png = out_dir / f"ipc-gerber-{safe}.png"
+    rasterize_svg(rsvg_convert, kicad_svg, kicad_png, px_per_mm)
+    rasterize_svg(rsvg_convert, ipc_svg, ipc_png, px_per_mm)
+
+    reference = alpha_mask(kicad_png, args.alpha_threshold)
+    candidate = alpha_mask(ipc_png, args.alpha_threshold)
+    if reference.shape != candidate.shape:
+        # Shared viewBox + identical DPI should always agree; tolerate a
+        # single-pixel rounding edge by cropping to the common extent.
+        rows = min(reference.shape[0], candidate.shape[0])
+        cols = min(reference.shape[1], candidate.shape[1])
+        reference = reference[:rows, :cols]
+        candidate = candidate[:rows, :cols]
+
+    xor = reference ^ candidate
+    labels, component_count = ndimage.label(xor)
+    largest_px = 0
+    if component_count:
+        sizes = ndimage.sum_labels(xor, labels, index=range(1, component_count + 1))
+        largest_px = int(sizes.max())
+
+    write_diff_panel(
+        out_dir / f"kicad-vs-ipc-gerber-{safe}.panel.png",
+        kicad_layer,
+        reference,
+        candidate,
+        px_per_mm,
+    )
+
+    px_per_mm2 = px_per_mm * px_per_mm
+    return LayerResult(
+        layer=kicad_layer,
+        px_per_mm=px_per_mm,
+        kicad_area_mm2=int(reference.sum()) / px_per_mm2,
+        ipc_area_mm2=int(candidate.sum()) / px_per_mm2,
+        diff_mm2=int(xor.sum()) / px_per_mm2,
+        largest_component_mm2=largest_px / px_per_mm2,
+        component_count=int(component_count),
+        panel=out_dir / f"kicad-vs-ipc-gerber-{safe}.panel.png",
+    )
+
+
+def alpha_mask(png: Path, threshold: int) -> np.ndarray:
+    image = np.asarray(Image.open(png).convert("RGBA"))
+    return image[:, :, 3] > threshold
+
+
+def write_diff_panel(
+    output: Path,
+    layer: str,
+    reference: np.ndarray,
+    candidate: np.ndarray,
+    px_per_mm: int,
+) -> None:
+    height, width = reference.shape
+    rgb = np.full((height, width, 3), 255, dtype=np.uint8)
+    rgb[reference & candidate] = (18, 18, 18)
+    rgb[reference & ~candidate] = (220, 38, 38)
+    rgb[~reference & candidate] = (37, 99, 235)
+    diff = Image.fromarray(rgb)
+
+    max_width = 1600
+    scale = min(1.0, max_width / diff.size[0])
+    image_width = max(1, int(diff.size[0] * scale))
+    image_height = max(1, int(diff.size[1] * scale))
+    header_height = 64
+    legend_height = 48
+    panel = Image.new(
+        "RGB", (image_width, header_height + image_height + legend_height), "white"
+    )
+    draw = ImageDraw.Draw(panel)
+    draw.rectangle([0, 0, image_width, header_height], fill=(245, 245, 245))
+    diff_mm2 = int((reference ^ candidate).sum()) / (px_per_mm * px_per_mm)
+    draw.text((18, 12), f"KiCad vs IPC->Gerber: {layer}", fill=(20, 20, 20))
+    draw.text((18, 36), f"XOR {diff_mm2:.4f} mm^2 at {px_per_mm} px/mm", fill=(40, 40, 40))
+    panel.paste(
+        diff.resize((image_width, image_height), Image.Resampling.LANCZOS),
+        (0, header_height),
+    )
+    legend_y = header_height + image_height
+    legend = [
+        ((18, 18, 18), "common"),
+        ((220, 38, 38), "KiCad only (missing)"),
+        ((37, 99, 235), "candidate only (extra)"),
+    ]
+    x = 18
+    for color, label in legend:
+        draw.rectangle([x, legend_y + 14, x + 24, legend_y + 38], fill=color)
+        draw.text((x + 34, legend_y + 14), label, fill=(30, 30, 30))
+        x += 300
+    panel.save(output)
+
+
+# --- SVG plumbing -----------------------------------------------------------
+
+
+def unify_svg_viewports(svg_a: Path, svg_b: Path) -> tuple[float, float]:
+    """Rewrite both SVGs to share the union viewBox; returns its size in mm."""
+    box_a = read_viewbox(svg_a)
+    box_b = read_viewbox(svg_b)
+    min_x = min(box_a[0], box_b[0])
+    min_y = min(box_a[1], box_b[1])
+    max_x = max(box_a[0] + box_a[2], box_b[0] + box_b[2])
+    max_y = max(box_a[1] + box_a[3], box_b[1] + box_b[3])
+    width = max_x - min_x
+    height = max_y - min_y
+    if width <= 0 or height <= 0:
+        fail(f"degenerate union viewBox for {svg_a} and {svg_b}")
+    for svg in (svg_a, svg_b):
+        set_viewbox(svg, (min_x, min_y, width, height))
+    return width, height
+
+
+def read_viewbox(svg: Path) -> tuple[float, float, float, float]:
+    root = parse_svg(svg)
+    viewbox = root.attrib.get("viewBox")
+    if viewbox is None:
+        fail(f"SVG has no viewBox: {svg}")
+    values = [float(value) for value in viewbox.replace(",", " ").split()]
+    if len(values) != 4 or values[2] <= 0 or values[3] <= 0:
+        fail(f"invalid SVG viewBox in {svg}: {viewbox!r}")
+    return values[0], values[1], values[2], values[3]
+
+
+def set_viewbox(svg: Path, box: tuple[float, float, float, float]) -> None:
+    root = parse_svg(svg)
+    root.attrib["viewBox"] = f"{box[0]} {box[1]} {box[2]} {box[3]}"
+    root.attrib["width"] = f"{box[2]}mm"
+    root.attrib["height"] = f"{box[3]}mm"
+    ET.register_namespace("", SVG_NAMESPACE)
+    svg.write_text(ET.tostring(root, encoding="unicode") + "\n")
+
+
+def parse_svg(svg: Path) -> ET.Element:
+    try:
+        root = ET.fromstring(svg.read_text())
+    except ET.ParseError as error:
+        fail(f"invalid SVG XML in {svg}: {error}")
+    if root.tag.rsplit("}", 1)[-1] != "svg":
+        fail(f"expected SVG root in {svg}, got {root.tag!r}")
+    return root
+
+
+def effective_px_per_mm(requested: int, width_mm: float, height_mm: float) -> int:
+    px_per_mm = requested
+    while px_per_mm > 1 and width_mm * height_mm * px_per_mm * px_per_mm > MAX_RASTER_PIXELS:
+        px_per_mm = int(px_per_mm * 0.8)
+    if px_per_mm != requested:
+        print(
+            f"note: reducing rasterization to {px_per_mm} px/mm for a "
+            f"{width_mm:.0f}x{height_mm:.0f} mm board"
+        )
+    return max(px_per_mm, 1)
+
+
+def rasterize_svg(
+    rsvg_convert: str, input_svg: Path, output_png: Path, px_per_mm: int
+) -> None:
+    dpi = px_per_mm * 25.4
+    run(
+        [
+            rsvg_convert,
+            "--dpi-x",
+            f"{dpi}",
+            "--dpi-y",
+            f"{dpi}",
+            str(input_svg),
+            "--output",
+            str(output_png),
+        ]
+    )
+
+
+# --- Drill comparison -------------------------------------------------------
+
+
+@dataclass
+class DrillFile:
+    holes: list[tuple[float, float, float]] = field(default_factory=list)
+    slots: list[tuple[float, float, float, float, float]] = field(default_factory=list)
+
+
+@dataclass
+class DrillResult:
+    kicad_holes: int
+    ipc_holes: int
+    kicad_slots: int
+    ipc_slots: int
+    missing: list[str]
+    extra: list[str]
+
+    def failed(self) -> bool:
+        return bool(self.missing or self.extra)
+
+
+def compare_drills(
+    kicad_cli: str, layout: Path, out_dir: Path, ipc_gerber_dir: Path
+) -> DrillResult:
+    kicad_drill_dir = out_dir / "kicad-drills"
+    if kicad_drill_dir.exists():
+        shutil.rmtree(kicad_drill_dir)
+    kicad_drill_dir.mkdir(parents=True)
+    run(
+        [
+            kicad_cli,
+            "pcb",
+            "export",
+            "drill",
+            "--format",
+            "excellon",
+            "--excellon-units",
+            "mm",
+            "--excellon-zeros-format",
+            "decimal",
+            "--excellon-oval-format",
+            "route",
+            "--excellon-separate-th",
+            "--output",
+            str(kicad_drill_dir) + os.sep,
+            str(layout),
+        ]
+    )
+
+    kicad = DrillFile()
+    for path in sorted(kicad_drill_dir.glob("*.drl")):
+        parse_excellon(path, kicad)
+    ipc = DrillFile()
+    for path in sorted(ipc_gerber_dir.glob("*.drl")):
+        parse_excellon(path, ipc)
+
+    missing: list[str] = []
+    extra: list[str] = []
+    match_entries(kicad.holes, ipc.holes, format_hole, missing, extra)
+    match_entries(kicad.slots, ipc.slots, format_slot, missing, extra)
+    return DrillResult(
+        kicad_holes=len(kicad.holes),
+        ipc_holes=len(ipc.holes),
+        kicad_slots=len(kicad.slots),
+        ipc_slots=len(ipc.slots),
+        missing=missing,
+        extra=extra,
+    )
+
+
+COORD_RE = re.compile(r"([XY])(-?\d*\.?\d+)")
+
+
+def parse_excellon(path: Path, out: DrillFile) -> None:
+    """Parse the decimal-format Excellon/XNC subset KiCad and pcbc emit."""
+    tools: dict[str, float] = {}
+    current: float | None = None
+    in_header = True
+    route_start: tuple[float, float] | None = None
+    route_points: list[tuple[float, float]] = []
+    plunged = False
+    scale = 1.0
+
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(";"):
+            continue
+        if line == "M48":
+            in_header = True
+            continue
+        if line == "%" or line == "M95":
+            in_header = False
+            continue
+        if line in ("METRIC", "M71"):
+            scale = 1.0
+            continue
+        if line in ("INCH", "M72"):
+            scale = 25.4
+            continue
+        tool_def = re.fullmatch(r"T(\d+)C([\d.]+)", line)
+        if tool_def and in_header:
+            tools[tool_def.group(1).lstrip("0") or "0"] = float(tool_def.group(2)) * scale
+            continue
+        tool_select = re.fullmatch(r"T(\d+)", line)
+        if tool_select and not in_header:
+            number = tool_select.group(1).lstrip("0") or "0"
+            current = tools.get(number)
+            continue
+        if line == "M15":
+            plunged = True
+            route_points = []
+            continue
+        if line in ("M16", "M17"):
+            if route_start is not None and route_points and current is not None:
+                start = route_start
+                for end in route_points:
+                    out.slots.append((start[0], start[1], end[0], end[1], current))
+                    start = end
+            route_start = None
+            route_points = []
+            plunged = False
+            continue
+        if line.startswith(("G00", "G0X", "G0Y")):
+            coords = parse_coords(line, scale)
+            if coords is not None:
+                route_start = coords
+            continue
+        if line.startswith("G01") and not in_header:
+            coords = parse_coords(line, scale)
+            if coords is not None and plunged:
+                route_points.append(coords)
+            continue
+        if line.startswith(("X", "Y")) and current is not None:
+            if "G85" in line:
+                first, _, second = line.partition("G85")
+                start = parse_coords(first, scale)
+                end = parse_coords(second, scale)
+                if start is not None and end is not None:
+                    out.slots.append((start[0], start[1], end[0], end[1], current))
+                continue
+            coords = parse_coords(line, scale)
+            if coords is not None:
+                out.holes.append((coords[0], coords[1], current))
+
+
+def parse_coords(text: str, scale: float) -> tuple[float, float] | None:
+    values = dict((axis, float(value) * scale) for axis, value in COORD_RE.findall(text))
+    if "X" not in values or "Y" not in values:
+        return None
+    return values["X"], values["Y"]
+
+
+def match_entries(
+    reference: list,
+    candidate: list,
+    describe,
+    missing: list[str],
+    extra: list[str],
+) -> None:
+    remaining = list(candidate)
+    for entry in reference:
+        best = None
+        for index, other in enumerate(remaining):
+            if entries_match(entry, other):
+                best = index
+                break
+        if best is None:
+            missing.append(describe(entry))
+        else:
+            remaining.pop(best)
+    extra.extend(describe(entry) for entry in remaining)
+
+
+def entries_match(a: Sequence[float], b: Sequence[float]) -> bool:
+    if len(a) != len(b):
+        return False
+    *a_coords, a_diameter = a
+    *b_coords, b_diameter = b
+    if abs(a_diameter - b_diameter) > DRILL_DIAMETER_TOLERANCE_MM:
+        return False
+    if len(a_coords) == 2:
+        return coords_close(a_coords, b_coords)
+    # Slots may list their endpoints in either order (KiCad routes are
+    # mirrored around Y relative to nothing in particular).
+    return coords_close(a_coords[:2], b_coords[:2]) and coords_close(
+        a_coords[2:], b_coords[2:]
+    ) or coords_close(a_coords[:2], b_coords[2:]) and coords_close(
+        a_coords[2:], b_coords[:2]
+    )
+
+
+def coords_close(a: Sequence[float], b: Sequence[float]) -> bool:
+    return all(
+        abs(left - right) <= DRILL_POSITION_TOLERANCE_MM for left, right in zip(a, b)
+    )
+
+
+def format_hole(hole: tuple[float, float, float]) -> str:
+    return f"hole d={hole[2]:.3f} at ({hole[0]:.3f}, {hole[1]:.3f})"
+
+
+def format_slot(slot: tuple[float, float, float, float, float]) -> str:
+    return (
+        f"slot d={slot[4]:.3f} from ({slot[0]:.3f}, {slot[1]:.3f}) "
+        f"to ({slot[2]:.3f}, {slot[3]:.3f})"
+    )
+
+
+# --- Reporting ---------------------------------------------------------------
+
+
+def print_summary(
+    results: list[LayerResult],
+    drill_result: DrillResult | None,
+    args: argparse.Namespace,
+) -> bool:
+    failed = False
+    print(
+        f"{'layer':<12} {'kicad mm^2':>12} {'ipc mm^2':>12} {'xor mm^2':>10} "
+        f"{'largest':>10} {'status':>8}"
+    )
+    for result in results:
+        layer_failed = result.failed(args)
+        failed |= layer_failed
+        status = "FAIL" if layer_failed else "ok"
+        print(
+            f"{result.layer:<12} {result.kicad_area_mm2:>12.4f} "
+            f"{result.ipc_area_mm2:>12.4f} {result.diff_mm2:>10.4f} "
+            f"{result.largest_component_mm2:>10.4f} {status:>8}"
+        )
+        if layer_failed:
+            print(f"  see {result.panel}")
+
+    if drill_result is not None:
+        drill_failed = drill_result.failed()
+        failed |= drill_failed
+        status = "FAIL" if drill_failed else "ok"
+        print(
+            f"{'drills':<12} {drill_result.kicad_holes:>6} holes "
+            f"{drill_result.kicad_slots:>3} slots vs "
+            f"{drill_result.ipc_holes:>6} holes {drill_result.ipc_slots:>3} slots "
+            f"{status:>8}"
+        )
+        for line in drill_result.missing[:10]:
+            print(f"  missing in candidate: {line}")
+        for line in drill_result.extra[:10]:
+            print(f"  extra in candidate: {line}")
+    return failed
+
+
+# --- KiCad / process helpers -------------------------------------------------
+
+
+def run_kicad_gerbers(
+    kicad_cli: str, layout: Path, layers: list[str], output_dir: Path
 ) -> None:
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -313,13 +773,36 @@ def run_kicad_gerber(
             "export",
             "gerbers",
             "--layers",
-            layer,
+            ",".join(layers),
             "--check-zones",
             "--output",
             str(output_dir),
             str(layout),
         ]
     )
+
+
+KICAD_FILE_ALIASES = {
+    "F.SilkS": ["F_SilkS", "F_Silkscreen"],
+    "B.SilkS": ["B_SilkS", "B_Silkscreen"],
+    "F.Mask": ["F_Mask", "F_Soldermask"],
+    "B.Mask": ["B_Mask", "B_Soldermask"],
+}
+
+
+def kicad_gerber_file(output_dir: Path, kicad_layer: str) -> Path:
+    stem_fragments = KICAD_FILE_ALIASES.get(kicad_layer, [kicad_layer.replace(".", "_")])
+    matches = [
+        path
+        for path in output_dir.iterdir()
+        if path.is_file()
+        and path.suffix.lower() != ".gbrjob"
+        and any(path.stem.endswith(f"-{fragment}") for fragment in stem_fragments)
+    ]
+    if len(matches) != 1:
+        names = ", ".join(path.name for path in output_dir.iterdir()) or "none"
+        fail(f"expected one KiCad Gerber for {kicad_layer} in {output_dir}, got: {names}")
+    return matches[0]
 
 
 def prepare_layout_for_exports(
@@ -359,22 +842,6 @@ pcbnew.SaveBoard(layout, board)
     run([kicad_python, "-c", script, str(layout)])
 
 
-def find_exported_kicad_gerber(output_dir: Path) -> Path:
-    files = [
-        path
-        for path in output_dir.iterdir()
-        if path.is_file() and path.suffix.lower() != ".gbrjob"
-    ]
-    if len(files) != 1:
-        names = ", ".join(path.name for path in files) or "none"
-        fail(f"expected exactly one KiCad Gerber in {output_dir}, got {names}")
-    return files[0]
-
-
-def run_kicad_ipc(kicad_cli: str, layout: Path, output: Path) -> None:
-    run([kicad_cli, "pcb", "export", "ipc2581", "--output", str(output), str(layout)])
-
-
 def run_pcbc(args: argparse.Namespace, pcbc_args: Sequence[str]) -> None:
     if args.pcbc_bin:
         cmd = [str(args.pcbc_bin), *pcbc_args]
@@ -392,241 +859,6 @@ def unzip_to(zip_path: Path, output_dir: Path) -> None:
     output_dir.mkdir(parents=True)
     with zipfile.ZipFile(zip_path) as archive:
         archive.extractall(output_dir)
-
-
-def ensure_svg_size_from_viewbox(input_svg: Path, output_svg: Path) -> None:
-    text = input_svg.read_text()
-    try:
-        root = ET.fromstring(text)
-    except ET.ParseError as error:
-        fail(f"invalid SVG XML in {input_svg}: {error}")
-
-    if root.tag.rsplit("}", 1)[-1] != "svg":
-        fail(f"expected SVG root in {input_svg}, got {root.tag!r}")
-
-    viewbox = root.attrib.get("viewBox")
-    if viewbox is None:
-        fail(f"SVG has no viewBox: {input_svg}")
-
-    if "width" in root.attrib and "height" in root.attrib:
-        output_svg.write_text(text)
-        return
-
-    values = [float(value) for value in viewbox.replace(",", " ").split()]
-    if len(values) != 4 or values[2] <= 0 or values[3] <= 0:
-        fail(f"invalid SVG viewBox in {input_svg}: {viewbox!r}")
-    width, height = values[2], values[3]
-    root.attrib["width"] = f"{width}mm"
-    root.attrib["height"] = f"{height}mm"
-    ET.register_namespace("", SVG_NAMESPACE)
-    output_svg.write_text(ET.tostring(root, encoding="unicode") + "\n")
-
-
-def rasterize_svg(
-    rsvg_convert: str, input_svg: Path, output_png: Path, px_per_mm: int
-) -> None:
-    dpi = px_per_mm * 25.4
-    run(
-        [
-            rsvg_convert,
-            "--dpi-x",
-            f"{dpi}",
-            "--dpi-y",
-            f"{dpi}",
-            str(input_svg),
-            "--output",
-            str(output_png),
-        ]
-    )
-
-
-def compare_rasters(
-    reference_png: Path,
-    candidate_png: Path,
-    paths: OutputPaths,
-    alpha_threshold: int,
-    px_per_mm: int,
-) -> DiffReport:
-    reference = alpha_mask(reference_png, alpha_threshold)
-    candidate = alpha_mask(candidate_png, alpha_threshold)
-    ensure_nonempty_mask(reference, "KiCad Gerber", reference_png)
-    ensure_nonempty_mask(candidate, "IPC Gerber", candidate_png)
-    if reference.size != candidate.size:
-        fail(
-            f"raster sizes differ: KiCad {reference.size}, IPC Gerber {candidate.size}"
-        )
-    reference.save(paths.kicad_mask_png)
-    candidate.save(paths.ipc_gerber_mask_png)
-
-    only_reference = ImageChops.subtract(reference, candidate)
-    only_candidate = ImageChops.subtract(candidate, reference)
-    common = ImageChops.multiply(reference, candidate)
-    xor = ImageChops.difference(reference, candidate).point(
-        lambda value: 255 if value else 0, "L"
-    )
-    xor.save(paths.xor_png)
-
-    diff = Image.new("RGB", reference.size, "white")
-    diff_pixels = diff.load()
-    ref_pixels = only_reference.load()
-    candidate_pixels = only_candidate.load()
-    common_pixels = common.load()
-    width, height = reference.size
-    for y in range(height):
-        for x in range(width):
-            if common_pixels[x, y]:
-                diff_pixels[x, y] = (18, 18, 18)
-            if ref_pixels[x, y]:
-                diff_pixels[x, y] = (220, 38, 38)
-            if candidate_pixels[x, y]:
-                diff_pixels[x, y] = (37, 99, 235)
-    diff.save(paths.diff_png)
-
-    components = connected_components(xor)
-    return DiffReport(
-        size=reference.size,
-        reference_area_px=count_painted(reference),
-        candidate_area_px=count_painted(candidate),
-        diff_px=count_painted(xor),
-        px_per_mm=px_per_mm,
-        components=components,
-    )
-
-
-def alpha_mask(png: Path, threshold: int) -> Image.Image:
-    image = Image.open(png).convert("RGBA")
-    return image.getchannel("A").point(
-        lambda value: 255 if value > threshold else 0, "L"
-    )
-
-
-def ensure_nonempty_mask(mask: Image.Image, label: str, source_png: Path) -> None:
-    if mask.getbbox() is None:
-        fail(f"{label} raster contains no painted pixels: {source_png}")
-
-
-def count_painted(mask: Image.Image) -> int:
-    return sum(mask.histogram()[1:])
-
-
-def connected_components(
-    mask: Image.Image,
-) -> list[tuple[int, tuple[int, int, int, int]]]:
-    width, height = mask.size
-    pixels = mask.load()
-    seen = bytearray(width * height)
-    components: list[tuple[int, tuple[int, int, int, int]]] = []
-    for y in range(height):
-        for x in range(width):
-            start = y * width + x
-            if seen[start] or not pixels[x, y]:
-                continue
-            seen[start] = 1
-            stack = [(x, y)]
-            min_x = max_x = x
-            min_y = max_y = y
-            count = 0
-            while stack:
-                current_x, current_y = stack.pop()
-                count += 1
-                min_x = min(min_x, current_x)
-                max_x = max(max_x, current_x)
-                min_y = min(min_y, current_y)
-                max_y = max(max_y, current_y)
-                for next_y in range(max(0, current_y - 1), min(height, current_y + 2)):
-                    for next_x in range(
-                        max(0, current_x - 1), min(width, current_x + 2)
-                    ):
-                        if next_x == current_x and next_y == current_y:
-                            continue
-                        next_index = next_y * width + next_x
-                        if not seen[next_index] and pixels[next_x, next_y]:
-                            seen[next_index] = 1
-                            stack.append((next_x, next_y))
-            components.append((count, (min_x, min_y, max_x + 1, max_y + 1)))
-    components.sort(reverse=True)
-    return components
-
-
-def write_panel(output: Path, report: DiffReport) -> None:
-    diff = Image.open(
-        output.with_name(output.name.replace(".panel.", ".diff."))
-    ).convert("RGB")
-    max_width = 1600
-    scale = min(1.0, max_width / diff.size[0])
-    image_width = int(diff.size[0] * scale)
-    image_height = int(diff.size[1] * scale)
-    header_height = 96
-    legend_height = 48
-    panel = Image.new(
-        "RGB", (image_width, header_height + image_height + legend_height), "white"
-    )
-    draw = ImageDraw.Draw(panel)
-    draw.rectangle([0, 0, image_width, header_height], fill=(245, 245, 245))
-    draw.text((18, 14), "KiCad Gerber vs IPC -> Gerber", fill=(20, 20, 20))
-    draw.text(
-        (18, 42),
-        (
-            f"XOR {report.diff_mm2:.4f} mm^2; largest component "
-            f"{report.largest_component_mm2:.4f} mm^2; "
-            f"KiCad {report.reference_area_mm2:.4f} mm^2; "
-            f"candidate {report.candidate_area_mm2:.4f} mm^2"
-        ),
-        fill=(40, 40, 40),
-    )
-    panel.paste(
-        diff.resize((image_width, image_height), Image.Resampling.LANCZOS),
-        (0, header_height),
-    )
-    legend_y = header_height + image_height
-    legend = [
-        ((18, 18, 18), "common copper"),
-        ((220, 38, 38), "KiCad only / missing in candidate"),
-        ((37, 99, 235), "candidate only / extra copper"),
-    ]
-    x = 18
-    for color, label in legend:
-        draw.rectangle([x, legend_y + 14, x + 24, legend_y + 38], fill=color)
-        draw.text((x + 34, legend_y + 14), label, fill=(30, 30, 30))
-        x += 330
-    panel.save(output)
-
-
-def print_report(
-    paths: OutputPaths, report: DiffReport, args: argparse.Namespace
-) -> None:
-    print(f"Artifacts: {paths.out_dir}")
-    print(f"Prepared layout: {paths.prepared_layout}")
-    print(f"KiCad Gerber dir: {paths.kicad_gerber_dir}")
-    print(f"KiCad Gerber SVG: {paths.kicad_gerber_svg}")
-    print(f"IPC XML: {paths.ipc_xml}")
-    print(f"Gerber ZIP: {paths.gerber_zip}")
-    print(f"IPC Gerber SVG: {paths.ipc_gerber_svg}")
-    print(f"Diff panel: {paths.diff_panel_png}")
-    print(
-        "Areas: "
-        f"KiCad {report.reference_area_mm2:.6f} mm^2, "
-        f"candidate {report.candidate_area_mm2:.6f} mm^2, "
-        f"delta {report.candidate_area_mm2 - report.reference_area_mm2:.6f} mm^2"
-    )
-    print(
-        "Diff: "
-        f"total {report.diff_mm2:.6f} mm^2 "
-        f"({report.diff_px:,} px), "
-        f"largest component {report.largest_component_mm2:.6f} mm^2 "
-        f"({report.largest_component_px:,} px), "
-        f"components {len(report.components)}"
-    )
-    print(
-        "Tolerances: "
-        f"total <= {args.max_total_diff_mm2:.6f} mm^2, "
-        f"largest component <= {args.max_component_diff_mm2:.6f} mm^2"
-    )
-    for index, (pixels, bbox) in enumerate(report.components[:8], start=1):
-        print(
-            f"component {index}: {pixels / report.px_per_mm2:.6f} mm^2, "
-            f"bbox {bbox}, size {bbox[2] - bbox[0]}x{bbox[3] - bbox[1]} px"
-        )
 
 
 def resolve_command(value: str | None, fallback: str) -> str:
