@@ -1,11 +1,10 @@
 // Pure IPC-2581 parser modules
 mod checksum;
-mod intern;
 mod parse;
 pub mod types;
 pub mod units;
 
-pub use intern::{Interner, Symbol};
+pub use pcb_intern::{Interner, Symbol};
 pub use types::*;
 
 use checksum::validate_checksum;

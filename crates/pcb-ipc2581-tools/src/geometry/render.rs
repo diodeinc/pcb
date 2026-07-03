@@ -1,4 +1,6 @@
 use ipc2581::Symbol;
+
+pub use crate::layers::layer_role;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::artwork::{Geometry, Object, PaintOrder, PaintStage};
 use pcb_ir::dialects::ipc::{ProfileSet, profile_occurrences_for};
@@ -129,34 +131,4 @@ fn append_display_profile_path(
             meta: None,
         },
     );
-}
-
-pub fn layer_role(function: LayerFunction) -> LayerRole {
-    match function {
-        LayerFunction::Conductor
-        | LayerFunction::CondFilm
-        | LayerFunction::CondFoil
-        | LayerFunction::Plane
-        | LayerFunction::Signal
-        | LayerFunction::Mixed => LayerRole::Copper,
-        LayerFunction::Solderpaste | LayerFunction::Pastemask => LayerRole::Paste,
-        LayerFunction::Soldermask => LayerRole::Soldermask,
-        LayerFunction::Silkscreen | LayerFunction::Legend => LayerRole::Legend,
-        LayerFunction::Drill => LayerRole::Drill,
-        LayerFunction::Rout
-        | LayerFunction::VCut
-        | LayerFunction::Score
-        | LayerFunction::EdgeChamfer
-        | LayerFunction::EdgePlating
-        | LayerFunction::BoardOutline => LayerRole::Profile,
-        LayerFunction::Assembly
-        | LayerFunction::BoardFab
-        | LayerFunction::Courtyard
-        | LayerFunction::Document
-        | LayerFunction::Graphic
-        | LayerFunction::Fixture
-        | LayerFunction::Probe
-        | LayerFunction::Rework => LayerRole::Mechanical,
-        _ => LayerRole::Other,
-    }
 }

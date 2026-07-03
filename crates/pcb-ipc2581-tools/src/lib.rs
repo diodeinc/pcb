@@ -6,6 +6,7 @@ pub mod board_array;
 pub mod commands;
 pub mod geometry;
 pub mod gerber;
+pub mod layers;
 pub mod manufacturing;
 pub mod placement;
 mod steps;

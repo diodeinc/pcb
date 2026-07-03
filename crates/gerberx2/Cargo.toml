@@ -11,5 +11,6 @@ keywords = ["pcb", "gerber", "x2", "parser", "eda"]
 categories = ["parsing", "hardware-support"]
 
 [dependencies]
+pcb-intern = { workspace = true }
 pcb-ir = { workspace = true }
 thiserror = { workspace = true }

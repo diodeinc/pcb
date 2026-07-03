@@ -166,19 +166,7 @@ fn feature_contours(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Vec<Co
 
 fn relief_feature_layer(layer_function: LayerFunction) -> bool {
     matches!(layer_function, LayerFunction::Drill | LayerFunction::Rout)
-        || is_copper_layer(layer_function)
-}
-
-fn is_copper_layer(layer_function: LayerFunction) -> bool {
-    matches!(
-        layer_function,
-        LayerFunction::Conductor
-            | LayerFunction::CondFilm
-            | LayerFunction::CondFoil
-            | LayerFunction::Plane
-            | LayerFunction::Signal
-            | LayerFunction::Mixed
-    )
+        || crate::layers::is_copper(layer_function)
 }
 
 fn is_through_cutout(feature: &Feature<Symbol>) -> bool {

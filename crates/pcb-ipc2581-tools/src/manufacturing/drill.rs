@@ -33,17 +33,7 @@ pub fn build_xnc_drill_files(ipc: &Ipc2581, view: View) -> Result<Vec<Manufactur
 fn copper_layer_refs(layers: &[ipc2581::types::ecad::Layer]) -> Vec<ipc2581::Symbol> {
     layers
         .iter()
-        .filter(|layer| {
-            matches!(
-                layer.layer_function,
-                LayerFunction::Conductor
-                    | LayerFunction::CondFilm
-                    | LayerFunction::CondFoil
-                    | LayerFunction::Plane
-                    | LayerFunction::Signal
-                    | LayerFunction::Mixed
-            )
-        })
+        .filter(|layer| crate::layers::is_copper(layer.layer_function))
         .map(|layer| layer.name)
         .collect()
 }

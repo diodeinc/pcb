@@ -2382,6 +2382,7 @@ checksum = "8dba84198cf199c11b83f1cb9243eaeb70dc50b719d2835ebf34bf2481bca010"
 name = "gerberx2"
 version = "0.1.2"
 dependencies = [
+ "pcb-intern",
  "pcb-ir",
  "thiserror 2.0.18",
 ]
@@ -3178,6 +3179,7 @@ dependencies = [
  "base64",
  "hex",
  "md-5",
+ "pcb-intern",
  "quick-xml",
  "thiserror 2.0.18",
  "uppsala",
@@ -4581,6 +4583,10 @@ dependencies = [
  "ruff_python_formatter",
  "similar 3.1.0",
 ]
+
+[[package]]
+name = "pcb-intern"
+version = "0.1.0"
 
 [[package]]
 name = "pcb-ipc2581-tools"

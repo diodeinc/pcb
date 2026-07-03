@@ -236,13 +236,10 @@ fn sanitize_filename_stem(name: &str) -> String {
 }
 
 fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
+    if crate::layers::is_copper(function) {
+        return Some(GerberLayerRole::Copper);
+    }
     match function {
-        LayerFunction::Conductor
-        | LayerFunction::CondFilm
-        | LayerFunction::CondFoil
-        | LayerFunction::Plane
-        | LayerFunction::Signal
-        | LayerFunction::Mixed => Some(GerberLayerRole::Copper),
         LayerFunction::Solderpaste | LayerFunction::Pastemask => Some(GerberLayerRole::Paste),
         LayerFunction::Soldermask => Some(GerberLayerRole::Soldermask),
         LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),

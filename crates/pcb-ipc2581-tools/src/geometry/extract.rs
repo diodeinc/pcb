@@ -263,13 +263,10 @@ fn intent_for_layer(layer: &Layer) -> FeatureIntent<Symbol> {
 }
 
 fn domain_for_layer(function: LayerFunction) -> FeatureDomain {
+    if crate::layers::is_copper(function) {
+        return FeatureDomain::Copper;
+    }
     match function {
-        LayerFunction::Conductor
-        | LayerFunction::CondFilm
-        | LayerFunction::CondFoil
-        | LayerFunction::Plane
-        | LayerFunction::Signal
-        | LayerFunction::Mixed => FeatureDomain::Copper,
         LayerFunction::Soldermask => FeatureDomain::Soldermask,
         LayerFunction::Solderpaste | LayerFunction::Pastemask => FeatureDomain::Paste,
         LayerFunction::Silkscreen | LayerFunction::Legend => FeatureDomain::Legend,
