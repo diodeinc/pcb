@@ -1,19 +1,43 @@
+//! Lower pcb-ir artwork into an idiomatic Gerber X2 layer.
+//!
+//! This is the write-side mirror of [`crate::geometry::extract_document`]:
+//! any artwork document annotated with [`LayerAttributes`]/[`ObjectAttributes`]
+//! can be emitted as a Gerber file, regardless of which source dialect
+//! produced it.
+
 use std::collections::{BTreeSet, HashMap};
 
-use anyhow::{Context, Result, bail};
-use gerberx2::{
-    AttributeValue, Contour, ContourSegment, GerberLayer, ObjectKind, Point as GerberPoint,
-    WriterAperture, WriterApertureTemplate, WriterObject, sanitize_attribute_field,
+use crate::{
+    AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
+    Point as GerberPoint, Result, WriterAperture, WriterApertureTemplate, WriterObject,
+    sanitize_attribute_field,
 };
-use i_overlay::float::simplify::SimplifyShape;
-use pcb_ir::common::{FillRule, PaintPolarity, Point};
-use pcb_ir::dialects::artwork::{ArtworkAperture, ArtworkGeometry, ArtworkPath, PaintStage};
-use pcb_ir::dialects::gerber::Polarity;
-use pcb_ir::dialects::path::{self as common_path, PathCmd, PathOp, PathPayload, PolygonContour};
+use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
+use pcb_ir::geom::path::{self as geom_path, ContourBuf, PathCmd};
+use pcb_ir::geom::region::{self, Ring};
+use pcb_ir::geom::{FillRule, Point, Polarity, Segment};
 
-use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
+/// Gerber file-level attributes carried as artwork layer metadata.
+#[derive(Debug, Clone, Default)]
+pub struct LayerAttributes {
+    pub file_function: Vec<String>,
+    pub part: Option<Vec<String>>,
+    pub file_polarity: Option<String>,
+}
 
-pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
+/// Gerber X2 object attributes carried as artwork object metadata.
+#[derive(Debug, Clone, Default)]
+pub struct ObjectAttributes {
+    pub aperture_function: Option<Vec<String>>,
+    pub net: Option<String>,
+    pub component: Option<String>,
+    pub pin: Option<String>,
+}
+
+/// An artwork document annotated for Gerber export.
+pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerAttributes, ObjectAttributes>;
+
+pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
     let mut apertures = ApertureTable::default();
     let mut plan = GerberPlan::default();
     let layer_attributes = layer
@@ -37,8 +61,8 @@ pub fn lower_artwork_layer(layer: &ArtworkLayer) -> Result<GerberLayer> {
 }
 
 fn lower_artwork_object(
-    layer: &ArtworkLayer,
-    object: &pcb_ir::dialects::artwork::ArtworkObject<ObjectAttributes>,
+    layer: &ArtworkDocument,
+    object: &pcb_ir::dialects::artwork::Object<ObjectAttributes>,
     apertures: &mut ApertureTable,
 ) -> Result<Vec<WriterObject>> {
     let attributes = lower_object_attributes(&object.meta);
@@ -48,21 +72,22 @@ fn lower_artwork_object(
             objects.extend(lower_region_objects(
                 layer,
                 path,
-                object.paint,
+                object.polarity,
                 &attributes,
             )?);
         }
         ArtworkGeometry::Stroke { path } => {
-            let artwork_path = &layer.paths[path as usize];
+            let artwork_path = &layer.arena.paths[path as usize];
             let default_function = vec!["Conductor".to_string()];
             let aperture_function = object
                 .meta
                 .aperture_function
                 .as_deref()
                 .unwrap_or(default_function.as_slice());
-            let aperture = apertures.circle(artwork_path.stroke_width, aperture_function)?;
-            for contour in path_contours(layer, artwork_path) {
-                for segment in contour_segments(&contour.cmds)? {
+            let stroke_width = artwork_path.stroke().map_or(0.0, |stroke| stroke.width);
+            let aperture = apertures.circle(stroke_width, aperture_function)?;
+            for contour in layer.arena.path_contours(artwork_path) {
+                for segment in contour_segments(&contour.cmds) {
                     objects.push(WriterObject {
                         kind: match segment {
                             Segment::Line { start, end } => ObjectKind::Draw {
@@ -70,56 +95,40 @@ fn lower_artwork_object(
                                 end: lower_point(end),
                                 aperture,
                             },
-                            Segment::Arc {
-                                start,
-                                end,
-                                center,
-                                clockwise,
-                            } => ObjectKind::Arc {
-                                start: lower_point(start),
-                                end: lower_point(end),
+                            Segment::Arc(arc) => ObjectKind::Arc {
+                                start: lower_point(arc.start),
+                                end: lower_point(arc.end),
                                 center_offset: lower_point(Point::new(
-                                    center.x - start.x,
-                                    center.y - start.y,
+                                    arc.center.x - arc.start.x,
+                                    arc.center.y - arc.start.y,
                                 )),
-                                clockwise,
+                                clockwise: arc.clockwise,
                                 aperture,
                             },
+                            Segment::Cubic { .. } => {
+                                unreachable!("contour_segments flattens cubics")
+                            }
                         },
-                        polarity: lower_polarity(object.paint),
+                        polarity: object.polarity,
                         attributes: attributes.clone(),
                     });
                 }
             }
-        }
-        ArtworkGeometry::CircleFlash { at, diameter } => {
-            let default_function = vec!["Conductor".to_string()];
-            let aperture_function = object
-                .meta
-                .aperture_function
-                .as_deref()
-                .unwrap_or(default_function.as_slice());
-            let aperture = apertures.circle(diameter, aperture_function)?;
-            objects.push(WriterObject {
-                kind: ObjectKind::Flash {
-                    at: lower_point(at),
-                    aperture,
-                },
-                polarity: lower_polarity(object.paint),
-                attributes,
-            });
         }
         ArtworkGeometry::Flash {
             aperture,
             transform,
         } => {
             if !transform_is_translation(transform) {
-                bail!("cannot lower transformed artwork flash to Gerber");
+                return Err(GerberError::InvalidStructure(format!(
+                    "cannot lower transformed artwork flash to Gerber"
+                )));
             }
-            let artwork_aperture = *layer
-                .apertures
-                .get(aperture as usize)
-                .with_context(|| format!("artwork flash references missing aperture {aperture}"))?;
+            let artwork_aperture = *layer.apertures.get(aperture as usize).ok_or_else(|| {
+                GerberError::InvalidStructure(format!(
+                    "artwork flash references missing aperture {aperture}"
+                ))
+            })?;
             let default_function = vec!["Conductor".to_string()];
             let aperture_function = object
                 .meta
@@ -132,7 +141,7 @@ fn lower_artwork_object(
                     at: lower_point(transform.transform_point(Point::new(0.0, 0.0))),
                     aperture,
                 },
-                polarity: lower_polarity(object.paint),
+                polarity: object.polarity,
                 attributes,
             });
         }
@@ -295,7 +304,9 @@ impl ScheduleGraph {
         }
 
         if order.len() != indegree.len() {
-            bail!("Gerber emission schedule contains a cycle");
+            return Err(GerberError::InvalidStructure(format!(
+                "Gerber emission schedule contains a cycle"
+            )));
         }
         Ok(order)
     }
@@ -316,63 +327,125 @@ struct ApertureKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ApertureTemplateKey {
-    Circle { diameter_nm: i64 },
-    Rectangle { width_nm: i64, height_nm: i64 },
-    Obround { width_nm: i64, height_nm: i64 },
+    Circle {
+        diameter_nm: i64,
+        hole_nm: i64,
+    },
+    Rectangle {
+        width_nm: i64,
+        height_nm: i64,
+        hole_nm: i64,
+    },
+    Obround {
+        width_nm: i64,
+        height_nm: i64,
+        hole_nm: i64,
+    },
+    Polygon {
+        diameter_nm: i64,
+        vertices: u32,
+        rotation_microdeg: i64,
+        hole_nm: i64,
+    },
 }
 
 impl ApertureTable {
     fn circle(&mut self, diameter: f64, function: &[String]) -> Result<i32> {
+        self.circle_with_hole(diameter, None, function)
+    }
+
+    fn circle_with_hole(
+        &mut self,
+        diameter: f64,
+        hole_diameter: Option<f64>,
+        function: &[String],
+    ) -> Result<i32> {
         if diameter <= 0.0 {
-            bail!("cannot export non-positive Gerber stroke aperture diameter {diameter}");
+            return Err(GerberError::InvalidStructure(format!(
+                "cannot export non-positive Gerber stroke aperture diameter {diameter}"
+            )));
         }
         self.define(
             ApertureTemplateKey::Circle {
                 diameter_nm: quantize_mm(diameter),
+                hole_nm: quantize_hole(hole_diameter),
             },
             WriterApertureTemplate::Circle {
                 diameter,
-                hole_diameter: None,
+                hole_diameter,
             },
             function,
         )
     }
 
-    fn artwork_aperture(&mut self, aperture: ArtworkAperture, function: &[String]) -> Result<i32> {
-        match aperture {
-            ArtworkAperture::Circle { diameter } => self.circle(diameter, function),
-            ArtworkAperture::Rectangle { width, height } => {
+    fn artwork_aperture(&mut self, aperture: Aperture, function: &[String]) -> Result<i32> {
+        let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
+        match aperture.shape {
+            ApertureShape::Circle { diameter } => {
+                self.circle_with_hole(diameter, hole_diameter, function)
+            }
+            ApertureShape::Rectangle { width, height } => {
                 if width <= 0.0 || height <= 0.0 {
-                    bail!(
+                    return Err(GerberError::InvalidStructure(format!(
                         "cannot export non-positive Gerber rectangle aperture {width} x {height}"
-                    );
+                    )));
                 }
                 self.define(
                     ApertureTemplateKey::Rectangle {
                         width_nm: quantize_mm(width),
                         height_nm: quantize_mm(height),
+                        hole_nm: quantize_hole(hole_diameter),
                     },
                     WriterApertureTemplate::Rectangle {
                         width,
                         height,
-                        hole_diameter: None,
+                        hole_diameter,
                     },
                     function,
                 )
             }
-            ArtworkAperture::Obround { width, height } => {
+            ApertureShape::Obround { width, height } => {
                 if width <= 0.0 || height <= 0.0 {
-                    bail!("cannot export non-positive Gerber obround aperture {width} x {height}");
+                    return Err(GerberError::InvalidStructure(format!(
+                        "cannot export non-positive Gerber obround aperture {width} x {height}"
+                    )));
                 }
                 self.define(
                     ApertureTemplateKey::Obround {
                         width_nm: quantize_mm(width),
                         height_nm: quantize_mm(height),
+                        hole_nm: quantize_hole(hole_diameter),
                     },
                     WriterApertureTemplate::Obround {
                         width,
                         height,
-                        hole_diameter: None,
+                        hole_diameter,
+                    },
+                    function,
+                )
+            }
+            ApertureShape::Polygon {
+                diameter,
+                vertices,
+                rotation_degrees,
+            } => {
+                if diameter <= 0.0 {
+                    return Err(GerberError::InvalidStructure(format!(
+                        "cannot export non-positive Gerber polygon aperture diameter {diameter}"
+                    )));
+                }
+                self.define(
+                    ApertureTemplateKey::Polygon {
+                        diameter_nm: quantize_mm(diameter),
+                        vertices,
+                        rotation_microdeg: quantize_mm(rotation_degrees),
+                        hole_nm: quantize_hole(hole_diameter),
+                    },
+                    WriterApertureTemplate::Polygon {
+                        outer_diameter: diameter,
+                        vertices: vertices as i32,
+                        rotation_degrees: Some(rotation_degrees),
+                        hole_diameter,
                     },
                     function,
                 )
@@ -435,83 +508,91 @@ fn lower_layer_attributes(attributes: &LayerAttributes) -> Vec<AttributeValue> {
 }
 
 fn lower_region_objects(
-    layer: &ArtworkLayer,
+    layer: &ArtworkDocument,
     path_index: u32,
-    paint: PaintPolarity,
+    polarity: Polarity,
     attributes: &[AttributeValue],
 ) -> Result<Vec<WriterObject>> {
-    let artwork_path = &layer.paths[path_index as usize];
-    let payloads = path_contours(layer, artwork_path);
-    let contours = lower_region_image_contours(&payloads, artwork_path.fill_rule)?;
+    let artwork_path = &layer.arena.paths[path_index as usize];
+    let payloads = layer.arena.path_contours(artwork_path);
+    let fill_rule = artwork_path.fill_rule().unwrap_or(FillRule::NonZero);
+    let contours = lower_region_image_contours(&payloads, fill_rule)?;
     Ok(contours
         .into_iter()
         .map(|contour| WriterObject {
             kind: ObjectKind::Region {
                 contours: vec![contour],
             },
-            polarity: lower_polarity(paint),
+            polarity,
             attributes: attributes.to_vec(),
         })
         .collect())
 }
 
 fn lower_region_image_contours(
-    payloads: &[PathPayload],
+    payloads: &[ContourBuf],
     fill_rule: FillRule,
 ) -> Result<Vec<Contour>> {
-    let contours = common_path::payloads_to_polygon_contours(payloads);
-    if payloads.len() == 1 && contours.len() == 1 {
+    let rings = region::rings_from_contours(payloads);
+    if payloads.len() == 1 && rings.len() == 1 {
         return Ok(vec![lower_region_contour(&payloads[0])?]);
     }
 
-    let shapes = contours.simplify_shape(common_path::overlay_fill_rule(fill_rule));
+    let shapes = group_rings_into_shapes(region::simplify_rings(rings, fill_rule));
     shapes
         .into_iter()
         .filter_map(region_shape_contour)
         .collect::<Result<Vec<_>>>()
 }
 
-fn lower_region_contour(contour: &PathPayload) -> Result<Contour> {
+/// Regroup a regularized flat ring list into shapes: each outer boundary
+/// followed by its holes. `region::simplify_rings` emits shapes in order with
+/// the outer ring first and holes wound opposite to it, so a ring wound like
+/// the first ring starts a new shape.
+fn group_rings_into_shapes(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
+    let mut shapes: Vec<Vec<Ring>> = Vec::new();
+    let mut outer_sign = 0.0;
+    for ring in rings {
+        let sign = region::ring_signed_area(&ring).signum();
+        if shapes.is_empty() {
+            outer_sign = sign;
+        }
+        if shapes.is_empty() || sign == outer_sign {
+            shapes.push(vec![ring]);
+        } else if let Some(shape) = shapes.last_mut() {
+            shape.push(ring);
+        }
+    }
+    shapes
+}
+
+fn lower_region_contour(contour: &ContourBuf) -> Result<Contour> {
     if contour.cmds.is_empty() {
-        bail!("cannot export empty Gerber region contour");
+        return Err(GerberError::InvalidStructure(format!(
+            "cannot export empty Gerber region contour"
+        )));
     }
     Ok(Contour {
-        segments: contour_segments(&contour.cmds)?
+        segments: contour_segments(&contour.cmds)
             .into_iter()
             .map(|segment| match segment {
                 Segment::Line { start, end } => ContourSegment::Line {
                     start: lower_point(start),
                     end: lower_point(end),
                 },
-                Segment::Arc {
-                    start,
-                    end,
-                    center,
-                    clockwise,
-                } => ContourSegment::Arc {
-                    start: lower_point(start),
-                    end: lower_point(end),
-                    center_offset: lower_point(Point::new(center.x - start.x, center.y - start.y)),
-                    clockwise,
+                Segment::Arc(arc) => ContourSegment::Arc {
+                    start: lower_point(arc.start),
+                    end: lower_point(arc.end),
+                    center_offset: lower_point(Point::new(
+                        arc.center.x - arc.start.x,
+                        arc.center.y - arc.start.y,
+                    )),
+                    clockwise: arc.clockwise,
                 },
+                Segment::Cubic { .. } => unreachable!("contour_segments flattens cubics"),
             })
             .collect(),
     })
-}
-
-fn path_contours(
-    layer: &ArtworkLayer,
-    path: &ArtworkPath,
-) -> Vec<pcb_ir::dialects::path::PathPayload> {
-    layer.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
-        .iter()
-        .map(|contour| pcb_ir::dialects::path::PathPayload {
-            bbox: contour.bbox,
-            cmds: layer.path_cmds
-                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
-                .to_vec(),
-        })
-        .collect()
 }
 
 #[derive(Debug)]
@@ -520,21 +601,19 @@ struct RegionPart {
     signed_area: f64,
 }
 
-fn region_part(polygon: PolygonContour) -> Option<Result<RegionPart>> {
-    if polygon.is_empty() {
+fn region_part(ring: Ring) -> Option<Result<RegionPart>> {
+    if ring.is_empty() {
         return None;
     }
-    let payload = common_path::polygon_contours_to_payloads(vec![polygon.clone()])
-        .into_iter()
-        .next()?;
-    let signed_area = polygon_area_signed(&polygon);
+    let signed_area = region::ring_signed_area(&ring);
+    let payload = region::rings_to_contours(vec![ring]).into_iter().next()?;
     Some(lower_region_contour(&payload).map(|contour| RegionPart {
         contour,
         signed_area,
     }))
 }
 
-fn region_shape_contour(shape: Vec<PolygonContour>) -> Option<Result<Contour>> {
+fn region_shape_contour(shape: Vec<Ring>) -> Option<Result<Contour>> {
     let mut parts = match shape
         .into_iter()
         .filter_map(region_part)
@@ -555,7 +634,11 @@ fn region_part_shape_contour(outer: &RegionPart, holes: &[&RegionPart]) -> Resul
     let mut contour = outer.contour.clone();
     let outer_start = match contour.segments.first() {
         Some(ContourSegment::Line { start, .. } | ContourSegment::Arc { start, .. }) => *start,
-        None => bail!("compound Gerber region has empty outer"),
+        None => {
+            return Err(GerberError::InvalidStructure(format!(
+                "compound Gerber region has empty outer"
+            )));
+        }
     };
     for hole in holes {
         let mut hole_contour = hole.contour.clone();
@@ -564,7 +647,11 @@ fn region_part_shape_contour(outer: &RegionPart, holes: &[&RegionPart]) -> Resul
         }
         let hole_start = match hole_contour.segments.first() {
             Some(ContourSegment::Line { start, .. } | ContourSegment::Arc { start, .. }) => *start,
-            None => bail!("compound Gerber region has empty hole"),
+            None => {
+                return Err(GerberError::InvalidStructure(format!(
+                    "compound Gerber region has empty hole"
+                )));
+            }
         };
         if (outer_start.x - hole_start.x).hypot(outer_start.y - hole_start.y) > 1e-9 {
             contour.segments.push(ContourSegment::Line {
@@ -623,83 +710,30 @@ fn reverse_contour_segment(segment: &ContourSegment) -> ContourSegment {
     }
 }
 
-fn polygon_area_signed(polygon: &PolygonContour) -> f64 {
-    let mut area = 0.0;
-    for index in 0..polygon.len() {
-        let [x0, y0] = polygon[index];
-        let [x1, y1] = polygon[(index + 1) % polygon.len()];
-        area += x0 * y1 - x1 * y0;
-    }
-    area / 2.0
-}
+const CUBIC_FLATTEN_STEPS: usize = 16;
 
-#[derive(Debug, Clone, Copy)]
-enum Segment {
-    Line {
-        start: Point,
-        end: Point,
-    },
-    Arc {
-        start: Point,
-        end: Point,
-        center: Point,
-        clockwise: bool,
-    },
-}
-
-fn contour_segments(cmds: &[PathCmd]) -> Result<Vec<Segment>> {
-    let mut first = None;
-    let mut current = None;
+/// Decode a command stream into resolved line/arc segments, flattening cubic
+/// curves into line runs.
+fn contour_segments(cmds: &[PathCmd]) -> Vec<Segment> {
     let mut segments = Vec::new();
-    for cmd in cmds {
-        match cmd.op {
-            PathOp::MoveTo => {
-                first = Some(cmd.p0);
-                current = Some(cmd.p0);
-            }
-            PathOp::LineTo => {
-                let start = current.context("path line command appears before move command")?;
-                segments.push(Segment::Line { start, end: cmd.p0 });
-                current = Some(cmd.p0);
-            }
-            PathOp::ArcTo => {
-                let start = current.context("path arc command appears before move command")?;
-                segments.push(Segment::Arc {
-                    start,
-                    end: cmd.p0,
-                    center: cmd.p1,
-                    clockwise: cmd.clockwise,
-                });
-                current = Some(cmd.p0);
-            }
-            PathOp::CubicTo => {
-                let start = current.context("path cubic command appears before move command")?;
-                let steps = 16;
-                for step in 1..=steps {
-                    let end =
-                        cubic_point(start, cmd.p0, cmd.p1, cmd.p2, step as f64 / steps as f64);
-                    let segment_start = current.unwrap_or(start);
+    for segment in geom_path::segments(cmds) {
+        match segment {
+            Segment::Cubic { start, .. } => {
+                let mut points = Vec::with_capacity(CUBIC_FLATTEN_STEPS);
+                segment.sample_points(CUBIC_FLATTEN_STEPS, &mut points);
+                let mut current = start;
+                for end in points {
                     segments.push(Segment::Line {
-                        start: segment_start,
+                        start: current,
                         end,
                     });
-                    current = Some(end);
+                    current = end;
                 }
             }
-            PathOp::Close => {
-                if let (Some(start), Some(end)) = (first, current)
-                    && !points_close(start, end)
-                {
-                    segments.push(Segment::Line {
-                        start: end,
-                        end: start,
-                    });
-                }
-                current = first;
-            }
+            segment => segments.push(segment),
         }
     }
-    Ok(segments)
+    segments
 }
 
 fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue> {
@@ -725,13 +759,6 @@ fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue>
     values
 }
 
-fn lower_polarity(paint: PaintPolarity) -> Polarity {
-    match paint {
-        PaintPolarity::Dark => Polarity::Dark,
-        PaintPolarity::Clear => Polarity::Clear,
-    }
-}
-
 fn lower_point(point: Point) -> GerberPoint {
     GerberPoint {
         x: point.x,
@@ -739,40 +766,29 @@ fn lower_point(point: Point) -> GerberPoint {
     }
 }
 
-fn transform_is_translation(transform: pcb_ir::common::Affine2) -> bool {
+fn transform_is_translation(transform: pcb_ir::geom::Affine2) -> bool {
     (transform.m00 - 1.0).abs() <= 1e-9
         && transform.m01.abs() <= 1e-9
         && transform.m10.abs() <= 1e-9
         && (transform.m11 - 1.0).abs() <= 1e-9
 }
 
-fn points_close(a: Point, b: Point) -> bool {
-    a.distance_to(b) <= 1e-9
-}
-
-fn cubic_point(start: Point, c1: Point, c2: Point, end: Point, t: f64) -> Point {
-    let mt = 1.0 - t;
-    Point::new(
-        mt.powi(3) * start.x
-            + 3.0 * mt.powi(2) * t * c1.x
-            + 3.0 * mt * t.powi(2) * c2.x
-            + t.powi(3) * end.x,
-        mt.powi(3) * start.y
-            + 3.0 * mt.powi(2) * t * c1.y
-            + 3.0 * mt * t.powi(2) * c2.y
-            + t.powi(3) * end.y,
-    )
-}
-
 fn quantize_mm(value: f64) -> i64 {
     (value * 1_000_000.0).round() as i64
+}
+
+fn quantize_hole(hole_diameter: Option<f64>) -> i64 {
+    hole_diameter.map_or(0, quantize_mm)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcb_ir::common::{BBox, FillRule, LayerRole, Side, Unit};
-    use pcb_ir::dialects::artwork::{ArtworkLayer as IrArtworkLayer, ArtworkObject, PaintOrder};
+    use pcb_ir::dialects::artwork::{
+        Layer as IrArtworkDocument, Object as ArtworkObject, PaintOrder,
+    };
+    use pcb_ir::dialects::{LayerRole, Side};
+    use pcb_ir::geom::{BBox, Paint, Span};
 
     #[test]
     fn sanitizes_net_names_for_gerber_attribute_fields() {
@@ -816,18 +832,19 @@ mod tests {
 
     #[test]
     fn lowers_compound_region_holes_as_local_cut_ins() {
-        let mut artwork = ArtworkLayer::new(Unit::Millimeter);
-        let layer_id = artwork.push_layer(IrArtworkLayer {
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.SilkS".to_string(),
             role: LayerRole::Legend,
             side: Side::None,
-            object_start: 0,
-            object_count: 0,
+            objects: Span::EMPTY,
             bbox: BBox::empty(),
             meta: LayerAttributes::default(),
         });
         let path = artwork.push_path(
-            ArtworkPath::filled(FillRule::EvenOdd),
+            Paint::Fill {
+                rule: FillRule::EvenOdd,
+            },
             vec![
                 rect_payload(0.0, 0.0, 10.0, 10.0),
                 rect_payload(2.0, 2.0, 8.0, 8.0),
@@ -836,11 +853,10 @@ mod tests {
         artwork.push_object(
             layer_id,
             ArtworkObject {
-                paint: PaintPolarity::Dark,
+                polarity: Polarity::Dark,
                 order: Default::default(),
                 geometry: ArtworkGeometry::Region { path },
-                net: None,
-                bbox: artwork.paths[path as usize].bbox,
+                bbox: artwork.path_bbox(path),
                 meta: ObjectAttributes::default(),
             },
         );
@@ -862,18 +878,19 @@ mod tests {
 
     #[test]
     fn deep_nested_even_odd_compound_regions_preserve_topology() {
-        let mut artwork = ArtworkLayer::new(Unit::Millimeter);
-        let layer_id = artwork.push_layer(IrArtworkLayer {
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
             role: LayerRole::Copper,
             side: Side::Top,
-            object_start: 0,
-            object_count: 0,
+            objects: Span::EMPTY,
             bbox: BBox::empty(),
             meta: LayerAttributes::default(),
         });
         let path = artwork.push_path(
-            ArtworkPath::filled(FillRule::EvenOdd),
+            Paint::Fill {
+                rule: FillRule::EvenOdd,
+            },
             vec![
                 rect_payload(0.0, 0.0, 10.0, 10.0),
                 rect_payload(1.0, 1.0, 9.0, 9.0),
@@ -884,11 +901,10 @@ mod tests {
         artwork.push_object(
             layer_id,
             ArtworkObject {
-                paint: PaintPolarity::Dark,
+                polarity: Polarity::Dark,
                 order: Default::default(),
                 geometry: ArtworkGeometry::Region { path },
-                net: None,
-                bbox: artwork.paths[path as usize].bbox,
+                bbox: artwork.path_bbox(path),
                 meta: ObjectAttributes::default(),
             },
         );
@@ -903,10 +919,10 @@ mod tests {
                 .all(|object| object.polarity == Polarity::Dark
                     && matches!(&object.kind, ObjectKind::Region { contours } if contours.len() == 1))
         );
-        let contents = gerberx2::write_layer(&gerber).expect("write Gerber");
-        let parsed = gerberx2::GerberX2::parse(&contents).expect("parse Gerber");
-        let geometry = gerberx2::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+        let contents = crate::write_layer(&gerber).expect("write Gerber");
+        let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
+        let geometry = crate::geometry::extract_document(&parsed);
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
         assert!(
             (summary.area_mm2 - 56.0).abs() < 0.001,
             "deep even-odd topology exported wrong area: {}",
@@ -916,28 +932,28 @@ mod tests {
 
     #[test]
     fn lowers_single_self_cut_even_odd_region_before_emitting_gerber() {
-        let mut artwork = ArtworkLayer::new(Unit::Millimeter);
-        let layer_id = artwork.push_layer(IrArtworkLayer {
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
             role: LayerRole::Copper,
             side: Side::Top,
-            object_start: 0,
-            object_count: 0,
+            objects: Span::EMPTY,
             bbox: BBox::empty(),
             meta: LayerAttributes::default(),
         });
         let path = artwork.push_path(
-            ArtworkPath::filled(FillRule::EvenOdd),
+            Paint::Fill {
+                rule: FillRule::EvenOdd,
+            },
             vec![self_cut_donut_payload()],
         );
         artwork.push_object(
             layer_id,
             ArtworkObject {
-                paint: PaintPolarity::Dark,
+                polarity: Polarity::Dark,
                 order: Default::default(),
                 geometry: ArtworkGeometry::Region { path },
-                net: None,
-                bbox: artwork.paths[path as usize].bbox,
+                bbox: artwork.path_bbox(path),
                 meta: ObjectAttributes::default(),
             },
         );
@@ -956,35 +972,37 @@ mod tests {
 
     #[test]
     fn local_compound_region_holes_do_not_clear_prior_base_copper() {
-        let mut artwork = ArtworkLayer::new(Unit::Millimeter);
-        let layer_id = artwork.push_layer(IrArtworkLayer {
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
             role: LayerRole::Copper,
             side: Side::Top,
-            object_start: 0,
-            object_count: 0,
+            objects: Span::EMPTY,
             bbox: BBox::empty(),
             meta: LayerAttributes::default(),
         });
         let base = artwork.push_path(
-            ArtworkPath::filled(FillRule::NonZero),
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
             vec![rect_payload(0.0, 0.0, 10.0, 10.0)],
         );
         artwork.push_object(
             layer_id,
             ArtworkObject {
-                paint: PaintPolarity::Dark,
+                polarity: Polarity::Dark,
                 order: PaintOrder {
                     stage: PaintStage::Base,
                 },
                 geometry: ArtworkGeometry::Region { path: base },
-                net: None,
-                bbox: artwork.paths[base as usize].bbox,
+                bbox: artwork.path_bbox(base),
                 meta: ObjectAttributes::default(),
             },
         );
         let donut = artwork.push_path(
-            ArtworkPath::filled(FillRule::EvenOdd),
+            Paint::Fill {
+                rule: FillRule::EvenOdd,
+            },
             vec![
                 rect_payload(2.0, 2.0, 8.0, 8.0),
                 rect_payload(4.0, 4.0, 6.0, 6.0),
@@ -993,13 +1011,12 @@ mod tests {
         artwork.push_object(
             layer_id,
             ArtworkObject {
-                paint: PaintPolarity::Dark,
+                polarity: Polarity::Dark,
                 order: PaintOrder {
                     stage: PaintStage::Base,
                 },
                 geometry: ArtworkGeometry::Region { path: donut },
-                net: None,
-                bbox: artwork.paths[donut as usize].bbox,
+                bbox: artwork.path_bbox(donut),
                 meta: ObjectAttributes::default(),
             },
         );
@@ -1013,10 +1030,10 @@ mod tests {
                 .all(|object| object.polarity == Polarity::Dark),
             "local holes must not lower to layer-global clear polarity"
         );
-        let contents = gerberx2::write_layer(&gerber).expect("write Gerber");
-        let parsed = gerberx2::GerberX2::parse(&contents).expect("parse Gerber");
-        let geometry = gerberx2::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+        let contents = crate::write_layer(&gerber).expect("write Gerber");
+        let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
+        let geometry = crate::geometry::extract_document(&parsed);
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
         assert!(
             (summary.area_mm2 - 100.0).abs() < 0.001,
             "donut hole cleared prior base copper; area was {}",
@@ -1026,18 +1043,19 @@ mod tests {
 
     #[test]
     fn places_compound_regions_before_overlay_objects() {
-        let mut artwork = ArtworkLayer::new(Unit::Millimeter);
-        let layer_id = artwork.push_layer(IrArtworkLayer {
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
             role: LayerRole::Copper,
             side: Side::Top,
-            object_start: 0,
-            object_count: 0,
+            objects: Span::EMPTY,
             bbox: BBox::empty(),
             meta: LayerAttributes::default(),
         });
         let pour = artwork.push_path(
-            ArtworkPath::filled(FillRule::EvenOdd),
+            Paint::Fill {
+                rule: FillRule::EvenOdd,
+            },
             vec![
                 rect_payload(0.0, 0.0, 10.0, 10.0),
                 rect_payload(2.0, 2.0, 8.0, 8.0),
@@ -1046,18 +1064,19 @@ mod tests {
         artwork.push_object(
             layer_id,
             ArtworkObject {
-                paint: PaintPolarity::Dark,
+                polarity: Polarity::Dark,
                 order: PaintOrder {
                     stage: PaintStage::Base,
                 },
                 geometry: ArtworkGeometry::Region { path: pour },
-                net: None,
-                bbox: artwork.paths[pour as usize].bbox,
+                bbox: artwork.path_bbox(pour),
                 meta: ObjectAttributes::default(),
             },
         );
         let trace = artwork.push_path(
-            ArtworkPath::filled(FillRule::NonZero),
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
             vec![
                 rect_payload(11.0, 0.0, 12.0, 1.0),
                 rect_payload(11.0, 2.0, 12.0, 3.0),
@@ -1066,13 +1085,12 @@ mod tests {
         artwork.push_object(
             layer_id,
             ArtworkObject {
-                paint: PaintPolarity::Dark,
+                polarity: Polarity::Dark,
                 order: PaintOrder {
                     stage: PaintStage::Overlay,
                 },
                 geometry: ArtworkGeometry::Region { path: trace },
-                net: None,
-                bbox: artwork.paths[trace as usize].bbox,
+                bbox: artwork.path_bbox(trace),
                 meta: ObjectAttributes {
                     net: Some("TRACE".to_string()),
                     ..ObjectAttributes::default()
@@ -1124,7 +1142,7 @@ mod tests {
         );
     }
 
-    fn rect_payload(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> PathPayload {
+    fn rect_payload(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ContourBuf {
         let points = [
             Point::new(min_x, min_y),
             Point::new(max_x, min_y),
@@ -1142,10 +1160,10 @@ mod tests {
             });
         }
         cmds.push(PathCmd::close());
-        PathPayload { bbox, cmds }
+        ContourBuf::from_parts(bbox, cmds)
     }
 
-    fn self_cut_donut_payload() -> PathPayload {
+    fn self_cut_donut_payload() -> ContourBuf {
         let points = [
             Point::new(0.0, 0.0),
             Point::new(4.0, 0.0),
@@ -1170,6 +1188,6 @@ mod tests {
             });
         }
         cmds.push(PathCmd::close());
-        PathPayload { bbox, cmds }
+        ContourBuf::from_parts(bbox, cmds)
     }
 }

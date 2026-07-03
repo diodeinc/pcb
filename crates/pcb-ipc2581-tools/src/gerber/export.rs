@@ -10,25 +10,24 @@ use ipc2581::types::{
     FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive, ecad::Layer,
 };
 
-use super::artwork::{ArtworkLayer, LayerAttributes, ObjectAttributes};
-use super::lower::lower_artwork_layer;
 use crate::geometry;
-use pcb_ir::common::{
-    Affine2, BBox, LayerRole, LineCap, LineJoin, PaintPolarity, Point, Side as IrSide, Unit,
-    arc_sweep_radians,
-};
+use gerberx2::from_artwork::lower_artwork_layer;
+use gerberx2::from_artwork::{ArtworkDocument as GerberArtwork, LayerAttributes, ObjectAttributes};
 use pcb_ir::dialects::artwork::{
-    ArtworkAperture, ArtworkGeometry, ArtworkObject, ArtworkPath, PaintOrder, PaintStage,
+    Aperture, ApertureShape, Geometry as ArtworkGeometry, Object as ArtworkObject, PaintOrder,
+    PaintStage,
 };
 use pcb_ir::dialects::ipc::{
-    BoardArrayFabricationProfile, FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole,
-    FiducialKind, GeometryFeature, GeometryPath, GeometryPathPaintClass, GeometryPolarity,
-    GeometryView, PlatingKind, ProfileSet, profile_occurrences_for, relief,
-    transformed_path_payloads,
+    BoardArrayFabricationProfile, Feature, FeatureBucket, FeatureDomain, FeatureOperation,
+    FeatureRole, FiducialKind, PlatingKind, ProfileSet, View, profile_occurrences_for, relief,
 };
-use pcb_ir::dialects::path as common_path;
+use pcb_ir::dialects::{LayerRole, Side as IrSide};
+use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
+use pcb_ir::geom::{
+    Affine2, Arc, BBox, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span, StrokeStyle,
+};
 
-type IpcGeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>;
+type IpcGeometryDocument = pcb_ir::dialects::ipc::Document<ipc2581::Symbol, LayerFunction>;
 
 #[derive(Debug, Clone)]
 pub struct GerberX2File {
@@ -59,16 +58,16 @@ impl Default for ProfileGerberStyle {
     }
 }
 
-pub fn build_gerber_x2_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<GerberX2File>> {
+pub fn build_gerber_x2_files(ipc: &Ipc2581, view: View) -> Result<Vec<GerberX2File>> {
     build_gerber_x2_files_with_options(ipc, view, &GerberExportOptions::default())
 }
 
 pub fn build_gerber_x2_files_with_options(
     ipc: &Ipc2581,
-    view: GeometryView,
+    view: View,
     options: &GerberExportOptions,
 ) -> Result<Vec<GerberX2File>> {
-    if view == GeometryView::LayoutSymbolic {
+    if view == View::LayoutSymbolic {
         bail!("Gerber export does not support symbolic layout view; use board or board-array");
     }
 
@@ -89,7 +88,7 @@ pub fn build_gerber_x2_files_with_options(
             bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
         }
         if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
-            && doc.layers[0].feature_count == 0
+            && doc.layers[0].features.is_empty()
         {
             continue;
         }
@@ -116,7 +115,7 @@ pub fn build_gerber_x2_files_with_options(
             contents,
         });
     }
-    if view == GeometryView::ArrayFlattened {
+    if view == View::ArrayFlattened {
         if let Some(file) =
             board_array_profile_gerber_file(ipc, options.relief_debug_dir.as_deref())?
         {
@@ -404,27 +403,23 @@ fn artwork_from_ipc_layer(
     doc: &IpcGeometryDocument,
     layer_index: usize,
     spec: GerberArtworkSpec,
-) -> Result<ArtworkLayer> {
+) -> Result<GerberArtwork> {
     let layer = &doc.layers[layer_index];
-    let mut artwork = ArtworkLayer::new(Unit::Millimeter);
-    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
+    let mut artwork = GerberArtwork::new();
+    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
         name: layer.name.clone(),
         role: spec.role.ir_role(),
         side: spec.side,
-        object_start: 0,
-        object_count: 0,
+        objects: Span::EMPTY,
         bbox: layer.bbox,
         meta: spec.meta,
     });
-    let features = &doc.features
-        [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize];
-
-    for feature in features {
+    for feature in layer.features.slice(&doc.features) {
         push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
     }
     if spec.role == GerberLayerRole::Profile
-        && spec.view != GeometryView::ArrayFlattened
-        && artwork.layers[artwork_layer as usize].object_count == 0
+        && spec.view != View::ArrayFlattened
+        && artwork.layers[artwork_layer as usize].objects.is_empty()
     {
         append_profile_occurrences(
             &mut artwork,
@@ -441,21 +436,17 @@ struct GerberArtworkSpec {
     role: GerberLayerRole,
     side: IrSide,
     meta: LayerAttributes,
-    view: GeometryView,
+    view: View,
 }
 
-fn synthetic_profile_gerber_file(
-    ipc: &Ipc2581,
-    view: GeometryView,
-) -> Result<Option<GerberX2File>> {
+fn synthetic_profile_gerber_file(ipc: &Ipc2581, view: View) -> Result<Option<GerberX2File>> {
     let doc = geometry::extract_layout(ipc)?;
-    let mut artwork = ArtworkLayer::new(Unit::Millimeter);
-    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
+    let mut artwork = GerberArtwork::new();
+    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
         name: "Edge.Cuts".to_string(),
         role: LayerRole::Profile,
         side: IrSide::None,
-        object_start: 0,
-        object_count: 0,
+        objects: Span::EMPTY,
         bbox: BBox::empty(),
         meta: layer_attributes(
             vec!["Profile".to_string(), "NP".to_string()],
@@ -469,7 +460,7 @@ fn synthetic_profile_gerber_file(
         view.profile_set(),
         ProfileGerberStyle::default(),
     );
-    if artwork.layers[artwork_layer as usize].object_count == 0 {
+    if artwork.layers[artwork_layer as usize].objects.is_empty() {
         return Ok(None);
     }
 
@@ -500,13 +491,12 @@ fn board_array_profile_gerber_file(
         return Ok(None);
     }
 
-    let mut artwork = ArtworkLayer::new(Unit::Millimeter);
-    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::ArtworkLayer {
+    let mut artwork = GerberArtwork::new();
+    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
         name: "Board Array Profile".to_string(),
         role: LayerRole::Profile,
         side: IrSide::None,
-        object_start: 0,
-        object_count: 0,
+        objects: Span::EMPTY,
         bbox: BBox::empty(),
         meta: layer_attributes(
             vec!["Profile".to_string(), "NP".to_string()],
@@ -515,7 +505,7 @@ fn board_array_profile_gerber_file(
     });
     let style = ProfileGerberStyle::default();
     append_board_array_profile(&mut artwork, artwork_layer, &profile, style);
-    if artwork.layers[artwork_layer as usize].object_count == 0 {
+    if artwork.layers[artwork_layer as usize].objects.is_empty() {
         return Ok(None);
     }
 
@@ -681,7 +671,7 @@ struct DebugSvgPathStyle {
 fn write_debug_path(
     svg: &mut String,
     entry_index: usize,
-    payloads: &[common_path::PathPayload],
+    payloads: &[ContourBuf],
     style: DebugSvgPathStyle,
 ) {
     let Some(path_data) = debug_path_data(payloads) else {
@@ -695,7 +685,7 @@ fn write_debug_path(
     .unwrap();
 }
 
-fn debug_path_data(payloads: &[common_path::PathPayload]) -> Option<String> {
+fn debug_path_data(payloads: &[ContourBuf]) -> Option<String> {
     let mut data = String::new();
     for payload in payloads {
         append_debug_path_cmds(&mut data, &payload.cmds);
@@ -703,26 +693,26 @@ fn debug_path_data(payloads: &[common_path::PathPayload]) -> Option<String> {
     (!data.is_empty()).then_some(data)
 }
 
-fn append_debug_path_cmds(data: &mut String, cmds: &[common_path::PathCmd]) {
+fn append_debug_path_cmds(data: &mut String, cmds: &[PathCmd]) {
     let mut current = Point::default();
     for cmd in cmds {
         match cmd.op {
-            common_path::PathOp::MoveTo => {
+            PathOp::MoveTo => {
                 current = cmd.p0;
                 if !data.is_empty() {
                     data.push(' ');
                 }
                 write!(data, "M{} {}", debug_num(cmd.p0.x), debug_num(cmd.p0.y)).unwrap();
             }
-            common_path::PathOp::LineTo => {
+            PathOp::LineTo => {
                 current = cmd.p0;
                 write!(data, " L{} {}", debug_num(cmd.p0.x), debug_num(cmd.p0.y)).unwrap();
             }
-            common_path::PathOp::ArcTo => {
+            PathOp::ArcTo => {
                 write_debug_arc(data, current, cmd.p0, cmd.p1, cmd.clockwise);
                 current = cmd.p0;
             }
-            common_path::PathOp::CubicTo => {
+            PathOp::CubicTo => {
                 current = cmd.p2;
                 write!(
                     data,
@@ -736,7 +726,7 @@ fn append_debug_path_cmds(data: &mut String, cmds: &[common_path::PathCmd]) {
                 )
                 .unwrap();
             }
-            common_path::PathOp::Close => data.push_str(" Z"),
+            PathOp::Close => data.push_str(" Z"),
         }
     }
 }
@@ -757,7 +747,7 @@ fn write_debug_arc(data: &mut String, start: Point, end: Point, center: Point, c
     }
 
     let large_arc =
-        u8::from(arc_sweep_radians(start, end, center, clockwise) > std::f64::consts::PI);
+        u8::from(Arc::new(start, end, center, clockwise).sweep_radians() > std::f64::consts::PI);
     write_debug_svg_arc(data, radius, large_arc, sweep_flag, end);
 }
 
@@ -773,7 +763,7 @@ fn write_debug_svg_arc(data: &mut String, radius: f64, large_arc: u8, sweep_flag
     .unwrap();
 }
 
-fn payloads_bbox(payloads: &[common_path::PathPayload]) -> BBox {
+fn payloads_bbox(payloads: &[ContourBuf]) -> BBox {
     payloads
         .iter()
         .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
@@ -790,8 +780,8 @@ fn debug_num(value: f64) -> String {
     if text == "-0" { "0".to_string() } else { text }
 }
 
-fn gerber_part_for_view(doc: &IpcGeometryDocument, view: GeometryView) -> GerberPart {
-    if view == GeometryView::Board {
+fn gerber_part_for_view(doc: &IpcGeometryDocument, view: View) -> GerberPart {
+    if view == View::Board {
         GerberPart::Single
     } else {
         gerber_part_for_doc(doc)
@@ -799,7 +789,7 @@ fn gerber_part_for_view(doc: &IpcGeometryDocument, view: GeometryView) -> Gerber
 }
 
 fn append_profile_occurrences(
-    artwork: &mut ArtworkLayer,
+    artwork: &mut GerberArtwork,
     layer: u32,
     doc: &IpcGeometryDocument,
     profile_set: ProfileSet,
@@ -826,7 +816,7 @@ fn append_profile_occurrences(
 }
 
 fn append_board_array_profile(
-    artwork: &mut ArtworkLayer,
+    artwork: &mut GerberArtwork,
     layer: u32,
     profile: &BoardArrayFabricationProfile,
     style: ProfileGerberStyle,
@@ -840,22 +830,20 @@ fn append_board_array_profile(
 }
 
 fn append_profile_cutouts(
-    artwork: &mut ArtworkLayer,
+    artwork: &mut GerberArtwork,
     layer: u32,
     doc: &IpcGeometryDocument,
     profile: &pcb_ir::dialects::ipc::StepProfile,
     transform: Affine2,
     style: ProfileGerberStyle,
 ) {
-    for cutout in &doc.profile_cutouts
-        [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
-    {
+    for cutout in profile.cutouts.slice(&doc.profile_cutouts) {
         append_profile_path(artwork, layer, doc, cutout.path, transform, style);
     }
 }
 
 fn append_profile_path(
-    artwork: &mut ArtworkLayer,
+    artwork: &mut GerberArtwork,
     layer: u32,
     doc: &IpcGeometryDocument,
     path: u32,
@@ -865,31 +853,35 @@ fn append_profile_path(
     append_profile_payloads(
         artwork,
         layer,
-        transformed_path_payloads(doc, path, transform),
+        doc.transformed_path_contours(path, transform),
         style,
     );
 }
 
 fn append_profile_payloads(
-    artwork: &mut ArtworkLayer,
+    artwork: &mut GerberArtwork,
     layer: u32,
-    payloads: Vec<common_path::PathPayload>,
+    payloads: Vec<ContourBuf>,
     style: ProfileGerberStyle,
 ) {
     let path = artwork.push_path(
-        ArtworkPath::stroked(style.stroke_width_mm, style.line_cap, style.line_join),
+        Paint::Stroke(StrokeStyle {
+            width: style.stroke_width_mm,
+            cap: style.line_cap,
+            join: style.line_join,
+            pattern: LinePattern::Solid,
+        }),
         payloads,
     );
-    let bbox = artwork.paths[path as usize].bbox;
+    let bbox = artwork.path_bbox(path);
     artwork.push_object(
         layer,
         ArtworkObject {
-            paint: PaintPolarity::Dark,
+            polarity: Polarity::Dark,
             order: PaintOrder {
                 stage: PaintStage::Overlay,
             },
             geometry: ArtworkGeometry::Stroke { path },
-            net: None,
             bbox,
             meta: ObjectAttributes {
                 aperture_function: Some(vec!["Profile".to_string()]),
@@ -897,7 +889,6 @@ fn append_profile_payloads(
             },
         },
     );
-    artwork.layers[layer as usize].bbox = artwork.layers[layer as usize].bbox.union(bbox);
 }
 
 fn ir_side(side: Option<IpcSide>) -> IrSide {
@@ -909,11 +900,11 @@ fn ir_side(side: Option<IpcSide>) -> IrSide {
 }
 
 fn push_artwork_feature(
-    artwork: &mut ArtworkLayer,
+    artwork: &mut GerberArtwork,
     artwork_layer: u32,
     ipc: &Ipc2581,
     doc: &IpcGeometryDocument,
-    feature: &GeometryFeature<ipc2581::Symbol>,
+    feature: &Feature<ipc2581::Symbol>,
     layer_name: &str,
 ) -> Result<()> {
     if let Some((aperture, at, bbox)) = standard_flash_aperture(ipc, feature) {
@@ -921,13 +912,12 @@ fn push_artwork_feature(
         artwork.push_object(
             artwork_layer,
             ArtworkObject {
-                paint: paint_polarity(feature.polarity),
+                polarity: feature.polarity,
                 order: paint_order(feature),
                 geometry: ArtworkGeometry::Flash {
                     aperture,
-                    transform: Affine2::placement(at, 0.0, false, 1.0),
+                    transform: Affine2::translation(at),
                 },
-                net: None,
                 bbox,
                 meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
             },
@@ -936,13 +926,16 @@ fn push_artwork_feature(
     }
 
     if let Some((at, diameter)) = circle_flash(doc, feature) {
+        let aperture = artwork.push_aperture(Aperture::circle(diameter));
         artwork.push_object(
             artwork_layer,
             ArtworkObject {
-                paint: paint_polarity(feature.polarity),
+                polarity: feature.polarity,
                 order: paint_order(feature),
-                geometry: ArtworkGeometry::CircleFlash { at, diameter },
-                net: None,
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: Affine2::translation(at),
+                },
                 bbox: BBox::from_point(at).expand(diameter / 2.0),
                 meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
             },
@@ -950,14 +943,8 @@ fn push_artwork_feature(
         return Ok(());
     }
 
-    for path in
-        &doc.paths[feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
-    {
-        let aperture_function = matches!(
-            path.paint_class().ok().flatten(),
-            Some(GeometryPathPaintClass::Stroked)
-        )
-        .then(|| aperture_function(feature));
+    for path in feature.paths.slice(&doc.arena.paths) {
+        let aperture_function = path.is_stroked().then(|| aperture_function(feature));
         push_artwork_object(
             artwork,
             artwork_layer,
@@ -974,8 +961,8 @@ fn push_artwork_feature(
 
 fn standard_flash_aperture(
     ipc: &Ipc2581,
-    feature: &GeometryFeature<ipc2581::Symbol>,
-) -> Option<(ArtworkAperture, Point, BBox)> {
+    feature: &Feature<ipc2581::Symbol>,
+) -> Option<(Aperture, Point, BBox)> {
     if !standard_flash_feature_is_eligible(feature) {
         return None;
     }
@@ -988,9 +975,9 @@ fn standard_flash_aperture(
     let aperture = match primitive {
         StandardPrimitive::Circle(circle) => {
             let scale = uniform_scale(feature.transform)?;
-            ArtworkAperture::Circle {
+            Aperture::solid(ApertureShape::Circle {
                 diameter: circle.shape.diameter * scale,
-            }
+            })
         }
         StandardPrimitive::RectCenter(rect) => {
             let (width, height) = axis_aligned_size(
@@ -998,7 +985,7 @@ fn standard_flash_aperture(
                 rect.shape.size.width,
                 rect.shape.size.height,
             )?;
-            ArtworkAperture::Rectangle { width, height }
+            Aperture::solid(ApertureShape::Rectangle { width, height })
         }
         StandardPrimitive::Oval(oval) => {
             let (width, height) = axis_aligned_size(
@@ -1006,7 +993,7 @@ fn standard_flash_aperture(
                 oval.shape.size.width,
                 oval.shape.size.height,
             )?;
-            ArtworkAperture::Obround { width, height }
+            Aperture::solid(ApertureShape::Obround { width, height })
         }
         _ => return None,
     };
@@ -1016,9 +1003,9 @@ fn standard_flash_aperture(
     Some((aperture, at, bbox))
 }
 
-fn standard_flash_feature_is_eligible(feature: &GeometryFeature<ipc2581::Symbol>) -> bool {
-    feature.polarity == GeometryPolarity::Positive
-        && feature.path_count != 0
+fn standard_flash_feature_is_eligible(feature: &Feature<ipc2581::Symbol>) -> bool {
+    feature.polarity == Polarity::Dark
+        && !feature.paths.is_empty()
         && (matches!(
             feature.intent.role,
             FeatureRole::Pad | FeatureRole::Via | FeatureRole::Hole
@@ -1027,7 +1014,7 @@ fn standard_flash_feature_is_eligible(feature: &GeometryFeature<ipc2581::Symbol>
 
 fn standard_primitive_for_feature<'a>(
     ipc: &'a Ipc2581,
-    feature: &GeometryFeature<ipc2581::Symbol>,
+    feature: &Feature<ipc2581::Symbol>,
 ) -> Option<&'a StandardPrimitive> {
     let primitive_ref = feature.primitive_ref?;
     ipc.content()
@@ -1095,16 +1082,9 @@ fn axis_aligned_size(transform: Affine2, width: f64, height: f64) -> Option<(f64
     None
 }
 
-fn flash_bbox(at: Point, aperture: ArtworkAperture) -> BBox {
-    let (width, height) = match aperture {
-        ArtworkAperture::Circle { diameter } => (diameter, diameter),
-        ArtworkAperture::Rectangle { width, height }
-        | ArtworkAperture::Obround { width, height } => (width, height),
-    };
-    BBox {
-        min: Point::new(at.x - width / 2.0, at.y - height / 2.0),
-        max: Point::new(at.x + width / 2.0, at.y + height / 2.0),
-    }
+fn flash_bbox(at: Point, aperture: Aperture) -> BBox {
+    let local = aperture.bbox();
+    BBox::new(at + local.min, at + local.max)
 }
 
 const GEOMETRY_EPSILON: f64 = 1e-9;
@@ -1113,17 +1093,10 @@ fn nearly_equal(left: f64, right: f64) -> bool {
     (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
 }
 
-fn paint_polarity(polarity: GeometryPolarity) -> PaintPolarity {
-    match polarity {
-        GeometryPolarity::Positive => PaintPolarity::Dark,
-        GeometryPolarity::Negative => PaintPolarity::Clear,
-    }
-}
-
-fn paint_order(feature: &GeometryFeature<ipc2581::Symbol>) -> PaintOrder {
+fn paint_order(feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
     let stage = if feature.intent.role == FeatureRole::Cutout || feature.is_drill_like() {
         PaintStage::FinalCutout
-    } else if feature.polarity == GeometryPolarity::Negative
+    } else if feature.polarity == Polarity::Clear
         || feature.flags.clears_previous_in_set
         || matches!(
             feature.bucket,
@@ -1139,14 +1112,14 @@ fn paint_order(feature: &GeometryFeature<ipc2581::Symbol>) -> PaintOrder {
 
 fn circle_flash(
     doc: &IpcGeometryDocument,
-    feature: &GeometryFeature<ipc2581::Symbol>,
+    feature: &Feature<ipc2581::Symbol>,
 ) -> Option<(Point, f64)> {
-    if feature.outer_diameter <= 0.0 || feature.path_count != 1 {
+    if feature.outer_diameter <= 0.0 || feature.paths.len() != 1 {
         return None;
     }
 
-    let path = &doc.paths[feature.path_start as usize];
-    if path.paint_class().ok().flatten() != Some(GeometryPathPaintClass::Filled) {
+    let path = &feature.paths.slice(&doc.arena.paths)[0];
+    if !path.is_filled() {
         return None;
     }
 
@@ -1163,12 +1136,10 @@ fn circle_flash(
 fn object_attributes(
     ipc: &Ipc2581,
     doc: &IpcGeometryDocument,
-    feature: &GeometryFeature<ipc2581::Symbol>,
+    feature: &Feature<ipc2581::Symbol>,
     aperture_function: Option<Vec<String>>,
 ) -> ObjectAttributes {
-    let pin_ref = (feature.pin_ref_count > 0)
-        .then(|| doc.pin_refs.get(feature.pin_ref_start as usize))
-        .flatten();
+    let pin_ref = feature.pin_refs.slice(&doc.pin_refs).first();
     ObjectAttributes {
         aperture_function,
         net: feature.net.map(|symbol| ipc.resolve(symbol).to_string()),
@@ -1179,7 +1150,7 @@ fn object_attributes(
     }
 }
 
-fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> {
+fn aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String> {
     match feature.intent.operation {
         FeatureOperation::Drill => return vec!["Other".to_string(), "Drill".to_string()],
         FeatureOperation::Score if feature.is_vcut() => {
@@ -1233,7 +1204,7 @@ fn aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> 
     }
 }
 
-fn fiducial_aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec<String> {
+fn fiducial_aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String> {
     let kind = match feature.fiducial_kind {
         FiducialKind::Unknown => "Global",
         FiducialKind::Local => "Local",
@@ -1247,47 +1218,37 @@ fn fiducial_aperture_function(feature: &GeometryFeature<ipc2581::Symbol>) -> Vec
 }
 
 fn push_artwork_path(
-    artwork: &mut ArtworkLayer,
-    artwork_path: ArtworkPath,
+    artwork: &mut GerberArtwork,
+    paint: Paint,
     doc: &IpcGeometryDocument,
-    path: &GeometryPath,
+    path: &pcb_ir::geom::Path,
 ) -> u32 {
-    artwork.push_path(artwork_path, artwork_contours(doc, path))
+    artwork.push_path(paint, doc.arena.path_contours(path))
 }
 
 fn push_artwork_object(
-    artwork: &mut ArtworkLayer,
+    artwork: &mut GerberArtwork,
     artwork_layer: u32,
     doc: &IpcGeometryDocument,
-    feature: &GeometryFeature<ipc2581::Symbol>,
-    path: &GeometryPath,
+    feature: &Feature<ipc2581::Symbol>,
+    path: &pcb_ir::geom::Path,
     meta: ObjectAttributes,
     layer_name: &str,
 ) -> Result<()> {
-    let paint_class = path.paint_class().map_err(|error| {
-        anyhow::anyhow!("processed IPC geometry path is invalid on layer '{layer_name}': {error}")
-    })?;
-    let (geometry, path_id) = match paint_class {
-        Some(GeometryPathPaintClass::Filled) => {
-            let path = push_artwork_path(
-                artwork,
-                ArtworkPath::filled(path.style.fill.rule),
-                doc,
-                path,
-            );
+    let (geometry, path_id) = match path.paint {
+        Paint::Fill { rule } => {
+            let path = push_artwork_path(artwork, Paint::Fill { rule }, doc, path);
             (ArtworkGeometry::Region { path }, path)
         }
-        Some(GeometryPathPaintClass::Stroked) => {
-            let artwork_path = ArtworkPath::stroked_with_pattern(
-                path.style.stroke.width,
-                path.style.stroke.line_cap,
-                LineJoin::Round,
-                path.style.stroke.pattern,
-            );
-            let path = push_artwork_path(artwork, artwork_path, doc, path);
+        Paint::Stroke(stroke) => {
+            let paint = Paint::Stroke(StrokeStyle {
+                join: LineJoin::Round,
+                ..stroke
+            });
+            let path = push_artwork_path(artwork, paint, doc, path);
             (ArtworkGeometry::Stroke { path }, path)
         }
-        None => {
+        Paint::None => {
             bail!(
                 "processed IPC geometry path is neither filled nor stroked on layer '{layer_name}'"
             );
@@ -1296,30 +1257,14 @@ fn push_artwork_object(
     artwork.push_object(
         artwork_layer,
         ArtworkObject {
-            paint: paint_polarity(feature.polarity),
+            polarity: feature.polarity,
             order: paint_order(feature),
             geometry,
-            net: None,
-            bbox: artwork.paths[path_id as usize].bbox,
+            bbox: artwork.path_bbox(path_id),
             meta,
         },
     );
     Ok(())
-}
-
-fn artwork_contours(
-    doc: &IpcGeometryDocument,
-    path: &GeometryPath,
-) -> Vec<common_path::PathPayload> {
-    doc.contours[path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
-        .iter()
-        .map(|contour| common_path::PathPayload {
-            bbox: contour.bbox,
-            cmds: doc.path_cmds
-                [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize]
-                .to_vec(),
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -1425,7 +1370,7 @@ mod tests {
         )
         .unwrap();
 
-        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
         let edge_cuts = files
             .iter()
             .find(|file| file.filename == "Edge_Cuts.gm1")
@@ -1483,7 +1428,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
 
         assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));
         for file in &files {
@@ -1507,7 +1452,7 @@ mod tests {
                 .any(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
         );
 
-        let panel_target_files = build_gerber_x2_files(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let panel_target_files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
 
         let panel_target_copper = panel_target_files
             .iter()
@@ -1576,7 +1521,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
 
         let copper = files
             .iter()
@@ -1587,14 +1532,14 @@ mod tests {
             parsed
                 .objects()
                 .iter()
-                .all(|object| object.polarity == pcb_ir::dialects::gerber::Polarity::Dark),
+                .all(|object| object.polarity == Polarity::Dark),
             "positive compound region holes should not export as layer-global clear regions"
         );
         let region_index = parsed
             .objects()
             .iter()
             .position(|object| {
-                object.polarity == pcb_ir::dialects::gerber::Polarity::Dark
+                object.polarity == Polarity::Dark
                     && matches!(object.kind, gerberx2::ObjectKind::Region { .. })
             })
             .expect("compound fill should export as a dark local cut-in region");
@@ -1606,7 +1551,7 @@ mod tests {
         assert!(region_index < pad_flash_index);
 
         let geometry = gerberx2::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
         assert!(
             summary.area_mm2 > 96.7,
             "pad flash was not restored after local clear; area was {}",
@@ -1671,7 +1616,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
 
         let copper = files
             .iter()
@@ -1693,7 +1638,7 @@ mod tests {
 
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
         let geometry = gerberx2::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
         assert!(
             summary.area_mm2 > 97.0,
             "multi-contour trace was not restored after local clear; area was {}",
@@ -1749,7 +1694,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let package = build_manufacturing_package(&ipc, GeometryView::Board).unwrap();
+        let package = build_manufacturing_package(&ipc, View::Board).unwrap();
 
         assert!(
             !package
@@ -1847,7 +1792,7 @@ mod tests {
             &ipc,
             &ManufacturingExportOptions {
                 output: output_zip.clone(),
-                view: GeometryView::Board,
+                view: View::Board,
                 relief_debug_dir: None,
             },
         )
@@ -1884,7 +1829,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let error = build_manufacturing_package(&ipc, GeometryView::LayoutSymbolic).unwrap_err();
+        let error = build_manufacturing_package(&ipc, View::LayoutSymbolic).unwrap_err();
 
         assert!(
             error
@@ -1940,7 +1885,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
 
         let silk = files
             .iter()
@@ -1952,7 +1897,7 @@ mod tests {
         );
         let parsed = gerberx2::GerberX2::parse(&silk.contents).unwrap();
         let geometry = gerberx2::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
         assert!(
             (summary.area_mm2 - 12.0).abs() < 1e-6,
             "compound region should preserve its counter hole; area was {}",
@@ -2013,7 +1958,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
 
         let top = files
             .iter()
@@ -2068,7 +2013,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
 
         assert!(files.iter().all(|file| file.filename != "V_Cut.gbr"));
         let profile = files
@@ -2149,7 +2094,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
 
         let top = files
             .iter()
@@ -2190,7 +2135,7 @@ mod tests {
         let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
         let content = zstd::decode_all(Cursor::new(compressed)).unwrap();
         let ipc = ipc::Ipc2581::parse(std::str::from_utf8(&content).unwrap()).unwrap();
-        let files = build_gerber_x2_files(&ipc, GeometryView::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
 
         assert!(files.len() >= 10);
         assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));
@@ -2200,11 +2145,11 @@ mod tests {
             let parsed = gerberx2::GerberX2::parse(&file.contents).unwrap();
             let geometry = gerberx2::geometry::extract_document(&parsed);
             geometry.validate().unwrap();
-            let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
-            assert!(svg.contains("<svg"), "{} did not render SVG", file.filename);
 
             let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
             mask.validate().unwrap();
+            let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::layer(0));
+            assert!(svg.contains("<svg"), "{} did not render SVG", file.filename);
         }
 
         let mut layer = geometry::extract_layer(&ipc, "F.Cu").unwrap();
@@ -2213,23 +2158,28 @@ mod tests {
             &layer,
             0,
             LayerRole::Copper,
-            pcb_ir::common::Side::Top,
+            pcb_ir::dialects::Side::Top,
         );
         artwork.validate().unwrap();
         let mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork);
         mask.validate().unwrap();
-        assert!(pcb_ir::dialects::mask::render_svg(&mask, 0).contains("<svg"));
+        assert!(
+            pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::layer(0)).contains("<svg")
+        );
 
         pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut layer);
         let flat_artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
             &layer,
             0,
             LayerRole::Copper,
-            pcb_ir::common::Side::Top,
+            pcb_ir::dialects::Side::Top,
         );
         flat_artwork.validate().unwrap();
         let flat_mask = pcb_ir::dialects::artwork::compose_to_mask(&flat_artwork);
         flat_mask.validate().unwrap();
-        assert!(pcb_ir::dialects::mask::render_svg(&flat_mask, 0).contains("<svg"));
+        assert!(
+            pcb_ir::render::svg(&flat_mask, &pcb_ir::render::RenderOptions::layer(0))
+                .contains("<svg")
+        );
     }
 }

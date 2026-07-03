@@ -1,5 +1,25 @@
 use crate::Symbol;
-use pcb_ir::dialects::gerber::{Mirroring, Polarity};
+use pcb_ir::geom::{Mirror, Polarity};
+
+/// Gerber load-mirroring state (`LM`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Mirroring {
+    None,
+    X,
+    Y,
+    XY,
+}
+
+impl From<Mirroring> for Mirror {
+    fn from(mirroring: Mirroring) -> Mirror {
+        match mirroring {
+            Mirroring::None => Mirror::NONE,
+            Mirroring::X => Mirror::X,
+            Mirroring::Y => Mirror::Y,
+            Mirroring::XY => Mirror::XY,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unit {

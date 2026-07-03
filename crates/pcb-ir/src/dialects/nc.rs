@@ -1,15 +1,15 @@
-use crate::common::{Point, Unit};
+//! Numerically controlled drill/rout operations (millimeters).
 
-#[derive(Debug, Clone)]
-pub struct NcDocument<Symbol = ()> {
-    pub unit: Unit,
-    pub objects: Vec<NcObject<Symbol>>,
+use crate::geom::Point;
+
+#[derive(Debug, Clone, Default)]
+pub struct Document<Symbol = ()> {
+    pub objects: Vec<Object<Symbol>>,
 }
 
-impl<Symbol> NcDocument<Symbol> {
-    pub fn new(unit: Unit) -> Self {
+impl<Symbol> Document<Symbol> {
+    pub fn new() -> Self {
         Self {
-            unit,
             objects: Vec::new(),
         }
     }
@@ -20,18 +20,18 @@ impl<Symbol> NcDocument<Symbol> {
 }
 
 #[derive(Debug, Clone)]
-pub struct NcObject<Symbol = ()> {
-    pub geometry: NcGeometry,
-    pub plating: NcPlating,
-    pub span: NcSpan<Symbol>,
-    pub function: NcFunction,
+pub struct Object<Symbol = ()> {
+    pub geometry: Geometry,
+    pub plating: Plating,
+    pub span: DrillSpan<Symbol>,
+    pub function: Function,
     pub net: Option<Symbol>,
     pub component: Option<Symbol>,
     pub pin: Option<Symbol>,
 }
 
 #[derive(Debug, Clone)]
-pub enum NcGeometry {
+pub enum Geometry {
     Drill {
         at: Point,
         diameter: f64,
@@ -44,11 +44,11 @@ pub enum NcGeometry {
     Route {
         start: Point,
         diameter: f64,
-        segments: Vec<NcRouteSegment>,
+        segments: Vec<RouteSegment>,
     },
 }
 
-impl NcGeometry {
+impl Geometry {
     pub fn diameter(&self) -> f64 {
         match self {
             Self::Drill { diameter, .. }
@@ -59,20 +59,21 @@ impl NcGeometry {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum NcRouteSegment {
+pub enum RouteSegment {
     Line { to: Point },
     ClockwiseArc { to: Point, radius: f64 },
     CounterClockwiseArc { to: Point, radius: f64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum NcPlating {
+pub enum Plating {
     Plated,
     NonPlated,
 }
 
+/// Which layers an operation spans through the stackup.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum NcSpan<Symbol = ()> {
+pub enum DrillSpan<Symbol = ()> {
     ThroughBoard,
     FromTo {
         from: Option<Symbol>,
@@ -81,7 +82,7 @@ pub enum NcSpan<Symbol = ()> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum NcFunction {
+pub enum Function {
     Via,
     Component,
 }

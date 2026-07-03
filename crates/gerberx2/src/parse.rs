@@ -1,6 +1,7 @@
+use crate::types::Mirroring;
 use crate::types::*;
 use crate::{GerberError, GerberX2, Interner, Result, Symbol};
-use pcb_ir::dialects::gerber::{Mirroring, Polarity};
+use pcb_ir::geom::Polarity;
 use std::collections::HashMap;
 
 pub struct Parser<'a> {

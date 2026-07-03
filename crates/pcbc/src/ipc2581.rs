@@ -186,7 +186,7 @@ enum GerberLayoutTarget {
     BoardArray,
 }
 
-impl From<GerberLayoutTarget> for pcb_ir::dialects::ipc::GeometryView {
+impl From<GerberLayoutTarget> for pcb_ir::dialects::ipc::View {
     fn from(target: GerberLayoutTarget) -> Self {
         match target {
             GerberLayoutTarget::Board => Self::Board,

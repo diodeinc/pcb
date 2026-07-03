@@ -193,7 +193,7 @@ impl<'a> IpcAccessor<'a> {
     }
 }
 
-fn dimensions_from_bbox(bbox: pcb_ir::common::BBox) -> Option<BoardDimensions> {
+fn dimensions_from_bbox(bbox: pcb_ir::geom::BBox) -> Option<BoardDimensions> {
     if bbox.width() > 0.0 && bbox.height() > 0.0 {
         Some(BoardDimensions::new(bbox.width(), bbox.height()))
     } else {

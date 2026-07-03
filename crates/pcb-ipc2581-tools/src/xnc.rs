@@ -43,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 use gerberx2::sanitize_attribute_field;
-use pcb_ir::common::Point;
+use pcb_ir::geom::Point;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XncUnit {

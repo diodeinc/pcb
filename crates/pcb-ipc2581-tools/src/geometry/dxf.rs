@@ -1,10 +1,8 @@
 use std::fmt::Write;
 
-use pcb_ir::common::Point;
-use pcb_ir::dialects::ipc::{
-    GeometryDocument, PathCmd, PathOp, ProfileSet, profile_occurrences_for,
-    transformed_path_payloads,
-};
+use pcb_ir::dialects::ipc::{Document, ProfileSet, profile_occurrences_for};
+use pcb_ir::geom::Point;
+use pcb_ir::geom::path::{PathCmd, PathOp};
 
 const OUTLINE_LAYER: &str = "BOARD_OUTLINE";
 const EPSILON: f64 = 1e-9;
@@ -17,7 +15,7 @@ struct DxfVertex {
 }
 
 pub fn render_profile_set_dxf<Symbol, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
+    doc: &Document<Symbol, LayerFunction>,
     profile_set: ProfileSet,
 ) -> String {
     let mut dxf = String::new();
@@ -31,9 +29,7 @@ pub fn render_profile_set_dxf<Symbol, LayerFunction>(
             occurrence.profile.outer_path,
             occurrence.transform,
         );
-        for cutout in &doc.profile_cutouts[occurrence.profile.cutout_start as usize
-            ..(occurrence.profile.cutout_start + occurrence.profile.cutout_count) as usize]
-        {
+        for cutout in occurrence.profile.cutouts.slice(&doc.profile_cutouts) {
             write_path(&mut dxf, doc, cutout.path, occurrence.transform);
         }
     }
@@ -65,12 +61,12 @@ fn write_footer(dxf: &mut String) {
 
 fn write_path<Symbol, LayerFunction>(
     dxf: &mut String,
-    doc: &GeometryDocument<Symbol, LayerFunction>,
+    doc: &Document<Symbol, LayerFunction>,
     path_index: u32,
-    transform: pcb_ir::common::Affine2,
+    transform: pcb_ir::geom::Affine2,
 ) {
-    for payload in transformed_path_payloads(doc, path_index, transform) {
-        write_polyline(dxf, &contour_vertices(&payload.cmds));
+    for contour in doc.transformed_path_contours(path_index, transform) {
+        write_polyline(dxf, &contour_vertices(&contour.cmds));
     }
 }
 
@@ -231,8 +227,9 @@ fn fmt_num(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcb_ir::common::BBox;
-    use pcb_ir::dialects::ipc::{GeometryPath, StepProfile, StepProfileCutout};
+    use pcb_ir::dialects::ipc::{StepProfile, StepProfileCutout};
+    use pcb_ir::geom::BBox;
+    use pcb_ir::geom::{ContourBuf, Paint, Span};
 
     #[test]
     fn renders_profile_ir_as_mm_dxf_with_closed_outline_layer() {
@@ -249,20 +246,19 @@ mod tests {
 
     #[test]
     fn preserves_profile_arcs_as_lwpolyline_bulges() {
-        let mut doc = GeometryDocument::<u32, ()>::new();
+        let mut doc = Document::<u32, ()>::new();
         let path = doc.push_path(
-            GeometryPath::unpainted(BBox::empty()),
-            [
+            Paint::None,
+            [ContourBuf::new(vec![
                 PathCmd::move_to(Point::new(1.0, 0.0)),
                 PathCmd::arc_to(Point::new(-1.0, 0.0), Point::new(0.0, 0.0), false),
                 PathCmd::arc_to(Point::new(1.0, 0.0), Point::new(0.0, 0.0), false),
                 PathCmd::close(),
-            ],
+            ])],
         );
         doc.profiles.push(StepProfile {
             outer_path: path,
-            cutout_start: 0,
-            cutout_count: 0,
+            cutouts: Span::EMPTY,
             bbox: BBox::empty(),
         });
 
@@ -271,27 +267,27 @@ mod tests {
         assert!(dxf.contains("42\n1\n"));
     }
 
-    fn rect_profile_doc() -> GeometryDocument<u32, ()> {
-        let mut doc = GeometryDocument::new();
+    fn rect_profile_doc() -> Document<u32, ()> {
+        let mut doc = Document::new();
         let outer_path = doc.push_path(
-            GeometryPath::unpainted(BBox::empty()),
-            [
+            Paint::None,
+            [ContourBuf::new(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
                 PathCmd::line_to(Point::new(10.0, 0.0)),
                 PathCmd::line_to(Point::new(10.0, 5.0)),
                 PathCmd::line_to(Point::new(0.0, 5.0)),
                 PathCmd::close(),
-            ],
+            ])],
         );
         let cutout_path = doc.push_path(
-            GeometryPath::unpainted(BBox::empty()),
-            [
+            Paint::None,
+            [ContourBuf::new(vec![
                 PathCmd::move_to(Point::new(4.0, 2.0)),
                 PathCmd::line_to(Point::new(6.0, 2.0)),
                 PathCmd::line_to(Point::new(6.0, 3.0)),
                 PathCmd::line_to(Point::new(4.0, 3.0)),
                 PathCmd::close(),
-            ],
+            ])],
         );
         doc.profile_cutouts.push(StepProfileCutout {
             path: cutout_path,
@@ -299,8 +295,7 @@ mod tests {
         });
         doc.profiles.push(StepProfile {
             outer_path,
-            cutout_start: 0,
-            cutout_count: 1,
+            cutouts: Span::new(0, 1),
             bbox: BBox::empty(),
         });
         doc

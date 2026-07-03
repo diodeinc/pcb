@@ -34,7 +34,8 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
         RenderTarget::Png => render_png(&geometry, options, view)?,
         RenderTarget::Terminal => {
             let mask = geometry::render::layer_mask(&geometry, true, view.profile_set());
-            pcb_ir::dialects::mask::render_all_to_terminal(&mask).map_err(anyhow::Error::msg)?;
+            pcb_ir::render::to_terminal(&mask, &pcb_ir::render::RenderOptions::default())
+                .map_err(anyhow::Error::msg)?;
         }
     }
 
@@ -56,7 +57,7 @@ fn resolve_target(options: &RenderOptions) -> Result<RenderTarget> {
         RenderFormat::Auto => {
             if let Some(output) = &options.output {
                 infer_format_from_output(output)
-            } else if pcb_ir::dialects::mask::can_render_to_terminal() {
+            } else if pcb_ir::render::can_render_to_terminal() {
                 Ok(RenderTarget::Terminal)
             } else {
                 bail!(
@@ -86,12 +87,9 @@ fn infer_format_from_output(output: &Path) -> Result<RenderTarget> {
 }
 
 fn render_svg(
-    geometry: &pcb_ir::dialects::ipc::GeometryDocument<
-        ipc2581::Symbol,
-        ipc2581::types::LayerFunction,
-    >,
+    geometry: &pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>,
     options: &RenderOptions,
-    view: pcb_ir::dialects::ipc::GeometryView,
+    view: pcb_ir::dialects::ipc::View,
 ) -> Result<()> {
     let svg = geometry::render::render_layer_svg(geometry, true, view.profile_set());
 
@@ -111,15 +109,13 @@ fn render_svg(
 }
 
 fn render_png(
-    geometry: &pcb_ir::dialects::ipc::GeometryDocument<
-        ipc2581::Symbol,
-        ipc2581::types::LayerFunction,
-    >,
+    geometry: &pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>,
     options: &RenderOptions,
-    view: pcb_ir::dialects::ipc::GeometryView,
+    view: pcb_ir::dialects::ipc::View,
 ) -> Result<()> {
     let mask = geometry::render::layer_mask(geometry, true, view.profile_set());
-    let png = pcb_ir::dialects::mask::render_png_all(&mask).map_err(anyhow::Error::msg)?;
+    let png = pcb_ir::render::png(&mask, &pcb_ir::render::RenderOptions::default())
+        .map_err(anyhow::Error::msg)?;
 
     if let Some(output) = &options.output {
         std::fs::write(output, png)

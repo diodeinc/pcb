@@ -3,14 +3,14 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
-use pcb_ir::common::{Affine2, BBox, Point, arc_sweep_radians};
-use pcb_ir::dialects::ipc::{GeometryView, LayoutStep, LayoutStepKind, PathCmd, PathOp};
-use pcb_ir::dialects::path::PathPayload;
+use pcb_ir::dialects::ipc::{LayoutStep, LayoutStepKind, View};
+use pcb_ir::geom::path::{PathCmd, PathOp};
+use pcb_ir::geom::{Affine2, Arc, BBox, ContourBuf, Point};
 
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
 
 type GeometryDocument =
-    pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
+    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 const OVERVIEW_STROKE_WIDTH_MM: f64 = 0.1;
 const OVERVIEW_VIEWBOX_PADDING_MM: f64 = 1.0;
@@ -175,7 +175,7 @@ fn board_array_layer_overlays(
             let Ok(mut doc) = crate::geometry::extract_layer_for_view(
                 accessor.ipc(),
                 layer_name,
-                GeometryView::ArraySupport,
+                View::ArraySupport,
             ) else {
                 return None;
             };
@@ -214,10 +214,7 @@ fn board_array_profile_paths(
     })
 }
 
-fn payload_groups_path_data(
-    payload_groups: &[Vec<PathPayload>],
-    transform: Affine2,
-) -> Vec<String> {
+fn payload_groups_path_data(payload_groups: &[Vec<ContourBuf>], transform: Affine2) -> Vec<String> {
     payload_groups
         .iter()
         .filter_map(|payloads| payloads_path_data(payloads, transform))
@@ -230,7 +227,9 @@ fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayer
     };
     let transform = y_flip_transform(panel_height);
 
-    doc.features[layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
+    layer
+        .features
+        .slice(&doc.features)
         .iter()
         .filter(|feature| feature.source_layer_ref == Some(layer.source_layer_ref))
         .flat_map(|feature| feature_paths(doc, feature, transform))
@@ -280,15 +279,13 @@ fn step_profile_path_data(
     include_cutouts: bool,
 ) -> Option<String> {
     let mut path_data = String::new();
-    for profile_index in step.profile_start..step.profile_start + step.profile_count {
+    for profile_index in step.profiles.indices() {
         let profile = doc.profiles.get(profile_index as usize)?;
         append_transformed_path_data(&mut path_data, doc, profile.outer_path, transform)?;
         if !include_cutouts {
             continue;
         }
-        for cutout in &doc.profile_cutouts
-            [profile.cutout_start as usize..(profile.cutout_start + profile.cutout_count) as usize]
-        {
+        for cutout in profile.cutouts.slice(&doc.profile_cutouts) {
             append_transformed_path_data(&mut path_data, doc, cutout.path, transform)?;
         }
     }
@@ -317,20 +314,22 @@ fn overview_viewbox(
 
 fn feature_paths(
     doc: &GeometryDocument,
-    feature: &pcb_ir::dialects::ipc::GeometryFeature<ipc2581::Symbol>,
+    feature: &pcb_ir::dialects::ipc::Feature<ipc2581::Symbol>,
     transform: Affine2,
 ) -> Vec<BoardArrayLayerPath> {
-    (feature.path_start..feature.path_start + feature.path_count)
+    feature
+        .paths
+        .indices()
         .filter_map(|path_index| {
-            let path = doc.paths.get(path_index as usize)?;
+            let path = doc.arena.paths.get(path_index as usize)?;
             let mut data = String::new();
             append_transformed_path_data(&mut data, doc, path_index, transform)?;
             (!data.is_empty()).then_some(BoardArrayLayerPath {
                 data,
                 bbox: transform_bbox(path.bbox, transform),
-                stroke_width: path.style.stroke.width,
-                filled: path.flags.filled,
-                stroked: path.flags.stroked,
+                stroke_width: path.stroke().map(|stroke| stroke.width).unwrap_or(0.0),
+                filled: path.is_filled(),
+                stroked: path.is_stroked(),
                 vscore: feature.is_vscore(),
             })
         })
@@ -361,24 +360,21 @@ fn append_transformed_path_data(
     path_index: u32,
     transform: Affine2,
 ) -> Option<()> {
-    let path = doc.paths.get(path_index as usize)?;
-    for contour in &doc.contours
-        [path.contour_start as usize..(path.contour_start + path.contour_count) as usize]
-    {
-        let cmds = &doc.path_cmds
-            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
-        let (_, cmds) = pcb_ir::dialects::path::transform_cmds(cmds.iter().copied(), transform);
-        append_path_cmds(path_data, &cmds);
+    let path = doc.arena.paths.get(path_index as usize)?;
+    for contour in doc.arena.contours(path.contours) {
+        let transformed =
+            pcb_ir::geom::path::transform_cmds(doc.arena.cmds(*contour).iter().copied(), transform);
+        append_path_cmds(path_data, &transformed.cmds);
     }
     Some(())
 }
 
-fn payloads_path_data(payloads: &[PathPayload], transform: Affine2) -> Option<String> {
+fn payloads_path_data(payloads: &[ContourBuf], transform: Affine2) -> Option<String> {
     let mut path_data = String::new();
     for payload in payloads {
-        let (_, cmds) =
-            pcb_ir::dialects::path::transform_cmds(payload.cmds.iter().copied(), transform);
-        append_path_cmds(&mut path_data, &cmds);
+        let transformed =
+            pcb_ir::geom::path::transform_cmds(payload.cmds.iter().copied(), transform);
+        append_path_cmds(&mut path_data, &transformed.cmds);
     }
     (!path_data.is_empty()).then_some(path_data)
 }
@@ -443,7 +439,7 @@ fn write_arc_to_path_data(
     }
 
     let large_arc =
-        u8::from(arc_sweep_radians(start, end, center, clockwise) > std::f64::consts::PI);
+        u8::from(Arc::new(start, end, center, clockwise).sweep_radians() > std::f64::consts::PI);
     write_svg_arc(data, radius, large_arc, sweep_flag, end);
 }
 

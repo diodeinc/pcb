@@ -1,25 +1,17 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
-use pcb_ir::common::{Point, Unit};
-use pcb_ir::dialects::ipc::{
-    FeatureKind, FeatureOperation, FeatureSpan, GeometryFeature, GeometryView, LayoutStepKind,
-    PlatingKind,
-};
-use pcb_ir::dialects::nc::{
-    NcDocument, NcFunction, NcGeometry, NcObject, NcPlating, NcRouteSegment, NcSpan,
-};
+use pcb_ir::dialects::ipc::View;
+use pcb_ir::dialects::nc;
 
 use crate::geometry;
 use crate::manufacturing::{ManufacturingFile, ManufacturingFileKind};
 use crate::xnc::{XncAttribute, XncBuilder, XncUnit, write_xnc};
 
-type IpcGeometryDocument = pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, LayerFunction>;
-
-pub fn build_xnc_drill_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<ManufacturingFile>> {
+pub fn build_xnc_drill_files(ipc: &Ipc2581, view: View) -> Result<Vec<ManufacturingFile>> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let copper_layers = copper_layer_refs(&ecad.cad_data.layers);
-    let mut nc = NcDocument::new(Unit::Millimeter);
+    let mut nc = nc::Document::new();
 
     for layer in &ecad.cad_data.layers {
         if !matches!(
@@ -32,7 +24,7 @@ pub fn build_xnc_drill_files(ipc: &Ipc2581, view: GeometryView) -> Result<Vec<Ma
         let doc = geometry::extract_layer_for_view(ipc, layer_name, view).with_context(|| {
             format!("failed to extract IPC-2581 drill/rout layer '{layer_name}'")
         })?;
-        collect_nc_features(&doc, &mut nc)?;
+        pcb_ir::dialects::ipc::lower_to_nc(&doc, &mut nc).map_err(anyhow::Error::msg)?;
     }
 
     xnc_files_from_nc(ipc, &nc, &copper_layers)
@@ -56,136 +48,9 @@ fn copper_layer_refs(layers: &[ipc2581::types::ecad::Layer]) -> Vec<ipc2581::Sym
         .collect()
 }
 
-fn collect_nc_features(
-    doc: &IpcGeometryDocument,
-    nc: &mut NcDocument<ipc2581::Symbol>,
-) -> Result<()> {
-    for layer in &doc.layers {
-        for feature in &doc.features
-            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
-        {
-            match feature.kind {
-                FeatureKind::Hole if feature.outer_diameter > 0.0 => {
-                    nc.objects.push(nc_object_from_feature(
-                        doc,
-                        feature,
-                        NcGeometry::Drill {
-                            at: feature.center,
-                            diameter: feature.outer_diameter,
-                        },
-                    )?);
-                }
-                FeatureKind::Slot => {
-                    if feature.intent.operation == FeatureOperation::Route
-                        && feature.source_step_kind != LayoutStepKind::Board
-                    {
-                        continue;
-                    }
-                    let Some(slot) = nc_linear_slot(feature) else {
-                        if feature.intent.operation == FeatureOperation::Route {
-                            continue;
-                        }
-                        bail!(
-                            "cannot export slot on layer '{}' to XNC because it is not a simple oval slot",
-                            layer.name
-                        );
-                    };
-                    let geometry = NcGeometry::Slot {
-                        diameter: slot.diameter,
-                        start: slot.start,
-                        end: slot.end,
-                    };
-                    nc.objects
-                        .push(nc_object_from_feature(doc, feature, geometry)?);
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(())
-}
-
-fn nc_object_from_feature(
-    doc: &IpcGeometryDocument,
-    feature: &GeometryFeature<ipc2581::Symbol>,
-    geometry: NcGeometry,
-) -> Result<NcObject<ipc2581::Symbol>> {
-    let plating = match feature.intent.plating {
-        PlatingKind::Via | PlatingKind::ViaCapped | PlatingKind::Plated => NcPlating::Plated,
-        PlatingKind::NonPlated | PlatingKind::None => NcPlating::NonPlated,
-        PlatingKind::Unknown => {
-            bail!("cannot export drill/rout feature to XNC with unknown plating")
-        }
-    };
-    let function = if matches!(
-        feature.intent.plating,
-        PlatingKind::Via | PlatingKind::ViaCapped
-    ) {
-        NcFunction::Via
-    } else {
-        NcFunction::Component
-    };
-    let span = match feature.intent.span {
-        FeatureSpan::ThroughBoard | FeatureSpan::Unknown => NcSpan::ThroughBoard,
-        FeatureSpan::Layer(layer) => NcSpan::FromTo {
-            from: Some(layer),
-            to: Some(layer),
-        },
-        FeatureSpan::FromTo { from, to } => NcSpan::FromTo { from, to },
-    };
-
-    let pin_ref = (feature.pin_ref_count > 0)
-        .then(|| doc.pin_refs.get(feature.pin_ref_start as usize))
-        .flatten();
-    Ok(NcObject {
-        geometry,
-        plating,
-        span,
-        function,
-        net: feature.net,
-        component: pin_ref.and_then(|pin_ref| pin_ref.component_ref),
-        pin: pin_ref.map(|pin_ref| pin_ref.pin),
-    })
-}
-
-#[derive(Debug, Clone, Copy)]
-struct NcLinearSlot {
-    diameter: f64,
-    start: Point,
-    end: Point,
-}
-
-fn nc_linear_slot(feature: &GeometryFeature<ipc2581::Symbol>) -> Option<NcLinearSlot> {
-    if feature.width <= 0.0 || feature.height <= 0.0 || feature.scale <= 0.0 {
-        return None;
-    }
-    let diameter = feature.width.min(feature.height) * feature.scale;
-    if diameter <= NC_GEOMETRY_EPSILON {
-        return None;
-    }
-    let long = feature.width.max(feature.height);
-    let short = feature.width.min(feature.height);
-    let centerline = (long - short).max(0.0) / 2.0;
-    if centerline <= NC_GEOMETRY_EPSILON {
-        return None;
-    }
-    let (start, end) = if feature.width >= feature.height {
-        (Point::new(-centerline, 0.0), Point::new(centerline, 0.0))
-    } else {
-        (Point::new(0.0, -centerline), Point::new(0.0, centerline))
-    };
-    Some(NcLinearSlot {
-        diameter,
-        start: feature.transform.transform_point(start),
-        end: feature.transform.transform_point(end),
-    })
-}
-
-const NC_GEOMETRY_EPSILON: f64 = 1e-9;
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct XncGroupKey {
-    plating: NcPlating,
+    plating: nc::Plating,
     span: XncSpanKey,
 }
 
@@ -197,7 +62,7 @@ enum XncSpanKey {
 
 fn xnc_files_from_nc(
     ipc: &Ipc2581,
-    nc: &NcDocument<ipc2581::Symbol>,
+    nc: &nc::Document<ipc2581::Symbol>,
     copper_layers: &[ipc2581::Symbol],
 ) -> Result<Vec<ManufacturingFile>> {
     let mut groups = std::collections::BTreeMap::<XncGroupKey, XncBuilder>::new();
@@ -206,28 +71,24 @@ fn xnc_files_from_nc(
             plating: object.plating,
             span: xnc_span_key(copper_layers, &object.span),
         };
-        let unit = match nc.unit {
-            Unit::Millimeter => XncUnit::Metric,
-            Unit::Inch => XncUnit::Inch,
-        };
         let file_function = xnc_file_function(&key, copper_layers);
         let builder = groups
             .entry(key)
-            .or_insert_with(|| XncBuilder::new(unit, vec![file_function]));
+            .or_insert_with(|| XncBuilder::new(XncUnit::Metric, vec![file_function]));
         let tool_attributes = xnc_tool_attributes(object);
         let object_attributes = xnc_object_attributes(ipc, object);
         match &object.geometry {
-            NcGeometry::Drill { at, diameter } => {
+            nc::Geometry::Drill { at, diameter } => {
                 builder.add_drill(*diameter, *at, tool_attributes, object_attributes)?;
             }
-            NcGeometry::Slot {
+            nc::Geometry::Slot {
                 start,
                 end,
                 diameter,
             } => {
                 builder.add_slot(*diameter, *start, *end, tool_attributes, object_attributes)?;
             }
-            NcGeometry::Route {
+            nc::Geometry::Route {
                 start,
                 diameter,
                 segments,
@@ -238,11 +99,13 @@ fn xnc_files_from_nc(
                     segments
                         .iter()
                         .map(|segment| match *segment {
-                            NcRouteSegment::Line { to } => crate::xnc::XncRouteSegment::Line { to },
-                            NcRouteSegment::ClockwiseArc { to, radius } => {
+                            nc::RouteSegment::Line { to } => {
+                                crate::xnc::XncRouteSegment::Line { to }
+                            }
+                            nc::RouteSegment::ClockwiseArc { to, radius } => {
                                 crate::xnc::XncRouteSegment::ClockwiseArc { to, radius }
                             }
-                            NcRouteSegment::CounterClockwiseArc { to, radius } => {
+                            nc::RouteSegment::CounterClockwiseArc { to, radius } => {
                                 crate::xnc::XncRouteSegment::CounterClockwiseArc { to, radius }
                             }
                         })
@@ -272,8 +135,8 @@ fn xnc_files_from_nc(
 
 fn xnc_file_function(key: &XncGroupKey, copper_layers: &[ipc2581::Symbol]) -> XncAttribute {
     let (plating, suffix) = match key.plating {
-        NcPlating::Plated => ("Plated", xnc_span_suffix(copper_layers, key.span)),
-        NcPlating::NonPlated => ("NonPlated", "NPTH".to_string()),
+        nc::Plating::Plated => ("Plated", xnc_span_suffix(copper_layers, key.span)),
+        nc::Plating::NonPlated => ("NonPlated", "NPTH".to_string()),
     };
     let (from, to) = key.span.layer_numbers(copper_layers.len().max(1));
     XncAttribute::file(
@@ -287,19 +150,19 @@ fn xnc_file_function(key: &XncGroupKey, copper_layers: &[ipc2581::Symbol]) -> Xn
     )
 }
 
-fn xnc_tool_attributes(object: &NcObject<ipc2581::Symbol>) -> Vec<XncAttribute> {
+fn xnc_tool_attributes(object: &nc::Object<ipc2581::Symbol>) -> Vec<XncAttribute> {
     let drill_function = match object.function {
-        NcFunction::Via => "ViaDrill",
-        NcFunction::Component => "ComponentDrill",
+        nc::Function::Via => "ViaDrill",
+        nc::Function::Component => "ComponentDrill",
     };
     let fields = match object.plating {
-        NcPlating::Plated => vec!["Plated", "PTH", drill_function],
-        NcPlating::NonPlated => vec!["NonPlated", "NPTH", drill_function],
+        nc::Plating::Plated => vec!["Plated", "PTH", drill_function],
+        nc::Plating::NonPlated => vec!["NonPlated", "NPTH", drill_function],
     };
     vec![XncAttribute::tool("AperFunction", fields)]
 }
 
-fn xnc_object_attributes(ipc: &Ipc2581, object: &NcObject<ipc2581::Symbol>) -> Vec<XncAttribute> {
+fn xnc_object_attributes(ipc: &Ipc2581, object: &nc::Object<ipc2581::Symbol>) -> Vec<XncAttribute> {
     let mut attributes = Vec::new();
     if let Some(net) = object.net {
         attributes.push(XncAttribute::object("N", [ipc.resolve(net)]));
@@ -316,9 +179,12 @@ fn xnc_object_attributes(ipc: &Ipc2581, object: &NcObject<ipc2581::Symbol>) -> V
     attributes
 }
 
-fn xnc_span_key(copper_layers: &[ipc2581::Symbol], span: &NcSpan<ipc2581::Symbol>) -> XncSpanKey {
+fn xnc_span_key(
+    copper_layers: &[ipc2581::Symbol],
+    span: &nc::DrillSpan<ipc2581::Symbol>,
+) -> XncSpanKey {
     match span {
-        NcSpan::FromTo { from, to } => {
+        nc::DrillSpan::FromTo { from, to } => {
             let Some(from) = from.and_then(|layer| copper_layer_index(copper_layers, layer)) else {
                 return XncSpanKey::ThroughBoard;
             };
@@ -332,7 +198,7 @@ fn xnc_span_key(copper_layers: &[ipc2581::Symbol], span: &NcSpan<ipc2581::Symbol
                 XncSpanKey::FromTo { from, to }
             }
         }
-        NcSpan::ThroughBoard => XncSpanKey::ThroughBoard,
+        nc::DrillSpan::ThroughBoard => XncSpanKey::ThroughBoard,
     }
 }
 
@@ -369,8 +235,8 @@ fn copper_layer_index(copper_layers: &[ipc2581::Symbol], layer: ipc2581::Symbol)
 
 fn xnc_filename(key: &XncGroupKey) -> String {
     let base = match key.plating {
-        NcPlating::Plated => "PTH",
-        NcPlating::NonPlated => "NPTH",
+        nc::Plating::Plated => "PTH",
+        nc::Plating::NonPlated => "NPTH",
     };
     if matches!(key.span, XncSpanKey::ThroughBoard) {
         return format!("{base}.drl");

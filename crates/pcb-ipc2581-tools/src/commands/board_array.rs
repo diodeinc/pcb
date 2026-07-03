@@ -16,8 +16,8 @@ use ipc2581::types::{
     transform::Location,
 };
 use pcb_ir::{
-    common::{BBox, Point},
     dialects::ipc::{LayoutStepKind, root_step},
+    geom::{BBox, Point},
 };
 use quick_xml::{
     Reader, Writer,
@@ -570,12 +570,11 @@ fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
         .filter(|layer| layer.layer_function == LayerFunction::Courtyard)
     {
         let layer_name = ipc.resolve(layer.name);
-        let doc = geometry::extract_layer_for_view(
-            ipc,
-            layer_name,
-            pcb_ir::dialects::ipc::GeometryView::Board,
-        )
-        .with_context(|| format!("failed to extract IPC-2581 courtyard layer '{layer_name}'"))?;
+        let doc =
+            geometry::extract_layer_for_view(ipc, layer_name, pcb_ir::dialects::ipc::View::Board)
+                .with_context(|| {
+                format!("failed to extract IPC-2581 courtyard layer '{layer_name}'")
+            })?;
         for feature in doc
             .features
             .iter()
@@ -610,7 +609,7 @@ fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
 #[derive(Debug, Clone, Copy)]
 struct PrimaryBoardLayout {
     source_step_ref: ipc2581::Symbol,
-    bbox: pcb_ir::common::BBox,
+    bbox: pcb_ir::geom::BBox,
 }
 
 fn primary_board_layout(ipc: &Ipc2581) -> Result<PrimaryBoardLayout> {
@@ -2766,11 +2765,11 @@ mod tests {
     use super::*;
     use crate::accessors::IpcAccessor;
     use crate::manufacturing::build_manufacturing_package;
-    use pcb_ir::common::Point;
     use pcb_ir::dialects::ipc::{
         FeatureBucket, FeatureDomain, FeatureIntent, FeatureKind, FeatureOperation, FeatureRole,
-        FeatureSpan, FiducialKind, GeometryView, LayoutStepKind, PlatingKind,
+        FeatureSpan, FiducialKind, LayoutStepKind, PlatingKind, View,
     };
+    use pcb_ir::geom::Point;
 
     #[test]
     fn parses_board_margin_css_shorthand() {
@@ -2886,8 +2885,7 @@ mod tests {
         assert_point_close(first_instance.bbox.min, Point::new(7.5, 7.5));
         assert_point_close(first_instance.bbox.max, Point::new(17.5, 17.5));
 
-        let vcut = geometry::extract_layer_for_view(&ipc, "V-Score", GeometryView::ArrayFlattened)
-            .unwrap();
+        let vcut = geometry::extract_layer_for_view(&ipc, "V-Score", View::ArrayFlattened).unwrap();
         assert!(vcut.features.len() > 24);
         assert!(
             vcut.features
@@ -3137,7 +3135,7 @@ mod tests {
         assert!(viewbox.1 + viewbox.3 > 100.0);
         assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
 
-        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
 
         let vcut = package
             .files
@@ -3150,7 +3148,7 @@ mod tests {
         assert!(!vcut.contents.contains("G36*"));
         assert!(vcut.contents.matches("D01*").count() > 24);
 
-        let board_package = build_manufacturing_package(&ipc, GeometryView::Board).unwrap();
+        let board_package = build_manufacturing_package(&ipc, View::Board).unwrap();
         assert!(
             board_package
                 .files
@@ -3175,7 +3173,7 @@ mod tests {
         assert!(!xml.contains("<SlotCavity"));
 
         let ipc = Ipc2581::parse(&xml).unwrap();
-        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
         let vcut = package
             .files
             .iter()
@@ -3226,7 +3224,7 @@ mod tests {
         assert!(!xml.contains(r#"<LayerFeature layerRef="Edge.Cuts">"#));
 
         let ipc = Ipc2581::parse(&xml).unwrap();
-        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
         assert!(
             package
                 .files
@@ -3245,8 +3243,7 @@ mod tests {
     fn board_array_creation_preserves_board_target_geometry() {
         let input = board_fixture_with_top_line_mm();
         let before_ipc = Ipc2581::parse(input).unwrap();
-        let before =
-            geometry::extract_layer_for_view(&before_ipc, "TOP", GeometryView::Board).unwrap();
+        let before = geometry::extract_layer_for_view(&before_ipc, "TOP", View::Board).unwrap();
 
         let xml = create_board_array_xml(
             input,
@@ -3259,13 +3256,12 @@ mod tests {
         )
         .unwrap();
         let after_ipc = Ipc2581::parse(&xml).unwrap();
-        let after =
-            geometry::extract_layer_for_view(&after_ipc, "TOP", GeometryView::Board).unwrap();
+        let after = geometry::extract_layer_for_view(&after_ipc, "TOP", View::Board).unwrap();
 
         assert_eq!(before.features.len(), after.features.len());
-        assert_eq!(before.paths.len(), after.paths.len());
-        assert_eq!(before.contours.len(), after.contours.len());
-        assert_eq!(before.path_cmds, after.path_cmds);
+        assert_eq!(before.arena.paths.len(), after.arena.paths.len());
+        assert_eq!(before.arena.contours.len(), after.arena.contours.len());
+        assert_eq!(before.arena.cmds, after.arena.cmds);
 
         for (before_feature, after_feature) in before.features.iter().zip(&after.features) {
             assert_eq!(before_feature.kind, after_feature.kind);
@@ -3279,7 +3275,7 @@ mod tests {
             );
             assert_eq!(before_feature.fiducial_kind, after_feature.fiducial_kind);
             assert_eq!(before_feature.bbox, after_feature.bbox);
-            assert_eq!(before_feature.path_count, after_feature.path_count);
+            assert_eq!(before_feature.paths.count, after_feature.paths.count);
         }
     }
 
@@ -3349,16 +3345,14 @@ mod tests {
         assert!(xml.contains(r#"x="20" y="20""#));
 
         let parsed = Ipc2581::parse(&xml).unwrap();
-        let top =
-            geometry::extract_layer_for_view(&parsed, "TOP", GeometryView::ArrayFlattened).unwrap();
+        let top = geometry::extract_layer_for_view(&parsed, "TOP", View::ArrayFlattened).unwrap();
         assert!(top.features.iter().any(|feature| {
             feature.intent.role == FeatureRole::Fiducial
                 && feature.fiducial_kind == FiducialKind::Global
         }));
 
         let drill =
-            geometry::extract_layer_for_view(&parsed, "Array_Drill", GeometryView::ArrayFlattened)
-                .unwrap();
+            geometry::extract_layer_for_view(&parsed, "Array_Drill", View::ArrayFlattened).unwrap();
         assert_eq!(drill.features.len(), 1);
         assert_eq!(drill.features[0].kind, FeatureKind::Hole);
         assert_eq!(drill.features[0].bucket, FeatureBucket::Cutout);
@@ -3367,7 +3361,7 @@ mod tests {
         assert_eq!(drill.features[0].intent.operation, FeatureOperation::Drill);
         assert_eq!(drill.features[0].intent.plating, PlatingKind::NonPlated);
 
-        let package = build_manufacturing_package(&parsed, GeometryView::ArrayFlattened).unwrap();
+        let package = build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
         let top = package
             .files
             .iter()
@@ -3621,8 +3615,7 @@ mod tests {
             vec![(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
         );
 
-        let top =
-            geometry::extract_layer_for_view(&ipc, "TOP", GeometryView::ArrayFlattened).unwrap();
+        let top = geometry::extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened).unwrap();
         assert_eq!(
             top.features
                 .iter()
@@ -3631,7 +3624,7 @@ mod tests {
             8
         );
 
-        let package = build_manufacturing_package(&ipc, GeometryView::ArrayFlattened).unwrap();
+        let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
         let top = package
             .files
             .iter()

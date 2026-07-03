@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
 use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::ipc::{FeatureKind, GeometryView, PlatingKind};
+use pcb_ir::dialects::ipc::{FeatureKind, PlatingKind, View};
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
 use crate::geometry;
 
 type GeometryDocument =
-    pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
+    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 /// Drill hole statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,21 +56,21 @@ pub struct DrillSize {
 impl<'a> IpcAccessor<'a> {
     /// Get board-local drill hole statistics with per-type distribution.
     pub fn board_drill_stats(&self) -> Option<DrillStats> {
-        self.drill_stats_for_view(GeometryView::Board)
+        self.drill_stats_for_view(View::Board)
     }
 
     /// Get array-local drill hole statistics, excluding repeated board drills.
     pub fn board_array_drill_stats(&self) -> Option<DrillStats> {
-        self.drill_stats_for_view(GeometryView::ArrayLocal)
+        self.drill_stats_for_view(View::ArrayLocal)
     }
 
     /// Get flattened board-array drill statistics, including repeated board drills
     /// and array-local drill features.
     pub fn board_array_flattened_drill_stats(&self) -> Option<DrillStats> {
-        self.drill_stats_for_view(GeometryView::ArrayFlattened)
+        self.drill_stats_for_view(View::ArrayFlattened)
     }
 
-    fn drill_stats_for_view(&self, view: GeometryView) -> Option<DrillStats> {
+    fn drill_stats_for_view(&self, view: View) -> Option<DrillStats> {
         let ecad = self.ecad()?;
         let mut collector = DrillStatsCollector::default();
         let mut has_drill_layer = false;
@@ -144,9 +144,7 @@ impl DrillStatsCollector {
 /// Collect drill holes grouped by plating type, with per-diameter counts.
 fn collect_drill_info(doc: &GeometryDocument, collector: &mut DrillStatsCollector) {
     for layer in &doc.layers {
-        for feature in &doc.features
-            [layer.feature_start as usize..(layer.feature_start + layer.feature_count) as usize]
-        {
+        for feature in layer.features.slice(&doc.features) {
             if let Some((diameter_mm, hole_type)) = drill_hole(feature) {
                 collector.add_hole(diameter_mm, hole_type);
             }
@@ -155,7 +153,7 @@ fn collect_drill_info(doc: &GeometryDocument, collector: &mut DrillStatsCollecto
 }
 
 fn drill_hole(
-    feature: &pcb_ir::dialects::ipc::GeometryFeature<ipc2581::Symbol>,
+    feature: &pcb_ir::dialects::ipc::Feature<ipc2581::Symbol>,
 ) -> Option<(f64, DrillHoleType)> {
     if !feature.is_drill_like()
         || feature.kind != FeatureKind::Hole

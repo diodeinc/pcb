@@ -3,7 +3,7 @@ use gerberx2::{
     ObjectKind, PathCommand, Point, Unit, WriterAperture, WriterApertureMacro,
     WriterApertureTemplate, WriterMacroExpression, WriterMacroPrimitive, WriterObject,
 };
-use pcb_ir::dialects::gerber::Polarity;
+use pcb_ir::geom::Polarity;
 
 #[test]
 fn parses_basic_x2_layer() {
@@ -419,7 +419,7 @@ fn extracts_render_artwork() {
     let geometry = gerberx2::geometry::extract_document(&gerber);
     assert_eq!(geometry.layers[0].meta, vec!["Copper", "L1", "Top"]);
     assert_eq!(geometry.objects.len(), 2);
-    assert!(geometry.paths.iter().any(|path| path.flags.stroked));
+    assert!(geometry.arena.paths.iter().any(|path| path.is_stroked()));
     assert!(!geometry.layers[0].bbox.is_empty());
 }
 
@@ -431,7 +431,7 @@ fn artwork_composition_applies_clear_polarity_cutouts() {
     .unwrap();
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
-    let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
     let expected_area = 4.0 - std::f64::consts::PI * 0.25;
     assert!(
         (summary.area_mm2 - expected_area).abs() < 0.02,
@@ -448,7 +448,7 @@ fn region_contour_orientation_does_not_create_holes() {
     .unwrap();
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
-    let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
     assert!(
         close(summary.area_mm2, 16.0),
         "region contours are filled independently; area was {}",
@@ -464,7 +464,7 @@ fn artwork_composition_keeps_clear_polarity_semantics_after_overlapping_dark_run
     .unwrap();
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
-    let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
 
     assert!(
         close(summary.area_mm2, 12.0),
@@ -481,7 +481,7 @@ fn extraction_preserves_ordered_aperture_path_polarity() {
     .unwrap();
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
-    let summary = pcb_ir::dialects::gerber::compare::summarize(&geometry);
+    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
 
     assert!(
         close(summary.area_mm2, 13.0),
@@ -499,11 +499,12 @@ fn extraction_applies_scaling_to_circular_draw_width() {
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
     let path = geometry
+        .arena
         .paths
         .iter()
-        .find(|path| path.flags.stroked)
+        .find(|path| path.is_stroked())
         .unwrap();
-    assert!(close(path.stroke_width, 0.4));
+    assert!(close(path.stroke().unwrap().width, 0.4));
 }
 
 #[test]
@@ -514,10 +515,16 @@ fn extraction_flips_mirrored_aperture_arc_direction() {
     .unwrap();
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
-    let arc = geometry
-        .path_cmds
+    assert!(matches!(
+        geometry.objects[0].geometry,
+        pcb_ir::dialects::artwork::Geometry::Flash { .. }
+    ));
+    let expanded = pcb_ir::dialects::artwork::expand_native_geometry_to_regions(geometry);
+    let arc = expanded
+        .arena
+        .cmds
         .iter()
-        .find(|cmd| cmd.op == pcb_ir::dialects::gerber::PathOp::ArcTo)
+        .find(|cmd| cmd.op == pcb_ir::geom::PathOp::ArcTo)
         .unwrap();
     assert!(arc.clockwise);
 }
@@ -532,7 +539,7 @@ fn extracts_non_circular_aperture_sweeps_without_diagnostics() {
     let geometry = gerberx2::geometry::extract_document(&gerber);
     assert!(geometry.diagnostics.is_empty());
     assert_eq!(geometry.objects.len(), 1);
-    assert!(geometry.paths[0].flags.filled);
+    assert!(geometry.arena.paths[0].is_filled());
 }
 
 #[test]
@@ -543,12 +550,17 @@ fn renders_svg_and_png_from_artwork() {
     .unwrap();
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
-    let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
+    let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+    let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default());
     assert!(svg.contains("<svg"));
     assert!(svg.contains("<path"));
     assert!(svg.contains("Paste, Top"));
-    let png =
-        pcb_ir::dialects::gerber::raster::render_png_with_max_dimension(&geometry, 64).unwrap();
+    let png = pcb_ir::render::png(
+        &mask,
+        &pcb_ir::render::RenderOptions::default()
+            .with_size(pcb_ir::render::SizeConstraint::MaxDimension(64)),
+    )
+    .unwrap();
     assert!(png.starts_with(b"\x89PNG"));
 }
 
@@ -560,7 +572,8 @@ fn renders_profile_gerber_as_black_board_outline() {
     .unwrap();
 
     let geometry = gerberx2::geometry::extract_document(&gerber);
-    let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
+    let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+    let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default());
 
     assert!(svg.contains("fill='none' stroke='#000000'"));
     assert!(svg.contains("data-board-outline='true'"));

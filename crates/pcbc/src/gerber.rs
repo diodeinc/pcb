@@ -83,10 +83,10 @@ fn compare(
 ) -> Result<()> {
     let reference_geometry = load_geometry(reference)?;
     let candidate_geometry = load_geometry(candidate)?;
-    let report = pcb_ir::dialects::gerber::compare::compare_documents(
+    let report = pcb_ir::dialects::artwork::compare::compare_documents(
         &reference_geometry,
         &candidate_geometry,
-        pcb_ir::dialects::gerber::compare::GeometryCompareTolerance {
+        pcb_ir::dialects::artwork::compare::CompareTolerance {
             bbox_mm: bbox_tolerance_mm,
             area_mm2: area_tolerance_mm2,
         },
@@ -138,7 +138,7 @@ fn compare(
 
 fn print_difference_components(
     label: &str,
-    summary: &pcb_ir::dialects::gerber::compare::DirectionalDifferenceSummary,
+    summary: &pcb_ir::dialects::artwork::compare::DirectionalDifferenceSummary,
 ) {
     for (index, component) in summary.components.iter().take(12).enumerate() {
         println!(
@@ -163,7 +163,8 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
 
     match target {
         RenderTarget::Svg => {
-            let svg = pcb_ir::dialects::gerber::svg::render_svg(&geometry);
+            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+            let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default());
             if let Some(output) = output {
                 std::fs::write(output, svg)
                     .with_context(|| format!("Failed to write SVG to {}", output.display()))?;
@@ -173,7 +174,8 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
             }
         }
         RenderTarget::Png => {
-            let png = pcb_ir::dialects::gerber::raster::render_png(&geometry)
+            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+            let png = pcb_ir::render::png(&mask, &pcb_ir::render::RenderOptions::default())
                 .map_err(gerberx2::GerberError::Render)?;
             if let Some(output) = output {
                 std::fs::write(output, png)
@@ -187,7 +189,8 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
             }
         }
         RenderTarget::Terminal => {
-            pcb_ir::dialects::gerber::terminal::render_to_terminal(&geometry)
+            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+            pcb_ir::render::to_terminal(&mask, &pcb_ir::render::RenderOptions::default())
                 .map_err(gerberx2::GerberError::Render)?;
         }
     }
@@ -206,7 +209,7 @@ fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderT
         RenderFormat::Auto => {
             if let Some(output) = output {
                 infer_format_from_output(output)
-            } else if pcb_ir::dialects::mask::can_render_to_terminal() {
+            } else if pcb_ir::render::can_render_to_terminal() {
                 Ok(RenderTarget::Terminal)
             } else {
                 bail!(

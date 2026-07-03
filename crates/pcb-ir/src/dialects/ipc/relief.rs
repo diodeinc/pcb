@@ -28,12 +28,10 @@
 
 use std::fmt;
 
-use crate::common::{BBox, FillRule, Point};
-use crate::dialects::ipc::{GeometryDocument, GeometryPathPaintClass, IpcSpecItemKind};
-use crate::dialects::path::{
-    ContourSet, PathCmd, PathOp, PathPayload, PolygonContour, payloads_to_polygon_contours,
-    simplify_polygon_contours,
-};
+use crate::dialects::ipc::{Document, SpecItemKind};
+use crate::geom::path::{ContourBuf, PathCmd, PathOp};
+use crate::geom::region::{Ring, rings_from_contours, simplify_rings};
+use crate::geom::{BBox, ContourSet, FillRule, PaintKind, Point};
 
 pub const DEFAULT_ROUTE_TOOL_DIAMETER_MM: f64 = 1.0;
 pub const DEFAULT_RELIEF_TOLERANCE_MM: f64 = 0.01;
@@ -41,16 +39,16 @@ pub const DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM: f64 = 0.10;
 
 #[derive(Debug, Clone)]
 pub struct VScoreReliefInput {
-    pub board_boundaries: Vec<PathPayload>,
-    pub board_cutouts: Vec<PathPayload>,
-    pub score_blockers: Vec<PathPayload>,
+    pub board_boundaries: Vec<ContourBuf>,
+    pub board_cutouts: Vec<ContourBuf>,
+    pub score_blockers: Vec<ContourBuf>,
     pub score_lines: Vec<VScoreLine>,
     pub tool_diameter_mm: f64,
     pub tolerance_mm: f64,
 }
 
 impl VScoreReliefInput {
-    pub fn new(board_boundaries: Vec<PathPayload>, score_lines: Vec<VScoreLine>) -> Self {
+    pub fn new(board_boundaries: Vec<ContourBuf>, score_lines: Vec<VScoreLine>) -> Self {
         Self {
             board_boundaries,
             board_cutouts: Vec::new(),
@@ -71,23 +69,23 @@ pub struct VScoreLine {
 
 #[derive(Debug, Clone, Default)]
 pub struct VScoreReliefOutput {
-    pub relief_contours: Vec<PathPayload>,
+    pub relief_contours: Vec<ContourBuf>,
     pub debug: VScoreReliefDebug,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct VScoreReliefDebug {
     pub entries: Vec<VScoreReliefDebugEntry>,
-    pub merged_relief_contours: Vec<PathPayload>,
+    pub merged_relief_contours: Vec<ContourBuf>,
 }
 
 #[derive(Debug, Clone)]
 pub struct VScoreReliefDebugEntry {
-    pub board_boundary: Vec<PathPayload>,
-    pub score_cell: PathPayload,
-    pub dead_space_pockets: Vec<PathPayload>,
-    pub legal_tool_centers: Vec<PathPayload>,
-    pub relief_contours: Vec<PathPayload>,
+    pub board_boundary: Vec<ContourBuf>,
+    pub score_cell: ContourBuf,
+    pub dead_space_pockets: Vec<ContourBuf>,
+    pub legal_tool_centers: Vec<ContourBuf>,
+    pub relief_contours: Vec<ContourBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,7 +122,7 @@ impl std::error::Error for VScoreReliefError {}
 
 pub fn vscore_route_reliefs(
     input: &VScoreReliefInput,
-) -> Result<Vec<PathPayload>, VScoreReliefError> {
+) -> Result<Vec<ContourBuf>, VScoreReliefError> {
     Ok(vscore_route_reliefs_inner(input, false)?.relief_contours)
 }
 
@@ -164,10 +162,10 @@ fn vscore_route_reliefs_inner(
         if include_debug {
             debug.entries.push(boundary_relief.debug_entry(boundary));
         }
-        relief_contours.extend(boundary_relief.geometry.material_removal.contours);
+        relief_contours.extend(boundary_relief.geometry.material_removal.rings);
     }
     let relief_region = ContourSet::new(relief_contours, FillRule::NonZero, input.tolerance_mm);
-    let relief_payloads = relief_region.to_payloads();
+    let relief_payloads = relief_region.to_contours();
     if include_debug {
         debug.merged_relief_contours = relief_payloads.clone();
     }
@@ -179,7 +177,7 @@ fn vscore_route_reliefs_inner(
 }
 
 pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
+    doc: &Document<Symbol, LayerFunction>,
 ) -> Vec<VScoreLine> {
     let mut lines = Vec::new();
     for feature in doc
@@ -187,14 +185,14 @@ pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
         .iter()
         .filter(|feature| feature.is_vcut() && feature_has_vcut_spec(doc, feature))
     {
-        for path in &doc.paths
-            [feature.path_start as usize..(feature.path_start + feature.path_count) as usize]
-        {
-            if path.paint_class().ok().flatten() != Some(GeometryPathPaintClass::Stroked) {
+        for path in feature.paths.slice(&doc.arena.paths) {
+            if path.paint.kind() != PaintKind::Stroke {
                 continue;
             }
             let line_start = lines.len();
-            append_path_line_segments(doc, path.contour_start, path.contour_count, &mut lines);
+            for contour in doc.arena.contours(path.contours) {
+                append_contour_line_segments(doc.arena.cmds(*contour), &mut lines);
+            }
             if feature.stroke_width > 0.0 {
                 for line in &mut lines[line_start..] {
                     line.width = feature.stroke_width;
@@ -206,8 +204,8 @@ pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
 }
 
 fn feature_has_vcut_spec<Symbol: PartialEq, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-    feature: &crate::dialects::ipc::GeometryFeature<Symbol>,
+    doc: &Document<Symbol, LayerFunction>,
+    feature: &crate::dialects::ipc::Feature<Symbol>,
 ) -> bool {
     let Some(set_index) = feature.set else {
         return false;
@@ -215,47 +213,36 @@ fn feature_has_vcut_spec<Symbol: PartialEq, LayerFunction>(
     let Some(set) = doc.feature_sets.get(set_index as usize) else {
         return false;
     };
-    spec_refs_include_vcut(doc, set.spec_ref_start, set.spec_ref_count)
-        || doc.layers.get(set.layer as usize).is_some_and(|layer| {
-            spec_refs_include_vcut(doc, layer.spec_ref_start, layer.spec_ref_count)
-        })
+    spec_refs_include_vcut(doc, set.spec_refs)
+        || doc
+            .layers
+            .get(set.layer as usize)
+            .is_some_and(|layer| spec_refs_include_vcut(doc, layer.spec_refs))
 }
 
 fn spec_refs_include_vcut<Symbol: PartialEq, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-    spec_ref_start: u32,
-    spec_ref_count: u32,
+    doc: &Document<Symbol, LayerFunction>,
+    spec_refs: crate::geom::Span,
 ) -> bool {
-    doc.spec_refs[spec_ref_start as usize..(spec_ref_start + spec_ref_count) as usize]
+    spec_refs
+        .slice(&doc.spec_refs)
         .iter()
         .any(|spec_ref| spec_is_vcut(doc, &spec_ref.spec))
 }
 
 fn spec_is_vcut<Symbol: PartialEq, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
+    doc: &Document<Symbol, LayerFunction>,
     spec_name: &Symbol,
 ) -> bool {
     doc.specs
         .iter()
         .find(|spec| &spec.name == spec_name)
         .is_some_and(|spec| {
-            doc.spec_items[spec.item_start as usize..(spec.item_start + spec.item_count) as usize]
+            spec.items
+                .slice(&doc.spec_items)
                 .iter()
-                .any(|item| item.kind == IpcSpecItemKind::VCut)
+                .any(|item| item.kind == SpecItemKind::VCut)
         })
-}
-
-fn append_path_line_segments<Symbol, LayerFunction>(
-    doc: &GeometryDocument<Symbol, LayerFunction>,
-    contour_start: u32,
-    contour_count: u32,
-    lines: &mut Vec<VScoreLine>,
-) {
-    for contour in &doc.contours[contour_start as usize..(contour_start + contour_count) as usize] {
-        let cmds = &doc.path_cmds
-            [contour.cmd_start as usize..(contour.cmd_start + contour.cmd_count) as usize];
-        append_contour_line_segments(cmds, lines);
-    }
 }
 
 fn append_contour_line_segments(cmds: &[PathCmd], lines: &mut Vec<VScoreLine>) {
@@ -295,7 +282,7 @@ fn append_contour_line_segments(cmds: &[PathCmd], lines: &mut Vec<VScoreLine>) {
 }
 
 fn boundary_pocket_relief(
-    boundary: &PathPayload,
+    boundary: &ContourBuf,
     base_protected_material: &ContourSet,
     input: &VScoreReliefInput,
 ) -> Result<Option<BoundaryRelief>, VScoreReliefError> {
@@ -324,7 +311,7 @@ fn boundary_pocket_relief(
     let protected_material = if score_blockers.is_empty() {
         base_protected_material.clone()
     } else {
-        base_protected_material.clone().difference(&score_blockers)
+        base_protected_material.difference(&score_blockers)
     };
 
     let geometry = compute_relief_geometry(
@@ -352,18 +339,18 @@ fn boundary_pocket_relief(
 
 #[derive(Debug, Clone)]
 struct BoundaryRelief {
-    score_cell: PathPayload,
+    score_cell: ContourBuf,
     geometry: ReliefGeometry,
 }
 
 impl BoundaryRelief {
-    fn debug_entry(&self, boundary: &PathPayload) -> VScoreReliefDebugEntry {
+    fn debug_entry(&self, boundary: &ContourBuf) -> VScoreReliefDebugEntry {
         VScoreReliefDebugEntry {
             board_boundary: vec![boundary.clone()],
             score_cell: self.score_cell.clone(),
-            dead_space_pockets: self.geometry.dead_space.to_payloads(),
-            legal_tool_centers: self.geometry.legal_tool_centers.to_payloads(),
-            relief_contours: self.geometry.material_removal.to_payloads(),
+            dead_space_pockets: self.geometry.dead_space.to_contours(),
+            legal_tool_centers: self.geometry.legal_tool_centers.to_contours(),
+            relief_contours: self.geometry.material_removal.to_contours(),
         }
     }
 }
@@ -380,7 +367,7 @@ struct ReliefGeometry {
 /// The returned `material_removal` is a filled region. Callers emit its
 /// boundary (`∂R_i`) as closed profile contours.
 fn compute_relief_geometry(
-    boundary: &PathPayload,
+    boundary: &ContourBuf,
     protected_material: &ContourSet,
     score_blockers: &ContourSet,
     score_cell: BBox,
@@ -389,9 +376,9 @@ fn compute_relief_geometry(
     area_tolerance: f64,
 ) -> ReliefGeometry {
     // C_i: the V-score cell around this board instance.
-    let score_cell_region = ContourSet::rectangle(score_cell, FillRule::NonZero, area_tolerance);
+    let score_cell_region = ContourSet::rectangle(score_cell, area_tolerance);
     // B_i: this board instance before score-alignment tolerance is applied.
-    let current_board = ContourSet::from_payloads(
+    let current_board = ContourSet::from_contours(
         std::slice::from_ref(boundary),
         FillRule::NonZero,
         area_tolerance,
@@ -424,8 +411,8 @@ fn tool_aware_material_removal(
     tool_radius: f64,
 ) -> (ContourSet, ContourSet) {
     // T_i = (P_i ⊕ D_r) \ (B ⊕ D_r).
-    let sacrificial_center_window = dead_space.clone().disk_dilate(tool_radius);
-    let protected_clearance = protected_material.clone().disk_dilate(tool_radius);
+    let sacrificial_center_window = dead_space.disk_dilate(tool_radius);
+    let protected_clearance = protected_material.disk_dilate(tool_radius);
     let legal_tool_centers = sacrificial_center_window.difference(&protected_clearance);
 
     // W_i = (T_i ⊕ D_r) \ B.
@@ -435,7 +422,7 @@ fn tool_aware_material_removal(
         .difference(protected_material);
 
     // R_i = P_i ∪ W_i.
-    let material_removal = dead_space.clone().union(&tool_sweep);
+    let material_removal = dead_space.union(&tool_sweep);
     (legal_tool_centers, material_removal)
 }
 
@@ -445,38 +432,33 @@ fn protected_board_material(input: &VScoreReliefInput) -> Result<ContourSet, VSc
     let mut board_region = ContourSet::new(board_contours, FillRule::NonZero, input.tolerance_mm);
     if !input.board_cutouts.is_empty() {
         let cutout_region =
-            ContourSet::from_filled_payloads(&input.board_cutouts, input.tolerance_mm);
+            ContourSet::from_filled_contours(&input.board_cutouts, input.tolerance_mm);
         board_region = board_region.difference(&cutout_region);
     }
     Ok(board_region)
 }
 
 fn score_blockers_for_cell(
-    score_blockers: &[PathPayload],
+    score_blockers: &[ContourBuf],
     score_cell: BBox,
     score_tolerance: f64,
     area_tolerance: f64,
 ) -> ContourSet {
     if score_blockers.is_empty() {
-        return ContourSet::empty(FillRule::NonZero, area_tolerance);
+        return ContourSet::empty(area_tolerance);
     }
-    let score_strip = score_cell_strip_region(
-        score_cell,
-        score_tolerance,
-        FillRule::NonZero,
-        area_tolerance,
-    );
+    let score_strip = score_cell_strip_region(score_cell, score_tolerance, area_tolerance);
     let selected = score_blockers
         .iter()
         .filter(|payload| payload.bbox.intersects(score_strip.bbox))
         .filter(|payload| {
-            !ContourSet::from_filled_payloads(std::slice::from_ref(payload), area_tolerance)
+            !ContourSet::from_filled_contours(std::slice::from_ref(payload), area_tolerance)
                 .intersection(&score_strip)
                 .is_empty()
         })
         .cloned()
         .collect::<Vec<_>>();
-    ContourSet::from_filled_payloads(&selected, area_tolerance)
+    ContourSet::from_filled_contours(&selected, area_tolerance)
 }
 
 /// Snap tolerance-scale boundary slivers onto score-cell edges.
@@ -489,27 +471,17 @@ fn score_aligned_board_region(
     score_cell: BBox,
     score_tolerance: f64,
 ) -> ContourSet {
-    let cell_strip = score_cell_strip_region(
-        score_cell,
-        score_tolerance,
-        board.fill_rule,
-        board.tolerance,
-    );
+    let cell_strip = score_cell_strip_region(score_cell, score_tolerance, board.tolerance);
     if cell_strip.is_empty() {
         return board;
     }
-    let dilated_board = board.clone().disk_dilate(score_tolerance);
+    let dilated_board = board.disk_dilate(score_tolerance);
     let score_slivers = cell_strip.intersection(&dilated_board);
     board.union(&score_slivers)
 }
 
-fn score_cell_strip_region(
-    score_cell: BBox,
-    width: f64,
-    fill_rule: FillRule,
-    tolerance: f64,
-) -> ContourSet {
-    let cell = ContourSet::rectangle(score_cell, fill_rule, tolerance);
+fn score_cell_strip_region(score_cell: BBox, width: f64, tolerance: f64) -> ContourSet {
+    let cell = ContourSet::rectangle(score_cell, tolerance);
     if score_cell.width() <= 2.0 * width || score_cell.height() <= 2.0 * width {
         return cell;
     }
@@ -517,17 +489,15 @@ fn score_cell_strip_region(
         min: Point::new(score_cell.min.x + width, score_cell.min.y + width),
         max: Point::new(score_cell.max.x - width, score_cell.max.y - width),
     };
-    cell.difference(&ContourSet::rectangle(inner, fill_rule, tolerance))
+    cell.difference(&ContourSet::rectangle(inner, tolerance))
 }
 
-fn finished_board_contours(
-    boundaries: &[PathPayload],
-) -> Result<Vec<PolygonContour>, VScoreReliefError> {
+fn finished_board_contours(boundaries: &[ContourBuf]) -> Result<Vec<Ring>, VScoreReliefError> {
     let contours = boundaries
         .iter()
-        .flat_map(|boundary| payloads_to_polygon_contours(std::slice::from_ref(boundary)))
+        .flat_map(|boundary| rings_from_contours(std::slice::from_ref(boundary)))
         .collect::<Vec<_>>();
-    let contours = simplify_polygon_contours(contours, FillRule::NonZero);
+    let contours = simplify_rings(contours, FillRule::NonZero);
     if contours.is_empty() {
         Err(VScoreReliefError::InvalidBoundary(
             "boundary does not form a polygon",
@@ -635,27 +605,24 @@ fn axis_aligned_y(line: VScoreLine, tolerance: f64) -> Option<f64> {
     ((line.start.y - line.end.y).abs() <= tolerance).then_some((line.start.y + line.end.y) / 2.0)
 }
 
-fn rectangle_payload(bbox: BBox) -> PathPayload {
-    let cmds = vec![
-        PathCmd::move_to(Point::new(bbox.min.x, bbox.min.y)),
-        PathCmd::line_to(Point::new(bbox.max.x, bbox.min.y)),
-        PathCmd::line_to(Point::new(bbox.max.x, bbox.max.y)),
-        PathCmd::line_to(Point::new(bbox.min.x, bbox.max.y)),
-        PathCmd::close(),
-    ];
-    PathPayload { bbox, cmds }
+fn rectangle_payload(bbox: BBox) -> ContourBuf {
+    ContourBuf::from_parts(
+        bbox,
+        vec![
+            PathCmd::move_to(Point::new(bbox.min.x, bbox.min.y)),
+            PathCmd::line_to(Point::new(bbox.max.x, bbox.min.y)),
+            PathCmd::line_to(Point::new(bbox.max.x, bbox.max.y)),
+            PathCmd::line_to(Point::new(bbox.min.x, bbox.max.y)),
+            PathCmd::close(),
+        ],
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialects::path::contour_bbox;
-
-    fn path(cmds: Vec<PathCmd>) -> Vec<PathPayload> {
-        vec![PathPayload {
-            bbox: contour_bbox(&cmds),
-            cmds,
-        }]
+    fn path(cmds: Vec<PathCmd>) -> Vec<ContourBuf> {
+        vec![ContourBuf::new(cmds)]
     }
 
     fn rectangle_score_lines(width: f64, height: f64) -> Vec<VScoreLine> {
@@ -1010,7 +977,7 @@ mod tests {
         );
     }
 
-    fn payloads_bbox(payloads: &[PathPayload]) -> BBox {
+    fn payloads_bbox(payloads: &[ContourBuf]) -> BBox {
         payloads
             .iter()
             .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))

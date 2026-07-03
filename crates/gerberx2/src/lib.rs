@@ -1,3 +1,4 @@
+pub mod from_artwork;
 pub mod geometry;
 mod intern;
 mod parse;
