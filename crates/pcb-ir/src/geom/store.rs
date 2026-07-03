@@ -312,19 +312,40 @@ impl PathArena {
         mapping
     }
 
-    pub fn validate(&self, name: &str) -> Result<(), String> {
+    pub fn validate(&self, name: &str) -> Result<(), crate::geom::Diagnostics> {
+        let mut diagnostics = crate::geom::Diagnostics::default();
+        self.validate_into(name, &mut diagnostics);
+        diagnostics.into_result()
+    }
+
+    /// Collect validation problems without terminating at the first.
+    pub fn validate_into(&self, name: &str, diagnostics: &mut crate::geom::Diagnostics) {
         for (index, path) in self.paths.iter().enumerate() {
-            path.contours
-                .validate(&format!("{name} path contours"), index, self.contours.len())?;
-            validate_bbox(&format!("{name} path"), index, path.bbox)?;
+            if let Err(message) =
+                path.contours
+                    .validate(&format!("{name} path contours"), index, self.contours.len())
+            {
+                diagnostics.error(message);
+            }
+            if let Err(message) = validate_bbox(&format!("{name} path"), index, path.bbox) {
+                diagnostics.error(message);
+            }
         }
         for (index, contour) in self.contours.iter().enumerate() {
-            contour
-                .cmds
-                .validate(&format!("{name} contour commands"), index, self.cmds.len())?;
-            validate_bbox(&format!("{name} contour"), index, contour.bbox)?;
+            if let Err(message) =
+                contour
+                    .cmds
+                    .validate(&format!("{name} contour commands"), index, self.cmds.len())
+            {
+                diagnostics.error(message);
+            }
+            if let Err(message) = validate_bbox(&format!("{name} contour"), index, contour.bbox) {
+                diagnostics.error(message);
+            }
         }
-        validate_cmd_points(name, &self.cmds)
+        if let Err(message) = validate_cmd_points(name, &self.cmds) {
+            diagnostics.error(message);
+        }
     }
 }
 

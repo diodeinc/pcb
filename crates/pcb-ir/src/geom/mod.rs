@@ -81,3 +81,52 @@ impl Diagnostic {
         }
     }
 }
+
+impl std::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.severity {
+            Severity::Warning => write!(f, "warning: {}", self.message),
+            Severity::Error => write!(f, "error: {}", self.message),
+        }
+    }
+}
+
+/// A collection of validation problems.
+///
+/// Validation collects every problem it finds instead of stopping at the
+/// first; the collection is the error type of `validate()` functions.
+#[derive(Debug, Clone, Default)]
+pub struct Diagnostics(pub Vec<Diagnostic>);
+
+impl Diagnostics {
+    pub fn error(&mut self, message: impl Into<String>) {
+        self.0.push(Diagnostic::error(message));
+    }
+
+    pub fn warning(&mut self, message: impl Into<String>) {
+        self.0.push(Diagnostic::warning(message));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// `Ok` when no diagnostics were collected, otherwise `Err(self)`.
+    pub fn into_result(self) -> Result<(), Diagnostics> {
+        if self.is_empty() { Ok(()) } else { Err(self) }
+    }
+}
+
+impl std::fmt::Display for Diagnostics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, diagnostic) in self.0.iter().enumerate() {
+            if index > 0 {
+                writeln!(f)?;
+            }
+            write!(f, "{diagnostic}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Diagnostics {}

@@ -1079,7 +1079,7 @@ mod tests {
 
         let error = validate_artwork_ready(&doc).unwrap_err();
 
-        assert!(error.contains("mixes Fill and Stroke paths"));
+        assert!(error.to_string().contains("mixes Fill and Stroke paths"));
     }
 
     #[test]
@@ -1098,7 +1098,7 @@ mod tests {
 
         let error = validate_artwork_ready(&doc).unwrap_err();
 
-        assert!(error.contains("unresolved negative polarity"));
+        assert!(error.to_string().contains("unresolved negative polarity"));
     }
 
     #[test]
@@ -1118,7 +1118,7 @@ mod tests {
 
         let error = validate_artwork_ready(&doc).unwrap_err();
 
-        assert!(error.contains("non-circular arc radii"));
+        assert!(error.to_string().contains("non-circular arc radii"));
     }
 
     #[test]

@@ -59,19 +59,27 @@ impl<LayerMeta> Document<LayerMeta> {
         layer.shapes.slice(&self.arena.paths)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), crate::geom::Diagnostics> {
+        let mut diagnostics = crate::geom::Diagnostics::default();
         for (index, layer) in self.layers.iter().enumerate() {
-            layer
-                .shapes
-                .validate("mask layer shapes", index, self.arena.paths.len())?;
-            crate::geom::validate_bbox("mask layer", index, layer.bbox)?;
+            if let Err(message) =
+                layer
+                    .shapes
+                    .validate("mask layer shapes", index, self.arena.paths.len())
+            {
+                diagnostics.error(message);
+            }
+            if let Err(message) = crate::geom::validate_bbox("mask layer", index, layer.bbox) {
+                diagnostics.error(message);
+            }
         }
         for (index, path) in self.arena.paths.iter().enumerate() {
             if !path.is_filled() {
-                return Err(format!("mask shape {index} is not fill-painted"));
+                diagnostics.error(format!("mask shape {index} is not fill-painted"));
             }
         }
-        self.arena.validate("mask")
+        self.arena.validate_into("mask", &mut diagnostics);
+        diagnostics.into_result()
     }
 }
 

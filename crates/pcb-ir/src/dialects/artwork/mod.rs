@@ -90,33 +90,43 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
         self.diagnostics.push(Diagnostic::warning(message));
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), crate::geom::Diagnostics> {
+        let mut diagnostics = crate::geom::Diagnostics::default();
         for (index, layer) in self.layers.iter().enumerate() {
-            layer
-                .objects
-                .validate("artwork layer objects", index, self.objects.len())?;
-            crate::geom::validate_bbox("artwork layer", index, layer.bbox)?;
+            if let Err(message) =
+                layer
+                    .objects
+                    .validate("artwork layer objects", index, self.objects.len())
+            {
+                diagnostics.error(message);
+            }
+            if let Err(message) = crate::geom::validate_bbox("artwork layer", index, layer.bbox) {
+                diagnostics.error(message);
+            }
         }
         for (index, object) in self.objects.iter().enumerate() {
             match object.geometry {
                 Geometry::Flash { aperture, .. } => {
                     if aperture as usize >= self.apertures.len() {
-                        return Err(format!(
+                        diagnostics.error(format!(
                             "artwork object {index} references missing aperture {aperture}"
                         ));
                     }
                 }
                 Geometry::Stroke { path } | Geometry::Region { path } => {
                     if path as usize >= self.arena.paths.len() {
-                        return Err(format!(
+                        diagnostics.error(format!(
                             "artwork object {index} references missing path {path}"
                         ));
                     }
                 }
             }
-            crate::geom::validate_bbox("artwork object", index, object.bbox)?;
+            if let Err(message) = crate::geom::validate_bbox("artwork object", index, object.bbox) {
+                diagnostics.error(message);
+            }
         }
-        self.arena.validate("artwork")
+        self.arena.validate_into("artwork", &mut diagnostics);
+        diagnostics.into_result()
     }
 }
 

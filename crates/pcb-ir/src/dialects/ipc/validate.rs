@@ -3,53 +3,66 @@
 use crate::dialects::ipc::Document;
 use crate::dialects::ipc::feature::{Feature, FeatureBucket};
 use crate::geom::path::{PathCmd, PathOp};
-use crate::geom::{PaintKind, Point, Polarity, Span, tol};
+use crate::geom::{Diagnostics, PaintKind, Point, Polarity, Span, tol};
 
 /// Check that every feature is exportable as native artwork: no unresolved
 /// set-void or negative-polarity semantics, homogeneous paint per feature,
-/// and circular arcs.
+/// and circular arcs. All problems are collected.
 pub fn validate_artwork_ready<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
-) -> Result<(), String> {
-    validate_homogeneous_features(doc)?;
+) -> Result<(), Diagnostics> {
+    let mut diagnostics = Diagnostics::default();
+    validate_homogeneous_features_into(doc, &mut diagnostics);
     for (feature_index, feature) in doc.features.iter().enumerate() {
         if feature.paths.is_empty() {
             continue;
         }
         if feature.flags.clears_previous_in_set {
-            return Err(format!(
+            diagnostics.error(format!(
                 "feature {feature_index} still has unresolved set-void clear semantics"
             ));
         }
         if feature.bucket != FeatureBucket::Cutout && feature.polarity != Polarity::Dark {
-            return Err(format!(
+            diagnostics.error(format!(
                 "feature {feature_index} still has unresolved negative polarity"
             ));
         }
-        validate_feature_arcs(doc, feature_index, feature)?;
+        validate_feature_arcs(doc, feature_index, feature, &mut diagnostics);
     }
-    Ok(())
+    diagnostics.into_result()
 }
 
 /// Check that every feature's paths agree on one paint kind.
 pub fn validate_homogeneous_features<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
-) -> Result<(), String> {
+) -> Result<(), Diagnostics> {
+    let mut diagnostics = Diagnostics::default();
+    validate_homogeneous_features_into(doc, &mut diagnostics);
+    diagnostics.into_result()
+}
+
+fn validate_homogeneous_features_into<Symbol, LayerFunction>(
+    doc: &Document<Symbol, LayerFunction>,
+    diagnostics: &mut Diagnostics,
+) {
     for (feature_index, feature) in doc.features.iter().enumerate() {
-        checked_span(feature.paths, "feature paths", doc.arena.paths.len())
-            .map_err(|error| format!("feature {feature_index}: {error}"))?;
+        if let Err(error) = checked_span(feature.paths, "feature paths", doc.arena.paths.len()) {
+            diagnostics.error(format!("feature {feature_index}: {error}"));
+            continue;
+        }
         let mut feature_kind = None;
         for path_index in feature.paths.indices() {
             let path_kind = doc.arena.paths[path_index as usize].paint.kind();
             if path_kind == PaintKind::None {
-                return Err(format!(
+                diagnostics.error(format!(
                     "feature {feature_index} path {path_index} is unpainted"
                 ));
+                continue;
             }
 
             match feature_kind {
                 Some(previous) if previous != path_kind => {
-                    return Err(format!(
+                    diagnostics.error(format!(
                         "feature {feature_index} mixes {previous:?} and {path_kind:?} paths"
                     ));
                 }
@@ -58,18 +71,19 @@ pub fn validate_homogeneous_features<Symbol, LayerFunction>(
             }
         }
     }
-    Ok(())
 }
 
 fn validate_feature_arcs<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     feature_index: usize,
     feature: &Feature<Symbol>,
-) -> Result<(), String> {
+    diagnostics: &mut Diagnostics,
+) {
     for path_index in feature.paths.indices() {
-        validate_path_arcs(doc, feature_index, path_index)?;
+        if let Err(message) = validate_path_arcs(doc, feature_index, path_index) {
+            diagnostics.error(message);
+        }
     }
-    Ok(())
 }
 
 fn validate_path_arcs<Symbol, LayerFunction>(
