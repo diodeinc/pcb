@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-07-03
+
 ### Added
 
 - Added `pcb sync --check` to fail CI when hydrated `pcb.toml` manifests or vendored package versions are out of sync. The check covers the whole workspace regardless of the current directory.
@@ -1261,7 +1263,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/diodeinc/pcb/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/diodeinc/pcb/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/diodeinc/pcb/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/diodeinc/pcb/compare/v0.4.0...v0.4.1
