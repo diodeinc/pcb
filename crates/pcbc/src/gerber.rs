@@ -27,6 +27,15 @@ enum Commands {
         #[arg(long, default_value_t = 0.01)]
         area_tolerance_mm2: f64,
     },
+    /// Re-emit a Gerber X2 layer through the pcb-ir artwork pipeline
+    Normalize {
+        /// Gerber layer file to normalize
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Output file path; prints to stdout when omitted
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+    },
     /// Render a single Gerber X2 layer to SVG, PNG, or terminal graphics
     Render {
         /// Gerber layer file to render
@@ -67,12 +76,26 @@ pub fn execute(args: GerberArgs) -> Result<()> {
             bbox_tolerance_mm,
             area_tolerance_mm2,
         ),
+        Commands::Normalize { file, output } => normalize(&file, output.as_deref()),
         Commands::Render {
             file,
             output,
             format,
         } => render(&file, output.as_deref(), format),
     }
+}
+
+fn normalize(file: &Path, output: Option<&Path>) -> Result<()> {
+    let gerber = gerberx2::GerberX2::parse_file(file)
+        .with_context(|| format!("failed to parse Gerber file {}", file.display()))?;
+    let normalized = gerberx2::from_artwork::normalize_layer(&gerber)
+        .with_context(|| format!("failed to normalize Gerber file {}", file.display()))?;
+    match output {
+        Some(path) => std::fs::write(path, normalized)
+            .with_context(|| format!("failed to write {}", path.display()))?,
+        None => print!("{normalized}"),
+    }
+    Ok(())
 }
 
 fn compare(

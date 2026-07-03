@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added `pcb gerber normalize` to re-emit a Gerber X2 layer through the pcb-ir pipeline.
+
+### Changed
+
+- Gerber import now preserves standard-aperture flashes instead of flattening them to regions.
+
 ## [0.4.4] - 2026-07-03
 
 ### Added
@@ -19,8 +27,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb sync` now applies manifest and vendor updates only after the whole workspace resolves; a resolution failure no longer leaves partially hydrated manifests.
 - `pcb sync` and `pcb vendor` no longer create an empty `vendor/` directory when no packages match the vendor patterns.
-- Restructured the `pcb-ir` crate around a shared `geom` substrate: one `PathArena` (paths/contours/commands addressed by typed `Span` ranges) embedded in every dialect document, a unified `Paint`/`Path` model, a single `Polarity` enum, a primitive `shapes` library, and regularized `ContourSet` region operations. Rendering moved to `pcb_ir::render`, artwork comparison to `dialects::artwork::compare`, and the `dialects::gerber` module dissolved into `gerberx2`. IPC pass pipelines now compact orphaned geometry.
-- Gerber import now preserves standard-aperture flashes as native artwork flash objects (with aperture table and hole support) instead of flattening them to regions, and the artwork→Gerber lowering moved into `gerberx2::from_artwork` so any annotated artwork document can be written as Gerber. IPC drill/rout extraction to NC moved into `pcb_ir::dialects::ipc::lower_to_nc`.
 
 ### Removed
 

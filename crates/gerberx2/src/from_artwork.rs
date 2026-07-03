@@ -37,6 +37,102 @@ pub struct ObjectAttributes {
 /// An artwork document annotated for Gerber export.
 pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerAttributes, ObjectAttributes>;
 
+/// Re-emit a parsed Gerber layer through the artwork IR.
+///
+/// This is the normalize pipeline: extract the parsed layer into artwork,
+/// carry its X2 attributes across, and lower it back to idiomatic Gerber.
+/// Standard-aperture flashes survive as flashes; macro/block flashes and
+/// shaped draws are flattened to regions.
+pub fn normalize_layer(gerber: &crate::GerberX2) -> Result<String> {
+    let annotated = annotate_for_export(gerber, crate::geometry::extract_document(gerber));
+    crate::write_layer(&lower_artwork_layer(&annotated)?)
+}
+
+/// Convert an extracted layer's interned Gerber metadata into the resolved
+/// export annotations.
+pub fn annotate_for_export(
+    gerber: &crate::GerberX2,
+    doc: crate::geometry::GerberArtworkDocument,
+) -> ArtworkDocument {
+    ArtworkDocument {
+        apertures: doc.apertures,
+        layers: doc
+            .layers
+            .into_iter()
+            .map(|layer| pcb_ir::dialects::artwork::Layer {
+                name: layer.name,
+                role: layer.role,
+                side: layer.side,
+                objects: layer.objects,
+                bbox: layer.bbox,
+                meta: LayerAttributes {
+                    file_function: layer.meta,
+                    part: file_attribute_fields(gerber, ".Part"),
+                    file_polarity: file_attribute_fields(gerber, ".FilePolarity")
+                        .and_then(|fields| fields.into_iter().next()),
+                },
+            })
+            .collect(),
+        objects: doc
+            .objects
+            .into_iter()
+            .map(|object| pcb_ir::dialects::artwork::Object {
+                polarity: object.polarity,
+                order: object.order,
+                geometry: object.geometry,
+                bbox: object.bbox,
+                meta: object_attributes(gerber, &object.meta),
+            })
+            .collect(),
+        arena: doc.arena,
+        diagnostics: doc.diagnostics,
+    }
+}
+
+fn file_attribute_fields(gerber: &crate::GerberX2, name: &str) -> Option<Vec<String>> {
+    gerber
+        .file_attributes()
+        .iter()
+        .find(|attribute| gerber.resolve(attribute.name) == name)
+        .map(|attribute| resolve_fields(gerber, attribute))
+}
+
+fn object_attributes(
+    gerber: &crate::GerberX2,
+    meta: &crate::geometry::GerberObjectMeta,
+) -> ObjectAttributes {
+    let component = attribute_fields(gerber, &meta.object_attributes, ".C")
+        .or_else(|| attribute_fields(gerber, &meta.object_attributes, ".P"))
+        .and_then(|fields| fields.into_iter().next());
+    ObjectAttributes {
+        aperture_function: attribute_fields(gerber, &meta.aperture_attributes, ".AperFunction"),
+        net: attribute_fields(gerber, &meta.object_attributes, ".N")
+            .and_then(|fields| fields.into_iter().next()),
+        component,
+        pin: attribute_fields(gerber, &meta.object_attributes, ".P")
+            .and_then(|fields| fields.into_iter().nth(1)),
+    }
+}
+
+fn attribute_fields(
+    gerber: &crate::GerberX2,
+    attributes: &[crate::types::Attribute],
+    name: &str,
+) -> Option<Vec<String>> {
+    attributes
+        .iter()
+        .find(|attribute| gerber.resolve(attribute.name) == name)
+        .map(|attribute| resolve_fields(gerber, attribute))
+}
+
+fn resolve_fields(gerber: &crate::GerberX2, attribute: &crate::types::Attribute) -> Vec<String> {
+    attribute
+        .fields
+        .iter()
+        .map(|field| gerber.resolve(*field).to_string())
+        .collect()
+}
+
 pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
     let mut apertures = ApertureTable::default();
     let mut plan = GerberPlan::default();
