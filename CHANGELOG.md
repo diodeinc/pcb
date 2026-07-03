@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- `pcb doc @stdlib/...` now documents stdlib files from any workspace without treating the materialized stdlib as an ordinary workspace package.
+
 ## [0.4.4] - 2026-07-03
 
 ### Added

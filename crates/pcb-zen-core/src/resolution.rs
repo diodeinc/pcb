@@ -842,6 +842,9 @@ impl ResolutionResult {
                     {
                         Some((root_package.as_str(), resolution, root.as_os_str().len()))
                     }
+                    FrozenPackageIdentity::Stdlib => {
+                        Some((root_package.as_str(), resolution, root.as_os_str().len()))
+                    }
                     _ => None,
                 }
             })
