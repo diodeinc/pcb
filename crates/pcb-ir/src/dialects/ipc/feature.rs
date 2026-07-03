@@ -15,8 +15,10 @@ use crate::geom::{Affine2, BBox, FillRule, LineCap, PaintKind, Point, Polarity, 
 #[derive(Debug, Clone)]
 pub struct Feature<Symbol> {
     pub kind: FeatureKind,
-    /// Export/render grouping. Assigned at extraction alongside `intent`;
-    /// passes may rewrite it when features are flattened.
+    /// Export/render grouping, derived from `kind` and `intent` via
+    /// [`FeatureBucket::classify`]. Extraction never writes this directly;
+    /// lowering passes refine it (primitive path runs split into fill/trace
+    /// buckets, layer flattening rewrites to `Fill`).
     pub bucket: FeatureBucket,
     pub polarity: Polarity,
     pub net: Option<Symbol>,
@@ -53,10 +55,11 @@ pub struct Feature<Symbol> {
 }
 
 impl<Symbol> Feature<Symbol> {
-    pub fn new(kind: FeatureKind, bucket: FeatureBucket, polarity: Polarity) -> Self {
+    pub fn new(kind: FeatureKind, polarity: Polarity) -> Self {
+        let intent = FeatureIntent::default();
         Self {
             kind,
-            bucket,
+            bucket: FeatureBucket::classify(kind, &intent),
             polarity,
             net: None,
             source_layer_ref: None,
@@ -64,7 +67,7 @@ impl<Symbol> Feature<Symbol> {
             source_step_kind: LayoutStepKind::Unknown,
             set: None,
             source: SourceRef::default(),
-            intent: FeatureIntent::default(),
+            intent,
             fiducial_kind: FiducialKind::Unknown,
             transform: Affine2::IDENTITY,
             bbox: BBox::empty(),
@@ -87,8 +90,14 @@ impl<Symbol> Feature<Symbol> {
         }
     }
 
+    /// Recompute `bucket` from `kind` and the current `intent`. Call after
+    /// intent resolution at extraction time.
+    pub fn reclassify(&mut self) {
+        self.bucket = FeatureBucket::classify(self.kind, &self.intent);
+    }
+
     pub fn is_fiducial(&self) -> bool {
-        self.intent.role == FeatureRole::Fiducial || self.bucket == FeatureBucket::Fiducial
+        self.intent.role == FeatureRole::Fiducial
     }
 
     pub fn is_vscore(&self) -> bool {
@@ -166,6 +175,34 @@ pub enum FeatureBucket {
 }
 
 impl FeatureBucket {
+    /// Classify a feature from its kind and fabrication intent.
+    ///
+    /// Holes and slots are always cutouts. Otherwise the intent's role
+    /// decides, with pads split into through-hole/surface buckets by plating;
+    /// features whose role carries no grouping of its own (conductors, array
+    /// separation, outlines) fall back to trace-vs-fill by kind.
+    pub fn classify<Symbol>(kind: FeatureKind, intent: &FeatureIntent<Symbol>) -> Self {
+        match kind {
+            FeatureKind::Hole | FeatureKind::Slot => Self::Cutout,
+            _ => match intent.role {
+                FeatureRole::Via => Self::Via,
+                FeatureRole::Fiducial => Self::Fiducial,
+                FeatureRole::Pad => match intent.plating {
+                    PlatingKind::Via | PlatingKind::ViaCapped => Self::Via,
+                    PlatingKind::Plated | PlatingKind::NonPlated => Self::Pth,
+                    PlatingKind::Unknown | PlatingKind::None => Self::Smd,
+                },
+                FeatureRole::Thermal => Self::Thermal,
+                FeatureRole::Antipad => Self::Antipad,
+                FeatureRole::Cutout => Self::Cutout,
+                _ => match kind {
+                    FeatureKind::Trace => Self::Trace,
+                    _ => Self::Fill,
+                },
+            },
+        }
+    }
+
     /// The bucket a lowered primitive path run belongs to, by paint kind.
     pub fn for_primitive_paint(kind: PaintKind) -> Option<Self> {
         match kind {

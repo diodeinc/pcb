@@ -246,6 +246,7 @@ fn complete_feature_intent(layer: &Layer, feature: &mut GeometryFeature) {
     if feature.intent.plating == PlatingKind::Unknown {
         feature.intent.plating = plating_for_feature(feature);
     }
+    feature.reclassify();
 }
 
 fn intent_for_layer(layer: &Layer) -> FeatureIntent<Symbol> {
@@ -367,24 +368,8 @@ fn role_for_feature(feature: &GeometryFeature) -> FeatureRole {
             FeatureDomain::VCut | FeatureDomain::Score => FeatureRole::ArraySeparation,
             FeatureDomain::Rout => FeatureRole::Route,
             FeatureDomain::Profile => FeatureRole::BoardOutline,
-            _ => match feature.bucket {
-                FeatureBucket::Smd | FeatureBucket::Pth => FeatureRole::Pad,
-                FeatureBucket::Via => FeatureRole::Via,
-                FeatureBucket::Fiducial => FeatureRole::Fiducial,
-                FeatureBucket::Trace | FeatureBucket::Fill => {
-                    if matches!(
-                        feature.intent.domain,
-                        FeatureDomain::Copper | FeatureDomain::Unknown
-                    ) {
-                        FeatureRole::Conductor
-                    } else {
-                        FeatureRole::Other
-                    }
-                }
-                FeatureBucket::Cutout => FeatureRole::Cutout,
-                FeatureBucket::Thermal => FeatureRole::Thermal,
-                FeatureBucket::Antipad => FeatureRole::Antipad,
-            },
+            FeatureDomain::Copper | FeatureDomain::Unknown => FeatureRole::Conductor,
+            _ => FeatureRole::Other,
         },
     }
 }
@@ -1343,10 +1328,9 @@ fn extract_pad(
         return Ok(None);
     };
 
-    let bucket = match padstack.hole_def.as_ref().map(|hole| hole.plating_status) {
-        Some(PlatingStatus::Via) => FeatureBucket::Via,
-        Some(PlatingStatus::Plated | PlatingStatus::NonPlated) => FeatureBucket::Pth,
-        None => FeatureBucket::Smd,
+    let role = match padstack.hole_def.as_ref().map(|hole| hole.plating_status) {
+        Some(PlatingStatus::Via) => FeatureRole::Via,
+        _ => FeatureRole::Pad,
     };
 
     let placement = ipc_placement(Point::new(x, y), pad.xform);
@@ -1372,7 +1356,7 @@ fn extract_pad(
                 ));
                 return Ok(None);
             };
-            lower_standard_primitive(context, doc, primitive, placement.transform, bucket)?
+            lower_standard_primitive(context, doc, primitive, placement.transform)?
         }
         PadPrimitiveRef::User(primitive_ref) => {
             let Some(primitive) = context.user_primitives.get(&primitive_ref).copied() else {
@@ -1395,7 +1379,6 @@ fn extract_pad(
 
     let mut feature = GeometryFeature::new(
         FeatureKind::Padstack,
-        bucket,
         if paint == PrimitivePaint::Void {
             GeometryPolarity::Clear
         } else {
@@ -1406,6 +1389,7 @@ fn extract_pad(
     feature.source = source;
     feature.bbox = bbox;
     feature.paths = paths;
+    feature.intent.role = role;
     apply_ipc_placement(&mut feature, placement);
     feature.padstack_ref = Some(padstack_ref);
     feature.primitive_ref = match primitive_ref {
@@ -1497,7 +1481,7 @@ fn extract_feature_primitive(
                 ));
                 return Ok(Vec::new());
             };
-            lower_standard_primitive(context, doc, primitive, transform, FeatureBucket::Fill)?
+            lower_standard_primitive(context, doc, primitive, transform)?
         }
         FeaturePrimitiveKind::User => {
             let Some(primitive) = context.user_primitives.get(&primitive_ref.id).copied() else {
@@ -1554,7 +1538,6 @@ fn primitive_path_feature(
 ) -> GeometryFeature {
     let mut feature = GeometryFeature::new(
         FeatureKind::Primitive,
-        FeatureBucket::Fill,
         if paint == PrimitivePaint::Void {
             GeometryPolarity::Clear
         } else {
@@ -1599,13 +1582,7 @@ fn extract_fiducial(
     let path_start = doc.arena.paths.len() as u32;
     let (paint, primitive_ref, outer_diameter) = match &fiducial.shape {
         ipc2581::types::ecad::FiducialShape::Primitive(primitive) => (
-            lower_standard_primitive(
-                context,
-                doc,
-                primitive,
-                placement.transform,
-                FeatureBucket::Fiducial,
-            )?,
+            lower_standard_primitive(context, doc, primitive, placement.transform)?,
             None,
             standard_primitive_outer_diameter(primitive),
         ),
@@ -1618,13 +1595,7 @@ fn extract_fiducial(
                 return Ok(None);
             };
             (
-                lower_standard_primitive(
-                    context,
-                    doc,
-                    primitive,
-                    placement.transform,
-                    FeatureBucket::Fiducial,
-                )?,
+                lower_standard_primitive(context, doc, primitive, placement.transform)?,
                 Some(*primitive_ref),
                 standard_primitive_outer_diameter(primitive),
             )
@@ -1639,7 +1610,6 @@ fn extract_fiducial(
 
     let mut feature = GeometryFeature::new(
         FeatureKind::Primitive,
-        FeatureBucket::Fiducial,
         if paint == PrimitivePaint::Void {
             GeometryPolarity::Clear
         } else {
@@ -1648,6 +1618,7 @@ fn extract_fiducial(
     );
     feature.net = net;
     feature.source = source;
+    feature.intent.role = FeatureRole::Fiducial;
     feature.fiducial_kind = map_fiducial_kind(fiducial.kind);
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
@@ -1855,7 +1826,7 @@ fn extract_polygon(
     push_polygon_path(doc, polygon, Affine2::identity(), FillRule::NonZero);
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
 
-    let mut feature = GeometryFeature::new(FeatureKind::Polygon, FeatureBucket::Fill, polarity);
+    let mut feature = GeometryFeature::new(FeatureKind::Polygon, polarity);
     feature.net = net;
     feature.source = source;
     feature.bbox = doc.arena.paths_bbox(paths);
@@ -1922,8 +1893,7 @@ fn push_stroked_polyline(
     doc.push_path(stroked_paint(style), [ContourBuf::from_parts(bbox, cmds)]);
     bbox = bbox.expand(style.width / 2.0);
 
-    let mut feature =
-        GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, style.polarity);
+    let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
     feature.net = style.net;
     feature.source = style.source;
     feature.bbox = bbox;
@@ -1957,8 +1927,7 @@ fn push_stroked_arc(
     );
     let bbox = bbox.expand(style.width / 2.0);
 
-    let mut feature =
-        GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, style.polarity);
+    let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
     feature.net = style.net;
     feature.source = style.source;
     feature.bbox = bbox;
@@ -2021,8 +1990,7 @@ fn push_stroked_steps(
     doc.push_path(stroked_paint(style), [ContourBuf::from_parts(bbox, cmds)]);
     bbox = bbox.expand(style.width / 2.0);
 
-    let mut feature =
-        GeometryFeature::new(FeatureKind::Trace, FeatureBucket::Trace, style.polarity);
+    let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
     feature.net = style.net;
     feature.source = style.source;
     feature.bbox = bbox;
@@ -2055,11 +2023,7 @@ fn extract_hole(
     );
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
 
-    let mut feature = GeometryFeature::new(
-        FeatureKind::Hole,
-        FeatureBucket::Cutout,
-        GeometryPolarity::Dark,
-    );
+    let mut feature = GeometryFeature::new(FeatureKind::Hole, GeometryPolarity::Dark);
     feature.source = source;
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
@@ -2090,22 +2054,12 @@ fn extract_slot(
             if let StandardPrimitive::Oval(oval) = primitive {
                 primitive_size = Some((oval.shape.size.width, oval.shape.size.height));
             }
-            let _ = lower_standard_primitive(
-                context,
-                doc,
-                primitive,
-                placement.transform,
-                FeatureBucket::Cutout,
-            )?;
+            let _ = lower_standard_primitive(context, doc, primitive, placement.transform)?;
         }
     }
 
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
-    let mut feature = GeometryFeature::new(
-        FeatureKind::Slot,
-        FeatureBucket::Cutout,
-        GeometryPolarity::Dark,
-    );
+    let mut feature = GeometryFeature::new(FeatureKind::Slot, GeometryPolarity::Dark);
     feature.source = source;
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
@@ -2127,7 +2081,6 @@ fn lower_standard_primitive(
     doc: &mut GeometryDocument,
     primitive: &StandardPrimitive,
     transform: Affine2,
-    bucket: FeatureBucket,
 ) -> Result<PrimitivePaint> {
     let paint = primitive_paint(primitive);
     if standard_primitive_has_no_area(primitive) {
@@ -2270,11 +2223,6 @@ fn lower_standard_primitive(
         StandardPrimitive::Moire(moire) => {
             push_moire_path(doc, transform, moire);
         }
-    }
-
-    if matches!(bucket, FeatureBucket::Thermal) {
-        // Thermal pads are already represented by their primitive. This branch is
-        // just here to make the bucket dependency explicit for future styling.
     }
 
     match paint {
@@ -3555,14 +3503,8 @@ mod tests {
             line_desc_ref: None,
         });
 
-        let paint = lower_standard_primitive(
-            &context,
-            &mut doc,
-            &primitive,
-            Affine2::identity(),
-            FeatureBucket::Fill,
-        )
-        .unwrap();
+        let paint =
+            lower_standard_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
 
         assert_eq!(paint, PrimitivePaint::Fill);
         assert!(doc.arena.paths.is_empty());

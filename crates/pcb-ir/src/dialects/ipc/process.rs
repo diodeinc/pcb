@@ -851,7 +851,7 @@ mod tests {
         doc.push_path(Paint::None, [rect_contour(2.0, 2.0, 3.0, 3.0)]);
         doc.features.push(Feature {
             paths: Span::new(painted_feature_path, 2),
-            ..Feature::new(FeatureKind::Padstack, FeatureBucket::Smd, Polarity::Dark)
+            ..Feature::new(FeatureKind::Padstack, Polarity::Dark)
         });
         doc.layers.push(test_layer(Span::new(0, 1)));
 
@@ -965,7 +965,7 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(0, 1),
-            ..Feature::new(FeatureKind::Polygon, FeatureBucket::Fill, Polarity::Dark)
+            ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
         });
         doc.push_path(
             Paint::Fill {
@@ -975,7 +975,7 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(1, 1),
-            ..Feature::new(FeatureKind::Polygon, FeatureBucket::Fill, Polarity::Clear)
+            ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
@@ -1013,7 +1013,7 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(1, 1),
-            ..Feature::new(FeatureKind::Slot, FeatureBucket::Cutout, Polarity::Dark)
+            ..Feature::new(FeatureKind::Slot, Polarity::Dark)
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
@@ -1043,7 +1043,7 @@ mod tests {
                 PathCmd::line_to(Point::new(3.0, 0.0)),
             ])],
         );
-        let mut feature = Feature::new(FeatureKind::Primitive, FeatureBucket::Fill, Polarity::Dark);
+        let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
         feature.paths = Span::new(0, 2);
         feature.flags.lowered_to_paths = true;
 
@@ -1074,7 +1074,7 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(0, 2),
-            ..Feature::new(FeatureKind::Primitive, FeatureBucket::Fill, Polarity::Dark)
+            ..Feature::new(FeatureKind::Primitive, Polarity::Dark)
         });
 
         let error = validate_artwork_ready(&doc).unwrap_err();
@@ -1093,7 +1093,7 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(0, 1),
-            ..Feature::new(FeatureKind::Polygon, FeatureBucket::Fill, Polarity::Clear)
+            ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
         });
 
         let error = validate_artwork_ready(&doc).unwrap_err();
@@ -1150,7 +1150,7 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(0, 1),
-            ..Feature::new(FeatureKind::Padstack, FeatureBucket::Smd, Polarity::Dark)
+            ..Feature::new(FeatureKind::Padstack, Polarity::Dark)
         });
         doc.push_path(
             Paint::Fill {
@@ -1190,7 +1190,7 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(0, 1),
-            ..Feature::new(FeatureKind::Polygon, FeatureBucket::Fill, Polarity::Dark)
+            ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
         });
         doc.push_path(
             Paint::Fill {
@@ -1200,7 +1200,7 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(1, 1),
-            ..Feature::new(FeatureKind::Polygon, FeatureBucket::Fill, Polarity::Clear)
+            ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
@@ -1225,7 +1225,7 @@ mod tests {
     }
 
     fn copper_trace_feature() -> Feature<u32> {
-        let mut feature = Feature::new(FeatureKind::Trace, FeatureBucket::Trace, Polarity::Dark);
+        let mut feature = Feature::new(FeatureKind::Trace, Polarity::Dark);
         feature.intent.domain = FeatureDomain::Copper;
         feature.intent.role = FeatureRole::Conductor;
         feature.intent.operation = FeatureOperation::AddMaterial;
