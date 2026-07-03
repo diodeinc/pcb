@@ -251,7 +251,7 @@ fn build_availability_summary(
 /// Call the BOM match API and return parsed response
 fn call_bom_match_api(
     ctx: &WorkspaceContext,
-    auth_token: &str,
+    auth_token: Option<&str>,
     bom_entries: &[serde_json::Value],
     timeout_secs: u64,
     strict: bool,
@@ -263,9 +263,7 @@ fn call_bom_match_api(
         .build()?;
     let request_body = bom_match_request_body(bom_entries, strict);
 
-    let response = client
-        .post(&url)
-        .bearer_auth(auth_token)
+    let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
         .json(&request_body)
         .send()
         .context("Failed to send BOM match request")?;
@@ -294,7 +292,7 @@ fn bom_match_request_body(bom_entries: &[serde_json::Value], strict: bool) -> se
 
 /// Fetch BOM matching results from the API and populate availability data
 pub fn fetch_and_populate_availability(
-    auth_token: &str,
+    auth_token: Option<&str>,
     bom: &mut pcb_sch::bom::Bom,
 ) -> Result<()> {
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
@@ -303,7 +301,7 @@ pub fn fetch_and_populate_availability(
 
 pub fn fetch_and_populate_availability_with_context(
     ctx: &WorkspaceContext,
-    auth_token: &str,
+    auth_token: Option<&str>,
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
 ) -> Result<()> {
@@ -423,7 +421,7 @@ pub fn has_search_availability(availability: &Availability) -> bool {
 
 /// Fetch pricing for multiple components in a single batch request
 pub fn fetch_pricing_batch(
-    auth_token: &str,
+    auth_token: Option<&str>,
     components: &[ComponentKey],
 ) -> Result<Vec<Availability>> {
     fetch_pricing_in_chunks(components, |chunk| {
@@ -433,7 +431,7 @@ pub fn fetch_pricing_batch(
 
 /// Fetch pricing for grouped alternate components, combining all offers per group.
 pub fn fetch_pricing_grouped_batch(
-    auth_token: &str,
+    auth_token: Option<&str>,
     groups: &[Vec<ComponentKey>],
 ) -> Result<Vec<Availability>> {
     fetch_pricing_in_chunks(groups, |chunk| {
@@ -478,7 +476,7 @@ fn fetch_pricing_in_chunks<T: Clone>(
 }
 
 fn fetch_pricing_grouped_batch_once(
-    auth_token: &str,
+    auth_token: Option<&str>,
     groups: &[Vec<ComponentKey>],
 ) -> Result<Vec<Availability>> {
     if groups.is_empty() {
@@ -553,7 +551,7 @@ fn fetch_pricing_grouped_batch_once(
 }
 
 fn fetch_pricing_batch_once(
-    auth_token: &str,
+    auth_token: Option<&str>,
     components: &[ComponentKey],
 ) -> Result<Vec<Availability>> {
     if components.is_empty() {

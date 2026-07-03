@@ -20,7 +20,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use std::sync::LazyLock;
 
-use crate::auth::get_valid_token;
 use crate::get_api_base_url;
 
 // ============================================================================
@@ -113,14 +112,12 @@ fn save_aws_creds_to_disk(creds: &AwsCredentials) -> Result<()> {
 
 /// Fetch fresh AWS credentials from Diode API
 fn fetch_aws_creds_from_api() -> Result<AwsCredentials> {
-    let token = get_valid_token()?;
+    let token = crate::auth::get_api_token()?;
 
     let api_url = get_api_base_url();
     let url = format!("{}/api/bedrock/embed/credentials", api_url);
 
-    let response = HTTP_CLIENT
-        .post(&url)
-        .bearer_auth(&token)
+    let response = crate::auth::apply_bearer_auth(HTTP_CLIENT.post(&url), token.as_deref())
         .send()
         .context("Failed to fetch AWS credentials")?;
 

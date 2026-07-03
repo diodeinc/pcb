@@ -52,14 +52,12 @@ fn download_index_response(
 
 /// Fetch KiCad symbols index metadata without downloading the file.
 pub fn fetch_kicad_symbols_index_metadata() -> Result<KicadSymbolsIndexMetadata> {
-    let token = crate::auth::get_valid_token().context("Auth failed")?;
+    let token = crate::auth::get_api_token().context("Auth failed")?;
     let client = http_client()?;
     let api_url = crate::get_api_base_url();
     let url = format!("{api_url}{KICAD_SYMBOLS_INDEX_ROUTE}");
 
-    let resp = client
-        .get(&url)
-        .bearer_auth(&token)
+    let resp = crate::auth::apply_bearer_auth(client.get(&url), token.as_deref())
         .send()
         .with_context(|| format!("Request to {url} failed"))?
         .error_for_status()
@@ -79,15 +77,13 @@ pub enum KicadSymbolsAccessResult {
 
 /// Check if KiCad symbols index download is allowed.
 pub fn check_kicad_symbols_access() -> Result<KicadSymbolsAccessResult> {
-    let token = crate::auth::get_valid_token()
+    let token = crate::auth::get_api_token()
         .context("Authentication required. Run `pcb auth` to log in.")?;
     let client = http_client()?;
     let api_url = crate::get_api_base_url();
     let url = format!("{api_url}{KICAD_SYMBOLS_INDEX_ROUTE}");
 
-    let resp = client
-        .get(&url)
-        .bearer_auth(&token)
+    let resp = crate::auth::apply_bearer_auth(client.get(&url), token.as_deref())
         .send()
         .with_context(|| format!("Request to {url} failed"))?;
 
@@ -167,22 +163,21 @@ pub fn download_kicad_symbols_index_with_progress(
 
 /// Download KiCad symbols index (blocking, prints to stderr).
 pub fn download_kicad_symbols_index(dest_path: &Path) -> Result<()> {
-    let token = crate::auth::get_valid_token()
+    let token = crate::auth::get_api_token()
         .context("Authentication required. Run `pcb auth login` first.")?;
     let client = http_client()?;
     let api_url = crate::get_api_base_url();
     let url = format!("{api_url}{KICAD_SYMBOLS_INDEX_ROUTE}");
 
     eprintln!("Fetching KiCad symbols index URL...");
-    let index_metadata: KicadSymbolsIndexMetadata = client
-        .get(&url)
-        .bearer_auth(&token)
-        .send()
-        .context("Failed to fetch KiCad symbols index URL")?
-        .error_for_status()
-        .context("API returned error when fetching KiCad symbols index URL")?
-        .json()
-        .context("Failed to parse KiCad symbols index response")?;
+    let index_metadata: KicadSymbolsIndexMetadata =
+        crate::auth::apply_bearer_auth(client.get(&url), token.as_deref())
+            .send()
+            .context("Failed to fetch KiCad symbols index URL")?
+            .error_for_status()
+            .context("API returned error when fetching KiCad symbols index URL")?
+            .json()
+            .context("Failed to parse KiCad symbols index response")?;
 
     ensure_parent_dir(dest_path, "KiCad symbols")?;
 

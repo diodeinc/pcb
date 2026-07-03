@@ -39,12 +39,12 @@ struct UploadContext {
     client: Client,
     base_url: String,
     web_base_url: String,
-    token: String,
+    token: Option<String>,
     sha256_hex: String,
 }
 
 fn prepare_upload(ctx: &WorkspaceContext, zip_path: &Path) -> Result<UploadContext> {
-    let token = ctx.token()?;
+    let token = crate::auth::get_api_token_with_context(ctx)?;
     let base_url = ctx.api_base_url().to_string();
 
     let client = Client::builder()
@@ -56,7 +56,7 @@ fn prepare_upload(ctx: &WorkspaceContext, zip_path: &Path) -> Result<UploadConte
     stage_artifact(
         &client,
         &base_url,
-        &token,
+        token.as_deref(),
         zip_path,
         &sha256_hex,
         &sha256_b64,
@@ -81,7 +81,7 @@ pub fn upload_release(
     create_release(
         &upload.client,
         &upload.base_url,
-        &upload.token,
+        upload.token.as_deref(),
         workspace,
         &upload.sha256_hex,
     )
@@ -94,7 +94,7 @@ pub fn upload_preview(zip_path: &Path, ctx: &WorkspaceContext) -> Result<Preview
         &upload.client,
         &upload.base_url,
         &upload.web_base_url,
-        &upload.token,
+        upload.token.as_deref(),
         &upload.sha256_hex,
     )
 }
@@ -120,15 +120,13 @@ fn calculate_sha256(path: &Path) -> Result<(String, String)> {
 fn stage_artifact(
     client: &Client,
     base_url: &str,
-    token: &str,
+    token: Option<&str>,
     zip_path: &Path,
     sha256_hex: &str,
     sha256_b64: &str,
 ) -> Result<()> {
     let url = format!("{}/api/file/{}", base_url, sha256_hex);
-    let resp = client
-        .post(&url)
-        .bearer_auth(token)
+    let resp = crate::auth::apply_bearer_auth(client.post(&url), token)
         .send()
         .context("Failed to connect to Diode API")?;
 
@@ -161,7 +159,7 @@ fn stage_artifact(
 fn create_release(
     client: &Client,
     base_url: &str,
-    token: &str,
+    token: Option<&str>,
     workspace: &str,
     sha256_hex: &str,
 ) -> Result<ReleaseResult> {
@@ -171,9 +169,7 @@ fn create_release(
         urlencoding::encode(workspace)
     );
 
-    let resp = client
-        .post(&url)
-        .bearer_auth(token)
+    let resp = crate::auth::apply_bearer_auth(client.post(&url), token)
         .json(&serde_json::json!({ "artifactHash": sha256_hex }))
         .send()
         .context("Failed to connect to Diode API")?;
@@ -210,14 +206,12 @@ fn create_preview(
     client: &Client,
     base_url: &str,
     web_base_url: &str,
-    token: &str,
+    token: Option<&str>,
     sha256_hex: &str,
 ) -> Result<PreviewResult> {
     let url = format!("{}/api/previews", base_url);
 
-    let resp = client
-        .post(&url)
-        .bearer_auth(token)
+    let resp = crate::auth::apply_bearer_auth(client.post(&url), token)
         .json(&serde_json::json!({ "artifactHash": sha256_hex }))
         .send()
         .context("Failed to connect to Diode API")?;

@@ -155,14 +155,12 @@ pub fn save_local_version(db_path: &Path, version: &str) -> Result<()> {
 
 /// Fetch registries visible to the current user.
 pub fn fetch_registries() -> Result<Vec<RegistryInfo>> {
-    let token = crate::auth::get_valid_token().context("Auth failed")?;
+    let token = crate::auth::get_api_token().context("Auth failed")?;
     let client = http_client()?;
     let api_url = crate::get_api_base_url();
     let url = format!("{api_url}{REGISTRIES_ROUTE}");
 
-    let resp = client
-        .get(&url)
-        .bearer_auth(&token)
+    let resp = crate::auth::apply_bearer_auth(client.get(&url), token.as_deref())
         .send()
         .with_context(|| format!("Request to {url} failed"))?
         .error_for_status()
@@ -525,15 +523,13 @@ fn registry_index_route(registry: &RegistryInfo) -> String {
 
 /// Fetch registry index metadata without downloading the file.
 pub fn fetch_registry_index_metadata(registry: &RegistryInfo) -> Result<RegistryIndexMetadata> {
-    let token = crate::auth::get_valid_token().context("Auth failed")?;
+    let token = crate::auth::get_api_token().context("Auth failed")?;
     let client = http_client()?;
     let api_url = crate::get_api_base_url();
     let url = reqwest::Url::parse(&format!("{api_url}{}", registry_index_route(registry)))
         .context("Invalid registry index URL")?;
 
-    let resp = client
-        .get(url.clone())
-        .bearer_auth(&token)
+    let resp = crate::auth::apply_bearer_auth(client.get(url.clone()), token.as_deref())
         .send()
         .with_context(|| format!("Request to {url} failed"))?
         .error_for_status()
