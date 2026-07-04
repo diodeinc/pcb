@@ -236,6 +236,17 @@ impl ContourSet {
     pub fn to_contours(&self) -> Vec<ContourBuf> {
         rings_to_contours(self.rings.clone())
     }
+
+    /// Convert to closed contours, re-fitting maximal circular arcs over the
+    /// flattened boundaries. Arcs from source outlines and disk-swept tool
+    /// paths that the boolean pipeline tessellated come back as `ArcTo`
+    /// segments, within the shared chord tolerance of the polyline form.
+    pub fn to_contours_with_arcs(&self) -> Vec<ContourBuf> {
+        self.rings
+            .iter()
+            .map(|ring| crate::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM))
+            .collect()
+    }
 }
 
 /// Compose an ordered dark/clear paint stream into a final positive image.
@@ -374,8 +385,11 @@ mod tests {
             PathCmd::close(),
         ]);
 
-        let a = ContourSet::from_filled_contours(&[clockwise.clone()], tol::REGION_MM);
-        let b = ContourSet::from_filled_contours(&[counter_clockwise.clone()], tol::REGION_MM);
+        let a = ContourSet::from_filled_contours(std::slice::from_ref(&clockwise), tol::REGION_MM);
+        let b = ContourSet::from_filled_contours(
+            std::slice::from_ref(&counter_clockwise),
+            tol::REGION_MM,
+        );
         let unioned =
             ContourSet::from_filled_contours(&[clockwise, counter_clockwise], tol::REGION_MM);
 

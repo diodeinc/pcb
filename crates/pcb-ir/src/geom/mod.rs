@@ -5,6 +5,7 @@
 
 mod affine;
 mod arc;
+pub mod arcfit;
 mod bbox;
 pub mod path;
 mod point;

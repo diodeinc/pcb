@@ -336,7 +336,7 @@ fn compose_board_array_fabrication_profile(
     Ok((
         BoardArrayFabricationProfile {
             array_outlines: input.array_outlines,
-            material_removal: material_removal.to_contours(),
+            material_removal: material_removal.to_contours_with_arcs(),
         },
         relief_debug,
     ))

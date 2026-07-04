@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Gerber import now preserves standard-aperture flashes instead of flattening them to regions.
+- Board array profile Gerbers now emit route reliefs as arcs instead of tessellated segments.
 
 ## [0.4.4] - 2026-07-03
 
