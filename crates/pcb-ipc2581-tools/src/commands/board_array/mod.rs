@@ -20,7 +20,7 @@ use pcb_ir::{
     geom::{BBox, Point},
 };
 use quick_xml::{
-    Reader, Writer,
+    Writer,
     events::{BytesStart, Event},
 };
 
@@ -584,11 +584,10 @@ fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
     let generated_spec_xml = write_generated_specs_xml(spec)?;
     let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry)?;
     let generated_steps_xml = write_generated_steps_xml(spec)?;
-    let xml = update_content_refs(xml, &spec.content_step_refs, &spec.content_layer_refs)?;
-    let xml = insert_generated_cad_header_specs(&xml, &generated_spec_xml)?;
-    let xml = insert_array_cad_data(
-        &xml,
+    let xml = patch_board_xml(
+        xml,
         spec,
+        &generated_spec_xml,
         generated_layer_xml.as_deref(),
         &generated_steps_xml,
     )?;

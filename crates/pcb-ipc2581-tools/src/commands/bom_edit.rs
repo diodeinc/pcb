@@ -375,98 +375,42 @@ fn patch_logistic_header(
     original_xml: &str,
     new_enterprises: &[(String, String)],
 ) -> Result<String> {
-    use quick_xml::{
-        Reader, Writer,
-        events::{BytesStart, Event},
-    };
+    use quick_xml::{Writer, events::BytesStart, events::Event};
     use std::io::Cursor;
 
-    let mut reader = Reader::from_str(original_xml);
+    let doc = ipc2581::edit::Doc::parse(original_xml)?;
+    let root = doc.root()?;
+    let Some(header) = doc.child(root, "LogisticHeader") else {
+        return Ok(original_xml.to_string());
+    };
+
     let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let mut buf = Vec::new();
-    let (mut in_header, mut inserted) = (false, false);
-
-    loop {
-        match reader.read_event_into(&mut buf)? {
-            Event::Eof => break,
-            Event::Start(ref e) if e.name().as_ref() == b"LogisticHeader" => {
-                in_header = true;
-                writer.write_event(Event::Start(e.to_owned()))?;
-            }
-            Event::Empty(ref e) | Event::Start(ref e)
-                if in_header && !inserted && e.name().as_ref() == b"Person" =>
-            {
-                for (id, name) in new_enterprises {
-                    let mut elem = BytesStart::new("Enterprise");
-                    elem.push_attribute(("id", id.as_str()));
-                    elem.push_attribute(("name", name.as_str()));
-                    elem.push_attribute(("code", "NONE"));
-                    writer.write_event(Event::Empty(elem))?;
-                }
-                inserted = true;
-                writer.write_event(Event::Empty(e.to_owned()).into_owned())?;
-            }
-            Event::End(ref e) if e.name().as_ref() == b"LogisticHeader" => {
-                if !inserted {
-                    for (id, name) in new_enterprises {
-                        let mut elem = BytesStart::new("Enterprise");
-                        elem.push_attribute(("id", id.as_str()));
-                        elem.push_attribute(("name", name.as_str()));
-                        elem.push_attribute(("code", "NONE"));
-                        writer.write_event(Event::Empty(elem))?;
-                    }
-                }
-                writer.write_event(Event::End(e.to_owned()))?;
-            }
-            e => writer.write_event(e)?,
-        }
-        buf.clear();
+    for (id, name) in new_enterprises {
+        let mut elem = BytesStart::new("Enterprise");
+        elem.push_attribute(("id", id.as_str()));
+        elem.push_attribute(("name", name.as_str()));
+        elem.push_attribute(("code", "NONE"));
+        writer.write_event(Event::Empty(elem))?;
     }
+    let enterprises_xml = String::from_utf8(writer.into_inner().into_inner())?;
 
-    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+    let edit = match doc.child(header, "Person") {
+        Some(person) => doc.insert_before(person, enterprises_xml),
+        None => doc.append_inside(header, enterprises_xml),
+    };
+    Ok(ipc2581::edit::apply(original_xml, vec![edit])?)
 }
 
-/// Patch AVL section in XML using quick-xml
+/// Replace the Avl section (or add one before the document end)
 fn patch_or_add_avl_section(original_xml: &str, new_avl_xml: &str) -> Result<String> {
-    use quick_xml::{Reader, Writer, events::Event};
-    use std::io::{Cursor, Write};
+    let doc = ipc2581::edit::Doc::parse(original_xml)?;
+    let root = doc.root()?;
 
-    let mut reader = Reader::from_str(original_xml);
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let mut buf = Vec::new();
-    let (mut skip_depth, mut avl_added) = (0, false);
-
-    loop {
-        match reader.read_event_into(&mut buf)? {
-            Event::Eof => break,
-            Event::Start(e) if e.name().as_ref() == b"Avl" && skip_depth == 0 => {
-                skip_depth = 1;
-                avl_added = true;
-                writer.get_mut().write_all(new_avl_xml.as_bytes())?;
-            }
-            Event::Start(_) if skip_depth > 0 => skip_depth += 1,
-            Event::End(e) if skip_depth > 0 => {
-                skip_depth -= 1;
-                if skip_depth == 0 && e.name().as_ref() != b"Avl" {
-                    writer.write_event(Event::End(e))?;
-                }
-            }
-            Event::End(e) if e.name().as_ref() == b"IPC-2581" => {
-                if !avl_added {
-                    writer.get_mut().write_all(new_avl_xml.as_bytes())?;
-                }
-                writer.write_event(Event::End(e))?;
-            }
-            Event::Empty(e) if e.name().as_ref() == b"Avl" => {
-                avl_added = true;
-                writer.get_mut().write_all(new_avl_xml.as_bytes())?;
-            }
-            e if skip_depth == 0 => writer.write_event(e)?,
-            _ => {}
-        }
-        buf.clear();
-    }
-    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+    let edit = match doc.child(root, "Avl") {
+        Some(avl) => doc.replace(avl, new_avl_xml),
+        None => doc.append_inside(root, new_avl_xml),
+    };
+    Ok(ipc2581::edit::apply(original_xml, vec![edit])?)
 }
 
 #[cfg(test)]
