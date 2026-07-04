@@ -14,3 +14,6 @@ categories = ["parsing", "hardware-support"]
 pcb-intern = { workspace = true }
 pcb-ir = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+gerber_parser = "0.5.0"

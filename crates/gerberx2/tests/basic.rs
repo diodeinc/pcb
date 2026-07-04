@@ -77,7 +77,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             attributes: vec![
                 AttributeValue::new(".N", ["GND"]),
                 AttributeValue::new(".C", ["U1"]),
-                AttributeValue::new(".P", ["1"]),
+                AttributeValue::new(".P", ["U1", "1"]),
             ],
         },
         WriterObject::dark(ObjectKind::Draw {
@@ -113,6 +113,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
     ];
 
     let output = gerberx2::write_layer(&layer).unwrap();
+    assert_external_parser_accepts(&output);
     assert!(output.contains("%TF.FileFunction,Copper,L1,Top*%"));
     assert!(output.contains("%TA.AperFunction,SMDPad,CuDef*%"));
     assert!(output.contains("%TO.N,GND*%"));
@@ -207,6 +208,7 @@ fn writes_macro_and_block_apertures_without_flattening() {
     };
 
     let output = gerberx2::write_layer(&layer).unwrap();
+    assert_external_parser_accepts(&output);
     assert!(output.contains("%AMROUNDRECT*"));
     assert!(output.contains("%ADD11ROUNDRECT,0.2X0.4*%"));
     assert!(output.contains("%ABD20*%"));
@@ -601,6 +603,7 @@ fn writes_polygon_hole_with_explicit_zero_rotation() {
     };
 
     let output = gerberx2::write_layer(&layer).unwrap();
+    assert_external_parser_accepts(&output);
     assert!(output.contains("%ADD10P,2X6X0X0.5*%"));
 
     let parsed = GerberX2::parse(&output).unwrap();
@@ -612,6 +615,15 @@ fn writes_polygon_hole_with_explicit_zero_rotation() {
             ..
         } if close(rotation, 0.0) && close(hole, 0.5)
     ));
+}
+
+/// Independent syntax oracle: the MakerPnP `gerber_parser` crate must accept
+/// everything our writer emits.
+fn assert_external_parser_accepts(content: &str) {
+    let reader = std::io::BufReader::new(content.as_bytes());
+    if let Err((_, error)) = gerber_parser::parse(reader) {
+        panic!("external gerber_parser rejected our output: {error:?}\n---\n{content}");
+    }
 }
 
 fn close(a: f64, b: f64) -> bool {

@@ -216,9 +216,7 @@ fn lower_artwork_object(
             transform,
         } => {
             if !transform_is_translation(transform) {
-                return Err(GerberError::InvalidStructure(format!(
-                    "cannot lower transformed artwork flash to Gerber"
-                )));
+                return Err(GerberError::InvalidStructure("cannot lower transformed artwork flash to Gerber".to_string()));
             }
             let artwork_aperture = *layer.apertures.get(aperture as usize).ok_or_else(|| {
                 GerberError::InvalidStructure(format!(
@@ -400,9 +398,7 @@ impl ScheduleGraph {
         }
 
         if order.len() != indegree.len() {
-            return Err(GerberError::InvalidStructure(format!(
-                "Gerber emission schedule contains a cycle"
-            )));
+            return Err(GerberError::InvalidStructure("Gerber emission schedule contains a cycle".to_string()));
         }
         Ok(order)
     }
@@ -664,9 +660,7 @@ fn group_rings_into_shapes(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
 
 fn lower_region_contour(contour: &ContourBuf) -> Result<Contour> {
     if contour.cmds.is_empty() {
-        return Err(GerberError::InvalidStructure(format!(
-            "cannot export empty Gerber region contour"
-        )));
+        return Err(GerberError::InvalidStructure("cannot export empty Gerber region contour".to_string()));
     }
     Ok(Contour {
         segments: contour_segments(&contour.cmds)
@@ -731,9 +725,7 @@ fn region_part_shape_contour(outer: &RegionPart, holes: &[&RegionPart]) -> Resul
     let outer_start = match contour.segments.first() {
         Some(ContourSegment::Line { start, .. } | ContourSegment::Arc { start, .. }) => *start,
         None => {
-            return Err(GerberError::InvalidStructure(format!(
-                "compound Gerber region has empty outer"
-            )));
+            return Err(GerberError::InvalidStructure("compound Gerber region has empty outer".to_string()));
         }
     };
     for hole in holes {
@@ -744,9 +736,7 @@ fn region_part_shape_contour(outer: &RegionPart, holes: &[&RegionPart]) -> Resul
         let hole_start = match hole_contour.segments.first() {
             Some(ContourSegment::Line { start, .. } | ContourSegment::Arc { start, .. }) => *start,
             None => {
-                return Err(GerberError::InvalidStructure(format!(
-                    "compound Gerber region has empty hole"
-                )));
+                return Err(GerberError::InvalidStructure("compound Gerber region has empty hole".to_string()));
             }
         };
         if (outer_start.x - hole_start.x).hypot(outer_start.y - hole_start.y) > 1e-9 {
@@ -880,6 +870,15 @@ fn quantize_hole(hole_diameter: Option<f64>) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Independent syntax oracle: the MakerPnP `gerber_parser` crate must
+    /// accept everything our writer emits.
+    fn assert_external_parser_accepts(content: &str) {
+        let reader = std::io::BufReader::new(content.as_bytes());
+        if let Err((_, error)) = gerber_parser::parse(reader) {
+            panic!("external gerber_parser rejected our output: {error:?}\n---\n{content}");
+        }
+    }
     use pcb_ir::dialects::artwork::{
         Layer as IrArtworkDocument, Object as ArtworkObject, PaintOrder,
     };
@@ -1016,6 +1015,7 @@ mod tests {
                     && matches!(&object.kind, ObjectKind::Region { contours } if contours.len() == 1))
         );
         let contents = crate::write_layer(&gerber).expect("write Gerber");
+        assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
         let geometry = crate::geometry::extract_document(&parsed);
         let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
@@ -1127,6 +1127,7 @@ mod tests {
             "local holes must not lower to layer-global clear polarity"
         );
         let contents = crate::write_layer(&gerber).expect("write Gerber");
+        assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
         let geometry = crate::geometry::extract_document(&parsed);
         let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
