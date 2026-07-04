@@ -8,6 +8,7 @@ use pcb_ir::geom::path::{PathCmd, PathOp};
 use pcb_ir::geom::{Affine2, Arc, BBox, ContourBuf, Point};
 
 use crate::accessors::{BoardArrayGridInfo, BoardArrayInfo, IpcAccessor};
+use crate::utils::format::fmt_num;
 
 type GeometryDocument =
     pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
@@ -625,17 +626,6 @@ fn escape_xml(input: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
-}
-
-fn fmt_num(value: f64) -> String {
-    let mut text = format!("{value:.6}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
-    }
-    if text.ends_with('.') {
-        text.pop();
-    }
-    if text == "-0" { "0".to_string() } else { text }
 }
 
 #[cfg(test)]

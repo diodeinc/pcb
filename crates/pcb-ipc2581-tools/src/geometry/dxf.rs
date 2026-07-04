@@ -2,6 +2,8 @@ use std::fmt::Write;
 
 use pcb_ir::dialects::ipc::{Document, ProfileSet, profile_occurrences_for};
 use pcb_ir::geom::Point;
+
+use crate::utils::format::fmt_num;
 use pcb_ir::geom::path::{PathCmd, PathOp};
 
 const OUTLINE_LAYER: &str = "BOARD_OUTLINE";
@@ -208,20 +210,6 @@ fn cubic_point(start: Point, c1: Point, c2: Point, end: Point, t: f64) -> Point 
 
 fn same_point(a: Point, b: Point) -> bool {
     (a.x - b.x).abs() <= EPSILON && (a.y - b.y).abs() <= EPSILON
-}
-
-fn fmt_num(value: f64) -> String {
-    if value.abs() < EPSILON {
-        return "0".to_string();
-    }
-    let mut s = format!("{value:.6}");
-    while s.contains('.') && s.ends_with('0') {
-        s.pop();
-    }
-    if s.ends_with('.') {
-        s.pop();
-    }
-    s
 }
 
 #[cfg(test)]

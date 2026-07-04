@@ -20,3 +20,18 @@ pub fn reformat_xml(xml: &str) -> Result<String> {
 
     Ok(String::from_utf8(writer.into_inner().into_inner())?)
 }
+
+/// Format a numeric value with up to six decimals, trimming trailing zeros.
+pub fn fmt_num(value: f64) -> String {
+    if value.abs() < 1e-9 {
+        return "0".to_string();
+    }
+    let mut text = format!("{value:.6}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    if text == "-0" { "0".to_string() } else { text }
+}
