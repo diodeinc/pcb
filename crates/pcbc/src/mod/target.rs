@@ -139,6 +139,7 @@ mod tests {
                 ),
             ]),
             errors: vec![],
+                rel_path_index: Default::default(),
         }
     }
 

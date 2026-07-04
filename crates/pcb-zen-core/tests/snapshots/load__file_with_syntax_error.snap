@@ -1,6 +1,7 @@
 ---
 source: crates/pcb-zen-core/tests/load.rs
+assertion_line: 24
 expression: output
 ---
 Error: test.zen:6:6-18 Error loading module `broken.zen`
-Error: /broken.zen:8:1 Parse error: unexpected new line here, expected one of ")", "*", "**", "/" or "IDENTIFIER"
+Error: /broken.zen:8:1 Parse error: unexpected new line, expected identifier

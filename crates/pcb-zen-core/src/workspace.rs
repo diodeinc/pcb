@@ -5,7 +5,7 @@
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::FileProvider;
@@ -138,7 +138,7 @@ pub struct DiscoveryError {
 }
 
 /// Comprehensive workspace information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
     /// Workspace root directory
     pub root: PathBuf,
@@ -154,6 +154,25 @@ pub struct WorkspaceInfo {
     /// Discovery errors
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<DiscoveryError>,
+    /// Lazily-built index of package `rel_path` → package URL, used to answer
+    /// `package_url_for_path` in O(path depth) instead of scanning all packages.
+    #[serde(skip)]
+    pub rel_path_index: std::sync::OnceLock<HashMap<PathBuf, String>>,
+}
+
+impl Clone for WorkspaceInfo {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            cache_dir: self.cache_dir.clone(),
+            config: self.config.clone(),
+            packages: self.packages.clone(),
+            errors: self.errors.clone(),
+            // Start the clone with a fresh index so a clone that goes on to
+            // mutate `packages` cannot observe a stale index.
+            rel_path_index: Default::default(),
+        }
+    }
 }
 
 impl WorkspaceInfo {
@@ -244,11 +263,19 @@ impl WorkspaceInfo {
             .strip_prefix(&canonical_workspace_root)
             .ok()?;
 
-        self.packages
-            .iter()
-            .filter(|(_, pkg)| workspace_relative.starts_with(&pkg.rel_path))
-            .max_by_key(|(_, pkg)| pkg.rel_path.as_os_str().len())
-            .map(|(url, _)| url.as_str())
+        let index = self.rel_path_index.get_or_init(|| {
+            self.packages
+                .iter()
+                .map(|(url, pkg)| (pkg.rel_path.clone(), url.clone()))
+                .collect()
+        });
+
+        // Walking ancestors finds the longest matching rel_path first (the
+        // final empty ancestor matches a root package with an empty rel_path).
+        workspace_relative
+            .ancestors()
+            .find_map(|dir| index.get(dir))
+            .map(String::as_str)
     }
 
     /// Get optional subpath within repository
@@ -594,6 +621,7 @@ pub fn get_workspace_info<F: FileProvider>(
         config,
         packages,
         errors,
+        rel_path_index: Default::default(),
     })
 }
 

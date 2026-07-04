@@ -1475,6 +1475,7 @@ P1 = io(Net)
             }),
             packages: BTreeMap::new(),
             errors: Vec::new(),
+            rel_path_index: Default::default(),
         }
     }
 

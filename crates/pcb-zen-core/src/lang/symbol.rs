@@ -268,102 +268,119 @@ impl<'v> SymbolValue {
                 std::path::Path::new(&current_file),
             )?;
 
-            let file_provider = eval_ctx.file_provider();
-
-            let (_symbol_name, symbol, source_path) = if file_provider.is_directory(&resolved_path)
-            {
-                let (symbol_name, symbol, source_path, source_paths) =
-                    load_split_library_symbol(&resolved_path, name, file_provider)?;
-                for path in source_paths {
-                    eval_ctx.get_config().track_file(&path);
-                }
-                (symbol_name, symbol, source_path)
-            } else {
-                // Get or load the library (lazy - only scans for symbol names, doesn't parse them)
-                let library = get_or_load_library(&resolved_path, file_provider)?;
-
-                // Determine which symbol to use
-                let symbol_name = if let Some(name) = name {
-                    // Verify the symbol exists
-                    if !library.has_symbol(&name) {
-                        let available: Vec<_> = library.symbol_names();
-                        return Err(starlark::Error::new_other(anyhow!(
-                            "Symbol '{}' not found in library '{}'. Available symbols: {}",
-                            name,
-                            resolved_path.display(),
-                            available.join(", ")
-                        )));
-                    }
-                    name
-                } else {
-                    // No specific name provided, need exactly one symbol in library
-                    let names = library.symbol_names();
-                    if names.len() == 1 {
-                        names[0].to_string()
-                    } else if names.is_empty() {
-                        return Err(starlark::Error::new_other(anyhow!(
-                            "No symbols found in library '{}'",
-                            resolved_path.display()
-                        )));
-                    } else {
-                        return Err(starlark::Error::new_other(anyhow!(
-                            "Library '{}' contains {} symbols. Please specify which one with the 'name' parameter. Available symbols: {}",
-                            resolved_path.display(),
-                            names.len(),
-                            names.join(", ")
-                        )));
-                    }
-                };
-
-                // Now get the specific symbol (this does the actual parsing + extends resolution)
-                let symbol = library
-                    .get_symbol_lazy_as_eda(&symbol_name)
-                    .map_err(|e| {
-                        starlark::Error::new_other(anyhow!(
-                            "Failed to parse symbol '{}': {}",
-                            symbol_name,
-                            e
-                        ))
-                    })?
-                    .ok_or_else(|| {
-                        starlark::Error::new_other(anyhow!(
-                            "Symbol '{}' not found in library",
-                            symbol_name
-                        ))
-                    })?;
-                (symbol_name, symbol, resolved_path.clone())
-            };
-
-            let source_uri = eval_ctx
-                .resolution()
-                .format_package_uri(&source_path)
-                .ok_or_else(|| {
-                    starlark::Error::new_other(anyhow!(
-                        "Symbol library '{}' must resolve inside a workspace or dependency package",
-                        source_path.display()
-                    ))
-                })?;
-
-            let sexpr = symbol.raw_sexp.as_ref().map(|s| {
-                pcb_sexpr::formatter::format_tree(s, pcb_sexpr::formatter::FormatMode::Normal)
-            });
-
-            let mut properties = SmallMap::new();
-            for (key, value) in &symbol.properties {
-                properties.insert(key.clone(), value.clone());
+            // Loading a symbol from a library is pure in (resolved_path, name),
+            // so the constructed value is cached on the session.
+            let cache_key = (resolved_path, name);
+            if let Some(cached) = eval_ctx.session().symbol_cache.get(&cache_key) {
+                return Ok(cached);
             }
-
-            Ok(SymbolValue::from_eda_symbol(
-                &symbol,
-                Some(source_uri),
-                sexpr,
-                properties,
-            ))
+            let value = Self::load_library_symbol(&cache_key.0, cache_key.1.clone(), eval_ctx)?;
+            eval_ctx
+                .session()
+                .symbol_cache
+                .insert(cache_key, value.clone());
+            Ok(value)
         } else {
             Err(starlark::Error::new_other(anyhow!(
                 "Symbol requires either 'definition' or 'library' parameter"
             )))
         }
+    }
+
+    /// Load a symbol from a resolved library path (a `.kicad_sym` file or a
+    /// split-library directory).
+    fn load_library_symbol(
+        resolved_path: &std::path::Path,
+        name: Option<String>,
+        eval_ctx: &EvalContext,
+    ) -> Result<SymbolValue, starlark::Error> {
+        let file_provider = eval_ctx.file_provider();
+
+        let (_symbol_name, symbol, source_path) = if file_provider.is_directory(resolved_path) {
+            let (symbol_name, symbol, source_path, _source_paths) =
+                load_split_library_symbol(resolved_path, name, file_provider)?;
+            (symbol_name, symbol, source_path)
+        } else {
+            // Get or load the library (lazy - only scans for symbol names, doesn't parse them)
+            let library = get_or_load_library(resolved_path, file_provider)?;
+
+            // Determine which symbol to use
+            let symbol_name = if let Some(name) = name {
+                // Verify the symbol exists
+                if !library.has_symbol(&name) {
+                    let available: Vec<_> = library.symbol_names();
+                    return Err(starlark::Error::new_other(anyhow!(
+                        "Symbol '{}' not found in library '{}'. Available symbols: {}",
+                        name,
+                        resolved_path.display(),
+                        available.join(", ")
+                    )));
+                }
+                name
+            } else {
+                // No specific name provided, need exactly one symbol in library
+                let names = library.symbol_names();
+                if names.len() == 1 {
+                    names[0].to_string()
+                } else if names.is_empty() {
+                    return Err(starlark::Error::new_other(anyhow!(
+                        "No symbols found in library '{}'",
+                        resolved_path.display()
+                    )));
+                } else {
+                    return Err(starlark::Error::new_other(anyhow!(
+                        "Library '{}' contains {} symbols. Please specify which one with the 'name' parameter. Available symbols: {}",
+                        resolved_path.display(),
+                        names.len(),
+                        names.join(", ")
+                    )));
+                }
+            };
+
+            // Now get the specific symbol (this does the actual parsing + extends resolution)
+            let symbol = library
+                .get_symbol_lazy_as_eda(&symbol_name)
+                .map_err(|e| {
+                    starlark::Error::new_other(anyhow!(
+                        "Failed to parse symbol '{}': {}",
+                        symbol_name,
+                        e
+                    ))
+                })?
+                .ok_or_else(|| {
+                    starlark::Error::new_other(anyhow!(
+                        "Symbol '{}' not found in library",
+                        symbol_name
+                    ))
+                })?;
+            (symbol_name, symbol, resolved_path.to_path_buf())
+        };
+
+        let source_uri = eval_ctx
+            .resolution()
+            .format_package_uri(&source_path)
+            .ok_or_else(|| {
+                starlark::Error::new_other(anyhow!(
+                    "Symbol library '{}' must resolve inside a workspace or dependency package",
+                    source_path.display()
+                ))
+            })?;
+
+        let sexpr = symbol.raw_sexp.as_ref().map(|s| {
+            pcb_sexpr::formatter::format_tree(s, pcb_sexpr::formatter::FormatMode::Normal)
+        });
+
+        let mut properties = SmallMap::new();
+        for (key, value) in &symbol.properties {
+            properties.insert(key.clone(), value.clone());
+        }
+
+        Ok(SymbolValue::from_eda_symbol(
+            &symbol,
+            Some(source_uri),
+            sexpr,
+            properties,
+        ))
     }
 
     pub fn name(&self) -> Option<&str> {

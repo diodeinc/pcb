@@ -30,11 +30,11 @@ pub(crate) fn validate_footprints(
                 continue;
             };
             let key = footprint_cache_key(&path, config);
-            let cached = if let Some(cached) = session.get_cached_footprint(&key) {
+            let cached = if let Some(cached) = session.footprint_cache.get(&key) {
                 cached
             } else {
                 let cached = validate_footprint_file(&path, config);
-                session.cache_footprint(key, cached.clone());
+                session.footprint_cache.insert(key, cached.clone());
                 cached
             };
             diagnostics.extend(cached.into_iter().map(|diagnostic| {

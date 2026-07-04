@@ -232,6 +232,11 @@ impl LspEvalContext {
     fn maybe_invalidate_symbol_library(&self, path: &Path) {
         if is_kicad_symbol_file(path.extension()) {
             invalidate_symbol_library(path, self.file_provider.as_ref());
+            let canonical = self
+                .file_provider
+                .canonicalize(path)
+                .unwrap_or_else(|_| path.to_path_buf());
+            self.inner.invalidate_file(&canonical);
         }
     }
 
@@ -629,8 +634,7 @@ impl LspContext for LspEvalContext {
     fn did_change_file_contents(&self, uri: &LspUrl, contents: &str) {
         if let LspUrl::File(path) = uri {
             self.store_open_file(path, contents);
-            self.inner
-                .set_file_contents(path.to_path_buf(), contents.to_string());
+            self.inner.invalidate_file(path);
             self.maybe_invalidate_symbol_library(path);
             self.maybe_invalidate_resolution_cache(path);
         }
@@ -639,9 +643,9 @@ impl LspContext for LspEvalContext {
     fn did_close_file(&self, uri: &LspUrl) {
         if let LspUrl::File(path) = uri {
             self.remove_open_file(path);
-            self.inner.clear_file_contents(path);
+            self.inner.invalidate_file(path);
             if let Ok(canon) = self.file_provider.canonicalize(path) {
-                self.inner.clear_file_contents(&canon);
+                self.inner.invalidate_file(&canon);
             }
             self.clear_last_schematic(path);
             self.maybe_invalidate_symbol_library(path);
@@ -829,7 +833,7 @@ impl LspContext for LspEvalContext {
 
                 LspEvalResult {
                     diagnostics,
-                    ast: result.output.map(|parsed| parsed.ast),
+                    ast: result.output.map(|parsed| Arc::unwrap_or_clone(parsed.ast)),
                 }
             }
             _ => {
