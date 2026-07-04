@@ -167,7 +167,18 @@ impl<'a> Doc<'a> {
         }
     }
 
-    fn span(&self, node: Node) -> Range<usize> {
+    /// All elements with the given local name, anywhere in the document,
+    /// in document order.
+    pub fn find_all(&self, name: &str) -> Vec<Node> {
+        self.dom
+            .get_elements_by_tag_name(name)
+            .into_iter()
+            .map(Node)
+            .collect()
+    }
+
+    /// Byte range of an element in the source, including its tags.
+    pub fn span(&self, node: Node) -> Range<usize> {
         self.dom
             .node_range(node.0)
             .expect("nodes come from parsed source")
@@ -219,7 +230,7 @@ pub fn apply(source: &str, mut edits: Vec<Edit>) -> Result<String> {
 
 /// Length of the opening tag: everything through the first `>` that is not
 /// inside a quoted attribute value.
-fn start_tag_len(element_source: &str) -> usize {
+pub fn start_tag_len(element_source: &str) -> usize {
     let mut quote = 0u8;
     for (index, byte) in element_source.bytes().enumerate() {
         match (quote, byte) {

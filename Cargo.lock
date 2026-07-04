@@ -3210,7 +3210,6 @@ dependencies = [
  "hex",
  "md-5",
  "pcb-intern",
- "quick-xml",
  "thiserror 2.0.18",
  "uppsala",
  "zstd",
@@ -4638,9 +4637,9 @@ dependencies = [
  "pcb-ir",
  "pcb-sch",
  "pcb-ui",
- "quick-xml",
  "serde",
  "serde_json",
+ "uppsala",
  "zip 8.5.1",
  "zstd",
 ]
@@ -5334,15 +5333,6 @@ name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
-
-[[package]]
-name = "quick-xml"
-version = "0.39.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "958f21e8e7ceb5a1aa7fa87fab28e7c75976e0bfe7e23ff069e0a260f894067d"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "quinn"
@@ -8051,9 +8041,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uppsala"
-version = "0.4.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d87ccb81b1e9ddc119871ecbd40a5e93f173f0777838db1e8c0dec223ae3c49"
+checksum = "c9eb84142190cfb1c6099f0285636be7149a6ffb343b4bedbb0f0ab050d2dc54"
 
 [[package]]
 name = "ureq"

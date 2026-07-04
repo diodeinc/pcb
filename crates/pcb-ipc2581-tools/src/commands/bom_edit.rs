@@ -375,24 +375,24 @@ fn patch_logistic_header(
     original_xml: &str,
     new_enterprises: &[(String, String)],
 ) -> Result<String> {
-    use quick_xml::{Writer, events::BytesStart, events::Event};
-    use std::io::Cursor;
-
     let doc = ipc2581::edit::Doc::parse(original_xml)?;
     let root = doc.root()?;
     let Some(header) = doc.child(root, "LogisticHeader") else {
         return Ok(original_xml.to_string());
     };
 
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut writer = ipc2581::XmlWriter::new();
     for (id, name) in new_enterprises {
-        let mut elem = BytesStart::new("Enterprise");
-        elem.push_attribute(("id", id.as_str()));
-        elem.push_attribute(("name", name.as_str()));
-        elem.push_attribute(("code", "NONE"));
-        writer.write_event(Event::Empty(elem))?;
+        writer.empty_element(
+            "Enterprise",
+            &[
+                ("id", id.as_str()),
+                ("name", name.as_str()),
+                ("code", "NONE"),
+            ],
+        );
     }
-    let enterprises_xml = String::from_utf8(writer.into_inner().into_inner())?;
+    let enterprises_xml = writer.into_string();
 
     let edit = match doc.child(header, "Person") {
         Some(person) => doc.insert_before(person, enterprises_xml),

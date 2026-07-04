@@ -5,10 +5,7 @@
 //! [`crate::edit`]. Coordinates are in millimeters and converted to the
 //! document's units on write.
 
-use std::io::Write;
-
-use quick_xml::Writer;
-use quick_xml::events::{BytesStart, Event};
+use uppsala::XmlWriter;
 
 use crate::types::ecad::{Fiducial, FiducialKind, FiducialShape, Hole, Line, PlatingStatus};
 use crate::types::primitives::{
@@ -92,147 +89,122 @@ pub fn fiducial_element_name(kind: FiducialKind) -> &'static str {
     }
 }
 
-pub fn step_ref<W: Write>(writer: &mut Writer<W>, name: &str) -> Result<()> {
-    let mut elem = BytesStart::new("StepRef");
-    elem.push_attribute(("name", name));
-    writer.write_event(Event::Empty(elem))?;
-    Ok(())
+pub fn step_ref(writer: &mut XmlWriter, name: &str) {
+    writer.empty_element("StepRef", &[("name", name)]);
 }
 
-pub fn layer_ref<W: Write>(writer: &mut Writer<W>, name: &str) -> Result<()> {
-    let mut elem = BytesStart::new("LayerRef");
-    elem.push_attribute(("name", name));
-    writer.write_event(Event::Empty(elem))?;
-    Ok(())
+pub fn layer_ref(writer: &mut XmlWriter, name: &str) {
+    writer.empty_element("LayerRef", &[("name", name)]);
 }
 
-pub fn spec_ref<W: Write>(writer: &mut Writer<W>, id: &str) -> Result<()> {
-    let mut elem = BytesStart::new("SpecRef");
-    elem.push_attribute(("id", id));
-    writer.write_event(Event::Empty(elem))?;
-    Ok(())
+pub fn spec_ref(writer: &mut XmlWriter, id: &str) {
+    writer.empty_element("SpecRef", &[("id", id)]);
 }
 
 /// Write an empty location-style element (`Location`, `Datum`, `PolyBegin`,
 /// `PolyStepSegment`, ...) with x/y attributes.
-pub fn location<W: Write>(
-    writer: &mut Writer<W>,
-    name: &str,
-    x_mm: f64,
-    y_mm: f64,
-    units: Units,
-) -> Result<()> {
-    let x = fmt_units(x_mm, units);
-    let y = fmt_units(y_mm, units);
-    let mut elem = BytesStart::new(name);
-    elem.push_attribute(("x", x.as_str()));
-    elem.push_attribute(("y", y.as_str()));
-    writer.write_event(Event::Empty(elem))?;
-    Ok(())
+pub fn location(writer: &mut XmlWriter, name: &str, x_mm: f64, y_mm: f64, units: Units) {
+    writer.empty_element(
+        name,
+        &[
+            ("x", fmt_units(x_mm, units).as_str()),
+            ("y", fmt_units(y_mm, units).as_str()),
+        ],
+    );
 }
 
-pub fn circle<W: Write>(writer: &mut Writer<W>, units: Units, diameter_mm: f64) -> Result<()> {
-    let diameter = fmt_units(diameter_mm, units);
-    let mut elem = BytesStart::new("Circle");
-    elem.push_attribute(("diameter", diameter.as_str()));
-    writer.write_event(Event::Empty(elem))?;
-    Ok(())
+pub fn circle(writer: &mut XmlWriter, units: Units, diameter_mm: f64) {
+    writer.empty_element(
+        "Circle",
+        &[("diameter", fmt_units(diameter_mm, units).as_str())],
+    );
 }
 
 /// Write a `Line` feature with an inline `LineDesc`. Lines that reference a
 /// dictionary `LineDescRef` cannot be written as standalone fragments.
-pub fn line<W: Write>(writer: &mut Writer<W>, units: Units, line: &Line) -> Result<()> {
+pub fn line(writer: &mut XmlWriter, units: Units, line: &Line) -> Result<()> {
     if line.line_desc_ref.is_some() {
         return Err(Ipc2581Error::InvalidStructure(
             "Line with a LineDescRef cannot be written standalone; inline LineDesc required".into(),
         ));
     }
 
-    let start_x = fmt_units(line.start_x, units);
-    let start_y = fmt_units(line.start_y, units);
-    let end_x = fmt_units(line.end_x, units);
-    let end_y = fmt_units(line.end_y, units);
-    let mut elem = BytesStart::new("Line");
-    elem.push_attribute(("startX", start_x.as_str()));
-    elem.push_attribute(("startY", start_y.as_str()));
-    elem.push_attribute(("endX", end_x.as_str()));
-    elem.push_attribute(("endY", end_y.as_str()));
-    writer.write_event(Event::Start(elem))?;
+    writer.start_element(
+        "Line",
+        &[
+            ("startX", fmt_units(line.start_x, units).as_str()),
+            ("startY", fmt_units(line.start_y, units).as_str()),
+            ("endX", fmt_units(line.end_x, units).as_str()),
+            ("endY", fmt_units(line.end_y, units).as_str()),
+        ],
+    );
 
     let line_width = fmt_units(line.line_width, units);
-    let mut line_desc = BytesStart::new("LineDesc");
-    line_desc.push_attribute(("lineWidth", line_width.as_str()));
+    let mut attrs = vec![("lineWidth", line_width.as_str())];
     if let Some(line_end) = line.line_end {
-        line_desc.push_attribute(("lineEnd", line_end_attr(line_end)));
+        attrs.push(("lineEnd", line_end_attr(line_end)));
     }
     if let Some(line_property) = line.line_property {
-        line_desc.push_attribute(("lineProperty", line_property_attr(line_property)));
+        attrs.push(("lineProperty", line_property_attr(line_property)));
     }
-    writer.write_event(Event::Empty(line_desc))?;
-    writer.write_event(Event::End(BytesStart::new("Line").to_end()))?;
+    writer.empty_element("LineDesc", &attrs);
+    writer.end_element("Line");
     Ok(())
 }
 
 /// Write a fiducial or panel mark with location-only round geometry.
-pub fn fiducial<W: Write>(writer: &mut Writer<W>, units: Units, fiducial: &Fiducial) -> Result<()> {
+pub fn fiducial(writer: &mut XmlWriter, units: Units, fiducial: &Fiducial) -> Result<()> {
     if fiducial.xform.is_some() || fiducial.pin_ref.is_some() {
         return Err(Ipc2581Error::InvalidStructure(
             "fiducial with Xform or PinRef cannot be written standalone".into(),
         ));
     }
+    let FiducialShape::Primitive(StandardPrimitive::Circle(styled)) = &fiducial.shape else {
+        return Err(Ipc2581Error::InvalidStructure(
+            "fiducial without inline Circle geometry cannot be written standalone".into(),
+        ));
+    };
 
     let elem_name = fiducial_element_name(fiducial.kind);
-    writer.write_event(Event::Start(BytesStart::new(elem_name)))?;
+    writer.start_element(elem_name, &[]);
     location(
         writer,
         "Location",
         fiducial.location.x,
         fiducial.location.y,
         units,
-    )?;
-    match &fiducial.shape {
-        FiducialShape::Primitive(StandardPrimitive::Circle(styled)) => {
-            circle(writer, units, styled.shape.diameter)?;
-        }
-        _ => {
-            return Err(Ipc2581Error::InvalidStructure(
-                "fiducial without inline Circle geometry cannot be written standalone".into(),
-            ));
-        }
-    }
-    writer.write_event(Event::End(BytesStart::new(elem_name).to_end()))?;
+    );
+    circle(writer, units, styled.shape.diameter);
+    writer.end_element(elem_name);
     Ok(())
 }
 
 /// Write a round `Hole` with the given name and zero tolerances.
-pub fn hole<W: Write>(writer: &mut Writer<W>, units: Units, hole: &Hole, name: &str) -> Result<()> {
-    let diameter = fmt_units(hole.diameter, units);
-    let x = fmt_units(hole.x, units);
-    let y = fmt_units(hole.y, units);
-
-    let mut elem = BytesStart::new("Hole");
-    elem.push_attribute(("name", name));
-    elem.push_attribute(("type", "CIRCLE"));
-    elem.push_attribute(("diameter", diameter.as_str()));
-    elem.push_attribute(("platingStatus", plating_status_attr(hole.plating_status)));
-    elem.push_attribute(("plusTol", "0"));
-    elem.push_attribute(("minusTol", "0"));
-    elem.push_attribute(("x", x.as_str()));
-    elem.push_attribute(("y", y.as_str()));
-    writer.write_event(Event::Empty(elem))?;
-    Ok(())
+pub fn hole(writer: &mut XmlWriter, units: Units, hole: &Hole, name: &str) {
+    writer.empty_element(
+        "Hole",
+        &[
+            ("name", name),
+            ("type", "CIRCLE"),
+            ("diameter", fmt_units(hole.diameter, units).as_str()),
+            ("platingStatus", plating_status_attr(hole.plating_status)),
+            ("plusTol", "0"),
+            ("minusTol", "0"),
+            ("x", fmt_units(hole.x, units).as_str()),
+            ("y", fmt_units(hole.y, units).as_str()),
+        ],
+    );
 }
 
-pub fn profile<W: Write>(writer: &mut Writer<W>, units: Units, polygon: &Polygon) -> Result<()> {
-    writer.write_event(Event::Start(BytesStart::new("Profile")))?;
-    self::polygon(writer, units, polygon)?;
-    writer.write_event(Event::End(BytesStart::new("Profile").to_end()))?;
-    Ok(())
+pub fn profile(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
+    writer.start_element("Profile", &[]);
+    self::polygon(writer, units, polygon);
+    writer.end_element("Profile");
 }
 
-pub fn polygon<W: Write>(writer: &mut Writer<W>, units: Units, polygon: &Polygon) -> Result<()> {
-    writer.write_event(Event::Start(BytesStart::new("Polygon")))?;
-    location(writer, "PolyBegin", polygon.begin.x, polygon.begin.y, units)?;
+pub fn polygon(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
+    writer.start_element("Polygon", &[]);
+    location(writer, "PolyBegin", polygon.begin.x, polygon.begin.y, units);
     for step in &polygon.steps {
         match step {
             PolyStep::Segment(segment) => {
@@ -242,44 +214,30 @@ pub fn polygon<W: Write>(writer: &mut Writer<W>, units: Units, polygon: &Polygon
                     segment.point.x,
                     segment.point.y,
                     units,
-                )?;
+                );
             }
-            PolyStep::Curve(curve) => poly_step_curve(writer, units, curve)?,
+            PolyStep::Curve(curve) => poly_step_curve(writer, units, curve),
         }
     }
-    writer.write_event(Event::End(BytesStart::new("Polygon").to_end()))?;
-    Ok(())
+    writer.end_element("Polygon");
 }
 
-pub fn poly_step_curve<W: Write>(
-    writer: &mut Writer<W>,
-    units: Units,
-    curve: &PolyStepCurve,
-) -> Result<()> {
-    let x = fmt_units(curve.point.x, units);
-    let y = fmt_units(curve.point.y, units);
-    let center_x = fmt_units(curve.center.x, units);
-    let center_y = fmt_units(curve.center.y, units);
-    let mut elem = BytesStart::new("PolyStepCurve");
-    elem.push_attribute(("x", x.as_str()));
-    elem.push_attribute(("y", y.as_str()));
-    elem.push_attribute(("centerX", center_x.as_str()));
-    elem.push_attribute(("centerY", center_y.as_str()));
-    elem.push_attribute(("clockwise", if curve.clockwise { "true" } else { "false" }));
-    writer.write_event(Event::Empty(elem))?;
-    Ok(())
+pub fn poly_step_curve(writer: &mut XmlWriter, units: Units, curve: &PolyStepCurve) {
+    writer.empty_element(
+        "PolyStepCurve",
+        &[
+            ("x", fmt_units(curve.point.x, units).as_str()),
+            ("y", fmt_units(curve.point.y, units).as_str()),
+            ("centerX", fmt_units(curve.center.x, units).as_str()),
+            ("centerY", fmt_units(curve.center.y, units).as_str()),
+            ("clockwise", if curve.clockwise { "true" } else { "false" }),
+        ],
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
-
-    fn render(f: impl FnOnce(&mut Writer<Cursor<Vec<u8>>>) -> Result<()>) -> String {
-        let mut writer = Writer::new(Cursor::new(Vec::new()));
-        f(&mut writer).unwrap();
-        String::from_utf8(writer.into_inner().into_inner()).unwrap()
-    }
 
     #[test]
     fn hole_renders_units_and_plating() {
@@ -290,16 +248,17 @@ mod tests {
             x: 1.5,
             y: -0.25,
         };
-        let xml = render(|w| hole(w, Units::Millimeter, &hole_mm, "tooling_0"));
+        let mut writer = XmlWriter::new();
+        hole(&mut writer, Units::Millimeter, &hole_mm, "tooling_0");
         assert_eq!(
-            xml,
+            writer.into_string(),
             r#"<Hole name="tooling_0" type="CIRCLE" diameter="2" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="1.5" y="-0.25"/>"#
         );
     }
 
     #[test]
     fn line_requires_inline_desc() {
-        let mut writer = Writer::new(Cursor::new(Vec::new()));
+        let mut writer = XmlWriter::new();
         let mut interner = pcb_intern::Interner::default();
         let bad = Line {
             start_x: 0.0,

@@ -1,7 +1,15 @@
 use std::collections::HashSet;
-use std::io::{self, Cursor, Write};
+use std::io::{self, Write};
 use std::path::Path;
 
+use super::board_array_auto::{
+    AutoBoardArrayPlan, AutoSheetSize, TargetSizeMm, auto_board_array_plan,
+    auto_board_array_plan_for_sheet,
+};
+use crate::geometry;
+use crate::ipc2581::Ipc2581;
+use crate::utils::file as file_utils;
+use crate::utils::format::fmt_num;
 use anyhow::{Context, Result, bail};
 use ipc2581::types::{
     Units,
@@ -19,19 +27,6 @@ use pcb_ir::{
     dialects::ipc::{LayoutStepKind, root_step},
     geom::{BBox, Point},
 };
-use quick_xml::{
-    Writer,
-    events::{BytesStart, Event},
-};
-
-use super::board_array_auto::{
-    AutoBoardArrayPlan, AutoSheetSize, TargetSizeMm, auto_board_array_plan,
-    auto_board_array_plan_for_sheet,
-};
-use crate::geometry;
-use crate::ipc2581::Ipc2581;
-use crate::utils::file as file_utils;
-use crate::utils::format::fmt_num;
 
 const EPSILON: f64 = 1e-9;
 const MIN_BOARD_ARRAY_DIMENSION_MM: f64 = 70.0;
@@ -581,8 +576,8 @@ fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
 }
 
 fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
-    let generated_spec_xml = write_generated_specs_xml(spec)?;
-    let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry)?;
+    let generated_spec_xml = write_generated_specs_xml(spec);
+    let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry);
     let generated_steps_xml = write_generated_steps_xml(spec)?;
     let xml = patch_board_xml(
         xml,

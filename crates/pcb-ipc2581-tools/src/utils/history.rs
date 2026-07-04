@@ -1,10 +1,6 @@
 use anyhow::Result;
+use ipc2581::XmlWriter;
 use ipc2581::edit::{self, Doc, Node};
-use quick_xml::{
-    Writer,
-    events::{BytesStart, Event},
-};
-use std::io::Cursor;
 
 /// PCB tool version from Cargo.toml
 const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -36,12 +32,11 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
     let edits = match doc.child(root, "HistoryRecord") {
         // A childless record is expanded in place, keeping its attributes.
         Some(record) if doc.source(record).ends_with("/>") => {
-            let xml = render(|writer| {
-                writer.write_event(Event::Start(initial_history_attributes(&doc, record, &now)))?;
-                write_file_revision(writer, 1, comment)?;
-                writer.write_event(Event::End(BytesStart::new("HistoryRecord").to_end()))
-            })?;
-            vec![doc.replace(record, xml)]
+            let mut writer = XmlWriter::new();
+            writer.start_element_with("HistoryRecord", initial_history_attrs(&doc, record, &now));
+            write_file_revision(&mut writer, 1, comment);
+            writer.end_element("HistoryRecord");
+            vec![doc.replace(record, writer.into_string())]
         }
         Some(record) => {
             let next_id = doc
@@ -52,34 +47,37 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
                 .map(|id| id + 1)
                 .max()
                 .unwrap_or(1);
-            let start_tag = render(|writer| {
-                writer.write_event(Event::Start(update_history_attributes(&doc, record, &now)))
-            })?;
-            let revision = render(|writer| write_file_revision(writer, next_id, comment))?;
+            let mut start_tag = XmlWriter::new();
+            start_tag
+                .start_element_with("HistoryRecord", updated_history_attrs(&doc, record, &now));
+            let mut revision = XmlWriter::new();
+            write_file_revision(&mut revision, next_id, comment);
             vec![
-                doc.replace_start_tag(record, start_tag),
-                doc.append_inside(record, revision),
+                doc.replace_start_tag(record, start_tag.into_string()),
+                doc.append_inside(record, revision.into_string()),
             ]
         }
         None => {
-            let xml = render(|writer| {
-                let mut history = BytesStart::new("HistoryRecord");
-                history.push_attribute(("number", "1"));
-                history.push_attribute(("origination", now.as_str()));
-                history.push_attribute(("software", "pcb"));
-                history.push_attribute(("lastChange", now.as_str()));
-                writer.write_event(Event::Start(history))?;
-                write_file_revision(writer, 1, comment)?;
-                writer.write_event(Event::End(BytesStart::new("HistoryRecord").to_end()))
-            })?;
+            let mut writer = XmlWriter::new();
+            writer.start_element(
+                "HistoryRecord",
+                &[
+                    ("number", "1"),
+                    ("origination", now.as_str()),
+                    ("software", "pcb"),
+                    ("lastChange", now.as_str()),
+                ],
+            );
+            write_file_revision(&mut writer, 1, comment);
+            writer.end_element("HistoryRecord");
             // Per the schema, HistoryRecord follows Content and LogisticHeader.
             let anchor = doc
                 .children(root)
                 .into_iter()
                 .find(|&child| !matches!(doc.name(child), "Content" | "LogisticHeader"));
             match anchor {
-                Some(node) => vec![doc.insert_before(node, xml)],
-                None => vec![doc.append_inside(root, xml)],
+                Some(node) => vec![doc.insert_before(node, writer.into_string())],
+                None => vec![doc.append_inside(root, writer.into_string())],
             }
         }
     };
@@ -87,74 +85,59 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
     Ok(edit::apply(original_xml, edits)?)
 }
 
-fn render(f: impl FnOnce(&mut Writer<Cursor<Vec<u8>>>) -> std::io::Result<()>) -> Result<String> {
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-    f(&mut writer)?;
-    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+/// Attributes for expanding a childless HistoryRecord: number stays "1",
+/// lastChange/software are updated, everything else is preserved.
+fn initial_history_attrs(doc: &Doc, record: Node, now: &str) -> Vec<(String, String)> {
+    let mut attrs = vec![("number".to_string(), "1".to_string())];
+    attrs.extend(doc.attrs(record).filter(|(key, _)| *key != "number").map(
+        |(key, value)| match key {
+            "lastChange" => (key.to_string(), now.to_string()),
+            "software" => (key.to_string(), "pcb".to_string()),
+            _ => (key.to_string(), value.to_string()),
+        },
+    ));
+    attrs
 }
 
-/// Start tag for expanding a childless HistoryRecord: number stays "1",
+/// Attributes for an existing HistoryRecord: number is incremented,
 /// lastChange/software are updated, everything else is preserved.
-fn initial_history_attributes(doc: &Doc, record: Node, now: &str) -> BytesStart<'static> {
-    let mut elem = BytesStart::new("HistoryRecord");
-    elem.push_attribute(("number", "1"));
-    for (key, value) in doc.attrs(record) {
-        match key {
-            "number" => {}
-            "lastChange" => elem.push_attribute(("lastChange", now)),
-            "software" => elem.push_attribute(("software", "pcb")),
-            _ => elem.push_attribute((key, value)),
-        }
-    }
-    elem
-}
-
-/// Start tag for an existing HistoryRecord: number is incremented,
-/// lastChange/software are updated, everything else is preserved.
-fn update_history_attributes(doc: &Doc, record: Node, now: &str) -> BytesStart<'static> {
-    let mut elem = BytesStart::new("HistoryRecord");
-    for (key, value) in doc.attrs(record) {
-        match key {
+fn updated_history_attrs(doc: &Doc, record: Node, now: &str) -> Vec<(String, String)> {
+    doc.attrs(record)
+        .map(|(key, value)| match key {
             "number" => {
                 let incremented = value
                     .parse::<u32>()
                     .map(|n| (n + 1).to_string())
                     .unwrap_or_else(|_| format!("{value}.1"));
-                elem.push_attribute(("number", incremented.as_str()));
+                (key.to_string(), incremented)
             }
-            "lastChange" => elem.push_attribute(("lastChange", now)),
-            "software" => elem.push_attribute(("software", "pcb")),
-            _ => elem.push_attribute((key, value)),
-        }
-    }
-    elem
+            "lastChange" => (key.to_string(), now.to_string()),
+            "software" => (key.to_string(), "pcb".to_string()),
+            _ => (key.to_string(), value.to_string()),
+        })
+        .collect()
 }
 
-fn write_file_revision(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
-    revision_id: u32,
-    comment: &str,
-) -> std::io::Result<()> {
-    let mut file_revision = BytesStart::new("FileRevision");
-    file_revision.push_attribute(("fileRevisionId", revision_id.to_string().as_str()));
-    file_revision.push_attribute(("comment", comment));
-    file_revision.push_attribute(("label", ""));
-    writer.write_event(Event::Start(file_revision))?;
-
-    let mut software = BytesStart::new("SoftwarePackage");
-    software.push_attribute(("name", "pcb"));
-    software.push_attribute(("revision", PCB_VERSION));
-    software.push_attribute(("vendor", "Diode"));
-    writer.write_event(Event::Start(software))?;
-
-    let mut cert = BytesStart::new("Certification");
-    cert.push_attribute(("certificationStatus", "NONE"));
-    writer.write_event(Event::Empty(cert))?;
-
-    writer.write_event(Event::End(BytesStart::new("SoftwarePackage").to_end()))?;
-    writer.write_event(Event::End(BytesStart::new("FileRevision").to_end()))?;
-
-    Ok(())
+fn write_file_revision(writer: &mut XmlWriter, revision_id: u32, comment: &str) {
+    writer.start_element(
+        "FileRevision",
+        &[
+            ("fileRevisionId", revision_id.to_string().as_str()),
+            ("comment", comment),
+            ("label", ""),
+        ],
+    );
+    writer.start_element(
+        "SoftwarePackage",
+        &[
+            ("name", "pcb"),
+            ("revision", PCB_VERSION),
+            ("vendor", "Diode"),
+        ],
+    );
+    writer.empty_element("Certification", &[("certificationStatus", "NONE")]);
+    writer.end_element("SoftwarePackage");
+    writer.end_element("FileRevision");
 }
 
 #[cfg(test)]

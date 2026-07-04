@@ -8,6 +8,7 @@ pub mod write;
 
 pub use pcb_intern::{Interner, Symbol};
 pub use types::*;
+pub use uppsala::XmlWriter;
 
 use checksum::validate_checksum;
 use parse::Parser;

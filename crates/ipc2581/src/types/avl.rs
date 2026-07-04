@@ -1,5 +1,5 @@
 use crate::{Interner, Symbol};
-use quick_xml::escape::escape;
+use uppsala::XmlWriter;
 
 /// AVL (Approved Vendor List) section
 #[derive(Debug, Clone)]
@@ -10,20 +10,22 @@ pub struct Avl {
 }
 
 impl Avl {
-    /// Serialize to XML string
+    /// Serialize to an XML fragment (compact; callers reformat the document).
     pub fn to_xml(&self, interner: &Interner) -> String {
-        let mut xml = format!("  <Avl name=\"{}\">\n", escape(interner.resolve(self.name)));
+        let mut writer = XmlWriter::new();
+        self.write(&mut writer, interner);
+        writer.into_string()
+    }
 
+    pub fn write(&self, writer: &mut XmlWriter, interner: &Interner) {
+        writer.start_element("Avl", &[("name", interner.resolve(self.name))]);
         if let Some(ref header) = self.header {
-            xml.push_str(&header.to_xml(interner));
+            header.write(writer, interner);
         }
-
         for item in &self.items {
-            xml.push_str(&item.to_xml(interner));
+            item.write(writer, interner);
         }
-
-        xml.push_str("  </Avl>\n");
-        xml
+        writer.end_element("Avl");
     }
 }
 
@@ -40,31 +42,22 @@ pub struct AvlHeader {
 }
 
 impl AvlHeader {
-    pub fn to_xml(&self, interner: &Interner) -> String {
-        let mut xml = format!(
-            "    <AvlHeader title=\"{}\" source=\"{}\" author=\"{}\" datetime=\"{}\" version=\"{}\"",
-            escape(interner.resolve(self.title)),
-            escape(interner.resolve(self.source)),
-            escape(interner.resolve(self.author)),
-            escape(interner.resolve(self.datetime)),
-            self.version
-        );
-
+    pub fn write(&self, writer: &mut XmlWriter, interner: &Interner) {
+        let version = self.version.to_string();
+        let mut attrs = vec![
+            ("title", interner.resolve(self.title)),
+            ("source", interner.resolve(self.source)),
+            ("author", interner.resolve(self.author)),
+            ("datetime", interner.resolve(self.datetime)),
+            ("version", version.as_str()),
+        ];
         if let Some(comment) = self.comment {
-            xml.push_str(&format!(
-                " comment=\"{}\"",
-                escape(interner.resolve(comment))
-            ));
+            attrs.push(("comment", interner.resolve(comment)));
         }
         if let Some(mod_ref) = self.mod_ref {
-            xml.push_str(&format!(
-                " modRef=\"{}\"",
-                escape(interner.resolve(mod_ref))
-            ));
+            attrs.push(("modRef", interner.resolve(mod_ref)));
         }
-
-        xml.push_str("/>\n");
-        xml
+        writer.empty_element("AvlHeader", &attrs);
     }
 }
 
@@ -80,25 +73,18 @@ pub struct AvlItem {
 }
 
 impl AvlItem {
-    pub fn to_xml(&self, interner: &Interner) -> String {
-        let mut xml = format!(
-            "    <AvlItem OEMDesignNumber=\"{}\">\n",
-            escape(interner.resolve(self.oem_design_number))
+    pub fn write(&self, writer: &mut XmlWriter, interner: &Interner) {
+        writer.start_element(
+            "AvlItem",
+            &[("OEMDesignNumber", interner.resolve(self.oem_design_number))],
         );
-
         for vmpn in &self.vmpn_list {
-            xml.push_str(&vmpn.to_xml(interner));
+            vmpn.write(writer, interner);
         }
-
         for spec_ref in &self.spec_refs {
-            xml.push_str(&format!(
-                "      <SpecRef id=\"{}\"/>\n",
-                escape(interner.resolve(*spec_ref))
-            ));
+            writer.empty_element("SpecRef", &[("id", interner.resolve(*spec_ref))]);
         }
-
-        xml.push_str("    </AvlItem>\n");
-        xml
+        writer.end_element("AvlItem");
     }
 }
 
@@ -144,40 +130,28 @@ impl AvlVmpn {
         }
     }
 
-    pub fn to_xml(&self, interner: &Interner) -> String {
-        let mut xml = String::from("      <AvlVmpn");
-
+    pub fn write(&self, writer: &mut XmlWriter, interner: &Interner) {
+        let mut attrs = Vec::new();
         if let Some(evpl_vendor) = self.evpl_vendor {
-            xml.push_str(&format!(
-                " evplVendor=\"{}\"",
-                escape(interner.resolve(evpl_vendor))
-            ));
+            attrs.push(("evplVendor", interner.resolve(evpl_vendor).to_string()));
         }
         if let Some(evpl_mpn) = self.evpl_mpn {
-            xml.push_str(&format!(
-                " evplMpn=\"{}\"",
-                escape(interner.resolve(evpl_mpn))
-            ));
+            attrs.push(("evplMpn", interner.resolve(evpl_mpn).to_string()));
         }
         if let Some(qualified) = self.qualified {
-            xml.push_str(&format!(" qualified=\"{}\"", qualified));
+            attrs.push(("qualified", qualified.to_string()));
         }
         if let Some(chosen) = self.chosen {
-            xml.push_str(&format!(" chosen=\"{}\"", chosen));
+            attrs.push(("chosen", chosen.to_string()));
         }
-
-        xml.push_str(">\n");
-
+        writer.start_element_with("AvlVmpn", attrs);
         for mpn in &self.mpns {
-            xml.push_str(&mpn.to_xml(interner));
+            mpn.write(writer, interner);
         }
-
         for vendor in &self.vendors {
-            xml.push_str(&vendor.to_xml(interner));
+            vendor.write(writer, interner);
         }
-
-        xml.push_str("      </AvlVmpn>\n");
-        xml
+        writer.end_element("AvlVmpn");
     }
 }
 
@@ -199,30 +173,24 @@ pub struct AvlMpn {
 }
 
 impl AvlMpn {
-    pub fn to_xml(&self, interner: &Interner) -> String {
-        let mut xml = format!(
-            "        <AvlMpn name=\"{}\"",
-            escape(interner.resolve(self.name))
-        );
-
+    pub fn write(&self, writer: &mut XmlWriter, interner: &Interner) {
+        let mut attrs = vec![("name", interner.resolve(self.name).to_string())];
         if let Some(rank) = self.rank {
-            xml.push_str(&format!(" rank=\"{}\"", rank));
+            attrs.push(("rank", rank.to_string()));
         }
         if let Some(cost) = self.cost {
-            xml.push_str(&format!(" cost=\"{}\"", cost));
+            attrs.push(("cost", cost.to_string()));
         }
         if let Some(ref ms) = self.moisture_sensitivity {
-            xml.push_str(&format!(" moistureSensitivity=\"{}\"", ms.as_str()));
+            attrs.push(("moistureSensitivity", ms.as_str().to_string()));
         }
         if let Some(avail) = self.availability {
-            xml.push_str(&format!(" availability=\"{}\"", avail));
+            attrs.push(("availability", avail.to_string()));
         }
         if let Some(other) = self.other {
-            xml.push_str(&format!(" other=\"{}\"", escape(interner.resolve(other))));
+            attrs.push(("other", interner.resolve(other).to_string()));
         }
-
-        xml.push_str("/>\n");
-        xml
+        writer.empty_element_with("AvlMpn", attrs);
     }
 }
 
@@ -278,11 +246,11 @@ pub struct AvlVendor {
 }
 
 impl AvlVendor {
-    pub fn to_xml(&self, interner: &Interner) -> String {
-        format!(
-            "        <AvlVendor enterpriseRef=\"{}\"/>\n",
-            escape(interner.resolve(self.enterprise_ref))
-        )
+    pub fn write(&self, writer: &mut XmlWriter, interner: &Interner) {
+        writer.empty_element(
+            "AvlVendor",
+            &[("enterpriseRef", interner.resolve(self.enterprise_ref))],
+        );
     }
 }
 
@@ -330,7 +298,9 @@ mod tests {
             other: None,
         };
 
-        let xml = mpn.to_xml(&interner);
+        let mut writer = XmlWriter::new();
+        mpn.write(&mut writer, &interner);
+        let xml = writer.into_string();
         assert!(xml.contains("R&amp;D &lt;test&gt;"));
         assert!(!xml.contains("<test>"));
     }

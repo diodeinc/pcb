@@ -216,7 +216,9 @@ fn lower_artwork_object(
             transform,
         } => {
             if !transform_is_translation(transform) {
-                return Err(GerberError::InvalidStructure("cannot lower transformed artwork flash to Gerber".to_string()));
+                return Err(GerberError::InvalidStructure(
+                    "cannot lower transformed artwork flash to Gerber".to_string(),
+                ));
             }
             let artwork_aperture = *layer.apertures.get(aperture as usize).ok_or_else(|| {
                 GerberError::InvalidStructure(format!(
@@ -398,7 +400,9 @@ impl ScheduleGraph {
         }
 
         if order.len() != indegree.len() {
-            return Err(GerberError::InvalidStructure("Gerber emission schedule contains a cycle".to_string()));
+            return Err(GerberError::InvalidStructure(
+                "Gerber emission schedule contains a cycle".to_string(),
+            ));
         }
         Ok(order)
     }
@@ -660,7 +664,9 @@ fn group_rings_into_shapes(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
 
 fn lower_region_contour(contour: &ContourBuf) -> Result<Contour> {
     if contour.cmds.is_empty() {
-        return Err(GerberError::InvalidStructure("cannot export empty Gerber region contour".to_string()));
+        return Err(GerberError::InvalidStructure(
+            "cannot export empty Gerber region contour".to_string(),
+        ));
     }
     Ok(Contour {
         segments: contour_segments(&contour.cmds)
@@ -725,7 +731,9 @@ fn region_part_shape_contour(outer: &RegionPart, holes: &[&RegionPart]) -> Resul
     let outer_start = match contour.segments.first() {
         Some(ContourSegment::Line { start, .. } | ContourSegment::Arc { start, .. }) => *start,
         None => {
-            return Err(GerberError::InvalidStructure("compound Gerber region has empty outer".to_string()));
+            return Err(GerberError::InvalidStructure(
+                "compound Gerber region has empty outer".to_string(),
+            ));
         }
     };
     for hole in holes {
@@ -736,7 +744,9 @@ fn region_part_shape_contour(outer: &RegionPart, holes: &[&RegionPart]) -> Resul
         let hole_start = match hole_contour.segments.first() {
             Some(ContourSegment::Line { start, .. } | ContourSegment::Arc { start, .. }) => *start,
             None => {
-                return Err(GerberError::InvalidStructure("compound Gerber region has empty hole".to_string()));
+                return Err(GerberError::InvalidStructure(
+                    "compound Gerber region has empty hole".to_string(),
+                ));
             }
         };
         if (outer_start.x - hole_start.x).hypot(outer_start.y - hole_start.y) > 1e-9 {
