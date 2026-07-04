@@ -656,10 +656,48 @@ pub struct ResolutionResult {
     /// of parts declared for that symbol (preserving manifest order).
     pub symbol_parts: HashMap<String, Vec<ManifestPart>>,
     package_roots: Arc<BTreeMap<String, PathBuf>>,
+    /// `package_roots` with `workspace_cache_path` applied to each root — the
+    /// map returned by [`Self::package_roots`] and matched by
+    /// [`Self::format_package_uri`].
+    workspace_package_roots: Arc<BTreeMap<String, PathBuf>>,
+    /// Reverse of `workspace_package_roots`: package root path → coordinate,
+    /// so `format_package_uri` can walk a path's ancestors instead of
+    /// scanning every package root.
+    package_root_index: Arc<HashMap<PathBuf, String>>,
     /// Package root path → root package URL, for resolution maps whose own
     /// workspace package sits at that path. Lets `frozen_root_for_file` walk
     /// a file's ancestors instead of scanning every resolution map.
     workspace_root_index: Arc<HashMap<PathBuf, String>>,
+}
+
+/// Map a global-cache path to its workspace-local `.pcb/cache` equivalent.
+fn workspace_cache_path(workspace_info: &WorkspaceInfo, path: &Path) -> PathBuf {
+    if workspace_info.cache_dir.as_os_str().is_empty() {
+        return path.to_path_buf();
+    }
+    path.strip_prefix(&workspace_info.cache_dir)
+        .map(|rel| workspace_info.workspace_cache_dir().join(rel))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Package roots with `workspace_cache_path` applied, plus the reverse
+/// root-path → coordinate index used for longest-prefix lookups.
+#[allow(clippy::type_complexity)]
+fn workspace_package_roots(
+    workspace_info: &WorkspaceInfo,
+    package_roots: &BTreeMap<String, PathBuf>,
+) -> (Arc<BTreeMap<String, PathBuf>>, Arc<HashMap<PathBuf, String>>) {
+    let roots: BTreeMap<String, PathBuf> = package_roots
+        .iter()
+        .map(|(coord, root)| (coord.clone(), workspace_cache_path(workspace_info, root)))
+        .collect();
+    // On duplicate root paths the later coordinate wins, matching the
+    // last-maximum tie-break of the longest-prefix scan this replaces.
+    let index: HashMap<PathBuf, String> = roots
+        .iter()
+        .map(|(coord, root)| (root.clone(), coord.clone()))
+        .collect();
+    (Arc::new(roots), Arc::new(index))
 }
 
 fn workspace_root_index(resolution: &FrozenResolutionSet) -> HashMap<PathBuf, String> {
@@ -682,12 +720,16 @@ impl ResolutionResult {
         symbol_parts: HashMap<String, Vec<ManifestPart>>,
     ) -> Self {
         let package_roots = Arc::new(resolution_package_roots(&workspace_info, &resolution));
+        let (workspace_package_roots, package_root_index) =
+            workspace_package_roots(&workspace_info, &package_roots);
         let workspace_root_index = Arc::new(workspace_root_index(&resolution));
         Self {
             workspace_info,
             resolution,
             symbol_parts,
             package_roots,
+            workspace_package_roots,
+            package_root_index,
             workspace_root_index,
         }
     }
@@ -823,14 +865,13 @@ impl ResolutionResult {
             &self.workspace_info,
             &self.resolution,
         ));
+        (self.workspace_package_roots, self.package_root_index) =
+            workspace_package_roots(&self.workspace_info, &self.package_roots);
         self.workspace_root_index = Arc::new(workspace_root_index(&self.resolution));
     }
 
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
-        self.package_roots
-            .iter()
-            .map(|(coord, root)| (coord.clone(), self.workspace_cache_path(root)))
-            .collect()
+        self.workspace_package_roots.as_ref().clone()
     }
 
     pub fn remote_package_versions(&self) -> BTreeMap<String, BTreeSet<String>> {
@@ -873,26 +914,16 @@ impl ResolutionResult {
         pcb_sch::resolve_package_uri(uri, self.package_roots.as_ref())
     }
 
-    fn workspace_cache_path(&self, path: &Path) -> PathBuf {
-        if self.workspace_info.cache_dir.as_os_str().is_empty() {
-            return path.to_path_buf();
-        }
-        path.strip_prefix(&self.workspace_info.cache_dir)
-            .map(|rel| self.workspace_info.workspace_cache_dir().join(rel))
-            .unwrap_or_else(|_| path.to_path_buf())
-    }
-
     /// Format an absolute path as a stable URI (`package://…`).
     ///
-    /// Uses longest-prefix matching to find the owning package.
+    /// The owning package is the longest package root that prefixes the path,
+    /// found by walking the path's ancestors over the precomputed root index.
     pub fn format_package_uri(&self, abs: &Path) -> Option<String> {
-        let effective_abs = self.workspace_cache_path(abs);
-        let package_roots = self
-            .package_roots
-            .iter()
-            .map(|(coord, root)| (coord.clone(), self.workspace_cache_path(root)))
-            .collect();
-        pcb_sch::format_package_uri(&effective_abs, &package_roots)
+        let effective_abs = workspace_cache_path(&self.workspace_info, abs);
+        let (root, coord) = effective_abs
+            .ancestors()
+            .find_map(|dir| self.package_root_index.get(dir).map(|coord| (dir, coord)))?;
+        pcb_sch::package_uri(coord, effective_abs.strip_prefix(root).ok()?)
     }
 }
 

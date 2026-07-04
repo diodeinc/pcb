@@ -355,14 +355,15 @@ impl WorkspaceInfo {
 
 /// Find single .zen file in a directory using a FileProvider
 fn find_single_zen_file<F: FileProvider>(file_provider: &F, dir: &Path) -> Option<String> {
-    let entries = file_provider.list_directory(dir).ok()?;
+    let entries = file_provider.list_directory_entries(dir).ok()?;
     let zen_files: Vec<_> = entries
         .into_iter()
-        .filter(|p| !file_provider.is_directory(p) && p.extension().is_some_and(|ext| ext == "zen"))
+        .filter(|e| !e.is_dir && e.path.extension().is_some_and(|ext| ext == "zen"))
         .collect();
 
     if zen_files.len() == 1 {
         zen_files[0]
+            .path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
     } else {
@@ -410,10 +411,11 @@ fn discover_package_dirs<F: FileProvider>(
     errors: &mut Vec<DiscoveryError>,
 ) -> Vec<(PathBuf, PathBuf)> {
     let mut result = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
+    // (directory, depth relative to root)
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
 
-    while let Some(dir) = stack.pop() {
-        let entries = match file_provider.list_directory(&dir) {
+    while let Some((dir, depth)) = stack.pop() {
+        let entries = match file_provider.list_directory_entries(&dir) {
             Ok(e) => e,
             Err(e) => {
                 if dir != root {
@@ -426,42 +428,36 @@ fn discover_package_dirs<F: FileProvider>(
             }
         };
 
+        // The listing tells us both whether this directory is a package and
+        // which subdirectories to visit, without any per-entry stat calls.
+        if depth > 0
+            && entries
+                .iter()
+                .any(|e| !e.is_dir && e.path.file_name().is_some_and(|n| n == "pcb.toml"))
+            && let Ok(rel_path) = dir.strip_prefix(root)
+        {
+            result.push((dir.clone(), rel_path.to_path_buf()));
+        }
+
+        if depth == WORKSPACE_DISCOVERY_MAX_DEPTH {
+            continue;
+        }
+
         for entry in entries {
-            if !file_provider.is_directory(&entry) {
-                continue;
-            }
-
-            if is_builtin_excluded_dir(&entry) {
-                continue;
-            }
-
             // Never descend into symlinks (e.g., .pcb/cache contains symlinked packages)
-            if file_provider.is_symlink(&entry) {
+            if !entry.is_dir || entry.is_symlink || is_builtin_excluded_dir(&entry.path) {
                 continue;
             }
 
-            let Ok(rel_path) = entry.strip_prefix(root) else {
+            let Ok(rel_path) = entry.path.strip_prefix(root) else {
                 continue;
             };
 
-            let depth = rel_path.components().count();
-            if depth > WORKSPACE_DISCOVERY_MAX_DEPTH {
+            if exclude_set.is_match(rel_path_string(rel_path)) {
                 continue;
             }
 
-            let rel_str = rel_path_string(rel_path);
-
-            if exclude_set.is_match(&rel_str) {
-                continue;
-            }
-
-            if file_provider.exists(&entry.join("pcb.toml")) {
-                result.push((entry.clone(), rel_path.to_path_buf()));
-            }
-
-            if depth < WORKSPACE_DISCOVERY_MAX_DEPTH {
-                stack.push(entry);
-            }
+            stack.push((entry.path, depth + 1));
         }
     }
 

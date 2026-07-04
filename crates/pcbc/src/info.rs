@@ -89,6 +89,7 @@ pub fn execute(args: InfoArgs) -> Result<()> {
 
     let resolution = crate::resolve::resolve(Some(&start_path), false)?;
     let mut workspace_info = resolution.workspace_info.clone();
+    pcb_zen::workspace::enrich_git_metadata(&mut workspace_info);
 
     match args.format {
         OutputFormat::Human => {

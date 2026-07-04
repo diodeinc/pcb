@@ -90,13 +90,18 @@ pub fn format_package_uri(abs: &Path, package_roots: &BTreeMap<String, PathBuf>)
                 .then_some((coord.as_str(), root.as_path()))
         })
         .max_by_key(|(_, root)| root.as_os_str().len())?;
-    let rel = abs.strip_prefix(pkg_root).ok()?;
+    package_uri(pkg_url, abs.strip_prefix(pkg_root).ok()?)
+}
+
+/// Format a `package://` URI from a package coordinate and a path relative to
+/// the package root.
+pub fn package_uri(coord: &str, rel: &Path) -> Option<String> {
     let rel_str = rel.to_str()?;
     if rel_str.is_empty() {
-        Some(format!("{PACKAGE_URI_PREFIX}{pkg_url}"))
+        Some(format!("{PACKAGE_URI_PREFIX}{coord}"))
     } else {
         let rel_str = rel_str.replace('\\', "/");
-        Some(format!("{PACKAGE_URI_PREFIX}{pkg_url}/{rel_str}"))
+        Some(format!("{PACKAGE_URI_PREFIX}{coord}/{rel_str}"))
     }
 }
 
