@@ -1,15 +1,16 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, Sender},
 };
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
@@ -22,41 +23,63 @@ use crate::WorkspaceContext;
 pub const SANDBOX_LOCK_FILE_PATH: &str = "/home/sandbox/.diode/sandbox-lock.json";
 const LOCK_HEARTBEAT_MAX_FAILURES: usize = 3;
 
+/// Re-mint the sandbox access token when it is within this margin of expiry.
+/// Tokens live ~20 minutes but a `pcb open` session (KiCad + lock heartbeats)
+/// can outlive any fixed lifetime.
+const ACCESS_TOKEN_REFRESH_MARGIN_SECS: i64 = 120;
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const FILE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const EXEC_STREAM_RECONNECT_ATTEMPTS: usize = 5;
+const EXEC_STREAM_RECONNECT_DELAY: Duration = Duration::from_secs(2);
+/// The data plane sends SSE keep-alives every 10s; a much longer read stall
+/// means the connection is dead and we should reconnect.
+const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
 #[derive(Clone)]
 pub struct SandboxClient {
     api_base_url: String,
     ctx: WorkspaceContext,
     http: Client,
+    access: Arc<Mutex<BTreeMap<String, SandboxAccess>>>,
+}
+
+/// Short-lived, sandbox-scoped credentials minted by the API. All sandbox
+/// file/exec traffic goes directly to `data_plane_url` with `token`; the API
+/// bearer token is only used for minting.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SandboxAccess {
+    token: String,
+    expires_at: i64,
+    data_plane_url: String,
+}
+
+impl SandboxAccess {
+    fn expires_soon(&self) -> bool {
+        Utc::now().timestamp() + ACCESS_TOKEN_REFRESH_MARGIN_SECS >= self.expires_at
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecSyncRequest {
+    #[serde(rename = "cmd")]
     pub command: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shell: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_stdout_bytes: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_stderr_bytes: Option<usize>,
 }
 
 impl ExecSyncRequest {
     pub fn command(command: impl Into<String>) -> Self {
         Self {
             command: command.into(),
-            shell: None,
             cwd: None,
             env: None,
             timeout_ms: None,
-            max_stdout_bytes: None,
-            max_stderr_bytes: None,
         }
     }
 
@@ -76,41 +99,20 @@ impl ExecSyncRequest {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct ExecSyncOutput {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: Option<i32>,
     pub duration_ms: i64,
     pub timed_out: bool,
-    pub truncated: ExecSyncTruncatedFields,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ExecSyncTruncatedFields {
-    pub stdout: bool,
-    pub stderr: bool,
-}
-
-#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SandboxExecRequest {
-    argv: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cwd: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    env: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timeout_ms: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SandboxExecStatus {
+struct ExecStatus {
     exit_code: Option<i32>,
-    duration_ms: Option<i64>,
-    #[serde(default)]
+    duration_ms: u64,
     timed_out: bool,
 }
 
@@ -121,11 +123,10 @@ pub struct SandboxListResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SandboxDirEntry {
     pub name: String,
     pub path: String,
-    #[serde(rename = "type", alias = "kind")]
+    #[serde(rename = "type")]
     pub kind: String,
     pub size: Option<u64>,
     pub mode: String,
@@ -217,47 +218,25 @@ impl SandboxClient {
             ctx,
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(10))
+                // Long-running exec event streams must not be cut off by the
+                // blocking client's 30s default whole-request timeout; every
+                // request sets an explicit per-request timeout instead.
+                .timeout(None)
                 .build()
                 .context("Failed to create sandbox HTTP client")?,
+            access: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
     pub fn exec_sync(&self, sandbox_id: &str, request: ExecSyncRequest) -> Result<ExecSyncOutput> {
-        let started_at = Instant::now();
-        let max_stdout_bytes = request.max_stdout_bytes;
-        let max_stderr_bytes = request.max_stderr_bytes;
-        let response = self
-            .authenticated(
-                self.http
-                    .post(self.url(&format!(
-                        "/api/sandboxes/{}/exec",
-                        encode_segment(sandbox_id)
-                    )))
-                    .json(&SandboxExecRequest::from(request)),
-            )?
-            .send()
-            .context("Sandbox exec request failed")?;
-        let response = self.ensure_success(response)?;
-        let location = response
-            .headers()
-            .get(LOCATION)
-            .and_then(|value| value.to_str().ok())
-            .context("Sandbox exec response did not include a Location header")?;
-        let exec_id = exec_id_from_location(location)?;
-
-        match self.read_exec_events(
-            sandbox_id,
-            &exec_id,
-            started_at,
-            max_stdout_bytes,
-            max_stderr_bytes,
-        ) {
-            Ok(output) => Ok(output),
-            Err(err) => {
-                let _ = self.delete_exec(sandbox_id, &exec_id);
-                Err(err)
-            }
+        let exec_id = self.create_exec(sandbox_id, &request)?;
+        let result = self.collect_exec_output(sandbox_id, &exec_id);
+        if result.is_err()
+            && let Err(err) = self.cancel_exec(sandbox_id, &exec_id)
+        {
+            log::debug!("Failed to cancel sandbox exec {exec_id}: {err:#}");
         }
+        result
     }
 
     pub fn exec_sync_success(
@@ -271,33 +250,38 @@ impl SandboxClient {
     }
 
     pub fn list(&self, sandbox_id: &str, path: &str) -> Result<SandboxListResponse> {
-        self.get_json(&sandbox_fs_url("read", sandbox_id, path)?)
+        let response = self.read_response(sandbox_id, path)?;
+        ensure_data_plane_success(response)?
+            .json()
+            .context("Invalid sandbox directory listing")
     }
 
     pub fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
-        let url = self.url(&sandbox_fs_url("read", sandbox_id, path)?);
-        let response = self
-            .authenticated(self.http.get(url))?
-            .send()
-            .context("Failed to read sandbox file")?;
-        let response = self.ensure_success(response)?;
-        Ok(response.bytes()?.to_vec())
+        self.read_file_optional(sandbox_id, path)?
+            .with_context(|| format!("Sandbox file not found: {path}"))
+    }
+
+    /// Read a file, returning `None` if the file (or sandbox) is gone.
+    fn read_file_optional(&self, sandbox_id: &str, path: &str) -> Result<Option<Vec<u8>>> {
+        let response = self.read_response(sandbox_id, path)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let response = ensure_data_plane_success(response)?;
+        Ok(Some(response.bytes()?.to_vec()))
     }
 
     pub fn write_file(&self, sandbox_id: &str, path: &str, bytes: &[u8]) -> Result<()> {
-        let response = self
-            .authenticated(
-                self.http
-                    .put(self.url(&sandbox_fs_url("write", sandbox_id, path)?)),
-            )?
-            .header(CONTENT_TYPE, "application/octet-stream")
-            .body(bytes.to_vec())
-            .send()
-            .context("Sandbox PUT request failed")?;
-        let _: serde_json::Value = self
-            .ensure_success(response)?
+        require_safe_absolute_path(path)?;
+        let response = self.data_plane_request(sandbox_id, |http, base| {
+            http.put(sandbox_fs_url(base, sandbox_id, "/fs/write", path))
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(bytes.to_vec())
+                .timeout(FILE_TRANSFER_TIMEOUT)
+        })?;
+        let _: serde_json::Value = ensure_data_plane_success(response)?
             .json()
-            .context("Invalid sandbox response")?;
+            .context("Invalid sandbox write response")?;
         Ok(())
     }
 
@@ -312,17 +296,12 @@ impl SandboxClient {
     }
 
     pub fn remove(&self, sandbox_id: &str, path: &str) -> Result<()> {
-        let response = self
-            .authenticated(
-                self.http
-                    .delete(self.url(&sandbox_fs_url("remove", sandbox_id, path)?)),
-            )?
-            .send()
-            .context("Sandbox DELETE request failed")?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok(());
-        }
-        self.ensure_success(response)?;
+        require_safe_absolute_path(path)?;
+        self.exec_sync_success(
+            sandbox_id,
+            ExecSyncRequest::command(format!("rm -f -- {}", shell_quote(path)))
+                .timeout(Duration::from_secs(30)),
+        )?;
         Ok(())
     }
 
@@ -375,97 +354,205 @@ impl SandboxClient {
         })
     }
 
-    fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
-        let response = self
-            .authenticated(self.http.get(self.url(path)))?
-            .send()
-            .context("Sandbox GET request failed")?;
-        self.ensure_success(response)?
-            .json()
-            .context("Invalid sandbox response")
-    }
-
-    fn read_exec_events(
-        &self,
-        sandbox_id: &str,
-        exec_id: &str,
-        started_at: Instant,
-        max_stdout_bytes: Option<usize>,
-        max_stderr_bytes: Option<usize>,
-    ) -> Result<ExecSyncOutput> {
-        let response = self
-            .authenticated(self.http.get(self.url(&format!(
-                "/api/sandboxes/{}/exec/{}/events?encoding=base64",
-                encode_segment(sandbox_id),
-                encode_segment(exec_id)
-            ))))?
-            .send()
-            .context("Sandbox exec events request failed")?;
-        let response = self.ensure_success(response)?;
-
-        let mut stdout = LimitedBuffer::new(max_stdout_bytes);
-        let mut stderr = LimitedBuffer::new(max_stderr_bytes);
-        let mut status = None;
-        read_sse_events(response, |event, data| -> Result<()> {
-            match event {
-                Some("stdout") => stdout.append_base64(data)?,
-                Some("stderr") => stderr.append_base64(data)?,
-                Some("status") => {
-                    status = Some(
-                        serde_json::from_str::<SandboxExecStatus>(data)
-                            .context("Invalid sandbox exec status event")?,
-                    );
-                }
-                _ => {}
-            }
-            Ok(())
-        })?;
-
-        let status = status.context("Sandbox exec ended without a status event")?;
-        let stdout_truncated = stdout.truncated;
-        let stderr_truncated = stderr.truncated;
-        Ok(ExecSyncOutput {
-            stdout: stdout.into_string(),
-            stderr: stderr.into_string(),
-            exit_code: status.exit_code,
-            duration_ms: status
-                .duration_ms
-                .unwrap_or_else(|| started_at.elapsed().as_millis().min(i64::MAX as u128) as i64),
-            timed_out: status.timed_out,
-            truncated: ExecSyncTruncatedFields {
-                stdout: stdout_truncated,
-                stderr: stderr_truncated,
-            },
+    fn read_response(&self, sandbox_id: &str, path: &str) -> Result<reqwest::blocking::Response> {
+        require_safe_absolute_path(path)?;
+        self.data_plane_request(sandbox_id, |http, base| {
+            http.get(sandbox_fs_url(base, sandbox_id, "/fs/read", path))
+                .timeout(FILE_TRANSFER_TIMEOUT)
         })
     }
 
-    fn delete_exec(&self, sandbox_id: &str, exec_id: &str) -> Result<()> {
-        let response = self
-            .authenticated(self.http.delete(self.url(&format!(
-                "/api/sandboxes/{}/exec/{}",
-                encode_segment(sandbox_id),
-                encode_segment(exec_id)
-            ))))?
-            .send()
-            .context("Sandbox exec cancel request failed")?;
-        self.ensure_success(response)?;
+    fn create_exec(&self, sandbox_id: &str, request: &ExecSyncRequest) -> Result<String> {
+        let response = self.data_plane_request(sandbox_id, |http, base| {
+            http.post(sandbox_endpoint_url(base, sandbox_id, "/exec"))
+                .json(request)
+                .timeout(DEFAULT_REQUEST_TIMEOUT)
+        })?;
+        let response = ensure_data_plane_success(response)?;
+        let location = response
+            .headers()
+            .get(LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .context("Sandbox exec response is missing a Location header")?;
+        exec_id_from_location(location)
+    }
+
+    fn collect_exec_output(&self, sandbox_id: &str, exec_id: &str) -> Result<ExecSyncOutput> {
+        let mut state = ExecStreamState::default();
+        let mut attempts_without_progress = 0;
+        loop {
+            let last_seen = state.last_event_id;
+            match self.stream_exec_events(sandbox_id, exec_id, &mut state)? {
+                Some(status) => {
+                    return Ok(ExecSyncOutput {
+                        stdout: String::from_utf8_lossy(&state.stdout).into_owned(),
+                        stderr: String::from_utf8_lossy(&state.stderr).into_owned(),
+                        exit_code: status.exit_code,
+                        duration_ms: status.duration_ms.min(i64::MAX as u64) as i64,
+                        timed_out: status.timed_out,
+                    });
+                }
+                None => {
+                    if state.last_event_id != last_seen {
+                        attempts_without_progress = 0;
+                    }
+                    attempts_without_progress += 1;
+                    if attempts_without_progress >= EXEC_STREAM_RECONNECT_ATTEMPTS {
+                        bail!(
+                            "Sandbox exec event stream disconnected before the command completed"
+                        );
+                    }
+                    thread::sleep(EXEC_STREAM_RECONNECT_DELAY);
+                }
+            }
+        }
+    }
+
+    /// Stream one events connection. `Ok(Some(status))` means the exec
+    /// finished; `Ok(None)` means the stream dropped before the status event
+    /// and the caller may reconnect (resuming after `state.last_event_id`).
+    fn stream_exec_events(
+        &self,
+        sandbox_id: &str,
+        exec_id: &str,
+        state: &mut ExecStreamState,
+    ) -> Result<Option<ExecStatus>> {
+        let mut events_endpoint =
+            format!("/exec/{}/events?encoding=base64", encode_segment(exec_id));
+        if let Some(after) = state.last_event_id {
+            events_endpoint.push_str(&format!("&after={after}"));
+        }
+        let response = self.data_plane_request(sandbox_id, |http, base| {
+            // The blocking client applies the request timeout to each body
+            // read, so this acts as a read-idle guard on the event stream.
+            http.get(sandbox_endpoint_url(base, sandbox_id, &events_endpoint))
+                .timeout(READ_IDLE_TIMEOUT)
+        })?;
+        // The previous connection's reader lease may not be reaped yet.
+        if response.status() == StatusCode::CONFLICT {
+            return Ok(None);
+        }
+        let response = ensure_data_plane_success(response)?;
+
+        let mut events = SseReader::new(BufReader::new(response));
+        loop {
+            let event = match events.next_event() {
+                Ok(Some(event)) => event,
+                Ok(None) => return Ok(None),
+                Err(err) => {
+                    log::warn!("Sandbox exec event stream was interrupted: {err}");
+                    return Ok(None);
+                }
+            };
+            if let Some(id) = event.id.as_deref().and_then(|id| id.parse().ok()) {
+                state.last_event_id = Some(id);
+            }
+            match event.event.as_deref() {
+                Some("stdout") => state
+                    .stdout
+                    .extend_from_slice(&decode_exec_data(&event.data)?),
+                Some("stderr") => state
+                    .stderr
+                    .extend_from_slice(&decode_exec_data(&event.data)?),
+                Some("status") => {
+                    let status = serde_json::from_str(&event.data)
+                        .context("Invalid sandbox exec status event")?;
+                    return Ok(Some(status));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn cancel_exec(&self, sandbox_id: &str, exec_id: &str) -> Result<()> {
+        let response = self.data_plane_request(sandbox_id, |http, base| {
+            http.delete(sandbox_endpoint_url(
+                base,
+                sandbox_id,
+                &format!("/exec/{}", encode_segment(exec_id)),
+            ))
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
+        })?;
+        ensure_data_plane_success(response)?;
         Ok(())
     }
 
-    fn ensure_success(
+    /// Send a data-plane request with the sandbox-scoped token, re-minting
+    /// once if the token was rejected (expired mid-session).
+    fn data_plane_request<F>(
         &self,
-        response: reqwest::blocking::Response,
-    ) -> Result<reqwest::blocking::Response> {
+        sandbox_id: &str,
+        build: F,
+    ) -> Result<reqwest::blocking::Response>
+    where
+        F: Fn(&Client, &str) -> reqwest::blocking::RequestBuilder,
+    {
+        let response = self.send_data_plane(sandbox_id, &build)?;
         let status = response.status();
-        if status.is_success() {
+        if status != StatusCode::UNAUTHORIZED && status != StatusCode::FORBIDDEN {
             return Ok(response);
         }
+        log::debug!("Sandbox data-plane request was rejected ({status}); re-minting access token");
+        self.invalidate_access(sandbox_id);
+        self.send_data_plane(sandbox_id, &build)
+    }
 
-        let text = response.text().unwrap_or_default();
+    fn send_data_plane<F>(&self, sandbox_id: &str, build: &F) -> Result<reqwest::blocking::Response>
+    where
+        F: Fn(&Client, &str) -> reqwest::blocking::RequestBuilder,
+    {
+        let access = self.access(sandbox_id)?;
+        build(&self.http, &access.data_plane_url)
+            .bearer_auth(&access.token)
+            .send()
+            .context("Sandbox request failed")
+    }
+
+    fn access(&self, sandbox_id: &str) -> Result<SandboxAccess> {
+        let mut cache = self
+            .access
+            .lock()
+            .map_err(|_| anyhow!("sandbox access cache lock poisoned"))?;
+        if let Some(access) = cache.get(sandbox_id)
+            && !access.expires_soon()
+        {
+            return Ok(access.clone());
+        }
+        let access = self.mint_access(sandbox_id)?;
+        cache.insert(sandbox_id.to_string(), access.clone());
+        Ok(access)
+    }
+
+    fn invalidate_access(&self, sandbox_id: &str) {
+        if let Ok(mut cache) = self.access.lock() {
+            cache.remove(sandbox_id);
+        }
+    }
+
+    fn mint_access(&self, sandbox_id: &str) -> Result<SandboxAccess> {
+        let url = self.url(&format!(
+            "/api/sandboxes/{}/access-token",
+            encode_segment(sandbox_id)
+        ));
+        let response = self
+            .authenticated(self.http.post(url))?
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
+            .send()
+            .context("Failed to mint sandbox access token")?;
+        let status = response.status();
         if status == StatusCode::UNAUTHORIZED {
             bail!("Sandbox API request was not authorized. Run `pcb auth login`.");
         }
-        bail!("Sandbox API request failed with {status}: {text}");
+        if status == StatusCode::NOT_FOUND {
+            bail!("Sandbox {sandbox_id} was not found or you do not have access to it");
+        }
+        if !status.is_success() {
+            let text = response.text().unwrap_or_default();
+            bail!("Failed to mint sandbox access token ({status}): {text}");
+        }
+        response
+            .json()
+            .context("Invalid sandbox access token response")
     }
 
     fn url(&self, path: &str) -> String {
@@ -480,127 +567,116 @@ impl SandboxClient {
     }
 }
 
-impl ExecSyncRequest {
-    pub fn max_stdout(mut self, bytes: usize) -> Self {
-        self.max_stdout_bytes = Some(bytes);
-        self
-    }
-
-    pub fn max_stderr(mut self, bytes: usize) -> Self {
-        self.max_stderr_bytes = Some(bytes);
-        self
-    }
+#[derive(Default)]
+struct ExecStreamState {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    last_event_id: Option<u64>,
 }
 
-impl From<ExecSyncRequest> for SandboxExecRequest {
-    fn from(request: ExecSyncRequest) -> Self {
-        let shell = request.shell.unwrap_or_else(|| "/bin/bash".to_string());
-        Self {
-            argv: vec![shell, "-lc".to_string(), request.command],
-            cwd: request.cwd,
-            env: request.env,
-            timeout_ms: request.timeout_ms,
-        }
-    }
+fn sandbox_endpoint_url(data_plane_url: &str, sandbox_id: &str, endpoint: &str) -> String {
+    format!(
+        "{}/sandboxes/{}{}",
+        data_plane_url.trim_end_matches('/'),
+        encode_segment(sandbox_id),
+        endpoint
+    )
 }
 
-struct LimitedBuffer {
-    bytes: Vec<u8>,
-    limit: Option<usize>,
-    truncated: bool,
+fn sandbox_fs_url(data_plane_url: &str, sandbox_id: &str, endpoint: &str, path: &str) -> String {
+    format!(
+        "{}?path={}",
+        sandbox_endpoint_url(data_plane_url, sandbox_id, endpoint),
+        encode_segment(path)
+    )
 }
 
-impl LimitedBuffer {
-    fn new(limit: Option<usize>) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-            truncated: false,
-        }
-    }
-
-    fn append_base64(&mut self, value: &str) -> Result<()> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(value)
-            .context("Invalid sandbox exec output event")?;
-        self.append(&bytes);
-        Ok(())
-    }
-
-    fn append(&mut self, bytes: &[u8]) {
-        let Some(limit) = self.limit else {
-            self.bytes.extend_from_slice(bytes);
-            return;
-        };
-        let remaining = limit.saturating_sub(self.bytes.len());
-        let keep = remaining.min(bytes.len());
-        self.bytes.extend_from_slice(&bytes[..keep]);
-        if keep < bytes.len() {
-            self.truncated = true;
-        }
-    }
-
-    fn into_string(self) -> String {
-        String::from_utf8_lossy(&self.bytes).into_owned()
-    }
-}
-
-fn read_sse_events(
+fn ensure_data_plane_success(
     response: reqwest::blocking::Response,
-    mut on_event: impl FnMut(Option<&str>, &str) -> Result<()>,
-) -> Result<()> {
-    let reader = BufReader::new(response);
-    read_sse_events_from_reader(reader, &mut on_event)
-}
-
-fn read_sse_events_from_reader(
-    reader: impl BufRead,
-    on_event: &mut impl FnMut(Option<&str>, &str) -> Result<()>,
-) -> Result<()> {
-    let mut event: Option<String> = None;
-    let mut data = Vec::new();
-
-    for line in reader.lines() {
-        let line = line.context("Failed to read sandbox exec event stream")?;
-        let line = line.strip_suffix('\r').unwrap_or(&line);
-        if line.is_empty() {
-            dispatch_sse_event(on_event, &mut event, &mut data)?;
-            continue;
-        }
-        if line.starts_with(':') {
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("event:") {
-            event = Some(value.trim_start().to_string());
-        } else if let Some(value) = line.strip_prefix("data:") {
-            data.push(value.trim_start().to_string());
-        }
+) -> Result<reqwest::blocking::Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
     }
-
-    dispatch_sse_event(on_event, &mut event, &mut data)
-}
-
-fn dispatch_sse_event(
-    on_event: &mut impl FnMut(Option<&str>, &str) -> Result<()>,
-    event: &mut Option<String>,
-    data: &mut Vec<String>,
-) -> Result<()> {
-    if event.is_none() && data.is_empty() {
-        return Ok(());
-    }
-    let joined = data.join("\n");
-    on_event(event.as_deref(), &joined)?;
-    *event = None;
-    data.clear();
-    Ok(())
+    let text = response.text().unwrap_or_default();
+    bail!("Sandbox request failed with {status}: {text}");
 }
 
 fn exec_id_from_location(location: &str) -> Result<String> {
-    location
-        .split('/')
-        .rfind(|segment| !segment.is_empty())
+    let path = match location.split_once("://") {
+        Some((_, rest)) => rest.find('/').map(|index| &rest[index..]).unwrap_or(""),
+        None => location,
+    };
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    path.rsplit('/')
+        .find(|segment| !segment.is_empty())
         .map(ToString::to_string)
-        .context("Sandbox exec response Location did not include an id")
+        .context("Sandbox exec Location header did not include an exec id")
+}
+
+fn decode_exec_data(data: &str) -> Result<Vec<u8>> {
+    BASE64
+        .decode(data.trim())
+        .context("Invalid base64 in sandbox exec event")
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SseEvent {
+    id: Option<String>,
+    event: Option<String>,
+    data: String,
+}
+
+/// Minimal SSE reader for the sandbox exec event stream. Comment lines
+/// (keep-alives) are skipped; events without data are ignored; a partial
+/// event cut off at EOF is dropped (the caller reconnects with `after`).
+struct SseReader<R> {
+    reader: R,
+}
+
+impl<R: BufRead> SseReader<R> {
+    fn new(reader: R) -> Self {
+        Self { reader }
+    }
+
+    fn next_event(&mut self) -> std::io::Result<Option<SseEvent>> {
+        let mut id = None;
+        let mut event = None;
+        let mut data: Vec<String> = Vec::new();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if self.reader.read_line(&mut line)? == 0 {
+                return Ok(None);
+            }
+            let line = line.trim_end_matches('\n').trim_end_matches('\r');
+            if line.is_empty() {
+                if data.is_empty() {
+                    id = None;
+                    event = None;
+                    continue;
+                }
+                return Ok(Some(SseEvent {
+                    id,
+                    event,
+                    data: data.join("\n"),
+                }));
+            }
+            if line.starts_with(':') {
+                continue;
+            }
+            let (field, value) = match line.split_once(':') {
+                Some((field, value)) => (field, value.strip_prefix(' ').unwrap_or(value)),
+                None => (line, ""),
+            };
+            match field {
+                "id" => id = Some(value.to_string()),
+                "event" => event = Some(value.to_string()),
+                "data" => data.push(value.to_string()),
+                _ => {}
+            }
+        }
+    }
 }
 
 impl SandboxLockGuard {
@@ -730,7 +806,7 @@ impl SandboxLockFile {
 }
 
 fn read_lock_file(client: &SandboxClient, sandbox_id: &str) -> Result<Option<SandboxLockFile>> {
-    let Some(bytes) = read_file_if_exists(client, sandbox_id, SANDBOX_LOCK_FILE_PATH)? else {
+    let Some(bytes) = client.read_file_optional(sandbox_id, SANDBOX_LOCK_FILE_PATH)? else {
         return Ok(None);
     };
     let lock = serde_json::from_slice(&bytes).context("Failed to parse sandbox lock file")?;
@@ -743,39 +819,9 @@ fn write_lock_file(client: &SandboxClient, sandbox_id: &str, lock: &SandboxLockF
 }
 
 fn delete_lock_file(client: &SandboxClient, sandbox_id: &str) -> Result<()> {
-    let response = client
-        .authenticated(client.http.delete(client.url(&sandbox_fs_url(
-            "remove",
-            sandbox_id,
-            SANDBOX_LOCK_FILE_PATH,
-        )?)))?
-        .send()
-        .context("Failed to delete sandbox lock file")?;
-    if response.status() == StatusCode::NOT_FOUND {
-        return Ok(());
-    }
-    client.ensure_success(response)?;
-    Ok(())
-}
-
-fn read_file_if_exists(
-    client: &SandboxClient,
-    sandbox_id: &str,
-    path: &str,
-) -> Result<Option<Vec<u8>>> {
-    let response = client
-        .authenticated(
-            client
-                .http
-                .get(client.url(&sandbox_fs_url("read", sandbox_id, path)?)),
-        )?
-        .send()
-        .context("Failed to read sandbox file")?;
-    if response.status() == StatusCode::NOT_FOUND {
-        return Ok(None);
-    }
-    let response = client.ensure_success(response)?;
-    Ok(Some(response.bytes()?.to_vec()))
+    // The data plane has no fs delete endpoint; `rm -f` also succeeds when
+    // the lock file is already gone.
+    client.remove(sandbox_id, SANDBOX_LOCK_FILE_PATH)
 }
 
 fn ensure_exec_success(output: &ExecSyncOutput) -> Result<()> {
@@ -798,20 +844,6 @@ fn duration_secs_i64(duration: Duration, label: &str) -> Result<i64> {
         bail!("{label} must be at least one second");
     }
     i64::try_from(seconds).map_err(|_| anyhow!("{label} is too large"))
-}
-
-fn sandbox_fs_url(operation: &str, sandbox_id: &str, path: &str) -> Result<String> {
-    Ok(format!(
-        "/api/sandboxes/{}/fs/{}?path={}",
-        encode_segment(sandbox_id),
-        operation,
-        encoded_query_path(path)?
-    ))
-}
-
-fn encoded_query_path(path: &str) -> Result<String> {
-    require_safe_absolute_path(path)?;
-    Ok(urlencoding::encode(path).into_owned())
 }
 
 fn require_safe_absolute_path(path: &str) -> Result<()> {
@@ -838,116 +870,140 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn read_all_events(input: &str) -> Vec<SseEvent> {
+        let mut reader = SseReader::new(input.as_bytes());
+        let mut events = Vec::new();
+        while let Some(event) = reader.next_event().unwrap() {
+            events.push(event);
+        }
+        events
+    }
+
     #[test]
-    fn encodes_absolute_paths_for_query_params() {
+    fn parses_sse_events() {
+        let events = read_all_events(
+            "id: 1\nevent: stdout\ndata: aGVsbG8=\n\nid: 2\nevent: status\ndata: {\"exitCode\":0}\n\n",
+        );
         assert_eq!(
-            encoded_query_path("/home/sandbox/My Board/main.zen").unwrap(),
-            "%2Fhome%2Fsandbox%2FMy%20Board%2Fmain.zen"
+            events,
+            vec![
+                SseEvent {
+                    id: Some("1".to_string()),
+                    event: Some("stdout".to_string()),
+                    data: "aGVsbG8=".to_string(),
+                },
+                SseEvent {
+                    id: Some("2".to_string()),
+                    event: Some("status".to_string()),
+                    data: "{\"exitCode\":0}".to_string(),
+                },
+            ]
         );
     }
 
     #[test]
-    fn builds_query_style_sandbox_fs_urls() {
+    fn sse_skips_keep_alive_comments_and_blank_lines() {
+        let events = read_all_events(":keep-alive\n\n\n:\n\nid: 7\nevent: stderr\ndata: b2g=\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id.as_deref(), Some("7"));
+        assert_eq!(events[0].event.as_deref(), Some("stderr"));
+        assert_eq!(events[0].data, "b2g=");
+    }
+
+    #[test]
+    fn sse_handles_crlf_and_multi_line_data() {
+        let events = read_all_events("event: status\r\ndata: {\r\ndata: }\r\n\r\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "{\n}");
+    }
+
+    #[test]
+    fn sse_drops_partial_event_at_eof() {
+        let events = read_all_events("id: 3\nevent: stdout\ndata: aGVsbG8=");
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn extracts_exec_id_from_location() {
+        assert_eq!(exec_id_from_location("/exec/abc123").unwrap(), "abc123");
+        assert_eq!(exec_id_from_location("/exec/abc123/").unwrap(), "abc123");
         assert_eq!(
-            sandbox_fs_url(
-                "read",
-                "sandbox/id",
-                "/home/sandbox/registry/components/LT3010EMS8E#PBF/LT3010x.zen"
+            exec_id_from_location(
+                "https://sandbox.api.diode.computer/sandboxes/sbx_1/exec/e-9?x=1"
             )
             .unwrap(),
-            "/api/sandboxes/sandbox%2Fid/fs/read?path=%2Fhome%2Fsandbox%2Fregistry%2Fcomponents%2FLT3010EMS8E%23PBF%2FLT3010x.zen"
+            "e-9"
+        );
+        assert!(exec_id_from_location("").is_err());
+    }
+
+    #[test]
+    fn deserializes_exec_status() {
+        let status: ExecStatus = serde_json::from_str(
+            "{\"exitCode\":null,\"durationMs\":1200,\"timedOut\":true,\"canceled\":false}",
+        )
+        .unwrap();
+        assert_eq!(status.exit_code, None);
+        assert_eq!(status.duration_ms, 1200);
+        assert!(status.timed_out);
+    }
+
+    #[test]
+    fn deserializes_directory_listing() {
+        let listing: SandboxListResponse = serde_json::from_str(
+            "{\"path\":\"/home/sandbox\",\"type\":\"directory\",\"entries\":[{\"name\":\"main.zen\",\"path\":\"/home/sandbox/main.zen\",\"type\":\"file\",\"size\":42,\"mode\":\"0644\",\"mtime\":\"2026-07-04T00:00:00Z\",\"etag\":\"\\\"abc\\\"\"},{\"name\":\"layout\",\"path\":\"/home/sandbox/layout\",\"type\":\"directory\",\"size\":0,\"mode\":\"0755\"}]}",
+        )
+        .unwrap();
+        assert_eq!(listing.path, "/home/sandbox");
+        assert_eq!(listing.entries.len(), 2);
+        assert_eq!(listing.entries[0].kind, "file");
+        assert_eq!(listing.entries[0].size, Some(42));
+        assert_eq!(listing.entries[1].kind, "directory");
+        assert_eq!(listing.entries[1].mtime, None);
+    }
+
+    #[test]
+    fn access_token_refresh_margin() {
+        let fresh = SandboxAccess {
+            token: "tok".to_string(),
+            expires_at: Utc::now().timestamp() + 600,
+            data_plane_url: "https://example.com".to_string(),
+        };
+        assert!(!fresh.expires_soon());
+        let expiring = SandboxAccess {
+            expires_at: Utc::now().timestamp() + 60,
+            ..fresh.clone()
+        };
+        assert!(expiring.expires_soon());
+    }
+
+    #[test]
+    fn builds_sandbox_endpoint_urls() {
+        assert_eq!(
+            sandbox_endpoint_url("https://sandbox.api.diode.computer/", "sbx 1", "/fs/read"),
+            "https://sandbox.api.diode.computer/sandboxes/sbx%201/fs/read"
+        );
+        assert_eq!(
+            sandbox_fs_url(
+                "http://localhost:8080",
+                "sbx_1",
+                "/fs/read",
+                "/home/sandbox/My Board/main.zen"
+            ),
+            "http://localhost:8080/sandboxes/sbx_1/fs/read?path=%2Fhome%2Fsandbox%2FMy%20Board%2Fmain.zen"
         );
     }
 
     #[test]
     fn rejects_unsafe_paths() {
-        assert!(encoded_query_path("relative/path").is_err());
-        assert!(encoded_query_path("/home/sandbox/../main.zen").is_err());
-        assert!(encoded_query_path("/home//sandbox/main.zen").is_err());
-    }
-
-    #[test]
-    fn parses_directory_listing_from_fs_read() {
-        let listing: SandboxListResponse = serde_json::from_str(
-            r#"{
-                "path": "/home/sandbox/layout",
-                "type": "directory",
-                "entries": [
-                    {
-                        "name": "layout.kicad_pcb",
-                        "path": "/home/sandbox/layout/layout.kicad_pcb",
-                        "type": "file",
-                        "size": 12,
-                        "mode": "100644",
-                        "mtime": null,
-                        "etag": "\"abc\""
-                    }
-                ]
-            }"#,
-        )
-        .unwrap();
-
-        assert_eq!(listing.path, "/home/sandbox/layout");
-        assert_eq!(listing.entries[0].kind, "file");
-        assert_eq!(listing.entries[0].mtime, None);
+        assert!(require_safe_absolute_path("relative/path").is_err());
+        assert!(require_safe_absolute_path("/home/sandbox/../main.zen").is_err());
+        assert!(require_safe_absolute_path("/home//sandbox/main.zen").is_err());
+        assert!(require_safe_absolute_path("/home/sandbox/My Board/main.zen").is_ok());
     }
 
     #[test]
     fn quotes_shell_arguments() {
         assert_eq!(shell_quote("/tmp/it's"), "'/tmp/it'\"'\"'s'");
-    }
-
-    #[test]
-    fn maps_exec_sync_request_to_streaming_exec_request() {
-        let mut env = BTreeMap::new();
-        env.insert("A".to_string(), "B".to_string());
-
-        let request = ExecSyncRequest::command("pwd")
-            .cwd("/home/sandbox")
-            .env(env.clone())
-            .timeout(Duration::from_secs(2));
-        let exec = SandboxExecRequest::from(request);
-
-        assert_eq!(exec.argv, vec!["/bin/bash", "-lc", "pwd"]);
-        assert_eq!(exec.cwd.as_deref(), Some("/home/sandbox"));
-        assert_eq!(exec.env, Some(env));
-        assert_eq!(exec.timeout_ms, Some(2000));
-    }
-
-    #[test]
-    fn parses_streaming_exec_events() {
-        let body = concat!(
-            "event: stdout\n",
-            "data: aGVs\n",
-            "\n",
-            "event: stdout\n",
-            "data: bG8=\n",
-            "\n",
-            "event: stderr\n",
-            "data: ZXJy\n",
-            "\n",
-            "event: status\n",
-            "data: {\"exitCode\":0,\"durationMs\":24,\"timedOut\":false,\"canceled\":false}\n",
-            "\n",
-        );
-        let mut stdout = LimitedBuffer::new(Some(4));
-        let mut stderr = LimitedBuffer::new(None);
-        let mut status = None;
-
-        let reader = std::io::Cursor::new(body);
-        read_sse_events_from_reader(reader, &mut |event, data| -> Result<()> {
-            match event {
-                Some("stdout") => stdout.append_base64(data)?,
-                Some("stderr") => stderr.append_base64(data)?,
-                Some("status") => status = Some(serde_json::from_str::<SandboxExecStatus>(data)?),
-                _ => {}
-            }
-            Ok(())
-        })
-        .unwrap();
-
-        assert_eq!(stdout.into_string(), "hell");
-        assert_eq!(stderr.into_string(), "err");
-        assert!(status.is_some());
     }
 }

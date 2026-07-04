@@ -5,6 +5,7 @@ edition = { workspace = true }
 description = "Diode API client for authentication, component search, registry TUI, and PDF scanning"
 
 [dev-dependencies]
+httpmock = { workspace = true }
 insta = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }

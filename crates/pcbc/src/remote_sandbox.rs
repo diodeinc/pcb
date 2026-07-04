@@ -24,7 +24,8 @@ use crate::open::OpenArgs;
 
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
-const REMOTE_LAYOUT_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+// The sandbox data plane caps exec timeouts at 15 minutes (SANDBOXD_MAX_TIMEOUT_MS).
+const REMOTE_LAYOUT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const LOCAL_LAYOUT_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const SYNC_RETRY_ATTEMPTS: usize = 3;
 const SYNC_RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -416,9 +417,7 @@ fn run_remote_layout(
         &uri.sandbox_id,
         ExecSyncRequest::command(shell_command(&command))
             .cwd(remote_parent_dir(&uri.sandbox_path)?)
-            .timeout(REMOTE_LAYOUT_TIMEOUT)
-            .max_stdout(2 * 1024 * 1024)
-            .max_stderr(2 * 1024 * 1024),
+            .timeout(REMOTE_LAYOUT_TIMEOUT),
     )?;
 
     parse_remote_layout_result(&output.stdout)
