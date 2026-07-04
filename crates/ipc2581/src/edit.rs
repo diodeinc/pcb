@@ -206,9 +206,10 @@ impl<'a> Doc<'a> {
 /// Apply a set of non-overlapping edits to `source` in one pass.
 ///
 /// Edits are ordered by position; insertions at the same position keep the
-/// order in which they were created.
+/// order in which they were created and land before any deletion starting
+/// there (so inserting at an element and replacing it compose).
 pub fn apply(source: &str, mut edits: Vec<Edit>) -> Result<String> {
-    edits.sort_by_key(|edit| edit.at);
+    edits.sort_by_key(|edit| (edit.at, edit.delete > 0));
 
     let grows: usize = edits.iter().map(|edit| edit.insert.len()).sum();
     let mut out = String::with_capacity(source.len() + grows);

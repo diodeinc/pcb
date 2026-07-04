@@ -341,28 +341,28 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
         items: avl_items,
     };
 
-    // Patch LogisticHeader first to add new Enterprise entries
-    let mut updated_xml = content;
+    // One parse serves the history append, the LogisticHeader patch, and
+    // the AVL replacement; all edits splice in a single pass.
+    let doc = ipc2581::edit::Doc::parse(&content)?;
+    let comment = format!(
+        "BOM alternatives added ({} items, {} total alternatives)",
+        num_items, num_alternatives
+    );
+    let mut edits = crate::utils::history::file_revision_edits(&doc, &comment)?;
     if !enterprise_registry.new_enterprises.is_empty() {
-        updated_xml = patch_logistic_header(&updated_xml, &enterprise_registry.new_enterprises)?;
+        edits.extend(logistic_header_edit(
+            &doc,
+            &enterprise_registry.new_enterprises,
+        ));
         eprintln!(
             "Added {} new Enterprise entries to LogisticHeader",
             enterprise_registry.new_enterprises.len()
         );
     }
+    edits.push(avl_section_edit(&doc, avl.to_xml(&interner))?);
 
-    // Then patch AVL section
-    updated_xml = patch_or_add_avl_section(&updated_xml, &avl.to_xml(&interner))?;
-
-    // Append FileRevision to HistoryRecord per IPC-2581C spec
-    let comment = format!(
-        "BOM alternatives added ({} items, {} total alternatives)",
-        num_items, num_alternatives
-    );
-    updated_xml = crate::utils::history::append_file_revision(&updated_xml, &comment)?;
-
-    // Reformat XML with proper indentation
-    updated_xml = crate::utils::format::reformat_xml(&updated_xml)?;
+    let updated_xml = ipc2581::edit::apply(&content, edits)?;
+    let updated_xml = crate::utils::format::reformat_xml(&updated_xml)?;
 
     file_utils::save_ipc_file(output.unwrap_or(file), &updated_xml)?;
 
@@ -370,16 +370,13 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
     Ok(())
 }
 
-/// Patch LogisticHeader to add new Enterprise entries (before Person or closing tag)
-fn patch_logistic_header(
-    original_xml: &str,
+/// Add new Enterprise entries to LogisticHeader (before Person or closing tag)
+fn logistic_header_edit(
+    doc: &ipc2581::edit::Doc,
     new_enterprises: &[(String, String)],
-) -> Result<String> {
-    let doc = ipc2581::edit::Doc::parse(original_xml)?;
-    let root = doc.root()?;
-    let Some(header) = doc.child(root, "LogisticHeader") else {
-        return Ok(original_xml.to_string());
-    };
+) -> Option<ipc2581::edit::Edit> {
+    let root = doc.root().ok()?;
+    let header = doc.child(root, "LogisticHeader")?;
 
     let mut writer = ipc2581::XmlWriter::new();
     for (id, name) in new_enterprises {
@@ -394,28 +391,30 @@ fn patch_logistic_header(
     }
     let enterprises_xml = writer.into_string();
 
-    let edit = match doc.child(header, "Person") {
+    Some(match doc.child(header, "Person") {
         Some(person) => doc.insert_before(person, enterprises_xml),
         None => doc.append_inside(header, enterprises_xml),
-    };
-    Ok(ipc2581::edit::apply(original_xml, vec![edit])?)
+    })
 }
 
 /// Replace the Avl section (or add one before the document end)
-fn patch_or_add_avl_section(original_xml: &str, new_avl_xml: &str) -> Result<String> {
-    let doc = ipc2581::edit::Doc::parse(original_xml)?;
+fn avl_section_edit(doc: &ipc2581::edit::Doc, new_avl_xml: String) -> Result<ipc2581::edit::Edit> {
     let root = doc.root()?;
-
-    let edit = match doc.child(root, "Avl") {
+    Ok(match doc.child(root, "Avl") {
         Some(avl) => doc.replace(avl, new_avl_xml),
         None => doc.append_inside(root, new_avl_xml),
-    };
-    Ok(ipc2581::edit::apply(original_xml, vec![edit])?)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn patch_avl(original: &str, new_avl: &str) -> String {
+        let doc = ipc2581::edit::Doc::parse(original).unwrap();
+        let edit = avl_section_edit(&doc, new_avl.to_string()).unwrap();
+        ipc2581::edit::apply(original, vec![edit]).unwrap()
+    }
 
     #[test]
     fn test_patch_or_add_avl_when_missing() {
@@ -426,7 +425,7 @@ mod tests {
 
         let new_avl = "  <Avl name=\"Test\">\n  </Avl>\n";
 
-        let result = patch_or_add_avl_section(original, new_avl).unwrap();
+        let result = patch_avl(original, new_avl);
 
         assert!(result.contains("<Avl name=\"Test\">"));
         assert!(result.contains("</Avl>"));
@@ -446,7 +445,7 @@ mod tests {
 
         let new_avl = "  <Avl name=\"New\">\n    <AvlItem OEMDesignNumber=\"NEW\"/>\n  </Avl>\n";
 
-        let result = patch_or_add_avl_section(original, new_avl).unwrap();
+        let result = patch_avl(original, new_avl);
 
         assert!(result.contains("<Avl name=\"New\">"));
         assert!(result.contains("OEMDesignNumber=\"NEW\""));

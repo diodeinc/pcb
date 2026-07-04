@@ -579,14 +579,22 @@ fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
     let generated_spec_xml = write_generated_specs_xml(spec);
     let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry);
     let generated_steps_xml = write_generated_steps_xml(spec)?;
-    let xml = patch_board_xml(
-        xml,
+
+    // One parse serves both the board-array patch and the history append;
+    // all edits splice in a single pass.
+    let doc = ipc2581::edit::Doc::parse(xml)?;
+    let mut edits = board_array_edits(
+        &doc,
         spec,
         &generated_spec_xml,
         generated_layer_xml.as_deref(),
         &generated_steps_xml,
     )?;
-    let xml = crate::utils::history::append_file_revision(&xml, "Created board array")?;
+    edits.extend(crate::utils::history::file_revision_edits(
+        &doc,
+        "Created board array",
+    )?);
+    let xml = ipc2581::edit::apply(xml, edits)?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
     Ipc2581::parse(&xml).context("Generated IPC-2581 board array XML did not parse")?;

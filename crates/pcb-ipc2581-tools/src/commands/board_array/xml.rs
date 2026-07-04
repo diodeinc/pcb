@@ -6,21 +6,20 @@
 
 use super::*;
 use ipc2581::XmlWriter;
-use ipc2581::edit::{self, Doc};
+use ipc2581::edit::{Doc, Edit};
 use ipc2581::write;
 use ipc2581::write::{fmt_num, fmt_units};
 
-/// Splice all board-array changes into the source document in one pass:
+/// The board-array changes as byte-range edits against the source document:
 /// Content step/layer refs, generated CadHeader specs, generated layers,
 /// board-outline removal, and the generated board-cell/array steps.
-pub(super) fn patch_board_xml(
-    xml: &str,
+pub(super) fn board_array_edits(
+    doc: &Doc,
     spec: &BoardArraySpec,
     generated_spec_xml: &str,
     generated_layer_xml: Option<&str>,
     array_step_xml: &str,
-) -> Result<String> {
-    let doc = Doc::parse(xml)?;
+) -> Result<Vec<Edit>> {
     let root = doc.root()?;
     let mut edits = Vec::new();
 
@@ -85,7 +84,7 @@ pub(super) fn patch_board_xml(
 
     edits.push(doc.append_inside(cad_data, array_step_xml));
 
-    Ok(edit::apply(xml, edits)?)
+    Ok(edits)
 }
 
 fn write_content_refs_xml(spec: &BoardArraySpec) -> String {

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use ipc2581::XmlWriter;
-use ipc2581::edit::{self, Doc, Node};
+use ipc2581::edit::{self, Doc, Edit, Node};
 
 /// PCB tool version from Cargo.toml
 const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,15 +25,22 @@ const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
 ///   - Descriptive comment about what changed
 ///   - SoftwarePackage element with pcb version info
 pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String> {
-    let now = jiff::Timestamp::now().to_string();
     let doc = Doc::parse(original_xml)?;
+    let edits = file_revision_edits(&doc, comment)?;
+    Ok(edit::apply(original_xml, edits)?)
+}
+
+/// The edits behind [`append_file_revision`], for composing with other edits
+/// against the same parsed document in a single splice pass.
+pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
+    let now = jiff::Timestamp::now().to_string();
     let root = doc.root()?;
 
     let edits = match doc.child(root, "HistoryRecord") {
         // A childless record is expanded in place, keeping its attributes.
         Some(record) if doc.source(record).ends_with("/>") => {
             let mut writer = XmlWriter::new();
-            writer.start_element_with("HistoryRecord", initial_history_attrs(&doc, record, &now));
+            writer.start_element_with("HistoryRecord", initial_history_attrs(doc, record, &now));
             write_file_revision(&mut writer, 1, comment);
             writer.end_element("HistoryRecord");
             vec![doc.replace(record, writer.into_string())]
@@ -48,8 +55,7 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
                 .max()
                 .unwrap_or(1);
             let mut start_tag = XmlWriter::new();
-            start_tag
-                .start_element_with("HistoryRecord", updated_history_attrs(&doc, record, &now));
+            start_tag.start_element_with("HistoryRecord", updated_history_attrs(doc, record, &now));
             let mut revision = XmlWriter::new();
             write_file_revision(&mut revision, next_id, comment);
             vec![
@@ -82,7 +88,7 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
         }
     };
 
-    Ok(edit::apply(original_xml, edits)?)
+    Ok(edits)
 }
 
 /// Attributes for expanding a childless HistoryRecord: number stays "1",
