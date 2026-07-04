@@ -170,8 +170,6 @@ pub enum FeatureBucket {
     Trace,
     Fill,
     Cutout,
-    Thermal,
-    Antipad,
 }
 
 impl FeatureBucket {
@@ -192,8 +190,6 @@ impl FeatureBucket {
                     PlatingKind::Plated | PlatingKind::NonPlated => Self::Pth,
                     PlatingKind::Unknown | PlatingKind::None => Self::Smd,
                 },
-                FeatureRole::Thermal => Self::Thermal,
-                FeatureRole::Antipad => Self::Antipad,
                 FeatureRole::Cutout => Self::Cutout,
                 _ => match kind {
                     FeatureKind::Trace => Self::Trace,
@@ -268,8 +264,6 @@ pub enum FeatureRole {
     ArraySeparation,
     Route,
     Cutout,
-    Thermal,
-    Antipad,
     Other,
 }
 

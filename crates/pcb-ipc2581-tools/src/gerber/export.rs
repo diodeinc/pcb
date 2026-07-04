@@ -1095,10 +1095,7 @@ fn paint_order(feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
         PaintStage::FinalCutout
     } else if feature.polarity == Polarity::Clear
         || feature.flags.clears_previous_in_set
-        || matches!(
-            feature.bucket,
-            FeatureBucket::Fill | FeatureBucket::Thermal | FeatureBucket::Antipad
-        )
+        || feature.bucket == FeatureBucket::Fill
     {
         PaintStage::Base
     } else {
@@ -1171,8 +1168,6 @@ fn aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String> {
         }
         FeatureRole::Via => return vec!["ViaPad".to_string()],
         FeatureRole::Conductor => return vec!["Conductor".to_string()],
-        FeatureRole::Thermal => return vec!["ThermalRelief".to_string()],
-        FeatureRole::Antipad => return vec!["AntiPad".to_string()],
         FeatureRole::Hole | FeatureRole::Slot | FeatureRole::Cutout => {
             return vec!["Other".to_string()];
         }

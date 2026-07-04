@@ -66,10 +66,7 @@ pub fn paint_order<Symbol>(feature: &Feature<Symbol>) -> artwork::PaintOrder {
         artwork::PaintStage::FinalCutout
     } else if feature.polarity == Polarity::Clear
         || feature.flags.clears_previous_in_set
-        || matches!(
-            feature.bucket,
-            FeatureBucket::Fill | FeatureBucket::Thermal | FeatureBucket::Antipad
-        )
+        || feature.bucket == FeatureBucket::Fill
     {
         artwork::PaintStage::Base
     } else {
