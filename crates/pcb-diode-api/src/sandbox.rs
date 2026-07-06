@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -9,12 +8,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
-use reqwest::header::{CONTENT_TYPE, LOCATION};
+use reqwest::header::{CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, LOCATION};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -23,26 +20,25 @@ use crate::WorkspaceContext;
 pub const SANDBOX_LOCK_FILE_PATH: &str = "/home/sandbox/.diode/sandbox-lock.json";
 const LOCK_HEARTBEAT_MAX_FAILURES: usize = 3;
 
-/// Re-mint the sandbox access token when it is within this margin of expiry.
-/// Tokens live ~20 minutes but a `pcb open` session (KiCad + lock heartbeats)
-/// can outlive any fixed lifetime.
-const ACCESS_TOKEN_REFRESH_MARGIN_SECS: i64 = 120;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const FILE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-const EXEC_STREAM_RECONNECT_ATTEMPTS: usize = 5;
-const EXEC_STREAM_RECONNECT_DELAY: Duration = Duration::from_secs(2);
-/// A dropped events connection can leave its reader lease held server-side
-/// until the data plane notices the dead socket via its keep-alive writes
-/// (~10-20s), during which reconnects get 409. Wait out a good multiple of
-/// that before giving up.
-const EXEC_STREAM_BUSY_ATTEMPTS: usize = 15;
-/// Cap accumulated exec output, mirroring the truncation the old exec_sync
-/// API applied server-side. Anything pcb parses (layout result JSON) is far
-/// below this; a runaway command must not balloon a sync session's memory.
-const EXEC_MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-/// The data plane sends SSE keep-alives every 10s; a much longer read stall
-/// means the connection is dead and we should reconnect.
-const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Commands run job-shaped: create the exec, poll its state, then read the
+/// output files it left behind. Polling is stateless and idempotent, so a
+/// dropped connection costs one retry instead of a resume protocol.
+const EXEC_POLL_INITIAL_DELAY: Duration = Duration::from_millis(150);
+const EXEC_POLL_MAX_DELAY: Duration = Duration::from_secs(2);
+const EXEC_POLL_MAX_CONSECUTIVE_FAILURES: usize = 3;
+/// Grace beyond the command's own timeout before polling gives up; the data
+/// plane kills the command at its timeout, so this only covers slow polls.
+const EXEC_POLL_GRACE: Duration = Duration::from_secs(60);
+/// Matches the data plane's default command timeout (SANDBOXD_DEFAULT_TIMEOUT_MS).
+const EXEC_DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Refuse to download exec output files larger than this; anything pcb
+/// parses (layout result JSON) is far below it, and a runaway command must
+/// not balloon a sync session's memory.
+const EXEC_MAX_OUTPUT_BYTES: u64 = 8 * 1024 * 1024;
+/// Where wrapped commands leave their output files inside the sandbox.
+const EXEC_OUTPUT_DIR: &str = "/tmp/.pcb-exec";
 
 #[derive(Clone)]
 pub struct SandboxClient {
@@ -54,23 +50,14 @@ pub struct SandboxClient {
 
 /// Short-lived, sandbox-scoped credentials minted by the API. All sandbox
 /// file/exec traffic goes directly to `data_plane_url` with `token`; the API
-/// bearer token is only used for minting.
+/// bearer token is only used for minting. Expiry is handled reactively: a
+/// 401/403 from the data plane invalidates the cache and re-mints, so there
+/// is no clock-based refresh logic to get wrong.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SandboxAccess {
     token: String,
-    expires_at: i64,
     data_plane_url: String,
-}
-
-impl SandboxAccess {
-    fn expires_soon(&self) -> bool {
-        Utc::now().timestamp() + ACCESS_TOKEN_REFRESH_MARGIN_SECS >= self.expires_at
-    }
-
-    fn is_expired(&self) -> bool {
-        Utc::now().timestamp() >= self.expires_at
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,12 +108,21 @@ pub struct ExecSyncOutput {
     pub timed_out: bool,
 }
 
+/// `GET /exec/{id}` — the exec's current state, polled until it leaves
+/// `running`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ExecStatus {
-    exit_code: Option<i32>,
+struct ExecInfo {
+    state: String,
     duration_ms: u64,
+    exit_code: Option<i32>,
     timed_out: bool,
+}
+
+impl ExecInfo {
+    fn is_finished(&self) -> bool {
+        self.state != "running"
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -193,8 +189,12 @@ fn local_hostname() -> Option<String> {
 struct SandboxLockState {
     client: SandboxClient,
     sandbox_id: String,
-    lease_id: String,
-    ttl_seconds: i64,
+    /// The lock contents we wrote; heartbeats re-write it with fresh
+    /// timestamps.
+    template: SandboxLockFile,
+    /// Etag of our last lock write — the compare-and-swap token for the next
+    /// heartbeat. A 412 means someone else took the lock.
+    etag: Mutex<String>,
     stop: AtomicBool,
     active: AtomicBool,
     released: AtomicBool,
@@ -231,9 +231,8 @@ impl SandboxClient {
             ctx,
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(10))
-                // Long-running exec event streams must not be cut off by the
-                // blocking client's 30s default whole-request timeout; every
-                // request sets an explicit per-request timeout instead.
+                // Every request sets an explicit per-request timeout instead
+                // of relying on the blocking client's 30s default.
                 .timeout(None)
                 .build()
                 .context("Failed to create sandbox HTTP client")?,
@@ -241,15 +240,40 @@ impl SandboxClient {
         })
     }
 
+    /// Run a command job-shaped: create the exec (with its output redirected
+    /// to files, since the data plane's event queue backpressures the command
+    /// after 1 MiB unless someone streams it), poll until it finishes, then
+    /// read the output files.
     pub fn exec_sync(&self, sandbox_id: &str, request: ExecSyncRequest) -> Result<ExecSyncOutput> {
+        let output_id = Uuid::new_v4().simple().to_string();
+        let deadline = Duration::from_millis(
+            request
+                .timeout_ms
+                .unwrap_or(EXEC_DEFAULT_TIMEOUT.as_millis() as i64) as u64,
+        ) + EXEC_POLL_GRACE;
+        let request = ExecSyncRequest {
+            command: wrapped_command(&request.command, &output_id),
+            ..request
+        };
+
         let exec_id = self.create_exec(sandbox_id, &request)?;
-        let result = self.collect_exec_output(sandbox_id, &exec_id);
-        if result.is_err()
-            && let Err(err) = self.cancel_exec(sandbox_id, &exec_id)
-        {
-            log::debug!("Failed to cancel sandbox exec {exec_id}: {err:#}");
-        }
-        result
+        let info = match self.poll_exec(sandbox_id, &exec_id, deadline) {
+            Ok(info) => info,
+            Err(err) => {
+                if let Err(cancel_err) = self.cancel_exec(sandbox_id, &exec_id) {
+                    log::debug!("Failed to cancel sandbox exec {exec_id}: {cancel_err:#}");
+                }
+                return Err(err);
+            }
+        };
+
+        Ok(ExecSyncOutput {
+            stdout: self.fetch_exec_output(sandbox_id, &output_id, "out")?,
+            stderr: self.fetch_exec_output(sandbox_id, &output_id, "err")?,
+            exit_code: info.exit_code,
+            duration_ms: info.duration_ms.min(i64::MAX as u64) as i64,
+            timed_out: info.timed_out,
+        })
     }
 
     pub fn exec_sync_success(
@@ -276,12 +300,23 @@ impl SandboxClient {
 
     /// Read a file, returning `None` if the file (or sandbox) is gone.
     fn read_file_optional(&self, sandbox_id: &str, path: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .read_file_with_etag(sandbox_id, path)?
+            .map(|(bytes, _)| bytes))
+    }
+
+    fn read_file_with_etag(
+        &self,
+        sandbox_id: &str,
+        path: &str,
+    ) -> Result<Option<(Vec<u8>, Option<String>)>> {
         let response = self.read_response(sandbox_id, path)?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
         let response = ensure_data_plane_success(response)?;
-        Ok(Some(response.bytes()?.to_vec()))
+        let etag = header_string(response.headers(), ETAG);
+        Ok(Some((response.bytes()?.to_vec(), etag)))
     }
 
     pub fn write_file(&self, sandbox_id: &str, path: &str, bytes: &[u8]) -> Result<()> {
@@ -298,14 +333,34 @@ impl SandboxClient {
         Ok(())
     }
 
-    pub fn mkdir_p(&self, sandbox_id: &str, path: &str) -> Result<()> {
+    /// Compare-and-swap write: the data plane checks the precondition
+    /// against the file's current etag, making lock acquire/refresh atomic.
+    fn write_file_if(
+        &self,
+        sandbox_id: &str,
+        path: &str,
+        bytes: &[u8],
+        precondition: &WritePrecondition,
+    ) -> Result<ConditionalWrite> {
         require_safe_absolute_path(path)?;
-        self.exec_sync_success(
-            sandbox_id,
-            ExecSyncRequest::command(format!("mkdir -p -- {}", shell_quote(path)))
-                .timeout(Duration::from_secs(30)),
-        )?;
-        Ok(())
+        let response = self.data_plane_request(sandbox_id, |http, base| {
+            let request = http
+                .put(sandbox_fs_url(base, sandbox_id, "/fs/write", path))
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(bytes.to_vec())
+                .timeout(FILE_TRANSFER_TIMEOUT);
+            match precondition {
+                WritePrecondition::CreateOnly => request.header(IF_NONE_MATCH, "*"),
+                WritePrecondition::Match(etag) => request.header(IF_MATCH, etag.clone()),
+            }
+        })?;
+        if response.status() == StatusCode::PRECONDITION_FAILED {
+            return Ok(ConditionalWrite::PreconditionFailed);
+        }
+        let response = ensure_data_plane_success(response)?;
+        let etag = header_string(response.headers(), ETAG)
+            .context("Sandbox write response is missing an ETag header")?;
+        Ok(ConditionalWrite::Written(etag))
     }
 
     pub fn remove(&self, sandbox_id: &str, path: &str) -> Result<()> {
@@ -330,12 +385,11 @@ impl SandboxClient {
             bail!("lock heartbeat interval must be shorter than the ttl");
         }
 
-        let lease_id = Uuid::new_v4().to_string();
         let now = Utc::now();
         let lock = SandboxLockFile {
             kind: options.kind,
             holder: options.holder,
-            lease_id: lease_id.clone(),
+            lease_id: Uuid::new_v4().to_string(),
             hostname: options.hostname,
             message: options.message,
             started_at: now,
@@ -343,13 +397,13 @@ impl SandboxClient {
             expires_at: now + chrono::Duration::seconds(ttl_seconds),
             ttl_seconds,
         };
-        acquire_lock_file(self, sandbox_id, &lock, options.force_reclaim_stale)?;
+        let etag = acquire_lock_file(self, sandbox_id, &lock, options.force_reclaim_stale)?;
 
         let state = Arc::new(SandboxLockState {
             client: self.clone(),
             sandbox_id: sandbox_id.to_string(),
-            lease_id,
-            ttl_seconds,
+            template: lock,
+            etag: Mutex::new(etag),
             stop: AtomicBool::new(false),
             active: AtomicBool::new(true),
             released: AtomicBool::new(false),
@@ -390,98 +444,79 @@ impl SandboxClient {
         exec_id_from_location(location)
     }
 
-    fn collect_exec_output(&self, sandbox_id: &str, exec_id: &str) -> Result<ExecSyncOutput> {
-        let mut state = ExecStreamState::default();
-        let mut drops_without_progress = 0;
-        let mut busy_attempts = 0;
+    /// Poll the exec until it finishes. Transient poll failures are retried
+    /// (polling is stateless), so a network blip mid-command costs nothing.
+    fn poll_exec(&self, sandbox_id: &str, exec_id: &str, deadline: Duration) -> Result<ExecInfo> {
+        let started = std::time::Instant::now();
+        let mut delay = EXEC_POLL_INITIAL_DELAY;
+        let mut consecutive_failures = 0;
         loop {
-            let last_seen = state.last_event_id;
-            match self.stream_exec_events(sandbox_id, exec_id, &mut state)? {
-                StreamOutcome::Done(status) => {
-                    return Ok(ExecSyncOutput {
-                        stdout: String::from_utf8_lossy(&state.stdout).into_owned(),
-                        stderr: String::from_utf8_lossy(&state.stderr).into_owned(),
-                        exit_code: status.exit_code,
-                        duration_ms: status.duration_ms.min(i64::MAX as u64) as i64,
-                        timed_out: status.timed_out,
-                    });
-                }
-                StreamOutcome::Dropped => {
-                    busy_attempts = 0;
-                    if state.last_event_id != last_seen {
-                        drops_without_progress = 0;
+            match self.exec_info(sandbox_id, exec_id) {
+                Ok(info) if info.is_finished() => return Ok(info),
+                Ok(_) => consecutive_failures = 0,
+                Err(err) => {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= EXEC_POLL_MAX_CONSECUTIVE_FAILURES {
+                        return Err(err);
                     }
-                    drops_without_progress += 1;
-                    if drops_without_progress >= EXEC_STREAM_RECONNECT_ATTEMPTS {
-                        bail!(
-                            "Sandbox exec event stream disconnected before the command completed"
-                        );
-                    }
-                    thread::sleep(EXEC_STREAM_RECONNECT_DELAY);
-                }
-                // The previous connection's reader lease has not been reaped
-                // yet; this clears on its own, so wait it out on a separate,
-                // more patient budget than stream drops.
-                StreamOutcome::Busy => {
-                    busy_attempts += 1;
-                    if busy_attempts >= EXEC_STREAM_BUSY_ATTEMPTS {
-                        bail!("Sandbox exec event stream stayed locked by a previous reader");
-                    }
-                    thread::sleep(EXEC_STREAM_RECONNECT_DELAY);
+                    log::warn!("Failed to poll sandbox exec {exec_id}; retrying: {err:#}");
                 }
             }
+            if started.elapsed() > deadline {
+                bail!("Sandbox command did not finish within {deadline:?}");
+            }
+            thread::sleep(delay);
+            delay = (delay * 2).min(EXEC_POLL_MAX_DELAY);
         }
     }
 
-    /// Stream one events connection. `Dropped` means the stream ended before
-    /// the status event and the caller may reconnect (resuming after
-    /// `state.last_event_id`).
-    fn stream_exec_events(
-        &self,
-        sandbox_id: &str,
-        exec_id: &str,
-        state: &mut ExecStreamState,
-    ) -> Result<StreamOutcome> {
-        let mut events_endpoint =
-            format!("/exec/{}/events?encoding=base64", encode_segment(exec_id));
-        if let Some(after) = state.last_event_id {
-            events_endpoint.push_str(&format!("&after={after}"));
-        }
+    fn exec_info(&self, sandbox_id: &str, exec_id: &str) -> Result<ExecInfo> {
         let response = self.data_plane_request(sandbox_id, |http, base| {
-            // The blocking client applies the request timeout to each body
-            // read, so this acts as a read-idle guard on the event stream.
-            http.get(sandbox_endpoint_url(base, sandbox_id, &events_endpoint))
-                .timeout(READ_IDLE_TIMEOUT)
+            http.get(sandbox_endpoint_url(
+                base,
+                sandbox_id,
+                &format!("/exec/{}", encode_segment(exec_id)),
+            ))
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
         })?;
-        if response.status() == StatusCode::CONFLICT {
-            return Ok(StreamOutcome::Busy);
-        }
-        let response = ensure_data_plane_success(response)?;
+        ensure_data_plane_success(response)?
+            .json()
+            .context("Invalid sandbox exec info")
+    }
 
-        let mut events = SseReader::new(BufReader::new(response));
-        loop {
-            let event = match events.next_event() {
-                Ok(Some(event)) => event,
-                Ok(None) => return Ok(StreamOutcome::Dropped),
-                Err(err) => {
-                    log::warn!("Sandbox exec event stream was interrupted: {err}");
-                    return Ok(StreamOutcome::Dropped);
-                }
-            };
-            if let Some(id) = event.id.as_deref().and_then(|id| id.parse().ok()) {
-                state.last_event_id = Some(id);
-            }
-            match event.event.as_deref() {
-                Some("stdout") => append_capped(&mut state.stdout, &decode_exec_data(&event.data)?),
-                Some("stderr") => append_capped(&mut state.stderr, &decode_exec_data(&event.data)?),
-                Some("status") => {
-                    let status = serde_json::from_str(&event.data)
-                        .context("Invalid sandbox exec status event")?;
-                    return Ok(StreamOutcome::Done(status));
-                }
-                _ => {}
-            }
+    /// Read one of the output files a wrapped command left behind, refusing
+    /// to download runaway output.
+    fn fetch_exec_output(&self, sandbox_id: &str, output_id: &str, kind: &str) -> Result<String> {
+        let path = exec_output_path(output_id, kind);
+        let Some(stat) = self.stat(sandbox_id, &path)? else {
+            return Ok(String::new());
+        };
+        if stat.size == 0 {
+            return Ok(String::new());
         }
+        if stat.size > EXEC_MAX_OUTPUT_BYTES {
+            return Ok(format!(
+                "(sandbox command produced {} bytes of {kind} output; not downloaded)",
+                stat.size
+            ));
+        }
+        let bytes = self.read_file(sandbox_id, &path)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn stat(&self, sandbox_id: &str, path: &str) -> Result<Option<SandboxStat>> {
+        require_safe_absolute_path(path)?;
+        let response = self.data_plane_request(sandbox_id, |http, base| {
+            http.get(sandbox_fs_url(base, sandbox_id, "/fs/stat", path))
+                .timeout(DEFAULT_REQUEST_TIMEOUT)
+        })?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        ensure_data_plane_success(response)?
+            .json()
+            .map(Some)
+            .context("Invalid sandbox stat response")
     }
 
     fn cancel_exec(&self, sandbox_id: &str, exec_id: &str) -> Result<()> {
@@ -530,34 +565,18 @@ impl SandboxClient {
 
     fn access(&self, sandbox_id: &str) -> Result<SandboxAccess> {
         // The mutex is held across the mint so concurrent callers (sync
-        // workers, the lock heartbeat) share one refresh instead of
-        // stampeding the API; they all need the same token anyway.
+        // workers, the lock heartbeat) share one mint instead of stampeding
+        // the API; they all need the same token anyway.
         let mut cache = self
             .access
             .lock()
             .map_err(|_| anyhow!("sandbox access cache lock poisoned"))?;
-        if let Some(access) = cache.get(sandbox_id)
-            && !access.expires_soon()
-        {
+        if let Some(access) = cache.get(sandbox_id) {
             return Ok(access.clone());
         }
-        match self.mint_access(sandbox_id) {
-            Ok(access) => {
-                cache.insert(sandbox_id.to_string(), access.clone());
-                Ok(access)
-            }
-            // The refresh margin fires two minutes early, so a failed
-            // refresh is not fatal while the current token is still valid.
-            Err(err) => match cache.get(sandbox_id) {
-                Some(access) if !access.is_expired() => {
-                    log::warn!(
-                        "Failed to refresh sandbox access token; reusing the current one: {err:#}"
-                    );
-                    Ok(access.clone())
-                }
-                _ => Err(err),
-            },
-        }
+        let access = self.mint_access(sandbox_id)?;
+        cache.insert(sandbox_id.to_string(), access.clone());
+        Ok(access)
     }
 
     fn invalidate_access(&self, sandbox_id: &str) {
@@ -604,22 +623,50 @@ impl SandboxClient {
     }
 }
 
-#[derive(Default)]
-struct ExecStreamState {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    last_event_id: Option<u64>,
+/// `GET /fs/stat` — only the size is needed (to guard output downloads).
+#[derive(Debug, Clone, Deserialize)]
+struct SandboxStat {
+    size: u64,
 }
 
-enum StreamOutcome {
-    Done(ExecStatus),
-    Dropped,
-    Busy,
+enum WritePrecondition {
+    /// `If-None-Match: *` — write only if the file does not exist yet.
+    CreateOnly,
+    /// `If-Match: <etag>` — write only if the file is unchanged.
+    Match(String),
 }
 
-fn append_capped(buffer: &mut Vec<u8>, bytes: &[u8]) {
-    let remaining = EXEC_MAX_OUTPUT_BYTES.saturating_sub(buffer.len());
-    buffer.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+enum ConditionalWrite {
+    /// The write landed; holds the file's new etag.
+    Written(String),
+    /// 412 — another writer changed or created the file first.
+    PreconditionFailed,
+}
+
+fn header_string(
+    headers: &reqwest::header::HeaderMap,
+    name: reqwest::header::HeaderName,
+) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+/// Wrap a command so its output lands in files instead of the exec event
+/// queue (which backpressures the command after 1 MiB unless streamed).
+/// Output files from earlier runs are pruned opportunistically.
+fn wrapped_command(command: &str, output_id: &str) -> String {
+    format!(
+        "mkdir -p {dir} && find {dir} -type f -mmin +240 -delete 2>/dev/null; exec >{out} 2>{err}; {command}",
+        dir = EXEC_OUTPUT_DIR,
+        out = exec_output_path(output_id, "out"),
+        err = exec_output_path(output_id, "err"),
+    )
+}
+
+fn exec_output_path(output_id: &str, kind: &str) -> String {
+    format!("{EXEC_OUTPUT_DIR}/{output_id}.{kind}")
 }
 
 fn sandbox_endpoint_url(data_plane_url: &str, sandbox_id: &str, endpoint: &str) -> String {
@@ -660,71 +707,6 @@ fn exec_id_from_location(location: &str) -> Result<String> {
         .find(|segment| !segment.is_empty())
         .map(ToString::to_string)
         .context("Sandbox exec Location header did not include an exec id")
-}
-
-fn decode_exec_data(data: &str) -> Result<Vec<u8>> {
-    BASE64
-        .decode(data.trim())
-        .context("Invalid base64 in sandbox exec event")
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct SseEvent {
-    id: Option<String>,
-    event: Option<String>,
-    data: String,
-}
-
-/// Minimal SSE reader for the sandbox exec event stream. Comment lines
-/// (keep-alives) are skipped; events without data are ignored; a partial
-/// event cut off at EOF is dropped (the caller reconnects with `after`).
-struct SseReader<R> {
-    reader: R,
-}
-
-impl<R: BufRead> SseReader<R> {
-    fn new(reader: R) -> Self {
-        Self { reader }
-    }
-
-    fn next_event(&mut self) -> std::io::Result<Option<SseEvent>> {
-        let mut id = None;
-        let mut event = None;
-        let mut data: Vec<String> = Vec::new();
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if self.reader.read_line(&mut line)? == 0 {
-                return Ok(None);
-            }
-            let line = line.trim_end_matches('\n').trim_end_matches('\r');
-            if line.is_empty() {
-                if data.is_empty() {
-                    id = None;
-                    event = None;
-                    continue;
-                }
-                return Ok(Some(SseEvent {
-                    id,
-                    event,
-                    data: data.join("\n"),
-                }));
-            }
-            if line.starts_with(':') {
-                continue;
-            }
-            let (field, value) = match line.split_once(':') {
-                Some((field, value)) => (field, value.strip_prefix(' ').unwrap_or(value)),
-                None => (line, ""),
-            };
-            match field {
-                "id" => id = Some(value.to_string()),
-                "event" => event = Some(value.to_string()),
-                "data" => data.push(value.to_string()),
-                _ => {}
-            }
-        }
-    }
 }
 
 impl SandboxLockGuard {
@@ -796,55 +778,82 @@ fn heartbeat_loop(state: Arc<SandboxLockState>, interval: Duration, stop_rx: Rec
     }
 }
 
+/// Refresh the lock with a compare-and-swap write against the etag of our
+/// previous write. A 412 means another client took the lock.
 fn heartbeat_once(state: &SandboxLockState) -> Result<LockHeartbeat> {
-    let Some(current) = read_lock_file(&state.client, &state.sandbox_id)
-        .context("Failed to refresh sandbox lock")?
-    else {
-        return Ok(LockHeartbeat::Lost);
-    };
-    if current.lease_id != state.lease_id {
-        return Ok(LockHeartbeat::Lost);
-    }
-
     let now = Utc::now();
     let lock = SandboxLockFile {
         updated_at: now,
-        expires_at: now + chrono::Duration::seconds(state.ttl_seconds),
-        ttl_seconds: state.ttl_seconds,
-        ..current
+        expires_at: now + chrono::Duration::seconds(state.template.ttl_seconds),
+        ..state.template.clone()
     };
-    write_lock_file(&state.client, &state.sandbox_id, &lock)
+    let etag = state
+        .etag
+        .lock()
+        .map_err(|_| anyhow!("sandbox lock etag poisoned"))?
+        .clone();
+    let outcome = state
+        .client
+        .write_file_if(
+            &state.sandbox_id,
+            SANDBOX_LOCK_FILE_PATH,
+            &encode_lock_file(&lock)?,
+            &WritePrecondition::Match(etag),
+        )
         .context("Failed to refresh sandbox lock")?;
-    Ok(LockHeartbeat::Active)
+    match outcome {
+        ConditionalWrite::Written(new_etag) => {
+            *state
+                .etag
+                .lock()
+                .map_err(|_| anyhow!("sandbox lock etag poisoned"))? = new_etag;
+            Ok(LockHeartbeat::Active)
+        }
+        ConditionalWrite::PreconditionFailed => Ok(LockHeartbeat::Lost),
+    }
 }
 
 fn release_once(state: &SandboxLockState) -> Result<()> {
-    if let Some(current) = read_lock_file(&state.client, &state.sandbox_id)
+    if let Some((current, _)) = read_lock_file(&state.client, &state.sandbox_id)
         .context("Failed to release sandbox lock")?
-        && current.lease_id != state.lease_id
+        && current.lease_id != state.template.lease_id
     {
         return Ok(());
     }
     delete_lock_file(&state.client, &state.sandbox_id).context("Failed to release sandbox lock")
 }
 
+/// Take the lock atomically: create-only when no lock exists, or a
+/// compare-and-swap overwrite of a stale one. Returns the etag of our write.
 fn acquire_lock_file(
     client: &SandboxClient,
     sandbox_id: &str,
     lock: &SandboxLockFile,
     force_reclaim_stale: bool,
-) -> Result<()> {
-    client.mkdir_p(sandbox_id, "/home/sandbox/.diode")?;
-    if let Some(existing) = read_lock_file(client, sandbox_id)?
-        && (!force_reclaim_stale || !existing.is_stale())
-    {
-        bail!(
-            "Sandbox is already locked: existing lock is active ({})",
-            existing.holder
-        );
+) -> Result<String> {
+    let precondition = match read_lock_file(client, sandbox_id)? {
+        None => WritePrecondition::CreateOnly,
+        Some((existing, etag)) => {
+            if !force_reclaim_stale || !existing.is_stale() {
+                bail!(
+                    "Sandbox is already locked: existing lock is active ({})",
+                    existing.holder
+                );
+            }
+            WritePrecondition::Match(etag)
+        }
+    };
+    match client.write_file_if(
+        sandbox_id,
+        SANDBOX_LOCK_FILE_PATH,
+        &encode_lock_file(lock)?,
+        &precondition,
+    )? {
+        ConditionalWrite::Written(etag) => Ok(etag),
+        ConditionalWrite::PreconditionFailed => {
+            bail!("Sandbox is already locked: another client just acquired it")
+        }
     }
-
-    write_lock_file(client, sandbox_id, lock)
 }
 
 impl SandboxLockFile {
@@ -853,17 +862,21 @@ impl SandboxLockFile {
     }
 }
 
-fn read_lock_file(client: &SandboxClient, sandbox_id: &str) -> Result<Option<SandboxLockFile>> {
-    let Some(bytes) = client.read_file_optional(sandbox_id, SANDBOX_LOCK_FILE_PATH)? else {
+fn read_lock_file(
+    client: &SandboxClient,
+    sandbox_id: &str,
+) -> Result<Option<(SandboxLockFile, String)>> {
+    let Some((bytes, etag)) = client.read_file_with_etag(sandbox_id, SANDBOX_LOCK_FILE_PATH)?
+    else {
         return Ok(None);
     };
+    let etag = etag.context("Sandbox lock read response is missing an ETag header")?;
     let lock = serde_json::from_slice(&bytes).context("Failed to parse sandbox lock file")?;
-    Ok(Some(lock))
+    Ok(Some((lock, etag)))
 }
 
-fn write_lock_file(client: &SandboxClient, sandbox_id: &str, lock: &SandboxLockFile) -> Result<()> {
-    let bytes = serde_json::to_vec_pretty(lock).context("Failed to encode sandbox lock file")?;
-    client.write_file(sandbox_id, SANDBOX_LOCK_FILE_PATH, &bytes)
+fn encode_lock_file(lock: &SandboxLockFile) -> Result<Vec<u8>> {
+    serde_json::to_vec_pretty(lock).context("Failed to encode sandbox lock file")
 }
 
 fn delete_lock_file(client: &SandboxClient, sandbox_id: &str) -> Result<()> {
@@ -918,59 +931,6 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
 
-    fn read_all_events(input: &str) -> Vec<SseEvent> {
-        let mut reader = SseReader::new(input.as_bytes());
-        let mut events = Vec::new();
-        while let Some(event) = reader.next_event().unwrap() {
-            events.push(event);
-        }
-        events
-    }
-
-    #[test]
-    fn parses_sse_events() {
-        let events = read_all_events(
-            "id: 1\nevent: stdout\ndata: aGVsbG8=\n\nid: 2\nevent: status\ndata: {\"exitCode\":0}\n\n",
-        );
-        assert_eq!(
-            events,
-            vec![
-                SseEvent {
-                    id: Some("1".to_string()),
-                    event: Some("stdout".to_string()),
-                    data: "aGVsbG8=".to_string(),
-                },
-                SseEvent {
-                    id: Some("2".to_string()),
-                    event: Some("status".to_string()),
-                    data: "{\"exitCode\":0}".to_string(),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn sse_skips_keep_alive_comments_and_blank_lines() {
-        let events = read_all_events(":keep-alive\n\n\n:\n\nid: 7\nevent: stderr\ndata: b2g=\n\n");
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].id.as_deref(), Some("7"));
-        assert_eq!(events[0].event.as_deref(), Some("stderr"));
-        assert_eq!(events[0].data, "b2g=");
-    }
-
-    #[test]
-    fn sse_handles_crlf_and_multi_line_data() {
-        let events = read_all_events("event: status\r\ndata: {\r\ndata: }\r\n\r\n");
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].data, "{\n}");
-    }
-
-    #[test]
-    fn sse_drops_partial_event_at_eof() {
-        let events = read_all_events("id: 3\nevent: stdout\ndata: aGVsbG8=");
-        assert!(events.is_empty());
-    }
-
     #[test]
     fn extracts_exec_id_from_location() {
         assert_eq!(exec_id_from_location("/exec/abc123").unwrap(), "abc123");
@@ -986,14 +946,21 @@ mod tests {
     }
 
     #[test]
-    fn deserializes_exec_status() {
-        let status: ExecStatus = serde_json::from_str(
-            "{\"exitCode\":null,\"durationMs\":1200,\"timedOut\":true,\"canceled\":false}",
+    fn deserializes_exec_info() {
+        let info: ExecInfo = serde_json::from_str(
+            "{\"id\":\"e-1\",\"state\":\"exited\",\"durationMs\":1200,\"exitCode\":null,\"timedOut\":true,\"canceled\":false}",
         )
         .unwrap();
-        assert_eq!(status.exit_code, None);
-        assert_eq!(status.duration_ms, 1200);
-        assert!(status.timed_out);
+        assert!(info.is_finished());
+        assert_eq!(info.exit_code, None);
+        assert_eq!(info.duration_ms, 1200);
+        assert!(info.timed_out);
+
+        let running: ExecInfo = serde_json::from_str(
+            "{\"id\":\"e-1\",\"state\":\"running\",\"durationMs\":5,\"exitCode\":null,\"timedOut\":false,\"canceled\":false}",
+        )
+        .unwrap();
+        assert!(!running.is_finished());
     }
 
     #[test]
@@ -1011,28 +978,10 @@ mod tests {
     }
 
     #[test]
-    fn caps_accumulated_exec_output() {
-        let mut buffer = vec![0u8; EXEC_MAX_OUTPUT_BYTES - 2];
-        append_capped(&mut buffer, b"abcde");
-        assert_eq!(buffer.len(), EXEC_MAX_OUTPUT_BYTES);
-        assert_eq!(&buffer[EXEC_MAX_OUTPUT_BYTES - 2..], b"ab");
-        append_capped(&mut buffer, b"xyz");
-        assert_eq!(buffer.len(), EXEC_MAX_OUTPUT_BYTES);
-    }
-
-    #[test]
-    fn access_token_refresh_margin() {
-        let fresh = SandboxAccess {
-            token: "tok".to_string(),
-            expires_at: Utc::now().timestamp() + 600,
-            data_plane_url: "https://example.com".to_string(),
-        };
-        assert!(!fresh.expires_soon());
-        let expiring = SandboxAccess {
-            expires_at: Utc::now().timestamp() + 60,
-            ..fresh.clone()
-        };
-        assert!(expiring.expires_soon());
+    fn wraps_commands_with_output_redirection() {
+        let wrapped = wrapped_command("pcb layout 'main.zen'", "abc123");
+        assert!(wrapped.ends_with("; pcb layout 'main.zen'"));
+        assert!(wrapped.contains("exec >/tmp/.pcb-exec/abc123.out 2>/tmp/.pcb-exec/abc123.err"));
     }
 
     #[test]
