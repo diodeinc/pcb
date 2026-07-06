@@ -215,8 +215,8 @@ impl ContourSet {
     }
 
     /// Minkowski sum with a disk: `self ⊕ D_radius`. This is the standard
-    /// "buffer out" operation used for manufacturability checks: the filled
-    /// region is unioned with a round stroke around its boundary.
+    /// "buffer out" operation used for manufacturability checks, computed as
+    /// a round-join parallel offset of the region boundary.
     pub fn disk_dilate(&self, radius: f64) -> Self {
         if self.is_empty() || radius <= 0.0 {
             return self.clone();
@@ -420,5 +420,94 @@ mod tests {
             PathCmd::line_to(Point::new(min_x, max_y)),
             PathCmd::close(),
         ])
+    }
+
+    fn contour_from_vertices(vertices: &[[f64; 2]]) -> ContourBuf {
+        let mut cmds = Vec::with_capacity(vertices.len() + 1);
+        for (index, &[x, y]) in vertices.iter().enumerate() {
+            let point = Point::new(x, y);
+            cmds.push(if index == 0 {
+                PathCmd::move_to(point)
+            } else {
+                PathCmd::line_to(point)
+            });
+        }
+        cmds.push(PathCmd::close());
+        ContourBuf::new(cmds)
+    }
+
+    /// Regression: V-score relief tool-center region from a real board whose
+    /// boolean output carried sub-micrometer float-debris segments. Dilation
+    /// must handle it without panicking or losing the region.
+    #[test]
+    fn dilates_boolean_debris_with_submicron_segments() {
+        let contour = contour_from_vertices(&[
+            [38.0, 160.0],
+            [38.0, 156.894598],
+            [38.0171578, 156.764663],
+            [38.0503974, 156.684556],
+            [38.0504384, 156.684832],
+            [38.1270673, 157.070071],
+            [38.1389899, 157.117669],
+            [38.2530098, 157.493541],
+            [38.2695398, 157.539739],
+            [38.419852, 157.902626],
+            [38.4408314, 157.946984],
+            [38.6259894, 158.29339],
+            [38.6512156, 158.335477],
+            [38.8694365, 158.662066],
+            [38.8986657, 158.701478],
+            [39.1478457, 159.005105],
+            [39.1807983, 159.041462],
+            [39.4585402, 159.319203],
+            [39.4948957, 159.352154],
+            [39.7985227, 159.601335],
+            [39.8379354, 159.630565],
+            [40.1645255, 159.848785],
+            [40.2066116, 159.874011],
+            [40.5530176, 160.059169],
+            [40.5973749, 160.080148],
+            [40.9602618, 160.23046],
+            [41.0064602, 160.24699],
+            [41.3823323, 160.36101],
+            [41.4299297, 160.372933],
+            [41.8151686, 160.449562],
+            [41.8154452, 160.449603],
+            [41.735338, 160.482842],
+            [41.6054032, 160.5],
+            [38.5, 160.5],
+            [38.3675704, 160.482272],
+            [38.2503393, 160.433321],
+            [38.1464467, 160.353553],
+            [38.0666795, 160.249661],
+            [38.0177281, 160.13243],
+        ]);
+        let region = ContourSet::from_filled_contours(&[contour], tol::REGION_MM);
+
+        let grown = region.disk_dilate(0.5);
+
+        assert!(grown.area() > region.area());
+    }
+
+    /// Regression: minimal boundary fragment from a real board that crashed
+    /// an arc-preserving offset library's slice stitching when grown by the
+    /// route-tool radius.
+    #[test]
+    fn dilates_relief_boundary_fragment() {
+        let contour = contour_from_vertices(&[
+            [31.901232957840, 63.057707951027],
+            [31.859204053879, 63.115636036354],
+            [31.806460976601, 63.248603985268],
+            [31.793315052986, 63.391045973259],
+            [32.526947975159, 63.811510965782],
+            [32.643206000328, 63.728166029411],
+            [32.689244031906, 63.673370048958],
+            [33.861821055412, 62.191123053986],
+        ]);
+        let region = ContourSet::from_filled_contours(&[contour], tol::REGION_MM);
+
+        let grown = region.disk_dilate(0.5);
+
+        assert!(grown.area() > region.area());
     }
 }
