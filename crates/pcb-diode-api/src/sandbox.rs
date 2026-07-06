@@ -31,6 +31,15 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const FILE_TRANSFER_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const EXEC_STREAM_RECONNECT_ATTEMPTS: usize = 5;
 const EXEC_STREAM_RECONNECT_DELAY: Duration = Duration::from_secs(2);
+/// A dropped events connection can leave its reader lease held server-side
+/// until the data plane notices the dead socket via its keep-alive writes
+/// (~10-20s), during which reconnects get 409. Wait out a good multiple of
+/// that before giving up.
+const EXEC_STREAM_BUSY_ATTEMPTS: usize = 15;
+/// Cap accumulated exec output, mirroring the truncation the old exec_sync
+/// API applied server-side. Anything pcb parses (layout result JSON) is far
+/// below this; a runaway command must not balloon a sync session's memory.
+const EXEC_MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 /// The data plane sends SSE keep-alives every 10s; a much longer read stall
 /// means the connection is dead and we should reconnect.
 const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -57,6 +66,10 @@ struct SandboxAccess {
 impl SandboxAccess {
     fn expires_soon(&self) -> bool {
         Utc::now().timestamp() + ACCESS_TOKEN_REFRESH_MARGIN_SECS >= self.expires_at
+    }
+
+    fn is_expired(&self) -> bool {
+        Utc::now().timestamp() >= self.expires_at
     }
 }
 
@@ -379,11 +392,12 @@ impl SandboxClient {
 
     fn collect_exec_output(&self, sandbox_id: &str, exec_id: &str) -> Result<ExecSyncOutput> {
         let mut state = ExecStreamState::default();
-        let mut attempts_without_progress = 0;
+        let mut drops_without_progress = 0;
+        let mut busy_attempts = 0;
         loop {
             let last_seen = state.last_event_id;
             match self.stream_exec_events(sandbox_id, exec_id, &mut state)? {
-                Some(status) => {
+                StreamOutcome::Done(status) => {
                     return Ok(ExecSyncOutput {
                         stdout: String::from_utf8_lossy(&state.stdout).into_owned(),
                         stderr: String::from_utf8_lossy(&state.stderr).into_owned(),
@@ -392,15 +406,26 @@ impl SandboxClient {
                         timed_out: status.timed_out,
                     });
                 }
-                None => {
+                StreamOutcome::Dropped => {
+                    busy_attempts = 0;
                     if state.last_event_id != last_seen {
-                        attempts_without_progress = 0;
+                        drops_without_progress = 0;
                     }
-                    attempts_without_progress += 1;
-                    if attempts_without_progress >= EXEC_STREAM_RECONNECT_ATTEMPTS {
+                    drops_without_progress += 1;
+                    if drops_without_progress >= EXEC_STREAM_RECONNECT_ATTEMPTS {
                         bail!(
                             "Sandbox exec event stream disconnected before the command completed"
                         );
+                    }
+                    thread::sleep(EXEC_STREAM_RECONNECT_DELAY);
+                }
+                // The previous connection's reader lease has not been reaped
+                // yet; this clears on its own, so wait it out on a separate,
+                // more patient budget than stream drops.
+                StreamOutcome::Busy => {
+                    busy_attempts += 1;
+                    if busy_attempts >= EXEC_STREAM_BUSY_ATTEMPTS {
+                        bail!("Sandbox exec event stream stayed locked by a previous reader");
                     }
                     thread::sleep(EXEC_STREAM_RECONNECT_DELAY);
                 }
@@ -408,15 +433,15 @@ impl SandboxClient {
         }
     }
 
-    /// Stream one events connection. `Ok(Some(status))` means the exec
-    /// finished; `Ok(None)` means the stream dropped before the status event
-    /// and the caller may reconnect (resuming after `state.last_event_id`).
+    /// Stream one events connection. `Dropped` means the stream ended before
+    /// the status event and the caller may reconnect (resuming after
+    /// `state.last_event_id`).
     fn stream_exec_events(
         &self,
         sandbox_id: &str,
         exec_id: &str,
         state: &mut ExecStreamState,
-    ) -> Result<Option<ExecStatus>> {
+    ) -> Result<StreamOutcome> {
         let mut events_endpoint =
             format!("/exec/{}/events?encoding=base64", encode_segment(exec_id));
         if let Some(after) = state.last_event_id {
@@ -428,9 +453,8 @@ impl SandboxClient {
             http.get(sandbox_endpoint_url(base, sandbox_id, &events_endpoint))
                 .timeout(READ_IDLE_TIMEOUT)
         })?;
-        // The previous connection's reader lease may not be reaped yet.
         if response.status() == StatusCode::CONFLICT {
-            return Ok(None);
+            return Ok(StreamOutcome::Busy);
         }
         let response = ensure_data_plane_success(response)?;
 
@@ -438,26 +462,22 @@ impl SandboxClient {
         loop {
             let event = match events.next_event() {
                 Ok(Some(event)) => event,
-                Ok(None) => return Ok(None),
+                Ok(None) => return Ok(StreamOutcome::Dropped),
                 Err(err) => {
                     log::warn!("Sandbox exec event stream was interrupted: {err}");
-                    return Ok(None);
+                    return Ok(StreamOutcome::Dropped);
                 }
             };
             if let Some(id) = event.id.as_deref().and_then(|id| id.parse().ok()) {
                 state.last_event_id = Some(id);
             }
             match event.event.as_deref() {
-                Some("stdout") => state
-                    .stdout
-                    .extend_from_slice(&decode_exec_data(&event.data)?),
-                Some("stderr") => state
-                    .stderr
-                    .extend_from_slice(&decode_exec_data(&event.data)?),
+                Some("stdout") => append_capped(&mut state.stdout, &decode_exec_data(&event.data)?),
+                Some("stderr") => append_capped(&mut state.stderr, &decode_exec_data(&event.data)?),
                 Some("status") => {
                     let status = serde_json::from_str(&event.data)
                         .context("Invalid sandbox exec status event")?;
-                    return Ok(Some(status));
+                    return Ok(StreamOutcome::Done(status));
                 }
                 _ => {}
             }
@@ -509,6 +529,9 @@ impl SandboxClient {
     }
 
     fn access(&self, sandbox_id: &str) -> Result<SandboxAccess> {
+        // The mutex is held across the mint so concurrent callers (sync
+        // workers, the lock heartbeat) share one refresh instead of
+        // stampeding the API; they all need the same token anyway.
         let mut cache = self
             .access
             .lock()
@@ -518,9 +541,23 @@ impl SandboxClient {
         {
             return Ok(access.clone());
         }
-        let access = self.mint_access(sandbox_id)?;
-        cache.insert(sandbox_id.to_string(), access.clone());
-        Ok(access)
+        match self.mint_access(sandbox_id) {
+            Ok(access) => {
+                cache.insert(sandbox_id.to_string(), access.clone());
+                Ok(access)
+            }
+            // The refresh margin fires two minutes early, so a failed
+            // refresh is not fatal while the current token is still valid.
+            Err(err) => match cache.get(sandbox_id) {
+                Some(access) if !access.is_expired() => {
+                    log::warn!(
+                        "Failed to refresh sandbox access token; reusing the current one: {err:#}"
+                    );
+                    Ok(access.clone())
+                }
+                _ => Err(err),
+            },
+        }
     }
 
     fn invalidate_access(&self, sandbox_id: &str) {
@@ -572,6 +609,17 @@ struct ExecStreamState {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     last_event_id: Option<u64>,
+}
+
+enum StreamOutcome {
+    Done(ExecStatus),
+    Dropped,
+    Busy,
+}
+
+fn append_capped(buffer: &mut Vec<u8>, bytes: &[u8]) {
+    let remaining = EXEC_MAX_OUTPUT_BYTES.saturating_sub(buffer.len());
+    buffer.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
 }
 
 fn sandbox_endpoint_url(data_plane_url: &str, sandbox_id: &str, endpoint: &str) -> String {
@@ -960,6 +1008,16 @@ mod tests {
         assert_eq!(listing.entries[0].size, Some(42));
         assert_eq!(listing.entries[1].kind, "directory");
         assert_eq!(listing.entries[1].mtime, None);
+    }
+
+    #[test]
+    fn caps_accumulated_exec_output() {
+        let mut buffer = vec![0u8; EXEC_MAX_OUTPUT_BYTES - 2];
+        append_capped(&mut buffer, b"abcde");
+        assert_eq!(buffer.len(), EXEC_MAX_OUTPUT_BYTES);
+        assert_eq!(&buffer[EXEC_MAX_OUTPUT_BYTES - 2..], b"ab");
+        append_capped(&mut buffer, b"xyz");
+        assert_eq!(buffer.len(), EXEC_MAX_OUTPUT_BYTES);
     }
 
     #[test]

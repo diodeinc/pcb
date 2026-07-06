@@ -84,6 +84,33 @@ fn re_mints_token_within_expiry_margin() {
 }
 
 #[test]
+fn falls_back_to_cached_token_when_refresh_fails() {
+    let server = MockServer::start();
+    // Valid for another 90s — inside the 2-minute refresh margin, so every
+    // call attempts a refresh, but the token itself is still usable.
+    let mut mint = mock_mint(&server, "stale-token", 90);
+    let read = server.mock(|when, then| {
+        when.method(GET)
+            .path("/sandboxes/sbx_1/fs/read")
+            .header("authorization", "Bearer stale-token");
+        then.status(200).body("ok");
+    });
+
+    let client = client_for(&server);
+    client.read_file(SANDBOX, "/home/sandbox/main.zen").unwrap();
+    mint.assert_calls(1);
+    mint.delete();
+    let failing_mint = server.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+        then.status(500);
+    });
+
+    client.read_file(SANDBOX, "/home/sandbox/main.zen").unwrap();
+    read.assert_calls(2);
+    failing_mint.assert_calls(1);
+}
+
+#[test]
 fn re_mints_once_when_data_plane_rejects_the_token() {
     let server = MockServer::start();
     let mint = mock_mint(&server, "rejected-token", 20 * 60);
