@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use clap::ValueEnum;
 
 use super::board_array::BoardMarginMm;
+use crate::utils::format::fmt_num;
 
 const AUTO_SHEETS: [AutoSheetSize; 4] = [
     AutoSheetSize::A7,
@@ -220,36 +221,18 @@ fn axis_count(usable_span: f64, cell_span: f64) -> Option<u32> {
     (count >= 1).then_some(count)
 }
 
+/// Rank plans by board count, then by more balanced edge rails, then by
+/// preferring a landscape sheet.
 fn compare_auto_plan(a: &AutoBoardArrayPlan, b: &AutoBoardArrayPlan) -> Ordering {
-    board_count(a)
-        .cmp(&board_count(b))
-        .then_with(|| {
-            rail_imbalance(b)
-                .partial_cmp(&rail_imbalance(a))
-                .unwrap_or(Ordering::Equal)
-        })
-        .then_with(|| orientation_priority(a).cmp(&orientation_priority(b)))
-}
+    let count = |plan: &AutoBoardArrayPlan| plan.columns * plan.rows;
+    let imbalance =
+        |plan: &AutoBoardArrayPlan| (plan.edge_rail_mm.right - plan.edge_rail_mm.top).abs();
+    let landscape = |plan: &AutoBoardArrayPlan| plan.target.width > plan.target.height;
 
-fn board_count(plan: &AutoBoardArrayPlan) -> u32 {
-    plan.columns * plan.rows
-}
-
-fn rail_imbalance(plan: &AutoBoardArrayPlan) -> f64 {
-    (plan.edge_rail_mm.right - plan.edge_rail_mm.top).abs()
-}
-
-fn orientation_priority(plan: &AutoBoardArrayPlan) -> u8 {
-    if plan.target.width > plan.target.height {
-        1
-    } else {
-        0
-    }
-}
-
-fn fmt_num(value: f64) -> String {
-    let text = format!("{value:.3}");
-    text.trim_end_matches('0').trim_end_matches('.').to_string()
+    count(a)
+        .cmp(&count(b))
+        .then_with(|| imbalance(b).total_cmp(&imbalance(a)))
+        .then_with(|| landscape(a).cmp(&landscape(b)))
 }
 
 fn fmt_margin(margin: BoardMarginMm) -> String {

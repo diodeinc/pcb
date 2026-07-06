@@ -208,8 +208,9 @@ impl<'a> IpcAccessor<'a> {
 ///
 /// Handles HTML-encoded JSON like: {&quot;mpn&quot;: &quot;...&quot;, &quot;manufacturer&quot;: &quot;...&quot;}
 fn parse_alternative_json(json_str: &str) -> Option<Alternative> {
-    // Decode HTML entities using quick-xml
-    let decoded = quick_xml::escape::unescape(json_str).ok()?.to_string();
+    // The JSON arrives double-encoded: XML parsing already decoded one layer,
+    // leaving entity references that need a second decode.
+    let decoded = decode_xml_entities(json_str);
 
     // Parse as JSON
     let parsed: serde_json::Value = serde_json::from_str(&decoded).ok()?;
@@ -219,4 +220,39 @@ fn parse_alternative_json(json_str: &str) -> Option<Alternative> {
     let manufacturer = parsed.get("manufacturer")?.as_str()?.to_string();
 
     Some(Alternative { mpn, manufacturer })
+}
+
+/// Decode the predefined XML entities and numeric character references.
+/// Unrecognized entities are left as-is.
+fn decode_xml_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let Some(semi) = rest.find(';') else {
+            break;
+        };
+        match &rest[1..semi] {
+            "quot" => out.push('"'),
+            "amp" => out.push('&'),
+            "apos" => out.push('\''),
+            "lt" => out.push('<'),
+            "gt" => out.push('>'),
+            entity => {
+                let code = entity
+                    .strip_prefix("#x")
+                    .or_else(|| entity.strip_prefix("#X"))
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                    .or_else(|| entity.strip_prefix('#').and_then(|dec| dec.parse().ok()));
+                match code.and_then(char::from_u32) {
+                    Some(ch) => out.push(ch),
+                    None => out.push_str(&rest[..=semi]),
+                }
+            }
+        }
+        rest = &rest[semi + 1..];
+    }
+    out.push_str(rest);
+    out
 }

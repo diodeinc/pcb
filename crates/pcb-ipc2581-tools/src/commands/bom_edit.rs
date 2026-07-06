@@ -341,28 +341,28 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
         items: avl_items,
     };
 
-    // Patch LogisticHeader first to add new Enterprise entries
-    let mut updated_xml = content;
+    // One parse serves the history append, the LogisticHeader patch, and
+    // the AVL replacement; all edits splice in a single pass.
+    let doc = ipc2581::edit::Doc::parse(&content)?;
+    let comment = format!(
+        "BOM alternatives added ({} items, {} total alternatives)",
+        num_items, num_alternatives
+    );
+    let mut edits = crate::utils::history::file_revision_edits(&doc, &comment)?;
     if !enterprise_registry.new_enterprises.is_empty() {
-        updated_xml = patch_logistic_header(&updated_xml, &enterprise_registry.new_enterprises)?;
+        edits.extend(logistic_header_edit(
+            &doc,
+            &enterprise_registry.new_enterprises,
+        ));
         eprintln!(
             "Added {} new Enterprise entries to LogisticHeader",
             enterprise_registry.new_enterprises.len()
         );
     }
+    edits.push(avl_section_edit(&doc, avl.to_xml(&interner))?);
 
-    // Then patch AVL section
-    updated_xml = patch_or_add_avl_section(&updated_xml, &avl.to_xml(&interner))?;
-
-    // Append FileRevision to HistoryRecord per IPC-2581C spec
-    let comment = format!(
-        "BOM alternatives added ({} items, {} total alternatives)",
-        num_items, num_alternatives
-    );
-    updated_xml = crate::utils::history::append_file_revision(&updated_xml, &comment)?;
-
-    // Reformat XML with proper indentation
-    updated_xml = crate::utils::format::reformat_xml(&updated_xml)?;
+    let updated_xml = ipc2581::edit::apply(&content, edits)?;
+    let updated_xml = crate::utils::format::reformat_xml(&updated_xml)?;
 
     file_utils::save_ipc_file(output.unwrap_or(file), &updated_xml)?;
 
@@ -370,108 +370,51 @@ pub fn execute(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<
     Ok(())
 }
 
-/// Patch LogisticHeader to add new Enterprise entries (before Person or closing tag)
-fn patch_logistic_header(
-    original_xml: &str,
+/// Add new Enterprise entries to LogisticHeader (before Person or closing tag)
+fn logistic_header_edit(
+    doc: &ipc2581::edit::Doc,
     new_enterprises: &[(String, String)],
-) -> Result<String> {
-    use quick_xml::{
-        Reader, Writer,
-        events::{BytesStart, Event},
-    };
-    use std::io::Cursor;
+) -> Option<ipc2581::edit::Edit> {
+    let root = doc.root().ok()?;
+    let header = doc.child(root, "LogisticHeader")?;
 
-    let mut reader = Reader::from_str(original_xml);
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let mut buf = Vec::new();
-    let (mut in_header, mut inserted) = (false, false);
-
-    loop {
-        match reader.read_event_into(&mut buf)? {
-            Event::Eof => break,
-            Event::Start(ref e) if e.name().as_ref() == b"LogisticHeader" => {
-                in_header = true;
-                writer.write_event(Event::Start(e.to_owned()))?;
-            }
-            Event::Empty(ref e) | Event::Start(ref e)
-                if in_header && !inserted && e.name().as_ref() == b"Person" =>
-            {
-                for (id, name) in new_enterprises {
-                    let mut elem = BytesStart::new("Enterprise");
-                    elem.push_attribute(("id", id.as_str()));
-                    elem.push_attribute(("name", name.as_str()));
-                    elem.push_attribute(("code", "NONE"));
-                    writer.write_event(Event::Empty(elem))?;
-                }
-                inserted = true;
-                writer.write_event(Event::Empty(e.to_owned()).into_owned())?;
-            }
-            Event::End(ref e) if e.name().as_ref() == b"LogisticHeader" => {
-                if !inserted {
-                    for (id, name) in new_enterprises {
-                        let mut elem = BytesStart::new("Enterprise");
-                        elem.push_attribute(("id", id.as_str()));
-                        elem.push_attribute(("name", name.as_str()));
-                        elem.push_attribute(("code", "NONE"));
-                        writer.write_event(Event::Empty(elem))?;
-                    }
-                }
-                writer.write_event(Event::End(e.to_owned()))?;
-            }
-            e => writer.write_event(e)?,
-        }
-        buf.clear();
+    let mut writer = ipc2581::XmlWriter::new();
+    for (id, name) in new_enterprises {
+        writer.empty_element(
+            "Enterprise",
+            &[
+                ("id", id.as_str()),
+                ("name", name.as_str()),
+                ("code", "NONE"),
+            ],
+        );
     }
+    let enterprises_xml = writer.into_string();
 
-    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+    Some(match doc.child(header, "Person") {
+        Some(person) => doc.insert_before(person, enterprises_xml),
+        None => doc.append_inside(header, enterprises_xml),
+    })
 }
 
-/// Patch AVL section in XML using quick-xml
-fn patch_or_add_avl_section(original_xml: &str, new_avl_xml: &str) -> Result<String> {
-    use quick_xml::{Reader, Writer, events::Event};
-    use std::io::{Cursor, Write};
-
-    let mut reader = Reader::from_str(original_xml);
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let mut buf = Vec::new();
-    let (mut skip_depth, mut avl_added) = (0, false);
-
-    loop {
-        match reader.read_event_into(&mut buf)? {
-            Event::Eof => break,
-            Event::Start(e) if e.name().as_ref() == b"Avl" && skip_depth == 0 => {
-                skip_depth = 1;
-                avl_added = true;
-                writer.get_mut().write_all(new_avl_xml.as_bytes())?;
-            }
-            Event::Start(_) if skip_depth > 0 => skip_depth += 1,
-            Event::End(e) if skip_depth > 0 => {
-                skip_depth -= 1;
-                if skip_depth == 0 && e.name().as_ref() != b"Avl" {
-                    writer.write_event(Event::End(e))?;
-                }
-            }
-            Event::End(e) if e.name().as_ref() == b"IPC-2581" => {
-                if !avl_added {
-                    writer.get_mut().write_all(new_avl_xml.as_bytes())?;
-                }
-                writer.write_event(Event::End(e))?;
-            }
-            Event::Empty(e) if e.name().as_ref() == b"Avl" => {
-                avl_added = true;
-                writer.get_mut().write_all(new_avl_xml.as_bytes())?;
-            }
-            e if skip_depth == 0 => writer.write_event(e)?,
-            _ => {}
-        }
-        buf.clear();
-    }
-    Ok(String::from_utf8(writer.into_inner().into_inner())?)
+/// Replace the Avl section (or add one before the document end)
+fn avl_section_edit(doc: &ipc2581::edit::Doc, new_avl_xml: String) -> Result<ipc2581::edit::Edit> {
+    let root = doc.root()?;
+    Ok(match doc.child(root, "Avl") {
+        Some(avl) => doc.replace(avl, new_avl_xml),
+        None => doc.append_inside(root, new_avl_xml),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn patch_avl(original: &str, new_avl: &str) -> String {
+        let doc = ipc2581::edit::Doc::parse(original).unwrap();
+        let edit = avl_section_edit(&doc, new_avl.to_string()).unwrap();
+        ipc2581::edit::apply(original, vec![edit]).unwrap()
+    }
 
     #[test]
     fn test_patch_or_add_avl_when_missing() {
@@ -482,7 +425,7 @@ mod tests {
 
         let new_avl = "  <Avl name=\"Test\">\n  </Avl>\n";
 
-        let result = patch_or_add_avl_section(original, new_avl).unwrap();
+        let result = patch_avl(original, new_avl);
 
         assert!(result.contains("<Avl name=\"Test\">"));
         assert!(result.contains("</Avl>"));
@@ -502,7 +445,7 @@ mod tests {
 
         let new_avl = "  <Avl name=\"New\">\n    <AvlItem OEMDesignNumber=\"NEW\"/>\n  </Avl>\n";
 
-        let result = patch_or_add_avl_section(original, new_avl).unwrap();
+        let result = patch_avl(original, new_avl);
 
         assert!(result.contains("<Avl name=\"New\">"));
         assert!(result.contains("OEMDesignNumber=\"NEW\""));

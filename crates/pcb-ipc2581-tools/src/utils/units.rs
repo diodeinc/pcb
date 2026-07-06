@@ -1,3 +1,4 @@
+use pcb_ir::geom::Unit;
 use serde::{Deserialize, Serialize};
 
 use crate::UnitFormat;
@@ -22,12 +23,12 @@ impl Length {
 
     /// Get value in inches
     pub fn inch(&self) -> f64 {
-        self.0 / 25.4
+        Unit::Inch.from_mm(self.0)
     }
 
     /// Get value in mils (thousandths of an inch)
     pub fn mil(&self) -> f64 {
-        self.0 * 39.370_078_74
+        Unit::Inch.from_mm(self.0) * 1000.0
     }
 }
 
@@ -42,8 +43,8 @@ impl From<f64> for Length {
 pub fn convert_mm(mm: f64, format: UnitFormat) -> String {
     match format {
         UnitFormat::Mm => format!("{:.2}mm", mm),
-        UnitFormat::Mil => format!("{:.1}mil", mm * 39.3701), // 1mm = 39.3701 mils
-        UnitFormat::Inch => format!("{:.4}in", mm / 25.4),    // 1in = 25.4mm
+        UnitFormat::Mil => format!("{:.1}mil", Length(mm).mil()),
+        UnitFormat::Inch => format!("{:.4}in", Length(mm).inch()),
     }
 }
 
@@ -51,15 +52,15 @@ pub fn convert_mm(mm: f64, format: UnitFormat) -> String {
 pub fn format_board_size(width_mm: f64, height_mm: f64, format: UnitFormat) -> String {
     match format {
         UnitFormat::Mm => format!("{:.2}mm × {:.2}mm", width_mm, height_mm),
-        UnitFormat::Mil => {
-            let width_mil = width_mm * 39.3701;
-            let height_mil = height_mm * 39.3701;
-            format!("{:.1}mil × {:.1}mil", width_mil, height_mil)
-        }
-        UnitFormat::Inch => {
-            let width_in = width_mm / 25.4;
-            let height_in = height_mm / 25.4;
-            format!("{:.4}in × {:.4}in", width_in, height_in)
-        }
+        UnitFormat::Mil => format!(
+            "{:.1}mil × {:.1}mil",
+            Length(width_mm).mil(),
+            Length(height_mm).mil()
+        ),
+        UnitFormat::Inch => format!(
+            "{:.4}in × {:.4}in",
+            Length(width_mm).inch(),
+            Length(height_mm).inch()
+        ),
     }
 }

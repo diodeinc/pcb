@@ -1,6 +1,9 @@
-// Simple string interner for IPC-2581 parsing
-// Deduplicates repeated identifiers (layer names, material specs, etc.)
-// Derived from: https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html
+//! Simple string interner for format parsing.
+//!
+//! Deduplicates repeated identifiers (layer names, attribute fields, material
+//! specs, ...) into copyable [`Symbol`] handles resolved through the owning
+//! [`Interner`]. Derived from
+//! <https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html>.
 
 use std::collections::HashMap;
 
@@ -80,7 +83,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn basic_interning() {
+    fn interning_deduplicates() {
         let mut interner = Interner::new();
         let x1 = interner.intern("Circle");
         let x2 = interner.intern("Circle");
@@ -89,7 +92,7 @@ mod tests {
     }
 
     #[test]
-    fn different_strings() {
+    fn different_strings_get_distinct_symbols() {
         let mut interner = Interner::new();
         let circle = interner.intern("Circle");
         let rect = interner.intern("RectRound");
@@ -99,12 +102,13 @@ mod tests {
     }
 
     #[test]
-    fn deduplication() {
-        let mut interner = Interner::new();
-        let s1 = interner.intern("repeated");
-        let s2 = interner.intern("unique");
-        let s3 = interner.intern("repeated");
-        assert_eq!(s1, s3);
-        assert_ne!(s1, s2);
+    fn survives_buffer_growth() {
+        let mut interner = Interner::with_capacity(4);
+        let symbols = (0..64)
+            .map(|index| interner.intern(&format!("symbol-{index}")))
+            .collect::<Vec<_>>();
+        for (index, symbol) in symbols.iter().enumerate() {
+            assert_eq!(interner.resolve(*symbol), format!("symbol-{index}"));
+        }
     }
 }

@@ -25,6 +25,7 @@ mimalloc = "0.1"
 similar = "3"
 
 ipc2581 = { path = "crates/ipc2581", version = "0.3.3" }
+pcb-intern = { path = "crates/pcb-intern", version = "0.1.0" }
 gerberx2 = { path = "crates/gerberx2", version = "0.1.2" }
 pcb-ir = { path = "crates/pcb-ir", version = "0.3.82" }
 pcb-command-runner = { path = "crates/pcb-command-runner" }
@@ -126,7 +127,7 @@ tar = { version = "0.4", default-features = false }
 ruzstd = "0.8"
 terminal_size = "0.4.0"
 terminal_hyperlink = "0.1"
-uppsala = "0.4"
+uppsala = "0.8.0"
 termimad = "0.34"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig"] }
 textwrap = "0.16"
@@ -143,7 +144,6 @@ ignore = "0.4"
 i_overlay = "6"
 sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }
-quick-xml = "0.39"
 kurbo = "0.13"
 resvg = "0.47"
 zstd = "0.13"

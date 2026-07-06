@@ -1,12 +1,14 @@
 // Pure IPC-2581 parser modules
 mod checksum;
-mod intern;
+pub mod edit;
 mod parse;
 pub mod types;
 pub mod units;
+pub mod write;
 
-pub use intern::{Interner, Symbol};
+pub use pcb_intern::{Interner, Symbol};
 pub use types::*;
+pub use uppsala::XmlWriter;
 
 use checksum::validate_checksum;
 use parse::Parser;

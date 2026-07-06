@@ -14,7 +14,6 @@ colored = { workspace = true }
 comfy-table = { workspace = true }
 ipc2581 = { workspace = true }
 gerberx2 = { workspace = true }
-i_overlay = { workspace = true }
 jiff = { workspace = true }
 log = { workspace = true }
 minijinja = { workspace = true }
@@ -23,7 +22,7 @@ pcb-ir = { workspace = true }
 pcb-sch = { workspace = true, features = ["table"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-quick-xml = { workspace = true }
+uppsala = { workspace = true }
 zstd = { workspace = true }
 pcb-diode-api = { workspace = true }
 pcb-ui = { workspace = true }

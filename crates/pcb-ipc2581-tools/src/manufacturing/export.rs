@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use gerberx2::GerberLayer;
 use ipc2581::Ipc2581;
-use pcb_ir::dialects::ipc::GeometryView;
+use pcb_ir::dialects::ipc::View;
 use zip::{ZipWriter, write::FileOptions};
 
 use crate::{gerber, ipc2581 as ipc};
@@ -13,7 +13,7 @@ use crate::{gerber, ipc2581 as ipc};
 #[derive(Debug, Clone)]
 pub struct ManufacturingExportOptions {
     pub output: PathBuf,
-    pub view: GeometryView,
+    pub view: View,
     pub relief_debug_dir: Option<PathBuf>,
 }
 
@@ -44,10 +44,7 @@ pub fn export_manufacturing_package(
     Ok(package)
 }
 
-pub fn build_manufacturing_package(
-    ipc: &Ipc2581,
-    view: GeometryView,
-) -> Result<ManufacturingPackage> {
+pub fn build_manufacturing_package(ipc: &Ipc2581, view: View) -> Result<ManufacturingPackage> {
     build_manufacturing_package_inner(ipc, view, None)
 }
 
@@ -60,10 +57,10 @@ pub fn build_manufacturing_package_with_options(
 
 fn build_manufacturing_package_inner(
     ipc: &Ipc2581,
-    view: GeometryView,
+    view: View,
     relief_debug_dir: Option<&Path>,
 ) -> Result<ManufacturingPackage> {
-    if view == GeometryView::LayoutSymbolic {
+    if view == View::LayoutSymbolic {
         bail!(
             "manufacturing export does not support symbolic layout view; use board or board-array"
         );

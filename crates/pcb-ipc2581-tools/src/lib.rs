@@ -6,6 +6,7 @@ pub mod board_array;
 pub mod commands;
 pub mod geometry;
 pub mod gerber;
+pub mod layers;
 pub mod manufacturing;
 pub mod placement;
 mod steps;
@@ -44,11 +45,11 @@ pub enum LayoutTarget {
 }
 
 impl LayoutTarget {
-    pub fn geometry_view(self) -> pcb_ir::dialects::ipc::GeometryView {
+    pub fn geometry_view(self) -> pcb_ir::dialects::ipc::View {
         match self {
-            Self::Board => pcb_ir::dialects::ipc::GeometryView::Board,
-            Self::BoardArray => pcb_ir::dialects::ipc::GeometryView::ArrayFlattened,
-            Self::Layout => pcb_ir::dialects::ipc::GeometryView::LayoutSymbolic,
+            Self::Board => pcb_ir::dialects::ipc::View::Board,
+            Self::BoardArray => pcb_ir::dialects::ipc::View::ArrayFlattened,
+            Self::Layout => pcb_ir::dialects::ipc::View::LayoutSymbolic,
         }
     }
 }

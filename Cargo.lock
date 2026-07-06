@@ -2379,9 +2379,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8dba84198cf199c11b83f1cb9243eaeb70dc50b719d2835ebf34bf2481bca010"
 
 [[package]]
+name = "gerber-types"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42103f088f731446755617a73b8d3a80633bd447317e6e1661195abac35150aa"
+dependencies = [
+ "chrono",
+ "num-rational",
+ "strum",
+ "strum_macros",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "gerber_parser"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73f675010c0dda2e38b3f276c45d96e743758929d4e6ae81052dcde35daf8dc1"
+dependencies = [
+ "anyhow",
+ "gerber-types",
+ "lazy-regex",
+ "log",
+ "regex",
+ "strum",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gerberx2"
 version = "0.1.2"
 dependencies = [
+ "gerber_parser",
+ "pcb-intern",
  "pcb-ir",
  "thiserror 2.0.18",
 ]
@@ -3178,7 +3209,7 @@ dependencies = [
  "base64",
  "hex",
  "md-5",
- "quick-xml",
+ "pcb-intern",
  "thiserror 2.0.18",
  "uppsala",
  "zstd",
@@ -4107,6 +4138,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -4583,6 +4615,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-intern"
+version = "0.1.0"
+
+[[package]]
 name = "pcb-ipc2581-tools"
 version = "0.4.4"
 dependencies = [
@@ -4592,7 +4628,6 @@ dependencies = [
  "colored",
  "comfy-table",
  "gerberx2",
- "i_overlay",
  "ipc2581",
  "jiff",
  "log",
@@ -4602,9 +4637,9 @@ dependencies = [
  "pcb-ir",
  "pcb-sch",
  "pcb-ui",
- "quick-xml",
  "serde",
  "serde_json",
+ "uppsala",
  "zip 8.5.1",
  "zstd",
 ]
@@ -5298,15 +5333,6 @@ name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
-
-[[package]]
-name = "quick-xml"
-version = "0.39.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "958f21e8e7ceb5a1aa7fa87fab28e7c75976e0bfe7e23ff069e0a260f894067d"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "quinn"
@@ -8015,9 +8041,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uppsala"
-version = "0.4.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d87ccb81b1e9ddc119871ecbd40a5e93f173f0777838db1e8c0dec223ae3c49"
+checksum = "c9eb84142190cfb1c6099f0285636be7149a6ffb343b4bedbb0f0ab050d2dc54"
 
 [[package]]
 name = "ureq"

@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use ipc2581::types::ecad::Layer;
 use minijinja::{Environment, context};
-use pcb_ir::dialects::ipc::{GeometryView, ProfileSet};
+use pcb_ir::dialects::ipc::{ProfileSet, View};
 use serde::Serialize;
 
 use crate::UnitFormat;
@@ -13,7 +13,7 @@ use crate::geometry;
 use crate::utils::file as file_utils;
 
 type GeometryDocument =
-    pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
+    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 pub fn execute(
     input_file: &Path,
@@ -389,10 +389,8 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    match geometry::extract_layer_for_view(ipc, &name, GeometryView::Board) {
-        Ok(geometry) => {
-            render_extracted_layer(&mut rendered, geometry, GeometryView::Board.profile_set())
-        }
+    match geometry::extract_layer_for_view(ipc, &name, View::Board) {
+        Ok(geometry) => render_extracted_layer(&mut rendered, geometry, View::Board.profile_set()),
         Err(error) => {
             rendered.warning = Some(format!("Render unavailable: {error}"));
         }

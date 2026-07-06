@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use ipc2581::types::{MountType, Side, Step};
 use ipc2581::{Ipc2581, Symbol};
-use pcb_ir::common::Point;
 use pcb_ir::dialects::placement::{
-    ComponentPlacement, PlacementDocument, PlacementMount, PlacementSide,
+    Document as PlacementDocument, Placement, PlacementMount, PlacementSide,
 };
+use pcb_ir::geom::Point;
 
 use crate::accessors::{CharacteristicsData, IpcAccessor};
 
@@ -55,7 +55,7 @@ pub fn extract_single_board_placements(accessor: &IpcAccessor<'_>) -> Result<Pla
             .map(map_side)
             .unwrap_or(PlacementSide::Unknown);
 
-        components.push(ComponentPlacement {
+        components.push(Placement {
             designator,
             value,
             package,

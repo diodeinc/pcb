@@ -1,12 +1,14 @@
-use crate::common::Point;
+//! Component placement data (pick-and-place).
+
+use crate::geom::Point;
 
 #[derive(Debug, Clone, Default)]
-pub struct PlacementDocument {
-    pub components: Vec<ComponentPlacement>,
+pub struct Document {
+    pub components: Vec<Placement>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ComponentPlacement {
+pub struct Placement {
     pub designator: String,
     pub value: Option<String>,
     pub package: Option<String>,
@@ -30,17 +32,6 @@ pub enum PlacementSide {
     Bottom,
     Internal,
     Unknown,
-}
-
-impl PlacementSide {
-    pub fn as_cpl_layer(self) -> &'static str {
-        match self {
-            Self::Top => "top",
-            Self::Bottom => "bottom",
-            Self::Internal => "internal",
-            Self::Unknown => "unknown",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

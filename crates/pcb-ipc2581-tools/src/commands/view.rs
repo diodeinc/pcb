@@ -1,13 +1,8 @@
 use std::path::Path;
 
 use anyhow::Result;
-use quick_xml::{
-    Reader, Writer,
-    events::{BytesStart, Event},
-};
-use std::io::Cursor;
-
-use ipc2581::Mode;
+use ipc2581::edit::{self, Doc};
+use ipc2581::{Mode, XmlWriter};
 
 use crate::ViewMode;
 use crate::utils::file as file_utils;
@@ -96,62 +91,49 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
 
 fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
     let excluded = excluded_sections(mode.as_ipc_mode());
-    let mut reader = Reader::from_str(xml);
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let mut buf = Vec::new();
-    let mut skip_depth = 0;
+    let doc = Doc::parse(xml)?;
+    let mut edits = Vec::new();
 
-    loop {
-        match reader.read_event_into(&mut buf)? {
-            Event::Eof => break,
-            Event::Empty(ref e) | Event::Start(ref e) if e.name().as_ref() == b"FunctionMode" => {
-                write_function_mode_element(&mut writer, mode, e)?;
-            }
-            Event::End(ref e) if e.name().as_ref() == b"FunctionMode" => {
-                writer.write_event(Event::End(e.to_owned()))?;
-            }
-            Event::Start(ref e) if skip_depth == 0 => {
-                if should_exclude(e.name().as_ref(), excluded) {
-                    skip_depth = 1;
-                } else {
-                    writer.write_event(Event::Start(e.to_owned()))?;
-                }
-            }
-            Event::Empty(ref e)
-                if skip_depth == 0 && !should_exclude(e.name().as_ref(), excluded) =>
-            {
-                writer.write_event(Event::Empty(e.to_owned()))?;
-            }
-            Event::Empty(_) if skip_depth == 0 => {}
-            Event::Start(_) if skip_depth > 0 => skip_depth += 1,
-            Event::End(_) if skip_depth > 0 => skip_depth -= 1,
-            event if skip_depth == 0 => writer.write_event(event)?,
-            _ => {}
+    // Delete excluded sections wherever they appear, skipping any nested
+    // inside an element that is already being deleted.
+    let mut spans: Vec<_> = excluded
+        .iter()
+        .flat_map(|name| doc.find_all(name))
+        .map(|node| (doc.span(node), node))
+        .collect();
+    spans.sort_by_key(|(span, _)| span.start);
+    let mut deleted_end = 0usize;
+    let mut deleted_spans = Vec::new();
+    for (span, node) in spans {
+        if span.start < deleted_end {
+            continue;
         }
-        buf.clear();
+        deleted_end = span.end;
+        deleted_spans.push(span.clone());
+        edits.push(doc.delete(node));
     }
 
-    Ok(String::from_utf8(writer.into_inner().into_inner())?)
-}
-
-fn should_exclude(name: &[u8], excluded: &[&str]) -> bool {
-    excluded.iter().any(|&ex| ex.as_bytes() == name)
-}
-
-fn write_function_mode_element(
-    writer: &mut Writer<Cursor<Vec<u8>>>,
-    mode: ViewMode,
-    event: &BytesStart,
-) -> Result<()> {
-    let mut elem = BytesStart::new("FunctionMode");
-    elem.push_attribute(("mode", mode.as_str()));
-    for attr in event.attributes().flatten() {
-        if attr.key.as_ref() != b"mode" {
-            elem.push_attribute(attr);
+    // Rewrite FunctionMode's mode attribute, preserving other attributes.
+    for function_mode in doc.find_all("FunctionMode") {
+        let span = doc.span(function_mode);
+        if deleted_spans
+            .iter()
+            .any(|deleted| deleted.start <= span.start && span.end <= deleted.end)
+        {
+            continue;
         }
+        let mut attrs = vec![("mode".to_string(), mode.as_str().to_string())];
+        attrs.extend(
+            doc.attrs(function_mode)
+                .filter(|(key, _)| *key != "mode")
+                .map(|(key, value)| (key.to_string(), value.to_string())),
+        );
+        let mut writer = XmlWriter::new();
+        writer.empty_element_with("FunctionMode", attrs);
+        edits.push(doc.replace(function_mode, writer.into_string()));
     }
-    writer.write_event(Event::Empty(elem))?;
-    Ok(())
+
+    Ok(edit::apply(xml, edits)?)
 }
 
 #[cfg(test)]
@@ -219,13 +201,5 @@ mod tests {
         // Should keep structure
         assert!(result.contains("<Ecad"));
         assert!(result.contains("<Step"));
-    }
-
-    #[test]
-    fn test_should_exclude_byte_comparison() {
-        let excluded = &["Component", "Package"];
-        assert!(should_exclude(b"Component", excluded));
-        assert!(should_exclude(b"Package", excluded));
-        assert!(!should_exclude(b"Bom", excluded));
     }
 }

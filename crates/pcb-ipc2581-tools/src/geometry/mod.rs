@@ -4,22 +4,20 @@ pub mod render;
 
 use anyhow::{Context, Result, bail};
 use ipc2581::{Ipc2581, Symbol, types::LayerFunction};
-use pcb_ir::common::{Affine2, BBox, FillRule, Point};
 use pcb_ir::dialects::ipc::{
-    BoardArrayFabricationProfile, BoardArrayReliefFeatures, FeatureBucket, FeatureDomain,
-    FeatureKind, GeometryFeature, GeometryPolarity, GeometryView, PlatingKind,
+    BoardArrayFabricationProfile, BoardArrayReliefFeatures, Feature, FeatureBucket, FeatureDomain,
+    FeatureKind, PlatingKind, View,
     relief::{
         DEFAULT_RELIEF_TOLERANCE_MM, DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM, VScoreLine,
         vscore_lines_for,
     },
-    transformed_path_payloads,
 };
-use pcb_ir::dialects::path::{ContourSet, PathPayload};
+use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
 
 pub use extract::{extract_layer, extract_layer_for_view, extract_layout};
 
 type GeometryDocument =
-    pcb_ir::dialects::ipc::GeometryDocument<ipc2581::Symbol, ipc2581::types::LayerFunction>;
+    pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 pub fn board_array_vscore_lines(ipc: &Ipc2581) -> Result<Vec<VScoreLine>> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
@@ -31,7 +29,7 @@ pub fn board_array_vscore_lines(ipc: &Ipc2581) -> Result<Vec<VScoreLine>> {
         .filter(|layer| layer.layer_function == LayerFunction::VCut)
     {
         let layer_name = ipc.resolve(source_layer.name);
-        let doc = extract_layer_for_view(ipc, layer_name, GeometryView::ArrayFlattened)
+        let doc = extract_layer_for_view(ipc, layer_name, View::ArrayFlattened)
             .with_context(|| format!("failed to extract IPC-2581 V-cut layer '{layer_name}'"))?;
         lines.extend(vscore_lines_for(&doc));
     }
@@ -43,14 +41,8 @@ pub fn board_array_fabrication_profile(
     layout: &GeometryDocument,
     score_lines: &[VScoreLine],
 ) -> Result<BoardArrayFabricationProfile> {
-    let relief_features = board_array_relief_features(ipc, score_lines)?;
-    Ok(
-        pcb_ir::dialects::ipc::board_array_fabrication_profile_with_relief_features(
-            layout,
-            score_lines,
-            relief_features,
-        )?,
-    )
+    let (profile, _) = board_array_fabrication_profile_with_debug(ipc, layout, score_lines)?;
+    Ok(profile)
 }
 
 pub fn board_array_fabrication_profile_with_debug(
@@ -62,13 +54,14 @@ pub fn board_array_fabrication_profile_with_debug(
     pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
 )> {
     let relief_features = board_array_relief_features(ipc, score_lines)?;
-    Ok(
-        pcb_ir::dialects::ipc::board_array_fabrication_profile_with_relief_features_and_debug(
-            layout,
-            score_lines,
+    Ok(pcb_ir::dialects::ipc::board_array_fabrication_profile(
+        layout,
+        score_lines,
+        pcb_ir::dialects::ipc::FabricationProfileOptions {
             relief_features,
-        )?,
-    )
+            debug: true,
+        },
+    )?)
 }
 
 fn board_array_relief_features(
@@ -107,9 +100,9 @@ fn board_array_relief_features(
         }
     }
 
-    let blockers = ContourSet::from_filled_payloads(&score_blockers, DEFAULT_RELIEF_TOLERANCE_MM);
+    let blockers = ContourSet::from_filled_contours(&score_blockers, DEFAULT_RELIEF_TOLERANCE_MM);
     Ok(BoardArrayReliefFeatures {
-        score_blockers: blockers.to_payloads(),
+        score_blockers: blockers.to_contours(),
     })
 }
 
@@ -127,7 +120,7 @@ fn collect_relief_feature_candidates(
         .filter(|layer| relief_feature_layer(layer.layer_function))
     {
         let layer_name = ipc.resolve(layer.name);
-        let doc = extract_layer_for_view(ipc, layer_name, GeometryView::ArrayFlattened)
+        let doc = extract_layer_for_view(ipc, layer_name, View::ArrayFlattened)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         for feature in &doc.features {
             if is_through_cutout(feature) {
@@ -143,7 +136,7 @@ fn collect_relief_feature_candidates(
 
 #[derive(Debug, Clone)]
 struct ReliefFeatureCandidate {
-    payloads: Vec<PathPayload>,
+    payloads: Vec<ContourBuf>,
     bbox: BBox,
     plating: PlatingKind,
     padstack_ref: Option<Symbol>,
@@ -151,9 +144,9 @@ struct ReliefFeatureCandidate {
 }
 
 impl ReliefFeatureCandidate {
-    fn new(doc: &GeometryDocument, feature: &GeometryFeature<Symbol>) -> Self {
+    fn new(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Self {
         Self {
-            payloads: feature_payloads(doc, feature),
+            payloads: feature_contours(doc, feature),
             bbox: feature.bbox,
             plating: feature.intent.plating,
             padstack_ref: feature.padstack_ref,
@@ -162,30 +155,21 @@ impl ReliefFeatureCandidate {
     }
 }
 
-fn feature_payloads(doc: &GeometryDocument, feature: &GeometryFeature<Symbol>) -> Vec<PathPayload> {
-    (feature.path_start..feature.path_start + feature.path_count)
-        .flat_map(|path| transformed_path_payloads(doc, path, Affine2::identity()))
+fn feature_contours(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Vec<ContourBuf> {
+    feature
+        .paths
+        .slice(&doc.arena.paths)
+        .iter()
+        .flat_map(|path| doc.arena.path_contours(path))
         .collect()
 }
 
 fn relief_feature_layer(layer_function: LayerFunction) -> bool {
     matches!(layer_function, LayerFunction::Drill | LayerFunction::Rout)
-        || is_copper_layer(layer_function)
+        || crate::layers::is_copper(layer_function)
 }
 
-fn is_copper_layer(layer_function: LayerFunction) -> bool {
-    matches!(
-        layer_function,
-        LayerFunction::Conductor
-            | LayerFunction::CondFilm
-            | LayerFunction::CondFoil
-            | LayerFunction::Plane
-            | LayerFunction::Signal
-            | LayerFunction::Mixed
-    )
-}
-
-fn is_through_cutout(feature: &GeometryFeature<Symbol>) -> bool {
+fn is_through_cutout(feature: &Feature<Symbol>) -> bool {
     matches!(feature.kind, FeatureKind::Hole | FeatureKind::Slot)
         && feature.bucket == FeatureBucket::Cutout
         && matches!(
@@ -197,9 +181,9 @@ fn is_through_cutout(feature: &GeometryFeature<Symbol>) -> bool {
         )
 }
 
-fn is_pad_envelope(feature: &GeometryFeature<Symbol>) -> bool {
+fn is_pad_envelope(feature: &Feature<Symbol>) -> bool {
     feature.kind == FeatureKind::Padstack
-        && feature.polarity == GeometryPolarity::Positive
+        && feature.polarity == Polarity::Dark
         && feature.intent.domain == FeatureDomain::Copper
 }
 
@@ -210,17 +194,17 @@ fn plated_like(plating: PlatingKind) -> bool {
     )
 }
 
-fn payloads_touch_score_lines(payloads: &[PathPayload], score_lines: &[VScoreLine]) -> bool {
+fn payloads_touch_score_lines(payloads: &[ContourBuf], score_lines: &[VScoreLine]) -> bool {
     if payloads.is_empty() {
         return false;
     }
     let bbox = payloads
         .iter()
         .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox));
-    let region = ContourSet::from_filled_payloads(payloads, DEFAULT_RELIEF_TOLERANCE_MM);
+    let region = ContourSet::from_filled_contours(payloads, DEFAULT_RELIEF_TOLERANCE_MM);
     score_lines.iter().any(|line| {
         let strip = score_line_strip(*line);
-        bbox.intersects(strip.bbox) && !region.clone().intersection(&strip).is_empty()
+        bbox.intersects(strip.bbox) && !region.intersection(&strip).is_empty()
     })
 }
 
@@ -236,7 +220,7 @@ fn score_line_strip(line: VScoreLine) -> ContourSet {
             line.start.y.max(line.end.y) + width,
         ),
     };
-    ContourSet::rectangle(bbox, FillRule::NonZero, DEFAULT_RELIEF_TOLERANCE_MM)
+    ContourSet::rectangle(bbox, DEFAULT_RELIEF_TOLERANCE_MM)
 }
 
 fn envelope_matches_cutout(
@@ -260,8 +244,8 @@ fn envelope_matches_cutout(
     payloads_intersect(&envelope.payloads, &cutout.payloads)
 }
 
-fn payloads_intersect(left: &[PathPayload], right: &[PathPayload]) -> bool {
-    let left_region = ContourSet::from_filled_payloads(left, DEFAULT_RELIEF_TOLERANCE_MM);
-    let right_region = ContourSet::from_filled_payloads(right, DEFAULT_RELIEF_TOLERANCE_MM);
+fn payloads_intersect(left: &[ContourBuf], right: &[ContourBuf]) -> bool {
+    let left_region = ContourSet::from_filled_contours(left, DEFAULT_RELIEF_TOLERANCE_MM);
+    let right_region = ContourSet::from_filled_contours(right, DEFAULT_RELIEF_TOLERANCE_MM);
     !left_region.intersection(&right_region).is_empty()
 }

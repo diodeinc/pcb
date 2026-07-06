@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use clap::ValueEnum;
 use ipc2581::Ipc2581;
-use pcb_ir::dialects::placement::{ComponentPlacement, PlacementDocument, PlacementSide};
+use pcb_ir::dialects::placement::{Document as PlacementDocument, Placement, PlacementSide};
 
 use crate::accessors::IpcAccessor;
 use crate::placement::extract_single_board_placements;
@@ -59,7 +59,7 @@ pub fn emit_cpl_csv(document: &PlacementDocument, options: &CplOptions) -> Strin
                 &format_number(component.at.x),
                 &format_number(component.at.y),
                 &format_number(normalize_rotation(component.rotation_degrees)),
-                component.side.as_cpl_layer(),
+                cpl_layer(component.side),
             ],
         );
     }
@@ -67,7 +67,16 @@ pub fn emit_cpl_csv(document: &PlacementDocument, options: &CplOptions) -> Strin
     output
 }
 
-fn include_component(component: &ComponentPlacement, options: &CplOptions) -> bool {
+fn cpl_layer(side: PlacementSide) -> &'static str {
+    match side {
+        PlacementSide::Top => "top",
+        PlacementSide::Bottom => "bottom",
+        PlacementSide::Internal => "internal",
+        PlacementSide::Unknown => "unknown",
+    }
+}
+
+fn include_component(component: &Placement, options: &CplOptions) -> bool {
     if options.exclude_dnp && component.populate == Some(false) {
         return false;
     }
@@ -79,7 +88,7 @@ fn include_component(component: &ComponentPlacement, options: &CplOptions) -> bo
     }
 }
 
-fn compare_components(left: &&ComponentPlacement, right: &&ComponentPlacement) -> Ordering {
+fn compare_components(left: &&Placement, right: &&Placement) -> Ordering {
     side_sort_key(left.side)
         .cmp(&side_sort_key(right.side))
         .then_with(|| natord::compare(&left.designator, &right.designator))
@@ -145,8 +154,8 @@ fn write_csv_field(output: &mut String, field: &str) {
 
 #[cfg(test)]
 mod tests {
-    use pcb_ir::common::Point;
     use pcb_ir::dialects::placement::{PlacementMount, PlacementSide};
+    use pcb_ir::geom::Point;
 
     use super::*;
 
@@ -154,7 +163,7 @@ mod tests {
     fn emits_release_cpl_header_and_rows() {
         let document = PlacementDocument {
             components: vec![
-                ComponentPlacement {
+                Placement {
                     designator: "R10".to_string(),
                     value: Some("10k".to_string()),
                     package: Some("R_0603".to_string()),
@@ -171,7 +180,7 @@ mod tests {
                     scale: 1.0,
                     populate: Some(true),
                 },
-                ComponentPlacement {
+                Placement {
                     designator: "R2".to_string(),
                     value: Some("1k".to_string()),
                     package: Some("R_0603".to_string()),
