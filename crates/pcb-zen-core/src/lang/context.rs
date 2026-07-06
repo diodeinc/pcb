@@ -17,7 +17,7 @@ use starlark::collections::SmallMap;
 
 use crate::lang::eval::EvalContext;
 
-use super::module::{FrozenModuleValue, ModuleLoader, ModuleValue, parse_positions};
+use super::module::{FrozenModuleValue, ModuleLoader, ModuleValue, parse_positions, parse_wire_lines};
 use super::net::NetId;
 
 #[derive(Debug, Trace)]
@@ -145,19 +145,24 @@ impl<'v> ContextValue<'v> {
             .source_path()
             .expect("source_path not set on Context");
 
-        // Parse position data if file provider is available
-        let positions = if let Some(contents) = context.config().contents.as_deref() {
-            parse_positions(contents)
+        // Parse position and wire data if file provider is available
+        let (positions, wire_lines) = if let Some(contents) = context.config().contents.as_deref() {
+            (parse_positions(contents), parse_wire_lines(contents))
         } else {
             context
                 .file_provider()
                 .read_file(source_path)
                 .ok()
-                .map(|content| parse_positions(&content))
+                .map(|content| (parse_positions(&content), parse_wire_lines(&content)))
                 .unwrap_or_default()
         };
 
-        let module = ModuleValue::new(context.module_path().clone(), source_path, positions);
+        let module = ModuleValue::new(
+            context.module_path().clone(),
+            source_path,
+            positions,
+            wire_lines,
+        );
 
         Self {
             module: RefCell::new(module),

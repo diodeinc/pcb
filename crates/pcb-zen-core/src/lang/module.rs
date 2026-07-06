@@ -238,7 +238,7 @@ impl<'v> StarlarkValue<'v> for Position {}
 
 pub type PositionMap = SmallMap<String, Position>;
 
-/// Parse position data from pcb:sch comments in file content  
+/// Parse position data from pcb:sch comments in file content
 pub fn parse_positions(content: &str) -> PositionMap {
     pcb_sch::position::parse_position_comments(content)
         .0
@@ -255,6 +255,16 @@ pub fn parse_positions(content: &str) -> PositionMap {
             )
         })
         .collect()
+}
+
+/// Extract raw `# pcb:wire*` comment lines from file content.
+///
+/// The lines are carried verbatim on the module and parsed into a
+/// [`pcb_sch::wire::WireBlock`] during schematic conversion (see
+/// `post_process_all_positions`). Keeping the raw lines here avoids imposing
+/// starlark value traits on the wire types.
+pub fn parse_wire_lines(content: &str) -> Vec<String> {
+    pcb_sch::wire::extract_wire_lines(content)
 }
 use std::sync::Arc;
 use thiserror::Error;
@@ -478,6 +488,9 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     net_name_to_id: SmallMap<String, NetId>,
     /// Parsed position data from pcb:sch comments in this module's source file
     positions: PositionMap,
+    /// Raw `# pcb:wire*` comment lines from this module's source file
+    /// (persisted wire block; parsed during schematic conversion).
+    wire_lines: Vec<String>,
     /// Path movement directives from moved() calls. Map of `old path → (new path, auto_generated)`.
     moved_directives: SmallMap<String, (String, bool)>,
     /// Local values (components, electrical checks, testbenches). Child modules are in module_tree.
@@ -585,7 +598,12 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         self.inputs.insert(name, value);
     }
 
-    pub fn new(path: ModulePath, source_path: &Path, positions: PositionMap) -> Self {
+    pub fn new(
+        path: ModulePath,
+        source_path: &Path,
+        positions: PositionMap,
+        wire_lines: Vec<String>,
+    ) -> Self {
         let source_path = source_path.to_string_lossy().into_owned();
         ModuleValueGen {
             path,
@@ -596,6 +614,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             introduced_nets: SmallMap::new(),
             net_name_to_id: SmallMap::new(),
             positions,
+            wire_lines,
             moved_directives: SmallMap::new(),
             children: Vec::new(),
             component_modifiers: Vec::new(),
@@ -609,6 +628,11 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
 
     pub fn positions(&self) -> &PositionMap {
         &self.positions
+    }
+
+    /// Raw `# pcb:wire*` comment lines from this module's source file.
+    pub fn wire_lines(&self) -> &[String] {
+        &self.wire_lines
     }
 
     pub fn path(&self) -> &ModulePath {

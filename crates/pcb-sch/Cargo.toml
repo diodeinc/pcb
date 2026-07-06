@@ -24,6 +24,7 @@ starlark_map = { workspace = true }
 allocative = { workspace = true }
 pagable = { workspace = true }
 anyhow = { workspace = true }
+sha2 = { workspace = true }
 comfy-table = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
 supports-hyperlinks = { workspace = true, optional = true }

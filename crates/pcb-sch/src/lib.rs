@@ -19,6 +19,7 @@ pub mod kicad_netlist;
 pub mod natural_string;
 pub mod physical;
 pub mod position;
+pub mod wire;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
@@ -536,6 +537,10 @@ pub struct Instance {
     pub internal_connectivity: InternalConnectivity,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub symbol_positions: HashMap<String, Position>,
+    /// Persisted wire block (`# pcb:wire` comments) parsed from this module's
+    /// source file, if any. Only meaningful on module instances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_block: Option<crate::wire::WireBlock>,
 }
 
 impl Instance {
@@ -548,6 +553,7 @@ impl Instance {
             reference_designator: None,
             internal_connectivity: InternalConnectivity::default(),
             symbol_positions: HashMap::new(),
+            wire_block: None,
         }
     }
 

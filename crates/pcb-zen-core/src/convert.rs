@@ -884,6 +884,23 @@ impl ModuleConverter {
     fn post_process_all_positions(&mut self) {
         let remapper = Remapper::from_path_map(self.schematic.moved_paths.clone());
 
+        // Attach persisted wire blocks (`# pcb:wire` comments) to their module
+        // instances. Endpoint keys are relative to the owning module, mirroring
+        // how `symbol_positions` keys work.
+        for (instance_ref, module) in &self.module_instances {
+            if module.wire_lines().is_empty() {
+                continue;
+            }
+            let block = pcb_sch::wire::parse_wire_block_from_lines(
+                module.wire_lines().iter().map(String::as_str),
+            );
+            if let Some(block) = block
+                && let Some(instance) = self.schematic.instances.get_mut(instance_ref)
+            {
+                instance.wire_block = Some(block);
+            }
+        }
+
         for (instance_ref, module) in &self.module_instances {
             let module_path = instance_ref.instance_path.join(".");
             for (key, pos) in module.positions().iter() {
