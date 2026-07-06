@@ -232,6 +232,7 @@ impl LspEvalContext {
     fn maybe_invalidate_symbol_library(&self, path: &Path) {
         if is_kicad_symbol_file(path.extension()) {
             invalidate_symbol_library(path, self.file_provider.as_ref());
+            self.inner.invalidate_file(path);
         }
     }
 
@@ -629,8 +630,7 @@ impl LspContext for LspEvalContext {
     fn did_change_file_contents(&self, uri: &LspUrl, contents: &str) {
         if let LspUrl::File(path) = uri {
             self.store_open_file(path, contents);
-            self.inner
-                .set_file_contents(path.to_path_buf(), contents.to_string());
+            self.inner.invalidate_file(path);
             self.maybe_invalidate_symbol_library(path);
             self.maybe_invalidate_resolution_cache(path);
         }
@@ -639,10 +639,7 @@ impl LspContext for LspEvalContext {
     fn did_close_file(&self, uri: &LspUrl) {
         if let LspUrl::File(path) = uri {
             self.remove_open_file(path);
-            self.inner.clear_file_contents(path);
-            if let Ok(canon) = self.file_provider.canonicalize(path) {
-                self.inner.clear_file_contents(&canon);
-            }
+            self.inner.invalidate_file(path);
             self.clear_last_schematic(path);
             self.maybe_invalidate_symbol_library(path);
             self.maybe_invalidate_resolution_cache(path);
@@ -811,7 +808,7 @@ impl LspContext for LspEvalContext {
                 if let Some(parsed) = result.output.as_ref() {
                     // Cache the schematic now, while the session module tree
                     // still reflects only this file's evaluation.
-                    if let Ok(sch) = parsed.eval_output.to_schematic() {
+                    if let Ok(sch) = parsed.to_schematic() {
                         self.set_last_schematic(path, sch);
                     } else {
                         self.clear_last_schematic(path);
@@ -829,7 +826,7 @@ impl LspContext for LspEvalContext {
 
                 LspEvalResult {
                     diagnostics,
-                    ast: result.output.map(|parsed| parsed.ast),
+                    ast: result.output.map(|parsed| Arc::unwrap_or_clone(parsed.ast)),
                 }
             }
             _ => {

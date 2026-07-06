@@ -215,8 +215,10 @@ fn package_url_for_path(
 
 /// Get workspace information (native-only).
 ///
-/// Calls core's get_workspace_info, adds path-patched forks as workspace packages,
-/// enriches with git tag metadata, and populates dirty status.
+/// Calls core's get_workspace_info and adds path-patched forks as workspace
+/// packages. Package `version`/`published_at`/`dirty` are left unset — they
+/// come from git and only matter for presentation; commands that display them
+/// (e.g. `pcb info`, `pcb publish`) call [`enrich_git_metadata`].
 #[instrument(name = "get_workspace_info", skip_all)]
 pub fn get_workspace_info<F: FileProvider>(
     file_provider: &F,
@@ -233,11 +235,18 @@ pub fn get_workspace_info<F: FileProvider>(
         add_path_patched_forks(file_provider, &mut info)?;
     }
 
-    // Enrich with git tag versions (native-only feature)
+    Ok(info)
+}
+
+/// Populate package `version`, `published_at`, and `dirty` from git tags and
+/// working-tree status. Runs several git commands, so it is opt-in for the
+/// commands that actually display this metadata.
+#[instrument(name = "enrich_git_metadata", skip_all)]
+pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
     // For forked packages, version is already set from the fork path, so only
     // update if we find a tag (don't overwrite with None)
     let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
-    let latest_tags = latest_package_tags(&info, &all_tags);
+    let latest_tags = latest_package_tags(info, &all_tags);
     let workspace_subpath = git::get_repo_subpath(&info.root).ok().flatten();
 
     let latest_tag_names: Vec<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
@@ -250,29 +259,21 @@ pub fn get_workspace_info<F: FileProvider>(
         )
     });
     let dirty_map = discover_dirty_packages(
-        &info,
+        info,
         &latest_tags,
         status_paths,
         workspace_subpath.as_deref(),
     );
 
-    {
-        let _span = info_span!("enrich_workspace_versions").entered();
-        for (url, pkg) in info.packages.iter_mut() {
-            if let Some(tag_info) = latest_tags.get(url) {
-                pkg.version = Some(tag_info.version.to_string());
-                pkg.published_at = tag_metadata
-                    .get(&tag_info.tag)
-                    .map(|metadata| metadata.timestamp.clone());
-            }
-        }
-    }
-
     for (url, pkg) in info.packages.iter_mut() {
+        if let Some(tag_info) = latest_tags.get(url) {
+            pkg.version = Some(tag_info.version.to_string());
+            pkg.published_at = tag_metadata
+                .get(&tag_info.tag)
+                .map(|metadata| metadata.timestamp.clone());
+        }
         pkg.dirty = dirty_map.contains(url);
     }
-
-    Ok(info)
 }
 
 /// Add path-patched forks as workspace packages.

@@ -9,17 +9,16 @@ use std::{
 
 use anyhow::anyhow;
 use pcb_sch::physical::PhysicalValue;
+use starlark::environment::FrozenModule;
 use starlark::{
     PrintHandler,
     environment::{GlobalsBuilder, LibraryExtension, Module},
     errors::{EvalMessage, EvalSeverity},
     eval::{Evaluator, FileLoader},
     syntax::{AstModule, Dialect},
-    typing::TypeMap,
     values::{FrozenHeapName, FrozenValue, Heap, Value, ValueLike},
 };
 use starlark::{codemap::ResolvedSpan, collections::SmallMap};
-use starlark::{environment::FrozenModule, typing::Interface};
 use starlark_syntax::syntax::{
     ast::{LoadArgP, StmtP},
     module::AstModuleFields,
@@ -231,7 +230,9 @@ fn serialize_parameter_value(value: Value<'_>) -> Option<serde_json::Value> {
 
 #[derive(Clone)]
 pub struct EvalOutput {
-    pub ast: AstModule,
+    /// Parsed AST of the module. Wrapped in `Arc` so that cloning an
+    /// `EvalOutput` (e.g. on every load-cache hit) does not deep-copy the AST.
+    pub ast: Arc<AstModule>,
     pub star_module: FrozenModule,
     pub sch_module: FrozenModuleValue,
     /// Ordered list of parameter information
@@ -252,11 +253,54 @@ struct CachedModule {
 
 type LoadCacheKey = (Option<PackageScopeKey>, PathBuf);
 
-/// Output of `parse_and_analyze_file`, preserving both parsed AST and full eval output.
+/// Key for the session-level `Symbol(library = ...)` cache: the resolved
+/// library path plus the requested symbol name.
+pub(crate) type SymbolCacheKey = (PathBuf, Option<String>);
+
+/// Key for the session-level spice subcircuit cache: the resolved model path
+/// plus the subcircuit name.
+pub(crate) type SpiceCacheKey = (PathBuf, String);
+
+/// A source file's on-disk contents together with its parsed AST — the single
+/// in-memory record for a module's source during an evaluation session.
 #[derive(Clone)]
-pub struct ParseAndAnalyzeOutput {
-    pub ast: AstModule,
-    pub eval_output: EvalOutput,
+pub(crate) struct ParsedSource {
+    pub(crate) contents: String,
+    pub(crate) ast: Arc<AstModule>,
+}
+
+/// Concurrent map for session-scoped caches of values derived from files.
+/// All [`EvalSession`] caches share this shape and lifecycle: cleared together
+/// by [`EvalSession::clear_load_cache`], with per-file invalidation via
+/// [`EvalContext::invalidate_file`].
+pub(crate) struct CacheMap<K, V>(RwLock<HashMap<K, V>>);
+
+impl<K, V> Default for CacheMap<K, V> {
+    fn default() -> Self {
+        Self(RwLock::new(HashMap::new()))
+    }
+}
+
+impl<K: Eq + std::hash::Hash, V: Clone> CacheMap<K, V> {
+    pub(crate) fn get(&self, key: &K) -> Option<V> {
+        self.0.read().unwrap().get(key).cloned()
+    }
+
+    pub(crate) fn insert(&self, key: K, value: V) {
+        self.0.write().unwrap().insert(key, value);
+    }
+
+    pub(crate) fn remove(&self, key: &K) {
+        self.0.write().unwrap().remove(key);
+    }
+
+    pub(crate) fn clear(&self) {
+        self.0.write().unwrap().clear();
+    }
+
+    pub(crate) fn retain(&self, f: impl FnMut(&K, &mut V) -> bool) {
+        self.0.write().unwrap().retain(f);
+    }
 }
 
 impl EvalOutput {
@@ -275,15 +319,20 @@ impl EvalOutput {
         self.session.clone_module_tree()
     }
 
+    /// Validate the KiCad footprints referenced by components in the module
+    /// tree. Decompresses and hashes embedded payloads, so this is expensive —
+    /// callers that actually consume footprints (e.g. layout) opt in.
+    pub fn validate_footprints(&self) -> Vec<Diagnostic> {
+        validate_footprints(&self.module_tree(), &self.config, &self.session)
+    }
+
     /// Convert to schematic with diagnostics
     pub fn to_schematic_with_diagnostics(&self) -> crate::WithDiagnostics<pcb_sch::Schematic> {
         let converter = ModuleConverter::new();
         let module_tree = self.module_tree();
-        let footprint_diagnostics = validate_footprints(&module_tree, &self.config, &self.session);
         let mut result = converter.build(module_tree);
         if let Some(ref mut schematic) = result.output {
             schematic.package_roots = self.config.resolution.package_roots();
-            schematic.resolved_paths = self.config.tracked_resolved_paths();
 
             // Resolve any non-package:// layout_path attributes to stable URIs
             for inst in schematic.instances.values_mut() {
@@ -312,7 +361,6 @@ impl EvalOutput {
                 }
             }
         }
-        result.diagnostics.extend(footprint_diagnostics);
         result
     }
 
@@ -380,31 +428,28 @@ impl EvalOutput {
 /// Handle to shared evaluation session state. Cheaply cloneable.
 /// Each cache has its own lock to minimize contention during parallel preloading.
 #[derive(Clone)]
-#[allow(clippy::type_complexity)]
 pub struct EvalSession {
-    /// Dedicated file contents cache - frequently accessed during preload scanning.
-    file_contents_cache: Arc<RwLock<HashMap<PathBuf, String>>>,
-    /// Dedicated load cache - frequently accessed during parallel module evaluation.
-    ///
-    /// Frozen package resolution is package-local, so cached modules are keyed by the
-    /// loaded file's package identity and resolved dependency map.
-    load_cache: Arc<RwLock<HashMap<LoadCacheKey, CachedModule>>>,
-    /// Cache of validated footprint files.
-    footprint_cache: Arc<RwLock<HashMap<FootprintCacheKey, Vec<Diagnostic>>>>,
+    /// On-disk contents and parsed AST per module path, so repeated
+    /// instantiations of the same module skip the disk read and reparse.
+    pub(crate) source_cache: Arc<CacheMap<PathBuf, ParsedSource>>,
+    /// Loaded (frozen) modules. Frozen package resolution is package-local,
+    /// so cached modules are keyed by the loaded file's package identity and
+    /// resolved dependency map.
+    load_cache: Arc<CacheMap<LoadCacheKey, CachedModule>>,
+    /// Diagnostics from validating footprint files.
+    pub(crate) footprint_cache: Arc<CacheMap<FootprintCacheKey, Vec<Diagnostic>>>,
+    /// `Symbol(library = ...)` values keyed by resolved library path and
+    /// symbol name.
+    pub(crate) symbol_cache: Arc<CacheMap<SymbolCacheKey, crate::lang::symbol::SymbolValue>>,
+    /// Spice subcircuits keyed by resolved model path and subcircuit name.
+    pub(crate) spice_cache:
+        Arc<CacheMap<SpiceCacheKey, crate::lang::spice_model::CachedSpiceModel>>,
     /// Per-file mapping of `symbol → target path` for "go-to definition".
     symbol_index: Arc<RwLock<HashMap<PathBuf, HashMap<String, PathBuf>>>>,
-    /// Per-file mapping of `symbol → parameter list` for signature help.
-    symbol_params: Arc<RwLock<HashMap<PathBuf, HashMap<String, Vec<String>>>>>,
     /// Per-file mapping of `symbol → metadata` (kind, docs, etc.)
     symbol_meta: Arc<RwLock<HashMap<PathBuf, HashMap<String, crate::SymbolInfo>>>>,
     /// Map of `module.zen` → set of files referenced via `load()`.
     module_deps: Arc<RwLock<HashMap<PathBuf, HashSet<PathBuf>>>>,
-    /// Cache of type maps for each module.
-    #[allow(dead_code)]
-    type_cache: Arc<RwLock<HashMap<PathBuf, TypeMap>>>,
-    /// Per-file interface map for load path → Interface.
-    #[allow(dead_code)]
-    interface_map: Arc<RwLock<HashMap<PathBuf, HashMap<String, Interface>>>>,
     /// Tree of all frozen child modules indexed by fully qualified path.
     module_tree: Arc<RwLock<BTreeMap<ModulePath, FrozenModule>>>,
 }
@@ -422,10 +467,6 @@ pub struct EvalContextConfig {
 
     /// Resolution result from dependency resolution.
     pub(crate) resolution: Arc<ResolutionResult>,
-
-    /// Maps resolved paths to their original LoadSpecs.
-    /// Shared across all contexts so that nested loads see parent tracking.
-    pub(crate) path_to_spec: Arc<RwLock<HashMap<PathBuf, LoadSpec>>>,
 
     /// The fully qualified path of the module we are evaluating (e.g., "root", "root.child")
     pub(crate) module_path: ModulePath,
@@ -484,7 +525,6 @@ impl EvalContextConfig {
             builtin_docs,
             file_provider,
             resolution,
-            path_to_spec: Arc::new(RwLock::new(HashMap::new())),
             module_path: ModulePath::root(),
             load_chain: HashSet::new(),
             source_path: None,
@@ -557,7 +597,6 @@ impl EvalContextConfig {
             builtin_docs: self.builtin_docs.clone(),
             file_provider: self.file_provider.clone(),
             resolution: self.resolution.clone(),
-            path_to_spec: self.path_to_spec.clone(),
             module_path: child_module_path,
             load_chain: child_load_chain,
             source_path: None,
@@ -586,7 +625,6 @@ impl EvalContextConfig {
             builtin_docs: self.builtin_docs.clone(),
             file_provider: self.file_provider.clone(),
             resolution: self.resolution.clone(),
-            path_to_spec: self.path_to_spec.clone(),
             module_path: child_module_path,
             load_chain: HashSet::new(),
             source_path: None,
@@ -603,40 +641,12 @@ impl EvalContextConfig {
         &*self.file_provider
     }
 
-    fn insert_load_spec(&self, resolved_path: PathBuf, spec: LoadSpec) {
-        self.path_to_spec
-            .write()
-            .unwrap()
-            .insert(resolved_path, spec);
-    }
-
-    pub fn tracked_resolved_paths(&self) -> Vec<PathBuf> {
-        let mut paths: Vec<PathBuf> = self.path_to_spec.read().unwrap().keys().cloned().collect();
-        paths.sort();
-        paths
-    }
-
     fn package_scope_for_file(
         &self,
         path: &Path,
     ) -> Option<crate::resolution::ResolvedPackageScope<'_>> {
         self.resolution
             .package_scope_for_file(path, self.active_root_package.as_deref())
-    }
-
-    /// Manually track a file. Useful for entrypoints.
-    pub fn track_file(&self, path: &Path) {
-        let canonical_path = self.file_provider.canonicalize(path).unwrap();
-        if self.get_load_spec(&canonical_path).is_some() {
-            return;
-        }
-        let load_spec = LoadSpec::local_path(&canonical_path);
-        self.insert_load_spec(canonical_path, load_spec);
-    }
-
-    /// Get the LoadSpec for a specific resolved file path.
-    pub fn get_load_spec(&self, path: &Path) -> Option<LoadSpec> {
-        self.path_to_spec.read().unwrap().get(path).cloned()
     }
 
     /// Convenience method to resolve a load path string directly.
@@ -660,7 +670,6 @@ impl EvalContextConfig {
         }
 
         let current_file = self.file_provider.canonicalize(current_file)?;
-        self.track_file(&current_file);
         let mut context =
             ResolveContext::new(self.file_provider(), current_file, load_spec.clone());
         self.resolve(&mut context)
@@ -772,19 +781,9 @@ impl EvalContextConfig {
         self.try_resolve_workspace(context, &scope)
     }
 
-    /// Compute the canonical URL for a file being evaluated.
-    ///
-    /// For files loaded via URL (remote deps), reconstructs from their tracked LoadSpec.
-    /// For local files (entry points, intra-package loads), uses the reverse map to find
-    /// the package URL and appends the file's relative path within that package.
+    /// Compute the canonical URL for a file being evaluated: the owning
+    /// package's URL plus the file's relative path within that package.
     fn file_url(&self, file_path: &Path) -> anyhow::Result<String> {
-        // Fast path: check if the file was loaded via a URL-based LoadSpec
-        if let Some(spec) = self.get_load_spec(file_path)
-            && let Some(url) = spec.to_full_url()
-        {
-            return Ok(url);
-        }
-
         self.resolution
             .package_url_for_file(
                 file_path,
@@ -816,24 +815,28 @@ impl EvalContextConfig {
         let canonical_resolved = context.file_provider.canonicalize(&resolved_path)?;
         let canonical_root = context.file_provider.canonicalize(&package_root)?;
 
-        let mut crosses_package_boundary = !canonical_resolved.starts_with(&canonical_root);
-        if !crosses_package_boundary
-            && let Some(target_scope) = self.package_scope_for_file(&canonical_resolved)
-        {
-            let target_root = context
-                .file_provider
-                .canonicalize(target_scope.root())
-                .unwrap_or_else(|_| target_scope.root().to_path_buf());
-            crosses_package_boundary = target_root != canonical_root;
-        }
+        // The load crosses a package boundary when the target is owned by a
+        // different package than the current file — judged first by the frozen
+        // package scopes, then by the (possibly finer-grained) workspace
+        // package map. `target_root` is always Some for targets inside the
+        // current package root: `current_package_scope` above proved the
+        // active scope map contains `canonical_root`, so the ancestor walk in
+        // `package_scope_for_file` finds at least that entry.
+        let target_root = self
+            .package_scope_for_file(&canonical_resolved)
+            .map(|target_scope| {
+                context
+                    .file_provider
+                    .canonicalize(target_scope.root())
+                    .unwrap_or_else(|_| target_scope.root().to_path_buf())
+            });
+        let mut crosses_package_boundary = target_root.as_deref() != Some(&canonical_root);
         if !crosses_package_boundary
             && let (Some(current_url), Some(target_url)) = (
                 self.resolution
-                    .workspace_info
-                    .package_url_for_path(self.file_provider(), &context.current_file),
+                    .workspace_package_url_for_path(self.file_provider(), &context.current_file),
                 self.resolution
-                    .workspace_info
-                    .package_url_for_path(self.file_provider(), &canonical_resolved),
+                    .workspace_package_url_for_path(self.file_provider(), &canonical_resolved),
             )
         {
             crosses_package_boundary = current_url != target_url;
@@ -870,18 +873,13 @@ impl EvalContextConfig {
         context: &ResolveContext,
         resolved_path: PathBuf,
     ) -> Result<PathBuf, anyhow::Error> {
-        if !context.file_provider.exists(&resolved_path)
-            && !context.original_spec().allow_not_exist()
-        {
+        if context.file_provider.exists(&resolved_path) {
+            crate::validate_path_case(context.file_provider, &resolved_path)?;
+        } else if !context.original_spec().allow_not_exist() {
             return Err(anyhow::anyhow!(
                 "File not found: {}",
                 resolved_path.display()
             ));
-        }
-
-        if context.file_provider.exists(&resolved_path) {
-            crate::validate_path_case(context.file_provider, &resolved_path)?;
-            self.insert_load_spec(resolved_path.clone(), context.latest_spec().clone());
         }
 
         Ok(resolved_path)
@@ -913,15 +911,14 @@ impl EvalContextConfig {
 impl Default for EvalSession {
     fn default() -> Self {
         Self {
-            file_contents_cache: Arc::new(RwLock::new(HashMap::new())),
-            load_cache: Arc::new(RwLock::new(HashMap::new())),
-            footprint_cache: Arc::new(RwLock::new(HashMap::new())),
+            source_cache: Arc::default(),
+            load_cache: Arc::default(),
+            footprint_cache: Arc::default(),
+            symbol_cache: Arc::default(),
+            spice_cache: Arc::default(),
             symbol_index: Arc::new(RwLock::new(HashMap::new())),
-            symbol_params: Arc::new(RwLock::new(HashMap::new())),
             symbol_meta: Arc::new(RwLock::new(HashMap::new())),
             module_deps: Arc::new(RwLock::new(HashMap::new())),
-            type_cache: Arc::new(RwLock::new(HashMap::new())),
-            interface_map: Arc::new(RwLock::new(HashMap::new())),
             module_tree: Arc::new(RwLock::new(BTreeMap::new())),
         }
     }
@@ -964,66 +961,41 @@ impl EvalSession {
         self.module_tree.write().unwrap().clear();
     }
 
-    // --- Load cache ---
+    // --- Derived-data caches ---
 
-    fn get_cached_module(
-        &self,
-        scope: Option<PackageScopeKey>,
-        path: &Path,
-    ) -> Option<CachedModule> {
-        let key = (scope, path.to_path_buf());
-        self.load_cache.read().unwrap().get(&key).cloned()
-    }
-
-    fn cache_module(&self, scope: Option<PackageScopeKey>, path: PathBuf, module: CachedModule) {
-        let key = (scope, path);
-        self.load_cache.write().unwrap().insert(key, module);
-    }
-
+    /// Drop everything derived from source files: loaded modules, parsed
+    /// sources, and footprint/symbol/spice values.
     pub fn clear_load_cache(&self) {
-        self.load_cache.write().unwrap().clear();
-        self.footprint_cache.write().unwrap().clear();
+        self.load_cache.clear();
+        self.source_cache.clear();
+        self.footprint_cache.clear();
+        self.symbol_cache.clear();
+        self.spice_cache.clear();
     }
 
-    pub(crate) fn get_cached_footprint(&self, key: &FootprintCacheKey) -> Option<Vec<Diagnostic>> {
-        self.footprint_cache.read().unwrap().get(key).cloned()
-    }
-
-    pub(crate) fn cache_footprint(&self, key: FootprintCacheKey, diagnostics: Vec<Diagnostic>) {
-        self.footprint_cache
-            .write()
-            .unwrap()
-            .insert(key, diagnostics);
-    }
-
-    fn clear_file_contents(&self, path: &Path, footprint_key: Option<FootprintCacheKey>) {
-        self.file_contents_cache.write().unwrap().remove(path);
+    /// Drop all cached state derived from `path`: parsed source, footprint
+    /// diagnostics, and symbol/spice values sourced from it. A symbol library
+    /// entry is also dropped when `path` sits inside its split-library
+    /// directory.
+    fn invalidate_file(&self, path: &Path, footprint_key: Option<FootprintCacheKey>) {
+        self.source_cache.remove(&path.to_path_buf());
         if let Some(key) = footprint_key {
-            self.footprint_cache.write().unwrap().remove(&key);
+            self.footprint_cache.remove(&key);
         }
+        self.symbol_cache.retain(|(lib_path, _), _| {
+            lib_path != path && Some(lib_path.as_path()) != path.parent()
+        });
+        self.spice_cache
+            .retain(|(model_path, _), _| model_path != path);
     }
 
     fn clear_symbol_maps(&self, path: &Path) {
         self.symbol_index.write().unwrap().remove(path);
-        self.symbol_params.write().unwrap().remove(path);
         self.symbol_meta.write().unwrap().remove(path);
     }
 
     fn clear_module_dependencies(&self, path: &Path) {
         self.module_deps.write().unwrap().remove(path);
-    }
-
-    // --- File contents ---
-
-    fn get_file_contents(&self, path: &Path) -> Option<String> {
-        self.file_contents_cache.read().unwrap().get(path).cloned()
-    }
-
-    fn set_file_contents(&self, path: PathBuf, contents: String) {
-        self.file_contents_cache
-            .write()
-            .unwrap()
-            .insert(path, contents);
     }
 
     // --- Module dependencies ---
@@ -1053,11 +1025,9 @@ impl EvalSession {
     // --- Symbol metadata ---
 
     fn get_symbol_params(&self, file: &Path, symbol: &str) -> Option<Vec<String>> {
-        self.symbol_params
-            .read()
-            .unwrap()
-            .get(file)
-            .and_then(|m| m.get(symbol).cloned())
+        self.get_symbol_info(file, symbol)?
+            .parameters
+            .filter(|params| !params.is_empty())
     }
 
     fn get_symbol_info(&self, file: &Path, symbol: &str) -> Option<crate::SymbolInfo> {
@@ -1080,7 +1050,6 @@ impl EvalSession {
         &self,
         path: PathBuf,
         symbol_index: HashMap<String, PathBuf>,
-        symbol_params: HashMap<String, Vec<String>>,
         symbol_meta: HashMap<String, crate::SymbolInfo>,
     ) {
         if !symbol_index.is_empty() {
@@ -1088,12 +1057,6 @@ impl EvalSession {
                 .write()
                 .unwrap()
                 .insert(path.clone(), symbol_index);
-        }
-        if !symbol_params.is_empty() {
-            self.symbol_params
-                .write()
-                .unwrap()
-                .insert(path.clone(), symbol_params);
         }
         if !symbol_meta.is_empty() {
             self.symbol_meta.write().unwrap().insert(path, symbol_meta);
@@ -1264,7 +1227,6 @@ impl EvalContext {
             builtin_docs: self.config.builtin_docs.clone(),
             file_provider: self.config.file_provider.clone(),
             resolution: self.config.resolution.clone(),
-            path_to_spec: self.config.path_to_spec.clone(),
             module_path,
             load_chain: self.config.load_chain.clone(),
             source_path: None,
@@ -1286,27 +1248,34 @@ impl EvalContext {
 
     /// Construct the `Globals` used when evaluating modules. Kept in one place so the
     /// configuration stays consistent between the main evaluator and nested `load()`s.
+    /// Built once per process; `Globals` is cheaply cloneable and shared across threads.
     fn build_globals() -> starlark::environment::Globals {
-        GlobalsBuilder::extended_by(&[
-            LibraryExtension::RecordType,
-            LibraryExtension::Typing,
-            LibraryExtension::StructType,
-            LibraryExtension::Print,
-            LibraryExtension::Debug,
-            LibraryExtension::Partial,
-            LibraryExtension::Breakpoint,
-            LibraryExtension::SetType,
-            LibraryExtension::Json,
-        ])
-        .with(builtin_globals)
-        .with(component_globals)
-        .with(module_globals)
-        .with(interface_globals)
-        .with(assert_globals)
-        .with(file_globals)
-        .with(model_globals)
-        .with(test_bench_globals)
-        .build()
+        static GLOBALS: std::sync::OnceLock<starlark::environment::Globals> =
+            std::sync::OnceLock::new();
+        GLOBALS
+            .get_or_init(|| {
+                GlobalsBuilder::extended_by(&[
+                    LibraryExtension::RecordType,
+                    LibraryExtension::Typing,
+                    LibraryExtension::StructType,
+                    LibraryExtension::Print,
+                    LibraryExtension::Debug,
+                    LibraryExtension::Partial,
+                    LibraryExtension::Breakpoint,
+                    LibraryExtension::SetType,
+                    LibraryExtension::Json,
+                ])
+                .with(builtin_globals)
+                .with(component_globals)
+                .with(module_globals)
+                .with(interface_globals)
+                .with(assert_globals)
+                .with(file_globals)
+                .with(model_globals)
+                .with(test_bench_globals)
+                .build()
+            })
+            .clone()
     }
 
     /// Get a clone of the module tree from the session.
@@ -1326,13 +1295,13 @@ impl EvalContext {
     }
 
     fn get_cached_module(&self, path: &Path) -> Option<CachedModule> {
-        self.session
-            .get_cached_module(self.load_cache_scope(path), path)
+        let key = (self.load_cache_scope(path), path.to_path_buf());
+        self.session.load_cache.get(&key)
     }
 
     fn cache_module(&self, path: PathBuf, module: CachedModule) {
-        let scope = self.load_cache_scope(&path);
-        self.session.cache_module(scope, path, module);
+        let key = (self.load_cache_scope(&path), path);
+        self.session.load_cache.insert(key, module);
     }
 
     /// Check if there is a module dependency between two files
@@ -1467,6 +1436,62 @@ impl EvalContext {
         self.json_inputs.extend(json_inputs);
     }
 
+    /// Parse Starlark source with this context's dialect, using the recursive
+    /// descent parser (same AST as the default LALRPOP parser, roughly half
+    /// the cost).
+    fn parse_ast(&self, filename: &str, contents: String) -> starlark::Result<AstModule> {
+        let _span = info_span!("parse").entered();
+        AstModule::parse_with(
+            filename,
+            contents,
+            &self.dialect(),
+            starlark::syntax::ParserKind::Rd,
+        )
+    }
+
+    /// Contents + AST for the module being evaluated. Explicit contents (e.g.
+    /// an editor buffer) parse fresh; otherwise the file is read and parsed
+    /// through the session cache, so repeated instantiations of a module do
+    /// neither more than once.
+    fn parsed_source(&self) -> Result<ParsedSource, Box<WithDiagnostics<EvalOutput>>> {
+        let source_path = self
+            .config
+            .source_path
+            .as_deref()
+            .expect("source_path is set before eval");
+        let parse = |contents: String| {
+            self.parse_ast(
+                source_path.to_str().expect("path is not a string"),
+                contents,
+            )
+            .map(Arc::new)
+            .map_err(|err| Box::new(EvalMessage::from_error(source_path, &err).into()))
+        };
+
+        if let Some(contents) = &self.config.contents {
+            let contents = contents.clone();
+            let ast = parse(contents.clone())?;
+            return Ok(ParsedSource { contents, ast });
+        }
+
+        if let Some(source) = self.session.source_cache.get(&source_path.to_path_buf()) {
+            return Ok(source);
+        }
+
+        let contents = self
+            .file_provider()
+            .read_file(source_path)
+            .map_err(|err| Box::new(anyhow::anyhow!("Failed to read file: {err}").into()))?;
+        let source = ParsedSource {
+            ast: parse(contents.clone())?,
+            contents,
+        };
+        self.session
+            .source_cache
+            .insert(source_path.to_path_buf(), source.clone());
+        Ok(source)
+    }
+
     /// Evaluate the configured module. All required fields must be provided
     /// beforehand via the corresponding setters. When a required field is
     /// missing this function returns a failed [`WithDiagnostics`].
@@ -1480,50 +1505,19 @@ impl EvalContext {
     )]
     pub fn eval(mut self) -> WithDiagnostics<EvalOutput> {
         // Make sure a source path is set.
-        let source_path = match self.config.source_path {
-            Some(ref path) => path,
-            None => {
-                return anyhow::anyhow!("source_path not set on Context before eval()").into();
-            }
+        if self.config.source_path.is_none() {
+            return anyhow::anyhow!("source_path not set on Context before eval()").into();
+        }
+
+        let ParsedSource { contents, ast } = match self.parsed_source() {
+            Ok(source) => source,
+            Err(failure) => return *failure,
         };
+        // Later span lookups (e.g. `resolve_load_span`) read `config.contents`.
+        self.config.contents = Some(contents.clone());
+        let source_path = self.config.source_path.as_ref().unwrap();
 
-        self.config.track_file(source_path);
-
-        // Fetch contents: prefer explicit override, otherwise read from disk.
-        let contents_owned = match &self.config.contents {
-            Some(c) => c.clone(),
-            None => match self.file_provider().read_file(source_path) {
-                Ok(c) => {
-                    // Cache the read contents for subsequent accesses.
-                    self.config.contents = Some(c.clone());
-                    c
-                }
-                Err(err) => {
-                    return anyhow::anyhow!("Failed to read file: {}", err).into();
-                }
-            },
-        };
-
-        // Cache provided contents in `open_files` so that nested `load()` calls see the
-        // latest buffer state rather than potentially stale on-disk contents.
-        self.session
-            .set_file_contents(source_path.clone(), contents_owned.clone());
-
-        let ast_res = {
-            let _span = info_span!("parse").entered();
-            AstModule::parse(
-                source_path.to_str().expect("path is not a string"),
-                contents_owned.to_string(),
-                &self.dialect(),
-            )
-        };
-
-        let ast = match ast_res {
-            Ok(ast) => ast,
-            Err(err) => return EvalMessage::from_error(source_path, &err).into(),
-        };
-
-        for diagnostic in binding::check_bindings(&ast, source_path, &contents_owned) {
+        for diagnostic in binding::check_bindings(&ast, source_path, &contents) {
             self.add_load_diagnostic(diagnostic);
         }
         for diagnostic in explicit_prelude_load_diagnostics(&ast, &self.config) {
@@ -1555,7 +1549,7 @@ impl EvalContext {
                 // We are only interested in whether evaluation succeeded, not in the
                 // value of the final expression, so map the result to `()`.
                 let _span = info_span!("starlark_eval").entered();
-                eval.eval_module(ast.clone(), &globals)
+                eval.eval_module(AstModule::clone(&ast), &globals)
                     .and_then(|_| Self::apply_component_modifiers(&mut eval))
             };
 
@@ -1706,21 +1700,17 @@ impl EvalContext {
         })
     }
 
-    /// Get the file contents from the in-memory cache
-    pub fn get_file_contents(&self, path: &Path) -> Option<String> {
-        self.session.get_file_contents(path)
-    }
-
-    /// Set file contents in the in-memory cache
-    pub fn set_file_contents(&self, path: PathBuf, contents: String) {
-        self.session.set_file_contents(path, contents);
-    }
-
-    /// Remove file contents from the in-memory cache.
-    pub fn clear_file_contents(&self, path: &Path) {
+    /// Drop cached state derived from `path` (parsed source, footprint
+    /// diagnostics, symbol/spice values). Call when a file changes on disk or
+    /// in an editor buffer. The path is canonicalized to match cache keys.
+    pub fn invalidate_file(&self, path: &Path) {
+        let path = self
+            .file_provider()
+            .canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf());
         let footprint_key = (path.extension().and_then(|ext| ext.to_str()) == Some("kicad_mod"))
-            .then(|| footprint_cache_key(path, &self.config));
-        self.session.clear_file_contents(path, footprint_key);
+            .then(|| footprint_cache_key(&path, &self.config));
+        self.session.invalidate_file(&path, footprint_key);
     }
 
     /// Get all symbols for a file
@@ -1748,13 +1738,10 @@ impl EvalContext {
         &self,
         path: PathBuf,
         contents: String,
-    ) -> WithDiagnostics<ParseAndAnalyzeOutput> {
+    ) -> WithDiagnostics<EvalOutput> {
         self.session.clear_load_cache();
         self.session.prepare_for_root_eval();
         self.session.clear_symbol_maps(&path);
-
-        // Update the in-memory file contents
-        self.set_file_contents(path.clone(), contents.clone());
 
         // Evaluate the file
         let result = self
@@ -1770,7 +1757,6 @@ impl EvalContext {
             // cross-file invalidation can still reach this module.
             self.session.clear_module_dependencies(&path);
             let mut symbol_index: HashMap<String, PathBuf> = HashMap::new();
-            let mut symbol_params: HashMap<String, Vec<String>> = HashMap::new();
             let mut symbol_meta: HashMap<String, crate::SymbolInfo> = HashMap::new();
 
             let names = output.star_module.names().collect::<Vec<_>>();
@@ -1801,11 +1787,6 @@ impl EvalContext {
 
                         symbol_index.insert(name_str.to_string(), p.clone());
 
-                        // Record parameter list for signature helpers.
-                        if !loader.params.is_empty() {
-                            symbol_params.insert(name_str.to_string(), loader.params.clone());
-                        }
-
                         // Build SymbolInfo
                         let info = crate::SymbolInfo {
                             kind: crate::SymbolKind::Module,
@@ -1828,11 +1809,9 @@ impl EvalContext {
                             _ => crate::SymbolKind::Variable,
                         };
 
-                        let params = symbol_params.get(name_str).cloned();
-
                         let info = crate::SymbolInfo {
                             kind,
-                            parameters: params,
+                            parameters: None,
                             source_path: None,
                             type_name: typ.to_string(),
                             documentation: None,
@@ -1858,13 +1837,10 @@ impl EvalContext {
 
             // Store/update the maps for this file.
             self.session
-                .update_symbol_maps(path.clone(), symbol_index, symbol_params, symbol_meta);
+                .update_symbol_maps(path.clone(), symbol_index, symbol_meta);
         }
 
-        result.map(|output| ParseAndAnalyzeOutput {
-            ast: output.ast.clone(),
-            eval_output: output,
-        })
+        result
     }
 
     /// Get the frozen module for a file if it has been evaluated
@@ -1948,12 +1924,8 @@ impl EvalContext {
     fn parse_current_ast(&self) -> Option<starlark::syntax::AstModule> {
         let source_path = self.config.source_path.as_ref()?;
         let contents = self.config.contents.as_ref()?;
-        starlark::syntax::AstModule::parse(
-            &source_path.to_string_lossy(),
-            contents.clone(),
-            &self.dialect(),
-        )
-        .ok()
+        self.parse_ast(&source_path.to_string_lossy(), contents.clone())
+            .ok()
     }
 
     /// Get the codemap for the current module being evaluated
@@ -2076,13 +2048,18 @@ impl EvalContext {
             .source_path
             .clone()
             .unwrap_or_else(|| PathBuf::from("<unknown>"));
-        let span = span.or_else(|| self.resolve_load_span(path));
+        // Resolving the load span requires re-parsing the current file, so only
+        // do it when a diagnostic actually needs to point at the load statement.
+        let load_span = |span: Option<ResolvedSpan>| span.or_else(|| self.resolve_load_span(path));
 
         // Fast path: if we've already loaded (and frozen) this module once
         // within the current evaluation context, simply return the cached
         // instance so that callers share the same definitions.
         if let Some(cached) = self.get_cached_module(&canonical_path) {
-            self.add_cached_load_warnings(path, &source_path, span, &cached.warnings);
+            if !cached.warnings.is_empty() {
+                let span = load_span(span);
+                self.add_cached_load_warnings(path, &source_path, span, &cached.warnings);
+            }
             return Ok(cached.output);
         }
 
@@ -2115,7 +2092,13 @@ impl EvalContext {
             .filter(|diag| matches!(diag.severity, EvalSeverity::Warning))
             .cloned()
             .collect();
-        self.add_cached_load_warnings(path, &source_path, span, &warning_diagnostics);
+        let needs_span = !warning_diagnostics.is_empty()
+            || result.output.is_none()
+            || result.diagnostics.iter().any(|d| d.is_error());
+        let span = if needs_span { load_span(span) } else { span };
+        if !warning_diagnostics.is_empty() {
+            self.add_cached_load_warnings(path, &source_path, span, &warning_diagnostics);
+        }
 
         // If there were any error diagnostics, return the first one
         if let Some(first_error) = result.diagnostics.iter().find(|d| d.is_error()) {
@@ -2288,7 +2271,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn clear_file_contents_invalidates_canonicalized_footprint_cache_key() {
+    fn invalidate_file_invalidates_canonicalized_footprint_cache_key() {
         let context = EvalContext::new(
             Arc::new(InMemoryFileProvider::empty()),
             ResolutionResult::empty(),
@@ -2297,11 +2280,14 @@ mod tests {
         let invalidation_path = Path::new("/dir/../dir/bad.kicad_mod");
         let key = footprint_cache_key(cached_path, context.config());
 
-        context.session.cache_footprint(key.clone(), Vec::new());
-        assert!(context.session.get_cached_footprint(&key).is_some());
+        context
+            .session
+            .footprint_cache
+            .insert(key.clone(), Vec::new());
+        assert!(context.session.footprint_cache.get(&key).is_some());
 
-        context.clear_file_contents(invalidation_path);
+        context.invalidate_file(invalidation_path);
 
-        assert!(context.session.get_cached_footprint(&key).is_none());
+        assert!(context.session.footprint_cache.get(&key).is_none());
     }
 }

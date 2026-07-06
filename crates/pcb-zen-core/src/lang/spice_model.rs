@@ -191,10 +191,20 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct SubCircuit {
     pub(crate) nets: Vec<String>,
     pub(crate) params: HashSet<String>,
+}
+
+/// A spice subcircuit cached on the [`EvalSession`] by (resolved model path,
+/// subcircuit name): the model file's contents plus the parsed subcircuit.
+///
+/// [`EvalSession`]: crate::lang::eval::EvalSession
+#[derive(Clone)]
+pub(crate) struct CachedSpiceModel {
+    pub(crate) definition: String,
+    pub(crate) circuit: SubCircuit,
 }
 
 pub(crate) fn resolve_spice_subcircuit(
@@ -210,19 +220,35 @@ pub(crate) fn resolve_spice_subcircuit(
             starlark::Error::new_other(anyhow!("Failed to resolve spice model path: {}", e))
         })?;
 
-    let contents = eval_ctx
-        .file_provider()
-        .read_file(&resolved_path)
-        .map_err(|e| {
-            starlark::Error::new_other(anyhow!(
-                "Failed to read spice model file '{}': {}",
-                resolved_path.display(),
-                e
-            ))
-        })?;
-
-    let circuit = get_sub_circuit(&contents, name)?;
-    Ok((contents, circuit))
+    // Reading and parsing the subcircuit is pure in (resolved_path, name), so
+    // the result is cached on the session.
+    let cache_key = (resolved_path, name.to_string());
+    let cached = match eval_ctx.session().spice_cache.get(&cache_key) {
+        Some(cached) => cached,
+        None => {
+            let definition = eval_ctx
+                .file_provider()
+                .read_file(&cache_key.0)
+                .map_err(|e| {
+                    starlark::Error::new_other(anyhow!(
+                        "Failed to read spice model file '{}': {}",
+                        cache_key.0.display(),
+                        e
+                    ))
+                })?;
+            let circuit = get_sub_circuit(&definition, name)?;
+            let loaded = CachedSpiceModel {
+                definition,
+                circuit,
+            };
+            eval_ctx
+                .session()
+                .spice_cache
+                .insert(cache_key, loaded.clone());
+            loaded
+        }
+    };
+    Ok((cached.definition, cached.circuit))
 }
 
 pub(crate) fn validate_spice_model(

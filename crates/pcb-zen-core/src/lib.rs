@@ -148,6 +148,16 @@ pub use lang::net::{FrozenNetValue, NetId};
 pub use lang::spice_model::FrozenSpiceModelValue;
 
 /// Abstraction for file system access to make the core WASM-compatible
+/// A directory entry together with the file type its directory listing
+/// reported, so callers can classify entries without extra `stat` calls.
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    pub path: std::path::PathBuf,
+    /// Whether the entry is a directory (not following symlinks).
+    pub is_dir: bool,
+    pub is_symlink: bool,
+}
+
 pub trait FileProvider: Send + Sync {
     /// Read the contents of a file at the given path
     fn read_file(&self, path: &std::path::Path) -> Result<String, FileProviderError>;
@@ -166,6 +176,27 @@ pub trait FileProvider: Send + Sync {
         &self,
         path: &std::path::Path,
     ) -> Result<Vec<std::path::PathBuf>, FileProviderError>;
+
+    /// List a directory together with each entry's file type. Native
+    /// providers get this from the directory read itself; the default
+    /// implementation falls back to per-entry queries.
+    fn list_directory_entries(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Vec<DirEntry>, FileProviderError> {
+        Ok(self
+            .list_directory(path)?
+            .into_iter()
+            .map(|path| {
+                let is_symlink = self.is_symlink(&path);
+                DirEntry {
+                    is_dir: self.is_directory(&path) && !is_symlink,
+                    is_symlink,
+                    path,
+                }
+            })
+            .collect())
+    }
 
     /// Canonicalize a path (make it absolute)
     fn canonicalize(&self, path: &std::path::Path)
@@ -201,6 +232,13 @@ impl<T: FileProvider + ?Sized> FileProvider for Arc<T> {
         path: &std::path::Path,
     ) -> Result<Vec<std::path::PathBuf>, FileProviderError> {
         (**self).list_directory(path)
+    }
+
+    fn list_directory_entries(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Vec<DirEntry>, FileProviderError> {
+        (**self).list_directory_entries(path)
     }
 
     fn canonicalize(
@@ -324,6 +362,33 @@ impl FileProvider for DefaultFileProvider {
             }
         }
         Ok(paths)
+    }
+
+    fn list_directory_entries(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Vec<DirEntry>, FileProviderError> {
+        let entries = std::fs::read_dir(path).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => FileProviderError::NotFound(path.to_path_buf()),
+            std::io::ErrorKind::PermissionDenied => {
+                FileProviderError::PermissionDenied(path.to_path_buf())
+            }
+            _ => FileProviderError::IoError(e.to_string()),
+        })?;
+
+        let mut result = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| FileProviderError::IoError(e.to_string()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|e| FileProviderError::IoError(e.to_string()))?;
+            result.push(DirEntry {
+                path: entry.path(),
+                is_dir: file_type.is_dir(),
+                is_symlink: file_type.is_symlink(),
+            });
+        }
+        Ok(result)
     }
 
     fn canonicalize(

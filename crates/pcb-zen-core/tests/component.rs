@@ -169,15 +169,13 @@ fn file_backed_footprint_validation_reports_embedded_file_errors() {
     ]);
     assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
 
-    let schematic_result = result
+    let diagnostics = result
         .output
         .expect("expected eval output")
-        .to_schematic_with_diagnostics();
+        .validate_footprints();
 
-    assert!(schematic_result.diagnostics.has_errors());
-    let footprint_diags = schematic_result
-        .diagnostics
-        .diagnostics
+    assert!(diagnostics.iter().any(|d| d.is_error()));
+    let footprint_diags = diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.body.contains("uses invalid footprint"))
         .collect::<Vec<_>>();

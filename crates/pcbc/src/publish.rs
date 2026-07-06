@@ -718,6 +718,7 @@ fn publish_packages(start_path: &Path, args: &PublishArgs) -> Result<()> {
     }
 
     let mut workspace = get_workspace_info(&file_provider, start_path)?;
+    pcb_zen::workspace::enrich_git_metadata(&mut workspace);
 
     // Fail on workspace discovery errors (invalid pcb.toml files)
     if !workspace.errors.is_empty() {
