@@ -269,13 +269,6 @@ pub fn build_package_roots<'a>(
     roots
 }
 
-fn resolution_package_roots(
-    workspace_info: &WorkspaceInfo,
-    resolution: &FrozenResolutionSet,
-) -> BTreeMap<String, PathBuf> {
-    build_package_roots(workspace_info, frozen_dependency_maps(resolution))
-}
-
 fn frozen_dependency_maps(
     resolution: &FrozenResolutionSet,
 ) -> impl Iterator<Item = &BTreeMap<String, PathBuf>> {
@@ -655,22 +648,69 @@ pub struct ResolutionResult {
     /// Keys are `package://` URIs for `.kicad_sym` files. Values are ordered lists
     /// of parts declared for that symbol (preserving manifest order).
     pub symbol_parts: HashMap<String, Vec<ManifestPart>>,
-    package_roots: Arc<BTreeMap<String, PathBuf>>,
+    indexes: Arc<PackageIndexes>,
+}
+
+/// Lookup tables derived from the workspace and resolution maps, rebuilt
+/// whenever they change. Package-ownership queries walk a path's ancestors
+/// over these instead of scanning every package.
+#[derive(Debug, Default)]
+struct PackageIndexes {
+    /// Coordinate → absolute package root.
+    package_roots: BTreeMap<String, PathBuf>,
     /// `package_roots` with `workspace_cache_path` applied to each root — the
-    /// map returned by [`Self::package_roots`] and matched by
-    /// [`Self::format_package_uri`].
-    workspace_package_roots: Arc<BTreeMap<String, PathBuf>>,
+    /// map returned by [`ResolutionResult::package_roots`].
+    workspace_package_roots: BTreeMap<String, PathBuf>,
     /// Reverse of `workspace_package_roots`: package root path → coordinate,
-    /// so `format_package_uri` can walk a path's ancestors instead of
-    /// scanning every package root.
-    package_root_index: Arc<HashMap<PathBuf, String>>,
+    /// for `format_package_uri`.
+    root_coords: HashMap<PathBuf, String>,
     /// Package root path → root package URL, for resolution maps whose own
-    /// workspace package sits at that path. Lets `frozen_root_for_file` walk
-    /// a file's ancestors instead of scanning every resolution map.
-    workspace_root_index: Arc<HashMap<PathBuf, String>>,
+    /// workspace package sits at that path, for `frozen_root_for_file`.
+    own_roots: HashMap<PathBuf, String>,
     /// Workspace-relative package dir → package URL, for
-    /// `workspace_package_url_for_path` ancestor-walk lookups.
-    workspace_rel_index: Arc<HashMap<PathBuf, String>>,
+    /// `workspace_package_url_for_path`.
+    rel_dirs: HashMap<PathBuf, String>,
+}
+
+impl PackageIndexes {
+    fn new(workspace_info: &WorkspaceInfo, resolution: &FrozenResolutionSet) -> Self {
+        let package_roots = build_package_roots(workspace_info, frozen_dependency_maps(resolution));
+
+        let workspace_package_roots: BTreeMap<String, PathBuf> = package_roots
+            .iter()
+            .map(|(coord, root)| (coord.clone(), workspace_cache_path(workspace_info, root)))
+            .collect();
+        // On duplicate root paths the later coordinate wins, matching the
+        // last-maximum tie-break of the longest-prefix scan this replaces.
+        let root_coords = workspace_package_roots
+            .iter()
+            .map(|(coord, root)| (root.clone(), coord.clone()))
+            .collect();
+
+        let mut own_roots = HashMap::new();
+        for (root_package, map) in resolution {
+            for (root, package) in &map.packages {
+                if matches!(&package.identity, FrozenPackageIdentity::Workspace(url) if url == root_package)
+                {
+                    own_roots.insert(root.clone(), root_package.clone());
+                }
+            }
+        }
+
+        let rel_dirs = workspace_info
+            .packages
+            .iter()
+            .map(|(url, pkg)| (pkg.rel_path.clone(), url.clone()))
+            .collect();
+
+        Self {
+            package_roots,
+            workspace_package_roots,
+            root_coords,
+            own_roots,
+            rel_dirs,
+        }
+    }
 }
 
 /// Map a global-cache path to its workspace-local `.pcb/cache` equivalent.
@@ -683,68 +723,18 @@ fn workspace_cache_path(workspace_info: &WorkspaceInfo, path: &Path) -> PathBuf 
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Package roots with `workspace_cache_path` applied, plus the reverse
-/// root-path → coordinate index used for longest-prefix lookups.
-#[allow(clippy::type_complexity)]
-fn workspace_package_roots(
-    workspace_info: &WorkspaceInfo,
-    package_roots: &BTreeMap<String, PathBuf>,
-) -> (Arc<BTreeMap<String, PathBuf>>, Arc<HashMap<PathBuf, String>>) {
-    let roots: BTreeMap<String, PathBuf> = package_roots
-        .iter()
-        .map(|(coord, root)| (coord.clone(), workspace_cache_path(workspace_info, root)))
-        .collect();
-    // On duplicate root paths the later coordinate wins, matching the
-    // last-maximum tie-break of the longest-prefix scan this replaces.
-    let index: HashMap<PathBuf, String> = roots
-        .iter()
-        .map(|(coord, root)| (root.clone(), coord.clone()))
-        .collect();
-    (Arc::new(roots), Arc::new(index))
-}
-
-/// Workspace-relative package dir → package URL.
-fn workspace_rel_index(workspace_info: &WorkspaceInfo) -> HashMap<PathBuf, String> {
-    workspace_info
-        .packages
-        .iter()
-        .map(|(url, pkg)| (pkg.rel_path.clone(), url.clone()))
-        .collect()
-}
-
-fn workspace_root_index(resolution: &FrozenResolutionSet) -> HashMap<PathBuf, String> {
-    let mut index = HashMap::new();
-    for (root_package, map) in resolution {
-        for (root, package) in &map.packages {
-            if matches!(&package.identity, FrozenPackageIdentity::Workspace(url) if url == root_package)
-            {
-                index.insert(root.clone(), root_package.clone());
-            }
-        }
-    }
-    index
-}
-
 impl ResolutionResult {
     pub fn frozen(
         workspace_info: WorkspaceInfo,
         resolution: FrozenResolutionSet,
         symbol_parts: HashMap<String, Vec<ManifestPart>>,
     ) -> Self {
-        let package_roots = Arc::new(resolution_package_roots(&workspace_info, &resolution));
-        let (workspace_package_roots, package_root_index) =
-            workspace_package_roots(&workspace_info, &package_roots);
-        let workspace_root_index = Arc::new(workspace_root_index(&resolution));
-        let workspace_rel_index = Arc::new(workspace_rel_index(&workspace_info));
+        let indexes = Arc::new(PackageIndexes::new(&workspace_info, &resolution));
         Self {
             workspace_info,
             resolution,
             symbol_parts,
-            package_roots,
-            workspace_package_roots,
-            package_root_index,
-            workspace_root_index,
-            workspace_rel_index,
+            indexes,
         }
     }
 
@@ -874,14 +864,7 @@ impl ResolutionResult {
     }
 
     fn refresh_package_roots(&mut self) {
-        self.package_roots = Arc::new(resolution_package_roots(
-            &self.workspace_info,
-            &self.resolution,
-        ));
-        (self.workspace_package_roots, self.package_root_index) =
-            workspace_package_roots(&self.workspace_info, &self.package_roots);
-        self.workspace_root_index = Arc::new(workspace_root_index(&self.resolution));
-        self.workspace_rel_index = Arc::new(workspace_rel_index(&self.workspace_info));
+        self.indexes = Arc::new(PackageIndexes::new(&self.workspace_info, &self.resolution));
     }
 
     /// Return the most specific workspace package URL that owns `path`.
@@ -903,12 +886,12 @@ impl ResolutionResult {
         // The final empty ancestor matches a root package with an empty rel_path.
         workspace_relative
             .ancestors()
-            .find_map(|dir| self.workspace_rel_index.get(dir))
+            .find_map(|dir| self.indexes.rel_dirs.get(dir))
             .map(String::as_str)
     }
 
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
-        self.workspace_package_roots.as_ref().clone()
+        self.indexes.workspace_package_roots.clone()
     }
 
     pub fn remote_package_versions(&self) -> BTreeMap<String, BTreeSet<String>> {
@@ -937,7 +920,7 @@ impl ResolutionResult {
         // root-path index and verify each candidate against its map, which is
         // equivalent to scanning every resolution map but O(path depth).
         file.ancestors().find_map(|dir| {
-            let root_package = self.workspace_root_index.get(dir)?;
+            let root_package = self.indexes.own_roots.get(dir)?;
             let resolution = self.resolution.get(root_package)?;
             let (root, package) = resolution.package_for_file(file)?;
             let is_own_root = root == dir
@@ -948,7 +931,7 @@ impl ResolutionResult {
 
     /// Resolve a package URI (`package://…`) to an absolute filesystem path.
     pub fn resolve_package_uri(&self, uri: &str) -> anyhow::Result<PathBuf> {
-        pcb_sch::resolve_package_uri(uri, self.package_roots.as_ref())
+        pcb_sch::resolve_package_uri(uri, &self.indexes.package_roots)
     }
 
     /// Format an absolute path as a stable URI (`package://…`).
@@ -959,7 +942,7 @@ impl ResolutionResult {
         let effective_abs = workspace_cache_path(&self.workspace_info, abs);
         let (root, coord) = effective_abs
             .ancestors()
-            .find_map(|dir| self.package_root_index.get(dir).map(|coord| (dir, coord)))?;
+            .find_map(|dir| self.indexes.root_coords.get(dir).map(|coord| (dir, coord)))?;
         pcb_sch::package_uri(coord, effective_abs.strip_prefix(root).ok()?)
     }
 }

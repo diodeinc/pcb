@@ -241,7 +241,10 @@ pub(crate) fn resolve_spice_subcircuit(
                 definition,
                 circuit,
             };
-            eval_ctx.session().spice_cache.insert(cache_key, loaded.clone());
+            eval_ctx
+                .session()
+                .spice_cache
+                .insert(cache_key, loaded.clone());
             loaded
         }
     };

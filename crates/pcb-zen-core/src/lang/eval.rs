@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::anyhow;
 use pcb_sch::physical::PhysicalValue;
+use starlark::environment::FrozenModule;
 use starlark::{
     PrintHandler,
     environment::{GlobalsBuilder, LibraryExtension, Module},
@@ -18,7 +19,6 @@ use starlark::{
     values::{FrozenHeapName, FrozenValue, Heap, Value, ValueLike},
 };
 use starlark::{codemap::ResolvedSpan, collections::SmallMap};
-use starlark::environment::FrozenModule;
 use starlark_syntax::syntax::{
     ast::{LoadArgP, StmtP},
     module::AstModuleFields,
@@ -446,9 +446,6 @@ pub struct EvalSession {
         Arc<CacheMap<SpiceCacheKey, crate::lang::spice_model::CachedSpiceModel>>,
     /// Per-file mapping of `symbol → target path` for "go-to definition".
     symbol_index: Arc<RwLock<HashMap<PathBuf, HashMap<String, PathBuf>>>>,
-    /// Per-file mapping of `symbol → parameter list` for signature help.
-    #[allow(clippy::type_complexity)]
-    symbol_params: Arc<RwLock<HashMap<PathBuf, HashMap<String, Vec<String>>>>>,
     /// Per-file mapping of `symbol → metadata` (kind, docs, etc.)
     symbol_meta: Arc<RwLock<HashMap<PathBuf, HashMap<String, crate::SymbolInfo>>>>,
     /// Map of `module.zen` → set of files referenced via `load()`.
@@ -470,11 +467,6 @@ pub struct EvalContextConfig {
 
     /// Resolution result from dependency resolution.
     pub(crate) resolution: Arc<ResolutionResult>,
-
-    /// Canonical URL each file was resolved from, recorded for files loaded
-    /// via URL-based specs. Lets [`Self::file_url`] reconstruct a file's URL
-    /// without consulting the resolution maps. Shared across all contexts.
-    pub(crate) resolved_urls: Arc<RwLock<HashMap<PathBuf, String>>>,
 
     /// The fully qualified path of the module we are evaluating (e.g., "root", "root.child")
     pub(crate) module_path: ModulePath,
@@ -533,7 +525,6 @@ impl EvalContextConfig {
             builtin_docs,
             file_provider,
             resolution,
-            resolved_urls: Arc::new(RwLock::new(HashMap::new())),
             module_path: ModulePath::root(),
             load_chain: HashSet::new(),
             source_path: None,
@@ -606,7 +597,6 @@ impl EvalContextConfig {
             builtin_docs: self.builtin_docs.clone(),
             file_provider: self.file_provider.clone(),
             resolution: self.resolution.clone(),
-            resolved_urls: self.resolved_urls.clone(),
             module_path: child_module_path,
             load_chain: child_load_chain,
             source_path: None,
@@ -635,7 +625,6 @@ impl EvalContextConfig {
             builtin_docs: self.builtin_docs.clone(),
             file_provider: self.file_provider.clone(),
             resolution: self.resolution.clone(),
-            resolved_urls: self.resolved_urls.clone(),
             module_path: child_module_path,
             load_chain: HashSet::new(),
             source_path: None,
@@ -792,17 +781,9 @@ impl EvalContextConfig {
         self.try_resolve_workspace(context, &scope)
     }
 
-    /// Compute the canonical URL for a file being evaluated.
-    ///
-    /// For files loaded via URL (remote deps), returns the URL recorded at
-    /// resolution time. For local files (entry points, intra-package loads),
-    /// uses the reverse map to find the package URL and appends the file's
-    /// relative path within that package.
+    /// Compute the canonical URL for a file being evaluated: the owning
+    /// package's URL plus the file's relative path within that package.
     fn file_url(&self, file_path: &Path) -> anyhow::Result<String> {
-        if let Some(url) = self.resolved_urls.read().unwrap().get(file_path) {
-            return Ok(url.clone());
-        }
-
         self.resolution
             .package_url_for_file(
                 file_path,
@@ -834,16 +815,19 @@ impl EvalContextConfig {
         let canonical_resolved = context.file_provider.canonicalize(&resolved_path)?;
         let canonical_root = context.file_provider.canonicalize(&package_root)?;
 
-        let mut crosses_package_boundary = !canonical_resolved.starts_with(&canonical_root);
-        if !crosses_package_boundary
-            && let Some(target_scope) = self.package_scope_for_file(&canonical_resolved)
-        {
-            let target_root = context
-                .file_provider
-                .canonicalize(target_scope.root())
-                .unwrap_or_else(|_| target_scope.root().to_path_buf());
-            crosses_package_boundary = target_root != canonical_root;
-        }
+        // The load crosses a package boundary when the target is owned by a
+        // different package than the current file — judged first by the frozen
+        // package scopes, then by the (possibly finer-grained) workspace
+        // package map.
+        let target_root = self
+            .package_scope_for_file(&canonical_resolved)
+            .map(|target_scope| {
+                context
+                    .file_provider
+                    .canonicalize(target_scope.root())
+                    .unwrap_or_else(|_| target_scope.root().to_path_buf())
+            });
+        let mut crosses_package_boundary = target_root.as_deref() != Some(&canonical_root);
         if !crosses_package_boundary
             && let (Some(current_url), Some(target_url)) = (
                 self.resolution
@@ -888,12 +872,6 @@ impl EvalContextConfig {
     ) -> Result<PathBuf, anyhow::Error> {
         if context.file_provider.exists(&resolved_path) {
             crate::validate_path_case(context.file_provider, &resolved_path)?;
-            if let Some(url) = context.latest_spec().to_full_url() {
-                self.resolved_urls
-                    .write()
-                    .unwrap()
-                    .insert(resolved_path.clone(), url);
-            }
         } else if !context.original_spec().allow_not_exist() {
             return Err(anyhow::anyhow!(
                 "File not found: {}",
@@ -936,7 +914,6 @@ impl Default for EvalSession {
             symbol_cache: Arc::default(),
             spice_cache: Arc::default(),
             symbol_index: Arc::new(RwLock::new(HashMap::new())),
-            symbol_params: Arc::new(RwLock::new(HashMap::new())),
             symbol_meta: Arc::new(RwLock::new(HashMap::new())),
             module_deps: Arc::new(RwLock::new(HashMap::new())),
             module_tree: Arc::new(RwLock::new(BTreeMap::new())),
@@ -1011,7 +988,6 @@ impl EvalSession {
 
     fn clear_symbol_maps(&self, path: &Path) {
         self.symbol_index.write().unwrap().remove(path);
-        self.symbol_params.write().unwrap().remove(path);
         self.symbol_meta.write().unwrap().remove(path);
     }
 
@@ -1046,11 +1022,9 @@ impl EvalSession {
     // --- Symbol metadata ---
 
     fn get_symbol_params(&self, file: &Path, symbol: &str) -> Option<Vec<String>> {
-        self.symbol_params
-            .read()
-            .unwrap()
-            .get(file)
-            .and_then(|m| m.get(symbol).cloned())
+        self.get_symbol_info(file, symbol)?
+            .parameters
+            .filter(|params| !params.is_empty())
     }
 
     fn get_symbol_info(&self, file: &Path, symbol: &str) -> Option<crate::SymbolInfo> {
@@ -1073,7 +1047,6 @@ impl EvalSession {
         &self,
         path: PathBuf,
         symbol_index: HashMap<String, PathBuf>,
-        symbol_params: HashMap<String, Vec<String>>,
         symbol_meta: HashMap<String, crate::SymbolInfo>,
     ) {
         if !symbol_index.is_empty() {
@@ -1081,12 +1054,6 @@ impl EvalSession {
                 .write()
                 .unwrap()
                 .insert(path.clone(), symbol_index);
-        }
-        if !symbol_params.is_empty() {
-            self.symbol_params
-                .write()
-                .unwrap()
-                .insert(path.clone(), symbol_params);
         }
         if !symbol_meta.is_empty() {
             self.symbol_meta.write().unwrap().insert(path, symbol_meta);
@@ -1257,7 +1224,6 @@ impl EvalContext {
             builtin_docs: self.config.builtin_docs.clone(),
             file_provider: self.config.file_provider.clone(),
             resolution: self.config.resolution.clone(),
-            resolved_urls: self.config.resolved_urls.clone(),
             module_path,
             load_chain: self.config.load_chain.clone(),
             source_path: None,
@@ -1491,9 +1457,12 @@ impl EvalContext {
             .as_deref()
             .expect("source_path is set before eval");
         let parse = |contents: String| {
-            self.parse_ast(source_path.to_str().expect("path is not a string"), contents)
-                .map(Arc::new)
-                .map_err(|err| Box::new(EvalMessage::from_error(source_path, &err).into()))
+            self.parse_ast(
+                source_path.to_str().expect("path is not a string"),
+                contents,
+            )
+            .map(Arc::new)
+            .map_err(|err| Box::new(EvalMessage::from_error(source_path, &err).into()))
         };
 
         if let Some(contents) = &self.config.contents {
@@ -1781,7 +1750,6 @@ impl EvalContext {
             // cross-file invalidation can still reach this module.
             self.session.clear_module_dependencies(&path);
             let mut symbol_index: HashMap<String, PathBuf> = HashMap::new();
-            let mut symbol_params: HashMap<String, Vec<String>> = HashMap::new();
             let mut symbol_meta: HashMap<String, crate::SymbolInfo> = HashMap::new();
 
             let names = output.star_module.names().collect::<Vec<_>>();
@@ -1812,11 +1780,6 @@ impl EvalContext {
 
                         symbol_index.insert(name_str.to_string(), p.clone());
 
-                        // Record parameter list for signature helpers.
-                        if !loader.params.is_empty() {
-                            symbol_params.insert(name_str.to_string(), loader.params.clone());
-                        }
-
                         // Build SymbolInfo
                         let info = crate::SymbolInfo {
                             kind: crate::SymbolKind::Module,
@@ -1839,11 +1802,9 @@ impl EvalContext {
                             _ => crate::SymbolKind::Variable,
                         };
 
-                        let params = symbol_params.get(name_str).cloned();
-
                         let info = crate::SymbolInfo {
                             kind,
-                            parameters: params,
+                            parameters: None,
                             source_path: None,
                             type_name: typ.to_string(),
                             documentation: None,
@@ -1869,7 +1830,7 @@ impl EvalContext {
 
             // Store/update the maps for this file.
             self.session
-                .update_symbol_maps(path.clone(), symbol_index, symbol_params, symbol_meta);
+                .update_symbol_maps(path.clone(), symbol_index, symbol_meta);
         }
 
         result
@@ -2312,7 +2273,10 @@ mod tests {
         let invalidation_path = Path::new("/dir/../dir/bad.kicad_mod");
         let key = footprint_cache_key(cached_path, context.config());
 
-        context.session.footprint_cache.insert(key.clone(), Vec::new());
+        context
+            .session
+            .footprint_cache
+            .insert(key.clone(), Vec::new());
         assert!(context.session.footprint_cache.get(&key).is_some());
 
         context.invalidate_file(invalidation_path);
