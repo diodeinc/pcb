@@ -7,6 +7,8 @@ mod affine;
 mod arc;
 pub mod arcfit;
 mod bbox;
+pub mod bridge;
+pub mod dfm;
 pub mod path;
 mod point;
 pub mod region;
