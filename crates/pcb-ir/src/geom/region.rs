@@ -52,7 +52,13 @@ pub fn rings_to_contours(rings: Vec<Ring>) -> Vec<ContourBuf> {
 
 /// Regularize rings under the given fill rule into non-overlapping shapes.
 pub fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {
-    flatten_shapes(rings.simplify_shape(overlay_fill_rule(fill_rule)))
+    flatten_shapes(simplify_shapes(rings, fill_rule))
+}
+
+/// Regularize rings keeping the connected-shape structure: each shape is its
+/// outer ring followed by its holes, wound opposite.
+pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
+    rings.simplify_shape(overlay_fill_rule(fill_rule))
 }
 
 pub fn union_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {

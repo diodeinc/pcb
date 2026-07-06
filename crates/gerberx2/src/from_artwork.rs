@@ -634,32 +634,10 @@ fn lower_region_image_contours(
         return Ok(vec![lower_region_contour(&payloads[0])?]);
     }
 
-    let shapes = group_rings_into_shapes(region::simplify_rings(rings, fill_rule));
-    shapes
+    region::simplify_shapes(rings, fill_rule)
         .into_iter()
         .filter_map(region_shape_contour)
         .collect::<Result<Vec<_>>>()
-}
-
-/// Regroup a regularized flat ring list into shapes: each outer boundary
-/// followed by its holes. `region::simplify_rings` emits shapes in order with
-/// the outer ring first and holes wound opposite to it, so a ring wound like
-/// the first ring starts a new shape.
-fn group_rings_into_shapes(rings: Vec<Ring>) -> Vec<Vec<Ring>> {
-    let mut shapes: Vec<Vec<Ring>> = Vec::new();
-    let mut outer_sign = 0.0;
-    for ring in rings {
-        let sign = region::ring_signed_area(&ring).signum();
-        if shapes.is_empty() {
-            outer_sign = sign;
-        }
-        if shapes.is_empty() || sign == outer_sign {
-            shapes.push(vec![ring]);
-        } else if let Some(shape) = shapes.last_mut() {
-            shape.push(ring);
-        }
-    }
-    shapes
 }
 
 fn lower_region_contour(contour: &ContourBuf) -> Result<Contour> {
