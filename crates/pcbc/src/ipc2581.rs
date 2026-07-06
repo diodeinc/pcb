@@ -115,6 +115,18 @@ enum Commands {
         #[arg(long)]
         flat: bool,
     },
+    /// Check exported Gerber geometry for manufacturability slivers
+    Dfm {
+        /// IPC-2581 XML file to check
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Layout target to check. Supports board or board-array.
+        #[arg(long, default_value = "board")]
+        layout_target: GerberLayoutTarget,
+        /// Minimum feature and gap width in millimeters
+        #[arg(long, default_value_t = 0.09)]
+        min_width_mm: f64,
+    },
     /// Export IPC-2581 fabrication layers as manufacturing files
     Gerber {
         /// IPC-2581 XML file to export from
@@ -317,6 +329,11 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 flat,
             },
         ),
+        Commands::Dfm {
+            file,
+            layout_target,
+            min_width_mm,
+        } => commands::dfm::execute(&file, layout_target.into(), min_width_mm),
         Commands::Gerber {
             file,
             layout_target,

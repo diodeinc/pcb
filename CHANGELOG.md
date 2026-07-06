@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added `pcb gerber normalize` to re-emit a Gerber X2 layer through the pcb-ir pipeline.
+- Added `pcb ipc2581 dfm` to report copper, mask, and paste features or gaps narrower than a manufacturing minimum.
 
 ### Changed
 
