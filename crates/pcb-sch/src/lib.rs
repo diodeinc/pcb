@@ -161,13 +161,15 @@ mod refdes_alloc {
     }
 
     fn parse_hint(s: &str) -> Option<ParsedRefdes> {
-        // Hint format is intentionally strict: 1-3 uppercase letters + 1-3 digits.
-        if !(2..=6).contains(&s.len()) {
+        // Hint format is intentionally strict: 1-3 uppercase letters + 1-4 digits.
+        // 4 digits covers 1000-series refdes (e.g. J1000, R1500, LED1001) that are
+        // common on large boards; longer numbers stay out of the fuzzy-hint path.
+        if !(2..=7).contains(&s.len()) {
             return None;
         }
         let first_digit = s.find(|c: char| c.is_ascii_digit())?;
         let (prefix, digits) = s.split_at(first_digit);
-        if !(1..=3).contains(&prefix.len()) || !(1..=3).contains(&digits.len()) {
+        if !(1..=3).contains(&prefix.len()) || !(1..=4).contains(&digits.len()) {
             return None;
         }
         if !is_known_prefix(prefix) {
@@ -1363,6 +1365,68 @@ mod tests {
         assert_eq!(ref_map.get(&a_ref), Some(&"R22".to_string()));
         assert_eq!(ref_map.get(&b_ref), Some(&"R5".to_string()));
         assert_eq!(ref_map.get(&c_ref), Some(&"R1".to_string()));
+    }
+
+    #[test]
+    fn assign_refdes_honors_four_digit_hint() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        // 1000-series refdes carried as an instance name (non-leaf hint).
+        for name in ["R1000", "R1500", "R9999"] {
+            let r_ref = InstanceRef::new(mod_ref.clone(), vec![name.into(), "R".into()]);
+            let r = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+            schematic.add_instance(r_ref, r);
+        }
+
+        // Multi-letter known prefix + 4 digits (7 chars): must clear the length gate.
+        let led_ref = InstanceRef::new(mod_ref.clone(), vec!["LED1001".into(), "D".into()]);
+        let led = Instance::component(mod_ref.clone()).with_attribute("prefix", "LED".to_string());
+        schematic.add_instance(led_ref.clone(), led);
+
+        let ref_map = schematic.assign_reference_designators();
+
+        for name in ["R1000", "R1500", "R9999"] {
+            let r_ref = InstanceRef::new(mod_ref.clone(), vec![name.into(), "R".into()]);
+            assert_eq!(ref_map.get(&r_ref), Some(&name.to_string()));
+        }
+        assert_eq!(ref_map.get(&led_ref), Some(&"LED1001".to_string()));
+    }
+
+    #[test]
+    fn assign_refdes_four_digit_hint_avoids_collision() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        // Explicit 1000-series hint plus an unnamed resistor: the auto-numberer
+        // must not collide with the honored R1000.
+        let named_ref = InstanceRef::new(mod_ref.clone(), vec!["R1000".into(), "R".into()]);
+        let named = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(named_ref.clone(), named);
+
+        let auto_ref = InstanceRef::new(mod_ref.clone(), vec!["z".into()]);
+        let auto = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(auto_ref.clone(), auto);
+
+        let ref_map = schematic.assign_reference_designators();
+        assert_eq!(ref_map.get(&named_ref), Some(&"R1000".to_string()));
+        let auto = ref_map.get(&auto_ref).unwrap();
+        assert_ne!(auto, "R1000");
+        assert!(auto.starts_with('R'));
+    }
+
+    #[test]
+    fn assign_refdes_five_digit_hint_not_honored() {
+        let mut schematic = Schematic::new();
+        let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
+
+        // 5+ digit numbers stay out of the fuzzy-hint path (auto-numbered instead).
+        let r_ref = InstanceRef::new(mod_ref.clone(), vec!["R12345".into(), "R".into()]);
+        let r = Instance::component(mod_ref.clone()).with_attribute("type", "res".to_string());
+        schematic.add_instance(r_ref.clone(), r);
+
+        let ref_map = schematic.assign_reference_designators();
+        assert_eq!(ref_map.get(&r_ref), Some(&"R1".to_string()));
     }
 
     #[test]
