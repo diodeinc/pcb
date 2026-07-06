@@ -10,17 +10,17 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Added `pcb gerber normalize` to re-emit a Gerber X2 layer through the pcb-ir pipeline.
-- Added `pcb ipc2581 dfm` to report copper, mask, and paste features or gaps narrower than a manufacturing minimum.
+- Added `pcb gerber normalize` to re-emit a Gerber layer through the pcb-ir pipeline.
+- Added `pcb ipc2581 dfm` to flag features and gaps narrower than a manufacturing minimum.
 
 ### Changed
 
-- Gerber import now preserves standard-aperture flashes instead of flattening them to regions.
-- Board array profile Gerbers now emit route reliefs as arcs instead of tessellated segments.
+- Gerber import preserves standard-aperture flashes.
+- Board array profile Gerbers emit arcs instead of tessellated segments.
 
 ### Fixed
 
-- Gerber region cut-ins now bridge each hole to its nearest boundary point instead of one distant anchor, eliminating the board-length hairline slivers that manufacturer DFM checks flagged.
+- Gerber regions no longer connect holes with board-length cut-in slivers.
 
 ## [0.4.4] - 2026-07-03
 
