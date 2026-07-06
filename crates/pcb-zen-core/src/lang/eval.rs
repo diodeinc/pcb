@@ -818,7 +818,10 @@ impl EvalContextConfig {
         // The load crosses a package boundary when the target is owned by a
         // different package than the current file — judged first by the frozen
         // package scopes, then by the (possibly finer-grained) workspace
-        // package map.
+        // package map. `target_root` is always Some for targets inside the
+        // current package root: `current_package_scope` above proved the
+        // active scope map contains `canonical_root`, so the ancestor walk in
+        // `package_scope_for_file` finds at least that entry.
         let target_root = self
             .package_scope_for_file(&canonical_resolved)
             .map(|target_scope| {
@@ -1699,11 +1702,15 @@ impl EvalContext {
 
     /// Drop cached state derived from `path` (parsed source, footprint
     /// diagnostics, symbol/spice values). Call when a file changes on disk or
-    /// in an editor buffer.
+    /// in an editor buffer. The path is canonicalized to match cache keys.
     pub fn invalidate_file(&self, path: &Path) {
+        let path = self
+            .file_provider()
+            .canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf());
         let footprint_key = (path.extension().and_then(|ext| ext.to_str()) == Some("kicad_mod"))
-            .then(|| footprint_cache_key(path, &self.config));
-        self.session.invalidate_file(path, footprint_key);
+            .then(|| footprint_cache_key(&path, &self.config));
+        self.session.invalidate_file(&path, footprint_key);
     }
 
     /// Get all symbols for a file

@@ -232,11 +232,7 @@ impl LspEvalContext {
     fn maybe_invalidate_symbol_library(&self, path: &Path) {
         if is_kicad_symbol_file(path.extension()) {
             invalidate_symbol_library(path, self.file_provider.as_ref());
-            let canonical = self
-                .file_provider
-                .canonicalize(path)
-                .unwrap_or_else(|_| path.to_path_buf());
-            self.inner.invalidate_file(&canonical);
+            self.inner.invalidate_file(path);
         }
     }
 
@@ -644,9 +640,6 @@ impl LspContext for LspEvalContext {
         if let LspUrl::File(path) = uri {
             self.remove_open_file(path);
             self.inner.invalidate_file(path);
-            if let Ok(canon) = self.file_provider.canonicalize(path) {
-                self.inner.invalidate_file(&canon);
-            }
             self.clear_last_schematic(path);
             self.maybe_invalidate_symbol_library(path);
             self.maybe_invalidate_resolution_cache(path);
