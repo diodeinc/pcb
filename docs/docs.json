@@ -30,20 +30,24 @@
   "navigation": {
     "groups": [
       {
-        "group": "Intro",
-        "pages": ["pages/quickstart", "pages/vscode"]
+        "group": "Toolchain",
+        "pages": [
+          "pages/quickstart",
+          "pages/vscode",
+          "pages/spec",
+          "pages/packages",
+          "pages/testing",
+          "pages/docs_readme",
+          "pages/docs_bringup"
+        ]
+      },
+      {
+        "group": "Registry",
+        "pages": ["pages/registry"]
       },
       {
         "group": "Examples",
         "pages": ["pages/antenna_matching_network"]
-      },
-      {
-        "group": "Documentation",
-        "pages": ["pages/spec", "pages/packages", "pages/testing"]
-      },
-      {
-        "group": "Guides",
-        "pages": ["pages/docs_bringup", "pages/docs_readme"]
       }
     ]
   },
@@ -53,4 +57,3 @@
     "linkedin": "https://www.linkedin.com/company/diode-inc"
   }
 }
-
