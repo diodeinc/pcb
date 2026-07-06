@@ -297,9 +297,7 @@ impl<'v> SymbolValue {
         let file_provider = eval_ctx.file_provider();
 
         let (_symbol_name, symbol, source_path) = if file_provider.is_directory(resolved_path) {
-            let (symbol_name, symbol, source_path, _source_paths) =
-                load_split_library_symbol(resolved_path, name, file_provider)?;
-            (symbol_name, symbol, source_path)
+            load_split_library_symbol(resolved_path, name, file_provider)?
         } else {
             // Get or load the library (lazy - only scans for symbol names, doesn't parse them)
             let library = get_or_load_library(resolved_path, file_provider)?;
@@ -795,7 +793,7 @@ fn load_split_library_symbol(
     dir: &std::path::Path,
     requested_name: Option<String>,
     file_provider: &dyn crate::FileProvider,
-) -> starlark::Result<(String, pcb_eda::Symbol, std::path::PathBuf, Vec<PathBuf>)> {
+) -> starlark::Result<(String, pcb_eda::Symbol, std::path::PathBuf)> {
     let symbol_files = split_library_symbol_files(dir, file_provider)?;
     let available: Vec<String> = symbol_files.iter().map(|(name, _)| name.clone()).collect();
 
@@ -829,10 +827,6 @@ fn load_split_library_symbol(
     let mut sources = Vec::new();
     let mut seen = HashSet::new();
     collect_split_library_sources(dir, &symbol_name, file_provider, &mut seen, &mut sources)?;
-    let source_paths = sources
-        .iter()
-        .map(|(path, _)| path.clone())
-        .collect::<Vec<_>>();
 
     let library = KicadSymbolLibrary::from_sources(
         sources
@@ -864,7 +858,6 @@ fn load_split_library_symbol(
         symbol_name.clone(),
         symbol,
         dir.join(format!("{symbol_name}.kicad_sym")),
-        source_paths,
     ))
 }
 

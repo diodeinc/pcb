@@ -187,10 +187,13 @@ pub trait FileProvider: Send + Sync {
         Ok(self
             .list_directory(path)?
             .into_iter()
-            .map(|path| DirEntry {
-                is_dir: self.is_directory(&path) && !self.is_symlink(&path),
-                is_symlink: self.is_symlink(&path),
-                path,
+            .map(|path| {
+                let is_symlink = self.is_symlink(&path);
+                DirEntry {
+                    is_dir: self.is_directory(&path) && !is_symlink,
+                    is_symlink,
+                    path,
+                }
             })
             .collect())
     }

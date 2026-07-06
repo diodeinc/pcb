@@ -108,7 +108,6 @@ check(LedValue == "hello from Led", "should load from Led")
         config: None,
         packages,
         errors: vec![],
-                rel_path_index: Default::default(),
     };
 
     // Board's resolution map: only include Led if it's a declared dependency

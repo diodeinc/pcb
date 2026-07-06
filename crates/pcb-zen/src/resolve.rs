@@ -633,7 +633,6 @@ mod tests {
             config: Some(config),
             packages,
             errors: vec![],
-            rel_path_index: Default::default(),
         }
     }
 

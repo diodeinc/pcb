@@ -303,13 +303,6 @@ impl<K: Eq + std::hash::Hash, V: Clone> CacheMap<K, V> {
     }
 }
 
-/// Output of `parse_and_analyze_file`, preserving both parsed AST and full eval output.
-#[derive(Clone)]
-pub struct ParseAndAnalyzeOutput {
-    pub ast: Arc<AstModule>,
-    pub eval_output: EvalOutput,
-}
-
 impl EvalOutput {
     /// Get the session (for creating a new EvalContext that shares state with this output).
     pub fn session(&self) -> &EvalSession {
@@ -435,7 +428,6 @@ impl EvalOutput {
 /// Handle to shared evaluation session state. Cheaply cloneable.
 /// Each cache has its own lock to minimize contention during parallel preloading.
 #[derive(Clone)]
-#[allow(clippy::type_complexity)]
 pub struct EvalSession {
     /// On-disk contents and parsed AST per module path, so repeated
     /// instantiations of the same module skip the disk read and reparse.
@@ -455,6 +447,7 @@ pub struct EvalSession {
     /// Per-file mapping of `symbol → target path` for "go-to definition".
     symbol_index: Arc<RwLock<HashMap<PathBuf, HashMap<String, PathBuf>>>>,
     /// Per-file mapping of `symbol → parameter list` for signature help.
+    #[allow(clippy::type_complexity)]
     symbol_params: Arc<RwLock<HashMap<PathBuf, HashMap<String, Vec<String>>>>>,
     /// Per-file mapping of `symbol → metadata` (kind, docs, etc.)
     symbol_meta: Arc<RwLock<HashMap<PathBuf, HashMap<String, crate::SymbolInfo>>>>,
@@ -854,11 +847,9 @@ impl EvalContextConfig {
         if !crosses_package_boundary
             && let (Some(current_url), Some(target_url)) = (
                 self.resolution
-                    .workspace_info
-                    .package_url_for_path(self.file_provider(), &context.current_file),
+                    .workspace_package_url_for_path(self.file_provider(), &context.current_file),
                 self.resolution
-                    .workspace_info
-                    .package_url_for_path(self.file_provider(), &canonical_resolved),
+                    .workspace_package_url_for_path(self.file_provider(), &canonical_resolved),
             )
         {
             crosses_package_boundary = current_url != target_url;
@@ -1292,30 +1283,30 @@ impl EvalContext {
     fn build_globals() -> starlark::environment::Globals {
         static GLOBALS: std::sync::OnceLock<starlark::environment::Globals> =
             std::sync::OnceLock::new();
-        GLOBALS.get_or_init(Self::build_globals_uncached).clone()
-    }
-
-    fn build_globals_uncached() -> starlark::environment::Globals {
-        GlobalsBuilder::extended_by(&[
-            LibraryExtension::RecordType,
-            LibraryExtension::Typing,
-            LibraryExtension::StructType,
-            LibraryExtension::Print,
-            LibraryExtension::Debug,
-            LibraryExtension::Partial,
-            LibraryExtension::Breakpoint,
-            LibraryExtension::SetType,
-            LibraryExtension::Json,
-        ])
-        .with(builtin_globals)
-        .with(component_globals)
-        .with(module_globals)
-        .with(interface_globals)
-        .with(assert_globals)
-        .with(file_globals)
-        .with(model_globals)
-        .with(test_bench_globals)
-        .build()
+        GLOBALS
+            .get_or_init(|| {
+                GlobalsBuilder::extended_by(&[
+                    LibraryExtension::RecordType,
+                    LibraryExtension::Typing,
+                    LibraryExtension::StructType,
+                    LibraryExtension::Print,
+                    LibraryExtension::Debug,
+                    LibraryExtension::Partial,
+                    LibraryExtension::Breakpoint,
+                    LibraryExtension::SetType,
+                    LibraryExtension::Json,
+                ])
+                .with(builtin_globals)
+                .with(component_globals)
+                .with(module_globals)
+                .with(interface_globals)
+                .with(assert_globals)
+                .with(file_globals)
+                .with(model_globals)
+                .with(test_bench_globals)
+                .build()
+            })
+            .clone()
     }
 
     /// Get a clone of the module tree from the session.
@@ -1771,7 +1762,7 @@ impl EvalContext {
         &self,
         path: PathBuf,
         contents: String,
-    ) -> WithDiagnostics<ParseAndAnalyzeOutput> {
+    ) -> WithDiagnostics<EvalOutput> {
         self.session.clear_load_cache();
         self.session.prepare_for_root_eval();
         self.session.clear_symbol_maps(&path);
@@ -1881,10 +1872,7 @@ impl EvalContext {
                 .update_symbol_maps(path.clone(), symbol_index, symbol_params, symbol_meta);
         }
 
-        result.map(|output| ParseAndAnalyzeOutput {
-            ast: output.ast.clone(),
-            eval_output: output,
-        })
+        result
     }
 
     /// Get the frozen module for a file if it has been evaluated

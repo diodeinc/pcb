@@ -668,6 +668,9 @@ pub struct ResolutionResult {
     /// workspace package sits at that path. Lets `frozen_root_for_file` walk
     /// a file's ancestors instead of scanning every resolution map.
     workspace_root_index: Arc<HashMap<PathBuf, String>>,
+    /// Workspace-relative package dir → package URL, for
+    /// `workspace_package_url_for_path` ancestor-walk lookups.
+    workspace_rel_index: Arc<HashMap<PathBuf, String>>,
 }
 
 /// Map a global-cache path to its workspace-local `.pcb/cache` equivalent.
@@ -700,6 +703,15 @@ fn workspace_package_roots(
     (Arc::new(roots), Arc::new(index))
 }
 
+/// Workspace-relative package dir → package URL.
+fn workspace_rel_index(workspace_info: &WorkspaceInfo) -> HashMap<PathBuf, String> {
+    workspace_info
+        .packages
+        .iter()
+        .map(|(url, pkg)| (pkg.rel_path.clone(), url.clone()))
+        .collect()
+}
+
 fn workspace_root_index(resolution: &FrozenResolutionSet) -> HashMap<PathBuf, String> {
     let mut index = HashMap::new();
     for (root_package, map) in resolution {
@@ -723,6 +735,7 @@ impl ResolutionResult {
         let (workspace_package_roots, package_root_index) =
             workspace_package_roots(&workspace_info, &package_roots);
         let workspace_root_index = Arc::new(workspace_root_index(&resolution));
+        let workspace_rel_index = Arc::new(workspace_rel_index(&workspace_info));
         Self {
             workspace_info,
             resolution,
@@ -731,6 +744,7 @@ impl ResolutionResult {
             workspace_package_roots,
             package_root_index,
             workspace_root_index,
+            workspace_rel_index,
         }
     }
 
@@ -743,7 +757,6 @@ impl ResolutionResult {
                 config: None,
                 packages: BTreeMap::new(),
                 errors: vec![],
-                rel_path_index: Default::default(),
             },
             FrozenResolutionSet::new(),
             HashMap::new(),
@@ -868,6 +881,30 @@ impl ResolutionResult {
         (self.workspace_package_roots, self.package_root_index) =
             workspace_package_roots(&self.workspace_info, &self.package_roots);
         self.workspace_root_index = Arc::new(workspace_root_index(&self.resolution));
+        self.workspace_rel_index = Arc::new(workspace_rel_index(&self.workspace_info));
+    }
+
+    /// Return the most specific workspace package URL that owns `path`.
+    /// Equivalent to [`WorkspaceInfo::package_url_for_path`], but answered by
+    /// walking the path's ancestors over a precomputed index.
+    pub(crate) fn workspace_package_url_for_path(
+        &self,
+        file_provider: &dyn FileProvider,
+        path: &Path,
+    ) -> Option<&str> {
+        let canonical_root = file_provider
+            .canonicalize(&self.workspace_info.root)
+            .unwrap_or_else(|_| self.workspace_info.root.clone());
+        let canonical_path = file_provider
+            .canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf());
+        let workspace_relative = canonical_path.strip_prefix(&canonical_root).ok()?;
+
+        // The final empty ancestor matches a root package with an empty rel_path.
+        workspace_relative
+            .ancestors()
+            .find_map(|dir| self.workspace_rel_index.get(dir))
+            .map(String::as_str)
     }
 
     pub fn package_roots(&self) -> BTreeMap<String, PathBuf> {
@@ -973,7 +1010,6 @@ mod tests {
                 config: None,
                 packages: BTreeMap::new(),
                 errors: vec![],
-                rel_path_index: Default::default(),
             },
             BTreeMap::from([(
                 "github.com/acme/root".into(),
@@ -1009,7 +1045,6 @@ mod tests {
                 config: None,
                 packages: BTreeMap::new(),
                 errors: vec![],
-                rel_path_index: Default::default(),
             },
             BTreeMap::from([(
                 LOCAL_WORKSPACE_ROOT_URL.to_string(),
@@ -1062,7 +1097,6 @@ mod tests {
                 config: None,
                 packages: BTreeMap::new(),
                 errors: vec![],
-                rel_path_index: Default::default(),
             },
             BTreeMap::from([
                 (
@@ -1111,7 +1145,6 @@ mod tests {
                 config: None,
                 packages: BTreeMap::new(),
                 errors: vec![],
-                rel_path_index: Default::default(),
             },
             BTreeMap::from([
                 (
@@ -1166,7 +1199,6 @@ mod tests {
                 config: None,
                 packages: BTreeMap::new(),
                 errors: vec![],
-                rel_path_index: Default::default(),
             },
             BTreeMap::from([
                 (
@@ -1209,7 +1241,6 @@ mod tests {
             config: None,
             packages: BTreeMap::new(),
             errors: vec![],
-                rel_path_index: Default::default(),
         };
 
         let result =
@@ -1233,7 +1264,6 @@ mod tests {
                 config: None,
                 packages: BTreeMap::new(),
                 errors: vec![],
-                rel_path_index: Default::default(),
             },
             FrozenResolutionSet::new(),
             HashMap::new(),
@@ -1309,7 +1339,6 @@ mod tests {
                 },
             )]),
             errors: vec![],
-            rel_path_index: Default::default(),
         };
         let stable_line = ModuleLine::new(dep_url.clone(), &stable_version);
         let pseudo_line = ModuleLine::new(dep_url.clone(), &pseudo_version);

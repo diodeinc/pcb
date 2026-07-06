@@ -170,7 +170,6 @@ pub fn test_resolution_at(workspace_root: &Path) -> pcb_zen_core::resolution::Re
         config: None,
         packages,
         errors: Vec::new(),
-                rel_path_index: Default::default(),
     };
     pcb_zen_core::resolution::ResolutionResult::frozen(
         workspace_info,

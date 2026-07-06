@@ -815,7 +815,7 @@ impl LspContext for LspEvalContext {
                 if let Some(parsed) = result.output.as_ref() {
                     // Cache the schematic now, while the session module tree
                     // still reflects only this file's evaluation.
-                    if let Ok(sch) = parsed.eval_output.to_schematic() {
+                    if let Ok(sch) = parsed.to_schematic() {
                         self.set_last_schematic(path, sch);
                     } else {
                         self.clear_last_schematic(path);
