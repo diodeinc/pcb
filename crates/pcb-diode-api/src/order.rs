@@ -425,12 +425,13 @@ fn map_error_response(resp: Response, target: &RequestTarget) -> anyhow::Error {
             anyhow!("Not authorized. Run `pcb auth login` to authenticate.")
         }
         StatusCode::NOT_FOUND => {
-            let lower = msg.to_lowercase();
-            if let Some(bom_id) = target.bom_id
-                && lower.contains("bom")
-            {
+            // `bom_id` is only set for `GET /api/boms/:bomId`, which is neither
+            // board- nor order-scoped: a 404 there can only mean the BOM itself
+            // is missing (the order was already fetched successfully).
+            if let Some(bom_id) = target.bom_id {
                 return anyhow!("BOM '{bom_id}' not found.");
             }
+            let lower = msg.to_lowercase();
             match target.order_id {
                 // Order-scoped request: could be an unknown board or unknown order.
                 Some(order_id) => {
