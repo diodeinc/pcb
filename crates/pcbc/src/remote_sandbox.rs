@@ -919,10 +919,7 @@ fn remote_relative_path(remote_base: &str, remote_path: &str) -> Result<PathBuf>
 }
 
 fn sandbox_uri_string(uri: &SandboxFileUri) -> String {
-    format!(
-        "diode://{}/sandboxes/{}/fs{}",
-        uri.host, uri.sandbox_id, uri.sandbox_path
-    )
+    uri.to_read_uri_string()
 }
 
 fn sanitize_path_component(value: &str) -> String {
