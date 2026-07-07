@@ -126,6 +126,10 @@ enum Commands {
     #[cfg(feature = "api")]
     Preview(preview::PreviewArgs),
 
+    /// Inspect fabrication orders for a board (read-only)
+    #[cfg(feature = "api")]
+    Order(api::OrderArgs),
+
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
 
@@ -223,6 +227,8 @@ fn run() -> anyhow::Result<()> {
         Commands::Publish(args) => publish::execute(args),
         #[cfg(feature = "api")]
         Commands::Preview(args) => preview::execute(args),
+        #[cfg(feature = "api")]
+        Commands::Order(args) => api::execute_order(args),
         Commands::Vendor(args) => vendor::execute(args),
         Commands::Fork(args) => fork::execute(args),
         #[cfg(feature = "api")]

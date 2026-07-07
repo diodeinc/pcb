@@ -3,6 +3,7 @@ pub mod bom;
 pub mod component;
 pub mod datasheet;
 pub mod mcp;
+pub mod order;
 pub mod registry;
 pub mod release;
 pub mod routing;
@@ -16,6 +17,7 @@ pub use component::{
     execute as execute_search, execute_web_components_tui, search_components,
     search_components_with_availability,
 };
+pub use order::{OrderArgs, OrderCommand, execute as execute_order};
 pub use registry::{
     DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
     ParsedQuery, RegistryClient, RegistryPackage, RegistryPart, SearchHit,

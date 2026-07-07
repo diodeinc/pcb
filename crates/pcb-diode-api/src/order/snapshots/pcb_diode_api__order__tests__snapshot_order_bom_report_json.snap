@@ -1,0 +1,95 @@
+---
+source: crates/pcb-diode-api/src/order/tests.rs
+expression: report
+---
+{
+  "orderId": "ord_abc123",
+  "bomId": "bom_555",
+  "rows": [
+    {
+      "bomLineId": "line_override",
+      "design": {
+        "mpn": "STM32F407VGT6",
+        "manufacturer": "STMicroelectronics",
+        "package": "LQFP-100",
+        "value": null,
+        "designator": "U1",
+        "path": "root.U1",
+        "alternatives": [
+          {
+            "mpn": "STM32F407VGT7",
+            "manufacturer": "ST"
+          }
+        ]
+      },
+      "matchStatus": "matched",
+      "offers": [
+        {
+          "id": "offer_default",
+          "mpn": "STM32F407VGT6",
+          "manufacturer": "STMicroelectronics",
+          "distributor": "lcsc",
+          "stock": 1200,
+          "price": 8.5
+        },
+        {
+          "id": "offer_override",
+          "mpn": "STM32F407VET6",
+          "manufacturer": "STMicroelectronics",
+          "distributor": "digikey",
+          "stock": 50,
+          "price": 9.1
+        }
+      ],
+      "selectedOfferId": "offer_override",
+      "selectionSource": "order_override",
+      "selectedMpn": "STM32F407VET6",
+      "selectedManufacturer": "STMicroelectronics"
+    },
+    {
+      "bomLineId": "line_default",
+      "design": {
+        "mpn": "GRM188R71H104KA93D",
+        "manufacturer": "Murata",
+        "package": "0603",
+        "value": "100nF",
+        "designator": "C1",
+        "path": "root.C1",
+        "alternatives": []
+      },
+      "matchStatus": "matched",
+      "offers": [
+        {
+          "id": "offer_c1",
+          "mpn": "GRM188R71H104KA93D",
+          "manufacturer": "Murata",
+          "distributor": "lcsc",
+          "stock": 500000,
+          "price": 0.01
+        }
+      ],
+      "selectedOfferId": "offer_c1",
+      "selectionSource": "default",
+      "selectedMpn": "GRM188R71H104KA93D",
+      "selectedManufacturer": "Murata"
+    },
+    {
+      "bomLineId": "line_none",
+      "design": {
+        "mpn": "XYZ-UNMATCHED",
+        "manufacturer": null,
+        "package": null,
+        "value": null,
+        "designator": "J1",
+        "path": "root.J1",
+        "alternatives": []
+      },
+      "matchStatus": "unmatched",
+      "offers": [],
+      "selectedOfferId": null,
+      "selectionSource": "none",
+      "selectedMpn": null,
+      "selectedManufacturer": null
+    }
+  ]
+}

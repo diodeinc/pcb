@@ -168,6 +168,26 @@ pcb open [PATHS...]               # Open existing layouts in KiCad
 pcb fmt [PATHS...]                # Format .zen files
 ```
 
+### Orders (read-only)
+
+Inspect fabrication orders for a board. The board identity is resolved from the
+workspace config (`workspace.repository`, as shown by `pcb info`) and can be
+overridden with `--workspace <slug>` and `--board <name>`. All subcommands accept
+`-f table|json` (default `table`).
+
+```bash
+pcb order list                          # List orders for the current board
+pcb order show <ORDER_ID>               # Show a single order (release, quote, timeline, ...)
+pcb order bom <ORDER_ID>                # Show the resolved BOM + effective offer selection
+pcb order bom <ORDER_ID> --mismatches-only   # Only lines where the selected MPN differs from design
+```
+
+For `pcb order bom`, each line reports the design entry, candidate offers, and the
+*effective selection*: the offer from the order's selections map if present, else
+the line default, else none — surfaced as `selectionSource` (`order_override` |
+`default` | `none`) with convenience `selectedMpn`/`selectedManufacturer` fields.
+Full offer detail is emitted in `-f json`; the table stays compact.
+
 ## Architecture
 
 Rust workspace with specialized crates:

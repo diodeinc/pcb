@@ -4075,6 +4075,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "comfy-table",
  "crossterm 0.29.0",
  "deunicode",
  "dirs",

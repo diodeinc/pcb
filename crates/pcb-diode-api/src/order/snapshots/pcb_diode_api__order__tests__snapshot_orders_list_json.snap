@@ -1,0 +1,24 @@
+---
+source: crates/pcb-diode-api/src/order/tests.rs
+expression: orders
+---
+[
+  {
+    "id": "ord_abc123",
+    "name": "Prototype run",
+    "status": "in_production",
+    "quantity": 10,
+    "releaseVersion": "v1.2.3",
+    "provider": "jlcpcb",
+    "createdAt": "2024-05-01T12:30:00Z"
+  },
+  {
+    "id": "ord_def456",
+    "name": null,
+    "status": "quoted",
+    "quantity": 100,
+    "releaseVersion": null,
+    "provider": "pcbway",
+    "createdAt": "2024-06-15T09:00:00Z"
+  }
+]
