@@ -19,6 +19,15 @@ impl SandboxFileUri {
     pub fn api_base_url(&self) -> String {
         host_api_base_url(&self.host)
     }
+
+    pub fn to_read_uri_string(&self) -> String {
+        format!(
+            "diode://{}/sandboxes/{}/fs/read?path={}",
+            self.host,
+            urlencoding::encode(&self.sandbox_id),
+            urlencoding::encode(&self.sandbox_path)
+        )
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -31,11 +40,13 @@ pub enum DiodeUriParseError {
     MissingHost,
     #[error("diode URI must not include user info")]
     UserInfoNotSupported,
-    #[error("diode URI must not include a query string")]
+    #[error(
+        "diode URI query string is only supported for /sandboxes/{{sandboxId}}/fs/read?path={{absolutePath}}"
+    )]
     QueryNotSupported,
     #[error("diode URI must not include a fragment")]
     FragmentNotSupported,
-    #[error("expected /sandboxes/{{sandboxId}}/fs/{{absolutePath}}")]
+    #[error("expected /sandboxes/{{sandboxId}}/fs/read?path={{absolutePath}}")]
     UnsupportedPath,
     #[error("sandbox id must not be empty")]
     EmptySandboxId,
@@ -79,9 +90,6 @@ impl FromStr for DiodeUri {
         if !url.username().is_empty() || url.password().is_some() {
             return Err(DiodeUriParseError::UserInfoNotSupported);
         }
-        if url.query().is_some() {
-            return Err(DiodeUriParseError::QueryNotSupported);
-        }
         if url.fragment().is_some() {
             return Err(DiodeUriParseError::FragmentNotSupported);
         }
@@ -107,24 +115,15 @@ impl FromStr for DiodeUri {
             return Err(DiodeUriParseError::EmptySandboxId);
         }
 
-        let sandbox_path_segments = &raw_segments[3..];
-        if sandbox_path_segments.is_empty() {
-            return Err(DiodeUriParseError::EmptySandboxPath);
+        if url.query().is_none() {
+            return Err(DiodeUriParseError::UnsupportedPath);
         }
-
-        let mut decoded_path_segments = Vec::with_capacity(sandbox_path_segments.len());
-        for segment in sandbox_path_segments {
-            let segment = decode_segment(segment)?;
-            if segment.is_empty() || segment == "." || segment == ".." {
-                return Err(DiodeUriParseError::UnsafeSandboxPath);
-            }
-            decoded_path_segments.push(segment);
-        }
+        let sandbox_path = parse_query_sandbox_path(&url, &raw_segments)?;
 
         Ok(DiodeUri::SandboxFile(SandboxFileUri {
             host,
             sandbox_id,
-            sandbox_path: format!("/{}", decoded_path_segments.join("/")),
+            sandbox_path,
         }))
     }
 }
@@ -153,6 +152,48 @@ fn decode_segment(segment: &str) -> Result<String, DiodeUriParseError> {
     Ok(decoded)
 }
 
+fn parse_query_sandbox_path(
+    url: &Url,
+    raw_segments: &[&str],
+) -> Result<String, DiodeUriParseError> {
+    if raw_segments.len() != 4 || raw_segments[3] != "read" {
+        return Err(DiodeUriParseError::QueryNotSupported);
+    }
+    if url.query().is_none() {
+        return Err(DiodeUriParseError::QueryNotSupported);
+    }
+
+    let mut sandbox_path = None;
+    for (key, value) in url.query_pairs() {
+        if key != "path" || sandbox_path.is_some() {
+            return Err(DiodeUriParseError::QueryNotSupported);
+        }
+        sandbox_path = Some(value.into_owned());
+    }
+    let sandbox_path = sandbox_path.ok_or(DiodeUriParseError::EmptySandboxPath)?;
+    validate_absolute_sandbox_path(&sandbox_path)?;
+    Ok(sandbox_path)
+}
+
+fn validate_absolute_sandbox_path(path: &str) -> Result<(), DiodeUriParseError> {
+    if path.is_empty() {
+        return Err(DiodeUriParseError::EmptySandboxPath);
+    }
+    if !path.starts_with('/') {
+        return Err(DiodeUriParseError::UnsupportedPath);
+    }
+    for segment in path.split('/').skip(1) {
+        if !is_safe_path_segment(segment) {
+            return Err(DiodeUriParseError::UnsafeSandboxPath);
+        }
+    }
+    Ok(())
+}
+
+fn is_safe_path_segment(segment: &str) -> bool {
+    !segment.is_empty() && segment != "." && segment != ".." && !segment.contains('\\')
+}
+
 fn host_api_base_url(host: &str) -> String {
     let scheme = if host.starts_with("localhost") || host.starts_with("127.") {
         "http"
@@ -167,25 +208,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_sandbox_file_uri() {
+    fn parses_sandbox_file_uri_with_query_path() {
         let uri = SandboxFileUri::parse(
-            "diode://registry.diode.computer/sandboxes/sbx_123/fs/home/sandbox/registry/boards/foo/main.zen",
+            "diode://api.diode.computer/sandboxes/pcb-ai-a49caa18-eae9-48d7-8b17-72d0de6cf7d6/fs/read?path=%2Fhome%2Fsandbox%2Fregistry%2Fcomponents%2FTexas_Instruments%2FTUSB321%2Flayout%2FPortController%2Flayout.kicad_pcb",
         )
         .unwrap();
 
-        assert_eq!(uri.host, "registry.diode.computer");
-        assert_eq!(uri.api_base_url(), "https://registry.diode.computer");
-        assert_eq!(uri.sandbox_id, "sbx_123");
+        assert_eq!(uri.host, "api.diode.computer");
+        assert_eq!(uri.api_base_url(), "https://api.diode.computer");
+        assert_eq!(
+            uri.sandbox_id,
+            "pcb-ai-a49caa18-eae9-48d7-8b17-72d0de6cf7d6"
+        );
         assert_eq!(
             uri.sandbox_path,
-            "/home/sandbox/registry/boards/foo/main.zen"
+            "/home/sandbox/registry/components/Texas_Instruments/TUSB321/layout/PortController/layout.kicad_pcb"
         );
     }
 
     #[test]
-    fn parses_host_with_port_and_percent_decoded_path() {
+    fn parses_host_with_port_and_query_path() {
         let uri = SandboxFileUri::parse(
-            "diode://localhost:3001/sandboxes/sbx_123/fs/home/sandbox/registry/boards/My%20Board/main.zen",
+            "diode://localhost:3001/sandboxes/sbx_123/fs/read?path=%2Fhome%2Fsandbox%2Fregistry%2Fboards%2FMy%20Board%2Fmain.zen",
         )
         .unwrap();
 
@@ -194,6 +238,30 @@ mod tests {
         assert_eq!(
             uri.sandbox_path,
             "/home/sandbox/registry/boards/My Board/main.zen"
+        );
+    }
+
+    #[test]
+    fn formats_query_style_sandbox_file_uri() {
+        let uri = SandboxFileUri {
+            host: "api.diode.computer".to_string(),
+            sandbox_id: "sandbox/id".to_string(),
+            sandbox_path: "/home/sandbox/registry/components/LT3010EMS8E#PBF/LT3010x.zen"
+                .to_string(),
+        };
+
+        assert_eq!(
+            uri.to_read_uri_string(),
+            "diode://api.diode.computer/sandboxes/sandbox%2Fid/fs/read?path=%2Fhome%2Fsandbox%2Fregistry%2Fcomponents%2FLT3010EMS8E%23PBF%2FLT3010x.zen"
+        );
+    }
+
+    #[test]
+    fn rejects_query_path_without_absolute_path() {
+        assert_eq!(
+            DiodeUri::parse("diode://api.diode.computer/sandboxes/sbx_123/fs/read?path=relative")
+                .unwrap_err(),
+            DiodeUriParseError::UnsupportedPath
         );
     }
 
@@ -218,18 +286,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_sandbox_path() {
+    fn rejects_missing_query_path() {
         assert_eq!(
-            DiodeUri::parse("diode://registry.diode.computer/sandboxes/sbx_123/fs").unwrap_err(),
-            DiodeUriParseError::EmptySandboxPath
+            DiodeUri::parse("diode://registry.diode.computer/sandboxes/sbx_123/fs/read?foo=bar")
+                .unwrap_err(),
+            DiodeUriParseError::QueryNotSupported
         );
     }
 
     #[test]
-    fn rejects_path_traversal_segments() {
+    fn rejects_query_path_traversal_segments() {
         assert_eq!(
             DiodeUri::parse(
-                "diode://registry.diode.computer/sandboxes/sbx_123/fs/home/sandbox/../main.zen"
+                "diode://registry.diode.computer/sandboxes/sbx_123/fs/read?path=%2Fhome%2Fsandbox%2F..%2Fmain.zen"
             )
             .unwrap_err(),
             DiodeUriParseError::UnsafeSandboxPath
@@ -240,7 +309,7 @@ mod tests {
     fn rejects_encoded_path_separators() {
         assert_eq!(
             DiodeUri::parse(
-                "diode://registry.diode.computer/sandboxes/sbx_123/fs/home/sandbox%2Fregistry/main.zen"
+                "diode://registry.diode.computer/sandboxes/sbx%2F123/fs/read?path=%2Fhome%2Fsandbox%2Fregistry%2Fmain.zen"
             )
             .unwrap_err(),
             DiodeUriParseError::PathSeparatorInSegment
