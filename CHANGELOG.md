@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-07-07
+
 ### Added
 
 - Added `pcb gerber normalize` to re-emit a Gerber layer through the pcb-ir pipeline.
@@ -1281,7 +1283,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/diodeinc/pcb/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/diodeinc/pcb/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/diodeinc/pcb/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/diodeinc/pcb/compare/v0.4.1...v0.4.2
