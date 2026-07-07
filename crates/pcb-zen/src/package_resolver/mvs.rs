@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::cache_index::CacheIndex;
 use anyhow::{Context, Result};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
-use pcb_zen_core::{initial_package_version, is_stdlib_module_path};
+use pcb_zen_core::{initial_package_version, is_stdlib_module_path, parse_relaxed_version};
 use semver::Version;
 
 use super::ResolvedDepId;
@@ -249,13 +249,17 @@ impl PackageResolver {
 
         let imported_workspace_floors = self.import_workspace_floors(&scanned)?;
 
-        self.run_remote_mvs(&scanned, &imported_workspace_floors)
-            .with_context(|| {
-                format!(
-                    "while resolving remote dependency closure for {}",
-                    package_url
-                )
-            })
+        self.run_remote_mvs(
+            &scanned,
+            &current_config.dependencies.direct,
+            &imported_workspace_floors,
+        )
+        .with_context(|| {
+            format!(
+                "while resolving remote dependency closure for {}",
+                package_url
+            )
+        })
     }
 
     fn populate_package_graph(
@@ -424,6 +428,7 @@ impl PackageResolver {
     fn run_remote_mvs(
         &mut self,
         scanned: &ScannedDirectDeps,
+        existing_direct: &BTreeMap<String, DependencySpec>,
         imported_workspace_floors: &BTreeMap<ResolvedDepId, Version>,
     ) -> Result<PackageResolution> {
         let mut selected = BTreeMap::<ResolvedDepId, Version>::new();
@@ -473,6 +478,7 @@ impl PackageResolver {
             direct: fold_direct_dependencies(
                 &self.workspace,
                 scanned,
+                existing_direct,
                 &selected,
                 &direct_remote_ids,
             )?,
@@ -505,6 +511,7 @@ impl PackageResolver {
 fn fold_direct_dependencies(
     workspace: &crate::WorkspaceInfo,
     scanned: &ScannedDirectDeps,
+    existing_direct: &BTreeMap<String, DependencySpec>,
     resolved_remote: &BTreeMap<ResolvedDepId, Version>,
     direct_remote_ids: &BTreeSet<ResolvedDepId>,
 ) -> Result<BTreeMap<String, DependencySpec>> {
@@ -526,7 +533,11 @@ fn fold_direct_dependencies(
     for module_path in &scanned.workspace {
         direct.insert(
             module_path.clone(),
-            DependencySpec::Version(workspace_package_version(workspace, module_path)?),
+            DependencySpec::Version(workspace_package_version(
+                workspace,
+                module_path,
+                existing_direct.get(module_path),
+            )?),
         );
     }
 
@@ -536,6 +547,7 @@ fn fold_direct_dependencies(
 fn workspace_package_version(
     workspace: &crate::WorkspaceInfo,
     package_url: &str,
+    existing_pin: Option<&DependencySpec>,
 ) -> Result<String> {
     let Some(pkg) = workspace.packages.get(package_url) else {
         anyhow::bail!(
@@ -543,10 +555,26 @@ fn workspace_package_version(
             package_url
         );
     };
-    Ok(pkg
+    let mut version = pkg
         .version
-        .clone()
-        .unwrap_or_else(|| initial_package_version().to_string()))
+        .as_deref()
+        .and_then(parse_relaxed_version)
+        .unwrap_or_else(initial_package_version);
+    // The tag-derived version lags reality whenever local tags haven't been
+    // fetched, so the existing manifest pin is a floor: sync never lowers it.
+    if let Some(pinned) = existing_pin.and_then(pinned_version) {
+        version = version.max(pinned);
+    }
+    Ok(version.to_string())
+}
+
+fn pinned_version(spec: &DependencySpec) -> Option<Version> {
+    match spec {
+        DependencySpec::Version(raw) => parse_relaxed_version(raw),
+        DependencySpec::Detailed(detail) => {
+            detail.version.as_deref().and_then(parse_relaxed_version)
+        }
+    }
 }
 
 fn merge_floor_version(
