@@ -62,6 +62,23 @@ pcb fork remove <URL>    # Remove fork
 ```
 
 ```bash
+# Resolve a component to its datasheet (URL or local path), one line on stdout.
+# QUERY is an encoded component_id (from `pcb search --mode web:components`),
+# a reference designator (e.g. U3, workspace only), or an MPN.
+pcb datasheet U3                       # by reference designator (board auto-discovered)
+pcb datasheet U3 --board boards/Main.zen  # ...or point at a specific board
+pcb datasheet LM358 --manufacturer TI  # by MPN, disambiguating manufacturer
+pcb datasheet U3 --scan                # resolve + OCR, prints generated markdown path
+pcb datasheet LM358 -f json            # {query, interpretation, mpn, manufacturer, url, source}
+# Force interpretation with --refdes/--mpn/--id when ambiguous.
+```
+
+Resolution tiers for an MPN (deterministic, in order): workspace component packages
+(`<MPN>.kicad_sym` Datasheet / sibling `<MPN>.pdf`) → local registry index → KiCad symbol index →
+component search API. Prefer `pcb datasheet <refdes> --scan` when an agent needs datasheet content
+for a specific board part in one call.
+
+```bash
 # JavaScript scripting with MCP tools
 pcb mcp eval 'tools.search_registry({query: "buck"})'  # Search registry
 pcb mcp eval 'tools.resolve_datasheet({pdf_path: "./part.pdf"})'  # Extract datasheet to markdown + images

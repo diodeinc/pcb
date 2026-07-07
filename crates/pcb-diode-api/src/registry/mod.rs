@@ -247,10 +247,76 @@ pub struct RegistryClient {
 }
 
 impl RegistryClient {
-    /// Get the default registry database path (~/.pcb/registry/packages.db)
+    /// Get the default registry database path (~/.pcb/registry/packages.db).
+    ///
+    /// The `PCB_REGISTRY_DB` environment variable overrides this location (used by tests and
+    /// advanced setups that keep the index outside the home directory).
     pub fn default_db_path() -> Result<PathBuf> {
+        if let Ok(path) = std::env::var("PCB_REGISTRY_DB") {
+            return Ok(PathBuf::from(path));
+        }
         let home = dirs::home_dir().context("Could not determine home directory")?;
         Ok(home.join(".pcb").join("registry").join("packages.db"))
+    }
+
+    /// Deterministically look up a component's datasheet URL by exact MPN match.
+    ///
+    /// Only considers Diode registry component packages (`registry:components`). When
+    /// `manufacturer` is provided, results are filtered case-insensitively to disambiguate
+    /// parts that share an MPN across manufacturers. Returns the DigiKey datasheet URL of the
+    /// first matching component that has one, or `None` if no component matches / none has a
+    /// datasheet on record.
+    pub fn find_component_datasheet(
+        &self,
+        mpn: &str,
+        manufacturer: Option<&str>,
+    ) -> Result<Option<String>> {
+        let pattern = format!(
+            "{}%",
+            crate::registry::tui::search::DIODE_REGISTRY_COMPONENTS_PREFIX
+        );
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT json(digikey), json(edatasheet), manufacturer
+            FROM packages
+            WHERE mpn = ?1 AND url LIKE ?2
+            ORDER BY id
+            LIMIT 50
+            "#,
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![mpn, pattern], |row| {
+            let digikey_json: Option<String> = row.get(0)?;
+            let edatasheet_json: Option<String> = row.get(1)?;
+            let manufacturer: Option<String> = row.get(2)?;
+            Ok((digikey_json, edatasheet_json, manufacturer))
+        })?;
+
+        for row in rows {
+            let (digikey_json, _edatasheet_json, row_manufacturer) = row?;
+
+            if let Some(want) = manufacturer {
+                let matches = row_manufacturer
+                    .as_deref()
+                    .map(|m| m.eq_ignore_ascii_case(want))
+                    .unwrap_or(false);
+                if !matches {
+                    continue;
+                }
+            }
+
+            if let Some(url) = digikey_json
+                .and_then(|s| serde_json::from_str::<DigikeyData>(&s).ok())
+                .and_then(|dk| dk.datasheet_url)
+            {
+                let url = url.trim().to_string();
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    return Ok(Some(url));
+                }
+            }
+        }
+
+        Ok(None)
     }
 
     /// Open the registry database from the default location.

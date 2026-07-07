@@ -40,7 +40,7 @@
 use assert_fs::TempDir;
 use assert_fs::fixture::PathChild;
 use duct::Expression;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsStr;
 
 use std::fs::{self, File};
@@ -75,6 +75,8 @@ pub struct Sandbox {
     trace: bool,
     hash_globs: Vec<String>,
     ignore_globs: Vec<String>,
+    /// Extra environment variables merged into (and overriding) the injected env for all commands.
+    extra_env: BTreeMap<String, String>,
 }
 
 impl Default for Sandbox {
@@ -113,6 +115,7 @@ impl Sandbox {
             hash_globs: Vec::new(),
             // Ignore pcb.sum by default - it's a lockfile that changes with stdlib versions
             ignore_globs: vec!["**/pcb.sum".to_string()],
+            extra_env: BTreeMap::new(),
         };
         s.write_gitconfig();
         // Most integration tests need stdlib and KiCad assets. Seeding here keeps tests offline
@@ -124,6 +127,14 @@ impl Sandbox {
     /// Enable `GIT_TRACE=1` for commands run with `run` / `run_ok` / `cmd`.
     pub fn with_trace(mut self, yes: bool) -> Self {
         self.trace = yes;
+        self
+    }
+
+    /// Set an extra environment variable that is merged into (and overrides) the injected env for
+    /// every command run in this sandbox. Useful for pointing commands at mock servers or
+    /// isolated index/config paths.
+    pub fn env<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) -> &mut Self {
+        self.extra_env.insert(key.into(), value.into());
         self
     }
 
@@ -637,6 +648,11 @@ impl Sandbox {
         if self.trace {
             env_map.insert("GIT_TRACE".into(), "1".into());
             env_map.insert("GIT_CURL_VERBOSE".into(), "1".into());
+        }
+
+        // Caller-provided overrides take precedence over the defaults above.
+        for (key, value) in &self.extra_env {
+            env_map.insert(key.clone(), value.clone());
         }
 
         expr = expr.full_env(&env_map);

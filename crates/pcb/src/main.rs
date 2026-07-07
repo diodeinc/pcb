@@ -13,6 +13,8 @@ mod api;
 mod bom;
 mod build;
 mod codegen;
+#[cfg(feature = "api")]
+mod datasheet;
 mod doc;
 mod drc;
 mod file_walker;
@@ -140,6 +142,10 @@ enum Commands {
     #[cfg(feature = "api")]
     Search(api::SearchArgs),
 
+    /// Resolve a component to its datasheet
+    #[cfg(feature = "api")]
+    Datasheet(datasheet::DatasheetArgs),
+
     /// Auto-route PCB using DeepPCB cloud service
     #[cfg(feature = "api")]
     #[command(hide = true)]
@@ -229,6 +235,8 @@ fn run() -> anyhow::Result<()> {
         Commands::Scan(args) => api::execute_scan(args),
         #[cfg(feature = "api")]
         Commands::Search(args) => api::execute_search(args),
+        #[cfg(feature = "api")]
+        Commands::Datasheet(args) => datasheet::execute(args),
         #[cfg(feature = "api")]
         Commands::Route(args) => route::execute(args),
         Commands::Simulate(args) => sim::execute(args),

@@ -10,6 +10,13 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `pcb datasheet <QUERY>` deterministically resolves a component to its datasheet and prints the
+  URL or local path to stdout. `QUERY` may be an encoded component id (from `pcb search --mode
+  web:components`), a reference designator (workspace only; evaluates the board like `pcb bom` and
+  prefers the design's own resolved symbol), or an MPN (resolved through workspace packages, the
+  local registry index, the KiCad symbol index, then the component search API). Supports
+  `--refdes`/`--mpn`/`--id` to force interpretation, `--manufacturer` to disambiguate, `-f json`
+  output, `--scan` to chain through the OCR pipeline, and `--open`.
 - `config()` now supports `checks` parameter for validation functions, matching `io()`.
 
 ### Changed

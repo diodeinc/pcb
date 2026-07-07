@@ -6,6 +6,7 @@ description = "Diode API client for authentication, component search, registry T
 
 [dev-dependencies]
 insta = { workspace = true }
+tempfile = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }

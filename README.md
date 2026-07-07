@@ -166,7 +166,36 @@ pcb build [PATHS...]              # Build and validate designs
 pcb layout [PATHS...]             # Generate layout and open in KiCad
 pcb open [PATHS...]               # Open existing layouts in KiCad
 pcb fmt [PATHS...]                # Format .zen files
+pcb search [QUERY]                # Search for components (registry + web)
+pcb scan <FILE>                   # Scan a PDF datasheet with OCR
+pcb datasheet <QUERY>             # Resolve a component to its datasheet
 ```
+
+### `pcb datasheet <QUERY>`
+
+Deterministically resolve a component to its datasheet and print the result to stdout. `QUERY` is
+one of three forms, tried in this order:
+
+1. **Encoded component id** — the `component_id` string returned by `pcb search --mode
+   web:components`. Resolved via the download API to a signed datasheet URL.
+2. **Reference designator** (e.g. `U3`) — valid only inside a workspace. Evaluates the board's BOM
+   (like `pcb bom`; discover the board automatically or pass `--board <file>`), then resolves that
+   component's datasheet, preferring the design's own resolved symbol (its `.kicad_sym` `Datasheet`
+   property and a sibling `<MPN>.pdf`).
+3. **MPN** — resolved through deterministic tiers: workspace component packages → local registry
+   index → KiCad symbol index → component search API.
+
+```bash
+pcb datasheet U3                        # resolve by reference designator (in a workspace)
+pcb datasheet LM358 --manufacturer TI   # resolve by MPN, disambiguating manufacturer
+pcb datasheet U3 --scan                 # resolve + OCR, print the generated markdown path
+pcb datasheet LM358 --open              # open the datasheet with the system opener
+pcb datasheet LM358 -f json             # {query, interpretation, mpn, manufacturer, url, source}
+```
+
+Use `--refdes`/`--mpn`/`--id` to force the interpretation when the heuristic is ambiguous. The
+command exits non-zero with a clear one-line error when no datasheet can be found, when a reference
+designator is used outside a workspace, or when authentication is required but missing.
 
 ## Architecture
 

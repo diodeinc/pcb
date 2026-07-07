@@ -2,6 +2,7 @@ pub mod auth;
 pub mod bom;
 pub mod component;
 pub mod datasheet;
+pub mod datasheet_resolve;
 pub mod mcp;
 pub mod registry;
 pub mod release;
@@ -15,6 +16,11 @@ pub use component::{
     ModelAvailability, SearchArgs, add_component_to_workspace, download_component,
     execute as execute_search, execute_web_components_tui, search_components,
     search_components_with_availability,
+};
+pub use datasheet_resolve::{
+    DatasheetSource, DecodedComponentId, Interpretation, MpnResolveConfig, ResolvedDatasheet,
+    datasheet_from_symbol, decode_component_id, looks_like_refdes, resolve_component_id,
+    resolve_mpn, workspace_datasheet_for_mpn,
 };
 pub use registry::{
     DigikeyData, EDatasheetComponentId, EDatasheetData, PackageDependency, PackageRelations,
