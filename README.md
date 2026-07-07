@@ -183,6 +183,22 @@ pcb layout <FILE>                            # Generate layout files
 pcb import <KICAD_SCH|KICAD_PRO> <OUTPUT_DIR> # Import a KiCad schematic or project
 ```
 
+### Orders (read-only)
+
+Inspect fabrication orders for a board. The board identity is resolved from
+`workspace.repository` and can be overridden with `--workspace <slug>` and
+`--board <name>`. All subcommands accept `-f table|json` (default `table`).
+
+```bash
+pcb order list
+pcb order show <ORDER_ID>
+pcb order bom <ORDER_ID>
+pcb order bom <ORDER_ID> --mismatches-only
+```
+
+For `pcb order bom`, an order selection overrides the BOM line default; lines
+without either have no effective selection. JSON output includes full offer detail.
+
 Run `pcb help` or `pcb help <command>` for the full command reference.
 
 ## License

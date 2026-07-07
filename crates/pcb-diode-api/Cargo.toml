@@ -18,6 +18,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 colored = { workspace = true }
+comfy-table = { workspace = true }
 crossterm = { workspace = true }
 dirs = { workspace = true }
 fslock = { workspace = true }

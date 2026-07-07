@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- New read-only `pcb order` command group (`list`, `show`, `bom`) for inspecting a
+  board's fabrication orders. Board identity resolves from `workspace.repository`
+  and is overridable with `--workspace`/`--board`. `pcb order bom` joins the order's
+  offer selections with the BOM (order override beats line default), supports
+  `--mismatches-only`, and all subcommands support `-f table|json`.
+
 ### Changed
 
 - `--layout-target` now takes `board` or `board-array` on every command, and defaults to `board-array`.
