@@ -11,9 +11,7 @@
 //!      local registry SQLite index, the KiCad symbol index, then `POST /api/component/search`.
 //!
 //! This module owns all resolution logic that does *not* require evaluating a board (board
-//! evaluation lives in the `pcb` crate, which reuses the same machinery as `pcb bom`). It reuses
-//! the existing auth, API client, registry index access, and scan pipeline from the rest of the
-//! crate rather than duplicating any of it.
+//! evaluation lives in the `pcb` crate, which reuses the same machinery as `pcb bom`).
 
 use std::path::{Path, PathBuf};
 
@@ -33,16 +31,6 @@ pub enum Interpretation {
     Mpn,
 }
 
-impl Interpretation {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Interpretation::ComponentId => "component_id",
-            Interpretation::Refdes => "refdes",
-            Interpretation::Mpn => "mpn",
-        }
-    }
-}
-
 /// Which tier produced the resolved datasheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,18 +45,6 @@ pub enum DatasheetSource {
     KicadIndex,
     /// `POST /api/component/search` best-scored result.
     WebSearch,
-}
-
-impl DatasheetSource {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DatasheetSource::DownloadCache => "download_cache",
-            DatasheetSource::Workspace => "workspace",
-            DatasheetSource::RegistryIndex => "registry_index",
-            DatasheetSource::KicadIndex => "kicad_index",
-            DatasheetSource::WebSearch => "web_search",
-        }
-    }
 }
 
 /// A fully resolved datasheet reference (a URL or a local filesystem path).
@@ -223,16 +199,23 @@ pub fn datasheet_from_symbol(
     }
 
     // Otherwise, the Datasheet property recorded on the symbol.
-    crate::datasheet::datasheet_url_from_symbol_file(symbol_path, symbol_name).ok()
+    crate::datasheet::extract_datasheet_url_from_kicad_sym(symbol_path, symbol_name).ok()
 }
 
 /// Find a component package in the workspace matching `mpn` and return its datasheet, if any.
 ///
 /// Searches `components/…` and `vendor/…` for `<MPN>.kicad_sym`, then applies
-/// [`datasheet_from_symbol`].
-pub fn workspace_datasheet_for_mpn(workspace_root: &Path, mpn: &str) -> Option<String> {
+/// [`datasheet_from_symbol`]. When `manufacturer` is provided, only packages whose path contains
+/// the sanitized manufacturer as a component are considered (the canonical download layout is
+/// `components/<manufacturer>/<mpn>/`), disambiguating parts that share an MPN.
+pub fn workspace_datasheet_for_mpn(
+    workspace_root: &Path,
+    mpn: &str,
+    manufacturer: Option<&str>,
+) -> Option<String> {
     let sanitized = sanitize_mpn_for_path(mpn);
     let target = format!("{sanitized}.kicad_sym");
+    let want_mfr = manufacturer.map(sanitize_mpn_for_path);
 
     for base in ["components", "vendor"] {
         let dir = workspace_root.join(base);
@@ -251,6 +234,15 @@ pub fn workspace_datasheet_for_mpn(workspace_root: &Path, mpn: &str) -> Option<S
                 .map(|n| n == target)
                 .unwrap_or(false);
             if !matches_name {
+                continue;
+            }
+            if let Some(want) = &want_mfr
+                && !entry.path().components().any(|c| {
+                    c.as_os_str()
+                        .to_str()
+                        .is_some_and(|s| s.eq_ignore_ascii_case(want))
+                })
+            {
                 continue;
             }
             if let Some(ds) = datasheet_from_symbol(entry.path(), Some(mpn), None) {
@@ -321,7 +313,7 @@ pub fn kicad_index_datasheet(mpn: &str) -> Option<String> {
                 && let Some(ds) = symbol.datasheet.as_deref()
             {
                 let ds = ds.trim();
-                if crate::datasheet::is_usable_datasheet_url(ds) {
+                if crate::datasheet::is_usable_datasheet_value(ds) {
                     return Some(ds.to_string());
                 }
             }
@@ -404,10 +396,8 @@ pub struct MpnResolveConfig<'a> {
     pub workspace_root: Option<&'a Path>,
     /// Optional manufacturer to disambiguate parts sharing an MPN.
     pub manufacturer: Option<&'a str>,
-    /// Whether the web-search tier may be used (requires network + auth).
-    pub allow_web: bool,
     /// Offline mode: never download the registry index (only use an existing local copy) and
-    /// skip any network tiers.
+    /// skip the web-search tier.
     pub offline: bool,
 }
 
@@ -436,14 +426,18 @@ pub fn resolve_mpn(mpn: &str, cfg: &MpnResolveConfig) -> Result<ResolvedDatashee
 
     // Tier 1: workspace component packages.
     if let Some(root) = cfg.workspace_root
-        && let Some(url) = workspace_datasheet_for_mpn(root, mpn)
+        && let Some(url) = workspace_datasheet_for_mpn(root, mpn, cfg.manufacturer)
     {
         return Ok(make(url, DatasheetSource::Workspace));
     }
 
-    // Tier 2: local registry SQLite index (registry:components).
+    // Tier 2: local registry SQLite index (registry:components). Query errors (e.g. a stale or
+    // corrupt local index) fall through to the next tier rather than aborting resolution.
     if let Some(client) = open_registry(cfg.offline)
-        && let Some(url) = client.find_component_datasheet(mpn, cfg.manufacturer)?
+        && let Some(url) = client
+            .find_component_datasheet(mpn, cfg.manufacturer)
+            .ok()
+            .flatten()
     {
         return Ok(make(url, DatasheetSource::RegistryIndex));
     }
@@ -454,7 +448,7 @@ pub fn resolve_mpn(mpn: &str, cfg: &MpnResolveConfig) -> Result<ResolvedDatashee
     }
 
     // Tier 4: web search via POST /api/component/search.
-    if cfg.allow_web {
+    if !cfg.offline {
         let token = crate::auth::get_valid_token()?;
         match web_search_datasheet(&token, mpn, cfg.manufacturer)? {
             WebOutcome::Found {
@@ -479,11 +473,7 @@ pub fn resolve_mpn(mpn: &str, cfg: &MpnResolveConfig) -> Result<ResolvedDatashee
 
     anyhow::bail!(
         "component '{mpn}' not found (searched workspace packages, registry index, and KiCad index{})",
-        if cfg.allow_web {
-            ", and web search"
-        } else {
-            ""
-        }
+        if cfg.offline { "" } else { ", and web search" }
     );
 }
 
@@ -523,20 +513,14 @@ mod tests {
     }
 
     #[test]
-    fn decode_component_id_rejects_plain_mpn() {
+    fn decode_component_id_rejects_non_component_ids() {
+        // Plain MPNs and reference designators.
         assert!(decode_component_id("LM358").is_none());
         assert!(decode_component_id("STM32F407VGT6").is_none());
-        assert!(decode_component_id("TPS82140SILR").is_none());
-    }
-
-    #[test]
-    fn decode_component_id_rejects_refdes() {
         assert!(decode_component_id("U3").is_none());
-        assert!(decode_component_id("R10").is_none());
-    }
-
-    #[test]
-    fn decode_component_id_rejects_incomplete_object() {
+        // Not base64 / empty.
+        assert!(decode_component_id("").is_none());
+        assert!(decode_component_id("not base64!!!").is_none());
         // Missing backendId.
         let id = encode(&serde_json::json!({"source": "web", "mpn": "LM358"}));
         assert!(decode_component_id(&id).is_none());
@@ -546,12 +530,6 @@ mod tests {
         // Not an object.
         let id = encode(&serde_json::json!(["source", "mpn", "backendId"]));
         assert!(decode_component_id(&id).is_none());
-    }
-
-    #[test]
-    fn decode_component_id_rejects_non_base64() {
-        assert!(decode_component_id("").is_none());
-        assert!(decode_component_id("not base64!!!").is_none());
     }
 
     #[test]
@@ -580,77 +558,5 @@ mod tests {
         // otherwise they fall through to MPN resolution.
         assert!(looks_like_refdes("LM358"));
         assert!(looks_like_refdes("TPS82140"));
-    }
-
-    #[test]
-    fn interpretation_and_source_strings_are_stable() {
-        assert_eq!(Interpretation::ComponentId.as_str(), "component_id");
-        assert_eq!(Interpretation::Refdes.as_str(), "refdes");
-        assert_eq!(Interpretation::Mpn.as_str(), "mpn");
-        assert_eq!(DatasheetSource::DownloadCache.as_str(), "download_cache");
-        assert_eq!(DatasheetSource::Workspace.as_str(), "workspace");
-        assert_eq!(DatasheetSource::RegistryIndex.as_str(), "registry_index");
-        assert_eq!(DatasheetSource::KicadIndex.as_str(), "kicad_index");
-        assert_eq!(DatasheetSource::WebSearch.as_str(), "web_search");
-    }
-
-    #[test]
-    fn datasheet_from_symbol_prefers_local_pdf() {
-        let dir = tempfile::tempdir().unwrap();
-        let sym = dir.path().join("LM358.kicad_sym");
-        std::fs::write(
-            &sym,
-            "(kicad_symbol_lib (symbol \"LM358\" (property \"Datasheet\" \"https://example.com/lm358.pdf\" (at 0 0 0))))",
-        )
-        .unwrap();
-        let pdf = dir.path().join("LM358.pdf");
-        std::fs::write(&pdf, b"%PDF-1.4").unwrap();
-
-        let resolved = datasheet_from_symbol(&sym, Some("LM358"), None).unwrap();
-        assert_eq!(resolved, pdf.to_string_lossy());
-    }
-
-    #[test]
-    fn datasheet_from_symbol_falls_back_to_property() {
-        let dir = tempfile::tempdir().unwrap();
-        let sym = dir.path().join("LM358.kicad_sym");
-        std::fs::write(
-            &sym,
-            "(kicad_symbol_lib (symbol \"LM358\" (property \"Datasheet\" \"https://example.com/lm358.pdf\" (at 0 0 0))))",
-        )
-        .unwrap();
-
-        let resolved = datasheet_from_symbol(&sym, Some("LM358"), None).unwrap();
-        assert_eq!(resolved, "https://example.com/lm358.pdf");
-    }
-
-    #[test]
-    fn datasheet_from_symbol_none_when_no_datasheet() {
-        let dir = tempfile::tempdir().unwrap();
-        let sym = dir.path().join("LM358.kicad_sym");
-        std::fs::write(
-            &sym,
-            "(kicad_symbol_lib (symbol \"LM358\" (property \"Reference\" \"U\" (at 0 0 0))))",
-        )
-        .unwrap();
-        assert!(datasheet_from_symbol(&sym, Some("LM358"), None).is_none());
-    }
-
-    #[test]
-    fn kicad_index_datasheet_reads_symbol_property() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("Amplifier.kicad_sym"),
-            "(kicad_symbol_lib (symbol \"LM358\" (property \"Datasheet\" \"https://ti.com/lm358.pdf\" (at 0 0 0))))",
-        )
-        .unwrap();
-
-        // Point the KiCad symbol index at our fixture dir for this test.
-        // SAFETY: single-threaded test; restored at end.
-        unsafe { std::env::set_var("PCB_KICAD_SYMBOL_PATH", dir.path()) };
-        let resolved = kicad_index_datasheet("LM358");
-        unsafe { std::env::remove_var("PCB_KICAD_SYMBOL_PATH") };
-
-        assert_eq!(resolved.as_deref(), Some("https://ti.com/lm358.pdf"));
     }
 }

@@ -276,24 +276,18 @@ impl RegistryClient {
             crate::registry::tui::search::DIODE_REGISTRY_COMPONENTS_PREFIX
         );
         let mut stmt = self.conn.prepare(
-            r#"
-            SELECT json(digikey), json(edatasheet), manufacturer
-            FROM packages
-            WHERE mpn = ?1 AND url LIKE ?2
-            ORDER BY id
-            LIMIT 50
-            "#,
+            "SELECT json(digikey), manufacturer FROM packages
+             WHERE mpn = ?1 AND url LIKE ?2 ORDER BY id LIMIT 50",
         )?;
 
         let rows = stmt.query_map(rusqlite::params![mpn, pattern], |row| {
             let digikey_json: Option<String> = row.get(0)?;
-            let edatasheet_json: Option<String> = row.get(1)?;
-            let manufacturer: Option<String> = row.get(2)?;
-            Ok((digikey_json, edatasheet_json, manufacturer))
+            let manufacturer: Option<String> = row.get(1)?;
+            Ok((digikey_json, manufacturer))
         })?;
 
         for row in rows {
-            let (digikey_json, _edatasheet_json, row_manufacturer) = row?;
+            let (digikey_json, row_manufacturer) = row?;
 
             if let Some(want) = manufacturer {
                 let matches = row_manufacturer

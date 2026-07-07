@@ -7,19 +7,18 @@
 //!
 //! `--refdes`/`--mpn`/`--id` force the interpretation when the heuristic is ambiguous. See
 //! [`pcb_diode_api::datasheet_resolve`] for the resolution tiers themselves; this module wires the
-//! command up, evaluates the board for reference-designator resolution (reusing the same machinery
-//! as `pcb bom`), and handles output/`--scan`/`--open`.
+//! command up and evaluates the board for reference-designator resolution (reusing the same
+//! machinery as `pcb bom`).
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use clap::{Args, ValueEnum};
-use pcb_diode_api::datasheet::{ResolveDatasheetInput, is_usable_datasheet_url, resolve_datasheet};
+use pcb_diode_api::datasheet::is_usable_datasheet_value;
 use pcb_diode_api::datasheet_resolve::{
     DatasheetSource, Interpretation, MpnResolveConfig, ResolvedDatasheet, datasheet_from_symbol,
     decode_component_id, looks_like_refdes, resolve_component_id, resolve_mpn,
 };
-use pcb_diode_api::scan::{ScanModel, ScanModelArg, scan_with_defaults};
 use pcb_sch::{InstanceKind, PACKAGE_URI_PREFIX, Schematic};
 use pcb_zen::get_workspace_info;
 use pcb_zen_core::DefaultFileProvider;
@@ -73,14 +72,6 @@ pub struct DatasheetArgs {
     #[arg(short = 'f', long, value_enum, default_value_t = DatasheetFormat::Text)]
     pub format: DatasheetFormat,
 
-    /// Scan the resolved datasheet and print the generated markdown path instead.
-    #[arg(long)]
-    pub scan: bool,
-
-    /// Open the resolved datasheet URL/file with the system opener.
-    #[arg(long)]
-    pub open: bool,
-
     /// Disable network access (offline mode) for board evaluation and resolution tiers.
     #[arg(long)]
     pub offline: bool,
@@ -88,15 +79,6 @@ pub struct DatasheetArgs {
     /// Require that pcb.toml and pcb.sum are up-to-date during board evaluation.
     #[arg(long)]
     pub locked: bool,
-
-    /// Model to use for datasheet scanning (with --scan).
-    #[arg(
-        long = "scan-model",
-        value_enum,
-        default_value = "mistral-ocr-2512",
-        hide = true
-    )]
-    pub scan_model: ScanModelArg,
 }
 
 pub fn execute(args: DatasheetArgs) -> Result<()> {
@@ -105,41 +87,17 @@ pub fn execute(args: DatasheetArgs) -> Result<()> {
 
     let resolved = resolve_query(&args, workspace_root.as_deref())?;
 
-    // --scan replaces the printed reference with the generated markdown path.
-    let markdown_path = if args.scan {
-        let token = pcb_diode_api::auth::get_valid_token()?;
-        Some(scan_resolved(
-            &token,
-            &resolved.url,
-            args.scan_model.into(),
-        )?)
-    } else {
-        None
-    };
-
-    if args.open {
-        open::that(&resolved.url).with_context(|| format!("Failed to open: {}", resolved.url))?;
-    }
-
-    let primary_line = markdown_path
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| resolved.url.clone());
-
     match args.format {
-        DatasheetFormat::Text => println!("{primary_line}"),
+        DatasheetFormat::Text => println!("{}", resolved.url),
         DatasheetFormat::Json => {
-            let mut obj = serde_json::json!({
+            let obj = serde_json::json!({
                 "query": args.query,
-                "interpretation": resolved.interpretation.as_str(),
+                "interpretation": resolved.interpretation,
                 "mpn": resolved.mpn,
                 "manufacturer": resolved.manufacturer,
                 "url": resolved.url,
-                "source": resolved.source.as_str(),
+                "source": resolved.source,
             });
-            if let Some(md) = markdown_path {
-                obj["markdown"] = serde_json::Value::String(md.to_string_lossy().into_owned());
-            }
             println!("{}", serde_json::to_string_pretty(&obj)?);
         }
     }
@@ -198,7 +156,6 @@ fn resolve_as_mpn(
     let cfg = MpnResolveConfig {
         workspace_root,
         manufacturer: args.manufacturer.as_deref(),
-        allow_web: !args.offline,
         offline: args.offline,
     };
     resolve_mpn(mpn, &cfg)
@@ -283,7 +240,6 @@ fn resolve_refdes(
                 .manufacturer
                 .as_deref()
                 .or(args.manufacturer.as_deref()),
-            allow_web: !args.offline,
             offline: args.offline,
         };
         let mut resolved = resolve_mpn(mpn, &cfg)?;
@@ -365,7 +321,7 @@ fn resolve_symbol_path(symbol_ref: &str, schematic: &Schematic) -> PathBuf {
 /// Normalize a component's `datasheet` attribute to a usable URL or existing local path.
 fn normalize_design_datasheet(datasheet: &str, board_dir: &Path) -> Option<String> {
     let trimmed = datasheet.trim();
-    if is_usable_datasheet_url(trimmed) {
+    if is_usable_datasheet_value(trimmed) {
         return Some(trimmed.to_string());
     }
 
@@ -379,25 +335,4 @@ fn normalize_design_datasheet(datasheet: &str, board_dir: &Path) -> Option<Strin
     resolved
         .is_file()
         .then(|| resolved.to_string_lossy().into_owned())
-}
-
-/// Chain the resolved datasheet through the scan pipeline; returns the generated markdown path.
-fn scan_resolved(token: &str, url_or_path: &str, model: ScanModel) -> Result<PathBuf> {
-    if url_or_path.starts_with("http://") || url_or_path.starts_with("https://") {
-        let resolved = resolve_datasheet(
-            token,
-            &ResolveDatasheetInput::DatasheetUrl(url_or_path.to_string()),
-        )?;
-        Ok(PathBuf::from(resolved.markdown_path))
-    } else {
-        let result = scan_with_defaults(
-            token,
-            PathBuf::from(url_or_path),
-            None,
-            Some(model),
-            true,  // images
-            false, // json
-        )?;
-        Ok(result.output_path)
-    }
 }

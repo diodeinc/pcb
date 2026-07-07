@@ -317,19 +317,10 @@ fn reset_materialized_cache(materialized_dir: &Path, images_dir: &Path, complete
 }
 
 /// Extract a usable (http/https) `Datasheet` property value from a `.kicad_sym` file.
-///
-/// Shared with the `pcb datasheet` resolver so that datasheet extraction logic is not
-/// duplicated across the scan and datasheet-resolution code paths.
-pub fn datasheet_url_from_symbol_file(path: &Path, symbol_name: Option<&str>) -> Result<String> {
-    extract_datasheet_url_from_kicad_sym(path, symbol_name)
-}
-
-/// Returns true if `value` is a usable datasheet reference (a non-placeholder http/https URL).
-pub fn is_usable_datasheet_url(value: &str) -> bool {
-    is_usable_datasheet_value(value)
-}
-
-fn extract_datasheet_url_from_kicad_sym(path: &Path, symbol_name: Option<&str>) -> Result<String> {
+pub fn extract_datasheet_url_from_kicad_sym(
+    path: &Path,
+    symbol_name: Option<&str>,
+) -> Result<String> {
     let symbol_lib = pcb_eda::SymbolLibrary::from_file(path)
         .with_context(|| format!("Failed to parse KiCad symbol file {}", path.display()))?;
 
@@ -378,7 +369,8 @@ fn select_symbol_from_library<'a>(
     Ok(&symbols[0])
 }
 
-fn is_usable_datasheet_value(value: &str) -> bool {
+/// Returns true if `value` is a usable datasheet reference (a non-placeholder http/https URL).
+pub fn is_usable_datasheet_value(value: &str) -> bool {
     if value.is_empty() || value == "~" {
         return false;
     }

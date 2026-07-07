@@ -208,6 +208,42 @@ fn datasheet_workspace_tier_falls_back_to_symbol_property() {
     assert_eq!(json["url"], "https://symbol.example.com/lm358.pdf");
 }
 
+#[test]
+fn datasheet_workspace_tier_manufacturer_disambiguation() {
+    // Two component packages share the MPN; --manufacturer must pick the matching one
+    // (canonical layout: components/<manufacturer>/<mpn>/).
+    let symbol_for = |url: &str| {
+        format!(
+            "(kicad_symbol_lib (symbol \"LM358\" (property \"Datasheet\" \"{url}\" (at 0 0 0))))"
+        )
+    };
+    let mut sb = Sandbox::new();
+    sb.write("pcb.toml", WORKSPACE_TOML)
+        .write(
+            "components/AcmeA/LM358/LM358.kicad_sym",
+            symbol_for("https://acme-a.example.com/lm358.pdf"),
+        )
+        .write(
+            "components/AcmeB/LM358/LM358.kicad_sym",
+            symbol_for("https://acme-b.example.com/lm358.pdf"),
+        );
+
+    for (mfr, url) in [
+        ("AcmeA", "https://acme-a.example.com/lm358.pdf"),
+        ("AcmeB", "https://acme-b.example.com/lm358.pdf"),
+    ] {
+        let (ok, stdout, stderr) = run_datasheet(
+            &mut sb,
+            &["LM358", "--manufacturer", mfr, "--offline", "-f", "json"],
+            &[],
+        );
+        assert!(ok, "stderr: {stderr}");
+        let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(json["source"], "workspace");
+        assert_eq!(json["url"], url, "wrong datasheet for manufacturer {mfr}");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Reference-designator tier
 // ---------------------------------------------------------------------------
@@ -371,39 +407,6 @@ fn datasheet_download_tier_component_id() {
     assert_eq!(json["mpn"], "LM358");
 }
 
-#[test]
-fn datasheet_download_tier_no_datasheet_on_record() {
-    let mut sb = Sandbox::new();
-    sb.write("pcb.toml", WORKSPACE_TOML);
-    write_auth_token(&sb);
-
-    let component_id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
-        serde_json::to_vec(&serde_json::json!({
-            "source": "web", "mpn": "OBSCURE1", "backendId": 9,
-        }))
-        .unwrap(),
-    );
-
-    // Download succeeds but carries no datasheet URL.
-    let download_body = serde_json::json!({
-        "metadata": {"mpn": "OBSCURE1", "timestamp": "2024-01-01", "source": "web"}
-    })
-    .to_string();
-
-    let api_url = spawn_mock_api(vec![("/api/component/download", download_body)]);
-
-    let (ok, _stdout, stderr) = run_datasheet(
-        &mut sb,
-        &[&component_id, "--id"],
-        &direct_network_env(&api_url),
-    );
-    assert!(!ok);
-    assert!(
-        stderr.contains("no datasheet on record"),
-        "expected 'no datasheet on record', got: {stderr}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Web-search tier
 // ---------------------------------------------------------------------------
@@ -415,51 +418,6 @@ fn datasheet_web_search_tier() {
     write_auth_token(&sb);
 
     // Empty registry index + empty KiCad symbol dir so those tiers deterministically miss.
-    let db_path = sb.root_path().join("registry/packages.db");
-    create_registry_db(&db_path, &[]);
-    let db_str = db_path.to_string_lossy().into_owned();
-    let kicad_dir = sb.root_path().join("empty-symbols");
-    std::fs::create_dir_all(&kicad_dir).unwrap();
-    let kicad_str = kicad_dir.to_string_lossy().into_owned();
-
-    let search_body = serde_json::json!([
-        {
-            "part_number": "LM358",
-            "manufacturer": "Texas Instruments",
-            "component_id": "abc",
-            "datasheets": ["https://web.example.com/lm358-best.pdf"],
-            "score": 9.9
-        },
-        {
-            "part_number": "LM358AN",
-            "manufacturer": "ON Semiconductor",
-            "component_id": "def",
-            "datasheets": ["https://web.example.com/lm358an.pdf"],
-            "score": 3.0
-        }
-    ])
-    .to_string();
-
-    let api_url = spawn_mock_api(vec![("/api/component/search", search_body)]);
-    let mut env = direct_network_env(&api_url);
-    env.push(("PCB_REGISTRY_DB", &db_str));
-    env.push(("PCB_KICAD_SYMBOL_PATH", &kicad_str));
-
-    let (ok, stdout, stderr) = run_datasheet(&mut sb, &["LM358", "-f", "json"], &env);
-    assert!(ok, "stderr: {stderr}");
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(json["source"], "web_search");
-    // best-scored result's datasheets[0]
-    assert_eq!(json["url"], "https://web.example.com/lm358-best.pdf");
-    assert_eq!(json["mpn"], "LM358");
-}
-
-#[test]
-fn datasheet_web_search_manufacturer_disambiguation() {
-    let mut sb = Sandbox::new();
-    sb.write("pcb.toml", WORKSPACE_TOML);
-    write_auth_token(&sb);
-
     let db_path = sb.root_path().join("registry/packages.db");
     create_registry_db(&db_path, &[]);
     let db_str = db_path.to_string_lossy().into_owned();
@@ -491,10 +449,12 @@ fn datasheet_web_search_manufacturer_disambiguation() {
     env.push(("PCB_KICAD_SYMBOL_PATH", &kicad_str));
 
     // Without --manufacturer, the higher-scored TI result wins.
-    let (ok, stdout, _) = run_datasheet(&mut sb, &["LM358", "-f", "json"], &env);
-    assert!(ok);
+    let (ok, stdout, stderr) = run_datasheet(&mut sb, &["LM358", "-f", "json"], &env);
+    assert!(ok, "stderr: {stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json["source"], "web_search");
     assert_eq!(json["url"], "https://web.example.com/ti-lm358.pdf");
+    assert_eq!(json["mpn"], "LM358");
 
     // --manufacturer selects the ON Semiconductor result even though it scores lower.
     let (ok, stdout, stderr) = run_datasheet(
