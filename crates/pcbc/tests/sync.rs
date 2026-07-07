@@ -458,6 +458,56 @@ P1 = io(Net)
     );
 }
 
+/// Workspace with a `libs/Helper` package tagged `v1.2.3`; returns the board
+/// pin for Helper after syncing a board whose manifest ends with `board_deps`.
+fn sync_tagged_helper_workspace(board_deps: &str) -> String {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
+pcb-version = "0.4"
+repository = "github.com/example/demo"
+"#,
+        )
+        .write("libs/Helper/pcb.toml", "[dependencies]\n")
+        .write("libs/Helper/Helper.zen", "P1 = io(Net)\n")
+        .write(
+            "boards/Main/pcb.toml",
+            format!("[board]\nname = \"Main\"\npath = \"Main.zen\"\n{board_deps}"),
+        )
+        .write(
+            "boards/Main/Main.zen",
+            r#"
+Helper = Module("github.com/example/demo/libs/Helper/Helper.zen")
+
+Helper(name = "H", P1 = Net("P1"))
+"#,
+        )
+        .init_git()
+        .commit("init")
+        .tag("libs/Helper/v1.2.3")
+        .sync();
+
+    let board_pcb_toml = read_sandbox_file(&sandbox, "boards/Main/pcb.toml");
+    hydrated_version(&board_pcb_toml, "libs/Helper")
+}
+
+#[test]
+fn test_sync_pins_workspace_dependency_to_latest_tag() {
+    assert_eq!(sync_tagged_helper_workspace(""), "1.2.3");
+}
+
+#[test]
+fn test_sync_never_downgrades_workspace_pin() {
+    // A pin newer than the local tags means the tags simply haven't been
+    // fetched; sync must keep the pin rather than downgrade it.
+    let pin = sync_tagged_helper_workspace(
+        "\n[dependencies]\n\"github.com/example/demo/libs/Helper\" = \"2.0.0\"\n",
+    );
+    assert_eq!(pin, "2.0.0");
+}
+
 #[test]
 fn test_sync_preserves_pinned_dependency_version() {
     let mut sandbox = Sandbox::new();

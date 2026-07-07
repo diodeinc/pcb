@@ -13,7 +13,7 @@ use pcb_zen::package_resolver::{
 use pcb_zen::resolve::VendorPlan;
 use pcb_zen::resolve::ensure_package_manifest_in_cache;
 use pcb_zen::tags;
-use pcb_zen::workspace::get_workspace_info;
+use pcb_zen::workspace::{enrich_tag_versions, get_workspace_info};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::is_stdlib_module_path;
@@ -81,10 +81,18 @@ pub struct ModResolveArgs {
     pub path: Option<PathBuf>,
 }
 
+/// Load and validate the workspace for `pcb mod` / `pcb sync`, with package
+/// versions from git tags: they feed the workspace pins written to pcb.toml.
+fn load_workspace(start_path: &Path) -> Result<WorkspaceInfo> {
+    let mut workspace = get_workspace_info(&DefaultFileProvider::new(), start_path)?;
+    enrich_tag_versions(&mut workspace);
+    validate_workspace(&workspace)?;
+    Ok(workspace)
+}
+
 pub fn execute_mod_add(args: ModAddArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
-    validate_workspace(&workspace)?;
+    let workspace = load_workspace(&cwd)?;
 
     let Some(target) = discover_package_target(&workspace, &cwd) else {
         bail!("must be run from a package directory.");
@@ -107,8 +115,7 @@ pub fn execute_sync(args: SyncArgs) -> Result<()> {
 }
 
 pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), cwd)?;
-    validate_workspace(&workspace)?;
+    let workspace = load_workspace(cwd)?;
 
     // --check always verifies the whole workspace, regardless of cwd.
     let scope = if args.check { &workspace.root } else { cwd };
@@ -130,8 +137,7 @@ pub(crate) fn execute_sync_from(cwd: &Path, args: SyncArgs) -> Result<()> {
 
 pub fn execute_mod_download(args: ModDownloadArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
-    validate_workspace(&workspace)?;
+    let workspace = load_workspace(&cwd)?;
     ensure_workspace_cache_symlink(&workspace.root)?;
 
     if let Some(dependency) = args.dependency {
@@ -179,8 +185,7 @@ pub fn execute_mod_graph(_args: ModGraphArgs) -> Result<()> {
 pub fn execute_mod_resolve(args: ModResolveArgs) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let path = args.path.as_deref().unwrap_or(&cwd);
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), path)?;
-    validate_workspace(&workspace)?;
+    let workspace = load_workspace(path)?;
 
     let package_urls = target_package_urls_for_path(&workspace, path)?;
     let resolutions = build_frozen_resolution_maps(&workspace, package_urls.clone(), false)?;
@@ -203,8 +208,7 @@ fn load_target_manifest(target: &AddTarget) -> Result<PcbToml> {
 
 fn load_single_target_workspace(command_name: &str) -> Result<(WorkspaceInfo, AddTarget)> {
     let cwd = std::env::current_dir()?;
-    let workspace = get_workspace_info(&DefaultFileProvider::new(), &cwd)?;
-    validate_workspace(&workspace)?;
+    let workspace = load_workspace(&cwd)?;
 
     let Some(target) = discover_package_target(&workspace, &cwd) else {
         bail!("`{command_name}` must be run from a package directory, not the workspace root.");

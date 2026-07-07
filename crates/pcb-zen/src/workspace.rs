@@ -238,15 +238,33 @@ pub fn get_workspace_info<F: FileProvider>(
     Ok(info)
 }
 
+/// Populate package `version` from the newest package tags merged into HEAD.
+/// Cheap subset of [`enrich_git_metadata`] for commands that only need
+/// versions (e.g. the workspace pins `pcb sync` writes back).
+#[instrument(name = "enrich_tag_versions", skip_all)]
+pub fn enrich_tag_versions(info: &mut WorkspaceInfo) {
+    apply_tag_versions(info);
+}
+
+/// For forked packages, version is already set from the fork path, so only
+/// update if we find a tag (don't overwrite with None).
+fn apply_tag_versions(info: &mut WorkspaceInfo) -> HashMap<String, PackageTagInfo> {
+    let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
+    let latest_tags = latest_package_tags(info, &all_tags);
+    for (url, pkg) in info.packages.iter_mut() {
+        if let Some(tag_info) = latest_tags.get(url) {
+            pkg.version = Some(tag_info.version.to_string());
+        }
+    }
+    latest_tags
+}
+
 /// Populate package `version`, `published_at`, and `dirty` from git tags and
 /// working-tree status. Runs several git commands, so it is opt-in for the
 /// commands that actually display this metadata.
 #[instrument(name = "enrich_git_metadata", skip_all)]
 pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
-    // For forked packages, version is already set from the fork path, so only
-    // update if we find a tag (don't overwrite with None)
-    let all_tags = git::list_tags_merged_into(&info.root, "HEAD");
-    let latest_tags = latest_package_tags(info, &all_tags);
+    let latest_tags = apply_tag_versions(info);
     let workspace_subpath = git::get_repo_subpath(&info.root).ok().flatten();
 
     let latest_tag_names: Vec<_> = latest_tags.values().map(|info| info.tag.clone()).collect();
@@ -267,7 +285,6 @@ pub fn enrich_git_metadata(info: &mut WorkspaceInfo) {
 
     for (url, pkg) in info.packages.iter_mut() {
         if let Some(tag_info) = latest_tags.get(url) {
-            pkg.version = Some(tag_info.version.to_string());
             pkg.published_at = tag_metadata
                 .get(&tag_info.tag)
                 .map(|metadata| metadata.timestamp.clone());
