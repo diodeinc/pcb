@@ -9,11 +9,11 @@ use anyhow::{Context, Result, bail};
 use ignore::WalkBuilder;
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use pcb_zen_core::file_extensions;
-use pcb_zen_core::is_stdlib_module_path;
 use pcb_zen_core::resolution::{
     FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, FrozenResolutionSet,
     ResolutionResult, selected_remote_from_hydrated_manifest,
 };
+use pcb_zen_core::{STDLIB_MODULE_PATH, is_stdlib_module_path};
 use semver::Version;
 
 use super::ResolvedDepId;
@@ -33,6 +33,12 @@ enum PackageNode {
 
 pub fn target_package_urls_for_path(workspace: &WorkspaceInfo, path: &Path) -> Result<Vec<String>> {
     let path = path.canonicalize()?;
+    // The materialized stdlib lives inside the workspace tree but is never a
+    // workspace package; resolve it as the stdlib root.
+    if path.starts_with(canonicalize(&workspace.workspace_stdlib_dir())) {
+        return Ok(vec![STDLIB_MODULE_PATH.to_string()]);
+    }
+
     if workspace.packages.is_empty() {
         return Ok(vec![STANDALONE_PACKAGE_URL.to_string()]);
     }
@@ -64,12 +70,36 @@ pub fn build_frozen_resolution_maps(
     let mut builder = FrozenResolutionBuilder::new(workspace.clone(), offline)?;
     let mut resolutions = BTreeMap::new();
     for package_url in package_urls {
-        let resolution = builder
-            .build(&package_url)
-            .with_context(|| format!("while resolving dependencies for {package_url}"))?;
+        // The stdlib has no manifest to hydrate; its resolution is the
+        // stdlib package alone.
+        let resolution = if is_stdlib_module_path(&package_url) {
+            stdlib_resolution_map(workspace)
+        } else {
+            builder
+                .build(&package_url)
+                .with_context(|| format!("while resolving dependencies for {package_url}"))?
+        };
         resolutions.insert(package_url, resolution);
     }
     Ok(resolutions)
+}
+
+fn stdlib_frozen_package() -> FrozenPackage {
+    FrozenPackage {
+        identity: FrozenPackageIdentity::Stdlib,
+        deps: BTreeMap::new(),
+        parts: Vec::new(),
+    }
+}
+
+fn stdlib_resolution_map(workspace: &WorkspaceInfo) -> FrozenResolutionMap {
+    FrozenResolutionMap {
+        selected_remote: BTreeMap::new(),
+        packages: BTreeMap::from([(
+            canonicalize(&workspace.workspace_stdlib_dir()),
+            stdlib_frozen_package(),
+        )]),
+    }
 }
 
 pub fn resolve_workspace_dependencies(
@@ -316,11 +346,7 @@ impl FrozenResolutionBuilder {
     fn add_stdlib_package(&mut self) -> Result<()> {
         self.packages.insert(
             canonicalize(&self.workspace.workspace_stdlib_dir()),
-            FrozenPackage {
-                identity: FrozenPackageIdentity::Stdlib,
-                deps: BTreeMap::new(),
-                parts: Vec::new(),
-            },
+            stdlib_frozen_package(),
         );
         Ok(())
     }
@@ -431,4 +457,86 @@ fn local_path_dependency_root(package_root: &Path, spec: &DependencySpec) -> Opt
         return None;
     };
     detail.path.as_ref().map(|path| package_root.join(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::WorkspacePackage;
+
+    fn workspace_with_package(root: &Path) -> WorkspaceInfo {
+        WorkspaceInfo {
+            root: root.to_path_buf(),
+            cache_dir: PathBuf::new(),
+            config: None,
+            packages: BTreeMap::from([(
+                "github.com/acme/pkg".to_string(),
+                WorkspacePackage {
+                    rel_path: PathBuf::from("pkg"),
+                    config: PcbToml::default(),
+                    version: None,
+                    published_at: None,
+                    preferred: false,
+                    dirty: false,
+                    entrypoints: Vec::new(),
+                    symbol_files: Vec::new(),
+                },
+            )]),
+            errors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn stdlib_path_resolves_as_stdlib_root() {
+        let temp = tempfile::tempdir().unwrap();
+        // Workspace roots are canonical in real discovery; mirror that here so
+        // the stdlib prefix checks compare canonical paths.
+        let root = temp.path().canonicalize().unwrap();
+        let stdlib = root.join(".pcb/stdlib");
+        let pin_header = stdlib.join("generics/PinHeader.zen");
+        std::fs::create_dir_all(pin_header.parent().unwrap()).unwrap();
+        std::fs::write(&pin_header, "").unwrap();
+        let workspace = workspace_with_package(&root);
+
+        let targets = target_package_urls_for_path(&workspace, &stdlib).unwrap();
+        assert_eq!(targets, vec![STDLIB_MODULE_PATH.to_string()]);
+
+        let frozen = build_frozen_resolution_maps(&workspace, targets, true).unwrap();
+        let stdlib_resolution = frozen
+            .get(STDLIB_MODULE_PATH)
+            .expect("stdlib root resolution should exist");
+        assert_eq!(stdlib_resolution.packages.len(), 1);
+
+        let package = stdlib_resolution
+            .packages
+            .get(&stdlib)
+            .expect("stdlib package should be registered");
+        assert!(matches!(package.identity, FrozenPackageIdentity::Stdlib));
+
+        let resolution = ResolutionResult::frozen(workspace, frozen, HashMap::new());
+        let (root_package, _) = resolution
+            .frozen_root_for_file(&pin_header)
+            .expect("stdlib files should select the stdlib root package");
+        assert_eq!(root_package, STDLIB_MODULE_PATH);
+    }
+
+    #[test]
+    fn stdlib_file_has_no_root_without_stdlib_resolution() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let stdlib = root.join(".pcb/stdlib");
+        std::fs::create_dir_all(&stdlib).unwrap();
+        let workspace = workspace_with_package(&root);
+
+        // A resolution set without a stdlib root (the build/LSP flows) must
+        // keep returning None for stdlib files rather than misattributing
+        // them to a workspace package.
+        let resolution =
+            ResolutionResult::frozen(workspace, FrozenResolutionSet::default(), HashMap::new());
+        assert!(
+            resolution
+                .frozen_root_for_file(&stdlib.join("interfaces.zen"))
+                .is_none()
+        );
+    }
 }

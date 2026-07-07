@@ -914,6 +914,17 @@ impl ResolutionResult {
     }
 
     pub fn frozen_root_for_file(&self, file: &Path) -> Option<(&str, &FrozenResolutionMap)> {
+        // Stdlib files are owned by the synthetic stdlib package in every map,
+        // never by a map's own root package; they root at the stdlib
+        // resolution when one was requested (e.g. `pcb doc @stdlib`). Both
+        // `file` and the workspace root are canonical, so a prefix check works.
+        if file.starts_with(self.workspace_info.workspace_stdlib_dir()) {
+            return self
+                .resolution
+                .get_key_value(STDLIB_MODULE_PATH)
+                .map(|(root_package, resolution)| (root_package.as_str(), resolution));
+        }
+
         // A resolution map is a candidate only when its own longest match for
         // `file` is its root workspace package; the longest such root wins.
         // Walk the file's ancestors (longest first) over the precomputed

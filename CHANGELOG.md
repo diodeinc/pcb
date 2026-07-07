@@ -23,6 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb sync` no longer downgrades workspace dependency pins when local git tags are stale.
 - Gerber regions no longer connect holes with board-length cut-in slivers.
 - Reference designators derived from instance-name hints now honor 4-digit (1000-series) numbers such as `R1000`, `R1500`, and `LED1001` instead of silently auto-renumbering them.
+- `pcb doc @stdlib/...` now works from inside any workspace.
 
 ## [0.4.4] - 2026-07-03
 
