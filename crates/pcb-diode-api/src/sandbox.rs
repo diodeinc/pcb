@@ -533,7 +533,10 @@ impl SandboxClient {
     }
 
     /// Send a data-plane request with the sandbox-scoped token, re-minting
-    /// once if the token was rejected (expired mid-session).
+    /// once if the token was rejected (expired mid-session). The orchestrator
+    /// authorizes before forwarding anything to the sandbox, so a 401/403
+    /// means the request was never executed and the retry cannot double-apply
+    /// a write.
     fn data_plane_request<F>(
         &self,
         sandbox_id: &str,
@@ -825,6 +828,8 @@ fn release_once(state: &SandboxLockState) -> Result<()> {
 
 /// Take the lock atomically: create-only when no lock exists, or a
 /// compare-and-swap overwrite of a stale one. Returns the etag of our write.
+/// The data plane's fs/write creates parent directories itself, so the lock
+/// directory needs no separate mkdir on fresh sandboxes.
 fn acquire_lock_file(
     client: &SandboxClient,
     sandbox_id: &str,
