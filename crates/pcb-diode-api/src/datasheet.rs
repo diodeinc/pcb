@@ -163,19 +163,32 @@ fn resolve_source_url_datasheet(
     auth_token: Option<&str>,
     canonical_url: String,
 ) -> Result<ResolveDatasheetResponse> {
-    let url_cache_dir = url_pdf_cache_dir(&canonical_url)?;
-    fs::create_dir_all(&url_cache_dir)?;
-
-    let pdf_path = if let Some(cached_pdf) =
-        first_valid_file_in_dir(&url_cache_dir, None, is_valid_cached_pdf)?
-    {
-        cached_pdf
-    } else {
-        fetch_url_pdf_via_backend(client, auth_token, &canonical_url, &url_cache_dir)?
-    };
-
+    let pdf_path = ensure_url_pdf_cached(client, auth_token, &canonical_url)?;
     let execution = ResolveExecution::from_pdf_path(pdf_path, Some(canonical_url))?;
     execute_resolve_execution(client, auth_token, execution)
+}
+
+/// Ensure the PDF behind a datasheet URL is present in the local URL cache,
+/// fetching it through the backend datasheet cache on miss, and return its
+/// local path.
+pub(crate) fn ensure_pdf_for_url(auth_token: Option<&str>, url: &str) -> Result<PathBuf> {
+    let client = build_scan_client()?;
+    let canonical_url = canonicalize_url(url)?;
+    ensure_url_pdf_cached(&client, auth_token, &canonical_url)
+}
+
+fn ensure_url_pdf_cached(
+    client: &Client,
+    auth_token: Option<&str>,
+    canonical_url: &str,
+) -> Result<PathBuf> {
+    let url_cache_dir = url_pdf_cache_dir(canonical_url)?;
+    fs::create_dir_all(&url_cache_dir)?;
+
+    if let Some(cached_pdf) = first_valid_file_in_dir(&url_cache_dir, None, is_valid_cached_pdf)? {
+        return Ok(cached_pdf);
+    }
+    fetch_url_pdf_via_backend(client, auth_token, canonical_url, &url_cache_dir)
 }
 
 fn execute_resolve_execution(

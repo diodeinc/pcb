@@ -194,6 +194,10 @@ fn write_validated_pdf(bytes: &[u8], output_path: &Path) -> Result<()> {
         );
     }
 
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
     std::fs::write(output_path, bytes)?;
     Ok(())
 }
@@ -334,7 +338,11 @@ fn resolve_component_identity(
     })
 }
 
-fn materialize_symbol_datasheet(symbol_path: &Path, output_path: &Path) -> Result<()> {
+fn materialize_symbol_datasheet(
+    auth_token: Option<&str>,
+    symbol_path: &Path,
+    output_path: &Path,
+) -> Result<DatasheetProcessingOutcome> {
     let symbol_lib = pcb_eda::SymbolLibrary::from_file(symbol_path).with_context(|| {
         format!(
             "Failed to parse KiCad symbol file {}",
@@ -348,12 +356,25 @@ fn materialize_symbol_datasheet(symbol_path: &Path, output_path: &Path) -> Resul
         .and_then(pcb_eda::usable_kicad_field_value)
         .ok_or_else(|| anyhow::anyhow!("No valid Datasheet found in {}", symbol_path.display()))?;
 
-    materialize_datasheet_pdf(datasheet_ref, symbol_path.parent(), output_path)
+    if datasheet_ref.starts_with("http://") || datasheet_ref.starts_with("https://") {
+        // Verify the URL resolves to a PDF through the backend datasheet
+        // cache (which also warms it for later `pcb scan` runs). The symbol
+        // keeps the original URL, so no docs/ copy is needed.
+        crate::datasheet::ensure_pdf_for_url(auth_token, datasheet_ref)?;
+        return Ok(DatasheetProcessingOutcome::SymbolUrlCached);
+    }
+
+    materialize_datasheet_pdf(datasheet_ref, symbol_path.parent(), output_path)?;
+    Ok(DatasheetProcessingOutcome::SymbolDownloaded)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DatasheetProcessingOutcome {
+    /// Symbol datasheet URL verified and cached; the symbol keeps the URL.
+    SymbolUrlCached,
+    /// Symbol's local datasheet reference copied into docs/.
     SymbolDownloaded,
+    /// Component-download fallback PDF downloaded into docs/.
     FallbackDownloaded,
     NotResolved,
 }
@@ -363,10 +384,6 @@ fn materialize_datasheet_pdf(
     relative_to_dir: Option<&Path>,
     output_path: &Path,
 ) -> Result<()> {
-    if datasheet_ref.starts_with("http://") || datasheet_ref.starts_with("https://") {
-        return download_pdf_file(datasheet_ref, output_path);
-    }
-
     let source_path = {
         let path = Path::new(datasheet_ref);
         if path.is_absolute() {
@@ -387,28 +404,16 @@ fn materialize_datasheet_pdf(
 }
 
 fn process_component_datasheet(
+    auth_token: Option<&str>,
     symbol_path: &Path,
     output_path: &Path,
     fallback_datasheet_url: Option<&str>,
 ) -> (DatasheetProcessingOutcome, Vec<String>) {
-    if let Some(parent) = output_path.parent()
-        && let Err(e) = fs::create_dir_all(parent)
-    {
-        return (
-            DatasheetProcessingOutcome::NotResolved,
-            vec![format!(
-                "datasheet setup: failed to create {}: {}",
-                parent.display(),
-                e
-            )],
-        );
-    }
-
     let mut symbol_error: Option<String> = None;
 
     if symbol_path.exists() {
-        match materialize_symbol_datasheet(symbol_path, output_path) {
-            Ok(()) => return (DatasheetProcessingOutcome::SymbolDownloaded, Vec::new()),
+        match materialize_symbol_datasheet(auth_token, symbol_path, output_path) {
+            Ok(outcome) => return (outcome, Vec::new()),
             Err(e) => symbol_error = Some(format!("symbol datasheet download: {e}")),
         }
     }
@@ -616,6 +621,7 @@ pub fn add_component_to_workspace(
     spinner.set_message("Downloading datasheet...");
 
     let (datasheet_outcome, datasheet_warnings) = process_component_datasheet(
+        auth_token,
         &files.symbol_path,
         &files.pdf_path,
         download.datasheet_url.as_deref(),
@@ -629,6 +635,9 @@ pub fn add_component_to_workspace(
     )
     .then(|| component_datasheet_ref(&files.sanitized_mpn));
     match datasheet_outcome {
+        DatasheetProcessingOutcome::SymbolUrlCached => {
+            eprintln!("{} Datasheet URL verified and cached", "✓".green());
+        }
         DatasheetProcessingOutcome::SymbolDownloaded => {
             eprintln!("{} Downloaded datasheet from symbol", "✓".green());
         }
