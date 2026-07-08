@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
+use jiff::Timestamp;
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
@@ -252,7 +253,7 @@ fn test_pcb_info_json_includes_published_at() {
         .run()
         .expect("create second annotated tag");
 
-    let expected_published_at = sandbox
+    let git_published_at = sandbox
         .cmd(
             "git",
             [
@@ -264,6 +265,11 @@ fn test_pcb_info_json_includes_published_at() {
         .read()
         .expect("read latest tag timestamp")
         .trim()
+        .to_string();
+    let expected_published_at = git_published_at
+        .parse::<Timestamp>()
+        .expect("parse latest tag timestamp")
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
 
     let output = sandbox.snapshot_run("pcbc", ["info", "-f", "json"]);

@@ -10,15 +10,15 @@ homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-glam = "0.32"
+glam = "0.33"
 starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
 starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
 starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
 allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
 pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "0a73b696d5f72085d85b04fc065d35e56eb32662", default-features = false }
 
-ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
-ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.11" }
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.20" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.20" }
 
 mimalloc = "0.1"
 
@@ -49,110 +49,110 @@ pcb-docgen = { path = "crates/pcb-docgen" }
 
 anyhow = "1.0"
 atomicwrites = "0.4"
-arboard = { version = "3.4", default-features = false }
+arboard = { version = "3.6", default-features = false }
 ariadne = { version = "0.6", features = ["auto-color"] }
-aws-config = "1.8.16"
+aws-config = "1.8.18"
 aws-credential-types = "1.2.14"
-aws-sigv4 = "1.4.3"
-aws-smithy-runtime-api = "1.12.0"
+aws-sigv4 = "1.4.5"
+aws-smithy-runtime-api = "1.13.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 colored = "3"
-derive_more = { version = "1.0.0", features = ["full"] }
+derive_more = { version = "2.1.1", features = ["full"] }
 dirs = "6"
 dupe = "0.9.1"
-duct = "1.1.0"
+duct = "1.1.1"
 env_logger = "0.11"
 indicatif = "0.18"
 inquire = "0.9"
-itertools = "0.14"
+itertools = "0.15"
 heck = "0.5.0"
 hex = "0.4"
 httpmock = "0.8"
 log = "0.4"
-minijinja = "2.5"
+minijinja = "2.21"
 notify = "8.2"
 open = "5"
 path-slash = "0.2.1"
 termtree = "1"
-regex = "1.11.0"
+regex = "1.12.4"
 natord = "1.0.9"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tempfile = "3.10.1"
+tempfile = "3.27.0"
 thiserror = "2"
 toml = "1"
 toml_edit = "0.25"
 tokio = { version = "1", features = ["rt-multi-thread"] }
-uuid = { version = "1.4", features = ["v4", "v5", "js"] }
-walkdir = "2.3"
+uuid = { version = "1.23", features = ["v4", "v5", "js"] }
+walkdir = "2.5"
 deunicode = "1.6"
-insta = { version = "1.47", features = ["yaml", "filters", "json"] }
-assert_cmd = "2.0"
-assert_fs = "1.0"
+insta = { version = "1.48", features = ["yaml", "filters", "json"] }
+assert_cmd = "2.2"
+assert_fs = "1.1"
 base64 = "0.22"
 console_error_panic_hook = "0.1"
 console_log = "1.0.0"
 crossterm = "0.29"
-ctrlc = { version = "3.4", features = ["termination"] }
+ctrlc = { version = "3.5", features = ["termination"] }
 ratatui = "0.30"
-ratatui-image = { version = "10.0", default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "11.0", default-features = false, features = ["crossterm"] }
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 csv = "1.4"
 debugserver-types = "0.5.0"
 derivative = "2.2"
-either = "1.8"
+either = "1.16"
 fixedbitset = "0.5"
-globset = "0.4.13"
+globset = "0.4.18"
 lsp-server = "0.7.2"
 lsp-types = "0.94.1"
 maplit = "1.0.2"
 md-5 = "0.11"
-os_pipe = "1.1.4"
+os_pipe = "1.2.3"
 paste = "1.0"
 pathdiff = "0.2"
 petgraph = "0.8"
-rayon = "1.10"
+rayon = "1.12"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "charset", "http2", "json", "multipart", "rustls", "system-proxy"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
-rand = "0.8"
+rand = "0.10"
 serde-wasm-bindgen = "0.6"
 serde_yaml = "0.9"
 self-replace = "1.5"
-serial_test = "3.0"
+serial_test = "3.5"
 smallvec = "1.15"
 strip-ansi-escapes = "0.2"
 supports-hyperlinks = "3"
 tar = { version = "0.4", default-features = false }
 ruzstd = "0.8"
-terminal_size = "0.4.0"
+terminal_size = "0.4.4"
 terminal_hyperlink = "0.1"
-uppsala = "0.8.0"
+uppsala = "0.9.0"
 termimad = "0.34"
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig"] }
 textwrap = "0.16"
-unicode-width = "0.2.0"
+unicode-width = "0.2.2"
 urlencoding = "2.1"
-wasm-bindgen = "0.2.100"
+wasm-bindgen = "0.2.126"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 fslock = "0.2"
-rust_decimal = { version = "1.38", features = ["serde", "serde-with-str"] }
-rust_decimal_macros = "1.38"
+rust_decimal = { version = "1.42", features = ["serde", "serde-with-str"] }
+rust_decimal_macros = "1.40"
 comfy-table = { version = "7.2", features = ["custom_styling"] }
 url = "2.5"
 ignore = "0.4"
-i_overlay = "6"
+i_overlay = "7"
 sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }
 kurbo = "0.13"
 resvg = "0.47"
 zstd = "0.13"
 jiff = "0.2"
-blake3 = "1.5"
-rusqlite = { version = "0.39", features = ["bundled"] }
+blake3 = "1.8"
+rusqlite = { version = "0.40", features = ["bundled"] }
 r2d2 = "0.8"
-r2d2_sqlite = "0.33"
+r2d2_sqlite = "0.35"
 unicode-normalization = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -160,7 +160,7 @@ tracing-chrome = "0.7"
 
 # rectify: STEP tessellation (foxtrot), raster grids, and FFT numerics
 triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "79d6fbb94a6dfb64976393d6b4196cc11c0d8f8f" }
-ndarray = "0.16"
+ndarray = "0.17"
 rustfft = "6.4"
 num-complex = "0.4"
 
