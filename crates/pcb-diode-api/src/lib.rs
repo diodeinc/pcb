@@ -38,7 +38,7 @@ pub use sandbox::{
     ExecSyncOutput, ExecSyncRequest, SandboxClient, SandboxDirEntry, SandboxListResponse,
     SandboxLockGuard, SandboxLockOptions,
 };
-pub use scan::{ScanArgs, ScanModel, ScanModelArg, execute as execute_scan};
+pub use scan::{ScanArgs, execute as execute_scan};
 
 pub fn get_api_base_url() -> String {
     WorkspaceContext::from_cwd()

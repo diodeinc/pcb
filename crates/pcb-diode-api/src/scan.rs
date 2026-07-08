@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
-use clap::{Args, ValueEnum};
+use clap::Args;
 use pcb_ui::Spinner;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, multipart};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -10,86 +10,50 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use url::Url;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScanModel {
-    MistralOcr2512,
-    DatalabFast,
-    DatalabBalanced,
-    DatalabAccurate,
-}
-
-impl ScanModel {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::MistralOcr2512 => "mistral-ocr-2512",
-            Self::DatalabFast => "datalab-fast",
-            Self::DatalabBalanced => "datalab-balanced",
-            Self::DatalabAccurate => "datalab-accurate",
-        }
-    }
-}
-
-impl std::fmt::Display for ScanModel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl std::str::FromStr for ScanModel {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "mistral-ocr-2512" => Ok(Self::MistralOcr2512),
-            "datalab-fast" => Ok(Self::DatalabFast),
-            "datalab-balanced" => Ok(Self::DatalabBalanced),
-            "datalab-accurate" => Ok(Self::DatalabAccurate),
-            _ => anyhow::bail!(
-                "Invalid model: {}. Valid options: mistral-ocr-2512, datalab-fast, datalab-balanced, datalab-accurate",
-                s
-            ),
-        }
-    }
-}
-
 #[derive(Serialize)]
-struct UploadUrlRequest {
-    sha256: String,
-    filename: String,
+struct CreateDatasheetRequest {
+    url: String,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct UploadUrlResponse {
-    #[serde(rename = "uploadUrl")]
-    pub(crate) upload_url: Option<String>,
-    #[serde(rename = "sourcePath")]
-    pub(crate) source_path: String,
-}
-
-#[derive(Serialize)]
-struct ProcessRequest {
-    #[serde(rename = "sourcePath")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_path: Option<String>,
-    #[serde(rename = "sourceUrl")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    concurrency: Option<u32>,
+pub(crate) struct DatasheetResponse {
+    pub(crate) id: String,
+    #[serde(rename = "fileUrl")]
+    pub(crate) file_url: String,
+    pub(crate) sha256: String,
+    pub(crate) filename: String,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct ProcessResponse {
+pub(crate) struct DatasheetScanResponse {
     #[serde(rename = "markdownUrl")]
     pub(crate) markdown_url: String,
-    #[serde(rename = "documentJsonUrl")]
-    pub(crate) document_json_url: Option<String>,
     #[serde(rename = "imagesZipUrl")]
     pub(crate) images_zip_url: Option<String>,
-    #[serde(rename = "sourcePdfUrl")]
-    pub(crate) source_pdf_url: Option<String>,
+}
+
+pub(crate) enum DatasheetScanOutcome {
+    Scanned(DatasheetScanResponse),
+    NotCached,
+}
+
+pub(crate) fn datasheet_id_for_sha256(sha256: &str) -> String {
+    format!("sha256:{sha256}")
+}
+
+fn api_error(context: &str, response: reqwest::blocking::Response) -> anyhow::Error {
+    #[derive(Deserialize)]
+    struct ApiError {
+        error: String,
+    }
+
+    let status = response.status();
+    match response.json::<ApiError>() {
+        Ok(body) if !body.error.is_empty() => {
+            anyhow::anyhow!("{context} failed ({status}): {}", body.error)
+        }
+        _ => anyhow::anyhow!("{context} failed: {status}"),
+    }
 }
 
 pub(crate) fn build_scan_client() -> Result<Client> {
@@ -115,105 +79,75 @@ pub(crate) fn calculate_sha256(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-pub(crate) fn request_upload_url(
+pub(crate) fn create_datasheet_from_url(
     client: &Client,
     token: Option<&str>,
-    base_url: &str,
-    sha256: &str,
-    filename: &str,
-) -> Result<UploadUrlResponse> {
-    let url = format!("{}/api/scan/upload-url", base_url);
+    url: &str,
+) -> Result<DatasheetResponse> {
+    let endpoint = format!("{}/api/datasheets", crate::get_api_base_url());
 
-    let response = crate::auth::apply_bearer_auth(client.post(&url), token)
-        .json(&UploadUrlRequest {
-            sha256: sha256.to_string(),
-            filename: filename.to_string(),
+    let response = crate::auth::apply_bearer_auth(client.post(&endpoint), token)
+        .json(&CreateDatasheetRequest {
+            url: url.to_string(),
         })
         .send()?;
 
     if !response.status().is_success() {
-        anyhow::bail!("API error: {}", response.status());
+        return Err(api_error("Datasheet download", response));
     }
 
     Ok(response.json()?)
 }
 
-pub(crate) fn process_local_pdf(
-    client: &Client,
-    auth_token: Option<&str>,
-    file_path: &Path,
-    file_sha256: Option<&str>,
-    model: Option<&str>,
-) -> Result<ProcessResponse> {
-    let api_base_url = crate::get_api_base_url();
-    let filename = file_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .context("Invalid filename")?;
-    let sha256 = match file_sha256 {
-        Some(sha256) => sha256.to_owned(),
-        None => calculate_sha256(file_path)?,
-    };
-
-    let upload = request_upload_url(client, auth_token, &api_base_url, &sha256, filename)?;
-    if let Some(upload_url) = upload.upload_url.as_deref() {
-        upload_pdf(client, upload_url, file_path)?;
-    }
-
-    request_process(
-        client,
-        auth_token,
-        &api_base_url,
-        Some(&upload.source_path),
-        None,
-        model,
-    )
-}
-
-pub(crate) fn upload_pdf(client: &Client, upload_url: &str, file_path: &Path) -> Result<()> {
-    let file_data = fs::read(file_path)?;
-
-    let response = client
-        .put(upload_url)
-        .header("Content-Type", "application/pdf")
-        .body(file_data)
-        .send()?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Upload failed: {}", response.status());
-    }
-
-    Ok(())
-}
-
-pub(crate) fn request_process(
+pub(crate) fn create_datasheet_from_pdf(
     client: &Client,
     token: Option<&str>,
-    base_url: &str,
-    source_path: Option<&str>,
-    source_url: Option<&str>,
-    model: Option<&str>,
-) -> Result<ProcessResponse> {
-    if source_path.is_none() && source_url.is_none() {
-        anyhow::bail!("Either source_path or source_url is required");
-    }
+    pdf_path: &Path,
+) -> Result<DatasheetResponse> {
+    let endpoint = format!("{}/api/datasheets", crate::get_api_base_url());
+    let form = multipart::Form::new()
+        .file("file", pdf_path)
+        .with_context(|| {
+            format!(
+                "Failed to read datasheet PDF for upload: {}",
+                pdf_path.display()
+            )
+        })?;
 
-    let url = format!("{}/api/scan/process", base_url);
-
-    let response = crate::auth::apply_bearer_auth(client.post(&url), token)
-        .json(&ProcessRequest {
-            source_path: source_path.map(ToOwned::to_owned),
-            source_url: source_url.map(ToOwned::to_owned),
-            model: model.map(|s| s.to_string()),
-            concurrency: None,
-        })
+    let response = crate::auth::apply_bearer_auth(client.post(&endpoint), token)
+        .multipart(form)
         .send()?;
 
     if !response.status().is_success() {
-        anyhow::bail!("API error: {}", response.status());
+        return Err(api_error("Datasheet upload", response));
     }
 
     Ok(response.json()?)
+}
+
+pub(crate) fn scan_datasheet(
+    client: &Client,
+    token: Option<&str>,
+    datasheet_id: &str,
+) -> Result<DatasheetScanOutcome> {
+    let endpoint = format!(
+        "{}/api/datasheets/{}/scan",
+        crate::get_api_base_url(),
+        datasheet_id
+    );
+
+    let response = crate::auth::apply_bearer_auth(client.post(&endpoint), token)
+        .json(&serde_json::json!({}))
+        .send()?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(DatasheetScanOutcome::NotCached);
+    }
+    if !response.status().is_success() {
+        return Err(api_error("Datasheet scan", response));
+    }
+
+    Ok(DatasheetScanOutcome::Scanned(response.json()?))
 }
 
 pub(crate) fn download_file(client: &Client, url: &str, path: &Path) -> Result<()> {
@@ -233,33 +167,23 @@ pub(crate) fn download_file(client: &Client, url: &str, path: &Path) -> Result<(
     Ok(())
 }
 
-pub(crate) fn download_process_artifacts(
+pub(crate) fn download_scan_artifacts(
     client: &Client,
-    process_response: &ProcessResponse,
+    scan_response: &DatasheetScanResponse,
     markdown_path: &Path,
-    document_json_path: Option<&Path>,
     images_zip_path: Option<&Path>,
 ) -> Result<()> {
     std::thread::scope(|s| -> Result<()> {
         let md_handle =
-            s.spawn(|| download_file(client, &process_response.markdown_url, markdown_path));
+            s.spawn(|| download_file(client, &scan_response.markdown_url, markdown_path));
 
-        let json_handle = process_response
-            .document_json_url
-            .as_ref()
-            .zip(document_json_path)
-            .map(|(url, path)| s.spawn(|| download_file(client, url, path)));
-
-        let images_handle = process_response
+        let images_handle = scan_response
             .images_zip_url
             .as_ref()
             .zip(images_zip_path)
             .map(|(url, path)| s.spawn(|| download_file(client, url, path)));
 
         md_handle.join().unwrap()?;
-        if let Some(h) = json_handle {
-            h.join().unwrap()?;
-        }
         if let Some(h) = images_handle {
             h.join().unwrap()?;
         }
@@ -293,29 +217,6 @@ pub(crate) fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum ScanModelArg {
-    #[value(name = "mistral-ocr-2512")]
-    MistralOcr2512,
-    #[value(name = "datalab-fast")]
-    DatalabFast,
-    #[value(name = "datalab-balanced")]
-    DatalabBalanced,
-    #[value(name = "datalab-accurate")]
-    DatalabAccurate,
-}
-
-impl From<ScanModelArg> for ScanModel {
-    fn from(arg: ScanModelArg) -> Self {
-        match arg {
-            ScanModelArg::MistralOcr2512 => ScanModel::MistralOcr2512,
-            ScanModelArg::DatalabFast => ScanModel::DatalabFast,
-            ScanModelArg::DatalabBalanced => ScanModel::DatalabBalanced,
-            ScanModelArg::DatalabAccurate => ScanModel::DatalabAccurate,
-        }
-    }
 }
 
 enum ScanInput {
