@@ -23,7 +23,6 @@ chrono = { workspace = true }
 clap = { workspace = true }
 colored = { workspace = true }
 crossterm = { workspace = true }
-deunicode = { workspace = true }
 dirs = { workspace = true }
 fslock = { workspace = true }
 fuzzy-matcher = "0.3"

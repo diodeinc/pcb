@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use clap::{Args, Subcommand};
 use fslock::LockFile;
-use rand::Rng;
+use rand::distr::{Alphanumeric, SampleString};
 use reqwest::blocking::{Client, RequestBuilder};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -267,11 +267,8 @@ pub(crate) fn apply_api_auth_with_context(
 }
 
 pub fn login_with_context(ctx: &WorkspaceContext) -> Result<()> {
-    let code: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(6)
-        .map(char::from)
-        .collect::<String>()
+    let code = Alphanumeric
+        .sample_string(&mut rand::rng(), 6)
         .to_uppercase();
 
     let listener = TcpListener::bind("127.0.0.1:0")?;

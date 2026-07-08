@@ -11,7 +11,6 @@ description = "Core functionality for Zen PCB design language"
 default = ["native"]
 native = [
     "dirs",
-    "tar",
     "walkdir",
     "rayon",
 ]
@@ -27,7 +26,6 @@ starlark_map = { workspace = true }
 starlark_syntax = { workspace = true }
 
 anyhow = { workspace = true }
-either = { workspace = true }
 globset = { workspace = true }
 itertools = { workspace = true }
 heck = { workspace = true }
@@ -40,9 +38,7 @@ log = { workspace = true }
 regex = { workspace = true }
 ariadne = { workspace = true }
 dirs = { workspace = true, optional = true }
-tar = { workspace = true, optional = true }
 toml = { workspace = true }
-zip = { workspace = true }
 fixedbitset = { workspace = true }
 smallvec = { workspace = true }
 rust_decimal = { workspace = true }
