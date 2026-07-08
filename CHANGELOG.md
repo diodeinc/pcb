@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb scan` now uses the datasheet cache API and skips re-uploading PDFs the backend already has.
+- `pcb new component` resolves symbol datasheet URLs through the datasheet cache API and keeps the URL in the symbol instead of vendoring a local PDF copy.
+
 ## [0.4.5] - 2026-07-07
 
 ### Added

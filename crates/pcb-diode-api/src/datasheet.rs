@@ -11,8 +11,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::scan::{
-    build_scan_client, calculate_sha256, download_file, download_process_artifacts, extract_zip,
-    process_local_pdf, request_process,
+    DatasheetScanOutcome, DatasheetScanResponse, build_scan_client, calculate_sha256,
+    create_datasheet_from_pdf, create_datasheet_from_url, datasheet_id_for_sha256, download_file,
+    download_scan_artifacts, extract_zip, scan_datasheet,
 };
 
 const DATASHEET_NAMESPACE_UUID: &str = "fe255507-b3f4-4ec0-98cb-9e3f90cfd8eb";
@@ -139,7 +140,7 @@ pub fn resolve_datasheet(
         ResolveDatasheetInput::PdfPath(path) => {
             let pdf_path = path.clone();
             let execution = ResolveExecution::from_pdf_path(pdf_path, None)?;
-            execute_resolve_execution(&client, auth_token, execution, None)
+            execute_resolve_execution(&client, auth_token, execution)
         }
         ResolveDatasheetInput::KicadSymPath { path, symbol_name } => {
             let reference =
@@ -151,7 +152,7 @@ pub fn resolve_datasheet(
                 let pdf_path = resolve_local_datasheet_path_from_kicad_sym(path, &reference)?;
                 validate_local_pdf(&pdf_path)?;
                 let execution = ResolveExecution::from_pdf_path(pdf_path, None)?;
-                execute_resolve_execution(&client, auth_token, execution, None)
+                execute_resolve_execution(&client, auth_token, execution)
             }
         }
     }
@@ -162,28 +163,38 @@ fn resolve_source_url_datasheet(
     auth_token: Option<&str>,
     canonical_url: String,
 ) -> Result<ResolveDatasheetResponse> {
-    let url_cache_dir = url_pdf_cache_dir(&canonical_url)?;
+    let pdf_path = ensure_url_pdf_cached(client, auth_token, &canonical_url)?;
+    let execution = ResolveExecution::from_pdf_path(pdf_path, Some(canonical_url))?;
+    execute_resolve_execution(client, auth_token, execution)
+}
+
+/// Ensure the PDF behind a datasheet URL is present in the local URL cache,
+/// fetching it through the backend datasheet cache on miss, and return its
+/// local path.
+pub(crate) fn ensure_pdf_for_url(auth_token: Option<&str>, url: &str) -> Result<PathBuf> {
+    let client = build_scan_client()?;
+    let canonical_url = canonicalize_url(url)?;
+    ensure_url_pdf_cached(&client, auth_token, &canonical_url)
+}
+
+fn ensure_url_pdf_cached(
+    client: &Client,
+    auth_token: Option<&str>,
+    canonical_url: &str,
+) -> Result<PathBuf> {
+    let url_cache_dir = url_pdf_cache_dir(canonical_url)?;
     fs::create_dir_all(&url_cache_dir)?;
 
-    let (pdf_path, prefetched_process) = if let Some(cached_pdf) =
-        first_valid_file_in_dir(&url_cache_dir, None, is_valid_cached_pdf)?
-    {
-        (cached_pdf, None)
-    } else {
-        let (process, downloaded_pdf_path) =
-            fetch_url_pdf_via_backend(client, auth_token, &canonical_url, &url_cache_dir)?;
-        (downloaded_pdf_path, Some(process))
-    };
-
-    let execution = ResolveExecution::from_pdf_path(pdf_path, Some(canonical_url))?;
-    execute_resolve_execution(client, auth_token, execution, prefetched_process)
+    if let Some(cached_pdf) = first_valid_file_in_dir(&url_cache_dir, None, is_valid_cached_pdf)? {
+        return Ok(cached_pdf);
+    }
+    fetch_url_pdf_via_backend(client, auth_token, canonical_url, &url_cache_dir)
 }
 
 fn execute_resolve_execution(
     client: &Client,
     auth_token: Option<&str>,
     execution: ResolveExecution,
-    prefetched_process: Option<crate::scan::ProcessResponse>,
 ) -> Result<ResolveDatasheetResponse> {
     let materialization_id = materialization_id_for_key(&execution.pdf_sha256)?;
     let materialized_dir = materialized_dir(&materialization_id);
@@ -213,25 +224,11 @@ fn execute_resolve_execution(
     }
     reset_materialized_cache(&materialized_dir, &images_dir, &complete_marker);
 
-    let process = if let Some(process) = prefetched_process {
-        process
-    } else {
-        if let Some(parent) = execution.pdf_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+    let scan = ensure_datasheet_scanned(client, auth_token, &execution)?;
 
-        process_local_pdf(
-            client,
-            auth_token,
-            &execution.pdf_path,
-            Some(&execution.pdf_sha256),
-            None,
-        )?
-    };
-
-    materialize_process_outputs(
+    materialize_scan_outputs(
         client,
-        &process,
+        &scan,
         &materialized_dir,
         &markdown_path,
         &images_dir,
@@ -252,36 +249,48 @@ fn fetch_url_pdf_via_backend(
     auth_token: Option<&str>,
     canonical_url: &str,
     url_cache_dir: &Path,
-) -> Result<(crate::scan::ProcessResponse, PathBuf)> {
-    let api_base_url = crate::get_api_base_url();
-    let process = request_process(
-        client,
-        auth_token,
-        &api_base_url,
-        None,
-        Some(canonical_url),
-        None,
-    )?;
-    let source_pdf_url = process
-        .source_pdf_url
-        .as_deref()
-        .context("Scan API did not return sourcePdfUrl for URL input")?;
-    let filename = infer_source_pdf_filename(source_pdf_url)?;
-    let pdf_path = url_cache_dir.join(filename);
+) -> Result<PathBuf> {
+    let datasheet = create_datasheet_from_url(client, auth_token, canonical_url)?;
+    let pdf_path = url_cache_dir.join(cached_pdf_filename(&datasheet.filename));
 
-    download_file(client, source_pdf_url, &pdf_path)
-        .context("Failed to download source PDF output")?;
+    download_file(client, &datasheet.file_url, &pdf_path)
+        .context("Failed to download cached datasheet PDF")?;
     if !is_valid_cached_pdf(&pdf_path)? {
         let _ = fs::remove_file(&pdf_path);
         anyhow::bail!("Downloaded URL did not produce a valid PDF: {canonical_url}");
     }
+    if !calculate_sha256(&pdf_path)?.eq_ignore_ascii_case(&datasheet.sha256) {
+        let _ = fs::remove_file(&pdf_path);
+        anyhow::bail!("Downloaded datasheet PDF did not match its content hash: {canonical_url}");
+    }
 
-    Ok((process, pdf_path))
+    Ok(pdf_path)
 }
 
-fn materialize_process_outputs(
+fn ensure_datasheet_scanned(
     client: &Client,
-    process: &crate::scan::ProcessResponse,
+    auth_token: Option<&str>,
+    execution: &ResolveExecution,
+) -> Result<DatasheetScanResponse> {
+    let datasheet_id = datasheet_id_for_sha256(&execution.pdf_sha256);
+    if let DatasheetScanOutcome::Scanned(scan) = scan_datasheet(client, auth_token, &datasheet_id)?
+    {
+        return Ok(scan);
+    }
+
+    // The backend has no PDF cached under this content hash yet — upload ours, then scan.
+    let datasheet = create_datasheet_from_pdf(client, auth_token, &execution.pdf_path)?;
+    match scan_datasheet(client, auth_token, &datasheet.id)? {
+        DatasheetScanOutcome::Scanned(scan) => Ok(scan),
+        DatasheetScanOutcome::NotCached => {
+            anyhow::bail!("Datasheet {} not found after upload", datasheet.id)
+        }
+    }
+}
+
+fn materialize_scan_outputs(
+    client: &Client,
+    scan: &DatasheetScanResponse,
     materialized_dir: &Path,
     markdown_path: &Path,
     images_dir: &Path,
@@ -291,16 +300,15 @@ fn materialize_process_outputs(
     let _ = fs::remove_file(complete_marker);
 
     let zip_path = materialized_dir.join("images.zip");
-    download_process_artifacts(
+    download_scan_artifacts(
         client,
-        process,
+        scan,
         markdown_path,
-        None,
-        process.images_zip_url.as_ref().map(|_| zip_path.as_path()),
+        scan.images_zip_url.as_ref().map(|_| zip_path.as_path()),
     )
     .context("Failed to download datasheet outputs")?;
 
-    if process.images_zip_url.is_some() {
+    if scan.images_zip_url.is_some() {
         let temp_images_dir = materialized_dir.join(format!(".images-{}", Uuid::new_v4()));
 
         let extract_result = (|| -> Result<()> {
@@ -635,20 +643,14 @@ fn is_file_with_extension(path: &Path, extension: &str) -> bool {
             .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
 }
 
-fn infer_source_pdf_filename(source_pdf_url: &str) -> Result<String> {
-    let parsed = Url::parse(source_pdf_url)
-        .with_context(|| format!("Invalid sourcePdfUrl returned by scan API: {source_pdf_url}"))?;
-    let filename = parsed
-        .path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .filter(|name| !name.is_empty())
-        .with_context(|| format!("sourcePdfUrl missing filename: {source_pdf_url}"))?;
-
-    if !filename.to_ascii_lowercase().ends_with(".pdf") {
-        anyhow::bail!("sourcePdfUrl filename must end with .pdf: {source_pdf_url}");
-    }
-
-    Ok(filename.to_string())
+/// Reduce the backend-reported filename to a safe local cache filename.
+fn cached_pdf_filename(filename: &str) -> String {
+    Path::new(filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| name.to_ascii_lowercase().ends_with(".pdf") && name.len() > ".pdf".len())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "datasheet.pdf".to_string())
 }
 
 fn is_non_empty_file(path: &Path) -> Result<bool> {
@@ -721,20 +723,22 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_source_pdf_filename_extracts_pdf_name() {
-        let name =
-            infer_source_pdf_filename("https://example.com/scans/abc123/ad574a.pdf").unwrap();
-        assert_eq!(name, "ad574a.pdf");
+    fn test_cached_pdf_filename_keeps_valid_pdf_name() {
+        assert_eq!(cached_pdf_filename("ad574a.pdf"), "ad574a.pdf");
+        assert_eq!(cached_pdf_filename("AD574A.PDF"), "AD574A.PDF");
     }
 
     #[test]
-    fn test_infer_source_pdf_filename_rejects_empty_segment() {
-        assert!(infer_source_pdf_filename("https://example.com/scans/abc123/").is_err());
+    fn test_cached_pdf_filename_strips_path_components() {
+        assert_eq!(cached_pdf_filename("scans/abc123/ad574a.pdf"), "ad574a.pdf");
     }
 
     #[test]
-    fn test_infer_source_pdf_filename_rejects_non_pdf_name() {
-        assert!(infer_source_pdf_filename("https://example.com/scans/abc123/source").is_err());
+    fn test_cached_pdf_filename_defaults_for_unsafe_names() {
+        assert_eq!(cached_pdf_filename(""), "datasheet.pdf");
+        assert_eq!(cached_pdf_filename("source"), "datasheet.pdf");
+        assert_eq!(cached_pdf_filename(".pdf"), "datasheet.pdf");
+        assert_eq!(cached_pdf_filename("scans/abc123/"), "datasheet.pdf");
     }
 
     #[test]
