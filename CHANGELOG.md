@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- LSP position saves accept a `baseHash` and return a text edit; evaluation results carry a `contentHash`.
+
 ### Changed
 
 - Physical quantity types now compose with `*` and `/` from builtin fundamentals, replacing `builtin.physical_value()`.
