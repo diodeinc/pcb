@@ -7,7 +7,8 @@ use lsp_types::{
     WorkDoneProgressOptions, request::Request,
 };
 use pcb_sch::position::{
-    Position, remove_positions, replace_pcb_sch_comments, symbol_id_to_comment_key,
+    Position, remove_position_comments, remove_positions, replace_pcb_sch_comments,
+    symbol_id_to_comment_key, update_position_comments,
 };
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
@@ -30,6 +31,29 @@ use std::sync::{Arc, RwLock};
 // JSON-RPC 2.0 error codes
 const INVALID_PARAMS: i32 = -32602;
 const INTERNAL_ERROR: i32 = -32603;
+// LSP error code: the document was modified since the state the request was
+// computed against. Clients should re-request with a fresh `baseHash`.
+const CONTENT_MODIFIED: i32 = -32801;
+
+/// Hex-encoded SHA-256 of the document text (exact UTF-8 bytes, no
+/// normalization). Used to correlate position edits and evaluation results
+/// with the document content they were computed from.
+fn content_hash(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(content.as_bytes()))
+}
+
+/// Convert a byte offset into an LSP `Position` (line + UTF-16 character).
+fn offset_to_lsp_position(content: &str, offset: usize) -> lsp_types::Position {
+    let prefix = &content[..offset];
+    let line = prefix.bytes().filter(|b| *b == b'\n').count() as u32;
+    let line_start = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let character = prefix[line_start..]
+        .chars()
+        .map(|c| c.len_utf16() as u32)
+        .sum();
+    lsp_types::Position { line, character }
+}
 
 /// Wrapper around EvalContext that implements LspContext
 pub struct LspEvalContext {
@@ -41,7 +65,6 @@ pub struct LspEvalContext {
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
     netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
     symbol_watch_paths: Arc<RwLock<HashMap<PathBuf, HashSet<PathBuf>>>>,
-    suppress_netlist_updates: Arc<RwLock<HashSet<PathBuf>>>,
     /// Per-file cache of the schematic computed right after evaluation, before
     /// the shared session module tree can be contaminated by other files.
     last_schematics: Arc<RwLock<HashMap<PathBuf, pcb_sch::Schematic>>>,
@@ -167,7 +190,6 @@ impl Default for LspEvalContext {
             open_files,
             netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             symbol_watch_paths: Arc::new(RwLock::new(HashMap::new())),
-            suppress_netlist_updates: Arc::new(RwLock::new(HashSet::new())),
             last_schematics: Arc::new(RwLock::new(HashMap::new())),
             custom_request_handler: None,
         }
@@ -273,8 +295,7 @@ impl LspEvalContext {
         self.netlist_subscriptions
             .write()
             .unwrap()
-            .insert(key.clone(), inputs.clone());
-        self.suppress_netlist_updates.write().unwrap().remove(&key);
+            .insert(key, inputs.clone());
     }
 
     fn set_symbol_watch_paths_for_netlist(&self, path: &Path, watched_paths: HashSet<PathBuf>) {
@@ -303,16 +324,6 @@ impl LspEvalContext {
             .unwrap()
             .get(&key)
             .cloned()
-    }
-
-    fn suppress_next_netlist_update(&self, path: &Path) {
-        let key = self.normalize_path(path);
-        self.suppress_netlist_updates.write().unwrap().insert(key);
-    }
-
-    fn should_suppress_netlist_update(&self, path: &Path) -> bool {
-        let key = self.normalize_path(path);
-        self.suppress_netlist_updates.write().unwrap().remove(&key)
     }
 
     fn set_last_schematic(&self, path: &Path, schematic: pcb_sch::Schematic) {
@@ -377,6 +388,7 @@ impl LspEvalContext {
     ) -> anyhow::Result<ZenerEvaluateResponse> {
         let uri = LspUrl::File(path_buf.to_path_buf());
         let maybe_contents = self.get_load_contents(&uri).ok().flatten();
+        let evaluated_content_hash = maybe_contents.as_deref().map(content_hash);
 
         let config = self.config_for(path_buf);
         let mut ctx = EvalContext::from_session_and_config(Default::default(), config)
@@ -415,6 +427,7 @@ impl LspEvalContext {
             parameters,
             schematic,
             diagnostics,
+            content_hash: evaluated_content_hash,
         })
     }
 
@@ -763,10 +776,6 @@ impl LspContext for LspEvalContext {
             LspUrl::File(path) => path,
             _ => return Ok(None),
         };
-
-        if self.should_suppress_netlist_update(path) {
-            return Ok(None);
-        }
 
         let Some(inputs) = self.get_netlist_inputs(path) else {
             return Ok(None);
@@ -1242,9 +1251,20 @@ impl LspContext for LspEvalContext {
                         flat_positions.insert(comment_name, position);
                     }
 
+                    // Buffer-first path: the client applies the returned edit
+                    // to its own buffer and mirrors it to disk; the server
+                    // touches neither.
+                    if let Some(base_hash) = &params.base_hash {
+                        let result = self.position_block_edit(file_path, base_hash, |content| {
+                            update_position_comments(content, &flat_positions)
+                        });
+                        return Some(position_edit_result_to_response(req.id.clone(), result));
+                    }
+
+                    // Legacy path (no baseHash): write the file directly; the
+                    // client rediscovers the change through its file watcher.
                     match replace_pcb_sch_comments(file_path, &flat_positions) {
                         Ok(()) => {
-                            self.suppress_next_netlist_update(Path::new(file_path));
                             info!("Successfully wrote positions to file");
                             return Some(Response {
                                 id: req.id.clone(),
@@ -1298,7 +1318,15 @@ impl LspContext for LspEvalContext {
                         });
                     };
 
-                    // Use the shared removal logic from pcb-sch
+                    // Buffer-first path: see pcb/savePositions above.
+                    if let Some(base_hash) = &params.base_hash {
+                        let result = self.position_block_edit(file_path, base_hash, |content| {
+                            remove_position_comments(content, &[comment_key])
+                        });
+                        return Some(position_edit_result_to_response(req.id.clone(), result));
+                    }
+
+                    // Legacy path (no baseHash): write the file directly.
                     if let Err(e) = remove_positions(file_path, &[comment_key]) {
                         return Some(Response {
                             id: req.id.clone(),
@@ -1311,7 +1339,6 @@ impl LspContext for LspEvalContext {
                         });
                     }
 
-                    self.suppress_next_netlist_update(Path::new(file_path));
                     return Some(Response {
                         id: req.id.clone(),
                         result: Some(serde_json::Value::Null),
@@ -1368,6 +1395,62 @@ impl LspContext for LspEvalContext {
 }
 
 impl LspEvalContext {
+    /// Compute a position-block edit against the current authoritative content
+    /// (open-file overlay, falling back to disk) without mutating either.
+    /// `rewrite` maps the content to the position block's byte offset and its
+    /// replacement text.
+    fn position_block_edit(
+        &self,
+        file_path: &str,
+        base_hash: &str,
+        rewrite: impl FnOnce(&str) -> (usize, String),
+    ) -> Result<PcbPositionEditResponse, ResponseError> {
+        let uri = LspUrl::File(PathBuf::from(file_path));
+        let content = match self.get_load_contents(&uri) {
+            Ok(Some(content)) => content,
+            Ok(None) => {
+                return Err(ResponseError {
+                    code: INVALID_PARAMS,
+                    message: format!("File not found: {file_path}"),
+                    data: None,
+                });
+            }
+            Err(e) => {
+                return Err(ResponseError {
+                    code: INTERNAL_ERROR,
+                    message: format!("Failed to read file: {e}"),
+                    data: None,
+                });
+            }
+        };
+
+        let actual_hash = content_hash(&content);
+        if actual_hash != base_hash {
+            return Err(ResponseError {
+                code: CONTENT_MODIFIED,
+                message: format!(
+                    "Document content changed (expected {base_hash}, found {actual_hash})"
+                ),
+                data: None,
+            });
+        }
+
+        let (block_start, new_block) = rewrite(&content);
+        let result_hash = content_hash(&format!("{}{}", &content[..block_start], new_block));
+
+        Ok(PcbPositionEditResponse {
+            edit: lsp_types::TextEdit {
+                range: lsp_types::Range {
+                    start: offset_to_lsp_position(&content, block_start),
+                    end: offset_to_lsp_position(&content, content.len()),
+                },
+                new_text: new_block,
+            },
+            base_hash: actual_hash,
+            result_hash,
+        })
+    }
+
     fn evaluate_module(
         &self,
         params: ZenerEvaluateParams,
@@ -1381,6 +1464,24 @@ impl LspEvalContext {
         self.set_netlist_subscription(path_buf, &params.inputs);
         self.maybe_update_symbol_watch_paths_from_response(path_buf, &response);
         Ok(response)
+    }
+}
+
+fn position_edit_result_to_response(
+    id: lsp_server::RequestId,
+    result: Result<PcbPositionEditResponse, ResponseError>,
+) -> Response {
+    match result {
+        Ok(response) => Response {
+            id,
+            result: Some(serde_json::to_value(response).unwrap()),
+            error: None,
+        },
+        Err(error) => Response {
+            id,
+            result: None,
+            error: Some(error),
+        },
     }
 }
 
@@ -1489,6 +1590,10 @@ struct ZenerEvaluateResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     schematic: Option<JsonValue>,
     diagnostics: Vec<DiagnosticInfo>,
+    /// Content hash of the document this result was evaluated from. Clients
+    /// apply a result only when this matches their current buffer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1517,6 +1622,11 @@ struct DiagnosticInfo {
 struct PcbSavePositionsParams {
     file_path: String,
     symbol_positions: BTreeMap<String, Position>,
+    /// Content hash of the document the positions were computed against.
+    /// When present, the server responds with a text edit for the client to
+    /// apply instead of writing the file itself.
+    #[serde(default)]
+    base_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1526,6 +1636,22 @@ struct PcbRemovePositionParams {
     /// Symbol ID in the same format used by pcb/savePositions keys
     /// (e.g. "comp:R1" or "sym:NET#1")
     symbol_id: String,
+    /// See [`PcbSavePositionsParams::base_hash`].
+    #[serde(default)]
+    base_hash: Option<String>,
+}
+
+/// Response to `pcb/savePositions` / `pcb/removePosition` requests that carry
+/// a `baseHash`: the edit is applied by the client to its own buffer (and
+/// mirrored to disk by the client); the server touches neither. `resultHash`
+/// is the content hash after applying the edit, which the client can verify
+/// and use to correlate the subsequent evaluation.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PcbPositionEditResponse {
+    edit: lsp_types::TextEdit,
+    base_hash: String,
+    result_hash: String,
 }
 
 #[cfg(test)]
@@ -1705,6 +1831,170 @@ pcb-version = "0.4"
             result.diagnostics.is_empty(),
             "expected diagnostics to clear after closing edited library"
         );
+
+        Ok(())
+    }
+
+    /// Convert an LSP position (line + UTF-16 character) back to a byte
+    /// offset, mirroring how a client would apply the returned edit.
+    fn lsp_position_to_offset(content: &str, position: lsp_types::Position) -> usize {
+        let mut offset = 0;
+        for _ in 0..position.line {
+            offset += content[offset..].find('\n').map(|i| i + 1).unwrap();
+        }
+        let mut character = position.character;
+        for c in content[offset..].chars() {
+            if character == 0 {
+                break;
+            }
+            character -= c.len_utf16() as u32;
+            offset += c.len_utf8();
+        }
+        offset
+    }
+
+    fn apply_text_edit(content: &str, edit: &lsp_types::TextEdit) -> String {
+        let start = lsp_position_to_offset(content, edit.range.start);
+        let end = lsp_position_to_offset(content, edit.range.end);
+        format!("{}{}{}", &content[..start], edit.new_text, &content[end..])
+    }
+
+    fn save_positions_request(id: i32, path: &std::path::Path, base_hash: Option<&str>) -> Request {
+        let mut params = json!({
+            "filePath": path.to_str().unwrap(),
+            "symbolPositions": {
+                "comp:R1": { "x": 12.5, "y": 30.0, "rotation": 90.0 }
+            },
+        });
+        if let Some(base_hash) = base_hash {
+            params["baseHash"] = json!(base_hash);
+        }
+        Request {
+            id: RequestId::from(id),
+            method: "pcb/savePositions".to_string(),
+            params,
+        }
+    }
+
+    #[test]
+    fn save_positions_with_base_hash_returns_edit_without_writing() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let zen_path = dir.path().canonicalize()?.join("main.zen");
+        let disk_contents = "x = 1\n";
+        // Buffer diverges from disk: the edit must be computed from the buffer.
+        let buffer_contents = "x = 1\n\n# pcb:sch C1 x=1.0000 y=2.0000 rot=0\n";
+        fs::write(&zen_path, disk_contents)?;
+
+        let ctx = LspEvalContext::default();
+        ctx.did_change_file_contents(&LspUrl::File(zen_path.clone()), buffer_contents);
+
+        let base_hash = super::content_hash(buffer_contents);
+        let response = ctx
+            .handle_custom_request(
+                &save_positions_request(1, &zen_path, Some(&base_hash)),
+                &lsp_types::InitializeParams::default(),
+            )
+            .expect("request should be handled");
+
+        assert!(response.error.is_none(), "error: {:?}", response.error);
+        let result = response.result.unwrap();
+        assert_eq!(result["baseHash"], json!(base_hash));
+
+        let edit: lsp_types::TextEdit = serde_json::from_value(result["edit"].clone())?;
+        let updated = apply_text_edit(buffer_contents, &edit);
+        assert!(updated.contains("# pcb:sch R1 x=12.5000 y=30.0000 rot=90"));
+        assert!(updated.contains("# pcb:sch C1 x=1.0000 y=2.0000 rot=0"));
+        assert_eq!(result["resultHash"], json!(super::content_hash(&updated)));
+
+        // Neither disk nor the overlay was touched.
+        assert_eq!(fs::read_to_string(&zen_path)?, disk_contents);
+        assert_eq!(
+            ctx.open_file_contents(&zen_path).as_deref(),
+            Some(buffer_contents)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn save_positions_with_stale_base_hash_returns_content_modified() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let zen_path = dir.path().canonicalize()?.join("main.zen");
+        fs::write(&zen_path, "x = 1\n")?;
+
+        let ctx = LspEvalContext::default();
+        let response = ctx
+            .handle_custom_request(
+                &save_positions_request(1, &zen_path, Some(&super::content_hash("stale"))),
+                &lsp_types::InitializeParams::default(),
+            )
+            .expect("request should be handled");
+
+        let error = response.error.expect("stale hash should be rejected");
+        assert_eq!(error.code, super::CONTENT_MODIFIED);
+        // The file was not modified.
+        assert_eq!(fs::read_to_string(&zen_path)?, "x = 1\n");
+
+        Ok(())
+    }
+
+    #[test]
+    fn save_positions_without_base_hash_writes_file() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let zen_path = dir.path().canonicalize()?.join("main.zen");
+        fs::write(&zen_path, "x = 1\n")?;
+
+        let ctx = LspEvalContext::default();
+        let response = ctx
+            .handle_custom_request(
+                &save_positions_request(1, &zen_path, None),
+                &lsp_types::InitializeParams::default(),
+            )
+            .expect("request should be handled");
+
+        assert!(response.error.is_none(), "error: {:?}", response.error);
+        assert_eq!(response.result, Some(serde_json::Value::Null));
+        let updated = fs::read_to_string(&zen_path)?;
+        assert!(updated.contains("# pcb:sch R1 x=12.5000 y=30.0000 rot=90"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn remove_position_with_base_hash_returns_edit() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let zen_path = dir.path().canonicalize()?.join("main.zen");
+        let contents =
+            "x = 1\n\n# pcb:sch C1 x=1.0000 y=2.0000 rot=0\n# pcb:sch R1 x=3.0000 y=4.0000 rot=0\n";
+        fs::write(&zen_path, contents)?;
+
+        let ctx = LspEvalContext::default();
+        let base_hash = super::content_hash(contents);
+        let response = ctx
+            .handle_custom_request(
+                &Request {
+                    id: RequestId::from(1),
+                    method: "pcb/removePosition".to_string(),
+                    params: json!({
+                        "filePath": zen_path.to_str().unwrap(),
+                        "symbolId": "comp:C1",
+                        "baseHash": base_hash,
+                    }),
+                },
+                &lsp_types::InitializeParams::default(),
+            )
+            .expect("request should be handled");
+
+        assert!(response.error.is_none(), "error: {:?}", response.error);
+        let result = response.result.unwrap();
+        let edit: lsp_types::TextEdit = serde_json::from_value(result["edit"].clone())?;
+        let updated = apply_text_edit(contents, &edit);
+        assert!(!updated.contains("C1"));
+        assert!(updated.contains("# pcb:sch R1 x=3.0000 y=4.0000 rot=0"));
+        assert_eq!(result["resultHash"], json!(super::content_hash(&updated)));
+
+        // Disk untouched.
+        assert_eq!(fs::read_to_string(&zen_path)?, contents);
 
         Ok(())
     }
