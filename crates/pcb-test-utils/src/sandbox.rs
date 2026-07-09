@@ -75,6 +75,7 @@ pub struct Sandbox {
     trace: bool,
     hash_globs: Vec<String>,
     ignore_globs: Vec<String>,
+    extra_env: HashMap<String, String>,
 }
 
 impl Default for Sandbox {
@@ -112,6 +113,7 @@ impl Sandbox {
             trace: false,
             hash_globs: Vec::new(),
             ignore_globs: Vec::new(),
+            extra_env: HashMap::new(),
         };
         s.write_gitconfig();
         s
@@ -126,6 +128,16 @@ impl Sandbox {
     /// Enable `GIT_TRACE=1` for commands run with `run` / `run_ok` / `cmd`.
     pub fn with_trace(mut self, yes: bool) -> Self {
         self.trace = yes;
+        self
+    }
+
+    /// Set an env var for all subsequent sandboxed commands.
+    ///
+    /// Use this instead of chaining `.env()` on the expression returned by
+    /// [`Sandbox::cmd`]: the sandbox environment is applied with `full_env`,
+    /// which replaces anything set on outer expression layers.
+    pub fn env(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
+        self.extra_env.insert(key.into(), value.into());
         self
     }
 
@@ -663,6 +675,8 @@ impl Sandbox {
             env_map.insert("GIT_TRACE".into(), "1".into());
             env_map.insert("GIT_CURL_VERBOSE".into(), "1".into());
         }
+
+        env_map.extend(self.extra_env.clone());
 
         expr = expr.full_env(&env_map);
 
