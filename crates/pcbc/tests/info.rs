@@ -1,6 +1,5 @@
 #![cfg(not(target_os = "windows"))]
 
-use jiff::Timestamp;
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 
@@ -223,6 +222,7 @@ fn test_pcb_info_json_includes_published_at() {
         .init_git()
         .commit("initial publishable board");
 
+    sandbox.env("GIT_COMMITTER_DATE", "2024-06-01T12:00:00+00:00");
     sandbox
         .cmd(
             "git",
@@ -234,10 +234,10 @@ fn test_pcb_info_json_includes_published_at() {
                 "Release 0.1.0",
             ],
         )
-        .env("GIT_COMMITTER_DATE", "2024-06-01T12:00:00+00:00")
         .run()
         .expect("create first annotated tag");
 
+    sandbox.env("GIT_COMMITTER_DATE", "2024-01-02T03:04:05+00:00");
     sandbox
         .cmd(
             "git",
@@ -249,28 +249,10 @@ fn test_pcb_info_json_includes_published_at() {
                 "Release 0.2.0",
             ],
         )
-        .env("GIT_COMMITTER_DATE", "2024-01-02T03:04:05+00:00")
         .run()
         .expect("create second annotated tag");
 
-    let git_published_at = sandbox
-        .cmd(
-            "git",
-            [
-                "for-each-ref",
-                "--format=%(taggerdate:iso8601-strict)",
-                "refs/tags/boards/test-board/v0.2.0",
-            ],
-        )
-        .read()
-        .expect("read latest tag timestamp")
-        .trim()
-        .to_string();
-    let expected_published_at = git_published_at
-        .parse::<Timestamp>()
-        .expect("parse latest tag timestamp")
-        .strftime("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
+    let expected_published_at = "2024-01-02T03:04:05Z";
 
     let output = sandbox.snapshot_run("pcbc", ["info", "-f", "json"]);
     let json = output
@@ -284,7 +266,7 @@ fn test_pcb_info_json_includes_published_at() {
     assert_eq!(pkg["version"], "0.2.0");
     assert_eq!(pkg["published_at"], expected_published_at);
 
-    let normalized = output.replace(&expected_published_at, "<PUBLISHED_AT>");
+    let normalized = output.replace(expected_published_at, "<PUBLISHED_AT>");
     assert_snapshot!("json_format_with_published_at", normalized);
 }
 
