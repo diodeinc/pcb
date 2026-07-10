@@ -2,12 +2,14 @@
 PI = 3.14159265358979323846
 
 # Fundamental physical quantity types.
+Mass = builtin.Mass
+Length = builtin.Length
 Time = builtin.Time
 Current = builtin.Current
-Voltage = builtin.Voltage
 Temperature = builtin.Temperature
 
 # Derived physical quantity types.
+Voltage = Mass * Length * Length / (Current * Time * Time * Time)
 Frequency = 1 / Time
 Charge = Current * Time
 Resistance = Voltage / Current

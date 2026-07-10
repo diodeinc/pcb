@@ -200,7 +200,11 @@ fn is_physical_type_expr<P: AstPayload>(
     match &expr.node {
         ExprP::Dot(_, _) => matches!(
             get_call_name(expr).as_str(),
-            "builtin.Current" | "builtin.Time" | "builtin.Voltage" | "builtin.Temperature"
+            "builtin.Mass"
+                | "builtin.Length"
+                | "builtin.Current"
+                | "builtin.Time"
+                | "builtin.Temperature"
         ),
         ExprP::Identifier(ident) => physical_types.contains(ident.ident.as_str()),
         ExprP::Op(left, BinOp::Multiply, right) => {
@@ -308,9 +312,11 @@ Block(name="POWER_REGULATOR")
         let doc = parse_library(
             "units.zen".to_string(),
             r#"
+Mass = builtin.Mass
+Length = builtin.Length
 Time = builtin.Time
 Current = builtin.Current
-Voltage = builtin.Voltage
+Voltage = Mass * Length * Length / (Current * Time * Time * Time)
 Frequency = 1 / Time
 Resistance = Voltage / Current
 Impedance = Resistance
@@ -321,6 +327,8 @@ Power = Voltage * Current
 
         for name in [
             "Time",
+            "Mass",
+            "Length",
             "Current",
             "Voltage",
             "Frequency",

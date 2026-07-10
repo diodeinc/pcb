@@ -334,6 +334,8 @@ pub enum InstanceKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PhysicalUnit {
+    Kilograms,
+    Metres,
     Ohms,
     Volts,
     Amperes,
@@ -352,6 +354,8 @@ pub enum PhysicalUnit {
 impl PhysicalUnit {
     pub fn from_quantity(quantity: &str) -> Option<Self> {
         match quantity {
+            "Mass" => Some(PhysicalUnit::Kilograms),
+            "Length" => Some(PhysicalUnit::Metres),
             "Resistance" => Some(PhysicalUnit::Ohms),
             "Voltage" => Some(PhysicalUnit::Volts),
             "Current" => Some(PhysicalUnit::Amperes),
@@ -371,6 +375,8 @@ impl PhysicalUnit {
 
     pub const fn suffix(&self) -> &'static str {
         match self {
+            PhysicalUnit::Kilograms => "kg",
+            PhysicalUnit::Metres => "m",
             PhysicalUnit::Ohms => "", // This should be "Ohm", but keep as empty for backward compatibility
             PhysicalUnit::Volts => "V",
             PhysicalUnit::Amperes => "A",
@@ -389,6 +395,8 @@ impl PhysicalUnit {
 
     pub const fn quantity(&self) -> &'static str {
         match self {
+            PhysicalUnit::Kilograms => "Mass",
+            PhysicalUnit::Metres => "Length",
             PhysicalUnit::Ohms => "Resistance",
             PhysicalUnit::Volts => "Voltage",
             PhysicalUnit::Amperes => "Current",
@@ -409,6 +417,8 @@ impl PhysicalUnit {
 impl std::fmt::Display for PhysicalUnit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            PhysicalUnit::Kilograms => write!(f, "Kilogram"),
+            PhysicalUnit::Metres => write!(f, "Metre"),
             PhysicalUnit::Ohms => write!(f, "Ohm"),
             PhysicalUnit::Volts => write!(f, "Volt"),
             PhysicalUnit::Amperes => write!(f, "Ampere"),
@@ -430,6 +440,14 @@ impl std::str::FromStr for PhysicalUnit {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "kg" | "kilogram" | "Kilogram" | "kilograms" | "Kilograms" => {
+                Ok(PhysicalUnit::Kilograms)
+            }
+            // Deliberately exclude bare `m`: untyped physical parsing has
+            // historically interpreted it as milli-ohms.
+            "metre" | "Metre" | "metres" | "Metres" | "meter" | "Meter" | "meters" | "Meters" => {
+                Ok(PhysicalUnit::Metres)
+            }
             "" | "Ω" | "ohm" | "Ohm" | "ohms" | "Ohms" => Ok(PhysicalUnit::Ohms),
             "V" | "volt" | "Volt" | "volts" | "Volts" => Ok(PhysicalUnit::Volts),
             "A" | "ampere" | "Ampere" | "amperes" | "Amperes" => Ok(PhysicalUnit::Amperes),
