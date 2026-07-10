@@ -27,20 +27,6 @@ use crate::{
     },
 };
 
-fn physical_value_type_from_unit(unit: NoneOr<String>) -> starlark::Result<PhysicalValueType> {
-    match unit {
-        NoneOr::Other(u) => {
-            let unit: pcb_sch::PhysicalUnit = u.parse().map_err(|err| {
-                Error::new_other(anyhow::anyhow!("Failed to parse unit: {}", err))
-            })?;
-            Ok(PhysicalValueType::new(unit.into()))
-        }
-        NoneOr::None => Ok(PhysicalValueType::new(
-            pcb_sch::physical::PhysicalUnitDims::DIMENSIONLESS,
-        )),
-    }
-}
-
 #[derive(Clone, Copy, Debug, ProvidesStaticType, Freeze, Allocative, Serialize)]
 pub struct Builtin;
 
@@ -82,6 +68,38 @@ pub fn builtin_globals(builder: &mut GlobalsBuilder) {
 
 #[starlark_module]
 fn builtin_methods(methods: &mut MethodsBuilder) {
+    #[allow(non_snake_case)]
+    #[starlark(attribute)]
+    fn Mass(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(PhysicalUnitDims::MASS))
+    }
+
+    #[allow(non_snake_case)]
+    #[starlark(attribute)]
+    fn Length(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(PhysicalUnitDims::LENGTH))
+    }
+
+    #[allow(non_snake_case)]
+    #[starlark(attribute)]
+    fn Current(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(PhysicalUnitDims::CURRENT))
+    }
+
+    #[allow(non_snake_case)]
+    #[starlark(attribute)]
+    fn Time(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(PhysicalUnitDims::TIME))
+    }
+
+    #[allow(non_snake_case)]
+    #[starlark(attribute)]
+    fn Temperature(
+        #[allow(unused_variables)] this: &Builtin,
+    ) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(PhysicalUnitDims::TEMP))
+    }
+
     fn add_board_config<'v>(
         #[allow(unused_variables)] this: &Builtin,
         name: String,
@@ -137,13 +155,6 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
 
         eval.add_property(&config_key, heap.alloc(&pretty_config_json));
         Ok(NoneType)
-    }
-
-    fn physical_value(
-        #[allow(unused_variables)] this: &Builtin,
-        unit: NoneOr<String>,
-    ) -> starlark::Result<PhysicalValueType> {
-        physical_value_type_from_unit(unit)
     }
 
     fn net_type<'v>(

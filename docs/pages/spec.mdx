@@ -385,10 +385,10 @@ connector = Symbol(library="Connector_Generic.kicad_sym", name="Conn_01x14")
 
 ### Physical Quantities
 
-Physical quantities represent electrical values with a nominal value, optional min/max bounds, and a unit. Unit-specific constructors are provided by `@stdlib/units.zen` (e.g. `Voltage`, `Current`, `Resistance`, `Capacitance`, `Inductance`, `Impedance`, `Frequency`, `Temperature`):
+Physical quantities have a nominal value, optional min/max bounds, and dimensional units. Zener exposes five SI bases as `builtin.Mass`, `builtin.Length`, `builtin.Time`, `builtin.Current`, and `builtin.Temperature`. `@stdlib/units.zen` re-exports them and derives conventional electrical types such as `Voltage`, `Resistance`, `Capacitance`, `Inductance`, `Impedance`, and `Frequency` using multiplication and division. For example, `Voltage` is `Mass * Length * Length / (Current * Time * Time * Time)`.
 
 ```python
-load("@stdlib/units.zen", "Voltage", "Current", "Resistance", "Capacitance")
+load("@stdlib/units.zen", "Voltage", "Current", "Time", "Resistance", "Capacitance")
 
 # Point values
 supply = Voltage("3.3V")
@@ -405,9 +405,15 @@ operating = Voltage(min=11, max=26)
 # Arithmetic with automatic unit tracking
 power = Voltage("3.3V") * Current("0.5A")   # → 1.65W
 r = Voltage("5V") / Current("100mA")        # → 50Ω
+
+# The same algebra constructs declarable physical types
+SlewRate = Voltage / Time
+slew_rate = config(SlewRate, default="5V/us")
 ```
 
-See `@stdlib/units.zen` for the complete list of unit constructors.
+Derived types are dimensional rather than nominal: independently constructed types with the same dimensions accept the same values. For example, `Voltage / Current` and stdlib `Resistance` are the same physical type.
+
+SI base symbols are resolved in the context of the declared type, so `Length("1m")` is one metre. Untyped `"1m"` parsing retains its historical meaning of one milliohm for compatibility.
 
 **Properties**: `.value` (alias for `.nominal`), `.nominal`, `.min`, `.max`, `.tolerance`, `.unit`
 

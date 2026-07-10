@@ -253,7 +253,7 @@ snapshot_eval!(net_field_with_enum, {
 snapshot_eval!(net_field_with_physical_value, {
     "test.zen" => r#"
         # Create net type with physical value field
-        Power = builtin.net_type("Power", voltage=builtin.physical_value("V"))
+        Power = builtin.net_type("Power", voltage=Voltage)
         
         # Create instance
         vcc = Power("VCC", voltage="5V")
@@ -482,6 +482,26 @@ fn net_field_nullable_impedance_coerces_from_string() {
 
         clk = Net("CLK", impedance="50")
         check(clk.impedance == Impedance("50"), "nullable field(...) impedance string should coerce to Impedance")
+    "#
+        .to_string(),
+    )]);
+
+    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
+}
+
+#[test]
+fn net_field_composed_physical_type_coerces_from_string() {
+    let result = common::eval_zen(vec![(
+        "test.zen".to_string(),
+        r#"
+        SlewNet = builtin.net_type(
+            "SlewNet",
+            slew_rate=field((Voltage / builtin.Time) | None, default=None),
+        )
+
+        signal = SlewNet("SIGNAL", slew_rate="5V/us")
+        check(signal.slew_rate.unit == "V/s", "composed field should retain dimensions")
+        check(signal.slew_rate.value == 5000000, "composed field should apply prefixes")
     "#
         .to_string(),
     )]);

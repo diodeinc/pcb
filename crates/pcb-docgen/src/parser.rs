@@ -3,6 +3,8 @@
 //! Uses starlark-rust's AST parsing for accurate extraction instead of regex.
 //! Module detection is done via `pcb build --netlist` in signature.rs.
 
+use std::collections::HashSet;
+
 use crate::types::*;
 use starlark::docs::DocString;
 use starlark::docs::DocStringKind;
@@ -12,6 +14,7 @@ use starlark_syntax::syntax::ast::AssignTargetP;
 use starlark_syntax::syntax::ast::AstLiteral;
 use starlark_syntax::syntax::ast::AstPayload;
 use starlark_syntax::syntax::ast::AstStmtP;
+use starlark_syntax::syntax::ast::BinOp;
 use starlark_syntax::syntax::ast::ExprP;
 use starlark_syntax::syntax::ast::ParameterP;
 use starlark_syntax::syntax::ast::StmtP;
@@ -133,6 +136,7 @@ fn extract_types_and_constants(
 ) -> (Vec<TypeDoc>, Vec<ConstDoc>) {
     let mut types = Vec::new();
     let mut constants = Vec::new();
+    let mut physical_types = HashSet::new();
 
     if let StmtP::Statements(stmts) = &stmt.node {
         for s in stmts {
@@ -143,8 +147,14 @@ fn extract_types_and_constants(
                     _ => continue, // Skip tuple/index/dot assignments
                 };
 
-                // Check what's being assigned
-                if let ExprP::Call(func, _args) = &assign.rhs.node {
+                // Check what's being assigned.
+                if is_physical_type_expr(&assign.rhs, &physical_types) {
+                    physical_types.insert(name.clone());
+                    types.push(TypeDoc {
+                        name: name.clone(),
+                        kind: "PhysicalValue".to_string(),
+                    });
+                } else if let ExprP::Call(func, _args) = &assign.rhs.node {
                     let func_name = get_call_name(func);
 
                     match func_name.as_str() {
@@ -164,10 +174,6 @@ fn extract_types_and_constants(
                             name: name.clone(),
                             kind: "net_type".to_string(),
                         }),
-                        "builtin.physical_value" => types.push(TypeDoc {
-                            name: name.clone(),
-                            kind: "PhysicalValue".to_string(),
-                        }),
                         _ => {
                             if is_constant_name(&name) {
                                 constants.push(ConstDoc { name: name.clone() });
@@ -185,6 +191,36 @@ fn extract_types_and_constants(
     constants.sort_by(|a, b| a.name.cmp(&b.name));
 
     (types, constants)
+}
+
+fn is_physical_type_expr<P: AstPayload>(
+    expr: &starlark_syntax::syntax::ast::AstExprP<P>,
+    physical_types: &HashSet<String>,
+) -> bool {
+    match &expr.node {
+        ExprP::Dot(_, _) => matches!(
+            get_call_name(expr).as_str(),
+            "builtin.Mass"
+                | "builtin.Length"
+                | "builtin.Current"
+                | "builtin.Time"
+                | "builtin.Temperature"
+        ),
+        ExprP::Identifier(ident) => physical_types.contains(ident.ident.as_str()),
+        ExprP::Op(left, BinOp::Multiply, right) => {
+            is_physical_type_expr(left, physical_types)
+                && is_physical_type_expr(right, physical_types)
+        }
+        ExprP::Op(left, BinOp::Divide, right) => {
+            let dimensionless_one = matches!(
+                &left.node,
+                ExprP::Literal(AstLiteral::Int(value)) if value.node.to_string() == "1"
+            );
+            (dimensionless_one || is_physical_type_expr(left, physical_types))
+                && is_physical_type_expr(right, physical_types)
+        }
+        _ => false,
+    }
 }
 
 /// Get the name of a called function from its expression.
@@ -269,5 +305,43 @@ Block(name="POWER_REGULATOR")
         assert!(is_constant_name("E96"));
         assert!(!is_constant_name("FooBar"));
         assert!(!is_constant_name("foo_bar"));
+    }
+
+    #[test]
+    fn test_extracts_composed_physical_types() {
+        let doc = parse_library(
+            "units.zen".to_string(),
+            r#"
+Mass = builtin.Mass
+Length = builtin.Length
+Time = builtin.Time
+Current = builtin.Current
+Voltage = Mass * Length * Length / (Current * Time * Time * Time)
+Frequency = 1 / Time
+Resistance = Voltage / Current
+Impedance = Resistance
+Power = Voltage * Current
+"#,
+        )
+        .unwrap();
+
+        for name in [
+            "Time",
+            "Mass",
+            "Length",
+            "Current",
+            "Voltage",
+            "Frequency",
+            "Resistance",
+            "Impedance",
+            "Power",
+        ] {
+            assert!(
+                doc.types
+                    .iter()
+                    .any(|ty| ty.name == name && ty.kind == "PhysicalValue"),
+                "missing physical type {name}"
+            );
+        }
     }
 }

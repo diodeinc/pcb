@@ -26,8 +26,8 @@ print("Tolerance:", f1.tolerance)
 print("Unit:", f1.unit)
 
 print("\n--- Dimensionless ---")
-# Test builtin.physical_value(None)
-Dimensionless = builtin.physical_value(None)
+# Dividing a physical type by itself produces a dimensionless type.
+Dimensionless = Voltage / Voltage
 print("Type object:", Dimensionless)
 
 d = Dimensionless(1.5)

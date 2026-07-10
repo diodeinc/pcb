@@ -12,6 +12,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added board release support for `pcb publish <board.zen> --bump=infer`.
 
+### Changed
+
+- Physical quantity types now compose with `*` and `/` from builtin fundamentals, replacing `builtin.physical_value()`.
+- Physical dimensions now use five SI bases while preserving existing electrical units.
+
 ## [0.4.6] - 2026-07-08
 
 ### Changed

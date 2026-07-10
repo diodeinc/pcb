@@ -79,8 +79,8 @@ pub fn stdlib_test_files() -> HashMap<String, String> {
 /// to repeat the Net definition in every inline snippet. This must match the
 /// production definition in stdlib/interfaces.zen (symbol, voltage, impedance).
 const ZEN_TEST_PREAMBLE: &str = "\
-Voltage = builtin.physical_value(\"V\")\n\
-Impedance = builtin.physical_value(\"Ohm\")\n\
+Voltage = builtin.Mass * builtin.Length * builtin.Length / (builtin.Current * builtin.Time * builtin.Time * builtin.Time)\n\
+Impedance = Voltage / builtin.Current\n\
 Net = builtin.net_type(\"Net\", symbol=Symbol, voltage=field(Voltage | None, default=None), impedance=field(Impedance | None, default=None)); io = builtin.io; input = partial(io, direction=\"input\"); output = partial(io, direction=\"output\")\n";
 
 /// Prepend `ZEN_TEST_PREAMBLE` to a `.zen` source string, matching the
