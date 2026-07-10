@@ -155,6 +155,134 @@ fn find_staging_dir(sb: &Sandbox, board_name: &str) -> String {
     format!(".pcb/releases/{}", staging_dir_name)
 }
 
+fn setup_board_publish_infer_workspace(sb: &mut Sandbox) {
+    sb.cwd("src")
+        .write(".gitignore", ".pcb\n")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/TestBoard.zen", TEST_BOARD_ZEN)
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .init_git()
+        .commit("chore: initial workspace")
+        .sync();
+
+    sb.run("pcbc", ["build", "boards/TestBoard.zen"])
+        .run()
+        .expect("build failed");
+    sb.commit("chore: hydrate manifests");
+}
+
+fn publish_board_infer(sb: &mut Sandbox) {
+    let mut args = source_only_args("boards/TestBoard.zen");
+    args.push("--bump=infer");
+    sb.run("pcbc", &args).run().expect("publish failed");
+}
+
+fn assert_publish_git_version(sb: &Sandbox, version: &str) {
+    let staging_dir = format!(".pcb/releases/TestBoard-{version}");
+    let metadata_file = File::open(
+        sb.root_path()
+            .join("src")
+            .join(&staging_dir)
+            .join("metadata.json"),
+    )
+    .unwrap();
+    let metadata_json: Value = serde_json::from_reader(metadata_file).unwrap();
+    assert_eq!(
+        metadata_json["release"]["git_version"].as_str(),
+        Some(version)
+    );
+}
+
+#[test]
+fn test_publish_board_infer_first_release() {
+    let mut sb = Sandbox::new();
+    setup_board_publish_infer_workspace(&mut sb);
+
+    publish_board_infer(&mut sb);
+
+    assert_publish_git_version(&sb, "v0.1.0");
+}
+
+#[test]
+fn test_publish_board_infer_pre_1_0_feat_is_patch() {
+    let mut sb = Sandbox::new();
+    setup_board_publish_infer_workspace(&mut sb);
+    sb.tag("boards/v0.1.0")
+        .write(
+            "boards/TestBoard.zen",
+            format!("{TEST_BOARD_ZEN}\n# add connector\n"),
+        )
+        .commit("feat: add connector");
+
+    publish_board_infer(&mut sb);
+
+    assert_publish_git_version(&sb, "v0.1.1");
+}
+
+#[test]
+fn test_publish_board_infer_pre_1_0_breaking_is_minor() {
+    let mut sb = Sandbox::new();
+    setup_board_publish_infer_workspace(&mut sb);
+    sb.tag("boards/v0.1.0")
+        .write(
+            "boards/TestBoard.zen",
+            format!("{TEST_BOARD_ZEN}\n# reroute board\n"),
+        )
+        .commit("feat!: reroute board");
+
+    publish_board_infer(&mut sb);
+
+    assert_publish_git_version(&sb, "v0.2.0");
+}
+
+#[test]
+fn test_publish_board_infer_post_1_0_feat_is_minor() {
+    let mut sb = Sandbox::new();
+    setup_board_publish_infer_workspace(&mut sb);
+    sb.tag("boards/v1.0.0")
+        .write(
+            "boards/TestBoard.zen",
+            format!("{TEST_BOARD_ZEN}\n# add connector\n"),
+        )
+        .commit("feat: add connector");
+
+    publish_board_infer(&mut sb);
+
+    assert_publish_git_version(&sb, "v1.1.0");
+}
+
+#[test]
+fn test_publish_board_infer_post_1_0_breaking_is_major() {
+    let mut sb = Sandbox::new();
+    setup_board_publish_infer_workspace(&mut sb);
+    sb.tag("boards/v1.0.0")
+        .write(
+            "boards/TestBoard.zen",
+            format!("{TEST_BOARD_ZEN}\n# reroute board\n"),
+        )
+        .commit("feat!: reroute board");
+
+    publish_board_infer(&mut sb);
+
+    assert_publish_git_version(&sb, "v2.0.0");
+}
+
+#[test]
+fn test_publish_board_infer_scopes_commit_history_to_board_path() {
+    let mut sb = Sandbox::new();
+    setup_board_publish_infer_workspace(&mut sb);
+    sb.tag("boards/v1.0.0")
+        .write("README.md", "outside board path\n")
+        .commit("feat!: outside breaking change");
+
+    publish_board_infer(&mut sb);
+
+    assert_publish_git_version(&sb, "v1.0.1");
+}
+
 #[test]
 fn test_publish_board_source_only() {
     let mut sb = Sandbox::new();

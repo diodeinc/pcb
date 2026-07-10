@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added board release support for `pcb publish <board.zen> --bump=infer`.
+
 ## [0.4.6] - 2026-07-08
 
 ### Changed
