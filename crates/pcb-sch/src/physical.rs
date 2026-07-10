@@ -1252,20 +1252,100 @@ fn parse_unit_with_prefix(
         _ => {}
     }
 
-    // Try SI prefixes
-    for &(exp, prefix) in &SI_PREFIXES {
-        if !prefix.is_empty()
-            && let Some(base_unit) = unit_str.strip_prefix(prefix)
-        {
-            let multiplier = pow10(exp);
+    let (multiplier, unit) = parse_scaled_unit_expression(unit_str)?;
+    Ok((base_value * multiplier, unit))
+}
+
+/// Parse a possibly-prefixed unit token such as `V`, `mA`, or `us`.
+fn parse_prefixed_unit(token: &str) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
+    match token {
+        "h" => return Ok((HOUR, PhysicalUnitDims::TIME)),
+        "min" => return Ok((MINUTE, PhysicalUnitDims::TIME)),
+        _ => {}
+    }
+
+    // Prefer an exact unit match so unit symbols are never mistaken for prefixes.
+    if let Ok(unit) = token.parse::<PhysicalUnit>() {
+        return Ok((Decimal::ONE, unit.into()));
+    }
+
+    // Accept both ASCII and Unicode micro prefixes on input. Formatting remains
+    // canonicalized to ASCII `u` through SI_PREFIXES.
+    for &(exp, prefix) in &[(-6, "µ"), (-6, "μ")] {
+        if let Some(base_unit) = token.strip_prefix(prefix) {
             if base_unit == "h" {
-                return Ok((base_value * multiplier * HOUR, PhysicalUnitDims::TIME));
+                return Ok((pow10(exp) * HOUR, PhysicalUnitDims::TIME));
             }
-            return Ok((base_value * multiplier, base_unit.parse()?));
+            if let Ok(unit) = base_unit.parse::<PhysicalUnit>() {
+                return Ok((pow10(exp), unit.into()));
+            }
         }
     }
 
-    Ok((base_value, unit_str.parse()?))
+    for &(exp, prefix) in &SI_PREFIXES {
+        if prefix.is_empty() {
+            continue;
+        }
+        if let Some(base_unit) = token.strip_prefix(prefix) {
+            if base_unit == "h" {
+                return Ok((pow10(exp) * HOUR, PhysicalUnitDims::TIME));
+            }
+            if let Ok(unit) = base_unit.parse::<PhysicalUnit>() {
+                return Ok((pow10(exp), unit.into()));
+            }
+        }
+    }
+
+    Err(ParseError::InvalidUnit)
+}
+
+/// Parse one side of a compound unit expression, including per-term prefixes.
+fn parse_scaled_unit_product(input: &str) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
+    let input = input
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(input);
+    let mut multiplier = Decimal::ONE;
+    let mut dims = PhysicalUnitDims::DIMENSIONLESS;
+    let mut found = false;
+
+    for token in input.split('·').filter(|token| !token.is_empty()) {
+        let (token_multiplier, token_dims) = parse_prefixed_unit(token)?;
+        multiplier *= token_multiplier;
+        dims = dims * token_dims;
+        found = true;
+    }
+
+    if !found {
+        return Err(ParseError::InvalidUnit);
+    }
+
+    Ok((multiplier, dims))
+}
+
+/// Parse a compound unit expression and its scale relative to SI base values.
+fn parse_scaled_unit_expression(input: &str) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
+    let (numerator, denominator) = match input.split_once('/') {
+        Some((numerator, denominator)) if !denominator.is_empty() => {
+            (Some(numerator), Some(denominator))
+        }
+        Some(_) => return Err(ParseError::InvalidUnit),
+        None => (Some(input), None),
+    };
+
+    let (mut multiplier, mut dims) = if matches!(numerator, Some("" | "1")) {
+        (Decimal::ONE, PhysicalUnitDims::DIMENSIONLESS)
+    } else {
+        parse_scaled_unit_product(numerator.expect("numerator is present"))?
+    };
+
+    if let Some(denominator) = denominator {
+        let (denominator_multiplier, denominator_dims) = parse_scaled_unit_product(denominator)?;
+        multiplier /= denominator_multiplier;
+        dims = dims / denominator_dims;
+    }
+
+    Ok((multiplier, dims))
 }
 
 impl std::fmt::Display for PhysicalValue {
@@ -1769,6 +1849,27 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
     fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
         self.hash(hasher);
         Ok(())
+    }
+
+    fn mul(&self, other: Value<'v>, heap: Heap<'v>) -> Option<starlark::Result<Value<'v>>> {
+        let other = other.downcast_ref::<PhysicalValueType>()?;
+        let result = PhysicalValueType::new(self.unit * other.unit);
+        Some(Ok(heap.alloc(result)))
+    }
+
+    fn div(&self, other: Value<'v>, heap: Heap<'v>) -> Option<starlark::Result<Value<'v>>> {
+        let other = other.downcast_ref::<PhysicalValueType>()?;
+        let result = PhysicalValueType::new(self.unit / other.unit);
+        Some(Ok(heap.alloc(result)))
+    }
+
+    fn rdiv(&self, other: Value<'v>, heap: Heap<'v>) -> Option<starlark::Result<Value<'v>>> {
+        if other.unpack_i32() != Some(1) {
+            return None;
+        }
+        Some(Ok(heap.alloc(PhysicalValueType::new(
+            PhysicalUnitDims::DIMENSIONLESS / self.unit,
+        ))))
     }
 
     fn eval_type(&self) -> Option<Ty> {
@@ -2809,6 +2910,22 @@ mod tests {
         // Test error cases
         assert!("UnknownUnit".parse::<PhysicalUnitDims>().is_err());
         assert!("A·UnknownUnit".parse::<PhysicalUnitDims>().is_err());
+    }
+
+    #[test]
+    fn test_compound_unit_prefixes() {
+        let volts_per_second = PhysicalUnitDims::VOLTAGE / PhysicalUnitDims::TIME;
+
+        for (input, expected) in [
+            ("5V/us", Decimal::from(5_000_000)),
+            ("5V/µs", Decimal::from(5_000_000)),
+            ("5V/μs", Decimal::from(5_000_000)),
+            ("5mV/us", Decimal::from(5_000)),
+        ] {
+            let parsed = input.parse::<PhysicalValue>().unwrap();
+            assert_eq!(parsed.nominal, expected, "{input}");
+            assert_eq!(parsed.unit, volts_per_second, "{input}");
+        }
     }
 
     #[test]
