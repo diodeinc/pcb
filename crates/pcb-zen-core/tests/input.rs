@@ -1673,8 +1673,8 @@ snapshot_eval!(io_invalid_type, {
 
 snapshot_eval!(config_string_to_physical_value, {
     "child.zen" => r#"
-        voltage = config(builtin.Voltage)
-        resistance = config(builtin.Voltage / builtin.Current)
+        voltage = config(Voltage)
+        resistance = config(Voltage / builtin.Current)
         current = config(builtin.Current)
 
         print("voltage:", voltage)
@@ -1694,7 +1694,7 @@ snapshot_eval!(config_string_to_physical_value, {
 
 snapshot_eval!(config_string_to_physical_value_with_bounds, {
     "child.zen" => r#"
-        voltage = config(builtin.Voltage)
+        voltage = config(Voltage)
 
         print("voltage:", voltage)
     "#,
@@ -1713,19 +1713,29 @@ fn config_accepts_composed_physical_types() {
         (
             "Module.zen".to_string(),
             r#"
-                load("@stdlib/units.zen", "Current", "Time", "Voltage")
+                load("@stdlib/units.zen", "Current", "Length", "Mass", "Resistance", "Time", "Voltage")
 
                 slew_rate = config(Voltage / Time, default="5V/us")
                 frequency = config(1 / Time, default="1MHz")
                 power = config(Voltage * Current, default="2W")
+                speed = config(Length / Time, default="2m/s")
+                mass = config(Mass, default="500g")
+                resistance = config(Resistance, default="1m")
 
                 expected_slew_rate = Voltage("5V") / Time("1us")
+                expected_voltage = Mass * Length * Length / (Current * Time * Time * Time)
+                check(Voltage.unit == expected_voltage.unit, "Voltage should derive from the five SI bases")
                 check(slew_rate.unit == "V/s", "slew rate should retain V/s dimensions")
                 check(slew_rate.value == 5000000, "slew rate should apply denominator prefix, got " + str(slew_rate.value))
                 check(expected_slew_rate.unit == slew_rate.unit, "value and type algebra should agree")
                 check(expected_slew_rate.value == slew_rate.value, "value and type algebra should agree")
                 check(frequency.unit == "Hz", "reciprocal time should be frequency")
                 check(power.unit == "W", "voltage times current should be power")
+                check(speed.unit == "m/s", "length over time should retain SI dimensions")
+                check(speed.value == 2, "metre should parse contextually as length")
+                check(mass.unit == "kg", "mass should be stored in kilograms")
+                check(mass.value == 0.5, "gram prefixes should scale relative to kilograms")
+                check(resistance.value == 0.001, "legacy bare m should remain milli-ohms for resistance")
             "#
             .to_string(),
         ),
@@ -1738,6 +1748,9 @@ fn config_accepts_composed_physical_types() {
                     slew_rate = "5V/us",
                     frequency = "1MHz",
                     power = "2W",
+                    speed = "2m/s",
+                    mass = "500g",
+                    resistance = "1m",
                 )
             "#
             .to_string(),
@@ -1994,7 +2007,7 @@ fn config_allowed_physical_metadata() {
         (
             "Module.zen".to_string(),
             r#"
-                Capacitance = builtin.Current * builtin.Time / builtin.Voltage
+                Capacitance = builtin.Current * builtin.Time / Voltage
 
                 capacitance = config(
                     "capacitance",

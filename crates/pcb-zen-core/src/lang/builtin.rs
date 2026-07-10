@@ -70,6 +70,18 @@ pub fn builtin_globals(builder: &mut GlobalsBuilder) {
 fn builtin_methods(methods: &mut MethodsBuilder) {
     #[allow(non_snake_case)]
     #[starlark(attribute)]
+    fn Mass(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(PhysicalUnitDims::MASS))
+    }
+
+    #[allow(non_snake_case)]
+    #[starlark(attribute)]
+    fn Length(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
+        Ok(PhysicalValueType::new(PhysicalUnitDims::LENGTH))
+    }
+
+    #[allow(non_snake_case)]
+    #[starlark(attribute)]
     fn Current(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
         Ok(PhysicalValueType::new(PhysicalUnitDims::CURRENT))
     }
@@ -78,12 +90,6 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
     #[starlark(attribute)]
     fn Time(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
         Ok(PhysicalValueType::new(PhysicalUnitDims::TIME))
-    }
-
-    #[allow(non_snake_case)]
-    #[starlark(attribute)]
-    fn Voltage(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
-        Ok(PhysicalValueType::new(PhysicalUnitDims::VOLTAGE))
     }
 
     #[allow(non_snake_case)]

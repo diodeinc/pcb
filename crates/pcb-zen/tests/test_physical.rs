@@ -27,7 +27,7 @@ print("Unit:", f1.unit)
 
 print("\n--- Dimensionless ---")
 # Dividing a physical type by itself produces a dimensionless type.
-Dimensionless = builtin.Voltage / builtin.Voltage
+Dimensionless = Voltage / Voltage
 print("Type object:", Dimensionless)
 
 d = Dimensionless(1.5)

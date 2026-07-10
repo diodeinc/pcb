@@ -496,7 +496,7 @@ fn net_field_composed_physical_type_coerces_from_string() {
         r#"
         SlewNet = builtin.net_type(
             "SlewNet",
-            slew_rate=field((builtin.Voltage / builtin.Time) | None, default=None),
+            slew_rate=field((Voltage / builtin.Time) | None, default=None),
         )
 
         signal = SlewNet("SIGNAL", slew_rate="5V/us")
