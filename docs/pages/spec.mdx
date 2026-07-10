@@ -385,7 +385,7 @@ connector = Symbol(library="Connector_Generic.kicad_sym", name="Conn_01x14")
 
 ### Physical Quantities
 
-Physical quantities represent electrical values with a nominal value, optional min/max bounds, and dimensional units. Zener exposes four fundamental quantity types directly as `builtin.Current`, `builtin.Time`, `builtin.Voltage`, and `builtin.Temperature`. `@stdlib/units.zen` re-exports those as `Current`, `Time`, `Voltage`, and `Temperature`, and defines conventional derived types such as `Resistance`, `Capacitance`, `Inductance`, `Impedance`, and `Frequency` using multiplication and division.
+Physical quantities have a nominal value, optional min/max bounds, and dimensional units. Zener exposes five SI bases as `builtin.Mass`, `builtin.Length`, `builtin.Time`, `builtin.Current`, and `builtin.Temperature`. `@stdlib/units.zen` re-exports them and derives conventional electrical types such as `Voltage`, `Resistance`, `Capacitance`, `Inductance`, `Impedance`, and `Frequency` using multiplication and division. For example, `Voltage` is `Mass * Length * Length / (Current * Time * Time * Time)`.
 
 ```python
 load("@stdlib/units.zen", "Voltage", "Current", "Time", "Resistance", "Capacitance")
@@ -412,6 +412,8 @@ slew_rate = config(SlewRate, default="5V/us")
 ```
 
 Derived types are dimensional rather than nominal: independently constructed types with the same dimensions accept the same values. For example, `Voltage / Current` and stdlib `Resistance` are the same physical type.
+
+SI base symbols are resolved in the context of the declared type, so `Length("1m")` is one metre. Untyped `"1m"` parsing retains its historical meaning of one milliohm for compatibility.
 
 **Properties**: `.value` (alias for `.nominal`), `.nominal`, `.min`, `.max`, `.tolerance`, `.unit`
 

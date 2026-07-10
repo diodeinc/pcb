@@ -168,7 +168,7 @@ fn extract_bounds(
         Ok((pv.min, pv.max))
     } else if let Some(s) = value.unpack_str() {
         // Try to parse as PhysicalValue (now handles range syntax too)
-        if let Ok(pv) = PhysicalValue::from_str(s) {
+        if let Ok(pv) = parse_physical_value(s, Some(expected_unit)) {
             if pv.unit != expected_unit {
                 return Err(PhysicalValueError::UnitMismatch {
                     expected: expected_unit.quantity(),
@@ -592,14 +592,36 @@ impl std::ops::Sub for PhysicalValue {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, ProvidesStaticType, Allocative, Hash, pagable::Pagable,
-)]
+#[derive(Clone, Copy, PartialEq, Eq, ProvidesStaticType, Allocative, Hash, pagable::Pagable)]
 pub struct PhysicalUnitDims {
-    pub current: i8,
+    pub mass: i8,
+    pub length: i8,
     pub time: i8,
-    pub voltage: i8,
+    pub current: i8,
     pub temp: i8,
+}
+
+impl fmt::Debug for PhysicalUnitDims {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some((current, time, voltage, temp)) = self.electrical_dimensions() {
+            // Preserve the legacy debug representation for existing electrical
+            // quantities and snapshot diagnostics.
+            f.debug_struct("PhysicalUnitDims")
+                .field("current", &current)
+                .field("time", &time)
+                .field("voltage", &voltage)
+                .field("temp", &temp)
+                .finish()
+        } else {
+            f.debug_struct("PhysicalUnitDims")
+                .field("mass", &self.mass)
+                .field("length", &self.length)
+                .field("time", &self.time)
+                .field("current", &self.current)
+                .field("temp", &self.temp)
+                .finish()
+        }
+    }
 }
 
 impl Freeze for PhysicalUnitDims {
@@ -613,9 +635,10 @@ impl std::ops::Mul for PhysicalUnitDims {
     type Output = PhysicalUnitDims;
     fn mul(self, rhs: Self) -> Self::Output {
         PhysicalUnitDims {
-            current: self.current + rhs.current,
+            mass: self.mass + rhs.mass,
+            length: self.length + rhs.length,
             time: self.time + rhs.time,
-            voltage: self.voltage + rhs.voltage,
+            current: self.current + rhs.current,
             temp: self.temp + rhs.temp,
         }
     }
@@ -625,9 +648,10 @@ impl std::ops::Div for PhysicalUnitDims {
     type Output = PhysicalUnitDims;
     fn div(self, rhs: Self) -> Self::Output {
         PhysicalUnitDims {
-            current: self.current - rhs.current,
+            mass: self.mass - rhs.mass,
+            length: self.length - rhs.length,
             time: self.time - rhs.time,
-            voltage: self.voltage - rhs.voltage,
+            current: self.current - rhs.current,
             temp: self.temp - rhs.temp,
         }
     }
@@ -643,6 +667,8 @@ impl From<PhysicalUnit> for PhysicalUnitDims {
     fn from(unit: PhysicalUnit) -> Self {
         use PhysicalUnit::*;
         match unit {
+            Kilograms => Self::MASS,
+            Metres => Self::LENGTH,
             Amperes => Self::CURRENT,
             Seconds => Self::TIME,
             Volts => Self::VOLTAGE,
@@ -664,6 +690,11 @@ impl FromStr for PhysicalUnitDims {
     type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
+        // In a dimension expression, bare `m` is unambiguously metre. Untyped
+        // physical-value parsing retains the legacy milli-ohm interpretation.
+        if s == "m" {
+            return Ok(Self::LENGTH);
+        }
         // 1. Fast path: simple aliases
         if let Ok(alias) = s.parse::<PhysicalUnit>() {
             return Ok(alias.into());
@@ -750,55 +781,113 @@ fn gather_units(list: &str) -> Result<PhysicalUnitDims, ParseError> {
 
     let mut acc = PhysicalUnitDims::DIMENSIONLESS;
     for token in list.split('·').filter(|t| !t.is_empty()) {
-        let u: PhysicalUnitDims = token
-            .parse::<PhysicalUnit>()
-            .map_err(|_| ParseError::InvalidUnit)?
-            .into();
+        let (unit, exponent) = match token.rsplit_once('^') {
+            Some((unit, exponent)) => (
+                unit,
+                exponent
+                    .parse::<i8>()
+                    .map_err(|_| ParseError::InvalidUnit)?,
+            ),
+            None => (token, 1),
+        };
+        let u = if unit == "m" {
+            PhysicalUnitDims::LENGTH
+        } else {
+            PhysicalUnitDims::from(
+                unit.parse::<PhysicalUnit>()
+                    .map_err(|_| ParseError::InvalidUnit)?,
+            )
+        }
+        .checked_scale(exponent)?;
         acc = acc * u;
     }
     Ok(acc)
 }
 
 impl PhysicalUnitDims {
-    pub const DIMENSIONLESS: Self = Self::new(0, 0, 0, 0);
-    pub const CURRENT: Self = Self::new(1, 0, 0, 0);
-    pub const TIME: Self = Self::new(0, 1, 0, 0);
-    pub const VOLTAGE: Self = Self::new(0, 0, 1, 0);
-    pub const TEMP: Self = Self::new(0, 0, 0, 1);
+    pub const DIMENSIONLESS: Self = Self::new(0, 0, 0, 0, 0);
+    pub const MASS: Self = Self::new(1, 0, 0, 0, 0);
+    pub const LENGTH: Self = Self::new(0, 1, 0, 0, 0);
+    pub const TIME: Self = Self::new(0, 0, 1, 0, 0);
+    pub const CURRENT: Self = Self::new(0, 0, 0, 1, 0);
+    pub const TEMP: Self = Self::new(0, 0, 0, 0, 1);
+    pub const VOLTAGE: Self = Self::new(1, 2, -3, -1, 0);
 
-    const fn new(current: i8, time: i8, voltage: i8, temp: i8) -> Self {
+    const fn new(mass: i8, length: i8, time: i8, current: i8, temp: i8) -> Self {
         Self {
-            current,
+            mass,
+            length,
             time,
-            voltage,
+            current,
             temp,
         }
+    }
+
+    fn checked_scale(self, exponent: i8) -> Result<Self, ParseError> {
+        Ok(Self {
+            mass: self
+                .mass
+                .checked_mul(exponent)
+                .ok_or(ParseError::InvalidUnit)?,
+            length: self
+                .length
+                .checked_mul(exponent)
+                .ok_or(ParseError::InvalidUnit)?,
+            time: self
+                .time
+                .checked_mul(exponent)
+                .ok_or(ParseError::InvalidUnit)?,
+            current: self
+                .current
+                .checked_mul(exponent)
+                .ok_or(ParseError::InvalidUnit)?,
+            temp: self
+                .temp
+                .checked_mul(exponent)
+                .ok_or(ParseError::InvalidUnit)?,
+        })
+    }
+
+    /// Express an SI dimension in the legacy V/A/s/K electrical basis when
+    /// possible. Existing electrical dimensions satisfy `length = 2 * mass`.
+    fn electrical_dimensions(&self) -> Option<(i8, i8, i8, i8)> {
+        if i16::from(self.length) != 2 * i16::from(self.mass) {
+            return None;
+        }
+
+        let voltage = self.mass;
+        let current = i8::try_from(i16::from(self.current) + i16::from(voltage)).ok()?;
+        let time = i8::try_from(i16::from(self.time) + 3 * i16::from(voltage)).ok()?;
+        Some((current, time, voltage, self.temp))
     }
 
     fn alias(&self) -> Option<PhysicalUnit> {
         use PhysicalUnit::*;
         let PhysicalUnitDims {
-            current,
+            mass,
+            length,
             time,
-            voltage,
+            current,
             temp,
         } = self;
-        let alias = match (current, time, voltage, temp) {
+        let alias = match (mass, length, time, current, temp) {
             // bases
-            (1, 0, 0, 0) => Amperes, // A
-            (0, 1, 0, 0) => Seconds, // s
-            (0, 0, 1, 0) => Volts,   // V
-            (0, 0, 0, 1) => Kelvin,  // K
+            (1, 0, 0, 0, 0) => Kilograms, // kg
+            (0, 1, 0, 0, 0) => Metres,    // m
+            (0, 0, 0, 1, 0) => Amperes,   // A
+            (0, 0, 1, 0, 0) => Seconds,   // s
+            (0, 0, 0, 0, 1) => Kelvin,    // K
             // derived
-            (0, -1, 0, 0) => Hertz,   // Hz = 1/s
-            (1, 1, 0, 0) => Coulombs, // C = A*s
-            (-1, 0, 1, 0) => Ohms,    // Ohm = V/A
-            (1, 0, -1, 0) => Siemens, // S = A/V
-            (1, 1, -1, 0) => Farads,  // F = A*s/V
-            (-1, 1, 1, 0) => Henries, // H = V*s/A
-            (1, 0, 1, 0) => Watts,    // W = V*A
-            (1, 1, 1, 0) => Joules,   // J = V*A*s
-            (0, 1, 1, 0) => Webers,   // Wb = V*s
+            (0, 0, -1, 0, 0) => Hertz,    // Hz = 1/s
+            (0, 0, 1, 1, 0) => Coulombs,  // C = A*s
+            (1, 2, -3, -1, 0) => Volts,   // V
+            (1, 2, -3, -2, 0) => Ohms,    // Ohm = V/A
+            (-1, -2, 3, 2, 0) => Siemens, // S = A/V
+            (-1, -2, 4, 2, 0) => Farads,  // F = A*s/V
+            (1, 2, -2, -2, 0) => Henries, // H = V*s/A
+            (1, 2, -3, 0, 0) => Watts,    // W = V*A
+            (1, 2, -2, 0, 0) => Joules,   // J = V*A*s
+            (1, 2, -2, -1, 0) => Webers,  // Wb = V*s
             _ => return None,
         };
         Some(alias)
@@ -808,43 +897,63 @@ impl PhysicalUnitDims {
         if let Some(alias) = self.alias() {
             return alias.suffix().to_string();
         }
-        fn push(exp: i8, sym: &str, num: &mut Vec<String>, den: &mut Vec<String>) {
-            match exp {
-                0 => {}
-                1 => num.push(sym.to_string()),
-                -1 => den.push(sym.to_string()),
-                n if n > 1 => num.push(format!("{sym}^{exp}")),
-                n if n < -1 => den.push(format!("{sym}^{exp}")),
-                _ => unreachable!(),
+
+        fn format_dimensions(dimensions: &[(i8, &str)]) -> String {
+            fn push(exp: i8, sym: &str, num: &mut Vec<String>, den: &mut Vec<String>) {
+                let formatted = |magnitude: i8| {
+                    if magnitude == 1 {
+                        sym.to_string()
+                    } else {
+                        format!("{sym}^{magnitude}")
+                    }
+                };
+                match exp {
+                    0 => {}
+                    n if n > 0 => num.push(formatted(n)),
+                    n => den.push(formatted(-n)),
+                }
+            }
+
+            let mut num = Vec::new();
+            let mut den = Vec::new();
+            for &(exp, symbol) in dimensions {
+                push(exp, symbol, &mut num, &mut den);
+            }
+            let format_units = |units: &[String]| {
+                let joined = units.join("·");
+                if units.len() > 1 {
+                    format!("({joined})")
+                } else {
+                    joined
+                }
+            };
+
+            match (num.is_empty(), den.is_empty()) {
+                (true, true) => String::new(),
+                (false, true) => format_units(&num),
+                (true, false) => format!("1/{}", format_units(&den)),
+                (false, false) => format!("{}/{}", format_units(&num), format_units(&den)),
             }
         }
+
+        if let Some((current, time, voltage, temp)) = self.electrical_dimensions() {
+            return format_dimensions(&[(voltage, "V"), (current, "A"), (temp, "K"), (time, "s")]);
+        }
+
         let PhysicalUnitDims {
-            current,
+            mass,
+            length,
             time,
-            voltage,
+            current,
             temp,
         } = *self;
-        let mut num = Vec::new();
-        let mut den = Vec::new();
-        push(voltage, "V", &mut num, &mut den);
-        push(current, "A", &mut num, &mut den);
-        push(temp, "K", &mut num, &mut den);
-        push(time, "s", &mut num, &mut den);
-        let format_units = |units: &[String]| {
-            let joined = units.join("·");
-            if units.len() > 1 {
-                format!("({})", joined)
-            } else {
-                joined
-            }
-        };
-
-        match (num.is_empty(), den.is_empty()) {
-            (true, true) => "".to_string(),
-            (false, true) => format_units(&num),
-            (true, false) => format!("1/{}", format_units(&den)),
-            (false, false) => format!("{}/{}", format_units(&num), format_units(&den)),
-        }
+        format_dimensions(&[
+            (mass, "kg"),
+            (length, "m"),
+            (current, "A"),
+            (temp, "K"),
+            (time, "s"),
+        ])
     }
 
     pub fn quantity(&self) -> String {
@@ -1003,7 +1112,7 @@ fn fmt_significant(x: Decimal) -> String {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ParseError {
     InvalidFormat,
     InvalidNumber,
@@ -1049,22 +1158,29 @@ fn split_number_and_unit(s: &str) -> Result<(Decimal, &str), ParseError> {
 
 fn parse_value_with_optional_unit(
     s: &str,
+    expected_unit: Option<PhysicalUnitDims>,
 ) -> Result<(Decimal, Option<PhysicalUnitDims>), ParseError> {
     let (base_number, unit_str) = split_number_and_unit(s)?;
     if unit_str.is_empty() {
         Ok((base_number, None))
     } else {
-        let (value, unit) = parse_unit_with_prefix(unit_str, base_number)?;
+        let (value, unit) = parse_unit_with_prefix(unit_str, base_number, expected_unit)?;
         Ok((value, Some(unit)))
     }
 }
 
-fn parse_value_with_unit(s: &str) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
+fn parse_value_with_unit(
+    s: &str,
+    expected_unit: Option<PhysicalUnitDims>,
+) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
     let (base_number, unit_str) = split_number_and_unit(s)?;
-    parse_unit_with_prefix(unit_str, base_number)
+    parse_unit_with_prefix(unit_str, base_number, expected_unit)
 }
 
-fn parse_range_syntax(s: &str) -> Option<Result<PhysicalValue, ParseError>> {
+fn parse_range_syntax(
+    s: &str,
+    expected_unit: Option<PhysicalUnitDims>,
+) -> Option<Result<PhysicalValue, ParseError>> {
     // Check for range separators: en-dash (–), hyphen surrounded by non-numbers, or "to"
     let (left, right, nominal_str) = if let Some((range_part, nom_part)) = s.split_once('(') {
         // Has nominal: "11–26 V (12 V nom.)"
@@ -1090,11 +1206,11 @@ fn parse_range_syntax(s: &str) -> Option<Result<PhysicalValue, ParseError>> {
     };
 
     // Parse left and right values
-    let left_result = match parse_value_with_optional_unit(left) {
+    let left_result = match parse_value_with_optional_unit(left, expected_unit) {
         Ok(r) => r,
         Err(e) => return Some(Err(e)),
     };
-    let right_result = match parse_value_with_optional_unit(right) {
+    let right_result = match parse_value_with_optional_unit(right, expected_unit) {
         Ok(r) => r,
         Err(e) => return Some(Err(e)),
     };
@@ -1103,6 +1219,7 @@ fn parse_range_syntax(s: &str) -> Option<Result<PhysicalValue, ParseError>> {
     let unit = right_result
         .1
         .or(left_result.1)
+        .or(expected_unit)
         .unwrap_or(PhysicalUnit::Ohms.into());
 
     // Check unit consistency
@@ -1122,7 +1239,7 @@ fn parse_range_syntax(s: &str) -> Option<Result<PhysicalValue, ParseError>> {
 
     // Parse nominal if present
     let nominal = if let Some(nom_str) = nominal_str {
-        let (value, nom_unit) = match parse_value_with_optional_unit(nom_str) {
+        let (value, nom_unit) = match parse_value_with_optional_unit(nom_str, expected_unit) {
             Ok(result) => result,
             Err(e) => return Some(Err(e)),
         };
@@ -1190,37 +1307,44 @@ impl FromStr for PhysicalValue {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.trim();
-        if s.is_empty() {
-            return Err(ParseError::InvalidFormat);
-        }
-
-        // Try range parsing first (handles "11–26V", "11V to 26V", etc.)
-        if let Some(result) = parse_range_syntax(s) {
-            return result;
-        }
-
-        // Split by spaces to check for tolerance
-        let parts: Vec<&str> = s.split_whitespace().collect();
-
-        // Extract tolerance if provided (last token ending with "%")
-        let mut tolerance = Decimal::ZERO;
-        let value_unit_str = if parts.len() > 1 && parts.last().unwrap().ends_with('%') {
-            tolerance = parse_percentish_decimal(parts.last().unwrap())?;
-            parts[..parts.len() - 1].join("")
-        } else {
-            parts.join("")
-        };
-
-        // Handle special case like "4k7" (resistance notation -> 4.7kOhm)
-        if let Some(result) = parse_resistor_k_notation(&value_unit_str, tolerance) {
-            return Ok(result);
-        }
-
-        let (value, unit) = parse_value_with_unit(&value_unit_str)?;
-
-        Ok(PhysicalValue::from_decimal(value, tolerance, unit))
+        parse_physical_value(s, None)
     }
+}
+
+fn parse_physical_value(
+    s: &str,
+    expected_unit: Option<PhysicalUnitDims>,
+) -> Result<PhysicalValue, ParseError> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(ParseError::InvalidFormat);
+    }
+
+    // Try range parsing first (handles "11–26V", "11V to 26V", etc.)
+    if let Some(result) = parse_range_syntax(s, expected_unit) {
+        return result;
+    }
+
+    // Split by spaces to check for tolerance
+    let parts: Vec<&str> = s.split_whitespace().collect();
+
+    // Extract tolerance if provided (last token ending with "%")
+    let mut tolerance = Decimal::ZERO;
+    let value_unit_str = if parts.len() > 1 && parts.last().unwrap().ends_with('%') {
+        tolerance = parse_percentish_decimal(parts.last().unwrap())?;
+        parts[..parts.len() - 1].join("")
+    } else {
+        parts.join("")
+    };
+
+    // Handle special case like "4k7" (resistance notation -> 4.7kOhm)
+    if let Some(result) = parse_resistor_k_notation(&value_unit_str, tolerance) {
+        return Ok(result);
+    }
+
+    let (value, unit) = parse_value_with_unit(&value_unit_str, expected_unit)?;
+
+    Ok(PhysicalValue::from_decimal(value, tolerance, unit))
 }
 
 fn convert_temperature_to_kelvin(value: Decimal, unit: &str) -> Decimal {
@@ -1234,6 +1358,7 @@ fn convert_temperature_to_kelvin(value: Decimal, unit: &str) -> Decimal {
 fn parse_unit_with_prefix(
     unit_str: &str,
     base_value: Decimal,
+    expected_unit: Option<PhysicalUnitDims>,
 ) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
     // Handle bare number (empty unit) - defaults to resistance
     if unit_str.is_empty() {
@@ -1252,16 +1377,62 @@ fn parse_unit_with_prefix(
         _ => {}
     }
 
-    let (multiplier, unit) = parse_scaled_unit_expression(unit_str)?;
+    let legacy = parse_scaled_unit_expression(unit_str, false);
+    if let (Some(expected), Ok((multiplier, unit))) = (expected_unit, legacy)
+        && unit == expected
+    {
+        return Ok((base_value * multiplier, unit));
+    }
+
+    let contextual = expected_unit.map(|_| parse_scaled_unit_expression(unit_str, true));
+    if let (Some(expected), Some(Ok((multiplier, unit)))) = (expected_unit, contextual)
+        && unit == expected
+    {
+        return Ok((base_value * multiplier, unit));
+    }
+
+    let (multiplier, unit) = legacy
+        .or_else(|_| contextual.unwrap_or_else(|| parse_scaled_unit_expression(unit_str, false)))?;
     Ok((base_value * multiplier, unit))
 }
 
+fn parse_si_base_token(token: &str) -> Option<(Decimal, PhysicalUnitDims)> {
+    let parse_base = |base: &str, base_scale: Decimal, unit: PhysicalUnitDims| {
+        if token == base {
+            return Some((base_scale, unit));
+        }
+        for &(exp, prefix) in &[(-6, "µ"), (-6, "μ")] {
+            if token.strip_prefix(prefix) == Some(base) {
+                return Some((pow10(exp) * base_scale, unit));
+            }
+        }
+        for &(exp, prefix) in &SI_PREFIXES {
+            if !prefix.is_empty() && token.strip_prefix(prefix) == Some(base) {
+                return Some((pow10(exp) * base_scale, unit));
+            }
+        }
+        None
+    };
+
+    // Length uses metre as its base. Mass is stored in kilograms, while SI
+    // prefixes conventionally apply to grams.
+    parse_base("m", Decimal::ONE, PhysicalUnitDims::LENGTH)
+        .or_else(|| parse_base("g", Decimal::new(1, 3), PhysicalUnitDims::MASS))
+}
+
 /// Parse a possibly-prefixed unit token such as `V`, `mA`, or `us`.
-fn parse_prefixed_unit(token: &str) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
+fn parse_prefixed_unit(
+    token: &str,
+    si_base_symbols: bool,
+) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
     match token {
         "h" => return Ok((HOUR, PhysicalUnitDims::TIME)),
         "min" => return Ok((MINUTE, PhysicalUnitDims::TIME)),
         _ => {}
+    }
+
+    if si_base_symbols && let Some(parsed) = parse_si_base_token(token) {
+        return Ok(parsed);
     }
 
     // Prefer an exact unit match so unit symbols are never mistaken for prefixes.
@@ -1300,7 +1471,10 @@ fn parse_prefixed_unit(token: &str) -> Result<(Decimal, PhysicalUnitDims), Parse
 }
 
 /// Parse one side of a compound unit expression, including per-term prefixes.
-fn parse_scaled_unit_product(input: &str) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
+fn parse_scaled_unit_product(
+    input: &str,
+    si_base_symbols: bool,
+) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
     let input = input
         .strip_prefix('(')
         .and_then(|s| s.strip_suffix(')'))
@@ -1310,9 +1484,23 @@ fn parse_scaled_unit_product(input: &str) -> Result<(Decimal, PhysicalUnitDims),
     let mut found = false;
 
     for token in input.split('·').filter(|token| !token.is_empty()) {
-        let (token_multiplier, token_dims) = parse_prefixed_unit(token)?;
-        multiplier *= token_multiplier;
-        dims = dims * token_dims;
+        let (token, exponent) = match token.rsplit_once('^') {
+            Some((token, exponent)) => {
+                let exponent = exponent
+                    .parse::<u8>()
+                    .map_err(|_| ParseError::InvalidUnit)?;
+                if exponent == 0 || exponent > i8::MAX as u8 {
+                    return Err(ParseError::InvalidUnit);
+                }
+                (token, exponent)
+            }
+            None => (token, 1),
+        };
+        let (token_multiplier, token_dims) = parse_prefixed_unit(token, si_base_symbols)?;
+        for _ in 0..exponent {
+            multiplier *= token_multiplier;
+        }
+        dims = dims * token_dims.checked_scale(exponent as i8)?;
         found = true;
     }
 
@@ -1324,7 +1512,10 @@ fn parse_scaled_unit_product(input: &str) -> Result<(Decimal, PhysicalUnitDims),
 }
 
 /// Parse a compound unit expression and its scale relative to SI base values.
-fn parse_scaled_unit_expression(input: &str) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
+fn parse_scaled_unit_expression(
+    input: &str,
+    si_base_symbols: bool,
+) -> Result<(Decimal, PhysicalUnitDims), ParseError> {
     let (numerator, denominator) = match input.split_once('/') {
         Some((numerator, denominator)) if !denominator.is_empty() => {
             (Some(numerator), Some(denominator))
@@ -1336,11 +1527,12 @@ fn parse_scaled_unit_expression(input: &str) -> Result<(Decimal, PhysicalUnitDim
     let (mut multiplier, mut dims) = if matches!(numerator, Some("" | "1")) {
         (Decimal::ONE, PhysicalUnitDims::DIMENSIONLESS)
     } else {
-        parse_scaled_unit_product(numerator.expect("numerator is present"))?
+        parse_scaled_unit_product(numerator.expect("numerator is present"), si_base_symbols)?
     };
 
     if let Some(denominator) = denominator {
-        let (denominator_multiplier, denominator_dims) = parse_scaled_unit_product(denominator)?;
+        let (denominator_multiplier, denominator_dims) =
+            parse_scaled_unit_product(denominator, si_base_symbols)?;
         multiplier /= denominator_multiplier;
         dims = dims / denominator_dims;
     }
@@ -1392,6 +1584,13 @@ impl PhysicalValue {
                 let celsius = self.nominal - KELVIN_OFFSET;
                 write!(f, "{}°C{}", fmt_significant(celsius), suffix)
             }
+            Some(PhysicalUnit::Kilograms) => {
+                if self.nominal.is_zero() {
+                    return write!(f, "0kg{suffix}");
+                }
+                let (scaled, prefix) = scale_to_si(self.nominal * Decimal::from(1000));
+                write!(f, "{}{}g{}", fmt_significant(scaled), prefix, suffix)
+            }
             Some(PhysicalUnit::Seconds) => {
                 let (value_str, unit_suffix) = if self.nominal >= HOUR {
                     (fmt_significant(self.nominal / HOUR), "h")
@@ -1426,20 +1625,35 @@ impl PhysicalValue {
         let (max_scaled, max_prefix) = scale_to_si(self.max);
         let (nom_scaled, nom_prefix) = scale_to_si(self.nominal);
 
-        // Handle temperature specially
-        if let Some(PhysicalUnit::Kelvin) = self.unit.alias() {
-            let min_celsius = self.min - KELVIN_OFFSET;
-            let max_celsius = self.max - KELVIN_OFFSET;
-            let nom_celsius = self.nominal - KELVIN_OFFSET;
-            write!(
-                f,
-                "{}–{}°C ({}°C nom.)",
-                fmt_significant(min_celsius),
-                fmt_significant(max_celsius),
-                fmt_significant(nom_celsius)
-            )
-        } else {
-            write!(
+        match self.unit.alias() {
+            Some(PhysicalUnit::Kelvin) => {
+                let min_celsius = self.min - KELVIN_OFFSET;
+                let max_celsius = self.max - KELVIN_OFFSET;
+                let nom_celsius = self.nominal - KELVIN_OFFSET;
+                write!(
+                    f,
+                    "{}–{}°C ({}°C nom.)",
+                    fmt_significant(min_celsius),
+                    fmt_significant(max_celsius),
+                    fmt_significant(nom_celsius)
+                )
+            }
+            Some(PhysicalUnit::Kilograms) => {
+                let (min_scaled, min_prefix) = scale_to_si(self.min * Decimal::from(1000));
+                let (max_scaled, max_prefix) = scale_to_si(self.max * Decimal::from(1000));
+                let (nom_scaled, nom_prefix) = scale_to_si(self.nominal * Decimal::from(1000));
+                write!(
+                    f,
+                    "{}{}–{}{}g ({}{}g nom.)",
+                    fmt_significant(min_scaled),
+                    min_prefix,
+                    fmt_significant(max_scaled),
+                    max_prefix,
+                    fmt_significant(nom_scaled),
+                    nom_prefix,
+                )
+            }
+            _ => write!(
                 f,
                 "{}{}–{}{}{} ({}{}{} nom.)",
                 fmt_significant(min_scaled),
@@ -1450,7 +1664,7 @@ impl PhysicalValue {
                 fmt_significant(nom_scaled),
                 nom_prefix,
                 unit_str
-            )
+            ),
         }
     }
 }
@@ -1978,7 +2192,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
                             return Ok(PhysicalValue::point(number, self.unit));
                         }
                         // Unit-suffixed strings must match the constructor's unit.
-                        let pv = PhysicalValue::from_str(s).map_err(|err| {
+                        let pv = parse_physical_value(s, Some(self.unit)).map_err(|err| {
                             PhysicalValueError::ParseError {
                                 unit: self.unit.quantity(),
                                 input: s.to_string(),
@@ -2872,6 +3086,14 @@ mod tests {
     fn test_physical_unit_dims_from_str() {
         // Test simple aliases
         assert_eq!(
+            "kg".parse::<PhysicalUnitDims>().unwrap(),
+            PhysicalUnitDims::MASS
+        );
+        assert_eq!(
+            "m".parse::<PhysicalUnitDims>().unwrap(),
+            PhysicalUnitDims::LENGTH
+        );
+        assert_eq!(
             "V".parse::<PhysicalUnitDims>().unwrap(),
             PhysicalUnit::Volts.into()
         );
@@ -2907,6 +3129,17 @@ mod tests {
         let capacitance_paren = "(A·s)/V".parse::<PhysicalUnitDims>().unwrap();
         assert_eq!(capacitance_paren, PhysicalUnit::Farads.into());
 
+        let voltage_si = "(kg·m^2)/(A·s^3)".parse::<PhysicalUnitDims>().unwrap();
+        assert_eq!(voltage_si, PhysicalUnit::Volts.into());
+
+        let force = "(kg·m)/s^2".parse::<PhysicalUnitDims>().unwrap();
+        assert_eq!(
+            force,
+            PhysicalUnitDims::MASS * PhysicalUnitDims::LENGTH
+                / PhysicalUnitDims::TIME
+                / PhysicalUnitDims::TIME
+        );
+
         // Test error cases
         assert!("UnknownUnit".parse::<PhysicalUnitDims>().is_err());
         assert!("A·UnknownUnit".parse::<PhysicalUnitDims>().is_err());
@@ -2931,7 +3164,9 @@ mod tests {
     #[test]
     fn test_physical_unit_dims_roundtrip() {
         // Test that fmt_unit output can be parsed back
-        let test_cases: [PhysicalUnitDims; 13] = [
+        let test_cases: [PhysicalUnitDims; 17] = [
+            PhysicalUnitDims::MASS,
+            PhysicalUnitDims::LENGTH,
             PhysicalUnit::Volts.into(),
             PhysicalUnit::Amperes.into(),
             PhysicalUnit::Ohms.into(),
@@ -2945,6 +3180,10 @@ mod tests {
             PhysicalUnit::Joules.into(),
             PhysicalUnit::Siemens.into(),
             PhysicalUnit::Webers.into(),
+            PhysicalUnitDims::VOLTAGE / PhysicalUnitDims::TIME,
+            PhysicalUnitDims::MASS * PhysicalUnitDims::LENGTH
+                / PhysicalUnitDims::TIME
+                / PhysicalUnitDims::TIME,
         ];
 
         for original in test_cases {
@@ -2954,6 +3193,115 @@ mod tests {
             let parsed: PhysicalUnitDims = formatted.parse().unwrap();
             assert_eq!(parsed, original, "Failed roundtrip for {}", formatted);
         }
+    }
+
+    #[test]
+    fn test_si_dimensions_derive_existing_electrical_units() {
+        let voltage = PhysicalUnitDims::MASS * PhysicalUnitDims::LENGTH * PhysicalUnitDims::LENGTH
+            / PhysicalUnitDims::CURRENT
+            / PhysicalUnitDims::TIME
+            / PhysicalUnitDims::TIME
+            / PhysicalUnitDims::TIME;
+        assert_eq!(voltage, PhysicalUnitDims::VOLTAGE);
+
+        for (actual, expected) in [
+            (
+                PhysicalUnitDims::DIMENSIONLESS / PhysicalUnitDims::TIME,
+                PhysicalUnit::Hertz,
+            ),
+            (
+                PhysicalUnitDims::CURRENT * PhysicalUnitDims::TIME,
+                PhysicalUnit::Coulombs,
+            ),
+            (voltage / PhysicalUnitDims::CURRENT, PhysicalUnit::Ohms),
+            (PhysicalUnitDims::CURRENT / voltage, PhysicalUnit::Siemens),
+            (
+                PhysicalUnitDims::CURRENT * PhysicalUnitDims::TIME / voltage,
+                PhysicalUnit::Farads,
+            ),
+            (
+                voltage * PhysicalUnitDims::TIME / PhysicalUnitDims::CURRENT,
+                PhysicalUnit::Henries,
+            ),
+            (voltage * PhysicalUnitDims::CURRENT, PhysicalUnit::Watts),
+            (
+                voltage * PhysicalUnitDims::CURRENT * PhysicalUnitDims::TIME,
+                PhysicalUnit::Joules,
+            ),
+            (voltage * PhysicalUnitDims::TIME, PhysicalUnit::Webers),
+        ] {
+            assert_eq!(actual, expected.into());
+        }
+    }
+
+    #[test]
+    fn test_si_base_parsing_is_contextual_and_legacy_safe() {
+        let legacy_milli_ohm = "1m".parse::<PhysicalValue>().unwrap();
+        assert_eq!(legacy_milli_ohm.unit, PhysicalUnit::Ohms.into());
+        assert_eq!(legacy_milli_ohm.nominal, Decimal::new(1, 3));
+
+        for (input, expected_unit, expected_value, display) in [
+            ("1m", PhysicalUnitDims::LENGTH, Decimal::ONE, "1m"),
+            ("1mm", PhysicalUnitDims::LENGTH, Decimal::new(1, 3), "1mm"),
+            ("1kg", PhysicalUnitDims::MASS, Decimal::ONE, "1kg"),
+            ("500g", PhysicalUnitDims::MASS, Decimal::new(5, 1), "500g"),
+            ("1mg", PhysicalUnitDims::MASS, Decimal::new(1, 6), "1mg"),
+        ] {
+            let parsed = parse_physical_value(input, Some(expected_unit)).unwrap();
+            assert_eq!(parsed.unit, expected_unit, "{input}");
+            assert_eq!(parsed.nominal, expected_value, "{input}");
+            assert_eq!(parsed.to_string(), display, "{input}");
+        }
+
+        let speed = PhysicalUnitDims::LENGTH / PhysicalUnitDims::TIME;
+        let parsed = parse_physical_value("2m/s", Some(speed)).unwrap();
+        assert_eq!(parsed.unit, speed);
+        assert_eq!(parsed.nominal, Decimal::from(2));
+
+        let force = PhysicalUnitDims::MASS * PhysicalUnitDims::LENGTH
+            / PhysicalUnitDims::TIME
+            / PhysicalUnitDims::TIME;
+        let parsed = parse_physical_value("3kg·m/s^2", Some(force)).unwrap();
+        assert_eq!(parsed.unit, force);
+        assert_eq!(parsed.nominal, Decimal::from(3));
+    }
+
+    #[test]
+    fn test_existing_electrical_dimension_serialization_is_stable() {
+        for (unit, serialized) in [
+            (PhysicalUnit::Volts, "\"Volts\""),
+            (PhysicalUnit::Amperes, "\"Amperes\""),
+            (PhysicalUnit::Seconds, "\"Seconds\""),
+            (PhysicalUnit::Kelvin, "\"Kelvin\""),
+            (PhysicalUnit::Ohms, "\"Ohms\""),
+            (PhysicalUnit::Farads, "\"Farads\""),
+            (PhysicalUnit::Henries, "\"Henries\""),
+            (PhysicalUnit::Hertz, "\"Hertz\""),
+            (PhysicalUnit::Coulombs, "\"Coulombs\""),
+            (PhysicalUnit::Watts, "\"Watts\""),
+            (PhysicalUnit::Joules, "\"Joules\""),
+            (PhysicalUnit::Siemens, "\"Siemens\""),
+            (PhysicalUnit::Webers, "\"Webers\""),
+        ] {
+            let dims = PhysicalUnitDims::from(unit);
+            assert_eq!(serde_json::to_string(&dims).unwrap(), serialized);
+            assert_eq!(
+                serde_json::from_str::<PhysicalUnitDims>(serialized).unwrap(),
+                dims
+            );
+        }
+
+        let slew_rate = PhysicalUnitDims::VOLTAGE / PhysicalUnitDims::TIME;
+        assert_eq!(slew_rate.to_string(), "V/s");
+        assert_eq!(serde_json::to_string(&slew_rate).unwrap(), "\"V/s\"");
+        assert_eq!(
+            serde_json::from_str::<PhysicalUnitDims>("\"V/s\"").unwrap(),
+            slew_rate
+        );
+        assert_eq!(
+            format!("{slew_rate:?}"),
+            "PhysicalUnitDims { current: 0, time: -1, voltage: 1, temp: 0 }"
+        );
     }
 
     #[test]
