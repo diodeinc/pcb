@@ -119,7 +119,9 @@ pub(crate) fn try_physical_conversion<'v>(
 }
 
 fn physical_unit_from_type_name(type_name: &str) -> Option<PhysicalUnitDims> {
-    PhysicalUnit::from_quantity(type_name).map(PhysicalUnitDims::from)
+    PhysicalUnit::from_quantity(type_name)
+        .map(PhysicalUnitDims::from)
+        .or_else(|| type_name.parse().ok())
 }
 
 /// Attempt physical-value conversion by inspecting a compiled field type.
