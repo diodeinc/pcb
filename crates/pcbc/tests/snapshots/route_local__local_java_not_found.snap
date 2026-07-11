@@ -1,6 +1,5 @@
 ---
-source: crates/pcbc/tests/route.rs
-assertion_line: 69
+source: crates/pcbc/tests/route_local.rs
 expression: output
 ---
 Command: pcbc route-local board.zen

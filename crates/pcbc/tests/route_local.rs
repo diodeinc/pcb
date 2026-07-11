@@ -39,14 +39,6 @@ fn scaffold_layout(sandbox: &mut Sandbox) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_route_missing_file() {
-    let output = Sandbox::new()
-        .with_workspace()
-        .snapshot_run("pcbc", ["route", "nonexistent.zen"]);
-    assert_snapshot!("missing_file", output);
-}
-
-#[test]
 fn test_route_local_no_layout() {
     let output = Sandbox::new()
         .with_workspace()
@@ -97,16 +89,6 @@ fn test_route_local_bad_jar_path() {
         ],
     );
     assert_snapshot!("local_bad_jar_path", output);
-}
-
-#[test]
-fn test_route_cloud_timeout_exceeded() {
-    let mut sandbox = Sandbox::new().with_workspace();
-    sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
-    scaffold_layout(&mut sandbox);
-
-    let output = sandbox.snapshot_run("pcbc", ["route", "-t", "999", "board.zen"]);
-    assert_snapshot!("cloud_timeout_exceeded", output);
 }
 
 // ---------------------------------------------------------------------------

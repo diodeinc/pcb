@@ -1,6 +1,6 @@
 ---
-source: crates/pcbc/tests/route.rs
-assertion_line: 99
+source: crates/pcbc/tests/route_local.rs
+assertion_line: 91
 expression: output
 ---
 Command: pcbc route-local --fr-jar /nonexistent/freerouting.jar board.zen

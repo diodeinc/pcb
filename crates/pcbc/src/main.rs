@@ -159,7 +159,6 @@ enum Commands {
     Route(route::RouteArgs),
 
     /// Auto-route PCB locally via FreeRouting
-    #[command(hide = true)]
     RouteLocal(route_local::RouteLocalArgs),
 
     /// Run SPICE simulations
