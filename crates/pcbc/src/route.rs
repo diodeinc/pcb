@@ -1,8 +1,7 @@
 //! PCB auto-routing command
 //!
-//! Supports two backends:
-//! - **Local** (default): runs FreeRouting Java JAR on the machine
-//! - **Cloud** (`--remote`): uploads to DeepPCB for headless routing
+//! Routes boards locally using FreeRouting Java JAR.
+//! Cloud routing via DeepPCB API is not yet exposed.
 //!
 //! The local path uses **Specctra DSN** as an intermediate format: the KiCad
 //! board is exported to DSN via `pcbnew`, FreeRouting reads the DSN and writes
@@ -41,7 +40,7 @@ const FREEROUTING_JAR_SHA256: &str =
     "d7fd0f63f52e6d74b0fad6715f87ca9f0ffd7109d66b2a584638000270592ecf";
 
 #[derive(Args, Debug, Clone)]
-#[command(about = "Auto-route PCB (local via FreeRouting, or cloud via DeepPCB)")]
+#[command(about = "Auto-route PCB locally via FreeRouting")]
 pub struct RouteArgs {
     /// Path to .zen file
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
@@ -59,9 +58,9 @@ pub struct RouteArgs {
     #[arg(long)]
     pub project_id: Option<String>,
 
-    /// Use cloud DeepPCB service instead of local FreeRouting
-    #[arg(long)]
-    pub remote: bool,
+    // /// Use cloud DeepPCB service instead of local FreeRouting
+    // #[arg(long)]
+    // pub remote: bool,
 
     /// Path to freerouting.jar (default: search FREEROUTING_JAR env or $PATH)
     #[arg(long)]
@@ -86,11 +85,11 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     let board_path = resolve_board(&args.file)?;
     let board_name = board_path.file_stem().unwrap().to_string_lossy();
 
-    if args.remote {
-        route_via_cloud(&args, &board_path, &board_name)
-    } else {
-        route_via_local(&args, &board_path, &board_name)
-    }
+    // if args.remote {
+    //     route_via_cloud(&args, &board_path, &board_name)
+    // } else {
+    route_via_local(&args, &board_path, &board_name)
+    // }
 }
 
 /// Shared board discovery: evaluate .zen, find .kicad_pcb, validate.
