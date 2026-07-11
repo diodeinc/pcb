@@ -7,10 +7,6 @@ Command: pcbc route --fr-jar /nonexistent/freerouting.jar board.zen
 Exit Code: 1
 
 --- STDOUT ---
-  Java 21+ not found on $PATH. Downloading JDK 21...
+
 --- STDERR ---
-
-  Download failed (attempt 1/3), retrying in 2s: error sending request for url (https://api.adoptium.net/v3/binary/latest/21/ga/mac/aarch64/jdk/hotspot/normal/eclipse)
-
-  Download failed (attempt 2/3), retrying in 4s: error sending request for url (https://api.adoptium.net/v3/binary/latest/21/ga/mac/aarch64/jdk/hotspot/normal/eclipse)
-Error: Download failed after 3 attempts: error sending request for url (https://api.adoptium.net/v3/binary/latest/21/ga/mac/aarch64/jdk/hotspot/normal/eclipse)
+Error: FreeRouting JAR not found at --fr-jar path: /nonexistent/freerouting.jar

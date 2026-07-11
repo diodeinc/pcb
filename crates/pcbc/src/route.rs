@@ -281,9 +281,9 @@ fn download_ses_bytes(ctx: &pcb_diode_api::WorkspaceContext, job_id: &str) -> Re
 // ---------------------------------------------------------------------------
 
 fn route_via_local(args: &RouteArgs, board_path: &Path, board_name: &str) -> Result<()> {
-    // 1. Check prerequisites
-    let java_path = resolve_java()?;
+    // 1. Check prerequisites — JAR first so --fr-jar errors surface immediately
     let fr_jar = find_freerouting_jar(args.fr_jar.as_deref())?;
+    let java_path = resolve_java()?;
 
     // 2. Session files live alongside the board; cleaned up unless --keep
     let board_dir = board_path.parent().unwrap();
