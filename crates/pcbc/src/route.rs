@@ -59,7 +59,7 @@ pub struct RouteArgs {
     pub project_id: Option<String>,
 
     /// Use cloud DeepPCB service instead of local FreeRouting
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub remote: bool,
 
     /// Path to freerouting.jar (default: search FREEROUTING_JAR env or $PATH)
