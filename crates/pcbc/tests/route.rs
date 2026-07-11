@@ -100,13 +100,13 @@ fn test_route_local_bad_jar_path() {
 }
 
 #[test]
-fn test_route_remote_not_available() {
+fn test_route_cloud_timeout_exceeded() {
     let mut sandbox = Sandbox::new().with_workspace();
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
     scaffold_layout(&mut sandbox);
 
     let output = sandbox.snapshot_run("pcbc", ["route", "--remote", "-t", "999", "board.zen"]);
-    assert_snapshot!("remote_not_available", output);
+    assert_snapshot!("cloud_timeout_exceeded", output);
 }
 
 // ---------------------------------------------------------------------------
