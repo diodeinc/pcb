@@ -51,7 +51,7 @@ fn test_route_local_no_layout() {
     let output = Sandbox::new()
         .with_workspace()
         .write("board.zen", BOARD_NO_LAYOUT_ZEN)
-        .snapshot_run("pcbc", ["route", "board.zen"]);
+        .snapshot_run("pcbc", ["route-local", "board.zen"]);
     assert_snapshot!("local_no_layout", output);
 }
 
@@ -65,7 +65,7 @@ fn test_route_local_java_not_found() {
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
     scaffold_layout(&mut sandbox);
 
-    let output = sandbox.snapshot_run("pcbc", ["route", "board.zen"]);
+    let output = sandbox.snapshot_run("pcbc", ["route-local", "board.zen"]);
     assert_snapshot!("local_java_not_found", output);
 }
 
@@ -77,7 +77,7 @@ fn test_route_local_jar_not_found() {
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
     scaffold_layout(&mut sandbox);
 
-    let output = sandbox.snapshot_run("pcbc", ["route", "board.zen"]);
+    let output = sandbox.snapshot_run("pcbc", ["route-local", "board.zen"]);
     assert_snapshot!("local_jar_not_found", output);
 }
 
@@ -90,7 +90,7 @@ fn test_route_local_bad_jar_path() {
     let output = sandbox.snapshot_run(
         "pcbc",
         [
-            "route",
+            "route-local",
             "--fr-jar",
             "/nonexistent/freerouting.jar",
             "board.zen",
@@ -105,7 +105,7 @@ fn test_route_cloud_timeout_exceeded() {
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
     scaffold_layout(&mut sandbox);
 
-    let output = sandbox.snapshot_run("pcbc", ["route", "--remote", "-t", "999", "board.zen"]);
+    let output = sandbox.snapshot_run("pcbc", ["route", "-t", "999", "board.zen"]);
     assert_snapshot!("cloud_timeout_exceeded", output);
 }
 
@@ -284,12 +284,11 @@ fn test_route_local_integration_freerouting_cli() {
         .run(
             "pcbc",
             [
-                "route",
+                "route-local",
                 "--fr-jar",
                 &fr_jar,
                 "--fr-timeout",
                 "60",
-                "--keep",
                 "board.zen",
             ],
         )

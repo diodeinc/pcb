@@ -38,6 +38,7 @@ mod publish;
 mod release;
 mod remote_sandbox;
 mod route;
+mod route_local;
 mod sandbox_uri;
 mod sim;
 mod test;
@@ -153,9 +154,13 @@ enum Commands {
     /// Search for electronic components
     Search(pcb_diode_api::SearchArgs),
 
-    /// Auto-route PCB locally via FreeRouting
+    /// Auto-route PCB using DeepPCB cloud service
     #[command(hide = true)]
     Route(route::RouteArgs),
+
+    /// Auto-route PCB locally via FreeRouting
+    #[command(hide = true)]
+    RouteLocal(route_local::RouteLocalArgs),
 
     /// Run SPICE simulations
     #[command(alias = "sim", alias = "s")]
@@ -240,6 +245,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Search(args) => pcb_diode_api::execute_search(args),
         Commands::EmbedStep(args) => embed_step::execute(args),
         Commands::Route(args) => route::execute(args),
+        Commands::RouteLocal(args) => route_local::execute(args),
         Commands::Simulate(args) => sim::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
         Commands::Gerber(args) => gerber::execute(args),

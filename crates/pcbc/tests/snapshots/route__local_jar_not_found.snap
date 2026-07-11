@@ -3,7 +3,7 @@ source: crates/pcbc/tests/route.rs
 assertion_line: 81
 expression: output
 ---
-Command: pcbc route board.zen
+Command: pcbc route-local board.zen
 Exit Code: 1
 
 --- STDOUT ---
