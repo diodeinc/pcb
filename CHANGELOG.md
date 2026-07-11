@@ -12,6 +12,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb route --local` runs FreeRouting v2.0.1 headlessly on the local machine with auto-download, SHA-256 verification, trace clearing, and board backup.
 
+## [0.4.7] - 2026-07-10
+
+### Added
+
+- LSP position saves accept a `baseHash` and return a text edit; evaluation results carry a `contentHash`.
+
 ### Changed
 
 - Physical quantity types now compose with `*` and `/` from builtin fundamentals, replacing `builtin.physical_value()`.
