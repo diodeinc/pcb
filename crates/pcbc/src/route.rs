@@ -303,28 +303,12 @@ fn route_via_local(args: &RouteArgs, board_path: &Path, board_name: &str) -> Res
         );
     }
 
-    // 4. Back up the board before clearing traces, so we can restore on failure.
-    //    The backup is removed on success.
+    // 4. Pre-compute backup path and force flag before registering Ctrl+C handler
     let backup_path = board_dir.join(format!("{}.bak", board_name));
     let did_clear = args.force;
 
-    if did_clear {
-        let spinner = Spinner::builder("Backing up board...").start();
-        std::fs::copy(board_path, &backup_path)
-            .context("Failed to create board backup before clearing traces")?;
-        spinner.finish();
-
-        let spinner = Spinner::builder("Clearing existing traces...").start();
-        if let Err(e) = clear_traces(board_path) {
-            let _ = std::fs::copy(&backup_path, board_path);
-            let _ = std::fs::remove_file(&backup_path);
-            anyhow::bail!("Failed to clear traces: {}", e);
-        }
-        spinner.finish();
-    }
-
-    // Install a Ctrl+C handler so interrupting FreeRouting kills the child
-    // process. When --force was used, also restore the board from backup.
+    // 5. Install a Ctrl+C handler BEFORE clearing traces so an interrupt
+    //    during clear_traces still restores the backup.
     let completed = Arc::new(AtomicBool::new(false));
     {
         let restore_board = board_path.to_path_buf();
@@ -347,7 +331,7 @@ fn route_via_local(args: &RouteArgs, board_path: &Path, board_name: &str) -> Res
                         .status();
                 }
             }
-            // Only restore backup if --force cleared traces and routing hasn't completed
+            // Restore backup if --force cleared traces and routing hasn't completed
             if should_restore && !done.load(Ordering::SeqCst) && restore_backup.exists() {
                 let _ = std::fs::copy(&restore_backup, &restore_board);
                 let _ = std::fs::remove_file(&restore_backup);
@@ -356,6 +340,23 @@ fn route_via_local(args: &RouteArgs, board_path: &Path, board_name: &str) -> Res
         }) {
             eprintln!("{} Could not set Ctrl+C handler: {}", "!".yellow(), e);
         }
+    }
+
+    // 6. Back up the board before clearing traces, so we can restore on failure.
+
+    if did_clear {
+        let spinner = Spinner::builder("Backing up board...").start();
+        std::fs::copy(board_path, &backup_path)
+            .context("Failed to create board backup before clearing traces")?;
+        spinner.finish();
+
+        let spinner = Spinner::builder("Clearing existing traces...").start();
+        if let Err(e) = clear_traces(board_path) {
+            let _ = std::fs::copy(&backup_path, board_path);
+            let _ = std::fs::remove_file(&backup_path);
+            anyhow::bail!("Failed to clear traces: {}", e);
+        }
+        spinner.finish();
     }
 
     // 5. DSN → FreeRouting → SES import
