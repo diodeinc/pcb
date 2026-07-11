@@ -510,7 +510,7 @@ fn download_jdk_21() -> Result<()> {
     };
 
     let url = format!(
-        "https://api.adoptium.net/v3/binary/latest/21/ga/{os}/{arch}/hotspot/normal/eclipse"
+        "https://api.adoptium.net/v3/binary/latest/21/ga/{os}/{arch}/jdk/hotspot/normal/eclipse"
     );
 
     let cache_dir = java_cache_dir();
