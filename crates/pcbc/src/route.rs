@@ -328,14 +328,14 @@ fn route_via_local(args: &RouteArgs, board_path: &Path, board_name: &str) -> Res
         spinner.finish();
     }
 
-    // Install a Ctrl+C handler so interrupting FreeRouting (or any step
-    // after clearing) restores the board from backup instead of leaving
-    // an empty board.
+    // Install a Ctrl+C handler so interrupting FreeRouting kills the child
+    // process. When --force was used, also restore the board from backup.
     let completed = Arc::new(AtomicBool::new(false));
-    if did_clear {
+    {
         let restore_board = board_path.to_path_buf();
         let restore_backup = backup_path.clone();
         let done = completed.clone();
+        let should_restore = did_clear;
         if let Err(e) = ctrlc::set_handler(move || {
             // Kill FreeRouting first so it doesn't orphan
             if let Ok(guard) = FREEROUTING_PID.lock() {
@@ -352,8 +352,8 @@ fn route_via_local(args: &RouteArgs, board_path: &Path, board_name: &str) -> Res
                         .status();
                 }
             }
-            // Only restore backup if routing hasn't completed successfully
-            if !done.load(Ordering::SeqCst) && restore_backup.exists() {
+            // Only restore backup if --force cleared traces and routing hasn't completed
+            if should_restore && !done.load(Ordering::SeqCst) && restore_backup.exists() {
                 let _ = std::fs::copy(&restore_backup, &restore_board);
                 let _ = std::fs::remove_file(&restore_backup);
             }
