@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb route` runs FreeRouting v2.0.1 headlessly on the local machine with auto-download, SHA-256 verification, trace clearing, and board backup.
+- `pcb route` runs FreeRouting v2.0.1 headlessly on the local machine with auto-download, SHA-256 verification, trace clearing, and board backup. Cloud routing (`--remote`) is hidden from help until ready.
 
 ## [0.4.7] - 2026-07-10
 

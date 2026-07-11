@@ -1,5 +1,6 @@
 ---
 source: crates/pcbc/tests/route.rs
+assertion_line: 109
 expression: output
 ---
 Command: pcbc route --remote -t 999 board.zen
@@ -8,4 +9,4 @@ Exit Code: 1
 --- STDOUT ---
 
 --- STDERR ---
-Error: Timeout cannot exceed 60 minutes
+Error: Cloud routing via DeepPCB is not yet available

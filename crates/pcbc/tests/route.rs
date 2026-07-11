@@ -99,16 +99,15 @@ fn test_route_local_bad_jar_path() {
     assert_snapshot!("local_bad_jar_path", output);
 }
 
-// Cloud routing test disabled — --remote flag is not exposed yet.
-// #[test]
-// fn test_route_cloud_timeout_exceeded() {
-//     let mut sandbox = Sandbox::new().with_workspace();
-//     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
-//     scaffold_layout(&mut sandbox);
-//
-//     let output = sandbox.snapshot_run("pcbc", ["route", "--remote", "-t", "999", "board.zen"]);
-//     assert_snapshot!("cloud_timeout_exceeded", output);
-// }
+#[test]
+fn test_route_remote_not_available() {
+    let mut sandbox = Sandbox::new().with_workspace();
+    sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
+    scaffold_layout(&mut sandbox);
+
+    let output = sandbox.snapshot_run("pcbc", ["route", "--remote", "-t", "999", "board.zen"]);
+    assert_snapshot!("remote_not_available", output);
+}
 
 // ---------------------------------------------------------------------------
 // Integration tests — need Java + FreeRouting JAR on the host
@@ -301,7 +300,7 @@ fn test_route_local_integration_freerouting_cli() {
         .expect("route command failed");
 
     let output_str = sandbox.sanitize_output(&format!(
-        "--- route --local ---\n{}{}",
+        "--- route ---\n{}{}",
         String::from_utf8_lossy(&route_output.stdout),
         String::from_utf8_lossy(&route_output.stderr),
     ));

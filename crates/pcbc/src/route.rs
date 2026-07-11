@@ -58,9 +58,9 @@ pub struct RouteArgs {
     #[arg(long)]
     pub project_id: Option<String>,
 
-    // /// Use cloud DeepPCB service instead of local FreeRouting
-    // #[arg(long)]
-    // pub remote: bool,
+    /// Use cloud DeepPCB service instead of local FreeRouting
+    #[arg(long, hide = true)]
+    pub remote: bool,
 
     /// Path to freerouting.jar (default: search FREEROUTING_JAR env or $PATH)
     #[arg(long)]
@@ -85,11 +85,11 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     let board_path = resolve_board(&args.file)?;
     let board_name = board_path.file_stem().unwrap().to_string_lossy();
 
-    // if args.remote {
-    //     route_via_cloud(&args, &board_path, &board_name)
-    // } else {
+    if args.remote {
+        anyhow::bail!("Cloud routing via DeepPCB is not yet available");
+    }
+
     route_via_local(&args, &board_path, &board_name)
-    // }
 }
 
 /// Shared board discovery: evaluate .zen, find .kicad_pcb, validate.
@@ -126,6 +126,7 @@ fn resolve_board(zen_path: &Path) -> Result<PathBuf> {
 // Cloud routing (existing DeepPCB backend)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn route_via_cloud(args: &RouteArgs, board_path: &Path, _board_name: &str) -> Result<()> {
     if args.timeout > 60 {
         anyhow::bail!("Timeout cannot exceed 60 minutes");
@@ -272,6 +273,7 @@ fn route_via_cloud(args: &RouteArgs, board_path: &Path, _board_name: &str) -> Re
     Ok(())
 }
 
+#[allow(dead_code)]
 fn download_ses_bytes(ctx: &pcb_diode_api::WorkspaceContext, job_id: &str) -> Result<Vec<u8>> {
     routing::download_routing_result(ctx, job_id)
 }
@@ -1118,6 +1120,7 @@ pcbnew.SaveBoard(brd_filename, brd)
     Ok(())
 }
 
+#[allow(dead_code)]
 fn format_progress(status: &RoutingJob, revision: u32) -> String {
     if let Some(ref stats) = status.stats {
         let sep = "·".dimmed();
@@ -1139,6 +1142,7 @@ fn format_progress(status: &RoutingJob, revision: u32) -> String {
     }
 }
 
+#[allow(dead_code)]
 fn display_summary(status: &RoutingJob, elapsed: Duration, board_path: &Path) {
     let cost = elapsed.as_secs_f64() / 60.0 * 0.5;
 
