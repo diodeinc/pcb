@@ -158,45 +158,14 @@ pub fn update_position_comments(
     (block_start, position_comments)
 }
 
-pub fn replace_pcb_sch_comments<P: AsRef<Path>>(
-    file_path: P,
-    positions: &BTreeMap<String, Position>,
-) -> std::io::Result<()> {
-    // Read existing content
-    let content = std::fs::read_to_string(&file_path)?;
-
-    // Get truncation position and new position comments
-    let (truncate_pos, position_comments) = update_position_comments(&content, positions);
-
-    // Open file for read+write (don't truncate the whole file)
-    let mut file = OpenOptions::new().write(true).read(true).open(&file_path)?;
-
-    // Truncate at position block start and append new comments
-    file.set_len(truncate_pos as u64)?;
-    file.seek(std::io::SeekFrom::Start(truncate_pos as u64))?;
-    file.write_all(position_comments.as_bytes())?;
-    file.flush()?;
-
-    Ok(())
-}
-
-/// Remove positions for specific symbol IDs from a .zen file.
+/// Remove positions for specific symbol IDs from document content.
 ///
-/// This removes the specified symbols from the position block while preserving
-/// all other positions. Used when components are deleted from the schematic.
-pub fn remove_positions<P: AsRef<Path>>(
-    file_path: P,
-    symbol_ids_to_remove: &[String],
-) -> std::io::Result<()> {
-    if symbol_ids_to_remove.is_empty() {
-        return Ok(());
-    }
-
-    // Read existing content
-    let content = std::fs::read_to_string(&file_path)?;
-
+/// Pure counterpart of [`remove_positions`]: returns the byte offset where the
+/// position block starts and the replacement text for everything from that
+/// offset to the end of the content.
+pub fn remove_position_comments(content: &str, symbol_ids_to_remove: &[String]) -> (usize, String) {
     // Parse existing positions
-    let (mut existing_positions, block_start) = parse_position_comments(&content);
+    let (mut existing_positions, block_start) = parse_position_comments(content);
 
     // Remove the specified symbols
     for symbol_id in symbol_ids_to_remove {
@@ -223,7 +192,16 @@ pub fn remove_positions<P: AsRef<Path>>(
         }
     }
 
-    // Open file for read+write
+    (block_start, position_comments)
+}
+
+/// Truncate `file_path` at `block_start` and append `position_comments`.
+fn write_position_block<P: AsRef<Path>>(
+    file_path: P,
+    block_start: usize,
+    position_comments: &str,
+) -> std::io::Result<()> {
+    // Open file for read+write (don't truncate the whole file)
     let mut file = OpenOptions::new().write(true).read(true).open(&file_path)?;
 
     // Truncate at position block start and append new comments
@@ -233,6 +211,32 @@ pub fn remove_positions<P: AsRef<Path>>(
     file.flush()?;
 
     Ok(())
+}
+
+pub fn replace_pcb_sch_comments<P: AsRef<Path>>(
+    file_path: P,
+    positions: &BTreeMap<String, Position>,
+) -> std::io::Result<()> {
+    let content = std::fs::read_to_string(&file_path)?;
+    let (block_start, position_comments) = update_position_comments(&content, positions);
+    write_position_block(&file_path, block_start, &position_comments)
+}
+
+/// Remove positions for specific symbol IDs from a .zen file.
+///
+/// This removes the specified symbols from the position block while preserving
+/// all other positions. Used when components are deleted from the schematic.
+pub fn remove_positions<P: AsRef<Path>>(
+    file_path: P,
+    symbol_ids_to_remove: &[String],
+) -> std::io::Result<()> {
+    if symbol_ids_to_remove.is_empty() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&file_path)?;
+    let (block_start, position_comments) = remove_position_comments(&content, symbol_ids_to_remove);
+    write_position_block(&file_path, block_start, &position_comments)
 }
 
 /// Convert a stable symbol ID (e.g. "comp:R1" or "sym:NET#2") to the
@@ -900,6 +904,31 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
         assert!(updated_content.contains("R2")); // Should still exist
         assert!(!updated_content.contains("C1")); // Should be removed
         assert!(!updated_content.contains("VCC.0")); // Should be removed
+    }
+
+    #[test]
+    fn test_remove_position_comments_pure() {
+        let content = r#"load("@stdlib/interfaces.zen", "Power")
+
+# pcb:sch R1 x=100.0 y=200.0 rot=0
+# pcb:sch C1 x=300.0 y=400.0 rot=90
+# pcb:sch R2 x=700.0 y=800.0 rot=180"#;
+
+        let (block_start, position_comments) =
+            remove_position_comments(content, &["C1".to_string()]);
+        let updated = format!("{}{}", &content[..block_start], position_comments);
+
+        assert!(updated.contains("R1"));
+        assert!(updated.contains("R2"));
+        assert!(!updated.contains("C1"));
+
+        // Removing every position leaves no trailing block (and no stray blank line).
+        let (block_start, position_comments) = remove_position_comments(
+            content,
+            &["R1".to_string(), "C1".to_string(), "R2".to_string()],
+        );
+        assert!(position_comments.is_empty());
+        assert!(!content[..block_start].contains("# pcb:sch"));
     }
 
     #[test]
