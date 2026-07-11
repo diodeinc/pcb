@@ -60,6 +60,7 @@ semver = { workspace = true }
 rayon = { workspace = true }
 ctrlc = { workspace = true }
 reqwest = { workspace = true }
+sha2 = { workspace = true }
 termimad = { workspace = true }
 syntect = { workspace = true }
 thiserror = { workspace = true }

@@ -1,0 +1,11 @@
+---
+source: crates/pcbc/tests/route.rs
+expression: output
+---
+Command: pcbc route --remote -t 999 board.zen
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: Timeout cannot exceed 60 minutes
