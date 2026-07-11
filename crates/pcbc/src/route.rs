@@ -70,10 +70,6 @@ pub struct RouteArgs {
     #[arg(long, default_value = "300")]
     pub fr_timeout: u64,
 
-    /// Keep temporary DSN/SES files after routing
-    #[arg(long)]
-    pub keep: bool,
-
     /// Clear existing traces before re-routing
     #[arg(long)]
     pub force: bool,
@@ -384,10 +380,8 @@ fn route_via_local(args: &RouteArgs, board_path: &Path, board_name: &str) -> Res
             let _ = std::fs::copy(&backup_path, board_path);
             let _ = std::fs::remove_file(&backup_path);
         }
-        if !args.keep {
-            let _ = std::fs::remove_file(&dsn_path);
-            let _ = std::fs::remove_file(&ses_path);
-        }
+        let _ = std::fs::remove_file(&dsn_path);
+        let _ = std::fs::remove_file(&ses_path);
         return result;
     }
 
@@ -395,16 +389,8 @@ fn route_via_local(args: &RouteArgs, board_path: &Path, board_name: &str) -> Res
     if did_clear {
         let _ = std::fs::remove_file(&backup_path);
     }
-    if !args.keep {
-        let _ = std::fs::remove_file(&dsn_path);
-        let _ = std::fs::remove_file(&ses_path);
-    } else {
-        println!(
-            "  Session files kept at:\n    {}\n    {}",
-            dsn_path.display(),
-            ses_path.display()
-        );
-    }
+    let _ = std::fs::remove_file(&dsn_path);
+    let _ = std::fs::remove_file(&ses_path);
 
     // 7. Open KiCad
     if !args.no_open {
