@@ -20,6 +20,7 @@ use starlark::{
 use crate::lang::evaluator_ext::EvaluatorExt;
 
 use anyhow::anyhow;
+use pcb_sch::physical::PhysicalValue;
 
 /// SpiceModel reprents a sub circuit
 #[derive(Clone, Trace, Coerce, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
@@ -145,12 +146,15 @@ where
                             starlark::Error::new_other(anyhow!("parameter names must be strings"))
                         })?
                         .to_owned();
-                    let v_str = v_val
-                        .unpack_str()
-                        .ok_or_else(|| {
-                            starlark::Error::new_other(anyhow!("parameter values must be strings"))
-                        })?
-                        .to_owned();
+                    let v_str = if let Some(s) = v_val.unpack_str() {
+                        s.to_owned()
+                    } else if let Some(pv) = v_val.downcast_ref::<PhysicalValue>() {
+                        pv.to_spice_string()
+                    } else {
+                        return Err(starlark::Error::new_other(anyhow!(
+                            "parameter values must be a string or PhysicalValue"
+                        )));
+                    };
                     args.insert(param_name, v_str);
                 }
 

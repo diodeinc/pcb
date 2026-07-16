@@ -114,9 +114,9 @@ def _spice_args(value, package, esr=None, esl=None):
     }
 
     return {
-        "CVAL": value.spice(),
-        "ESR": (esr or esr_table.get(package, Resistance("50mOhm"))).spice(),
-        "ESL": (esl or esl_table.get(package, Inductance("0.5nH"))).spice(),
+        "CVAL": value,
+        "ESR": esr or esr_table.get(package, Resistance("50mOhm")),
+        "ESL": esl or esl_table.get(package, Inductance("0.5nH")),
     }
 
 
