@@ -453,3 +453,85 @@ builtin.set_sim_setup(content=".tran 1u 10m")
         diag_text
     );
 }
+
+// Same as snapshot_sim_divider but passes the PhysicalValue directly into
+// `args` (no `.spice()` / `str()`); SpiceModel formats it to ngspice scale
+// factors, so RVAL comes out as `10k` / `20k` instead of `10000.0`.
+#[test]
+fn snapshot_sim_divider_physical_value() {
+    let env = TestProject::new();
+    add_resistor_artifacts(&env);
+
+    env.add_file(
+        "r.lib",
+        r#"
+.SUBCKT my_resistor p n PARAMS: RVAL={0}
+R1 p n {RVAL}
+.ENDS my_resistor
+"#,
+    );
+
+    env.add_file(
+        "myresistor.zen",
+        r#"
+load("@stdlib/units.zen", "Resistance", "Voltage")
+load("@stdlib/utils.zen", "format_value")
+
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
+
+package = config(Package, default = Package("0603"))
+value = config(Resistance)
+
+voltage = config(Voltage, optional = True)
+
+properties = {
+    "value": format_value(value, voltage),
+    "package": package,
+    "resistance": value,
+    "voltage": voltage,
+}
+
+P1 = io(Net)
+P2 = io(Net)
+
+Component(
+    name = "R",
+    symbol = Symbol(library = "Device_R.kicad_sym", name="R"),
+    footprint = File("R_0201_0603Metric.kicad_mod"),
+    prefix = "R",
+    skip_bom = True,
+    spice_model = SpiceModel('./r.lib', 'my_resistor',
+        nets=[P1, P2],
+        args={"RVAL": value}),
+    pins = {
+        "1": P1,
+        "2": P2,
+    },
+    properties = properties,
+)
+"#,
+    );
+
+    env.add_file(
+        "divider.zen",
+        r#"
+load("@stdlib/interfaces.zen", "Analog")
+Resistor = Module("myresistor.zen")
+
+# Configuration parameters
+r1_value = config(str, default="10kohms", optional=True)
+r2_value = config(str, default="20kohms", optional=True)
+
+# IO ports
+vin = io(Power)
+vout = io(Analog)
+gnd = io(Ground)
+
+# Create the voltage divider
+Resistor(name="R1", value=r1_value, package="0603", P1=vin, P2=vout)
+Resistor(name="R2", value=r2_value, package="0603", P1=vout, P2=gnd)
+"#,
+    );
+
+    sim_snapshot!(env, "divider.zen");
+}

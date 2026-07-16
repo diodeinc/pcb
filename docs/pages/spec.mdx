@@ -425,7 +425,7 @@ Use `.matches(other)` when you want coercive comparisons against strings or scal
 
 **String formatting**: Point values → `"3.3V"`. Symmetric tolerances → `"10k 5%"`. Ranges → `"11–26V (16V nom.)"`.
 
-**SPICE formatting**: `.spice()` → ngspice-safe string (`meg` for mega, no unit suffix, e.g. `Resistance("2MOhm").spice()` → `"2meg"`). Use it instead of `str()` when embedding a unit value in a SPICE simulation block.
+**SPICE formatting**: Pass a `PhysicalValue` directly or use `.spice()` to emit an ngspice-safe string (`meg` for mega, no unit suffix, e.g. `Resistance("2MOhm")` → `2meg`).
 
 ### Generic Components
 
