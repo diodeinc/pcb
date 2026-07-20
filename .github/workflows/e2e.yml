@@ -91,6 +91,7 @@ jobs:
         run: pcb +local build lib/std/ -S bom
 
       - name: Checkout kicad-test-fixtures
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/checkout@v5
         with:
           repository: diodeinc/kicad-test-fixtures
@@ -98,6 +99,7 @@ jobs:
           path: kicad-test-fixtures
 
       - name: Test pcb import (E2E)
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           find kicad-test-fixtures -name '*.kicad_pro' | while IFS= read -r pro; do
             echo "=== Importing $pro ==="
