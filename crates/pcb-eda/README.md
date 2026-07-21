@@ -1,7 +1,15 @@
-# Diode EDA
+# pcb-eda
 
-This crate contains the EDA (Electronic Design Automation) scraper for Diode.
+`pcb-eda` parses KiCad symbol libraries into the EDA data model used by the PCB
+toolchain. It preserves symbols, pins, internal connectivity, sourcing metadata,
+and the original S-expression when available.
 
-The idea is to have a separate process download all the EDA assets for a given
-part, then this crate will process those assets and extract the relevant
-information to generate atopile code.
+`Symbol` reads a single-symbol `.kicad_sym` file. `SymbolLibrary` reads a
+multi-symbol file or split `.kicad_symdir` directory. Unsupported file types,
+invalid S-expressions, and missing files return errors.
+
+The crate does not download EDA assets or generate Zener source.
+
+```bash
+cargo test -p pcb-eda
+```

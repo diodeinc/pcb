@@ -1,4 +1,4 @@
-//! # diode-ui
+//! # pcb-ui
 //!
 //! A consistent UI library for Diode PCB tools, providing spinners, progress bars,
 //! and other terminal UI components.

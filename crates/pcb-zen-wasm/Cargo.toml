@@ -5,7 +5,7 @@ edition = { workspace = true }
 repository = { workspace = true }
 homepage = { workspace = true }
 authors = { workspace = true }
-description = "WebAssembly bindings for Zen PCB design language"
+description = "WebAssembly bindings for the Zener PCB design language"
 publish = false
 
 [lib]

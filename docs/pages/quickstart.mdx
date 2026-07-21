@@ -3,13 +3,21 @@ title: "Getting Started"
 description: "Get started with the `pcb` CLI"
 ---
 
-## Install from a package manager
+Use this guide to install `pcb`, create a board repository, validate its Zener
+source, and generate a KiCad layout.
 
-_Package manager installation coming soon._
+## Requirements
 
-## Install from script
+- macOS or Linux. Windows support is experimental; use WSL2 for the most
+  stable Windows environment.
+- Git, which `pcb new board` uses to initialize a repository.
+- KiCad 10.x for layout generation and editing. `pcb build` does not require
+  KiCad.
 
-Install the `pcb` shim. It downloads and runs the right `pcbc` toolchain for each project.
+## 1. Install `pcb`
+
+The `pcb` launcher downloads and runs the `pcbc` toolchain selected by each
+project. Run the installer for your platform:
 
 <CodeGroup>
 
@@ -23,21 +31,63 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dio
 
 </CodeGroup>
 
-The installer adds `pcb` to your user `PATH` when needed.
-
-<Accordion title="Install from source.">
-
-Clone the [repo](https://github.com/diodeinc/pcb) and build locally.
+The installer adds `pcb` to your user `PATH` when necessary. Restart the shell
+if the command is not available, then verify the installation:
 
 ```bash
-# Clone the repo
+pcb --version
+```
+
+<Accordion title="Install from source">
+
+Install Rust, then clone the [repository](https://github.com/diodeinc/pcb) and
+run the local installer:
+
+```bash
 git clone https://github.com/diodeinc/pcb
-
-# Move into source folder
 cd pcb
-
-# Build locally
-cargo build -p pcb -p pcbc
+./install.sh --local
 ```
 
 </Accordion>
+
+## 2. Create a board repository
+
+Replace the example repository URL with the project repository URL:
+
+```bash
+pcb new board Blinky github.com/your-org/blinky
+cd Blinky
+```
+
+`pcb new board` creates `pcb.toml`, `Blinky.zen`, and a Git repository. The
+generated design is empty but valid.
+
+## 3. Build the board
+
+Validate the board source and generate its netlist:
+
+```bash
+pcb build Blinky.zen
+```
+
+A successful build exits without validation errors.
+
+## 4. Generate the layout
+
+Generate the KiCad files without opening KiCad:
+
+```bash
+pcb layout --no-open Blinky.zen
+```
+
+This command writes the generated board under `layout/`.
+
+## Troubleshooting
+
+- If the shell cannot find `pcb` after installation, restart the shell or
+  source the environment file printed by the installer.
+- If `pcb layout` cannot find KiCad, install `kicad-cli` and `pcbnew`. Set
+  `KICAD_CLI` or `KICAD_PCBNEW` if either executable is outside its default
+  platform path.
+- Run `pcb help` or `pcb help <command>` for the complete CLI reference.

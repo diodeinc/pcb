@@ -1,32 +1,23 @@
 ---
-title: "Zener Language"
-description: "Hardware Description Language for PCB design"
+title: "Zener language"
+description: "Language reference for Zener PCB designs"
 ---
 
 # Specification
 
 ## Overview
 
-Zener is a domain-specific language built on top of
+Zener is a domain-specific language built on
 [Starlark](https://github.com/bazelbuild/starlark/blob/master/spec.md) for
-describing PCB schematics. It provides primitives for defining components, symbols, nets,
-interfaces, and modules in a type-safe, composable manner.
+describing PCB schematics. It adds components, symbols, nets, interfaces,
+physical quantities, and hierarchical circuit modules.
 
-This specification describes the language extensions and primitives added on top
-of Starlark. For the base Starlark language features, please refer to the
+This specification defines the Zener extensions. The
 [Starlark specification](https://github.com/bazelbuild/starlark/blob/master/spec.md) and the
-[starlark-rust types extension](https://github.com/facebook/starlark-rust/blob/main/docs/types.md).
+[starlark-rust type extensions](https://github.com/facebook/starlark-rust/blob/main/docs/types.md)
+define the underlying language.
 
-## Table of Contents
-
-1. [Modules and Imports](#modules-and-imports)
-2. [Nets and Interfaces](#nets-and-interfaces)
-3. [Components and Symbols](#components-and-symbols)
-4. [Modules](#modules)
-5. [Utilities](#utilities)
-6. [Schematic Position Comments](#schematic-position-comments)
-
-## Modules and Imports
+## Modules and imports
 
 Each `.zen` file is a Starlark module that can be used in two ways:
 
@@ -42,7 +33,7 @@ Each `.zen` file is a Starlark module that can be used in two ways:
    Resistor(name="R1", value="10k", P1=vcc, P2=gnd)
    ```
 
-### Import Paths
+### Import paths
 
 Import paths support local files, stdlib, and remote packages:
 
@@ -59,16 +50,18 @@ Resistor = Module("@stdlib/generics/Resistor.zen")
 TPS54331 = Module("github.com/diodeinc/registry/components/TPS54331/TPS54331.zen")
 ```
 
-The `@stdlib` alias is special and virtual—its content is controlled by the toolchain. You don't need to declare it in `[dependencies]`.
+The toolchain supplies the virtual `@stdlib` package. Do not declare it in
+`[dependencies]`.
 
-Remote package URLs don't include version information. Versions are declared separately in `pcb.toml`, so import statements remain stable across upgrades:
+Remote package URLs omit versions. Declare each version in `pcb.toml` so import
+statements remain stable across upgrades:
 
 ```toml
 [dependencies]
 "github.com/diodeinc/registry/components/TPS54331" = "1.0"
 ```
 
-### Dependency Resolution
+### Dependency resolution
 
 Remote package URLs do not include versions. Declare versions in `pcb.toml`, then
 run `pcb sync` to reconcile imports and hydrate dependency manifests. `@stdlib`
@@ -77,7 +70,7 @@ is toolchain-managed and implicit.
 See [Packages](/pages/packages) for version resolution, package manifests, and
 dependency commands.
 
-### Project Structure
+### Repository layouts
 
 Zener projects use one of two repository shapes: a board repository or a registry repository.
 
@@ -123,7 +116,7 @@ description = "Replace with concise board description."
 
 Older workspace formats are no longer supported. Update legacy manifests and
 imports before building with the current toolchain.
-Only the workspace root `pcb.toml` should contain a `[workspace]` section.
+Only the workspace root `pcb.toml` may contain a `[workspace]` section.
 Board dependencies are also declared in the root manifest's `[dependencies]` table.
 
 #### Registry repository
@@ -164,7 +157,8 @@ parts = [
 ]
 ```
 
-Packages (modules, components) don't have a `[board]` section—they're libraries meant to be instantiated by boards or other modules.
+Module and component packages omit `[board]` because boards and other modules
+instantiate them as libraries.
 
 - `[dependencies]`: Version constraints for packages imported by this package
 - `parts`: Optional default sourcing metadata keyed by symbol file. Each entry provides `mpn`, `manufacturer`, optional `qualifications`, optional `datasheet`, a package-relative `.kicad_sym` `symbol` path, and optional `symbol_name` to target a specific symbol within a multi-symbol library file. If `symbol_name` is omitted, the referenced `.kicad_sym` file must contain exactly one symbol; otherwise resolution fails and `symbol_name` is required. `Component()` sourcing precedence is described below.
@@ -182,7 +176,7 @@ These stdlib symbols are available in every user `.zen` file without `load()`:
 
 Local definitions shadow prelude symbols. The prelude does not apply to stdlib modules themselves.
 
-## Nets and Interfaces
+## Nets and interfaces
 
 ### Nets
 
@@ -217,7 +211,8 @@ CLK = Net()       # equivalent to Net("CLK")
 VDD = Power()     # equivalent to Power("VDD")
 ```
 
-If you do spell out the same name that assignment inference would choose, Zener raises a style advice because the explicit name is redundant.
+If the explicit name duplicates the inferred assignment name, Zener reports
+style advice because the explicit name is redundant.
 
 Explicit constructor names still win. Regular nets must either have a name or be
 assigned where a name can be inferred:
@@ -228,7 +223,8 @@ Net()               # error: Net is unnamed
 ```
 
 Regular net names must be unique. Duplicate regular net names are rejected; open `NotConnected()` nets are exempt.
-`NotConnected()` has no source-level name. If you pass a name, it is ignored with a warning, and downstream tools assign connection-derived names where needed.
+`NotConnected()` has no source-level name. A supplied name is ignored with a
+warning. Downstream tools assign connection-derived names where required.
 
 Typed net fields validate against their declared field type and use the same
 string coercions as module inputs, so `Power("VCC", voltage="3.3V")` is
@@ -285,7 +281,7 @@ power = PowerIf(vcc = ext)
 
 The standard library provides common interfaces (`Spi`, `I2c`, `Uart`, `Usb2`, `DiffPair`, `Pcie`, `Jtag`, `Swd`, etc.) in `@stdlib/interfaces.zen`. Helper functions `UartPair(a, b)` and `UsartPair(a, b)` create cross-connected pairs for point-to-point links.
 
-## Components and Symbols
+## Components and symbols
 
 ### Component
 
@@ -383,7 +379,7 @@ connector = Symbol(library="Connector_Generic.kicad_sym", name="Conn_01x14")
 - `library`: Path to a `.kicad_sym` file. Supports local paths and package paths.
 - `name`: Symbol name within the library. Required for multi-symbol libraries; omit for single-symbol files.
 
-### Physical Quantities
+### Physical quantities
 
 Physical quantities have a nominal value, optional min/max bounds, and dimensional units. Zener exposes five SI bases as `builtin.Mass`, `builtin.Length`, `builtin.Time`, `builtin.Current`, and `builtin.Temperature`. `@stdlib/units.zen` re-exports them and derives conventional electrical types such as `Voltage`, `Resistance`, `Capacitance`, `Inductance`, `Impedance`, and `Frequency` using multiplication and division. For example, `Voltage` is `Mass * Length * Length / (Current * Time * Time * Time)`.
 
@@ -421,13 +417,14 @@ SI base symbols are resolved in the context of the declared type, so `Length("1m
 
 **Operators**: `+`, `-`, `*`, `/` (with unit tracking), `<`, `>`, `<=`, `>=`, `==` (strict equality against another `PhysicalValue`), unary `-`
 
-Use `.matches(other)` when you want coercive comparisons against strings or scalars such as `Voltage("5V").matches("5V")`.
+Use `.matches(other)` for coercive comparisons against strings or scalars, such
+as `Voltage("5V").matches("5V")`.
 
 **String formatting**: Point values → `"3.3V"`. Symmetric tolerances → `"10k 5%"`. Ranges → `"11–26V (16V nom.)"`.
 
 **SPICE formatting**: Pass a `PhysicalValue` directly or use `.spice()` to emit an ngspice-safe string (`meg` for mega, no unit suffix, e.g. `Resistance("2MOhm")` → `2meg`).
 
-### Generic Components
+### Generic components
 
 Prefer generic components over raw `Component()` where possible. Generics come with standard symbols, footprints, and automatic BOM matching to house parts.
 
@@ -476,7 +473,8 @@ Declare a net or interface input for a module. This defines the module's electri
 - `name`: Optional explicit input name (conventionally UPPERCASE). If omitted, `io()` must be assigned to a top-level variable and that variable name is used.
 - `typ_or_template`: A net type (`Net`, `Power`, `Ground`, etc.), an interface factory (`Spi`, `Uart`, etc.), a net template value, or an interface template value.
 - `checks`: Optional check function or list of checks applied to the resolved value.
-- `optional`: If `True`, a generated net/interface is used when the parent doesn't provide one. Default `False`.
+- `optional`: If `True`, use a generated net or interface when the parent omits
+  the input. The default is `False`.
 - `help`: Help text for documentation and signatures.
 - `direction`: Optional signature metadata. Must be `"input"` or `"output"` when provided.
 
@@ -500,7 +498,8 @@ When `typ_or_template` is a template value, `io()` derives all three of these fr
 
 For example, `io(Power(voltage="1.8V - 3.6V"))` requires any supplied `Power` net to stay within that voltage range.
 
-Use `direction` for genuinely one-way ports like signal or power flow. Shared rails such as `GND` should usually remain plain `io()` declarations.
+Use `direction` only for one-way signal or power flow. Leave shared rails such
+as `GND` as plain `io()` declarations.
 
 When the explicit `name` matches the assigned variable name, omitting it is the preferred style and emits no redundancy advice.
 
@@ -544,7 +543,7 @@ Values passed by the parent are automatically converted to the declared type whe
 
 As with `io()`, repeating the assigned variable name as an explicit `config()` name is redundant and triggers a style advice.
 
-### Writing a Module
+### Write a module
 
 A module is a `.zen` file that declares its interface with `io()` and `config()`, then uses those values to build its circuit:
 
@@ -589,7 +588,7 @@ Board(name="MainBoard", layers=4, layout_path="layout/MainBoard")
 
 ## Utilities
 
-### Board and Layout
+### Board and layout
 
 `Board()` configures PCB manufacturing parameters — stackup, design rules, and layout path. It is a prelude symbol.
 
@@ -607,9 +606,10 @@ When `layers` is provided, `Board()` selects an appropriate default stackup, net
 
 `Simulation()` uses the same BOM-profile hook as `Layout()`: by default it registers the standard house-part matcher, `modifiers` run before `bom_profile`, and `bom_profile=None` disables automatic house matching for simulation-only evals.
 
-### File and Path
+### File and path
 
-**`File(path)`** — Resolve a path relative to the current `.zen` file. Raises an error if it doesn't exist.
+**`File(path)`** — Resolve an existing path relative to the current `.zen` file.
+The call fails if the path does not exist.
 
 ```python
 datasheet = File("TPS54331.pdf")
@@ -635,7 +635,7 @@ check(voltage <= Voltage("3.6V"), "Voltage exceeds maximum rating")
 warn("Using deprecated parameter")
 ```
 
-### Electrical Checks
+### Electrical checks
 
 `@stdlib/checks.zen` provides reusable check functions for typed inputs. For example, `voltage_within(range)` validates that a net with voltage metadata, or a direct `Voltage` value, falls within a specified range:
 
@@ -652,7 +652,7 @@ VCC = io(Power(voltage="1.1–3.6V"))
 
 Explicit `checks=` still run as well, after type validation and any template-derived implicit checks.
 
-### E-Series
+### E-series
 
 `@stdlib/utils.zen` provides functions to snap values to standard resistor/capacitor E-series: `e3()`, `e6()`, `e12()`, `e24()`, `e48()`, `e96()`, `e192()`.
 
@@ -661,7 +661,7 @@ load("@stdlib/utils.zen", "e96")
 r = e96(Resistance("4.8k"))  # → 4.87kΩ (nearest E96 value)
 ```
 
-## Schematic Position Comments
+## Schematic position comments
 
 Zener supports persisted schematic placement metadata in trailing comment blocks.
 These comments are consumed by tooling and surfaced in netlist output.

@@ -3,47 +3,27 @@ title: "Packages"
 description: "Package management, workspaces, and dependency resolution"
 ---
 
-A version identifies a specific, immutable snapshot of a package's source code.
-Versions give engineers a precise language for specifying requirements: when a
-package declares a dependency on `component-lib@0.3.2`, any engineer building it will
-use exactly that version, producing identical results regardless of when or where
-the build runs.
+Package versions identify immutable source snapshots. A dependency on
+`component-lib@0.3.2` selects the same source for every build until the manifest
+changes.
 
-## Principles
+## Version policy
 
-The package system is built on three principles: compatibility, repeatability, and
-cooperation. These principles reinforce each other and guide every design decision.
+PCB packages use semantic versions with hardware-specific compatibility rules:
 
-### Compatibility
-
-<Info>
-The meaning of a package version should not change over time.
-</Info>
-
-**Semantic versioning** encodes compatibility promises in version numbers:
-
-- **Patch versions** (0.3.1 → 0.3.2): Metadata changes only. No changes to
-  connectivity, layout, or electrical behavior. Examples: updating documentation,
-  fixing a typo in a property value, adding manufacturer aliases.
-- **Minor versions** (0.3.x → 0.4.0): New functionality that doesn't break existing
-  designs. Examples: adding optional pins, new configuration options, additional
-  footprint variants.
-- **Major versions** (0.x → 1.0): Breaking changes that may require design updates.
-  Examples: changing pin definitions, restructuring interfaces, removing deprecated
-  features.
-
-For pre-1.0 packages, minor versions (0.3 vs 0.4) are treated as breaking changes,
-following the convention that early development may have frequent API changes.
+| Change | Allowed contents |
+|---|---|
+| Patch, such as `0.3.1` to `0.3.2` | Documentation and metadata changes that do not alter connectivity, layout, or electrical behavior. |
+| Minor, such as `0.3` to `0.4` | New compatible behavior after `1.0`; a breaking compatibility lane before `1.0`. |
+| Major, such as `1.x` to `2.0` | Breaking changes such as changed pins, interfaces, or removed behavior. |
 
 <Warning>
-**Pre-1.0 packages are considered unstable.** Per the [Semantic Versioning spec](https://semver.org/#spec-item-4),
-major version zero (0.y.z) is for initial development—anything may change at any time
-and the public API should not be considered stable. This is why `0.3.x` and `0.4.x` are
-treated as separate, potentially incompatible families.
+Per the [Semantic Versioning specification](https://semver.org/#spec-item-4),
+pre-1.0 packages have no stable public API. PCB therefore treats `0.3.x` and
+`0.4.x` as separate compatibility families.
 </Warning>
 
-**Semver families** group compatible versions together. Within a family, any version
-can substitute for any other without breaking dependent code:
+Versions within one family must remain compatible:
 
 ```
 v0.3.x family: 0.3.0, 0.3.1, 0.3.2, ...  (compatible)
@@ -51,64 +31,20 @@ v0.4.x family: 0.4.0, 0.4.1, ...          (compatible)
 v0.3.x and v0.4.x: different families     (potentially incompatible)
 ```
 
-When a build requires multiple versions from the same family, the system selects the
-highest version. This is safe precisely because compatibility guarantees that newer
-versions in a family work everywhere older versions did.
+When a dependency graph requires several versions from one family, resolution
+selects the highest required version in that family. Authors must not publish a
+breaking change within a family.
 
-### Repeatability
+PCB combines Minimal Version Selection (MVS) with hydrated `pcb.toml` manifests
+for reproducible builds. `pcb sync` records the selected dependency graph,
+including immutable pseudo-versions for branch and commit dependencies. Build
+commands then reuse that recorded graph without selecting newly published
+versions.
 
-<Info>
-The result of a build should not change over time.
-</Info>
+## Workspace package discovery
 
-Given the same source files, a build should produce the same output whether it runs
-today, next month, or next year. Time should not be an input to the build process.
-
-Repeatability has two components:
-
-**Version selection must be deterministic.** Given a set of dependencies, the system
-must always select the same versions. This rules out "latest compatible version"
-resolution that depends on what versions exist at build time.
-
-**Selected versions must be immutable.** Once selected, a version's contents cannot
-change. This rules out mutable references like branches or tags that can be moved.
-
-The package system achieves repeatability with **Minimal Version Selection
-(MVS)** and hydrated `pcb.toml` manifests. MVS selects the minimum version that
-satisfies the dependency graph. `pcb sync` records that selected graph in
-manifests, including pseudo-versions for branch and commit dependencies, so
-read-only and offline builds reuse immutable versions.
-
-### Cooperation
-
-<Info>
-To maintain the package ecosystem, we must all work together.
-</Info>
-
-Technical mechanisms can enforce compatibility and repeatability, but they cannot
-create them. A version number is a *promise* from the package author to their users.
-The system trusts that authors will:
-
-- Follow semantic versioning conventions
-- Test changes before releasing new versions
-- Avoid breaking changes within a semver family
-- Communicate clearly when breaking changes are necessary
-
-In return, the system provides tools that make cooperation easier:
-
-- **Gradual migration**: Multiple major versions can coexist in a single build,
-  allowing dependent packages to upgrade at their own pace
-- **Publishing workflow**: The `pcb publish` command validates packages before
-  release, catching common mistakes early
-
-No amount of clever algorithms can fix a package that violates its compatibility
-promises. The goal is to make keeping promises easy and breaking them hard.
-
-## Workspace Package Discovery
-
-Workspace package discovery is implicit. Starting from the workspace root, `pcb`
-looks up to eight directory levels deep and treats each descendant directory with a
-`pcb.toml` as a workspace package.
+Starting at the workspace root, `pcb` searches at most eight directory levels
+and treats each descendant directory containing `pcb.toml` as a package.
 
 `[workspace].exclude` controls discovery:
 
@@ -118,19 +54,13 @@ pcb-version = "0.4"
 exclude = ["scratch/**", "experiments/old-board"]
 ```
 
-Excluded directories are pruned, so `pcb` neither discovers a package there nor
-searches below it. The tool also always skips generated/cache directories such as
+`pcb` does not search inside an excluded directory. It also skips generated and
+cache directories such as
 `.git`, `.pcb`, `vendor`, `target`, `node_modules`, and `fork`.
 
-## Coexisting Versions
+## Coexisting versions
 
-Sometimes breaking changes are necessary. A component library might need to
-restructure its pin definitions, or a shared component library might change how interfaces are
-represented. When this happens, packages that depend on the old API cannot
-immediately upgrade—they need time to adapt.
-
-The package system supports **multiple major versions in a single build**. If your
-dependency graph contains:
+A build can contain multiple incompatible families of one package. For example:
 
 ```toml
 # Library X
@@ -142,46 +72,19 @@ dependency graph contains:
 "github.com/acme/component-lib" = "1.0"
 ```
 
-Both libraries can build together. The system maintains separate copies of
-`component-lib@0.3.x` and `component-lib@1.0.x`, each used by the packages that require them.
-Types and values from different major versions are distinct and cannot be mixed.
-
-This approach has two key benefits:
-
-**No flag day upgrades.** Teams can migrate package-by-package over weeks or months,
-validating each migration before moving to the next. The old version remains
-available as long as any package needs it.
-
-**Diamond dependencies work.** If Board A uses Library X (component-lib 0.3) and Library Y
-(component-lib 1.0), both libraries function correctly. Library X sees component-lib 0.3 types,
-Library Y sees component-lib 1.0 types, and the board sees whatever version it declares.
-
-The limitation is that types from different major versions may be incompatible. A
-`Foo` from component-lib 0.3 cannot be passed to a function expecting a component-lib 1.0 `Foo`.
-Major versions represent potential breaking changes, and the system cannot guarantee
-compatibility across that boundary.
+The resolver retains separate copies of `component-lib@0.3.x` and
+`component-lib@1.x` for their respective dependents. This permits incremental
+migration and diamond dependencies. Values from the two families have distinct
+types and cannot be passed across the compatibility boundary.
 
 ## Minimal Version Selection
 
-Our approach to dependency resolution is heavily inspired by [Go modules](https://go.dev/ref/mod),
-which pioneered Minimal Version Selection.
+PCB uses MVS, based on [Go modules](https://go.dev/ref/mod). For each package
+family, MVS selects the lowest version that satisfies every explicit minimum in
+the dependency graph. Newly published versions do not change the result unless a
+manifest requires them.
 
-Most package managers (npm, Cargo, pip) use SAT solvers to find the newest versions
-that satisfy all constraints. This approach has a fundamental problem: the result
-depends on what versions exist at resolution time. If a new version is published
-between two builds, the resolver might select it, changing your dependencies without
-any change to your code.
-
-SAT solvers also introduce complexity. When constraints conflict, the solver must
-backtrack and try alternative versions. This can be slow, and when it fails, the
-error messages are often inscrutable—the solver tried thousands of combinations
-and none worked.
-
-Minimal Version Selection (MVS) takes a different approach: instead of finding
-the newest versions that work, find the *minimum* versions that each package
-explicitly requires. This simple change has profound consequences.
-
-### How MVS Works
+### How MVS works
 
 Consider this dependency graph:
 
@@ -192,62 +95,32 @@ Board
     └── component-lib >= 0.3.2
 ```
 
-The Board requires `component-lib >= 0.3.0`. The regulator requires `component-lib >= 0.3.2`.
-MVS selects `component-lib@0.3.2`—the minimum version that satisfies both constraints.
-
-Even if `component-lib@0.3.9` exists and is compatible, MVS chooses 0.3.2 because that's
-what the dependencies explicitly require. The existence of newer versions is
-irrelevant.
-
-### Why Minimum, Not Maximum?
-
-This seems counterintuitive. Wouldn't you want the newest compatible version with
-all its bug fixes? The key insight is that **the author tested with specific versions**.
-
-When the regulator author published version 1.0.0, they tested it with `component-lib@0.3.2`.
-They know it works with that version. They *hope* it works with 0.3.9, but they
-haven't tested it. By selecting the minimum, MVS chooses the versions that were
-actually tested together.
-
-If you want newer versions, you explicitly upgrade:
+The board requires `component-lib >= 0.3.0`, while `regulator` requires
+`component-lib >= 0.3.2`. MVS therefore selects `0.3.2`, even if `0.3.9` exists.
+Require a newer version explicitly when the project is ready to test it:
 
 ```toml
 [dependencies]
 "github.com/acme/component-lib" = "0.3.9"
 ```
 
-Now MVS selects 0.3.9 because *you* require it. You're taking responsibility for
-testing with that version.
+MVS is deterministic and does not backtrack. Within each compatibility family,
+the selected version is the highest minimum requested by any dependent.
 
-### Properties of MVS
+### Resolution algorithm
 
-**Deterministic.** The selected versions depend only on the dependency graph, not
-on what versions exist remotely. Two engineers building the same code get the
-same versions, even if one builds months later when new versions exist.
-
-**No backtracking.** MVS never needs to "try" a version and backtrack if it fails.
-It computes the answer directly: for each package, find the maximum of the minimum
-versions required by all dependents.
-
-**Understandable.** You can compute the result by hand. For each package, look at
-every place it's required and take the highest version. That's it.
-
-**Fast.** Linear in the size of the dependency graph. No exponential search space.
-
-### Resolution Algorithm
-
-1. **Seed**: Collect direct dependencies from all workspace packages. Group by
-   (package path, semver family). Initialize each family to the highest version
+1. **Seed:** Collect direct dependencies from all workspace packages. Group by
+   package path and compatibility family. Initialize each family to the highest version
    explicitly required.
 
-2. **Discover**: Fetch manifests for selected versions. For each transitive
+2. **Discover:** Fetch manifests for selected versions. For each transitive
    dependency, if it requires a higher version within an existing family, upgrade.
-   Repeat until no changes (fixed point).
+   Repeat until the selected graph no longer changes.
 
-3. **Build closure**: Trace the dependency graph from workspace roots using final
+3. **Build closure:** Trace the dependency graph from workspace roots using final
    versions. This filters out any versions that were superseded during discovery.
 
-**Example with multiple semver families:**
+For multiple compatibility families:
 
 ```
 WV0001: component-lib = 0.2.13
@@ -260,9 +133,9 @@ Result:
   v0.3.x family → component-lib@0.3.2 (max of 0.3.2, 0.3.1, 0.3.0)
 ```
 
-Both versions coexist in the final build because they're in different semver families.
+Both versions remain in the build because they belong to different families.
 
-## Import Paths as Identity
+## Import paths as identity
 
 Import paths serve as globally unique package identifiers:
 
@@ -271,38 +144,27 @@ load("@stdlib/units.zen", "Voltage")
 load("github.com/myorg/components/capacitor.zen", "Capacitor")
 ```
 
-This design has several benefits:
+The path identifies the package owner and source repository without a central
+namespace. A file's imports also state which packages its source requires.
 
-**No central registry.** Anyone can publish packages to their own repository without
-coordinating names. There's no competition for short names or namespacing conflicts.
-
-**Unambiguous origin.** The import path tells you exactly where code comes from.
-When reading unfamiliar code, you can immediately identify package ownership.
-
-**Zero-configuration.** A file's imports fully specify its dependencies. No external
-configuration is needed to understand what a module requires.
-
-Versions are intentionally *not* embedded in import paths. Instead, the `pcb.toml`
-manifest declares which version of each package to use:
+Import paths omit versions. The `pcb.toml` manifest declares which version of
+each package to use:
 
 ```toml
 [dependencies]
 "github.com/diodeinc/registry/components/ti/tps54331" = "1.0"
 ```
 
-This separation means:
-- Import statements remain stable across version upgrades
-- Version changes are localized to manifest files
-- The same source file can work with different versions in different contexts
+This separation keeps import statements stable across upgrades and confines
+version changes to manifests. The same source file can use different selected
+versions in different workspaces.
 
-## Hydrated Manifests
+## Hydrated manifests
 
 Workspaces store resolved dependency state in `pcb.toml`. `pcb sync` updates:
 
 - `[dependencies]`: direct dependencies the package imports or explicitly owns.
 - `[dependencies.indirect]`: the tool-managed MVS closure needed to build it.
-
-Example:
 
 ```toml
 [dependencies]
@@ -335,55 +197,64 @@ vendor = ["github.com/myorg/**"]
 - Read commands such as `pcb build`, `pcb layout`, `pcb test`, `pcb open`, and
   `pcb bom` do not change `vendor/` or rewrite dependency manifests.
 
-## Workspace Name (`[workspace].name`)
+## Workspace name (`[workspace].name`)
 
-Workspace manifests can override the Diode workspace name used by board release uploads:
+Workspace manifests can override the Diode workspace name used for board
+release uploads:
 
 ```toml
 [workspace]
 name = "my-workspace"
 ```
 
-If `name` is omitted, `pcb publish` derives the workspace name from the first path segment of `[workspace].repository`. For example, `anything.com/XYZ/boards/MyBoard` uses `XYZ`.
+If `name` is omitted, `pcb publish` derives the workspace name from the first
+path segment of `[workspace].repository`. For example,
+`anything.com/XYZ/boards/MyBoard` uses `XYZ`.
 
 ## Endpoint (`[workspace].endpoint`)
 
-Workspace manifests can override the Diode host suffix used by CLI commands that talk to Diode services:
+Workspace manifests can override the Diode host suffix used by CLI commands
+that access Diode services:
 
 ```toml
 [workspace]
 endpoint = "diode.computer"
 ```
 
-- `endpoint = "diode.computer"` resolves app/API URLs under `app.diode.computer` and `api.diode.computer`.
-- This applies to workspace-aware commands such as `pcb auth`, `pcb bom`, `pcb publish`, `pcb preview`, and routing flows.
-- Authentication is scoped per resolved endpoint, so logging into one workspace endpoint does not overwrite tokens for another.
+- `endpoint = "diode.computer"` resolves application and API URLs under
+  `app.diode.computer` and `api.diode.computer`.
+- The setting applies to workspace-aware commands such as `pcb auth`, `pcb bom`,
+  `pcb publish`, `pcb preview`, and routing commands.
+- Authentication is scoped to the resolved endpoint. Authentication for one
+  endpoint does not overwrite tokens for another.
 
-## BOM Matching (`[workspace.bom]`)
+## BOM matching (`[workspace.bom]`)
 
-Workspace manifests can opt into strict BOM matching for `pcb bom` availability lookups:
+Workspace manifests can enable strict BOM matching for `pcb bom` availability
+queries:
 
 ```toml
 [workspace.bom]
 strict = true
 ```
 
-When enabled, `pcb bom` asks the BOM service to require exact MPN matches. The default is `false`, which preserves the legacy fuzzy matching behavior.
+When enabled, `pcb bom` requires exact MPN matches. The default is `false`,
+which uses fuzzy matching.
 
-## Registry Search Scope
+## Registry search scope
 
-Registry-backed `pcb search` defaults to the public Diode registry and registries in the workspace configured by `[workspace].repository`.
+Registry-backed `pcb search` searches the public Diode registry and the
+registries configured by `[workspace].repository`.
 
-- `pcb search --registry github.com/diodeinc/registry ...` overrides the default scope for that invocation.
+- `pcb search --registry github.com/diodeinc/registry ...` overrides the default
+  scope for that invocation.
 - Repeat `--registry` to search more than one registry.
 
-## Pseudo-Versions
+## Pseudo-versions
 
-Sometimes you need to depend on unreleased code—a bug fix that hasn't been tagged,
-or a feature branch under development. Pseudo-versions provide a way to reference
-specific commits while maintaining version ordering.
+Pseudo-versions identify unreleased commits while preserving version ordering.
 
-Format: `v<base>-0.<timestamp>-<commit>`
+The format is `v<base>-0.<timestamp>-<commit>`.
 
 ```toml
 [dependencies]
@@ -394,7 +265,8 @@ Format: `v<base>-0.<timestamp>-<commit>`
 "github.com/acme/component-lib" = { rev = "a1b2c3d4" }
 ```
 
-When resolved, these become pseudo-versions like:
+Resolution produces a version such as:
+
 ```
 v0.3.15-0.20251120004415-137e2dcabc28…   # commit hash shortened here for readability
 ```
@@ -402,23 +274,22 @@ v0.3.15-0.20251120004415-137e2dcabc28…   # commit hash shortened here for read
 the full 40-character commit hash.
 
 The base version (0.3.15) is the next patch version after the most recent tag
-reachable from that commit. This ensures pseudo-versions sort correctly: they're
-newer than the tag they follow but older than the next official release.
+reachable from that commit. This places the pseudo-version after its base tag and
+before the next release.
 If the package has never been tagged, pseudo-versions start in the `0.1.1`
 family (for example `0.1.1-0.<timestamp>-<commit>`), one patch above the
 initial unpublished release version `0.1.0`.
 
 Pseudo-versions participate fully in MVS. If one package requires `component-lib@0.3.14`
 and another requires the pseudo-version above, MVS selects the pseudo-version
-(it's higher). This enables testing unreleased fixes without breaking version
-resolution.
+(it is higher). This permits testing an unreleased change without retaining a
+mutable branch reference in the hydrated graph.
 
-**Use pseudo-versions sparingly.** They represent unreleased, potentially unstable
-code. For production builds, prefer tagged releases.
+Use a tagged release for production dependencies when one is available.
 
 ## Commands
 
-### pcb migrate
+### `pcb migrate`
 
 Runs project migrations using the latest stable `pcbc` toolchain, regardless of
 the workspace's current `pcb-version` lane. After all migrations succeed, the
@@ -430,7 +301,7 @@ pcb migrate
 pcb migrate ./path/to/workspace
 ```
 
-### pcb sync
+### `pcb sync`
 
 Reconciles imports and hydrates package manifests. Run this after adding or
 removing imports or changing dependency versions.
@@ -449,7 +320,7 @@ current directory, and writes neither `pcb.toml` nor `vendor/`. It detects
 missing or stale vendored package versions; it does not verify the contents of
 vendored versions that are already present.
 
-### pcb add
+### `pcb add`
 
 Adds or upgrades a direct dependency for the package in the current directory.
 
@@ -463,7 +334,7 @@ pcb add -u github.com/acme/regulators/Buck
 `pcb add` rewrites the direct dependency entry and rehydrates the package's
 dependency closure.
 
-### pcb build
+### `pcb build`
 
 Builds a board or workspace package.
 
@@ -477,7 +348,7 @@ pcb build --offline          # Build using only cached/vendored packages
 `pcb.toml` or `vendor/`. Use `pcb sync` or `pcb vendor` to update dependency
 state.
 
-### pcb list
+### `pcb list`
 
 Lists read-only package dependency information.
 
@@ -490,7 +361,7 @@ pcb list -m -versions github.com/acme/foo   # Show published versions for a depe
 dependencies only, showing the latest stable version in the same compatibility
 lane and the latest newer breaking lane when available. It does not update manifests.
 
-### pcb update
+### `pcb update`
 
 `pcb update` is disabled. Use `pcb add -u` instead.
 
@@ -499,7 +370,7 @@ pcb add -u                   # Upgrade all direct remote dependencies
 pcb add -u github.com/acme/regulators/Buck
 ```
 
-### pcb publish
+### `pcb publish`
 
 Publishes packages by creating annotated git tags. Discovers which packages
 have changed since their last published version and tags them.
@@ -511,22 +382,27 @@ pcb publish --bump=infer -y  # Skip the final publish confirmation
 pcb publish --force          # Skip preflight checks
 ```
 
-A package needs publishing if:
-- No version tag exists (unpublished)
-- Content hash differs from the published tag
-- Manifest (`pcb.toml`) hash differs from the published tag
+A package requires publication when:
+
+- No version tag exists.
+- Its content hash differs from the published tag.
+- Its `pcb.toml` hash differs from the published tag.
 
 Versions are computed automatically:
-- **Unpublished**: starts at `0.1.0`
-- **Published packages**: apply the requested semver bump (`patch`, `minor`, or `major`)
-- **`--bump=infer`**: infers each package bump from conventional commits since its last tag,
-  then raises dependents to at least the highest bump among published internal dependencies
-- **`-y` / `--yes`**: skips the final package publish confirmation prompt
 
-Packages with interdependencies are published in waves—packages with no dirty
-dependencies first, then their dependents after `pcb.toml` files are updated.
+- **Unpublished:** Start at `0.1.0`.
+- **Published packages:** Apply the requested semantic-version bump: `patch`,
+  `minor`, or `major`.
+- **`--bump=infer`:** Infer each bump from conventional commits since the last
+  tag, then raise dependent bumps to at least the highest bump among published
+  internal dependencies.
+- **`-y` / `--yes`:** Skip the final confirmation prompt.
 
-### pcb info
+Packages are published in dependency order. Packages with no changed
+dependencies are published first; their dependents follow after manifest
+updates.
+
+### `pcb info`
 
 Displays workspace and package information.
 

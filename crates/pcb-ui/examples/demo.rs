@@ -1,10 +1,10 @@
-//! Example demonstrating the diode-ui API
+//! Example demonstrating the pcb-ui API
 
 use pcb_ui::prelude::*;
 use std::{thread, time::Duration};
 
 fn main() -> anyhow::Result<()> {
-    println!("diode-ui Demo\n");
+    println!("pcb-ui Demo\n");
 
     // Simple spinner example
     println!("1. Basic spinner:");
