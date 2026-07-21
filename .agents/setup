@@ -42,7 +42,10 @@ if [[ ! -x "$KICAD_DIR/bin/kicad-cli" ]]; then
     "./${archive%.tar}" --appimage-extract >/dev/null
 
     sudo install -d -m 0755 /opt/kicad
-    sudo mv squashfs-root "$KICAD_DIR"
+    # KiCad's AppImage extractor creates AppDir plus a relative
+    # `squashfs-root -> ./AppDir` symlink. Install the directory itself so it
+    # remains valid after the temporary extraction directory is removed.
+    sudo mv AppDir "$KICAD_DIR"
     sudo chown -R root:root "$KICAD_DIR"
   )
 fi
@@ -60,3 +63,8 @@ printf '%s\n' \
 printf '%s\n' /opt/kicad/current/shared/lib/python3.11/dist-packages \
   | sudo tee /usr/lib/python3/dist-packages/kicad.pth >/dev/null
 sudo ldconfig
+
+# Fail setup immediately if the command-line tools or Python bindings are not
+# usable; otherwise the problem surfaces much later as pcb-layout test failures.
+kicad-cli --version >/dev/null
+/usr/bin/python3 -c 'import pcbnew'
