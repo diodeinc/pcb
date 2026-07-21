@@ -32,3 +32,4 @@ build
 *.log
 *.layout.json
 result
+.amp/resume-last-ran.txt
