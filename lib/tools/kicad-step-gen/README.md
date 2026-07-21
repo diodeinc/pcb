@@ -1,11 +1,13 @@
-# KiCad STEP Generation Tools
+# KiCad STEP generation tools
 
-This directory contains regeneration tooling for compact STEP models derived
-from KiCad pin-header and pin-socket generator geometry. It is separate from
-the MIT-licensed project code.
+These scripts regenerate the compact STEP models derived from KiCad pin-header
+and pin-socket generator geometry.
 
-Scripts here are GPL-3.0-or-later unless otherwise noted because they import
-KiCad's `kicad-footprint-generator` package. See `LICENSE.md`.
+The scripts are GPL-3.0-or-later unless otherwise noted because they import
+KiCad's `kicad-footprint-generator` package. They are separate from the
+MIT-licensed project code. See `LICENSE.md`.
+
+Run these commands from the repository root:
 
 ```bash
 cargo build -p pcbc

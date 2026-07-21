@@ -1,39 +1,23 @@
 # ipc2581
 
-A Rust parser for IPC-2581 that converts XML into typed Rust data structures.
+`ipc2581` parses IPC-2581 XML into typed Rust data. It covers document metadata,
+content dictionaries, ECAD steps, layers, stackups, components, and BOM data.
 
-## Usage
+The parser interns repeated strings. Resolve an interned value through the
+parsed document:
 
 ```rust
 use ipc2581::Ipc2581;
 
-let doc = Ipc2581::parse_file("design.xml")?;
-
-// Optionally validate XML against the vendored IPC-2581C XSD.
-ipc2581::validate_file("design.xml")?;
-
-// Access parsed data
-println!("Revision: {}", doc.revision());
-
-// Resolve interned strings
-if let Some(ecad) = doc.ecad() {
-    for layer in &ecad.cad_data.layers {
-        let name = doc.resolve(layer.name);
-        println!("Layer: {} ({:?})", name, layer.layer_function);
-    }
-    
-    for step in &ecad.cad_data.steps {
-        for component in &step.components {
-            let refdes = doc.resolve(component.ref_des);
-            println!("Component: {}", refdes);
-        }
-    }
+let document = Ipc2581::parse_file("design.xml")?;
+for layer in &document.ecad().unwrap().cad_data.layers {
+    println!("{}", document.resolve(layer.name));
 }
 ```
 
-## What's Parsed
+Call `validate_file` to validate a document against the vendored IPC-2581C XML
+schema before parsing it.
 
-- Content (FunctionMode, Dictionaries)
-- ECAD (CadHeader, CadData: Steps, Layers, Stackup)
-- BOM (Items, Assembly)
-- Metadata (LogisticHeader, HistoryRecord)
+```bash
+cargo test -p ipc2581
+```

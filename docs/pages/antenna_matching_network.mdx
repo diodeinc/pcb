@@ -1,27 +1,24 @@
 ---
-title: "Antenna Matching Network"
+title: "Antenna matching network"
 description: "Build a reusable RF matching network with modern Zener packages"
 ---
 
-A compact antenna front end is a great Zener example because it uses all three
-layers of the language:
+This guide builds an antenna signal path from three Zener elements:
 
-- thin `Component()` wrappers for custom physical parts
-- a reusable `Module()` for the matching network
-- a top-level `Board()` that composes the RF path
+- `Component()` wrappers for the connector and antenna
+- a reusable matching-network module
+- a board that connects the complete RF path
 
-This guide follows the board repository and package model from the
-[language spec](/pages/spec). In particular:
+The example uses the repository model defined in the
+[language specification](/pages/spec): the board calls `Board()`, reusable
+blocks live under `modules/` and `components/`, and local modules use relative
+paths.
 
-- the top-level design uses `Board(...)`, not `Layout(...)`
-- reusable blocks live in packages under `modules/` and `components/`
-- local imports use normal paths
+![Rendered antenna matching board](/images/Antenna_PCB_Render.png)
 
-![](/images/Antenna_PCB_Render.png)
+## Repository layout
 
-## Repository Layout
-
-Start with a normal board repository and give each reusable block its own package:
+Create one package for each reusable block:
 
 ```text
 my-rf-demo/
@@ -34,9 +31,13 @@ my-rf-demo/
 └── components/
     ├── ChipAntenna/
     │   ├── ChipAntenna.zen
+    │   ├── ChipAntenna.kicad_sym
+    │   ├── ChipAntenna.kicad_mod
     │   └── pcb.toml
     └── SMAConnector/
         ├── SMAConnector.zen
+        ├── SMAConnector.kicad_sym
+        ├── SMAConnector.kicad_mod
         └── pcb.toml
 ```
 
@@ -53,20 +54,23 @@ description = "Replace with concise board description."
 ```
 
 <Info>
-Use `pcb new board` and `pcb new package` to create this structure. The values
-in this guide are starting points only. Real matching values should come from
-your antenna datasheet, PCB stackup, and VNA measurements.
+Use `pcb new board` and `pcb new package` to create this structure. The component
+values below are examples. Select production values from the antenna data,
+finished PCB stackup, and vector network analyzer measurements.
 </Info>
 
-## 1. Wrap The Physical Endpoints
+Before writing Zener source, copy the KiCad symbol and footprint for each
+physical part into its package directory with the filenames shown above. Zener
+does not copy these assets from an installed KiCad library. Confirm that the
+symbol pin names match the wrapper's `pins` mapping.
 
-For common passives, prefer the stdlib generics. For parts like an SMA connector
-or a specific chip antenna, a tiny custom package is often the right tool.
+## 1. Wrap the physical endpoints
 
-Each `.zen` file is still a module. A custom "component package" is simply a
-small module that calls `Component()` once and exposes its pins through `io()`.
+Use standard-library generics for common passives. Use a small custom module for
+the specific SMA connector and antenna. Each wrapper calls `Component()` once
+and exposes the required pins through `io()`.
 
-### SMA Connector
+### SMA connector
 
 ```python
 # components/SMAConnector/SMAConnector.zen
@@ -78,12 +82,9 @@ prefix = config(str, default="J")
 Component(
     name = "SMAConnector",
     symbol = Symbol(
-        library = "Connector.kicad_sym",
-        name = "Conn_Coaxial_Small",
+        library = "SMAConnector.kicad_sym",
     ),
-    footprint = File(
-        "Connector_Coaxial.pretty/SMA_Amphenol_132134_Vertical.kicad_mod"
-    ),
+    footprint = File("SMAConnector.kicad_mod"),
     prefix = prefix,
     pins = {
         "In": CENTER,
@@ -92,7 +93,7 @@ Component(
 )
 ```
 
-### Chip Antenna
+### Chip antenna
 
 ```python
 # components/ChipAntenna/ChipAntenna.zen
@@ -103,12 +104,9 @@ prefix = config(str, default="AE")
 Component(
     name = "ChipAntenna",
     symbol = Symbol(
-        library = "Device.kicad_sym",
-        name = "Antenna",
+        library = "ChipAntenna.kicad_sym",
     ),
-    footprint = File(
-        "RF_Antenna.pretty/Texas_SWRA416_868MHz_915MHz.kicad_mod"
-    ),
+    footprint = File("ChipAntenna.kicad_mod"),
     prefix = prefix,
     pins = {
         "A": FEED,
@@ -117,21 +115,20 @@ Component(
 ```
 
 <Tip>
-Use raw `Component()` only for the parts that actually need it. The matching
-elements themselves should stay on the stdlib generics so you inherit current
-symbols, footprints, and BOM behavior automatically.
+Use raw `Component()` only when a standard-library generic does not represent
+the physical part. Standard-library generics provide maintained symbols,
+footprints, and BOM behavior for the matching components.
 </Tip>
 
 <Tip>
-If you are authoring these files in the editor, hovering the `pins` field in a
-`Component()` call will show the pin names Zener expects from the symbol.
+Hover over `pins` in the editor to inspect the pin names loaded from the symbol.
 </Tip>
 
-## 2. Build A Reusable Matching Module
+## 2. Build the matching module
 
-This matching block reserves three tuning footprints: a series inductor, a
-shunt capacitor, and a final series resistor that can be used as a real damping
-element or simply stuffed as `0ohm`.
+The module reserves three tuning footprints: a series inductor, a shunt
+capacitor, and a final series resistor. Populate the resistor with a damping
+value or with `0ohm`.
 
 ```python
 # modules/AntennaMatch/AntennaMatch.zen
@@ -179,19 +176,18 @@ Layout(name = "AntennaMatch", path = "layout/AntennaMatch")
 ```
 
 <Tip>
-Use `io()` for the nets the parent board must connect, and plain `Net()` for
-internal nodes like `MATCH_NODE` that should stay inside the module boundary.
+Use `io()` for parent connections and `Net()` for internal nodes such as
+`MATCH_NODE`.
 </Tip>
 
 <Tip>
-The parent can still pass strings like `"6.8nH"`, `"1.5pF"`, and `"0ohm"`.
-Zener will convert them to physical quantities because the `config()` types are
-declared explicitly.
+The declared `config()` types convert parent-supplied strings such as `"6.8nH"`,
+`"1.5pF"`, and `"0ohm"` to physical quantities.
 </Tip>
 
-## 3. Compose The Board
+## 3. Compose the board
 
-Now instantiate the connector, matching network, and antenna on a real board:
+Instantiate the connector, matching network, and antenna in the board file:
 
 ```python
 # AntennaDemo.zen
@@ -233,7 +229,7 @@ Board(
 )
 ```
 
-At this point the RF path is easy to read:
+The resulting RF path is:
 
 ```text
 SMA center -> series inductor -> tuning node -> series resistor -> antenna feed
@@ -243,27 +239,27 @@ SMA center -> series inductor -> tuning node -> series resistor -> antenna feed
                                ground
 ```
 
-## Build And Iterate
+## 4. Build and lay out the board
 
-Build and lay out the board with the normal CLI flow:
+Run these commands from the repository root:
 
 ```bash
 pcb build AntennaDemo.zen
 pcb layout AntennaDemo.zen
 ```
 
-If the design validates, KiCad will open with a generated board you can tune and
-refine.
+`pcb build` validates the design. `pcb layout` generates the KiCad board and
+opens it for placement and routing.
 
 <Warning>
-Electrical correctness here depends heavily on placement. In practice, keep the
-matching parts as close to the antenna feed as possible, route the RF trace with
-the impedance your stackup expects, and leave room for value swaps during bringup.
+RF performance depends on placement and stackup. Place the matching components
+close to the antenna feed, route the RF trace for the required impedance, and
+leave access for component changes during bringup.
 </Warning>
 
-## Bonus: Add Mounting Holes
+## Optional mounting holes
 
-You can also add mounting holes programmatically:
+Add mounting holes with the standard-library generic:
 
 ```python
 MountingHole = Module("@stdlib/generics/MountingHole.zen")
@@ -275,15 +271,14 @@ for i in range(4):
     )
 ```
 
-Run `pcb layout` again and place the generated holes where they make sense for
-your enclosure and keep-out requirements.
+Run `pcb layout` again, then place the holes to satisfy the enclosure and copper
+keep-out requirements.
 
-## Why This Pattern Scales
+## Design rationale
 
-- The antenna and connector packages stay small and easy to reuse.
+- The antenna and connector packages contain only physical-part definitions.
 - The matching network owns the topology and tuning values.
-- The board file stays focused on composition instead of implementation detail.
+- The board file contains only board-level composition.
 
-That separation is the main benefit of Zener for RF work: you can change
-matching values, footprints, or even the whole antenna package without rewriting
-the board-level connectivity.
+This separation permits changes to matching values, footprints, or the antenna
+package without changing board-level connectivity.

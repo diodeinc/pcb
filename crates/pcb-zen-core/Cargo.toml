@@ -5,7 +5,7 @@ edition = { workspace = true }
 repository = { workspace = true }
 homepage = { workspace = true }
 authors = { workspace = true }
-description = "Core functionality for Zen PCB design language"
+description = "Core functionality for the Zener PCB design language"
 
 [features]
 default = ["native"]

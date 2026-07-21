@@ -1,154 +1,133 @@
-# KiCad Import (Developer Notes)
+# KiCad import pipeline
 
-This folder (`crates/pcb/src/import/`) implements the KiCad import pipeline used by:
+This module implements:
 
-`pcb import <path-to-project.kicad_pro> <output-dir>`
+```bash
+pcb import <project.kicad_pro> <output-directory>
+```
 
-In addition to generating Zener sources, import writes a portable archive of the original KiCad
-project sources to the target board directory as `<board>.kicad.archive.zip`.
+The command converts a KiCad project into a Zener board repository. It also
+writes `<board>.kicad.archive.zip`, which preserves the original KiCad source
+files.
 
-Entrypoint is `crates/pcb/src/import/mod.rs` (orchestrated by `crates/pcb/src/import/flow.rs`).
+`flow.rs` coordinates the pipeline. `mod.rs` defines the module boundary.
 
 ## Pipeline
 
-The import flow is organized into phases:
+Import runs these phases in order:
 
-- `discover`: identify a KiCad project and select a board entry.
-- `validate`: run KiCad ERC/DRC (and other checks) to catch obvious issues early.
-- `extract`: read KiCad schematic/layout artifacts into an IR (including sheet placements).
-- `hierarchy`: decide how to map KiCad sheet/module structure into Zener module structure.
-- `semantic`: classify parts (e.g. safe passive promotion candidates).
-- `materialize`: copy/patch source files into the output tree (layout, project metadata, etc.).
-- `generate`: emit `.zen` files (board/modules/components) and schematic placement comments.
-- `report`: persist the extraction report for iteration/debugging.
+1. `discover` locates the KiCad project and selects its board.
+2. `validate` runs the applicable KiCad ERC and DRC checks.
+3. `extract` converts schematic and layout data into the import IR.
+4. `hierarchy` maps KiCad sheets to Zener modules.
+5. `semantic` classifies components, including passive-promotion candidates.
+6. `materialize` copies and patches source assets into the output repository.
+7. `generate` writes board, module, component, and schematic-position sources.
+8. `report` writes the extraction report used for diagnostics.
 
-## Identifiers
+An error stops the import at the current phase. Because the command prepares the
+output repository before validation, a failure can leave generated or partial
+files. Correct the cause and rerun with `--force` to replace generated output.
 
-Import uses KiCad's stable, cross-artifact UUID-based identity for instances.
+## Output
 
-- `KiCadUuidPathKey` = (`sheetpath.tstamps`, `symbol_uuid`)
-- `sheetpath.tstamps` is a `/.../` chain of sheet UUIDs. Root is `/`.
+For a board named `<board>`, the output repository contains:
 
-Joins (schematic/netlist/layout) should use this key rather than refdes.
+```text
+<output-directory>/
+├── <board>.zen
+├── <board>.kicad.archive.zip
+├── modules/<SheetName>/<SheetName>.zen
+├── components/.../*.zen
+├── layout/<selected-project>.kicad_pro
+├── layout/<selected-board>.kicad_pcb
+└── .kicad.import.extraction.json
+```
 
-## Output Layout
+The generated layout retains the original KiCad project and board filenames.
 
-For an imported board named `<board>`, `<output-dir>` is a board repository:
+## Cross-file identity
 
-- `<output-dir>/<board>.zen` (root board module)
-- `<output-dir>/modules/<SheetName>/<SheetName>.zen` (sheet modules)
-- `<output-dir>/components/.../*.zen` (imported components)
-- `<output-dir>/layout/<selected.kicad_pro>` (KiCad project file; original filename preserved)
-- `<output-dir>/layout/<selected.kicad_pcb>` (patched KiCad PCB; original filename preserved)
-- `<output-dir>/.kicad.import.extraction.json` (extraction report)
+Join schematic, netlist, and layout records with `KiCadUuidPathKey`, not with a
+reference designator. The key contains the instance's sheet UUID path and symbol
+UUID:
 
-## Footprint De-Instancing (.kicad_pcb -> .kicad_mod)
+```text
+KiCadUuidPathKey = (sheetpath.tstamps, symbol_uuid)
+```
 
-Import cannot assume the original footprint library `.kicad_mod` files exist at import time.
-We therefore generate standalone `.kicad_mod` footprints by de-instancing the `(footprint ...)` blocks
-embedded in the PCB file.
+The root sheet path is `/`. Reference designators can change or collide across
+hierarchical sheets and are not stable cross-file identifiers.
 
-Model:
-- Instance pose: translation `t = (tx, ty)` and rotation `theta` from the root `(at tx ty theta)`.
-- `is_back` derived from the root `(layer "B.*")`.
-- Mirror across X axis (flip Y): `M(x, y) = (x, -y)` and rotation `R(theta)`.
+## Footprint de-instancing
 
-Normalization rules (high level):
-- Drop instance-only fields: root `at/path/sheetname/sheetfile/uuid/locked/property`, per-pad `net/uuid`.
-- Local geometry points (pads + `fp_*` graphics) are footprint-local but mirrored when `is_back`:
-  - `p_file = p_local` (front)
-  - `p_file = M(p_local)` (back)
-- Footprint-embedded `zone` polygon `(xy ...)` points in `.kicad_pcb` are serialized in **absolute board coordinates**
-  with the instance pose applied:
-  - `p_file = t + R(theta) * p_local` (front)
-  - `p_file = t + R(theta) * M(p_local)` (back)
-  Invert to recover `.kicad_mod` footprint-local points:
-  - `p_local = R(-theta) * (p_file - t)` (front)
-  - `p_local = M(R(-theta) * (p_file - t))` (back)
-- Pad angles in `.kicad_pcb` pad `(at x y ANGLE)` are serialized as board-absolute; normalize to pad-local:
-  - `a_local = a_file - theta` (front)
-  - `a_local = theta - a_file` (back)
-- When `is_back`, swap all `layer`/`layers` strings `B.* <-> F.*` and remove `mirror` from `(justify ...)`.
+Import cannot assume that the original `.kicad_mod` libraries are present. It
+therefore converts each embedded `(footprint ...)` instance in the board into a
+standalone footprint file.
 
-Implementation: `crates/pcb-sexpr/src/board.rs` `transform_board_instance_footprint_to_standalone(...)`.
+The conversion applies these rules:
 
-## Power/Ground Nets
+1. Remove instance-only fields, including root placement, path, sheet, UUID,
+   lock, and property data, plus per-pad nets and UUIDs.
+2. Preserve front-side local geometry. Mirror back-side local geometry across
+   the X axis and exchange `F.*` and `B.*` layer names.
+3. Convert embedded zone polygons from board coordinates back to footprint-local
+   coordinates by removing the instance translation and rotation.
+4. Convert absolute pad angles to local angles. Front-side pads use
+   `a_local = a_file - theta`; back-side pads use
+   `a_local = theta - a_file`.
+5. Remove `mirror` from back-side text justification after applying the
+   geometry transform.
 
-KiCad connectivity is sourced from the netlist export, but we classify net *kinds* (power/ground)
-from explicit schematic intent:
+`pcb-sexpr::board::transform_board_instance_footprint_to_standalone` implements
+these rules.
 
-- Extract all schematic `(power)` symbol instances and read their `Value` property (declares the
-  global net name).
-- Decide `Ground` vs `Power` from the symbol identity (`lib_id`) and join to netlist nets by exact
-  name match.
-- Codegen then emits `Power("...")` / `Ground("...")` instead of `Net("...")` only when
-  classification is high-confidence; otherwise we fall back to `Net`.
+## Power and ground classification
 
-## Schematic Placement (`# pcb:sch`)
+The netlist supplies connectivity, while schematic power symbols supply net
+intent. Import reads each `(power)` symbol's `Value`, classifies its library
+identity as power or ground, and joins it to a net by exact name. Code generation
+emits `Power` or `Ground` only for a high-confidence match; otherwise it emits
+`Net`.
 
-Zener schematics persist placement as line comments at the bottom of `.zen` files:
+## Schematic positions
 
-`# pcb:sch <fully-qualified-key> x=<..> y=<..> rot=<..> [mirror=x|y]`
+Generated `.zen` files store symbol placement in trailing `pcb:sch` comments:
 
-The editor’s schematic viewer consumes these comments.
+```text
+# pcb:sch <id> x=<value> y=<value> rot=<value> [mirror=<x|y>]
+```
 
-### Coordinate systems
+The relevant coordinate systems differ:
 
-- KiCad sheet placement (`(at x y rot)`): translation is stored in **mm** in a **Y-down** sheet
-  coordinate system.
-- KiCad symbol geometry (`lib_symbols`): local geometry uses a **Y-up** coordinate system.
-- `# pcb:sch` persisted values: `x/y` are stored in **0.1mm** units in **Y-down**; rotation is
-  stored in degrees **clockwise-positive**; `mirror` is the **axis of reflection** (`x` flips Y,
-  `y` flips X).
+| Source | Position units | Y axis | Rotation |
+|---|---|---|---|
+| KiCad sheet placement | mm | Down | KiCad sheet semantics |
+| KiCad symbol geometry | mm | Up | Symbol-local |
+| `pcb:sch` comment | 0.1 mm | Down | Clockwise-positive degrees |
 
-### Transform order
+Both KiCad and the schematic editor rotate and then mirror in symbol-local space
+before applying translation. The importer represents this operation as
+`p' = A * p + t` with `glam::DMat2` and `glam::DVec2`, then converts to the
+stored editor coordinates immediately before writing comments.
 
-Both KiCad and the editor apply transforms in symbol-local space as:
+Passive promotion can replace a source symbol with a standard resistor or
+capacitor symbol that has different bounds. In that case, import aligns the
+transformed visual bounding boxes instead of copying the original symbol origin.
+This preserves the visible placement.
 
-1. rotate
-2. mirror
+Embedded schematic `lib_symbols` are the preferred geometry source. Import can
+fall back to the KiCad global symbol libraries when `KICAD_SYMBOL_DIR` or a
+platform default is available.
 
-about the symbol origin, then translate.
+The schematic placement implementation is under
+`generate/schematic_placement.rs`; comment collection and serialization are
+under `generate/schematic_comments.rs` and `generate/schematic_types.rs`.
 
-### Internal representation
+## Verification
 
-In import code we treat an instance placement as an affine transform:
+Run the focused importer tests with:
 
-`p' = A * p + t`
-
-where `A` is the 2x2 linear transform (rotation and/or mirror) and `t` is translation.
-
-Implementation uses `glam`'s double-precision types:
-
-- `DVec2` for translations/points
-- `DMat2` for linear transforms
-- `DAffine2` for full poses when needed
-
-This keeps the rotation+mirror math explicit and makes it harder to introduce sign/order bugs.
-
-### Mapping model
-
-The importer primarily operates in “KiCad semantics” and performs a final conversion right before
-writing `# pcb:sch` comments. The detailed math and rationale live in:
-
-- `docs/specs/kicad-import.md` ("Schematic Placement Mapping")
-- implementation: `crates/pcb/src/import/generate/schematic_comments.rs` (comment collection + emission)
-- implementation: `crates/pcb/src/import/generate/schematic_types.rs` (shared comment data)
-- implementation: `crates/pcb/src/import/generate/schematic_placement.rs` (KiCad->editor anchor mapping)
-
-Important subtlety: when promoting passives (substituting the KiCad symbol with a stdlib
-Device:R/C symbol), the symbol geometry changes. For these cases, we preserve **visual placement**
-by aligning the transformed **visual AABB top-left** (axis-aligned bbox in world space after
-rotate+mirror) between the source and target symbol, then converting that target origin into the
-editor’s stored-anchor format.
-
-### Symbol geometry sources
-
-Placement conversion needs per-symbol bounds and (for passive promotion) pin-direction info.
-Geometry is derived from:
-
-1. embedded schematic `lib_symbols` (preferred)
-2. KiCad global symbol libraries (if `KICAD_SYMBOL_DIR` or a platform default is available)
-
-The bounds extractor intentionally matches the editor’s bbox expansion so small constant offsets
-don’t accumulate into visible drift.
+```bash
+cargo test -p pcbc import
+```
