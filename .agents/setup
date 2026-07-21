@@ -4,14 +4,59 @@
 set -euo pipefail
 
 # --- Rust toolchain (pinned to stable by rust-toolchain.toml) ----------------
-if ! command -v cargo >/dev/null 2>&1; then
+if ! command -v rustup >/dev/null 2>&1; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal
   # shellcheck disable=SC1091
   source "$HOME/.cargo/env"
+fi
+rustup component add clippy rustfmt
+
+# --- cargo-nextest (official prebuilt binary; stay on the 0.9 series) --------
+if ! cargo nextest --version >/dev/null 2>&1; then
+  mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+  curl -LsSf https://get.nexte.st/0.9/linux \
+    | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
 fi
 
 # --- uv (standalone installer; installs to ~/.local/bin) ---------------------
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
+
+# --- KiCad 10 (official lite AppImage, installed as a host tool) -------------
+KICAD_VERSION=10.0.4
+KICAD_DIR="/opt/kicad/$KICAD_VERSION"
+
+if [[ ! -x "$KICAD_DIR/bin/kicad-cli" ]]; then
+  (
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    archive="kicad-$KICAD_VERSION-x86_64-lite.AppImage.tar"
+
+    curl -fL "https://kicad-downloads.s3.cern.ch/appimage/stable/$archive" \
+      -o "$tmp/$archive"
+    tar -xf "$tmp/$archive" -C "$tmp"
+    chmod +x "$tmp/${archive%.tar}"
+    cd "$tmp"
+    "./${archive%.tar}" --appimage-extract >/dev/null
+
+    sudo install -d -m 0755 /opt/kicad
+    sudo mv squashfs-root "$KICAD_DIR"
+    sudo chown -R root:root "$KICAD_DIR"
+  )
+fi
+
+sudo ln -sfn "$KICAD_VERSION" /opt/kicad/current
+for command in kicad kicad-cli pcbnew eeschema gerbview bitmap2component \
+  pcb_calculator pl_editor; do
+  sudo ln -sfn "/opt/kicad/current/bin/$command" "/usr/local/bin/$command"
+done
+
+printf '%s\n' \
+  /opt/kicad/current/shared/lib \
+  /opt/kicad/current/shared/lib/tmp/AppDir/usr/lib/x86_64-linux-gnu \
+  | sudo tee /etc/ld.so.conf.d/kicad.conf >/dev/null
+printf '%s\n' /opt/kicad/current/shared/lib/python3.11/dist-packages \
+  | sudo tee /usr/lib/python3/dist-packages/kicad.pth >/dev/null
+sudo ldconfig
