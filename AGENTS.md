@@ -34,6 +34,7 @@ Never run `cargo insta accept` without explicit user approval.
 
 - Prefer the smallest correct change and match existing crate/module boundaries.
 - Avoid adding cross-crate abstractions until a boundary is already shared in the existing code.
+- Keep Git history linear: before pushing, fetch and rebase local commits onto `origin/main`, then fast-forward push; never create merge commits.
 - In `.zen` files, remember Zener is Starlark-based, not Python: do not use f-strings.
 - Language behavior may come from the pinned `diodeinc/starlark-rust` fork in `Cargo.toml`; check that fork when local code does not explain Starlark behavior.
 
