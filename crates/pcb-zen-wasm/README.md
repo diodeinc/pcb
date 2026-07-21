@@ -1,11 +1,12 @@
 # pcb-zen-wasm
 
-WebAssembly bindings for the Zen PCB design language, intended for use in the
-browser via [wasm-pack](https://rustwasm.github.io/wasm-pack/).
+`pcb-zen-wasm` exposes the Zener evaluator to browser applications through
+WebAssembly.
 
-The npm package is built and published from [`bin/build-wasm-bundle.sh`](../../bin/build-wasm-bundle.sh).
+[`bin/build-wasm-bundle.sh`](../../bin/build-wasm-bundle.sh) builds and publishes
+the npm package with `wasm-pack`.
 
-To smoke-test the generated WASM bundle against a `pcb publish` release zip:
+To test a generated bundle against a `pcb publish` release archive, run:
 
 ```sh
 node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \

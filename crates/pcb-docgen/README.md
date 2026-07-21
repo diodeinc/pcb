@@ -1,28 +1,19 @@
 # pcb-docgen
 
-Generates stdlib docs (`stdlib.mdx`) from `.zen` files.
+`pcb-docgen` generates Markdown from Zener package sources for `pcb doc`. It
+extracts file docstrings, module signatures, and exported library symbols.
 
-## Notes
-
-- Input stdlib path is typically the workspace-local, toolchain-versioned stdlib root.
-- Output is deterministic and used by `pcb doc`.
-
-## CLI
+The crate is a library and has no binary target. Use the CLI to generate package
+documentation:
 
 ```bash
-cargo run -p pcb-docgen
-cargo run -p pcb-docgen -- <stdlib_path> <docs_dir> <pcb_cli_path>
+pcb doc --package @stdlib
+pcb doc --package ./modules/PowerSupply
 ```
 
-## Library
+Generation requires a valid PCB workspace and resolved dependencies. Files that
+cannot be evaluated produce warnings and are omitted from the output.
 
-```rust
-use pcb_docgen::generate_stdlib_mdx;
-use std::path::Path;
-
-let result = generate_stdlib_mdx(
-    Path::new("../lib/std"),
-    Path::new("docs/pages"),
-    Path::new("target/debug/pcb"),
-)?;
+```bash
+cargo test -p pcb-docgen
 ```

@@ -8,29 +8,28 @@ those designs, manages dependencies, and generates KiCad layout files.
 
 ## Installation
 
-Install the `pcb` shim:
+Install the `pcb` launcher on macOS, Linux, or WSL2:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/diodeinc/pcb/main/install.sh | bash
 ```
 
-On Windows:
+For native Windows, run this command in PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/diodeinc/pcb/main/install.ps1 | iex"
 ```
 
-The shim downloads and runs the `pcbc` toolchain requested by each project.
+The launcher downloads and runs the `pcbc` toolchain requested by each project.
 The Unix installer writes `pcb` to `$HOME/.local/bin` by default. The Windows
 installer writes `pcb.exe` to `%USERPROFILE%\.pcb\bin` by default. Set
 `PCB_INSTALL_DIR` to choose a different directory.
 
-Requirements:
+KiCad 10.x is required only for generating and editing layouts. Building and
+validating Zener files does not require KiCad.
 
-- [KiCad 10.x](https://kicad.org/) for generating and editing layouts.
-
-Windows support is experimental. For the most stable experience, use WSL2,
-macOS, or Linux.
+Native Windows support is experimental. Use WSL2 if a command does not work in
+the native environment.
 
 ### Developing from source
 
@@ -41,7 +40,7 @@ cargo build -p pcb -p pcbc
 ./install.sh --local
 ```
 
-## Quick Start
+## Quick start
 
 Create `blinky.zen`:
 
@@ -76,7 +75,7 @@ Generate a KiCad layout:
 pcb layout blinky.zen
 ```
 
-## Project Structure
+## Repository layouts
 
 Zener projects use one of two repository shapes.
 
@@ -148,7 +147,7 @@ repository = "github.com/myorg/registry"
 pcb-version = "0.4"
 ```
 
-## Common Commands
+## Common commands
 
 ```bash
 pcb new board <NAME> <REPO_URL>              # Create a board repository
