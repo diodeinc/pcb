@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Added a Murata model for the 0201 2.2 nF house capacitor.
+- Added a 0603 2.2 µF, 50 V X5R house capacitor; upgraded the 0402 470 nF part to X7R.
+
 ## [0.4.7] - 2026-07-10
 
 ### Added
