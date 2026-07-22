@@ -24,6 +24,7 @@ struct PriceBreak {
 #[serde(rename_all = "UPPERCASE")]
 enum Geography {
     Us,
+    Uk,
     Global,
 }
 
@@ -31,6 +32,7 @@ impl std::fmt::Display for Geography {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Us => "US",
+            Self::Uk => "UK",
             Self::Global => "Global",
         })
     }
@@ -627,7 +629,11 @@ fn build_search_availability(offers: &[&ComponentOffer], no_match: bool) -> Avai
         us: summary_for(Geography::Us),
         global: summary_for(Geography::Global),
         no_match,
-        offers: offers.iter().map(|offer| offer.to_offer(1)).collect(),
+        offers: offers
+            .iter()
+            .filter(|offer| offer.geography != Geography::Uk)
+            .map(|offer| offer.to_offer(1))
+            .collect(),
     }
 }
 
@@ -699,6 +705,29 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn geography_decodes_server_values() {
+        for (json, expected) in [
+            (r#""US""#, Geography::Us),
+            (r#""UK""#, Geography::Uk),
+            (r#""GLOBAL""#, Geography::Global),
+        ] {
+            assert_eq!(serde_json::from_str::<Geography>(json).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn uk_offers_are_ignored() {
+        let mut uk_offer = offer("uk-offer", Some(1), &[(1, 1.0)]);
+        uk_offer.geography = Geography::Uk;
+
+        let availability = build_search_availability(&[&uk_offer], false);
+
+        assert!(availability.us.is_none());
+        assert!(availability.global.is_none());
+        assert!(availability.offers.is_empty());
     }
 
     #[test]
