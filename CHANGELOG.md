@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-07-22
+
 ### Changed
 
 - Added a Murata model for the 0201 2.2 nF house capacitor.
@@ -1306,7 +1308,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/diodeinc/pcb/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/diodeinc/pcb/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/diodeinc/pcb/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/diodeinc/pcb/compare/v0.4.4...v0.4.5
