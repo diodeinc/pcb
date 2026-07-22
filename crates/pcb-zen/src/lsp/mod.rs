@@ -7,8 +7,8 @@ use lsp_types::{
     WorkDoneProgressOptions, request::Request,
 };
 use pcb_sch::position::{
-    Position, remove_position_comments, remove_positions, replace_pcb_sch_comments,
-    symbol_id_to_comment_key, update_position_comments,
+    Position, edit_position_comments, remove_position_comments, remove_positions,
+    replace_pcb_sch_comments, symbol_id_to_comment_key,
 };
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
@@ -1229,8 +1229,9 @@ impl LspContext for LspEvalContext {
                 Ok(params) => {
                     let file_path = &params.file_path;
                     info!(
-                        "Saving {} symbol positions to file: {}",
+                        "Saving {} position updates and {} deletions to file: {}",
                         params.symbol_positions.len(),
+                        params.deleted_symbol_ids.len(),
                         file_path
                     );
 
@@ -1251,24 +1252,52 @@ impl LspContext for LspEvalContext {
                         flat_positions.insert(comment_name, position);
                     }
 
-                    // Buffer-first path: the client applies the returned edit
-                    // to its own buffer and mirrors it to disk; the server
-                    // touches neither.
+                    let mut deleted_comment_names = Vec::new();
+                    for symbol_id in params.deleted_symbol_ids {
+                        let Some(comment_name) = symbol_id_to_comment_key(&symbol_id) else {
+                            return Some(Response {
+                                id: req.id.clone(),
+                                result: None,
+                                error: Some(ResponseError {
+                                    code: INVALID_PARAMS,
+                                    message: format!("Invalid symbol ID format: {symbol_id}"),
+                                    data: None,
+                                }),
+                            });
+                        };
+                        deleted_comment_names.push(comment_name);
+                    }
+
                     if let Some(base_hash) = &params.base_hash {
                         let result = self.position_block_edit(file_path, base_hash, |content| {
-                            update_position_comments(content, &flat_positions)
+                            edit_position_comments(content, &flat_positions, &deleted_comment_names)
                         });
                         return Some(position_edit_result_to_response(req.id.clone(), result));
                     }
 
-                    // Legacy path (no baseHash): write the file directly; the
-                    // client rediscovers the change through its file watcher.
+                    if !deleted_comment_names.is_empty() {
+                        return Some(Response {
+                            id: req.id.clone(),
+                            result: None,
+                            error: Some(ResponseError {
+                                code: INVALID_PARAMS,
+                                message: "baseHash is required when deletedSymbolIds is non-empty"
+                                    .to_string(),
+                                data: None,
+                            }),
+                        });
+                    }
+
+                    // DEPRECATED: Legacy clients expect this request to write
+                    // directly to disk and return null when baseHash is absent.
+                    // TODO(ENG-357): Remove this path once all Diode clients
+                    // send baseHash and apply the returned text edit.
                     match replace_pcb_sch_comments(file_path, &flat_positions) {
                         Ok(()) => {
                             info!("Successfully wrote positions to file");
                             return Some(Response {
                                 id: req.id.clone(),
-                                result: Some(serde_json::Value::Null), // null indicates success
+                                result: Some(serde_json::Value::Null),
                                 error: None,
                             });
                         }
@@ -1299,13 +1328,14 @@ impl LspContext for LspEvalContext {
             }
         }
 
-        // Handle pcb/removePosition requests
+        // DEPRECATED: Legacy clients send deletions as separate requests. New
+        // clients use deletedSymbolIds in the atomic pcb/savePositions request.
+        // TODO(ENG-357): Remove this handler once all Diode clients use the
+        // atomic pcb/savePositions request.
         if req.method == "pcb/removePosition" {
             match serde_json::from_value::<PcbRemovePositionParams>(req.params.clone()) {
                 Ok(params) => {
                     let file_path = &params.file_path;
-
-                    // Translate symbol_id to comment key used in pcb:sch lines
                     let Some(comment_key) = symbol_id_to_comment_key(&params.symbol_id) else {
                         return Some(Response {
                             id: req.id.clone(),
@@ -1318,7 +1348,6 @@ impl LspContext for LspEvalContext {
                         });
                     };
 
-                    // Buffer-first path: see pcb/savePositions above.
                     if let Some(base_hash) = &params.base_hash {
                         let result = self.position_block_edit(file_path, base_hash, |content| {
                             remove_position_comments(content, &[comment_key])
@@ -1326,7 +1355,6 @@ impl LspContext for LspEvalContext {
                         return Some(position_edit_result_to_response(req.id.clone(), result));
                     }
 
-                    // Legacy path (no baseHash): write the file directly.
                     if let Err(e) = remove_positions(file_path, &[comment_key]) {
                         return Some(Response {
                             id: req.id.clone(),
@@ -1622,30 +1650,33 @@ struct DiagnosticInfo {
 struct PcbSavePositionsParams {
     file_path: String,
     symbol_positions: BTreeMap<String, Position>,
+    /// Optional only for compatibility with clients predating atomic writes.
+    /// TODO(ENG-357): Make this field required after all clients migrate.
+    #[serde(default)]
+    deleted_symbol_ids: Vec<String>,
     /// Content hash of the document the positions were computed against.
-    /// When present, the server responds with a text edit for the client to
-    /// apply instead of writing the file itself.
+    /// Omitting this field selects the deprecated direct-to-disk path.
+    /// TODO(ENG-357): Make this field required after all clients migrate.
     #[serde(default)]
     base_hash: Option<String>,
 }
 
+/// Deprecated request shape retained for pre-atomic Diode clients.
+/// TODO(ENG-357): Remove after all clients send deletions through
+/// `PcbSavePositionsParams::deleted_symbol_ids`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct PcbRemovePositionParams {
     file_path: String,
-    /// Symbol ID in the same format used by pcb/savePositions keys
-    /// (e.g. "comp:R1" or "sym:NET#1")
     symbol_id: String,
-    /// See [`PcbSavePositionsParams::base_hash`].
     #[serde(default)]
     base_hash: Option<String>,
 }
 
-/// Response to `pcb/savePositions` / `pcb/removePosition` requests that carry
-/// a `baseHash`: the edit is applied by the client to its own buffer (and
-/// mirrored to disk by the client); the server touches neither. `resultHash`
-/// is the content hash after applying the edit, which the client can verify
-/// and use to correlate the subsequent evaluation.
+/// Response to `pcb/savePositions`: the edit is applied by the client to its
+/// own buffer (and mirrored to disk by the client); the server touches neither.
+/// `resultHash` is the content hash after applying the edit, which the client
+/// can verify and use to correlate the subsequent evaluation.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct PcbPositionEditResponse {
@@ -1859,16 +1890,15 @@ pcb-version = "0.4"
         format!("{}{}{}", &content[..start], edit.new_text, &content[end..])
     }
 
-    fn save_positions_request(id: i32, path: &std::path::Path, base_hash: Option<&str>) -> Request {
-        let mut params = json!({
+    fn save_positions_request(id: i32, path: &std::path::Path, base_hash: &str) -> Request {
+        let params = json!({
             "filePath": path.to_str().unwrap(),
+            "baseHash": base_hash,
             "symbolPositions": {
                 "comp:R1": { "x": 12.5, "y": 30.0, "rotation": 90.0 }
             },
+            "deletedSymbolIds": ["comp:C1"],
         });
-        if let Some(base_hash) = base_hash {
-            params["baseHash"] = json!(base_hash);
-        }
         Request {
             id: RequestId::from(id),
             method: "pcb/savePositions".to_string(),
@@ -1882,7 +1912,10 @@ pcb-version = "0.4"
         let zen_path = dir.path().canonicalize()?.join("main.zen");
         let disk_contents = "x = 1\n";
         // Buffer diverges from disk: the edit must be computed from the buffer.
-        let buffer_contents = "x = 1\n\n# pcb:sch C1 x=1.0000 y=2.0000 rot=0\n";
+        // No trailing newline exercises combined edits without reparsing a
+        // regenerated position block at a different byte offset.
+        let buffer_contents =
+            "x = 1\n\n# pcb:sch C1 x=1.0000 y=2.0000 rot=0\n# pcb:sch C2 x=3.0000 y=4.0000 rot=0";
         fs::write(&zen_path, disk_contents)?;
 
         let ctx = LspEvalContext::default();
@@ -1891,7 +1924,7 @@ pcb-version = "0.4"
         let base_hash = super::content_hash(buffer_contents);
         let response = ctx
             .handle_custom_request(
-                &save_positions_request(1, &zen_path, Some(&base_hash)),
+                &save_positions_request(1, &zen_path, &base_hash),
                 &lsp_types::InitializeParams::default(),
             )
             .expect("request should be handled");
@@ -1903,7 +1936,8 @@ pcb-version = "0.4"
         let edit: lsp_types::TextEdit = serde_json::from_value(result["edit"].clone())?;
         let updated = apply_text_edit(buffer_contents, &edit);
         assert!(updated.contains("# pcb:sch R1 x=12.5000 y=30.0000 rot=90"));
-        assert!(updated.contains("# pcb:sch C1 x=1.0000 y=2.0000 rot=0"));
+        assert!(!updated.contains("# pcb:sch C1"));
+        assert!(updated.contains("# pcb:sch C2 x=3.0000 y=4.0000 rot=0"));
         assert_eq!(result["resultHash"], json!(super::content_hash(&updated)));
 
         // Neither disk nor the overlay was touched.
@@ -1925,7 +1959,7 @@ pcb-version = "0.4"
         let ctx = LspEvalContext::default();
         let response = ctx
             .handle_custom_request(
-                &save_positions_request(1, &zen_path, Some(&super::content_hash("stale"))),
+                &save_positions_request(1, &zen_path, &super::content_hash("stale")),
                 &lsp_types::InitializeParams::default(),
             )
             .expect("request should be handled");
@@ -1939,23 +1973,51 @@ pcb-version = "0.4"
     }
 
     #[test]
+    fn save_positions_with_base_hash_defaults_missing_deletions() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let zen_path = dir.path().canonicalize()?.join("main.zen");
+        let contents = "x = 1\n\n# pcb:sch C1 x=1.0000 y=2.0000 rot=0\n";
+        fs::write(&zen_path, contents)?;
+
+        let ctx = LspEvalContext::default();
+        let mut request = save_positions_request(1, &zen_path, &super::content_hash(contents));
+        request
+            .params
+            .as_object_mut()
+            .unwrap()
+            .remove("deletedSymbolIds");
+        let response = ctx
+            .handle_custom_request(&request, &lsp_types::InitializeParams::default())
+            .expect("request should be handled");
+
+        assert!(response.error.is_none(), "error: {:?}", response.error);
+        let result = response.result.unwrap();
+        let edit: lsp_types::TextEdit = serde_json::from_value(result["edit"].clone())?;
+        let updated = apply_text_edit(contents, &edit);
+        assert!(updated.contains("# pcb:sch C1 x=1.0000 y=2.0000 rot=0"));
+        assert!(updated.contains("# pcb:sch R1 x=12.5000 y=30.0000 rot=90"));
+
+        Ok(())
+    }
+
+    #[test]
     fn save_positions_without_base_hash_writes_file() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let zen_path = dir.path().canonicalize()?.join("main.zen");
         fs::write(&zen_path, "x = 1\n")?;
 
         let ctx = LspEvalContext::default();
+        let mut request = save_positions_request(1, &zen_path, "unused");
+        let params = request.params.as_object_mut().unwrap();
+        params.remove("baseHash");
+        params.remove("deletedSymbolIds");
         let response = ctx
-            .handle_custom_request(
-                &save_positions_request(1, &zen_path, None),
-                &lsp_types::InitializeParams::default(),
-            )
+            .handle_custom_request(&request, &lsp_types::InitializeParams::default())
             .expect("request should be handled");
 
         assert!(response.error.is_none(), "error: {:?}", response.error);
         assert_eq!(response.result, Some(serde_json::Value::Null));
-        let updated = fs::read_to_string(&zen_path)?;
-        assert!(updated.contains("# pcb:sch R1 x=12.5000 y=30.0000 rot=90"));
+        assert!(fs::read_to_string(&zen_path)?.contains("# pcb:sch R1 x=12.5000 y=30.0000 rot=90"));
 
         Ok(())
     }
@@ -1969,7 +2031,6 @@ pcb-version = "0.4"
         fs::write(&zen_path, contents)?;
 
         let ctx = LspEvalContext::default();
-        let base_hash = super::content_hash(contents);
         let response = ctx
             .handle_custom_request(
                 &Request {
@@ -1978,7 +2039,7 @@ pcb-version = "0.4"
                     params: json!({
                         "filePath": zen_path.to_str().unwrap(),
                         "symbolId": "comp:C1",
-                        "baseHash": base_hash,
+                        "baseHash": super::content_hash(contents),
                     }),
                 },
                 &lsp_types::InitializeParams::default(),
@@ -1992,9 +2053,39 @@ pcb-version = "0.4"
         assert!(!updated.contains("C1"));
         assert!(updated.contains("# pcb:sch R1 x=3.0000 y=4.0000 rot=0"));
         assert_eq!(result["resultHash"], json!(super::content_hash(&updated)));
-
-        // Disk untouched.
         assert_eq!(fs::read_to_string(&zen_path)?, contents);
+
+        Ok(())
+    }
+
+    #[test]
+    fn remove_position_without_base_hash_writes_file() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let zen_path = dir.path().canonicalize()?.join("main.zen");
+        let contents =
+            "x = 1\n\n# pcb:sch C1 x=1.0000 y=2.0000 rot=0\n# pcb:sch R1 x=3.0000 y=4.0000 rot=0\n";
+        fs::write(&zen_path, contents)?;
+
+        let ctx = LspEvalContext::default();
+        let response = ctx
+            .handle_custom_request(
+                &Request {
+                    id: RequestId::from(1),
+                    method: "pcb/removePosition".to_string(),
+                    params: json!({
+                        "filePath": zen_path.to_str().unwrap(),
+                        "symbolId": "comp:C1",
+                    }),
+                },
+                &lsp_types::InitializeParams::default(),
+            )
+            .expect("request should be handled");
+
+        assert!(response.error.is_none(), "error: {:?}", response.error);
+        assert_eq!(response.result, Some(serde_json::Value::Null));
+        let updated = fs::read_to_string(&zen_path)?;
+        assert!(!updated.contains("C1"));
+        assert!(updated.contains("# pcb:sch R1 x=3.0000 y=4.0000 rot=0"));
 
         Ok(())
     }

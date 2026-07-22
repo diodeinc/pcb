@@ -127,32 +127,39 @@ pub fn update_position_comments(
     content: &str,
     new_positions: &BTreeMap<String, Position>,
 ) -> (usize, String) {
-    // Get existing positions and block start
-    let (mut existing_positions, block_start) = parse_position_comments(content);
+    edit_position_comments(content, new_positions, &[])
+}
 
-    // Merge new positions (overriding existing ones)
+/// Apply position updates and deletions after parsing the position block once.
+/// Updates take precedence when the same symbol appears in both collections.
+pub fn edit_position_comments(
+    content: &str,
+    new_positions: &BTreeMap<String, Position>,
+    symbol_ids_to_remove: &[String],
+) -> (usize, String) {
+    let (mut positions, block_start) = parse_position_comments(content);
+
+    for symbol_id in symbol_ids_to_remove {
+        positions.remove(&NaturalString::from(symbol_id.clone()));
+    }
     for (element_id, position) in new_positions {
-        existing_positions.insert(NaturalString::from(element_id.clone()), position.clone());
+        positions.insert(NaturalString::from(element_id.clone()), position.clone());
     }
 
-    // Check if we need a blank line before positions
     let content_before = &content[..block_start];
-    let needs_blank_line = !content_before.is_empty() && !content_before.ends_with("\n\n");
-
-    // Generate position comments
     let mut position_comments = String::new();
-    if needs_blank_line {
-        if content_before.ends_with('\n') {
-            position_comments.push('\n'); // Add one more to create blank line
-        } else {
-            position_comments.push_str("\n\n"); // Add newline + blank line
+    if !positions.is_empty() {
+        if !content_before.is_empty() && !content_before.ends_with("\n\n") {
+            position_comments.push_str(if content_before.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            });
         }
-    }
 
-    // BTreeMap with NaturalString keys automatically sorts naturally
-    for (element_id, position) in &existing_positions {
-        let comment = format_position_comment(element_id, position);
-        position_comments.push_str(&comment);
+        for (element_id, position) in &positions {
+            position_comments.push_str(&format_position_comment(element_id, position));
+        }
     }
 
     (block_start, position_comments)
@@ -164,35 +171,7 @@ pub fn update_position_comments(
 /// position block starts and the replacement text for everything from that
 /// offset to the end of the content.
 pub fn remove_position_comments(content: &str, symbol_ids_to_remove: &[String]) -> (usize, String) {
-    // Parse existing positions
-    let (mut existing_positions, block_start) = parse_position_comments(content);
-
-    // Remove the specified symbols
-    for symbol_id in symbol_ids_to_remove {
-        existing_positions.remove(&NaturalString::from(symbol_id.clone()));
-    }
-
-    // Regenerate position comments
-    let content_before = &content[..block_start];
-    let needs_blank_line = !content_before.is_empty() && !content_before.ends_with("\n\n");
-
-    let mut position_comments = String::new();
-    if !existing_positions.is_empty() {
-        if needs_blank_line {
-            if content_before.ends_with('\n') {
-                position_comments.push('\n');
-            } else {
-                position_comments.push_str("\n\n");
-            }
-        }
-
-        for (element_id, position) in &existing_positions {
-            let comment = format_position_comment(element_id, position);
-            position_comments.push_str(&comment);
-        }
-    }
-
-    (block_start, position_comments)
+    edit_position_comments(content, &BTreeMap::new(), symbol_ids_to_remove)
 }
 
 /// Truncate `file_path` at `block_start` and append `position_comments`.
