@@ -105,8 +105,12 @@ struct DesignBomEntry {
 enum BomMatchStatus {
     #[serde(rename = "MATCH_EXACT")]
     Exact,
+    #[serde(rename = "MATCH_COMPATIBLE")]
+    Compatible,
     #[serde(rename = "MATCH_FUZZY")]
     Fuzzy,
+    #[serde(rename = "MATCH_NEEDS_RETRY")]
+    NeedsRetry,
     #[serde(rename = "MATCH_FAILED")]
     Failed,
 }
@@ -256,12 +260,12 @@ fn call_bom_match_api(
     timeout_secs: u64,
     strict: bool,
 ) -> Result<MatchBomResponse> {
-    let url = format!("{}/api/boms/match", ctx.api_base_url());
+    let url = bom_match_url(ctx.api_base_url(), strict);
 
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()?;
-    let request_body = bom_match_request_body(bom_entries, strict);
+    let request_body = bom_match_request_body(bom_entries);
 
     let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
         .json(&request_body)
@@ -279,15 +283,16 @@ fn call_bom_match_api(
         .context("Failed to parse BOM match response")
 }
 
-fn bom_match_request_body(bom_entries: &[serde_json::Value], strict: bool) -> serde_json::Value {
-    let mut body = serde_json::json!({
+fn bom_match_url(api_base_url: &str, strict: bool) -> String {
+    let suffix = if strict { "?strict=true" } else { "" };
+    format!("{api_base_url}/api/boms/match{suffix}")
+}
+
+fn bom_match_request_body(bom_entries: &[serde_json::Value]) -> serde_json::Value {
+    serde_json::json!({
         "designBom": bom_entries,
         "format": "normalized",
-    });
-    if strict {
-        body["strict"] = serde_json::json!(true);
-    }
-    body
+    })
 }
 
 /// Fetch BOM matching results from the API and populate availability data
@@ -669,14 +674,31 @@ mod tests {
             Some(BomMatchStatus::Failed),
             vec!["offer-1".to_string()]
         )));
-        assert!(!bom_line_no_match(&bom_line(
-            Some(BomMatchStatus::Exact),
-            Vec::new()
-        )));
-        assert!(!bom_line_no_match(&bom_line(
-            Some(BomMatchStatus::Fuzzy),
-            Vec::new()
-        )));
+
+        for status in [
+            BomMatchStatus::Exact,
+            BomMatchStatus::Compatible,
+            BomMatchStatus::Fuzzy,
+            BomMatchStatus::NeedsRetry,
+        ] {
+            assert!(!bom_line_no_match(&bom_line(Some(status), Vec::new())));
+        }
+    }
+
+    #[test]
+    fn match_status_decodes_server_values() {
+        for (json, expected) in [
+            (r#""MATCH_EXACT""#, BomMatchStatus::Exact),
+            (r#""MATCH_COMPATIBLE""#, BomMatchStatus::Compatible),
+            (r#""MATCH_FUZZY""#, BomMatchStatus::Fuzzy),
+            (r#""MATCH_NEEDS_RETRY""#, BomMatchStatus::NeedsRetry),
+            (r#""MATCH_FAILED""#, BomMatchStatus::Failed),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<BomMatchStatus>(json).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -731,7 +753,7 @@ mod tests {
             "mpn": "ABC123",
         })];
 
-        let body = bom_match_request_body(&entries, false);
+        let body = bom_match_request_body(&entries);
 
         assert_eq!(body["format"], "normalized");
         assert_eq!(body["designBom"], serde_json::Value::Array(entries));
@@ -739,15 +761,14 @@ mod tests {
     }
 
     #[test]
-    fn bom_match_request_body_sends_strict_when_enabled() {
-        let entries = vec![serde_json::json!({
-            "path": "root.U1",
-            "designator": "U1",
-            "mpn": "ABC123",
-        })];
-
-        let body = bom_match_request_body(&entries, true);
-
-        assert_eq!(body["strict"], true);
+    fn bom_match_url_selects_strict_matching_when_enabled() {
+        assert_eq!(
+            bom_match_url("https://api.diode.computer", false),
+            "https://api.diode.computer/api/boms/match"
+        );
+        assert_eq!(
+            bom_match_url("https://api.diode.computer", true),
+            "https://api.diode.computer/api/boms/match?strict=true"
+        );
     }
 }

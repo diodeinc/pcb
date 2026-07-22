@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb scan` supports page ranges with `--pages START-END`.
 
+### Fixed
+
+- `[workspace.bom] strict = true` now selects the API's strict BOM matcher instead of sending an ignored request-body field.
+
 ## [0.4.8] - 2026-07-22
 
 ### Changed
