@@ -81,6 +81,8 @@ Use `pcb new component <DIR>` when importing a downloaded local ECAD directory.
 
 Fetched artifacts are starting points, not authority. Check every symbol, pin, footprint, datasheet link, sourcing field, and 3D model against the manufacturer datasheet. Footprints need an embedded STEP; imported or KiCad-copied footprints often only reference external models, which you must locate or download and embed.
 
+Prefer URL references over checked-in PDFs. Set the symbol's `Datasheet` property to a URL that `pcb scan <url>` resolves, and use `datasheet-reader` to inspect it. Link supplemental documents from READMEs or `.zen` docstrings. PDFs under `docs/` are allowed but discouraged, especially large files.
+
 If trusted footprint or STEP artifacts are unavailable, report what you checked and ask before creating scratch geometry. After approved scratch work, label it as scratch/generated, cite the evidence used, render/verify it, and call out the risk in the README and completion report.
 
 Embed real STEP models with `pcb embed-step`; do not hand-edit model blocks:
@@ -100,12 +102,10 @@ components/<Manufacturer>/<NAME>/
 ├── <NAME>.kicad_sym
 ├── <NAME or footprint>.kicad_mod
 ├── pcb.toml
-├── docs/
-│   └── <datasheet>.pdf
 └── README.md
 ```
 
-Include checked-in datasheet PDFs under `docs/`. Include a real `.kicad_mod`; note whether it is datasheet-exact, KiCad-stock-derived, vendor-derived, or intentionally adjusted.
+Include a real `.kicad_mod`; note whether it is datasheet-exact, KiCad-stock-derived, vendor-derived, or intentionally adjusted.
 
 Each `.zen` entrypoint should be a complete public API for one primitive component or one reference design. A package may contain multiple `.zen` entrypoints when one curated part/family has multiple useful datasheet-backed application circuits; avoid thin local wrappers that only re-export another `.zen`.
 
