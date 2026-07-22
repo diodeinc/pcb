@@ -6,6 +6,8 @@
 # dependencies = [
 #   "kicad-library-generators[3d] @ git+https://gitlab.com/kicad/libraries/kicad-footprint-generator.git@1a927734a1f860a223ec0fd41d28ec3f4d323013",
 # ]
+# [tool.ty.analysis]
+# allowed-unresolved-imports = ["cadquery", "OCP.**", "generators.**"]
 # ///
 from __future__ import annotations
 

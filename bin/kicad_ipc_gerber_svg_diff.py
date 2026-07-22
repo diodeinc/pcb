@@ -2,6 +2,8 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = ["pillow>=10", "numpy>=1.26", "scipy>=1.11"]
+# [tool.ty.analysis]
+# allowed-unresolved-imports = ["numpy", "PIL.**", "scipy.**"]
 # ///
 """Validate the IPC-2581 -> Gerber/drill conversion against KiCad as an oracle.
 
