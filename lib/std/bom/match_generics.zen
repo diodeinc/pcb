@@ -1329,9 +1329,6 @@ def assign_house_ferrite_bead(c, house_fb_by_pkg):
 def assign_house_inductor(c, house_inductors_by_pkg):
     """Assign house power inductor MPNs."""
     pkg = prop(c, ["package", "Package"])
-    if pkg not in house_inductors_by_pkg:
-        return
-
     inductance_req = Inductance(prop(c, ["inductance", "Inductance"]))
     current_constraint = prop(c, ["current", "Current"])
     dcr_constraint = prop(c, ["dcr", "Dcr"])
