@@ -11,7 +11,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::scan::{
-    DatasheetScanOutcome, DatasheetScanResponse, build_scan_client, calculate_sha256,
+    DatasheetScanOutcome, DatasheetScanResponse, PageRange, build_scan_client, calculate_sha256,
     create_datasheet_from_pdf, create_datasheet_from_url, datasheet_id_for_sha256, download_file,
     download_scan_artifacts, extract_zip, scan_datasheet,
 };
@@ -129,30 +129,31 @@ pub fn parse_resolve_request(args: Option<&Value>) -> Result<ResolveDatasheetInp
 pub fn resolve_datasheet(
     auth_token: Option<&str>,
     input: &ResolveDatasheetInput,
+    page_range: Option<PageRange>,
 ) -> Result<ResolveDatasheetResponse> {
     let client = build_scan_client()?;
 
     match input {
         ResolveDatasheetInput::DatasheetUrl(url) => {
             let canonical_url = canonicalize_url(url)?;
-            resolve_source_url_datasheet(&client, auth_token, canonical_url)
+            resolve_source_url_datasheet(&client, auth_token, canonical_url, page_range)
         }
         ResolveDatasheetInput::PdfPath(path) => {
             let pdf_path = path.clone();
             let execution = ResolveExecution::from_pdf_path(pdf_path, None)?;
-            execute_resolve_execution(&client, auth_token, execution)
+            execute_resolve_execution(&client, auth_token, execution, page_range)
         }
         ResolveDatasheetInput::KicadSymPath { path, symbol_name } => {
             let reference =
                 extract_datasheet_reference_from_kicad_sym(path, symbol_name.as_deref())?;
             if is_http_datasheet_url(&reference) {
                 let canonical_url = canonicalize_url(&reference)?;
-                resolve_source_url_datasheet(&client, auth_token, canonical_url)
+                resolve_source_url_datasheet(&client, auth_token, canonical_url, page_range)
             } else {
                 let pdf_path = resolve_local_datasheet_path_from_kicad_sym(path, &reference)?;
                 validate_local_pdf(&pdf_path)?;
                 let execution = ResolveExecution::from_pdf_path(pdf_path, None)?;
-                execute_resolve_execution(&client, auth_token, execution)
+                execute_resolve_execution(&client, auth_token, execution, page_range)
             }
         }
     }
@@ -162,10 +163,11 @@ fn resolve_source_url_datasheet(
     client: &Client,
     auth_token: Option<&str>,
     canonical_url: String,
+    page_range: Option<PageRange>,
 ) -> Result<ResolveDatasheetResponse> {
     let pdf_path = ensure_url_pdf_cached(client, auth_token, &canonical_url)?;
     let execution = ResolveExecution::from_pdf_path(pdf_path, Some(canonical_url))?;
-    execute_resolve_execution(client, auth_token, execution)
+    execute_resolve_execution(client, auth_token, execution, page_range)
 }
 
 /// Ensure the PDF behind a datasheet URL is present in the local URL cache,
@@ -195,10 +197,13 @@ fn execute_resolve_execution(
     client: &Client,
     auth_token: Option<&str>,
     execution: ResolveExecution,
+    page_range: Option<PageRange>,
 ) -> Result<ResolveDatasheetResponse> {
-    let materialization_id = materialization_id_for_key(&execution.pdf_sha256)?;
+    let materialization_id =
+        materialization_id_for_key(&materialization_key(&execution.pdf_sha256, page_range))?;
     let materialized_dir = materialized_dir(&materialization_id);
-    let markdown_path = materialized_dir.join(inferred_markdown_filename(&execution.pdf_path));
+    let markdown_path =
+        materialized_dir.join(inferred_markdown_filename(&execution.pdf_path, page_range));
     let cached_markdown_path = first_valid_file_in_dir(
         &materialized_dir,
         Some(&markdown_path),
@@ -224,7 +229,7 @@ fn execute_resolve_execution(
     }
     reset_materialized_cache(&materialized_dir, &images_dir, &complete_marker);
 
-    let scan = ensure_datasheet_scanned(client, auth_token, &execution)?;
+    let scan = ensure_datasheet_scanned(client, auth_token, &execution, page_range)?;
 
     materialize_scan_outputs(
         client,
@@ -271,16 +276,18 @@ fn ensure_datasheet_scanned(
     client: &Client,
     auth_token: Option<&str>,
     execution: &ResolveExecution,
+    page_range: Option<PageRange>,
 ) -> Result<DatasheetScanResponse> {
     let datasheet_id = datasheet_id_for_sha256(&execution.pdf_sha256);
-    if let DatasheetScanOutcome::Scanned(scan) = scan_datasheet(client, auth_token, &datasheet_id)?
+    if let DatasheetScanOutcome::Scanned(scan) =
+        scan_datasheet(client, auth_token, &datasheet_id, page_range)?
     {
         return Ok(scan);
     }
 
     // The backend has no PDF cached under this content hash yet — upload ours, then scan.
     let datasheet = create_datasheet_from_pdf(client, auth_token, &execution.pdf_path)?;
-    match scan_datasheet(client, auth_token, &datasheet.id)? {
+    match scan_datasheet(client, auth_token, &datasheet.id, page_range)? {
         DatasheetScanOutcome::Scanned(scan) => Ok(scan),
         DatasheetScanOutcome::NotCached => {
             anyhow::bail!("Datasheet {} not found after upload", datasheet.id)
@@ -525,10 +532,24 @@ fn inferred_pdf_filename(path: &Path) -> String {
         .unwrap_or_else(|| "datasheet.pdf".to_string())
 }
 
-fn inferred_markdown_filename(pdf_path: &Path) -> String {
+fn inferred_markdown_filename(pdf_path: &Path, page_range: Option<PageRange>) -> String {
     let mut filename = PathBuf::from(inferred_pdf_filename(pdf_path));
+    if let Some(range) = page_range {
+        let stem = filename
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("datasheet");
+        return format!("{stem}.pages-{:04}-{:04}.md", range.start(), range.end());
+    }
     filename.set_extension("md");
     filename.to_string_lossy().into_owned()
+}
+
+fn materialization_key(pdf_sha256: &str, page_range: Option<PageRange>) -> String {
+    match page_range {
+        Some(range) => format!("{pdf_sha256}:pages/{}-{}", range.start(), range.end()),
+        None => pdf_sha256.to_string(),
+    }
 }
 
 fn build_resolve_response(
@@ -718,8 +739,27 @@ mod tests {
 
     #[test]
     fn test_inferred_markdown_filename_matches_pdf_stem() {
-        let name = inferred_markdown_filename(Path::new("/tmp/LM1117-3.3.pdf"));
+        let name = inferred_markdown_filename(Path::new("/tmp/LM1117-3.3.pdf"), None);
         assert_eq!(name, "LM1117-3.3.md");
+    }
+
+    #[test]
+    fn test_inferred_markdown_filename_includes_page_range() {
+        let range = "1-1000".parse().unwrap();
+        let name = inferred_markdown_filename(Path::new("/tmp/UM11126.pdf"), Some(range));
+        assert_eq!(name, "UM11126.pages-0001-1000.md");
+    }
+
+    #[test]
+    fn test_materialization_key_separates_ranges_and_preserves_full_key() {
+        let first = "1-50".parse().unwrap();
+        let second = "51-100".parse().unwrap();
+
+        assert_eq!(materialization_key("abc123", None), "abc123");
+        assert_ne!(
+            materialization_key("abc123", Some(first)),
+            materialization_key("abc123", Some(second))
+        );
     }
 
     #[test]

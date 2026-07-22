@@ -8,7 +8,10 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use url::Url;
+
+const MAX_SCAN_PAGES: u32 = 1_000;
 
 #[derive(Serialize)]
 struct CreateDatasheetRequest {
@@ -30,6 +33,75 @@ pub(crate) struct DatasheetScanResponse {
     pub(crate) markdown_url: String,
     #[serde(rename = "imagesZipUrl")]
     pub(crate) images_zip_url: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PageRange {
+    start: u32,
+    end: u32,
+}
+
+impl PageRange {
+    pub(crate) fn start(self) -> u32 {
+        self.start
+    }
+
+    pub(crate) fn end(self) -> u32 {
+        self.end
+    }
+
+    fn page_count(self) -> u32 {
+        self.end - self.start + 1
+    }
+}
+
+impl std::fmt::Display for PageRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}", self.start, self.end)
+    }
+}
+
+impl FromStr for PageRange {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let (start, end) = value.split_once('-').ok_or_else(|| {
+            "page range must use START-END with one-based inclusive page numbers".to_string()
+        })?;
+        let start = start.parse::<u32>().map_err(|_| {
+            "page range must use START-END with one-based inclusive page numbers".to_string()
+        })?;
+        let end = end.parse::<u32>().map_err(|_| {
+            "page range must use START-END with one-based inclusive page numbers".to_string()
+        })?;
+
+        if start == 0 || end == 0 {
+            return Err(
+                "page range uses one-based page numbers; START and END must be at least 1"
+                    .to_string(),
+            );
+        }
+        if end < start {
+            return Err("page range END must be greater than or equal to START".to_string());
+        }
+
+        let range = Self { start, end };
+        if range.page_count() > MAX_SCAN_PAGES {
+            return Err(format!(
+                "page range selects {} pages; at most {MAX_SCAN_PAGES} pages can be scanned",
+                range.page_count()
+            ));
+        }
+
+        Ok(range)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanDatasheetRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_range: Option<PageRange>,
 }
 
 pub(crate) enum DatasheetScanOutcome {
@@ -129,6 +201,7 @@ pub(crate) fn scan_datasheet(
     client: &Client,
     token: Option<&str>,
     datasheet_id: &str,
+    page_range: Option<PageRange>,
 ) -> Result<DatasheetScanOutcome> {
     let endpoint = format!(
         "{}/api/datasheets/{}/scan",
@@ -137,7 +210,7 @@ pub(crate) fn scan_datasheet(
     );
 
     let response = crate::auth::apply_bearer_auth(client.post(&endpoint), token)
-        .json(&serde_json::json!({}))
+        .json(&ScanDatasheetRequest { page_range })
         .send()?;
 
     if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -257,6 +330,10 @@ pub struct ScanArgs {
 
     #[arg(short, long, value_name = "DIR")]
     pub output: Option<PathBuf>,
+
+    /// Scan a one-based, inclusive page range (for example, 1-1000)
+    #[arg(long, value_name = "START-END")]
+    pages: Option<PageRange>,
 }
 
 pub fn execute(args: ScanArgs) -> Result<()> {
@@ -274,7 +351,8 @@ pub fn execute(args: ScanArgs) -> Result<()> {
         ),
     };
     let spinner = Spinner::builder("Resolving datasheet...").start();
-    let response = crate::datasheet::resolve_datasheet(token.as_deref(), &resolve_input)?;
+    let response =
+        crate::datasheet::resolve_datasheet(token.as_deref(), &resolve_input, args.pages)?;
     let pdf_path = input_pdf_path
         .unwrap_or_else(|| PathBuf::from(&response.pdf_path))
         .display()
@@ -289,6 +367,12 @@ pub fn execute(args: ScanArgs) -> Result<()> {
     spinner.finish();
 
     println!("PDF: {pdf_path}");
+    println!(
+        "Pages: {}",
+        args.pages
+            .map(|range| range.to_string())
+            .unwrap_or_else(|| "all".to_string())
+    );
     println!("Markdown: {markdown_path}");
 
     Ok(())
@@ -346,5 +430,48 @@ mod tests {
         }
 
         fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn page_range_is_one_based_inclusive() {
+        let range = "1-1000".parse::<PageRange>().unwrap();
+        assert_eq!(range.start(), 1);
+        assert_eq!(range.end(), 1000);
+        assert_eq!(range.page_count(), 1000);
+    }
+
+    #[test]
+    fn page_range_rejects_invalid_ranges() {
+        for value in ["1", "a-b", "0-1", "2-1", "1-1001"] {
+            assert!(
+                value.parse::<PageRange>().is_err(),
+                "expected {value:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_request_omits_page_range_for_full_scan() {
+        let request = ScanDatasheetRequest { page_range: None };
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn scan_request_serializes_page_range() {
+        let request = ScanDatasheetRequest {
+            page_range: Some("7-12".parse().unwrap()),
+        };
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "pageRange": {
+                    "start": 7,
+                    "end": 12
+                }
+            })
+        );
     }
 }

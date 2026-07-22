@@ -19,7 +19,7 @@ fn handle_custom_request(
 
     let input = pcb_diode_api::datasheet::parse_resolve_request(Some(params))?;
     let token = pcb_diode_api::auth::get_api_token()?;
-    let response = pcb_diode_api::datasheet::resolve_datasheet(token.as_deref(), &input)?;
+    let response = pcb_diode_api::datasheet::resolve_datasheet(token.as_deref(), &input, None)?;
     Ok(Some(serde_json::to_value(response)?))
 }
 

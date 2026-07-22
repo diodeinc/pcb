@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb scan` supports page ranges with `--pages START-END`.
+
 ## [0.4.8] - 2026-07-22
 
 ### Changed
