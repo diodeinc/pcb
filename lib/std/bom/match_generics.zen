@@ -290,7 +290,7 @@ HOUSE_CAPS_BY_PKG = murata_caps_by_pkg(
             ("X7R", "50V", "10nF 10%", "GCM155R71H103KA55", ["D", "J"], "GCM155R71H103KA55-01A.pdf"),
             ("X7R", "50V", "22nF 10%", "GCM155R71H223KA55", ["D", "J"], "GCM155R71H223KA55-01A.pdf"),
             ("X7R", "50V", "100nF 10%", "GCM155R71H104KE02", ["D", "J"], "GCM155R71H104KE02-01A.pdf"),
-            ("X7S", "10V", "470nF 10%", "GCM155C71A474KE36", ["D", "J"], "GCM155C71A474KE36-01A.pdf"),
+            ("X7R", "10V", "470nF 10%", "GRT155R71A474KE01", ["D", "J"], "GRT155R71A474KE01-01A.pdf"),
             ("X7R", "10V", "1uF 10%", "GRM155Z71A105KE01", ["D", "J"], "GRM155Z71A105KE01-01A.pdf"),
         ],
         "0603": [
@@ -300,6 +300,7 @@ HOUSE_CAPS_BY_PKG = murata_caps_by_pkg(
             ("X7R", "50V", "220nF 10%", "GCM188R71H224KA64", ["D", "J"], "GCM188R71H224KA64-01A.pdf"),
             ("X7R", "25V", "470nF 10%", "GCM188R71E474KA64", ["D", "J"], "GCM188R71E474KA64-04A.pdf"),
             ("X7R", "25V", "1uF 10%", "GCM188R71E105KA64", ["D", "J"], "GCM188R71E105KA64-04A.pdf"),
+            ("X5R", "50V", "2.2uF 10%", "GRT188R61H225KE13", ["D", "J"], "GRT188R61H225KE13-01A.pdf"),
             ("X7R", "25V", "2.2uF 20%", "GRM188Z71E225ME43", ["D", "J"], "GRM188Z71E225ME43-01A.pdf"),
             ("X7R", "16V", "4.7uF 10%", "GRM188Z71C475KE21", ["D", "J"], "GRM188Z71C475KE21-01A.pdf"),
             ("X7R", "10V", "10uF 10%", "GRM188Z71A106KA73", ["D", "J"], "GRM188Z71A106KA73-01A.pdf"),
