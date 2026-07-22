@@ -1,0 +1,11 @@
+---
+source: crates/pcbc/tests/route_local.rs
+expression: output
+---
+Command: pcbc route-local board.zen
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: No layout path defined in schematic. Add layout="path" to your module.

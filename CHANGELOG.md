@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb route-local` runs FreeRouting v2.0.1 headlessly on the local machine with auto-download, SHA-256 verification, Java 21+ auto-provisioning, trace clearing, and board backup.
+
 ## [0.4.7] - 2026-07-10
 
 ### Added

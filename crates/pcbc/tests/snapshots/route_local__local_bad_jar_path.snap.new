@@ -1,0 +1,12 @@
+---
+source: crates/pcbc/tests/route_local.rs
+assertion_line: 91
+expression: output
+---
+Command: pcbc route-local --fr-jar /nonexistent/freerouting.jar board.zen
+Exit Code: 1
+
+--- STDOUT ---
+
+--- STDERR ---
+Error: FreeRouting JAR not found at --fr-jar path: /nonexistent/freerouting.jar
