@@ -285,17 +285,17 @@ fn select_toolchain(
             should_allow_latest_fallback(&request, migrate_command, prefer_local);
         (request, allow_latest_fallback)
     } else {
-        let (request, _) = configured_toolchain_request()?;
+        let (request, _) = configured_toolchain_request(false)?;
         (request, true)
     };
 
     resolve_request(&request, prefer_local, allow_latest_fallback)
 }
 
-fn configured_toolchain_request() -> Result<(ToolchainRequest, String)> {
+fn configured_toolchain_request(allow_local: bool) -> Result<(ToolchainRequest, String)> {
     if let Some((path, raw)) = find_workspace_pcb_version()? {
         let request = parse_request(&raw)?;
-        if matches!(request, ToolchainRequest::Local) {
+        if !allow_local && matches!(request, ToolchainRequest::Local) {
             anyhow::bail!(
                 "{} uses pcb-version = \"local\"; use a version lane and run commands with `pcb +local ...` to test a local toolchain",
                 path.display()
@@ -1046,7 +1046,7 @@ fn toolchain_list() -> Result<()> {
 }
 
 fn toolchain_show(offline: bool) -> Result<()> {
-    let (request, reason) = configured_toolchain_request()?;
+    let (request, reason) = configured_toolchain_request(true)?;
     println!("shim: {}", env!("CARGO_PKG_VERSION"));
     println!("request: {}", format_request(&request));
     println!("reason: {reason}");
@@ -1387,7 +1387,7 @@ struct PruneTarget {
 
 fn toolchain_prune(dry_run: bool) -> Result<()> {
     let installed = installed_toolchains()?;
-    let (request, _) = configured_toolchain_request()?;
+    let (request, _) = configured_toolchain_request(true)?;
     let active = if !matches!(request, ToolchainRequest::Nightly | ToolchainRequest::Local)
         && let Some((active, _)) = best_local_toolchain(&request)?
         && installed.contains_key(&active)
@@ -1761,18 +1761,15 @@ fn self_update() -> Result<()> {
         }
         Ok(changelogs)
     })();
-    match &stable_result {
-        Ok(changelogs) => {
-            for (from, to, binary) in changelogs {
-                let selector = format!("{from}..{to}");
-                match Command::new(binary).args(["changelog", &selector]).status() {
-                    Ok(status) if status.success() => {}
-                    Ok(status) => eprintln!("Warning: failed to print pcbc changelog ({status})"),
-                    Err(err) => eprintln!("Warning: failed to print pcbc changelog ({err})"),
-                }
+    if let Ok(changelogs) = &stable_result {
+        for (from, to, binary) in changelogs {
+            let selector = format!("{from}..{to}");
+            match Command::new(binary).args(["changelog", &selector]).status() {
+                Ok(status) if status.success() => {}
+                Ok(status) => eprintln!("Warning: failed to print pcbc changelog ({status})"),
+                Err(err) => eprintln!("Warning: failed to print pcbc changelog ({err})"),
             }
         }
-        Err(_) => {}
     }
 
     if let Err(err) = &stable_result {
