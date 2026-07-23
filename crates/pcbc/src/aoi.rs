@@ -59,10 +59,24 @@ struct ComponentFinding {
     detail: String,
 }
 
+/// Whether a report reflects a real inspection or a scaffold that has not yet
+/// run the comparison. Distinguishes "no defects found" from "not inspected".
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum InspectionStatus {
+    /// The render-vs-photo comparison is not implemented; `findings` is not a
+    /// clean-pass result.
+    NotImplemented,
+    /// A full inspection ran and `findings` is authoritative.
+    #[allow(dead_code)] // Set once the CV diff step is implemented.
+    Completed,
+}
+
 /// Result of an AOI compare run.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AoiReport {
+    status: InspectionStatus,
     design: PathBuf,
     captured_image: PathBuf,
     threshold: f64,
@@ -88,7 +102,7 @@ pub fn execute(args: AoiArgs) -> Result<()> {
     }
     file_walker::require_zen_file(&args.design)?;
 
-    println!(
+    eprintln!(
         "Inspecting {} against {}",
         args.design.display(),
         args.image.display()
@@ -143,10 +157,11 @@ fn compare_render_to_photo(
     captured: &CapturedImage,
     threshold: f64,
 ) -> Result<AoiReport> {
-    println!(
+    eprintln!(
         "note: render-vs-photo comparison is not yet implemented; no components were inspected"
     );
     Ok(AoiReport {
+        status: InspectionStatus::NotImplemented,
         design: expected.source.clone(),
         captured_image: captured.source.clone(),
         threshold,
@@ -162,12 +177,23 @@ fn emit_report(report: &AoiReport, output: Option<&Path>) -> Result<()> {
         Some(path) => {
             std::fs::write(path, serde_json::to_string_pretty(report)?)
                 .with_context(|| format!("Failed to write report to {}", path.display()))?;
-            println!("✓ AOI report written to {}", path.display());
+            eprintln!("✓ AOI report written to {}", path.display());
         }
-        None => {
-            if report.findings.is_empty() {
-                println!("No component discrepancies reported (inspection pending).");
-            } else {
+        None => match report.status {
+            InspectionStatus::NotImplemented => {
+                println!(
+                    "status: not implemented — the render-vs-photo comparison did not run; \
+                     this is not a clean-pass result"
+                );
+            }
+            InspectionStatus::Completed if report.findings.is_empty() => {
+                println!("status: completed — no component discrepancies found");
+            }
+            InspectionStatus::Completed => {
+                println!(
+                    "status: completed — {} discrepancy(ies) found",
+                    report.findings.len()
+                );
                 for finding in &report.findings {
                     println!(
                         "{}: {:?} — {}",
@@ -175,7 +201,7 @@ fn emit_report(report: &AoiReport, output: Option<&Path>) -> Result<()> {
                     );
                 }
             }
-        }
+        },
     }
     Ok(())
 }

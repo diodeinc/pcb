@@ -59,7 +59,44 @@ fn aoi_command_is_recognized() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("not yet implemented"),
-        "diff step should report it is pending, got stdout:\n{stdout}"
+        stdout.contains("not implemented"),
+        "report should flag that inspection did not run, got stdout:\n{stdout}"
     );
+    // Progress/notice text goes to stderr, keeping stdout report-only.
+    assert!(
+        stderr.contains("not yet implemented"),
+        "pending-diff notice should be on stderr, got stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn aoi_output_dash_emits_pure_json_to_stdout() {
+    let output = Sandbox::new()
+        .write("pcb.toml", PCB_TOML_MIN)
+        .write("boards/Board.zen", SIMPLE_BOARD_ZEN)
+        .write("photo.png", "not-a-real-image")
+        .run(
+            "pcbc",
+            [
+                "aoi",
+                "boards/Board.zen",
+                "--image",
+                "photo.png",
+                "--output",
+                "-",
+            ],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // stdout must be the JSON report only; progress notes are on stderr.
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout not pure JSON ({e}):\n{stdout}"));
+    assert_eq!(value["status"], "not_implemented");
+    assert_eq!(value["findings"].as_array().map(Vec::len), Some(0));
 }
