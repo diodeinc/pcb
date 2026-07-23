@@ -516,13 +516,17 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     let tag_prefix = tags::compute_tag_prefix(Some(&pkg_rel_path), workspace.path());
     let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
+    let latest_tag = tags::find_latest_tag(&all_tags, &tag_prefix);
 
     // Resolve bump type (interactive prompt if --bump was passed without a value)
     let bump = match args.bump.unwrap() {
         BumpType::Interactive => prompt_single_bump(&board_name, current.as_ref())?,
-        BumpType::Infer => {
-            bail!("--bump=infer is only supported when publishing packages.");
-        }
+        BumpType::Infer => infer_board_bump(
+            &workspace,
+            current.as_ref(),
+            latest_tag.as_deref(),
+            &pkg_rel_path,
+        ),
         b => b
             .release()
             .expect("explicit board bump must be a release bump"),
@@ -1093,6 +1097,24 @@ fn infer_self_bump(
     .into_iter()
     .map(|subject| ReleaseBump::infer_from_commit(&subject, current))
     .max()
+}
+
+fn infer_board_bump(
+    workspace: &WorkspaceInfo,
+    current: Option<&Version>,
+    latest_tag: Option<&str>,
+    pkg_rel_path: &Path,
+) -> ReleaseBump {
+    let Some(current) = current else {
+        return ReleaseBump::Minor;
+    };
+
+    let range = latest_tag.map(|tag| format!("{tag}..HEAD"));
+    git::log_subjects(&workspace.root, range.as_deref(), Some(pkg_rel_path))
+        .into_iter()
+        .map(|subject| ReleaseBump::infer_from_commit(&subject, current))
+        .max()
+        .unwrap_or(ReleaseBump::Patch)
 }
 
 fn current_package_version(
