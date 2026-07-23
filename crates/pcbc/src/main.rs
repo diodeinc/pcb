@@ -11,6 +11,7 @@ use std::process::Command;
 
 const BUNDLED_EXTERNAL_COMMANDS: &[&str] = &["rectify"];
 
+mod aoi;
 mod bom;
 mod build;
 mod bundle;
@@ -171,6 +172,9 @@ enum Commands {
     /// Gerber X2 parser and rendering tool
     Gerber(gerber::GerberArgs),
 
+    /// Automated optical inspection of an assembled board
+    Aoi(aoi::AoiArgs),
+
     /// Inspect KiCad symbol libraries as structured JSON
     #[command(hide = true)]
     Kq(kq::KqArgs),
@@ -246,6 +250,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Simulate(args) => sim::execute(args),
         Commands::Ipc2581(args) => ipc2581::execute(args),
         Commands::Gerber(args) => gerber::execute(args),
+        Commands::Aoi(args) => aoi::execute(args),
         Commands::Kq(args) => kq::execute(args),
         Commands::External(args) => execute_external(args),
     }
