@@ -123,72 +123,35 @@ pub fn parse_position_comments(content: &str) -> (BTreeMap<NaturalString, Positi
     (positions, block_start)
 }
 
-pub fn update_position_comments(
+/// Apply position updates and deletions after parsing the position block once.
+/// Updates take precedence when the same symbol appears in both collections.
+pub fn edit_position_comments(
     content: &str,
     new_positions: &BTreeMap<String, Position>,
+    symbol_ids_to_remove: &[String],
 ) -> (usize, String) {
-    // Get existing positions and block start
-    let (mut existing_positions, block_start) = parse_position_comments(content);
+    let (mut positions, block_start) = parse_position_comments(content);
 
-    // Merge new positions (overriding existing ones)
-    for (element_id, position) in new_positions {
-        existing_positions.insert(NaturalString::from(element_id.clone()), position.clone());
-    }
-
-    // Check if we need a blank line before positions
-    let content_before = &content[..block_start];
-    let needs_blank_line = !content_before.is_empty() && !content_before.ends_with("\n\n");
-
-    // Generate position comments
-    let mut position_comments = String::new();
-    if needs_blank_line {
-        if content_before.ends_with('\n') {
-            position_comments.push('\n'); // Add one more to create blank line
-        } else {
-            position_comments.push_str("\n\n"); // Add newline + blank line
-        }
-    }
-
-    // BTreeMap with NaturalString keys automatically sorts naturally
-    for (element_id, position) in &existing_positions {
-        let comment = format_position_comment(element_id, position);
-        position_comments.push_str(&comment);
-    }
-
-    (block_start, position_comments)
-}
-
-/// Remove positions for specific symbol IDs from document content.
-///
-/// Pure counterpart of [`remove_positions`]: returns the byte offset where the
-/// position block starts and the replacement text for everything from that
-/// offset to the end of the content.
-pub fn remove_position_comments(content: &str, symbol_ids_to_remove: &[String]) -> (usize, String) {
-    // Parse existing positions
-    let (mut existing_positions, block_start) = parse_position_comments(content);
-
-    // Remove the specified symbols
     for symbol_id in symbol_ids_to_remove {
-        existing_positions.remove(&NaturalString::from(symbol_id.clone()));
+        positions.remove(&NaturalString::from(symbol_id.clone()));
+    }
+    for (element_id, position) in new_positions {
+        positions.insert(NaturalString::from(element_id.clone()), position.clone());
     }
 
-    // Regenerate position comments
     let content_before = &content[..block_start];
-    let needs_blank_line = !content_before.is_empty() && !content_before.ends_with("\n\n");
-
     let mut position_comments = String::new();
-    if !existing_positions.is_empty() {
-        if needs_blank_line {
-            if content_before.ends_with('\n') {
-                position_comments.push('\n');
+    if !positions.is_empty() {
+        if !content_before.is_empty() && !content_before.ends_with("\n\n") {
+            position_comments.push_str(if content_before.ends_with('\n') {
+                "\n"
             } else {
-                position_comments.push_str("\n\n");
-            }
+                "\n\n"
+            });
         }
 
-        for (element_id, position) in &existing_positions {
-            let comment = format_position_comment(element_id, position);
-            position_comments.push_str(&comment);
+        for (element_id, position) in &positions {
+            position_comments.push_str(&format_position_comment(element_id, position));
         }
     }
 
@@ -218,7 +181,7 @@ pub fn replace_pcb_sch_comments<P: AsRef<Path>>(
     positions: &BTreeMap<String, Position>,
 ) -> std::io::Result<()> {
     let content = std::fs::read_to_string(&file_path)?;
-    let (block_start, position_comments) = update_position_comments(&content, positions);
+    let (block_start, position_comments) = edit_position_comments(&content, positions, &[]);
     write_position_block(&file_path, block_start, &position_comments)
 }
 
@@ -235,7 +198,8 @@ pub fn remove_positions<P: AsRef<Path>>(
     }
 
     let content = std::fs::read_to_string(&file_path)?;
-    let (block_start, position_comments) = remove_position_comments(&content, symbol_ids_to_remove);
+    let (block_start, position_comments) =
+        edit_position_comments(&content, &BTreeMap::new(), symbol_ids_to_remove);
     write_position_block(&file_path, block_start, &position_comments)
 }
 
@@ -276,7 +240,7 @@ load("@stdlib/interfaces.zen", "Power")
     }
 
     #[test]
-    fn test_update_position_comments() {
+    fn test_edit_position_comments() {
         let original_content = r#"load("@stdlib/interfaces.zen", "Power")
 
 # Old position comment
@@ -294,7 +258,7 @@ load("@stdlib/interfaces.zen", "Power")
         );
 
         let (truncate_pos, position_comments) =
-            update_position_comments(original_content, &positions);
+            edit_position_comments(original_content, &positions, &[]);
         let updated_content = format!("{}{}", &original_content[..truncate_pos], position_comments);
 
         // Old position comment should be preserved (merge behavior)
@@ -325,7 +289,7 @@ load("@stdlib/interfaces.zen", "Power")
         );
 
         let (truncate_pos, position_comments) =
-            update_position_comments(original_content, &positions);
+            edit_position_comments(original_content, &positions, &[]);
         let updated_content = format!("{}{}", &original_content[..truncate_pos], position_comments);
 
         // Should not add extra blank lines when updating existing position comments
@@ -402,7 +366,7 @@ load("@stdlib/interfaces.zen", "Power")
 
         // Test 3: Update function should preserve valid positions and add new ones
         let (truncate_pos, position_comments) =
-            update_position_comments(original_content, &new_positions);
+            edit_position_comments(original_content, &new_positions, &[]);
         let updated_content = format!("{}{}", &original_content[..truncate_pos], position_comments);
 
         // Should preserve valid positions from anywhere in file
@@ -450,7 +414,7 @@ load("@stdlib/interfaces.zen", "Power")
         ); // Add C
 
         let (content_before, position_comments) =
-            update_position_comments(original_content, &new_positions);
+            edit_position_comments(original_content, &new_positions, &[]);
         let updated_content = format!("{content_before}{position_comments}");
 
         // Should have 3 elements: updated A, preserved B, new C
@@ -556,7 +520,8 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)
             },
         ); // Add
 
-        let (truncate_pos, position_comments) = update_position_comments(content, &new_positions);
+        let (truncate_pos, position_comments) =
+            edit_position_comments(content, &new_positions, &[]);
         let updated_content = format!("{}{}", &content[..truncate_pos], position_comments);
 
         // Should preserve all scattered positions + new ones (5 total: EARLY, MIDDLE, FINAL_A, FINAL_B, NEW)
@@ -644,7 +609,7 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
     }
 
     #[test]
-    fn test_update_position_comments_writes_mirror() {
+    fn test_edit_position_comments_writes_mirror() {
         let content = "";
         let mut positions = std::collections::BTreeMap::new();
         positions.insert(
@@ -666,7 +631,7 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
             },
         );
 
-        let (_, position_comments) = update_position_comments(content, &positions);
+        let (_, position_comments) = edit_position_comments(content, &positions, &[]);
         assert!(position_comments.contains("# pcb:sch MIRRORED x=1.0000 y=2.0000 rot=90 mirror=x"));
         assert!(position_comments.contains("# pcb:sch PLAIN x=3.0000 y=4.0000 rot=180\n"));
     }
@@ -701,7 +666,8 @@ Resistor = Module("@stdlib/generics/Resistor.zen")"#;
             },
         );
 
-        let (truncate_pos, position_comments) = update_position_comments(content, &new_positions);
+        let (truncate_pos, position_comments) =
+            edit_position_comments(content, &new_positions, &[]);
         let updated_content = format!("{}{}", &content[..truncate_pos], position_comments);
 
         // Should handle file without trailing newline
@@ -810,7 +776,8 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
             },
         );
 
-        let (truncate_pos, position_comments) = update_position_comments(content, &new_positions);
+        let (truncate_pos, position_comments) =
+            edit_position_comments(content, &new_positions, &[]);
         let updated_content = format!("{}{}", &content[..truncate_pos], position_comments);
 
         println!("Updated content: '{updated_content}'");
@@ -862,7 +829,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
             },
         );
 
-        let (_, position_comments) = update_position_comments(content, &positions);
+        let (_, position_comments) = edit_position_comments(content, &positions, &[]);
         println!("Position comments order:\n{position_comments}");
 
         // Should sort numerically: 2, 9, 10, 11
@@ -907,7 +874,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
     }
 
     #[test]
-    fn test_remove_position_comments_pure() {
+    fn test_edit_position_comments_removes_positions() {
         let content = r#"load("@stdlib/interfaces.zen", "Power")
 
 # pcb:sch R1 x=100.0 y=200.0 rot=0
@@ -915,7 +882,7 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
 # pcb:sch R2 x=700.0 y=800.0 rot=180"#;
 
         let (block_start, position_comments) =
-            remove_position_comments(content, &["C1".to_string()]);
+            edit_position_comments(content, &BTreeMap::new(), &["C1".to_string()]);
         let updated = format!("{}{}", &content[..block_start], position_comments);
 
         assert!(updated.contains("R1"));
@@ -923,8 +890,9 @@ Resistor("R1", "10kOhm", "0603", P1=vcc.NET, P2=gnd.NET)"#;
         assert!(!updated.contains("C1"));
 
         // Removing every position leaves no trailing block (and no stray blank line).
-        let (block_start, position_comments) = remove_position_comments(
+        let (block_start, position_comments) = edit_position_comments(
             content,
+            &BTreeMap::new(),
             &["R1".to_string(), "C1".to_string(), "R2".to_string()],
         );
         assert!(position_comments.is_empty());
