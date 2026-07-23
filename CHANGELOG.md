@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-07-23
+
 ### Changed
 
 - Removed legacy LSP schematic position-write APIs.
@@ -1343,7 +1345,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.10...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.11...HEAD
+[0.4.11]: https://github.com/diodeinc/pcb/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/diodeinc/pcb/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/diodeinc/pcb/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/diodeinc/pcb/compare/v0.4.7...v0.4.8
