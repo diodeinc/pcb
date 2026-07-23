@@ -1132,12 +1132,10 @@ fn best_toolchain_for_show(request: &ToolchainRequest) -> Result<Option<(Version
     // Ordinary `latest` execution resolves the published release before
     // considering local fallbacks. Prefer a managed stable install here so the
     // diagnostic does not claim that a sibling development binary is active.
-    if matches!(request, ToolchainRequest::Latest)
-        && let Some(managed) = installed_toolchains()?
+    if matches!(request, ToolchainRequest::Latest) {
+        return Ok(installed_toolchains()?
             .into_iter()
-            .rfind(|(version, _)| request_matches(request, version))
-    {
-        return Ok(Some(managed));
+            .rfind(|(version, _)| request_matches(request, version)));
     }
     best_local_toolchain(request)
 }
