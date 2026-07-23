@@ -54,20 +54,17 @@ E_SERIES = {
 def _e_series(physical_value, series):
     """Return the closest series value to the given number."""
 
-    # lambda to convert to physical value
     _unit = lambda x: physical_value.with_value(x)
 
-    # Handle zero or negative values - return unchanged
-    # (will fail range checks naturally in matching logic)
+    # Non-positive values are not part of an E-series.
     if physical_value.value <= 0:
         return physical_value
 
-    # Find the appropriate decade
     decade = 1.0
     normalized = physical_value
 
-    # Scale down to 1-10 range
-    for _ in range(100):  # Limit to 100 iterations to avoid infinite loop
+    # Normalize to one decade.
+    for _ in range(100):
         if normalized >= 10.0:
             normalized = normalized / 10.0
             decade = decade * 10.0
@@ -77,20 +74,10 @@ def _e_series(physical_value, series):
         else:
             break
 
-    # Find closest E96 value
-    closest = _unit(series[0])
-    diff = normalized.diff(closest)
-
-    min_diff = diff
-
-    for e96_val in series:
-        diff = normalized.diff(_unit(e96_val))
-
-        if diff < min_diff:
-            min_diff = diff
-            closest = _unit(e96_val)
-
-    return closest * decade
+    # Include the first value of the next decade.
+    candidates = series + [series[0] * 10.0]
+    closest = min(candidates, key=lambda value: normalized.diff(_unit(value)))
+    return _unit(closest * decade)
 
 
 def e3(physical_value):
