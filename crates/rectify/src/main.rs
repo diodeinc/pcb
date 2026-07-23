@@ -21,7 +21,8 @@ mod solver;
 #[command(
     name = "pcb-rectify",
     bin_name = "pcb rectify",
-    about = "Check footprint <-> 3d model alignment in .kicad_mod file"
+    about = "Check footprint <-> 3d model alignment in .kicad_mod file",
+    version
 )]
 struct Cli {
     #[command(subcommand)]

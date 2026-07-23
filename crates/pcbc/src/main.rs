@@ -6,7 +6,10 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use env_logger::Env;
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+const BUNDLED_EXTERNAL_COMMANDS: &[&str] = &["rectify"];
 
 mod bom;
 mod build;
@@ -258,37 +261,13 @@ fn execute_external(args: Vec<OsString>) -> anyhow::Result<()> {
     let external_args = &args[1..];
     let candidates = external_command_candidates(&command);
 
-    // First search PATH, which supports separately-installed extensions.
-    for external_cmd in &candidates {
-        match run_external_command(external_cmd, external_args) {
-            Ok(()) => return Ok(()),
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                anyhow::bail!(
-                    "Failed to execute external command '{}': {}",
-                    external_cmd,
-                    e
-                )
-            }
-            Err(_) => {}
-        }
-    }
-
-    // Then search next to the currently-running `pcbc` binary. Bundled extension
-    // binaries installed by the `pcb` shim live in that toolchain directory,
-    // which is not necessarily on PATH.
-    for external_cmd in &candidates {
-        if let Some(sibling) = sibling_external_command(external_cmd) {
-            match run_external_command(sibling, external_args) {
-                Ok(()) => return Ok(()),
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    anyhow::bail!(
-                        "Failed to execute external command '{}': {}",
-                        external_cmd,
-                        e
-                    )
-                }
-                Err(_) => {}
-            }
+    // First-party sidecars belong to the selected pcbc toolchain, so prefer the
+    // sibling binary over an unrelated executable on PATH. Third-party
+    // extensions retain PATH-first behavior.
+    let sibling_first = BUNDLED_EXTERNAL_COMMANDS.contains(&command.as_ref());
+    for program in external_command_programs(&candidates, sibling_first) {
+        if try_external_program(&program, external_args)? {
+            return Ok(());
         }
     }
 
@@ -306,6 +285,41 @@ fn external_command_candidates(command: &str) -> Vec<String> {
     // are installed next to `pcbc` in the toolchain dir and found by the sibling
     // search; extensions are found on PATH.
     vec![format!("pcb-{command}")]
+}
+
+fn external_command_programs(candidates: &[String], sibling_first: bool) -> Vec<PathBuf> {
+    let siblings = candidates
+        .iter()
+        .filter_map(|candidate| sibling_external_command(candidate))
+        .collect();
+    let path_commands = candidates.iter().map(PathBuf::from).collect();
+    order_external_programs(siblings, path_commands, sibling_first)
+}
+
+fn order_external_programs(
+    siblings: Vec<PathBuf>,
+    path_commands: Vec<PathBuf>,
+    sibling_first: bool,
+) -> Vec<PathBuf> {
+    if sibling_first {
+        siblings.into_iter().chain(path_commands).collect()
+    } else {
+        path_commands.into_iter().chain(siblings).collect()
+    }
+}
+
+fn try_external_program(program: &Path, args: &[OsString]) -> anyhow::Result<bool> {
+    match run_external_command(program, args) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => {
+            anyhow::bail!(
+                "Failed to execute external command '{}': {}",
+                program.display(),
+                err
+            )
+        }
+    }
 }
 
 fn run_external_command<S: AsRef<std::ffi::OsStr>>(
@@ -336,4 +350,30 @@ fn sibling_external_command(command: &str) -> Option<std::path::PathBuf> {
     };
     let sibling = parent.join(binary_name);
     sibling.is_file().then_some(sibling)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_command_order_preserves_bundle_and_extension_precedence() {
+        let bundled = PathBuf::from("/toolchain/pcb-rectify");
+        let path_rectify = PathBuf::from("pcb-rectify");
+        assert_eq!(
+            order_external_programs(vec![bundled.clone()], vec![path_rectify.clone()], true),
+            vec![bundled, path_rectify]
+        );
+
+        let bundled_extension = PathBuf::from("/toolchain/pcb-vendor-extension");
+        let path_extension = PathBuf::from("pcb-vendor-extension");
+        assert_eq!(
+            order_external_programs(
+                vec![bundled_extension.clone()],
+                vec![path_extension.clone()],
+                false
+            ),
+            vec![path_extension, bundled_extension]
+        );
+    }
 }

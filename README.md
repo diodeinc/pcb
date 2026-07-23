@@ -31,6 +31,25 @@ validating Zener files does not require KiCad.
 Native Windows support is experimental. Use WSL2 if a command does not work in
 the native environment.
 
+### Toolchain management
+
+`pcb` manages `pcbc`, the standard library, and bundled sidecars such as
+`pcb-rectify` as one versioned toolchain.
+
+```bash
+pcb toolchain show                 # Show the active and latest matching versions
+pcb toolchain show --offline       # Use installed and cached data only
+pcb toolchain install latest       # Install the latest stable toolchain
+pcb toolchain prune --dry-run      # Preview removable downloads and old patches
+pcb toolchain prune                # Remove them
+pcb toolchain repair latest        # Validate and restore a toolchain
+```
+
+Install and repair accept `latest`, `nightly`, a lane such as `0.4`, or an exact
+version such as `0.4.9`. Pruning preserves the newest patch in each lane, the
+active version, prereleases, nightly, and local toolchains. `pcb self update`
+updates the shim and managed channels and fails if any requested update fails.
+
 ### Developing from source
 
 ```bash

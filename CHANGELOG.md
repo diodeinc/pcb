@@ -8,6 +8,16 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added `pcb toolchain prune [--dry-run]` and `pcb toolchain repair <request>`.
+
+### Changed
+
+- `pcb toolchain show` is now read-only, checks for updates, and supports `--offline`.
+- Toolchain install and self-update output now reports component status and failures accurately.
+- Bundled `pcb-rectify` now reports its version and takes precedence over `PATH`.
+
 ## [0.4.9] - 2026-07-23
 
 ### Added
