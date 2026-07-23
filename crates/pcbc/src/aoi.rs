@@ -134,8 +134,14 @@ fn render_expected_image(design: &Path) -> Result<ExpectedRender> {
 /// TODO: decode the image into a pixel buffer for alignment. For now this
 /// verifies the file is present and readable.
 fn load_captured_image(image: &Path) -> Result<CapturedImage> {
-    if !image.is_file() {
+    if !image.exists() {
         bail!("Captured image not found: {}", image.display());
+    }
+    if image.is_dir() {
+        bail!(
+            "Expected an image file, got a directory: {}",
+            image.display()
+        );
     }
     std::fs::File::open(image)
         .with_context(|| format!("Failed to open captured image {}", image.display()))?;
@@ -203,5 +209,17 @@ fn emit_report(report: &AoiReport, output: Option<&Path>) -> Result<()> {
             }
         },
     }
+
+    // A completed inspection that surfaced discrepancies is not a clean pass:
+    // signal it with a non-zero exit, mirroring how `pcb gerber compare` fails
+    // when the geometry differs. (The `NotImplemented` scaffold path is not a
+    // real result and stays exit-zero.)
+    if matches!(report.status, InspectionStatus::Completed) && !report.findings.is_empty() {
+        bail!(
+            "AOI found {} component discrepancy(ies)",
+            report.findings.len()
+        );
+    }
+
     Ok(())
 }
