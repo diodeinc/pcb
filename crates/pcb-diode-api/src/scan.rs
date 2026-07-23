@@ -367,13 +367,10 @@ pub fn execute(args: ScanArgs) -> Result<()> {
     spinner.finish();
 
     println!("PDF: {pdf_path}");
-    println!(
-        "Pages: {}",
-        args.pages
-            .map(|range| range.to_string())
-            .unwrap_or_else(|| "all".to_string())
-    );
     println!("Markdown: {markdown_path}");
+    if let Some(pages) = args.pages {
+        println!("Pages: {pages}");
+    }
 
     Ok(())
 }
