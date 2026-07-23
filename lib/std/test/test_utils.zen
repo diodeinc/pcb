@@ -1,0 +1,25 @@
+"""Tests for general utility functions."""
+
+load("../units.zen", "Capacitance")
+load("../utils.zen", "e3", "e6", "e12", "e24", "e48", "e96", "e192")
+
+for series_name, snap in [
+    ("E3", e3),
+    ("E6", e6),
+    ("E12", e12),
+    ("E24", e24),
+    ("E48", e48),
+    ("E96", e96),
+    ("E192", e192),
+]:
+    check(
+        snap(Capacitance("9.97nF")) == Capacitance("10nF"),
+        "{} should consider the next decade".format(series_name),
+    )
+
+# Preserve absolute-nearest behavior where it differs from geometric-nearest.
+check(e12(Capacitance("9.08nF")) == Capacitance("8.2nF"), "E12 should use absolute distance")
+
+# Check the same boundary above and below the base-unit decade.
+check(e12(Capacitance("0.997nF")) == Capacitance("1nF"), "E12 should cross a lower decade")
+check(e24(Capacitance("99.7nF")) == Capacitance("100nF"), "E24 should cross a higher decade")
