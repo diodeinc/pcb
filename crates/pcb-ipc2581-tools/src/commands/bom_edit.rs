@@ -127,7 +127,7 @@ fn resolve_selections<'a>(
 ) -> Result<Vec<ResolvedSelection<'a>>> {
     let bom = ipc.bom().ok_or_else(|| anyhow::anyhow!("No BOM section"))?;
 
-    selections
+    let resolved = selections
         .iter()
         .map(|selection| {
             let matches: Vec<_> = bom
@@ -156,7 +156,25 @@ fn resolve_selections<'a>(
                 _ => anyhow::bail!("Selection path is ambiguous: {}", selection.path),
             }
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut selections_by_oem = HashMap::new();
+    for resolved_selection in &resolved {
+        let selection = resolved_selection.selection;
+        if let Some(previous) =
+            selections_by_oem.insert(resolved_selection.oem_design_number.as_str(), selection)
+            && (previous.manufacturer != selection.manufacturer || previous.mpn != selection.mpn)
+        {
+            anyhow::bail!(
+                "Paths {} and {} select different parts for OEM {}",
+                previous.path,
+                selection.path,
+                resolved_selection.oem_design_number
+            );
+        }
+    }
+
+    Ok(resolved)
 }
 
 fn extract_generic_component(
