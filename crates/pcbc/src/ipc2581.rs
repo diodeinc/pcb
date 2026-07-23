@@ -152,11 +152,34 @@ enum EditCommands {
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
         /// JSON file containing path-based manufacturer/MPN selections
-        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
-        selections: PathBuf,
+        #[arg(
+            short,
+            long,
+            value_hint = clap::ValueHint::FilePath,
+            required_unless_present = "rules",
+            conflicts_with = "rules"
+        )]
+        selections: Option<PathBuf>,
+        /// Deprecated: JSON file containing BOM matching rules
+        #[arg(
+            short,
+            long,
+            value_hint = clap::ValueHint::FilePath,
+            required_unless_present = "selections",
+            conflicts_with = "selections"
+        )]
+        rules: Option<PathBuf>,
         /// Output IPC-2581 XML file
-        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
-        output: PathBuf,
+        #[arg(
+            short,
+            long,
+            value_hint = clap::ValueHint::FilePath,
+            required_unless_present = "rules"
+        )]
+        output: Option<PathBuf>,
+        /// Deprecated output format option retained for rules clients
+        #[arg(short = 'f', long, default_value = "text", hide = true)]
+        format: OutputFormat,
     },
 }
 
@@ -238,8 +261,24 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             EditCommands::Bom {
                 file,
                 selections,
+                rules,
                 output,
-            } => commands::bom_edit::execute(&file, &selections, &output),
+                ..
+            } => {
+                if let Some(rules) = rules {
+                    commands::bom_edit::execute_rules(&file, &rules, output.as_deref())
+                } else {
+                    commands::bom_edit::execute_selections(
+                        &file,
+                        selections
+                            .as_deref()
+                            .expect("clap requires either --selections or --rules"),
+                        output
+                            .as_deref()
+                            .expect("--output is required with --selections"),
+                    )
+                }
+            }
         },
         Commands::BoardArray { command } => match command {
             BoardArrayCommands::Create {
