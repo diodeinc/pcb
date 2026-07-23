@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -28,14 +29,51 @@ const RELEASE_LIST_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const NIGHTLY_RELEASE_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const SELF_UPDATE_REEXEC_ENV: &str = "PCB_SELF_UPDATE_REEXEC";
 
+#[derive(Parser)]
+#[command(name = "pcb")]
+struct ShimCli {
+    #[command(subcommand)]
+    command: ShimCommand,
+}
+
+#[derive(Subcommand)]
 enum ShimCommand {
-    SelfUpdate,
-    ToolchainList,
-    ToolchainShow { offline: bool },
-    ToolchainInstall(String),
-    ToolchainUninstall(String),
-    ToolchainPrune { dry_run: bool },
-    ToolchainRepair(String),
+    #[command(name = "self")]
+    SelfManage {
+        #[command(subcommand)]
+        command: SelfCommand,
+    },
+    Toolchain {
+        #[command(subcommand)]
+        command: ToolchainCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SelfCommand {
+    Update,
+}
+
+#[derive(Subcommand)]
+enum ToolchainCommand {
+    List,
+    Show {
+        #[arg(long)]
+        offline: bool,
+    },
+    Install {
+        request: String,
+    },
+    Uninstall {
+        version: String,
+    },
+    Prune {
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Repair {
+        request: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -123,7 +161,8 @@ fn run() -> Result<()> {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     if is_shim_command(&args) {
-        return execute_shim(parse_shim_command(&args)?);
+        let cli = ShimCli::parse_from(std::iter::once(OsString::from("pcb")).chain(args));
+        return execute_shim(cli.command);
     }
 
     let override_request = take_cli_override(&mut args)?;
@@ -167,56 +206,19 @@ fn first_command_arg(args: &[OsString]) -> Option<&str> {
     None
 }
 
-fn parse_shim_command(args: &[OsString]) -> Result<ShimCommand> {
-    let strings: Vec<&str> = args
-        .iter()
-        .map(|arg| {
-            arg.to_str()
-                .ok_or_else(|| anyhow::anyhow!("shim commands must be valid UTF-8"))
-        })
-        .collect::<Result<_>>()?;
-
-    match strings.as_slice() {
-        ["self", "update"] => Ok(ShimCommand::SelfUpdate),
-        ["toolchain", "list"] => Ok(ShimCommand::ToolchainList),
-        ["toolchain", "show"] => Ok(ShimCommand::ToolchainShow { offline: false }),
-        ["toolchain", "show", "--offline"] => Ok(ShimCommand::ToolchainShow { offline: true }),
-        ["toolchain", "install", request] => Ok(ShimCommand::ToolchainInstall((*request).into())),
-        ["toolchain", "uninstall", version] => {
-            Ok(ShimCommand::ToolchainUninstall((*version).into()))
-        }
-        ["toolchain", "prune"] => Ok(ShimCommand::ToolchainPrune { dry_run: false }),
-        ["toolchain", "prune", "--dry-run"] => Ok(ShimCommand::ToolchainPrune { dry_run: true }),
-        ["toolchain", "repair", request] => Ok(ShimCommand::ToolchainRepair((*request).into())),
-        ["self", "--help" | "-h" | "help"] => {
-            println!("Usage: pcb self update");
-            std::process::exit(0);
-        }
-        ["toolchain", "--help" | "-h" | "help"] => {
-            println!(
-                "Usage:\n  pcb toolchain list\n  pcb toolchain show [--offline]\n  pcb toolchain install <request>\n  pcb toolchain uninstall <version>\n  pcb toolchain prune [--dry-run]\n  pcb toolchain repair <request>"
-            );
-            std::process::exit(0);
-        }
-        ["self", ..] => anyhow::bail!("usage: pcb self update"),
-        ["toolchain", ..] => {
-            anyhow::bail!(
-                "usage: pcb toolchain <list|show|install|uninstall|prune|repair> [request|version]"
-            )
-        }
-        _ => anyhow::bail!("unknown shim command"),
-    }
-}
-
 fn execute_shim(command: ShimCommand) -> Result<()> {
     match command {
-        ShimCommand::SelfUpdate => self_update(),
-        ShimCommand::ToolchainList => toolchain_list(),
-        ShimCommand::ToolchainShow { offline } => toolchain_show(offline),
-        ShimCommand::ToolchainInstall(request) => toolchain_install(&request),
-        ShimCommand::ToolchainUninstall(version) => toolchain_uninstall(&version),
-        ShimCommand::ToolchainPrune { dry_run } => toolchain_prune(dry_run),
-        ShimCommand::ToolchainRepair(request) => toolchain_repair(&request),
+        ShimCommand::SelfManage {
+            command: SelfCommand::Update,
+        } => self_update(),
+        ShimCommand::Toolchain { command } => match command {
+            ToolchainCommand::List => toolchain_list(),
+            ToolchainCommand::Show { offline } => toolchain_show(offline),
+            ToolchainCommand::Install { request } => toolchain_install(&request),
+            ToolchainCommand::Uninstall { version } => toolchain_uninstall(&version),
+            ToolchainCommand::Prune { dry_run } => toolchain_prune(dry_run),
+            ToolchainCommand::Repair { request } => toolchain_repair(&request),
+        },
     }
 }
 
@@ -2296,22 +2298,6 @@ mod tests {
                 Version::parse("0.4.0-beta.1").unwrap(),
             ]
         );
-    }
-
-    #[test]
-    fn parses_toolchain_management_commands() {
-        assert!(matches!(
-            parse_shim_command(&args(&["toolchain", "show", "--offline"])).unwrap(),
-            ShimCommand::ToolchainShow { offline: true }
-        ));
-        assert!(matches!(
-            parse_shim_command(&args(&["toolchain", "prune", "--dry-run"])).unwrap(),
-            ShimCommand::ToolchainPrune { dry_run: true }
-        ));
-        assert!(matches!(
-            parse_shim_command(&args(&["toolchain", "repair", "0.4"])).unwrap(),
-            ShimCommand::ToolchainRepair(request) if request == "0.4"
-        ));
     }
 
     #[test]
