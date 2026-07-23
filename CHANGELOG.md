@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Removed legacy LSP schematic position-write APIs.
+
 ## [0.4.10] - 2026-07-23
 
 ### Added
