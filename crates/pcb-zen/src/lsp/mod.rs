@@ -7,8 +7,8 @@ use lsp_types::{
     WorkDoneProgressOptions, request::Request,
 };
 use pcb_sch::position::{
-    Position, edit_position_comments, remove_position_comments, remove_positions,
-    replace_pcb_sch_comments, symbol_id_to_comment_key,
+    Position, edit_position_comments, remove_positions, replace_pcb_sch_comments,
+    symbol_id_to_comment_key,
 };
 use pcb_starlark_lsp::server::{
     self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
@@ -1350,7 +1350,7 @@ impl LspContext for LspEvalContext {
 
                     if let Some(base_hash) = &params.base_hash {
                         let result = self.position_block_edit(file_path, base_hash, |content| {
-                            remove_position_comments(content, &[comment_key])
+                            edit_position_comments(content, &BTreeMap::new(), &[comment_key])
                         });
                         return Some(position_edit_result_to_response(req.id.clone(), result));
                     }

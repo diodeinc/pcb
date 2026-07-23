@@ -14,7 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- LSP schematic position edits can combine updates and deletions in one optimistic-concurrency request while retaining deprecated legacy position requests during client migration.
+- LSP schematic position writes support atomic updates and deletions while remaining compatible with legacy clients.
 
 ### Fixed
 
