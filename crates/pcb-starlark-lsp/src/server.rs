@@ -527,11 +527,26 @@ pub(crate) struct Backend<T: LspContext> {
     open_documents: RwLock<HashSet<LspUrl>>,
     /// Diagnostics published on behalf of each validated root document, grouped by target URI.
     published_diagnostics_by_origin: RwLock<HashMap<LspUrl, HashMap<Url, Vec<Diagnostic>>>>,
+    /// Complete payload most recently emitted for each subscribed document.
+    last_emitted_netlist_payloads: RwLock<HashMap<LspUrl, JsonValue>>,
     watched_file_paths: RwLock<HashSet<PathBuf>>,
     watched_file_registration_id: RwLock<Option<String>>,
     next_server_request_seq: AtomicU64,
     supports_dynamic_watched_files: bool,
     supports_relative_watch_patterns: bool,
+}
+
+fn record_netlist_payload(
+    last_emitted: &mut HashMap<LspUrl, JsonValue>,
+    uri: &LspUrl,
+    payload: &JsonValue,
+) -> bool {
+    // Value equality compares the complete JSON structure, independent of serialization order.
+    if last_emitted.get(uri) == Some(payload) {
+        return false;
+    }
+    last_emitted.insert(uri.clone(), payload.clone());
+    true
 }
 
 /// The logic implementations of stuff
@@ -668,6 +683,11 @@ impl<T: LspContext> Backend<T> {
         let lsp_url: LspUrl = params.text_document.uri.clone().try_into()?;
         self.open_documents.write().unwrap().remove(&lsp_url);
         self.context.did_close_file(&lsp_url);
+        self.last_emitted_netlist_payloads
+            .write()
+            .unwrap()
+            .remove(&lsp_url);
+        self.sync_watched_file_registrations();
 
         // In eager mode we keep the cached AST so that other features continue to work even
         // when the user closes the document in the editor.
@@ -1647,11 +1667,25 @@ impl<T: LspContext> Backend<T> {
     }
 
     fn maybe_publish_netlist_update(&self, uri: &LspUrl) -> anyhow::Result<()> {
-        if let Some(params) = self.context.netlist_update(uri)? {
-            self.send_notification(Notification {
-                method: "zener/netlistUpdated".to_string(),
-                params,
-            });
+        match self.context.netlist_update(uri)? {
+            Some(params) => {
+                let should_emit = {
+                    let mut last_emitted = self.last_emitted_netlist_payloads.write().unwrap();
+                    record_netlist_payload(&mut last_emitted, uri, &params)
+                };
+                if should_emit {
+                    self.send_notification(Notification {
+                        method: "zener/netlistUpdated".to_string(),
+                        params,
+                    });
+                }
+            }
+            None => {
+                self.last_emitted_netlist_payloads
+                    .write()
+                    .unwrap()
+                    .remove(uri);
+            }
         }
         self.sync_watched_file_registrations();
         Ok(())
@@ -1936,6 +1970,7 @@ pub fn server_with_connection<T: LspContext>(
         last_valid_parse: RwLock::default(),
         open_documents: RwLock::default(),
         published_diagnostics_by_origin: RwLock::default(),
+        last_emitted_netlist_payloads: RwLock::default(),
         watched_file_paths: RwLock::default(),
         watched_file_registration_id: RwLock::default(),
         next_server_request_seq: AtomicU64::new(1),
@@ -2018,6 +2053,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::Path;
     use std::path::PathBuf;
 
@@ -2043,6 +2079,7 @@ mod tests {
     use starlark::wasm::is_wasm;
     use textwrap::dedent;
 
+    use super::record_netlist_payload;
     use crate::definition::helpers::FixtureWithRanges;
     use crate::server::LspServerSettings;
     use crate::server::LspUrl;
@@ -2051,6 +2088,19 @@ mod tests {
     use crate::server::StarlarkFileContentsResponse;
     use crate::server::new_notification;
     use crate::test::TestServer;
+
+    #[test]
+    fn netlist_payload_deduplication_only_compares_with_previous_value() {
+        let uri = LspUrl::File(PathBuf::from("/tmp/netlist.zen"));
+        let a = serde_json::json!({"contentHash": "same", "dependency": "a"});
+        let b = serde_json::json!({"contentHash": "same", "dependency": "b"});
+        let mut last_emitted = HashMap::new();
+
+        assert!(record_netlist_payload(&mut last_emitted, &uri, &a));
+        assert!(!record_netlist_payload(&mut last_emitted, &uri, &a));
+        assert!(record_netlist_payload(&mut last_emitted, &uri, &b));
+        assert!(record_netlist_payload(&mut last_emitted, &uri, &a));
+    }
 
     fn goto_definition_request(
         server: &mut TestServer,

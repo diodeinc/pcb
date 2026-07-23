@@ -63,8 +63,7 @@ pub struct LspEvalContext {
     resolution_cache: RwLock<HashMap<PathBuf, Arc<ResolutionResult>>>,
     workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
-    netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
-    symbol_watch_paths: Arc<RwLock<HashMap<PathBuf, HashSet<PathBuf>>>>,
+    netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, NetlistSubscription>>>,
     /// Per-file cache of the schematic computed right after evaluation, before
     /// the shared session module tree can be contaminated by other files.
     last_schematics: Arc<RwLock<HashMap<PathBuf, pcb_sch::Schematic>>>,
@@ -73,6 +72,12 @@ pub struct LspEvalContext {
 
 type CustomRequestHandler =
     dyn Fn(&str, &JsonValue) -> anyhow::Result<Option<JsonValue>> + Send + Sync;
+
+#[derive(Default)]
+struct NetlistSubscription {
+    inputs: HashMap<String, JsonValue>,
+    symbol_watch_paths: HashSet<PathBuf>,
+}
 
 struct OverlayFileProvider {
     base: Arc<dyn FileProvider>,
@@ -189,7 +194,6 @@ impl Default for LspEvalContext {
             workspace_root_cache: RwLock::new(HashMap::new()),
             open_files,
             netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
-            symbol_watch_paths: Arc::new(RwLock::new(HashMap::new())),
             last_schematics: Arc::new(RwLock::new(HashMap::new())),
             custom_request_handler: None,
         }
@@ -295,21 +299,22 @@ impl LspEvalContext {
         self.netlist_subscriptions
             .write()
             .unwrap()
-            .insert(key, inputs.clone());
+            .entry(key)
+            .or_default()
+            .inputs = inputs.clone();
     }
 
     fn set_symbol_watch_paths_for_netlist(&self, path: &Path, watched_paths: HashSet<PathBuf>) {
         let key = self.normalize_path(path);
-        self.symbol_watch_paths
-            .write()
-            .unwrap()
-            .insert(key, watched_paths);
+        if let Some(subscription) = self.netlist_subscriptions.write().unwrap().get_mut(&key) {
+            subscription.symbol_watch_paths = watched_paths;
+        }
     }
 
     fn watched_symbol_paths(&self) -> Vec<PathBuf> {
         let mut watched_paths = HashSet::new();
-        for paths in self.symbol_watch_paths.read().unwrap().values() {
-            watched_paths.extend(paths.iter().cloned());
+        for subscription in self.netlist_subscriptions.read().unwrap().values() {
+            watched_paths.extend(subscription.symbol_watch_paths.iter().cloned());
         }
 
         let mut watched_paths: Vec<PathBuf> = watched_paths.into_iter().collect();
@@ -323,7 +328,7 @@ impl LspEvalContext {
             .read()
             .unwrap()
             .get(&key)
-            .cloned()
+            .map(|subscription| subscription.inputs.clone())
     }
 
     fn set_last_schematic(&self, path: &Path, schematic: pcb_sch::Schematic) {
@@ -652,6 +657,8 @@ impl LspContext for LspEvalContext {
     fn did_close_file(&self, uri: &LspUrl) {
         if let LspUrl::File(path) = uri {
             self.remove_open_file(path);
+            let key = self.normalize_path(path);
+            self.netlist_subscriptions.write().unwrap().remove(&key);
             self.inner.invalidate_file(path);
             self.clear_last_schematic(path);
             self.maybe_invalidate_symbol_library(path);
@@ -1691,7 +1698,26 @@ mod tests {
     use lsp_server::Request;
     use lsp_server::RequestId;
     use serde_json::json;
+    use std::collections::HashMap;
+    use std::collections::HashSet;
     use std::fs;
+
+    #[test]
+    fn closing_document_removes_netlist_subscription_and_symbol_watches() {
+        let ctx = LspEvalContext::default();
+        let path = std::env::temp_dir().join("subscribed.zen");
+        let uri = LspUrl::File(path.clone());
+        let symbol_path = std::env::temp_dir().join("symbols.kicad_sym");
+
+        ctx.set_netlist_subscription(&path, &HashMap::new());
+        ctx.set_symbol_watch_paths_for_netlist(&path, HashSet::from([symbol_path.clone()]));
+        assert_eq!(ctx.watched_symbol_paths(), vec![symbol_path]);
+
+        ctx.did_close_file(&uri);
+
+        assert_eq!(ctx.get_netlist_inputs(&path), None);
+        assert!(ctx.watched_symbol_paths().is_empty());
+    }
 
     #[test]
     fn lsp_loads_open_dependency_contents() -> anyhow::Result<()> {
