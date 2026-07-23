@@ -146,17 +146,17 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum EditCommands {
-    /// Add manufacturer/MPN alternatives to BOM entries
+    /// Apply manufacturer/MPN selections to BOM entries
     Bom {
-        /// IPC-2581 XML file to enrich
+        /// IPC-2581 XML file to hydrate
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
+        /// JSON file containing path-based manufacturer/MPN selections
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
-        rules: PathBuf,
+        selections: PathBuf,
+        /// Output IPC-2581 XML file
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
-        output: Option<PathBuf>,
-        #[arg(short = 'f', long, default_value = "text")]
-        format: OutputFormat,
+        output: PathBuf,
     },
 }
 
@@ -237,10 +237,9 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
         Commands::Edit { command } => match command {
             EditCommands::Bom {
                 file,
-                rules,
+                selections,
                 output,
-                ..
-            } => commands::bom_edit::execute(&file, &rules, output.as_deref()),
+            } => commands::bom_edit::execute(&file, &selections, &output),
         },
         Commands::BoardArray { command } => match command {
             BoardArrayCommands::Create {
