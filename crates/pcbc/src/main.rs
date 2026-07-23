@@ -173,6 +173,13 @@ enum Commands {
     Gerber(gerber::GerberArgs),
 
     /// Automated optical inspection of an assembled board
+    #[command(
+        long_about = "Automated Optical Inspection (AOI) compares the expected board — rendered from a \
+Zener design — against a captured photo of the physical PCB and flags component-level discrepancies \
+such as missing, misplaced, rotated, or tombstoned parts.\n\n\
+Note: the render-vs-photo comparison is a scaffold. Input handling and reporting are wired up, but \
+the computer-vision diff step is not yet implemented and reports no findings."
+    )]
     Aoi(aoi::AoiArgs),
 
     /// Inspect KiCad symbol libraries as structured JSON

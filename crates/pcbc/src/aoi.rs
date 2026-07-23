@@ -7,14 +7,6 @@ use serde::Serialize;
 use crate::file_walker;
 
 #[derive(Args, Debug)]
-#[command(
-    about = "Automated optical inspection: compare a board design against a photo of the assembled PCB",
-    long_about = "Automated Optical Inspection (AOI) compares the expected board — rendered from a \
-Zener design — against a captured photo of the physical PCB and flags component-level discrepancies \
-such as missing, misplaced, rotated, or tombstoned parts.\n\n\
-Note: the render-vs-photo comparison is a scaffold. Input handling and reporting are wired up, but \
-the computer-vision diff step is not yet implemented and reports no findings."
-)]
 pub struct AoiArgs {
     /// Path to the .zen design describing the expected board
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
