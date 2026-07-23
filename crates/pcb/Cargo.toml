@@ -20,6 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+clap = { workspace = true }
 dirs = { workspace = true }
 fslock = { workspace = true }
 self-replace = { workspace = true }

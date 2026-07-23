@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -28,12 +29,51 @@ const RELEASE_LIST_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const NIGHTLY_RELEASE_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const SELF_UPDATE_REEXEC_ENV: &str = "PCB_SELF_UPDATE_REEXEC";
 
+#[derive(Parser)]
+#[command(name = "pcb")]
+struct ShimCli {
+    #[command(subcommand)]
+    command: ShimCommand,
+}
+
+#[derive(Subcommand)]
 enum ShimCommand {
-    SelfUpdate,
-    ToolchainList,
-    ToolchainShow,
-    ToolchainInstall(String),
-    ToolchainUninstall(String),
+    #[command(name = "self")]
+    SelfManage {
+        #[command(subcommand)]
+        command: SelfCommand,
+    },
+    Toolchain {
+        #[command(subcommand)]
+        command: ToolchainCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SelfCommand {
+    Update,
+}
+
+#[derive(Subcommand)]
+enum ToolchainCommand {
+    List,
+    Show {
+        #[arg(long)]
+        offline: bool,
+    },
+    Install {
+        request: String,
+    },
+    Uninstall {
+        version: String,
+    },
+    Prune {
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Repair {
+        request: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -47,9 +87,7 @@ enum ToolchainRequest {
 
 #[derive(Debug, Clone)]
 struct ResolvedToolchain {
-    label: String,
     binary: PathBuf,
-    reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,7 +161,8 @@ fn run() -> Result<()> {
     let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     if is_shim_command(&args) {
-        return execute_shim(parse_shim_command(&args)?);
+        let cli = ShimCli::parse_from(std::iter::once(OsString::from("pcb")).chain(args));
+        return execute_shim(cli.command);
     }
 
     let override_request = take_cli_override(&mut args)?;
@@ -167,48 +206,19 @@ fn first_command_arg(args: &[OsString]) -> Option<&str> {
     None
 }
 
-fn parse_shim_command(args: &[OsString]) -> Result<ShimCommand> {
-    let strings: Vec<&str> = args
-        .iter()
-        .map(|arg| {
-            arg.to_str()
-                .ok_or_else(|| anyhow::anyhow!("shim commands must be valid UTF-8"))
-        })
-        .collect::<Result<_>>()?;
-
-    match strings.as_slice() {
-        ["self", "update"] => Ok(ShimCommand::SelfUpdate),
-        ["toolchain", "list"] => Ok(ShimCommand::ToolchainList),
-        ["toolchain", "show"] => Ok(ShimCommand::ToolchainShow),
-        ["toolchain", "install", request] => Ok(ShimCommand::ToolchainInstall((*request).into())),
-        ["toolchain", "uninstall", version] => {
-            Ok(ShimCommand::ToolchainUninstall((*version).into()))
-        }
-        ["self", "--help" | "-h" | "help"] => {
-            println!("Usage: pcb self update");
-            std::process::exit(0);
-        }
-        ["toolchain", "--help" | "-h" | "help"] => {
-            println!(
-                "Usage:\n  pcb toolchain list\n  pcb toolchain show\n  pcb toolchain install <request>\n  pcb toolchain uninstall <version>"
-            );
-            std::process::exit(0);
-        }
-        ["self", ..] => anyhow::bail!("usage: pcb self update"),
-        ["toolchain", ..] => {
-            anyhow::bail!("usage: pcb toolchain <list|show|install|uninstall> [request|version]")
-        }
-        _ => anyhow::bail!("unknown shim command"),
-    }
-}
-
 fn execute_shim(command: ShimCommand) -> Result<()> {
     match command {
-        ShimCommand::SelfUpdate => self_update(),
-        ShimCommand::ToolchainList => toolchain_list(),
-        ShimCommand::ToolchainShow => toolchain_show(),
-        ShimCommand::ToolchainInstall(request) => toolchain_install(&request),
-        ShimCommand::ToolchainUninstall(version) => toolchain_uninstall(&version),
+        ShimCommand::SelfManage {
+            command: SelfCommand::Update,
+        } => self_update(),
+        ShimCommand::Toolchain { command } => match command {
+            ToolchainCommand::List => toolchain_list(),
+            ToolchainCommand::Show { offline } => toolchain_show(offline),
+            ToolchainCommand::Install { request } => toolchain_install(&request),
+            ToolchainCommand::Uninstall { version } => toolchain_uninstall(&version),
+            ToolchainCommand::Prune { dry_run } => toolchain_prune(dry_run),
+            ToolchainCommand::Repair { request } => toolchain_repair(&request),
+        },
     }
 }
 
@@ -267,41 +277,39 @@ fn select_toolchain(
     migrate_command: bool,
     prefer_local: bool,
 ) -> Result<ResolvedToolchain> {
-    let (request, reason, allow_latest_fallback) = if let Some(request) = override_request {
+    let (request, allow_latest_fallback) = if let Some(request) = override_request {
         let allow_latest_fallback =
             should_allow_latest_fallback(&request, migrate_command, prefer_local);
-        (
-            request,
-            "command-line override".to_string(),
-            allow_latest_fallback,
-        )
+        (request, allow_latest_fallback)
     } else if migrate_command {
         let request = ToolchainRequest::Latest;
         let allow_latest_fallback =
             should_allow_latest_fallback(&request, migrate_command, prefer_local);
-        (
-            request,
-            "migrate uses the latest stable pcbc".to_string(),
-            allow_latest_fallback,
-        )
-    } else if let Some((path, lane)) = find_workspace_pcb_version()? {
-        let request = parse_request(&lane)?;
-        if matches!(request, ToolchainRequest::Local) {
+        (request, allow_latest_fallback)
+    } else {
+        let (request, _) = configured_toolchain_request(false)?;
+        (request, true)
+    };
+
+    resolve_request(&request, prefer_local, allow_latest_fallback)
+}
+
+fn configured_toolchain_request(allow_local: bool) -> Result<(ToolchainRequest, String)> {
+    if let Some((path, raw)) = find_workspace_pcb_version()? {
+        let request = parse_request(&raw)?;
+        if !allow_local && matches!(request, ToolchainRequest::Local) {
             anyhow::bail!(
                 "{} uses pcb-version = \"local\"; use a version lane and run commands with `pcb +local ...` to test a local toolchain",
                 path.display()
             );
         }
-        (request, format!("{} requires {lane}", path.display()), true)
+        Ok((request, format!("{} requires {raw}", path.display())))
     } else {
-        (
+        Ok((
             ToolchainRequest::Latest,
             "no pcb.toml found; using latest".to_string(),
-            true,
-        )
-    };
-
-    resolve_request(&request, reason, prefer_local, allow_latest_fallback)
+        ))
+    }
 }
 
 fn should_allow_latest_fallback(
@@ -314,44 +322,31 @@ fn should_allow_latest_fallback(
 
 fn resolve_request(
     request: &ToolchainRequest,
-    reason: String,
     prefer_local: bool,
     allow_latest_fallback: bool,
 ) -> Result<ResolvedToolchain> {
     if matches!(request, ToolchainRequest::Local) {
-        let Some((version, binary)) = local_toolchain() else {
+        let Some((_, binary)) = local_toolchain() else {
             anyhow::bail!("local pcbc toolchain is not installed; run ./install.sh --local");
         };
-        return Ok(ResolvedToolchain {
-            label: format!("local ({version})"),
-            binary,
-            reason,
-        });
+        return Ok(ResolvedToolchain { binary });
     }
 
     if matches!(request, ToolchainRequest::Nightly) {
-        return resolve_nightly(reason);
+        return resolve_nightly();
     }
 
     if matches!(request, ToolchainRequest::Latest) {
         if prefer_local && let Some(local) = best_local_toolchain(request)? {
-            return Ok(ResolvedToolchain {
-                label: local.0.to_string(),
-                binary: local.1,
-                reason,
-            });
+            return Ok(ResolvedToolchain { binary: local.1 });
         }
 
         match resolve_remote_version(request, false).and_then(|version| {
             let binary = ensure_installed(&version)?;
             Ok((version, binary))
         }) {
-            Ok((version, binary)) => {
-                return Ok(ResolvedToolchain {
-                    label: version.to_string(),
-                    binary,
-                    reason,
-                });
+            Ok((_, binary)) => {
+                return Ok(ResolvedToolchain { binary });
             }
             Err(remote_error) => {
                 if allow_latest_fallback && let Some(local) = best_local_toolchain(request)? {
@@ -359,11 +354,7 @@ fn resolve_request(
                         "Warning: failed to check latest release ({remote_error}); using installed pcbc {}",
                         local.0
                     );
-                    return Ok(ResolvedToolchain {
-                        label: local.0.to_string(),
-                        binary: local.1,
-                        reason,
-                    });
+                    return Ok(ResolvedToolchain { binary: local.1 });
                 }
                 return Err(remote_error);
             }
@@ -371,29 +362,17 @@ fn resolve_request(
     }
 
     if let Some(local) = best_local_toolchain(request)? {
-        return Ok(ResolvedToolchain {
-            label: local.0.to_string(),
-            binary: local.1,
-            reason,
-        });
+        return Ok(ResolvedToolchain { binary: local.1 });
     }
 
     let version = resolve_remote_version(request, false)?;
     let binary = ensure_installed(&version)?;
-    Ok(ResolvedToolchain {
-        label: version.to_string(),
-        binary,
-        reason,
-    })
+    Ok(ResolvedToolchain { binary })
 }
 
-fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
+fn resolve_nightly() -> Result<ResolvedToolchain> {
     match fetch_nightly_release(false).and_then(|release| ensure_nightly_installed(&release)) {
-        Ok((receipt, binary)) => Ok(ResolvedToolchain {
-            label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
-            binary,
-            reason,
-        }),
+        Ok((_, binary)) => Ok(ResolvedToolchain { binary }),
         Err(remote_error) => {
             if let Some((receipt, binary)) = installed_nightly_toolchain()? {
                 eprintln!(
@@ -401,11 +380,7 @@ fn resolve_nightly(reason: String) -> Result<ResolvedToolchain> {
                     receipt.date,
                     short_sha(&receipt.sha)
                 );
-                return Ok(ResolvedToolchain {
-                    label: format!("nightly {} ({})", receipt.date, short_sha(&receipt.sha)),
-                    binary,
-                    reason,
-                });
+                return Ok(ResolvedToolchain { binary });
             }
             Err(remote_error)
         }
@@ -1072,13 +1047,227 @@ fn toolchain_list() -> Result<()> {
     Ok(())
 }
 
-fn toolchain_show() -> Result<()> {
+fn toolchain_show(offline: bool) -> Result<()> {
+    let (request, reason) = configured_toolchain_request(true)?;
     println!("shim: {}", env!("CARGO_PKG_VERSION"));
-    let selection = select_toolchain(None, false, false)?;
-    println!("active: {}", selection.label);
-    println!("reason: {}", selection.reason);
-    println!("binary: {}", selection.binary.display());
+    println!("request: {}", format_request(&request));
+    println!("reason: {reason}");
+
+    match &request {
+        ToolchainRequest::Nightly => show_nightly_toolchain(offline)?,
+        ToolchainRequest::Local => show_local_toolchain(),
+        _ => show_stable_toolchain(&request, offline)?,
+    }
     Ok(())
+}
+
+fn show_stable_toolchain(request: &ToolchainRequest, offline: bool) -> Result<()> {
+    let active = best_toolchain_for_show(request)?;
+    if let Some((version, binary)) = &active {
+        println!("active: {version}");
+        print_toolchain_components(binary);
+    } else {
+        println!("active: not installed");
+    }
+
+    let available = if offline {
+        match read_release_cache()? {
+            Some(cache) => {
+                let age = cache_age(cache.fetched_at);
+                let version = latest_matching_version(cache.versions, request);
+                Some((version, Some(age)))
+            }
+            None => None,
+        }
+    } else {
+        match fetch_release_versions(false) {
+            Ok(versions) => Some((latest_matching_version(versions, request), None)),
+            Err(err) => {
+                println!("latest: unknown ({err})");
+                None
+            }
+        }
+    };
+
+    match available {
+        Some((Some(version), cache_age)) => {
+            if let Some(age) = cache_age {
+                println!("latest: {version} (cached {age} ago)");
+            } else {
+                println!("latest: {version}");
+            }
+            match &active {
+                Some((active, _)) if active < &version => println!("update: available"),
+                Some((active, _)) if active > &version => println!("update: installed is newer"),
+                Some(_) => println!("update: current"),
+                None => {
+                    println!("update: not installed");
+                    println!("action: pcb toolchain install {}", format_request(request));
+                }
+            }
+        }
+        Some((None, cache_age)) => {
+            if let Some(age) = cache_age {
+                println!("latest: unknown (cached release list is {age} old)");
+            } else {
+                println!("latest: unavailable");
+            }
+            println!("update: unknown");
+            if active.is_none() {
+                println!("action: pcb toolchain install {}", format_request(request));
+            }
+        }
+        None => {
+            if offline {
+                println!("latest: unknown (offline)");
+            }
+            println!("update: unknown");
+            if active.is_none() {
+                println!("action: pcb toolchain install {}", format_request(request));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn best_toolchain_for_show(request: &ToolchainRequest) -> Result<Option<(Version, PathBuf)>> {
+    // Ordinary `latest` execution resolves the published release before
+    // considering local fallbacks. Prefer a managed stable install here so the
+    // diagnostic does not claim that a sibling development binary is active.
+    if matches!(request, ToolchainRequest::Latest) {
+        return Ok(installed_toolchains()?
+            .into_iter()
+            .rfind(|(version, _)| request_matches(request, version)));
+    }
+    best_local_toolchain(request)
+}
+
+fn latest_matching_version(versions: Vec<Version>, request: &ToolchainRequest) -> Option<Version> {
+    versions
+        .into_iter()
+        .filter(|version| request_matches(request, version))
+        .max()
+}
+
+fn show_nightly_toolchain(offline: bool) -> Result<()> {
+    let installed = installed_nightly_toolchain()?;
+    if let Some((receipt, binary)) = &installed {
+        println!(
+            "active: nightly {} ({})",
+            receipt.date,
+            short_sha(&receipt.sha)
+        );
+        print_toolchain_components(binary);
+    } else {
+        println!("active: not installed");
+    }
+
+    let available = if offline {
+        read_nightly_release_cache()?
+            .map(|cache| (cache.release, Some(cache_age(cache.fetched_at))))
+    } else {
+        match fetch_nightly_release(false) {
+            Ok(release) => Some((release, None)),
+            Err(err) => {
+                println!("latest: unknown ({err})");
+                None
+            }
+        }
+    };
+
+    if let Some((release, age)) = available {
+        let label = format!("nightly {} ({})", release.date, short_sha(&release.sha));
+        if let Some(age) = age {
+            println!("latest: {label} (cached {age} ago)");
+        } else {
+            println!("latest: {label}");
+        }
+        match &installed {
+            Some((receipt, _)) if receipt.sha == release.sha => println!("update: current"),
+            Some(_) => println!("update: available"),
+            None => {
+                println!("update: not installed");
+                println!("action: pcb toolchain install nightly");
+            }
+        }
+    } else {
+        if offline {
+            println!("latest: unknown (offline)");
+        }
+        println!("update: unknown");
+        if installed.is_none() {
+            println!("action: pcb toolchain install nightly");
+        }
+    }
+    Ok(())
+}
+
+fn show_local_toolchain() {
+    match local_toolchain() {
+        Some((version, binary)) => {
+            println!("active: local ({version})");
+            println!("latest: not applicable");
+            print_toolchain_components(&binary);
+        }
+        None => {
+            println!("active: not installed");
+            println!("latest: not applicable");
+            println!("action: ./install.sh --local");
+        }
+    }
+}
+
+fn print_toolchain_components(binary: &Path) {
+    println!("pcbc: {}", binary.display());
+    let Some(install_dir) = binary.parent() else {
+        return;
+    };
+
+    let stdlib = install_dir.join("lib").join("std");
+    if stdlib.is_dir() {
+        println!("stdlib: {}", stdlib.display());
+    } else {
+        println!("stdlib: missing");
+    }
+
+    for sidecar in TOOLCHAIN_SIDECARS {
+        let bundled = install_dir.join(executable_name(sidecar));
+        if bundled.is_file() {
+            println!(
+                "{sidecar}: {} ({})",
+                bundled.display(),
+                if is_executable(&bundled) {
+                    "bundled"
+                } else {
+                    "bundled, not executable"
+                }
+            );
+        } else if let Some(path) = find_on_path(sidecar) {
+            println!("{sidecar}: {} (PATH fallback)", path.display());
+        } else {
+            println!("{sidecar}: not installed");
+        }
+    }
+}
+
+fn find_on_path(binary: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(executable_name(binary)))
+        .find(|path| path.is_file())
+}
+
+fn cache_age(fetched_at: u64) -> String {
+    let seconds = unix_timestamp().saturating_sub(fetched_at);
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 60 * 60 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 24 * 60 * 60 {
+        format!("{}h", seconds / (60 * 60))
+    } else {
+        format!("{}d", seconds / (24 * 60 * 60))
+    }
 }
 
 fn toolchain_install(raw: &str) -> Result<()> {
@@ -1088,19 +1277,73 @@ fn toolchain_install(raw: &str) -> Result<()> {
     }
     if matches!(request, ToolchainRequest::Nightly) {
         let release = fetch_nightly_release(true)?;
+        let previous = installed_nightly_toolchain()?;
+        let previous_sidecars = previous
+            .as_ref()
+            .map(|(_, binary)| installed_sidecars(binary))
+            .unwrap_or_default();
         let (receipt, binary) = ensure_nightly_installed(&release)?;
-        println!(
-            "installed pcbc nightly {} ({}): {}",
-            receipt.date,
-            short_sha(&receipt.sha),
-            binary.display()
-        );
+        match previous {
+            Some((previous, _)) if previous.sha == receipt.sha => {
+                println!(
+                    "pcbc nightly {} ({}) is already installed: {}",
+                    receipt.date,
+                    short_sha(&receipt.sha),
+                    binary.display()
+                );
+            }
+            Some((previous, _)) => {
+                println!(
+                    "Updated pcbc nightly {} ({}) → {} ({}): {}",
+                    previous.date,
+                    short_sha(&previous.sha),
+                    receipt.date,
+                    short_sha(&receipt.sha),
+                    binary.display()
+                );
+            }
+            None => {
+                println!(
+                    "Installed pcbc nightly {} ({}): {}",
+                    receipt.date,
+                    short_sha(&receipt.sha),
+                    binary.display()
+                );
+            }
+        }
+        print_added_sidecars(&previous_sidecars, &binary);
         return Ok(());
     }
     let version = resolve_remote_version(&request, true)?;
+    let install_dir = installed_dir(&version);
+    let binary_before = install_dir.join(pcbc_binary_name());
+    let already_installed = binary_before.is_file();
+    let previous_sidecars = installed_sidecars(&binary_before);
     let binary = ensure_installed(&version)?;
-    println!("installed pcbc {version}: {}", binary.display());
+    if already_installed {
+        println!("pcbc {version} is already installed: {}", binary.display());
+    } else {
+        println!("Installed pcbc {version}: {}", binary.display());
+    }
+    print_added_sidecars(&previous_sidecars, &binary);
     Ok(())
+}
+
+fn installed_sidecars(pcbc: &Path) -> BTreeSet<String> {
+    let Some(install_dir) = pcbc.parent() else {
+        return BTreeSet::new();
+    };
+    TOOLCHAIN_SIDECARS
+        .iter()
+        .filter(|sidecar| install_dir.join(executable_name(sidecar)).is_file())
+        .map(|sidecar| (*sidecar).to_string())
+        .collect()
+}
+
+fn print_added_sidecars(previous: &BTreeSet<String>, pcbc: &Path) {
+    for sidecar in installed_sidecars(pcbc).difference(previous) {
+        println!("Added bundled component {sidecar}");
+    }
 }
 
 fn resolve_remote_version(request: &ToolchainRequest, force_refresh: bool) -> Result<Version> {
@@ -1135,8 +1378,336 @@ fn toolchain_uninstall(raw: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+struct PruneTarget {
+    path: PathBuf,
+    bytes: u64,
+    description: String,
+}
+
+fn toolchain_prune(dry_run: bool) -> Result<()> {
+    let installed = installed_toolchains()?;
+    let (request, _) = configured_toolchain_request(true)?;
+    let active = if !matches!(request, ToolchainRequest::Nightly | ToolchainRequest::Local)
+        && let Some((active, _)) = best_local_toolchain(&request)?
+        && installed.contains_key(&active)
+    {
+        Some(active)
+    } else {
+        None
+    };
+
+    let mut targets = Vec::new();
+    for version in prunable_stable_versions(installed.keys().cloned().collect(), active.as_ref()) {
+        let path = toolchains_dir().join(version.to_string());
+        targets.push(PruneTarget {
+            bytes: path_size(&path)?,
+            path,
+            description: format!("superseded pcbc {version}"),
+        });
+    }
+
+    if let Ok(entries) = fs::read_dir(downloads_dir()) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            targets.push(PruneTarget {
+                bytes: path_size(&path)?,
+                description: format!("retained download {}", entry.file_name().to_string_lossy()),
+                path,
+            });
+        }
+    }
+
+    if targets.is_empty() {
+        println!("Nothing to prune.");
+        return Ok(());
+    }
+
+    let total = targets.iter().map(|target| target.bytes).sum();
+    for target in &targets {
+        println!(
+            "{}\t{}\t{}",
+            if dry_run { "would remove" } else { "removing" },
+            human_size(target.bytes),
+            target.description
+        );
+        println!("  {}", target.path.display());
+    }
+
+    if dry_run {
+        println!("Would reclaim {}.", human_size(total));
+        return Ok(());
+    }
+
+    for target in targets {
+        remove_path(&target.path)
+            .with_context(|| format!("failed to remove {}", target.path.display()))?;
+    }
+    println!("Reclaimed {}.", human_size(total));
+    Ok(())
+}
+
+fn prunable_stable_versions(versions: BTreeSet<Version>, active: Option<&Version>) -> Vec<Version> {
+    let mut newest_by_lane = BTreeMap::new();
+    for version in versions.iter().filter(|version| version.pre.is_empty()) {
+        newest_by_lane
+            .entry((version.major, version.minor))
+            .and_modify(|current: &mut Version| {
+                if version > current {
+                    *current = version.clone();
+                }
+            })
+            .or_insert_with(|| version.clone());
+    }
+
+    let mut keep: BTreeSet<Version> = newest_by_lane.into_values().collect();
+    if let Some(active) = active {
+        keep.insert(active.clone());
+    }
+
+    versions
+        .into_iter()
+        .filter(|version| version.pre.is_empty() && !keep.contains(version))
+        .collect()
+}
+
+fn path_size(path: &Path) -> Result<u64> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_file() || metadata.file_type().is_symlink() {
+        return Ok(metadata.len());
+    }
+    if !metadata.is_dir() {
+        return Ok(0);
+    }
+
+    let mut total = 0;
+    for entry in fs::read_dir(path)? {
+        total += path_size(&entry?.path())?;
+    }
+    Ok(total)
+}
+
+fn remove_path(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path)?;
+    } else {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn toolchain_repair(raw: &str) -> Result<()> {
+    let request = parse_request(raw)?;
+    if matches!(request, ToolchainRequest::Local) {
+        anyhow::bail!("local toolchains are rebuilt with ./install.sh --local");
+    }
+
+    if matches!(request, ToolchainRequest::Nightly) {
+        let release = fetch_nightly_release(true)?;
+        let issues = validate_nightly_install(&release)?;
+        if issues.is_empty() {
+            println!(
+                "pcbc nightly {} ({}) is healthy",
+                release.date,
+                short_sha(&release.sha)
+            );
+            return Ok(());
+        }
+        print_repair_issues("nightly", &issues);
+        let (receipt, binary) = install_nightly(&release)?;
+        println!(
+            "Repaired pcbc nightly {} ({}): {}",
+            receipt.date,
+            short_sha(&receipt.sha),
+            binary.display()
+        );
+        return Ok(());
+    }
+
+    let version = resolve_remote_version(&request, true)?;
+    let issues = validate_stable_install(&version)?;
+    if issues.is_empty() {
+        println!("pcbc {version} is healthy");
+        return Ok(());
+    }
+    print_repair_issues(&version.to_string(), &issues);
+    let binary = install_toolchain(&version)?;
+    println!("Repaired pcbc {version}: {}", binary.display());
+    Ok(())
+}
+
+fn print_repair_issues(label: &str, issues: &[String]) {
+    println!("Repairing pcbc {label}:");
+    for issue in issues {
+        println!("  - {issue}");
+    }
+}
+
+fn validate_stable_install(version: &Version) -> Result<Vec<String>> {
+    let install_dir = installed_dir(version);
+    let binary = install_dir.join(pcbc_binary_name());
+    let receipt_path = install_dir.join("receipt.json");
+    let mut issues = validate_common_install(&install_dir, &binary);
+
+    match fs::read_to_string(&receipt_path) {
+        Ok(content) => match serde_json::from_str::<InstallReceipt>(&content) {
+            Ok(receipt) => {
+                if receipt.version != *version {
+                    issues.push(format!(
+                        "receipt records pcbc {} instead of {version}",
+                        receipt.version
+                    ));
+                }
+                if receipt.target != target_triple() {
+                    issues.push(format!(
+                        "receipt target is {} instead of {}",
+                        receipt.target,
+                        target_triple()
+                    ));
+                }
+                if receipt.url.ends_with(".tar.xz") || receipt.url.ends_with(".zip") {
+                    match pcbc_version(&binary) {
+                        Some(installed) if installed == *version => {}
+                        Some(installed) => issues.push(format!(
+                            "{} reports pcbc {installed} instead of {version}",
+                            binary.display()
+                        )),
+                        None if binary.is_file() => {
+                            issues.push(format!("failed to read {}", binary.display()))
+                        }
+                        None => {}
+                    }
+                } else {
+                    validate_binary_checksum(&binary, &receipt.sha256, &mut issues)?;
+                }
+            }
+            Err(err) => issues.push(format!("invalid receipt: {err}")),
+        },
+        Err(_) => issues.push("missing receipt.json".to_string()),
+    }
+    Ok(issues)
+}
+
+fn validate_nightly_install(release: &NightlyRelease) -> Result<Vec<String>> {
+    let install_dir = nightly_dir();
+    let binary = install_dir.join(pcbc_binary_name());
+    let receipt_path = install_dir.join("receipt.json");
+    let mut issues = validate_common_install(&install_dir, &binary);
+
+    match fs::read_to_string(&receipt_path) {
+        Ok(content) => match serde_json::from_str::<NightlyReceipt>(&content) {
+            Ok(receipt) => {
+                if receipt.sha != release.sha {
+                    issues.push(format!(
+                        "installed nightly {} ({}) is not current",
+                        receipt.date,
+                        short_sha(&receipt.sha)
+                    ));
+                }
+                if receipt.target != target_triple() {
+                    issues.push(format!(
+                        "receipt target is {} instead of {}",
+                        receipt.target,
+                        target_triple()
+                    ));
+                }
+                validate_binary_checksum(&binary, &receipt.sha256, &mut issues)?;
+            }
+            Err(err) => issues.push(format!("invalid receipt: {err}")),
+        },
+        Err(_) => issues.push("missing receipt.json".to_string()),
+    }
+    Ok(issues)
+}
+
+fn validate_common_install(install_dir: &Path, binary: &Path) -> Vec<String> {
+    let mut issues = Vec::new();
+    if !binary.is_file() {
+        issues.push(format!("missing {}", binary.display()));
+    } else if !is_executable(binary) {
+        issues.push(format!("{} is not executable", binary.display()));
+    }
+
+    if !install_dir.join("lib/std/interfaces.zen").is_file() {
+        issues.push("missing or incomplete standard library".to_string());
+    }
+    if !optional_sidecars_present(install_dir) {
+        issues.push("bundled sidecars have not been staged".to_string());
+    }
+    for sidecar in TOOLCHAIN_SIDECARS {
+        let path = install_dir.join(executable_name(sidecar));
+        if path.is_file() && !is_executable(&path) {
+            issues.push(format!("{} is not executable", path.display()));
+        }
+    }
+    issues
+}
+
+fn validate_binary_checksum(binary: &Path, expected: &str, issues: &mut Vec<String>) -> Result<()> {
+    if !binary.is_file() {
+        return Ok(());
+    }
+    let actual = sha256_file(binary)?;
+    if actual != expected {
+        issues.push(format!(
+            "{} checksum mismatch: expected {expected}, got {actual}",
+            binary.display()
+        ));
+    }
+    Ok(())
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path)
+        .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &Path) -> bool {
+    path.is_file()
+}
+
 fn self_update() -> Result<()> {
     let current_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
+    let mut failures = Vec::new();
+    let mut shim_status = format!("pcb shim {current_version}: current");
     if std::env::var_os(SELF_UPDATE_REEXEC_ENV).is_none() {
         match fetch_latest_release() {
             Ok(latest) if latest.version > current_version => {
@@ -1145,9 +1716,10 @@ fn self_update() -> Result<()> {
                 reexec_self_update(&shim, &current_version, &version)?;
             }
             Ok(_) => {}
-            Err(err) => eprintln!(
-                "Warning: failed to check latest pcb shim release ({err}); continuing with pcbc updates"
-            ),
+            Err(err) => {
+                shim_status = format!("pcb shim {current_version}: update check failed");
+                failures.push(format!("failed to check latest pcb shim release: {err}"));
+            }
         }
     }
 
@@ -1189,28 +1761,59 @@ fn self_update() -> Result<()> {
         }
         Ok(changelogs)
     })();
-    match stable_result {
-        Ok(changelogs) => {
-            for (from, to, binary) in changelogs {
-                let selector = format!("{from}..{to}");
-                match Command::new(binary).args(["changelog", &selector]).status() {
-                    Ok(status) if status.success() => {}
-                    Ok(status) => eprintln!("Warning: failed to print pcbc changelog ({status})"),
-                    Err(err) => eprintln!("Warning: failed to print pcbc changelog ({err})"),
-                }
+    if let Ok(changelogs) = &stable_result {
+        for (from, to, binary) in changelogs {
+            let selector = format!("{from}..{to}");
+            match Command::new(binary).args(["changelog", &selector]).status() {
+                Ok(status) if status.success() => {}
+                Ok(status) => eprintln!("Warning: failed to print pcbc changelog ({status})"),
+                Err(err) => eprintln!("Warning: failed to print pcbc changelog ({err})"),
             }
         }
-        Err(err) => eprintln!("Warning: failed to update managed pcbc toolchains ({err})"),
     }
 
-    if installed_nightly_toolchain()?.is_some()
-        && let Err(err) =
-            fetch_nightly_release(true).and_then(|nightly| ensure_nightly_installed(&nightly))
-    {
-        eprintln!("Warning: failed to update installed nightly toolchain ({err})");
+    if let Err(err) = &stable_result {
+        failures.push(format!("failed to update managed pcbc toolchains: {err}"));
     }
 
-    Ok(())
+    let nightly_status = if installed_nightly_toolchain()?.is_some() {
+        match fetch_nightly_release(true).and_then(|nightly| ensure_nightly_installed(&nightly)) {
+            Ok((receipt, _)) => format!(
+                "pcbc nightly {} ({}): current",
+                receipt.date,
+                short_sha(&receipt.sha)
+            ),
+            Err(err) => {
+                failures.push(format!(
+                    "failed to update installed nightly toolchain: {err}"
+                ));
+                "pcbc nightly: update failed".to_string()
+            }
+        }
+    } else {
+        "pcbc nightly: not installed".to_string()
+    };
+
+    println!("{shim_status}");
+    println!(
+        "stable toolchains: {}",
+        if stable_result.is_ok() {
+            "current"
+        } else {
+            "update failed"
+        }
+    );
+    println!("{nightly_status}");
+
+    finish_self_update(failures)
+}
+
+fn finish_self_update(failures: Vec<String>) -> Result<()> {
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!("self update incomplete:\n  - {}", failures.join("\n  - "))
+    }
 }
 
 fn fetch_latest_release() -> Result<LatestRelease> {
@@ -1695,5 +2298,50 @@ mod tests {
                 Version::parse("0.4.0-beta.1").unwrap(),
             ]
         );
+    }
+
+    #[test]
+    fn prune_only_removes_superseded_unselected_stable_patches() {
+        let active = Version::parse("0.3.92").unwrap();
+        let versions = ["0.3.92", "0.3.93", "0.4.8", "0.4.9", "0.5.0-beta.1"]
+            .into_iter()
+            .map(|version| Version::parse(version).unwrap())
+            .collect();
+
+        assert_eq!(
+            prunable_stable_versions(versions, Some(&active)),
+            vec![Version::parse("0.4.8").unwrap()]
+        );
+    }
+
+    #[test]
+    fn validates_required_toolchain_components() {
+        let install = tempfile::tempdir().unwrap();
+        let binary = install.path().join(pcbc_binary_name());
+        fs::write(&binary, b"pcbc").unwrap();
+        copy_executable_permissions(&binary, &binary).unwrap();
+        fs::create_dir_all(install.path().join("lib/std")).unwrap();
+        fs::write(install.path().join("lib/std/interfaces.zen"), b"").unwrap();
+        fs::write(install.path().join(SIDECAR_CHECK_MARKER), b"").unwrap();
+
+        assert!(validate_common_install(install.path(), &binary).is_empty());
+
+        fs::remove_file(install.path().join("lib/std/interfaces.zen")).unwrap();
+        assert!(
+            validate_common_install(install.path(), &binary)
+                .iter()
+                .any(|issue| issue.contains("standard library"))
+        );
+    }
+
+    #[test]
+    fn self_update_fails_when_a_component_update_fails() {
+        assert!(finish_self_update(Vec::new()).is_ok());
+        let error =
+            finish_self_update(vec!["failed to update managed pcbc toolchains".to_string()])
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("self update incomplete"));
+        assert!(error.contains("managed pcbc"));
     }
 }

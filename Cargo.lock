@@ -4680,6 +4680,7 @@ name = "pcb"
 version = "0.2.4"
 dependencies = [
  "anyhow",
+ "clap",
  "dirs",
  "fslock",
  "self-replace",
