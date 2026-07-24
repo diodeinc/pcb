@@ -253,6 +253,32 @@ mod tests {
     }
 
     #[test]
+    fn rejects_multiple_file_revisions_in_history_record() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+  </Content>
+  <HistoryRecord number="2" origination="2026-01-01T00:00:00Z" software="pcb" lastChange="2026-01-02T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="Initial">
+      <SoftwarePackage name="pcb" revision="1" vendor="Diode">
+        <Certification certificationStatus="SELFTEST"/>
+      </SoftwarePackage>
+    </FileRevision>
+    <FileRevision fileRevisionId="2" comment="Invalid second revision">
+      <SoftwarePackage name="pcb" revision="1" vendor="Diode">
+        <Certification certificationStatus="SELFTEST"/>
+      </SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+</IPC-2581>"#;
+
+        let error =
+            Ipc2581::parse(xml).expect_err("multiple FileRevision children must be rejected");
+        assert!(error.to_string().contains("exactly one FileRevision"));
+    }
+
+    #[test]
     fn validate_reports_schema_errors() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -478,6 +504,8 @@ mod tests {
                 <PolyStepSegment x="1" y="1"/>
                 <PolyStepSegment x="0" y="0"/>
               </Polygon>
+            </Features>
+            <Features>
               <UserSpecial>
                 <Line startX="0" startY="0" endX="0" endY="1">
                   <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
@@ -516,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_invalid_inline_user_special_inside_features() {
+    fn rejects_multiple_features_inside_features() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
@@ -543,15 +571,8 @@ mod tests {
   </Ecad>
 </IPC-2581>"#;
 
-        let doc = Ipc2581::parse(xml).expect("parse IPC-2581");
-        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
-
-        assert_eq!(set.features.len(), 2);
-        assert!(
-            set.features
-                .iter()
-                .all(|feature| matches!(feature, ecad::SetFeature::Line(_)))
-        );
+        let error = Ipc2581::parse(xml).expect_err("multiple Features children must be rejected");
+        assert!(error.to_string().contains("exactly one Feature"));
     }
 
     #[test]
@@ -618,15 +639,16 @@ mod tests {
                 <PolyStepCurve x="0" y="1" centerX="0" centerY="0" clockwise="false"/>
                 <PolyStepSegment x="0" y="0"/>
               </Polygon>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="2" y="0"/>
-                    <PolyStepSegment x="3" y="0"/>
-                    <PolyStepSegment x="2" y="0"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
+            </Features>
+            <Features>
+              <Location x="10" y="20"/>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="2" y="0"/>
+                  <PolyStepSegment x="3" y="0"/>
+                  <PolyStepSegment x="2" y="0"/>
+                </Polygon>
+              </Contour>
             </Features>
           </Set>
         </LayerFeature>

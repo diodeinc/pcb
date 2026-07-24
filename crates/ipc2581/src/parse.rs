@@ -1063,22 +1063,74 @@ impl<'a> Parser<'a> {
         let software = self.optional_attr(node, "software");
         let last_change = self.required_attr(node, "lastChange", "HistoryRecord")?;
 
-        // Parse FileRevision child element
+        // HistoryRecordType is FileRevision followed by zero or more ChangeRec
+        // elements. Keep the typed parser strict here so it cannot silently
+        // accept the invalid repeated-FileRevision structure emitted by older
+        // writers.
         let mut file_revision = None;
+        let mut saw_change_record = false;
         for child in self.element_children(node) {
-            if self.name(&child) == "FileRevision" {
-                file_revision = Some(self.parse_file_revision(&child)?);
-                break;
+            match self.name(&child) {
+                "FileRevision" => {
+                    if saw_change_record {
+                        return Err(Ipc2581Error::InvalidStructure(
+                            "FileRevision must precede ChangeRec in HistoryRecord".to_string(),
+                        ));
+                    }
+                    if file_revision.is_some() {
+                        return Err(Ipc2581Error::InvalidStructure(
+                            "HistoryRecord allows exactly one FileRevision".to_string(),
+                        ));
+                    }
+                    file_revision = Some(self.parse_file_revision(&child)?);
+                }
+                "ChangeRec" => {
+                    if file_revision.is_none() {
+                        return Err(Ipc2581Error::InvalidStructure(
+                            "ChangeRec must follow FileRevision in HistoryRecord".to_string(),
+                        ));
+                    }
+                    self.validate_change_record(&child)?;
+                    saw_change_record = true;
+                }
+                name => {
+                    return Err(Ipc2581Error::InvalidStructure(format!(
+                        "Unexpected {name} in HistoryRecord"
+                    )));
+                }
             }
         }
+        let file_revision = file_revision.ok_or(Ipc2581Error::MissingElement(
+            "FileRevision in HistoryRecord",
+        ))?;
 
         Ok(HistoryRecord {
             number,
             origination,
             software,
             last_change,
-            file_revision,
+            file_revision: Some(file_revision),
         })
+    }
+
+    fn validate_change_record(&mut self, node: &Node) -> Result<()> {
+        self.required_attr(node, "datetime", "ChangeRec")?;
+        self.required_attr(node, "personRef", "ChangeRec")?;
+        self.required_attr(node, "application", "ChangeRec")?;
+        self.required_attr(node, "change", "ChangeRec")?;
+
+        for child in self.element_children(node) {
+            if self.name(&child) != "Approval" {
+                return Err(Ipc2581Error::InvalidStructure(format!(
+                    "Unexpected {} in ChangeRec",
+                    self.name(&child)
+                )));
+            }
+            self.required_attr(&child, "datetime", "Approval")?;
+            self.required_attr(&child, "personRef", "Approval")?;
+        }
+
+        Ok(())
     }
 
     fn parse_file_revision(&mut self, node: &Node) -> Result<metadata::FileRevision> {
@@ -2175,101 +2227,136 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_features(&mut self, features_node: &Node) -> Result<Vec<ecad::SetFeature>> {
-        let mut features = Vec::new();
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
-        let offset = self.parse_features_location(features_node, units);
+        let mut offset = Point { x: 0.0, y: 0.0 };
+        let mut xform_seen = false;
+        let mut location_seen = false;
+        let mut feature = None;
 
         for child in self.element_children(features_node) {
-            match self.name(&child) {
-                "Polygon" => {
-                    if let Some(feature) = self.parse_feature_polygon(&child, units, offset) {
-                        features.push(feature);
+            let child_name = self.name(&child);
+            if is_features_feature_name(child_name) && feature.is_some() {
+                return Err(Ipc2581Error::InvalidStructure(
+                    "Features allows exactly one Feature child".to_string(),
+                ));
+            }
+
+            match child_name {
+                "Xform" => {
+                    if xform_seen || location_seen || feature.is_some() {
+                        return Err(Ipc2581Error::InvalidStructure(
+                            "Xform must be the first child of Features".to_string(),
+                        ));
                     }
+                    xform_seen = true;
+                }
+                "Location" => {
+                    if feature.is_some() {
+                        return Err(Ipc2581Error::InvalidStructure(
+                            "Location must precede the Feature in Features".to_string(),
+                        ));
+                    }
+                    let location = Point {
+                        x: self.parse_f64_attr_with_units(&child, "x", "Location", units)?,
+                        y: self.parse_f64_attr_with_units(&child, "y", "Location", units)?,
+                    };
+                    if !location_seen {
+                        offset = location;
+                    }
+                    location_seen = true;
+                }
+                "Polygon" => {
+                    let polygon = self.parse_polygon(&child, units)?;
+                    feature = Some(ecad::SetFeature::Polygon(Self::translate_polygon(
+                        polygon, offset,
+                    )));
                 }
                 "Polyline" => {
-                    if let Ok(polyline) =
-                        self.parse_feature_polyline(&child, units, offset.x, offset.y)
-                    {
-                        features.push(ecad::SetFeature::Polyline(polyline));
-                    }
+                    feature = Some(ecad::SetFeature::Polyline(
+                        self.parse_feature_polyline(&child, units, offset.x, offset.y)?,
+                    ));
                 }
                 "Line" => {
-                    if let Ok(line) = self.parse_line(&child, units, offset.x, offset.y) {
-                        features.push(ecad::SetFeature::Line(line));
-                    }
+                    feature = Some(ecad::SetFeature::Line(
+                        self.parse_line(&child, units, offset.x, offset.y)?,
+                    ));
                 }
                 "Arc" => {
-                    if let Ok(arc) = self.parse_feature_arc(&child, units, offset.x, offset.y) {
-                        features.push(ecad::SetFeature::Arc(arc));
-                    }
+                    feature = Some(ecad::SetFeature::Arc(
+                        self.parse_feature_arc(&child, units, offset.x, offset.y)?,
+                    ));
+                }
+                "Contour" => {
+                    feature = Some(self.parse_contour_feature(&child, units, offset)?);
                 }
                 "UserSpecial" => {
-                    if let Ok(primitive) = self.parse_user_special(&child, units) {
-                        features.push(ecad::SetFeature::UserPrimitive(
-                            ecad::FeatureUserPrimitive {
-                                primitive,
-                                x: offset.x,
-                                y: offset.y,
-                            },
-                        ));
-                    }
+                    feature = Some(ecad::SetFeature::UserPrimitive(
+                        ecad::FeatureUserPrimitive {
+                            primitive: self.parse_user_special(&child, units)?,
+                            x: offset.x,
+                            y: offset.y,
+                        },
+                    ));
                 }
                 "StandardPrimitiveRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        features.push(ecad::SetFeature::StandardPrimitiveRef(
-                            ecad::FeaturePrimitiveRef {
-                                id: self.interner.intern(id),
-                                x: offset.x,
-                                y: offset.y,
-                            },
-                        ));
-                    }
+                    feature = Some(ecad::SetFeature::StandardPrimitiveRef(
+                        ecad::FeaturePrimitiveRef {
+                            id: self.required_attr(&child, "id", "StandardPrimitiveRef")?,
+                            x: offset.x,
+                            y: offset.y,
+                        },
+                    ));
                 }
                 "UserPrimitiveRef" => {
-                    if let Some(id) = self.attr(&child, "id") {
-                        features.push(ecad::SetFeature::UserPrimitiveRef(
-                            ecad::FeaturePrimitiveRef {
-                                id: self.interner.intern(id),
-                                x: offset.x,
-                                y: offset.y,
-                            },
-                        ));
-                    }
+                    feature = Some(ecad::SetFeature::UserPrimitiveRef(
+                        ecad::FeaturePrimitiveRef {
+                            id: self.required_attr(&child, "id", "UserPrimitiveRef")?,
+                            x: offset.x,
+                            y: offset.y,
+                        },
+                    ));
                 }
-                _ => {}
+                name => {
+                    return Err(Ipc2581Error::InvalidStructure(format!(
+                        "Unexpected {name} in Features"
+                    )));
+                }
             }
         }
 
-        Ok(features)
+        Ok(vec![feature.ok_or(Ipc2581Error::MissingElement(
+            "Feature in Features",
+        ))?])
     }
 
-    fn parse_features_location(&self, features_node: &Node, units: Units) -> Point {
-        self.element_children(features_node)
-            .find(|child| self.name(child) == "Location")
-            .map(|location| Point {
-                x: self
-                    .attr(&location, "x")
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|v| crate::units::to_mm(v, units))
-                    .unwrap_or(0.0),
-                y: self
-                    .attr(&location, "y")
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .map(|v| crate::units::to_mm(v, units))
-                    .unwrap_or(0.0),
-            })
-            .unwrap_or(Point { x: 0.0, y: 0.0 })
-    }
-
-    fn parse_feature_polygon(
+    fn parse_contour_feature(
         &mut self,
         node: &Node,
         units: Units,
         offset: Point,
-    ) -> Option<ecad::SetFeature> {
-        self.parse_polygon(node, units)
-            .ok()
-            .map(|polygon| ecad::SetFeature::Polygon(Self::translate_polygon(polygon, offset)))
+    ) -> Result<ecad::SetFeature> {
+        let contour = self.parse_contour(node, units)?;
+        let style_node = self
+            .element_children(node)
+            .find(|child| self.name(child) == "Polygon")
+            .unwrap_or(*node);
+        let (line_desc, line_desc_ref, fill_desc) =
+            self.parse_user_shape_style(&style_node, units)?;
+
+        Ok(ecad::SetFeature::UserPrimitive(
+            ecad::FeatureUserPrimitive {
+                primitive: UserPrimitive::UserSpecial(UserSpecial {
+                    shapes: vec![UserShape {
+                        shape: UserShapeType::Contour(contour),
+                        line_desc,
+                        line_desc_ref,
+                        fill_desc,
+                    }],
+                }),
+                x: offset.x,
+                y: offset.y,
+            },
+        ))
     }
 
     fn translate_polygon(mut polygon: Polygon, offset: Point) -> Polygon {
@@ -3267,6 +3354,20 @@ fn is_standard_primitive_name(name: &str) -> bool {
             | "RectRound"
             | "Thermal"
             | "Triangle"
+    )
+}
+
+fn is_features_feature_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Polygon"
+            | "Polyline"
+            | "Line"
+            | "Arc"
+            | "Contour"
+            | "UserSpecial"
+            | "StandardPrimitiveRef"
+            | "UserPrimitiveRef"
     )
 }
 

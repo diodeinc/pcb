@@ -76,7 +76,7 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
     let mut filtered_xml = filter_by_mode(&content, mode)?;
 
-    // Append FileRevision to HistoryRecord per IPC-2581C spec
+    // Append a schema-valid history change to HistoryRecord.
     let comment = format!("Filtered to {} view", mode.as_str());
     filtered_xml = crate::utils::history::append_file_revision(&filtered_xml, &comment)?;
 
