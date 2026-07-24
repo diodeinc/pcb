@@ -508,17 +508,10 @@ impl TestServer {
 
         let initialization_options = settings.map(|v| serde_json::to_value(v).unwrap());
 
-        #[allow(deprecated)]
         let init = InitializeParams {
-            process_id: None,
-            root_path: None,
-            root_uri: None,
             initialization_options,
             capabilities,
-            trace: None,
-            workspace_folders: None,
-            client_info: None,
-            locale: None,
+            ..InitializeParams::default()
         };
 
         let init_request = self.new_request::<Initialize>(init);
