@@ -730,7 +730,6 @@ impl<T: LspContext> Backend<T> {
         diagnostics.extend(sim_diagnostics);
 
         self.publish_grouped_diagnostics(&lsp_url, diagnostics, None);
-        self.maybe_publish_netlist_update(&lsp_url)?;
         self.propagate_change(&lsp_url)?;
 
         // Save is the explicit "refresh now" signal; force a full sweep so
@@ -2422,6 +2421,51 @@ mod tests {
         assert!(
             !notification.diagnostics.is_empty(),
             "expected diagnostics after didSave revalidation"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn did_save_does_not_republish_changed_document_netlist() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let uri = temp_file_uri("file.star");
+        let mut server = TestServer::new()?;
+        server.open_file(uri.clone(), "x = 1\n".to_owned())?;
+
+        let subscribe = Request {
+            id: RequestId::from(1001),
+            method: "test/subscribeNetlist".to_owned(),
+            params: serde_json::Value::Null,
+        };
+        let subscribe_id = server.send_request(subscribe)?;
+        server.get_response::<bool>(subscribe_id)?;
+
+        let changed = "x = 2\n".to_owned();
+        server.set_file_contents(&uri, changed.clone())?;
+        server.change_file(uri.clone(), changed)?;
+        server.send_notification(new_notification::<DidSaveTextDocument>(
+            DidSaveTextDocumentParams {
+                text_document: TextDocumentIdentifier { uri },
+                text: None,
+            },
+        ))?;
+
+        // A request acts as a barrier for the preceding change and save notifications.
+        let barrier = Request {
+            id: RequestId::from(1002),
+            method: "starlark/echo".to_owned(),
+            params: serde_json::json!("done"),
+        };
+        let barrier_id = server.send_request(barrier)?;
+        server.get_response::<String>(barrier_id)?;
+
+        assert_eq!(
+            server.notification_count("zener/netlistUpdated"),
+            1,
+            "didChange should own netlist publication for the updated open buffer"
         );
         Ok(())
     }

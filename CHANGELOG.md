@@ -39,6 +39,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Avoid duplicate LSP netlist updates for unchanged state.
+- Prevent `textDocument/didSave` from republishing an open-buffer netlist already emitted by `textDocument/didChange`.
 
 ## [0.4.9] - 2026-07-23
 
