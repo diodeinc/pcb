@@ -2286,6 +2286,9 @@ impl<'a> Parser<'a> {
                         self.parse_feature_arc(&child, units, offset.x, offset.y)?,
                     ));
                 }
+                "Contour" => {
+                    feature = Some(self.parse_contour_feature(&child, units, offset)?);
+                }
                 "UserSpecial" => {
                     feature = Some(ecad::SetFeature::UserPrimitive(
                         ecad::FeatureUserPrimitive {
@@ -2324,6 +2327,36 @@ impl<'a> Parser<'a> {
         Ok(vec![feature.ok_or(Ipc2581Error::MissingElement(
             "Feature in Features",
         ))?])
+    }
+
+    fn parse_contour_feature(
+        &mut self,
+        node: &Node,
+        units: Units,
+        offset: Point,
+    ) -> Result<ecad::SetFeature> {
+        let contour = self.parse_contour(node, units)?;
+        let style_node = self
+            .element_children(node)
+            .find(|child| self.name(child) == "Polygon")
+            .unwrap_or(*node);
+        let (line_desc, line_desc_ref, fill_desc) =
+            self.parse_user_shape_style(&style_node, units)?;
+
+        Ok(ecad::SetFeature::UserPrimitive(
+            ecad::FeatureUserPrimitive {
+                primitive: UserPrimitive::UserSpecial(UserSpecial {
+                    shapes: vec![UserShape {
+                        shape: UserShapeType::Contour(contour),
+                        line_desc,
+                        line_desc_ref,
+                        fill_desc,
+                    }],
+                }),
+                x: offset.x,
+                y: offset.y,
+            },
+        ))
     }
 
     fn translate_polygon(mut polygon: Polygon, offset: Point) -> Polygon {
@@ -3331,6 +3364,7 @@ fn is_features_feature_name(name: &str) -> bool {
             | "Polyline"
             | "Line"
             | "Arc"
+            | "Contour"
             | "UserSpecial"
             | "StandardPrimitiveRef"
             | "UserPrimitiveRef"

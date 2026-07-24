@@ -642,15 +642,13 @@ mod tests {
             </Features>
             <Features>
               <Location x="10" y="20"/>
-              <UserSpecial>
-                <Contour>
-                  <Polygon>
-                    <PolyBegin x="2" y="0"/>
-                    <PolyStepSegment x="3" y="0"/>
-                    <PolyStepSegment x="2" y="0"/>
-                  </Polygon>
-                </Contour>
-              </UserSpecial>
+              <Contour>
+                <Polygon>
+                  <PolyBegin x="2" y="0"/>
+                  <PolyStepSegment x="3" y="0"/>
+                  <PolyStepSegment x="2" y="0"/>
+                </Polygon>
+              </Contour>
             </Features>
           </Set>
         </LayerFeature>
