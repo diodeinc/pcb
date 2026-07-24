@@ -5,7 +5,7 @@ pub const SOFT_ITEM_LIMIT: usize = 16;
 pub const MAX_ITEM_COUNT: usize = 32;
 
 const SOFT_LIMIT_SEARCH_WORK: usize = 100_000_000;
-const EXTENDED_SEARCH_WORK: usize = 20_000_000;
+const EXTENDED_SEARCH_WORK: usize = 100_000_000;
 const SPLITS_PER_STATE_LIMIT: usize = 200_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -578,6 +578,48 @@ mod tests {
             };
             MAX_ITEM_COUNT
         ];
+        let placements = pack(&items, USABLE_FAB_PANEL, GAP).unwrap();
+        assert_valid(&items, &placements);
+    }
+
+    #[test]
+    fn packs_heterogeneous_shapes_above_the_soft_limit() {
+        let items = [
+            (
+                Size {
+                    width: 40_000,
+                    height: 60_000,
+                },
+                5,
+            ),
+            (
+                Size {
+                    width: 50_000,
+                    height: 70_000,
+                },
+                4,
+            ),
+            (
+                Size {
+                    width: 60_000,
+                    height: 80_000,
+                },
+                4,
+            ),
+            (
+                Size {
+                    width: 70_000,
+                    height: 90_000,
+                },
+                4,
+            ),
+        ]
+        .into_iter()
+        .flat_map(|(size, count)| std::iter::repeat_n(size, count))
+        .collect::<Vec<_>>();
+
+        assert!(items.len() > SOFT_ITEM_LIMIT);
+        assert!(EXTENDED_SEARCH_WORK >= SOFT_LIMIT_SEARCH_WORK);
         let placements = pack(&items, USABLE_FAB_PANEL, GAP).unwrap();
         assert_valid(&items, &placements);
     }
