@@ -208,10 +208,9 @@ fn ensure_history_person(doc: &Doc, root: Node) -> Result<(String, Vec<Edit>)> {
             .children(header)
             .into_iter()
             .find(|&child| doc.name(child) == "Person")
+            && let Some(name) = doc.attr(person, "name")
         {
-            if let Some(name) = doc.attr(person, "name") {
-                return Ok((name.to_string(), Vec::new()));
-            }
+            return Ok((name.to_string(), Vec::new()));
         }
 
         let role_ref = doc
