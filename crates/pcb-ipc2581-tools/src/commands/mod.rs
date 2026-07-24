@@ -4,6 +4,7 @@ pub mod bom;
 pub mod bom_edit;
 pub mod cpl;
 pub mod dfm;
+pub mod fab_panel;
 pub mod html_export;
 pub mod info;
 pub mod outline;

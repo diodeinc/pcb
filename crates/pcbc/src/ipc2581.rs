@@ -60,6 +60,11 @@ enum Commands {
         #[command(subcommand)]
         command: BoardArrayCommands,
     },
+    /// Tile assembly panels into a fixed 18 by 24 inch fabrication panel
+    FabPanel {
+        #[command(subcommand)]
+        command: FabPanelCommands,
+    },
     /// Export a filtered view of an IPC-2581 file for a specific mode
     View {
         /// Input IPC-2581 XML file
@@ -214,6 +219,24 @@ enum BoardArrayCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum FabPanelCommands {
+    /// Create a fabrication panel with 5 mm edge rails and 5 mm panel gaps
+    Create {
+        /// Assembly panel IPC-2581 files. Repeat a path to request multiple copies.
+        #[arg(
+            required = true,
+            num_args = 1..=32,
+            value_name = "ASSEMBLY_PANEL",
+            value_hint = clap::ValueHint::FilePath
+        )]
+        inputs: Vec<PathBuf>,
+        /// Output IPC-2581 XML file, or '-' for stdout
+        #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
+        output: PathBuf,
+    },
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy)]
 enum GerberLayoutTarget {
     Board,
@@ -327,6 +350,11 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                         },
                     )
                 }
+            }
+        },
+        Commands::FabPanel { command } => match command {
+            FabPanelCommands::Create { inputs, output } => {
+                commands::fab_panel::execute(&inputs, &output)
             }
         },
         Commands::View {
