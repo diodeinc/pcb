@@ -1,6 +1,6 @@
 """Tests for general utility functions."""
 
-load("../units.zen", "Capacitance")
+load("../units.zen", "Capacitance", "Resistance")
 load("../utils.zen", "e3", "e6", "e12", "e24", "e48", "e96", "e192")
 
 for series_name, snap in [
@@ -23,3 +23,8 @@ check(e12(Capacitance("9.08nF")) == Capacitance("8.2nF"), "E12 should use absolu
 # Check the same boundary above and below the base-unit decade.
 check(e12(Capacitance("0.997nF")) == Capacitance("1nF"), "E12 should cross a lower decade")
 check(e24(Capacitance("99.7nF")) == Capacitance("100nF"), "E24 should cross a higher decade")
+
+# Preserve exact E-series inputs when restoring their original decade.
+for value in ["40.2kohm", "402ohm", "402kohm"]:
+    check(e96(Resistance(value)) == Resistance(value), "E96 should preserve exact value " + value)
+check(e24(Capacitance("2.7nF")) == Capacitance("2.7nF"), "E24 should preserve exact value 2.7nF")

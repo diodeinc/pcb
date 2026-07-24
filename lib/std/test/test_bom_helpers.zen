@@ -1,6 +1,7 @@
 """Tests for BOM helper functions"""
 
-load("../bom/helpers.zen", "encode_R_notation", "iec60062_3digit", "iec60062_4digit")
+load("../bom/helpers.zen", "encode_R_notation", "find_e_series_match", "iec60062_3digit", "iec60062_4digit")
+load("../units.zen", "Resistance")
 
 # Test encode_R_notation
 check(encode_R_notation(4.7) == "4R7", "4.7Ω should encode to 4R7")
@@ -33,3 +34,7 @@ check(iec60062_3digit(100000.0) == "104", "100kΩ should encode to 104")
 check(iec60062_3digit(1000000.0) == "105", "1MΩ should encode to 105")
 check(iec60062_3digit(2200000.0) == "225", "2.2MΩ should encode to 225")
 check(iec60062_3digit(4700000.0) == "475", "4.7MΩ should encode to 475")
+
+# Exact E96 values must retain their full tolerance band for house-part matching.
+exact_e96 = Resistance("40.2kohm").with_tolerance(0.01)
+check(find_e_series_match(exact_e96, 0.01, ["e96"]) != None, "Exact E96 values should match a 1% E96 part")
