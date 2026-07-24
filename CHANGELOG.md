@@ -12,9 +12,13 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added `pcb aoi` scaffold for automated optical inspection (render-vs-photo compare); the computer-vision diff step is not yet implemented.
 
+### Changed
+
+- `pcb lsp` now reports its `pcbc` version, executable, client, workspace roots, and startup configuration.
+
 ### Fixed
 
-- E-series helpers now consider the nearest value in the adjacent decade.
+- E-series helpers now consider the nearest value in the adjacent decade without changing exact E-series inputs.
 
 ## [0.4.11] - 2026-07-23
 

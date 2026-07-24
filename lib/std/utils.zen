@@ -77,7 +77,7 @@ def _e_series(physical_value, series):
     # Include the first value of the next decade.
     candidates = series + [series[0] * 10.0]
     closest = min(candidates, key=lambda value: normalized.diff(_unit(value)))
-    return _unit(closest * decade)
+    return _unit(closest) * decade
 
 
 def e3(physical_value):
