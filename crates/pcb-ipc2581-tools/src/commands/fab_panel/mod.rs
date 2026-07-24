@@ -15,7 +15,7 @@ use crate::utils::file as file_utils;
 mod packing;
 mod xml;
 
-use packing::{MAX_ITEM_COUNT, SOFT_ITEM_LIMIT, Size, pack};
+use packing::{MAX_ITEM_COUNT, Size, pack};
 
 const FAB_PANEL_WIDTH_MM: f64 = 18.0 * 25.4;
 const FAB_PANEL_HEIGHT_MM: f64 = 24.0 * 25.4;
@@ -111,13 +111,6 @@ pub fn execute(inputs: &[PathBuf], output: &Path) -> Result<()> {
             inputs.len()
         );
     }
-    if inputs.len() > SOFT_ITEM_LIMIT {
-        eprintln!(
-            "warning: packing {} assembly panels exceeds the recommended limit of {SOFT_ITEM_LIMIT}",
-            inputs.len()
-        );
-    }
-
     let mut source_by_path = HashMap::<PathBuf, usize>::new();
     let mut source_xml = Vec::new();
     let mut occurrences = Vec::with_capacity(inputs.len());

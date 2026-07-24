@@ -1,11 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-pub const SOFT_ITEM_LIMIT: usize = 16;
 pub const MAX_ITEM_COUNT: usize = 32;
 
-const SOFT_LIMIT_SEARCH_WORK: usize = 100_000_000;
-const EXTENDED_SEARCH_WORK: usize = 100_000_000;
+const SEARCH_WORK_LIMIT: usize = 100_000_000;
 const SPLITS_PER_STATE_LIMIT: usize = 200_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,11 +146,7 @@ pub fn pack(items: &[Size], bin: Size, gap: u32) -> Result<Vec<Placement>, PackE
         memo: HashMap::new(),
         nodes: Vec::new(),
         work: 0,
-        work_limit: if items.len() <= SOFT_ITEM_LIMIT {
-            SOFT_LIMIT_SEARCH_WORK
-        } else {
-            EXTENDED_SEARCH_WORK
-        },
+        work_limit: SEARCH_WORK_LIMIT,
     };
     let frontier = solver.solve(&full_state)?;
     let best = frontier
@@ -570,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_shapes_scale_to_the_hard_limit() {
+    fn repeated_shapes_scale_to_the_limit() {
         let items = vec![
             Size {
                 width: 50_000,
@@ -583,7 +577,20 @@ mod tests {
     }
 
     #[test]
-    fn packs_heterogeneous_shapes_above_the_soft_limit() {
+    fn packs_twenty_nine_a7_panels() {
+        let items = vec![
+            Size {
+                width: 105_000,
+                height: 74_000,
+            };
+            29
+        ];
+        let placements = pack(&items, USABLE_FAB_PANEL, GAP).unwrap();
+        assert_valid(&items, &placements);
+    }
+
+    #[test]
+    fn packs_seventeen_heterogeneous_panels() {
         let items = [
             (
                 Size {
@@ -618,14 +625,13 @@ mod tests {
         .flat_map(|(size, count)| std::iter::repeat_n(size, count))
         .collect::<Vec<_>>();
 
-        assert!(items.len() > SOFT_ITEM_LIMIT);
-        assert!(EXTENDED_SEARCH_WORK >= SOFT_LIMIT_SEARCH_WORK);
+        assert_eq!(items.len(), 17);
         let placements = pack(&items, USABLE_FAB_PANEL, GAP).unwrap();
         assert_valid(&items, &placements);
     }
 
     #[test]
-    fn rejects_more_than_the_hard_limit() {
+    fn rejects_more_than_the_limit() {
         let items = vec![
             Size {
                 width: 1,

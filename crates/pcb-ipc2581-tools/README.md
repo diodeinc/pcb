@@ -34,9 +34,8 @@ pcb ipc2581 fab-panel create \
   assembly-a.xml assembly-a.xml assembly-b.xml
 ```
 
-The command supports up to 32 assembly panels. Packing more than 16 panels can
-require a larger slicing-layout search and produces a warning. The command
-fails without writing an output when it cannot find a layout.
+The command supports up to 32 assembly panels and fails without writing an
+output when it cannot find a layout.
 
 ```bash
 cargo test -p pcb-ipc2581-tools
