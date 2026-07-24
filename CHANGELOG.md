@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb lsp` now reports its `pcbc` version, executable, client, workspace roots, and startup configuration.
+
 ### Fixed
 
 - E-series helpers now consider the nearest value in the adjacent decade without changing exact E-series inputs.

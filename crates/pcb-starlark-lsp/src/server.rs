@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use derivative::Derivative;
 use derive_more::Display;
@@ -122,6 +123,10 @@ use crate::definition::LspModule;
 use crate::inspect::AstModuleInspect;
 use crate::inspect::AutocompleteType;
 use crate::symbols::find_symbols_at_location;
+
+const SERVER_NAME: &str = "pcbc";
+const SERVER_DISPLAY_NAME: &str = "PCB language server";
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The request to get the file contents for a starlark: URI
 struct StarlarkFileContentsRequest {}
@@ -1372,13 +1377,7 @@ impl<T: LspContext> Backend<T> {
             } else if let Some(root_uri) = initialize_params.root_uri.as_ref() {
                 root_uri.to_file_path().ok().into_iter().collect()
             } else {
-                #[allow(deprecated)]
-                initialize_params
-                    .root_path
-                    .as_ref()
-                    .map(PathBuf::from)
-                    .into_iter()
-                    .collect()
+                Vec::new()
             };
 
         match self.context.workspace_files(&workspace_roots) {
@@ -1847,13 +1846,18 @@ impl<T: LspContext> Backend<T> {
         params
     }
 
-    fn main_loop(&self, initialize_params: InitializeParams) -> anyhow::Result<()> {
-        self.log_message(MessageType::INFO, "Starlark server initialised");
+    fn main_loop(
+        &self,
+        initialize_params: InitializeParams,
+        started_at: Instant,
+    ) -> anyhow::Result<()> {
         self.register_manifest_watchers();
 
         // Pre-parse relevant files.
         self.preload_workspace(&initialize_params);
         self.sync_watched_file_registrations();
+        self.log_startup_information(&initialize_params, started_at);
+
         let mut pending: VecDeque<Message> = VecDeque::new();
         loop {
             let msg = if let Some(msg) = pending.pop_front() {
@@ -1914,19 +1918,70 @@ impl<T: LspContext> Backend<T> {
         }
         Ok(())
     }
+
+    fn log_startup_information(&self, initialize_params: &InitializeParams, started_at: Instant) {
+        self.log_message(
+            MessageType::INFO,
+            &format!(
+                "{SERVER_DISPLAY_NAME} initialized: {SERVER_NAME} {SERVER_VERSION} in {} ms",
+                started_at.elapsed().as_millis()
+            ),
+        );
+
+        let client = initialize_params
+            .client_info
+            .as_ref()
+            .map(|info| match info.version.as_deref() {
+                Some(version) => format!("{} {version}", info.name),
+                None => info.name.clone(),
+            })
+            .unwrap_or_else(|| "unknown".to_owned());
+        let client = match initialize_params.process_id {
+            Some(process_id) => format!("{client} (pid {process_id})"),
+            None => client,
+        };
+        self.log_message(MessageType::INFO, &format!("Client: {client}"));
+
+        let workspace_roots = workspace_root_labels(initialize_params);
+        let workspace_message = match workspace_roots.as_slice() {
+            [] => "Workspace roots: none".to_owned(),
+            [root] => format!("Workspace root: {root}"),
+            roots => format!("Workspace roots ({}): {}", roots.len(), roots.join(", ")),
+        };
+        self.log_message(MessageType::INFO, &workspace_message);
+
+        self.log_message(
+            MessageType::INFO,
+            &format!(
+                "Startup mode: workspace preload={}, dynamic file watching={}, relative watch patterns={}",
+                enabled(self.context.is_eager()),
+                supported(self.supports_dynamic_watched_files),
+                supported(self.supports_relative_watch_patterns),
+            ),
+        );
+    }
 }
 
 /// Instantiate an LSP server that reads on stdin, and writes to stdout
 pub fn stdio_server<T: LspContext>(context: T) -> anyhow::Result<()> {
     // Note that  we must have our logging only write out to stderr.
-    eprintln!("Starting Rust Starlark server");
+    eprintln!(
+        "Starting {SERVER_DISPLAY_NAME} ({SERVER_NAME} {SERVER_VERSION}, {}/{}, pid {})",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        std::process::id(),
+    );
+    match std::env::current_exe() {
+        Ok(executable) => eprintln!("Executable: {}", executable.display()),
+        Err(error) => eprintln!("Executable: unknown ({error})"),
+    }
 
     let (connection, io_threads) = Connection::stdio();
     server_with_connection(connection, context)?;
     // Make sure that the io threads stop properly too.
     io_threads.join()?;
 
-    eprintln!("Stopping Rust Starlark server");
+    eprintln!("Stopping {SERVER_DISPLAY_NAME}");
     Ok(())
 }
 
@@ -1935,6 +1990,8 @@ pub fn server_with_connection<T: LspContext>(
     connection: Connection,
     context: T,
 ) -> anyhow::Result<()> {
+    let started_at = Instant::now();
+
     // Run the server and wait for the main thread to end (typically by trigger LSP Exit event).
     let (init_request_id, init_value) = connection.initialize_start()?;
 
@@ -1948,7 +2005,11 @@ pub fn server_with_connection<T: LspContext>(
     let server_capabilities = serde_json::to_value(capabilities_payload).unwrap();
 
     let initialize_data = serde_json::json!({
-            "capabilities": server_capabilities,
+        "capabilities": server_capabilities,
+        "serverInfo": {
+            "name": SERVER_NAME,
+            "version": SERVER_VERSION,
+        },
     });
     connection.initialize_finish(init_request_id, initialize_data)?;
 
@@ -1977,9 +2038,38 @@ pub fn server_with_connection<T: LspContext>(
         supports_dynamic_watched_files,
         supports_relative_watch_patterns,
     }
-    .main_loop(initialization_params)?;
+    .main_loop(initialization_params, started_at)?;
 
     Ok(())
+}
+
+fn workspace_root_labels(initialize_params: &InitializeParams) -> Vec<String> {
+    if let Some(workspace_folders) = initialize_params.workspace_folders.as_ref() {
+        return workspace_folders
+            .iter()
+            .map(|folder| display_uri_path(&folder.uri))
+            .collect();
+    }
+
+    if let Some(root_uri) = initialize_params.root_uri.as_ref() {
+        return vec![display_uri_path(root_uri)];
+    }
+
+    Vec::new()
+}
+
+fn display_uri_path(uri: &Url) -> String {
+    uri.to_file_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| uri.to_string())
+}
+
+fn enabled(value: bool) -> &'static str {
+    if value { "enabled" } else { "disabled" }
+}
+
+fn supported(value: bool) -> &'static str {
+    if value { "supported" } else { "unsupported" }
 }
 
 fn as_notification<T>(x: &Notification) -> Option<T::Params>
@@ -2073,6 +2163,7 @@ mod tests {
     use lsp_types::Url;
     use lsp_types::notification::DidOpenTextDocument;
     use lsp_types::notification::DidSaveTextDocument;
+    use lsp_types::notification::LogMessage;
     use lsp_types::request::GotoDefinition;
     use lsp_types::{FileChangeType, FileEvent, notification::PublishDiagnostics};
     use starlark::codemap::ResolvedSpan;
@@ -2080,6 +2171,7 @@ mod tests {
     use textwrap::dedent;
 
     use super::record_netlist_payload;
+    use super::{SERVER_NAME, SERVER_VERSION};
     use crate::definition::helpers::FixtureWithRanges;
     use crate::server::LspServerSettings;
     use crate::server::LspUrl;
@@ -3119,6 +3211,44 @@ mod tests {
             .is_some();
 
         assert!(goto_definition_enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn reports_server_identity() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let server = TestServer::new()?;
+        let server_info = server.initialization_result().unwrap().server_info.unwrap();
+
+        assert_eq!(server_info.name, SERVER_NAME);
+        assert_eq!(server_info.version.as_deref(), Some(SERVER_VERSION));
+        Ok(())
+    }
+
+    #[test]
+    fn reports_startup_information() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let mut server = TestServer::new()?;
+        let messages = [
+            server.get_notification::<LogMessage>()?.message,
+            server.get_notification::<LogMessage>()?.message,
+            server.get_notification::<LogMessage>()?.message,
+            server.get_notification::<LogMessage>()?.message,
+        ];
+
+        assert!(messages[0].contains(&format!("{SERVER_NAME} {SERVER_VERSION}")));
+        assert_eq!(messages[1], "Client: unknown");
+        assert_eq!(messages[2], "Workspace roots: none");
+        assert_eq!(
+            messages[3],
+            "Startup mode: workspace preload=enabled, dynamic file watching=unsupported, relative watch patterns=unsupported"
+        );
         Ok(())
     }
 
