@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- E-series helpers now consider the nearest value in the adjacent decade.
+- E-series helpers now consider the nearest value in the adjacent decade without changing exact E-series inputs.
 
 ## [0.4.11] - 2026-07-23
 
