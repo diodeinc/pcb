@@ -20,6 +20,7 @@ const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - Preserves HistoryRecord/@origination
 /// - Creates a HistoryRecord if the file does not already have one
 /// - Creates the initial FileRevision when the record is empty
+/// - Migrates legacy extra FileRevision elements to ChangeRec entries
 /// - Appends a ChangeRec when the record already contains its FileRevision
 pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String> {
     let doc = Doc::parse(original_xml)?;
@@ -32,6 +33,7 @@ pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String>
 pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
     let now = jiff::Timestamp::now().to_string();
     let root = doc.root()?;
+    let (person_ref, mut edits) = ensure_history_person(doc, root)?;
 
     let edits = match doc.child(root, "HistoryRecord") {
         // A childless record is expanded in place, keeping its attributes.
@@ -40,30 +42,45 @@ pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
             writer.start_element_with("HistoryRecord", initial_history_attrs(doc, record, &now));
             write_file_revision(&mut writer, 1, comment);
             writer.end_element("HistoryRecord");
-            vec![doc.replace(record, writer.into_string())]
+            edits.push(doc.replace(record, writer.into_string()));
+            edits
         }
         Some(record) => {
-            let file_revision_count = doc
+            let file_revisions = doc
                 .children(record)
                 .into_iter()
                 .filter(|&child| doc.name(child) == "FileRevision")
-                .count();
-            match file_revision_count {
-                0 => bail!("HistoryRecord has no FileRevision"),
-                1 => {}
-                _ => bail!(
-                    "HistoryRecord contains multiple FileRevision elements; IPC-2581C allows exactly one"
-                ),
+                .collect::<Vec<_>>();
+            if file_revisions.is_empty() {
+                bail!("HistoryRecord has no FileRevision");
             }
 
             let mut start_tag = XmlWriter::new();
             start_tag.start_element_with("HistoryRecord", updated_history_attrs(doc, record, &now));
-            let mut change = XmlWriter::new();
-            write_change_record(&mut change, &now, &history_person_ref(doc, root), comment);
-            vec![
-                doc.replace_start_tag(record, start_tag.into_string()),
-                doc.append_inside(record, change.into_string()),
-            ]
+            let mut changes = XmlWriter::new();
+            let legacy_datetime = doc.attr(record, "lastChange").unwrap_or(&now);
+            for revision in file_revisions.iter().skip(1) {
+                let package = doc.child(*revision, "SoftwarePackage");
+                let application = package
+                    .and_then(|package| doc.attr(package, "name"))
+                    .unwrap_or("pcb");
+                let change = legacy_revision_change(doc, *revision, package);
+                write_change_record(
+                    &mut changes,
+                    legacy_datetime,
+                    &person_ref,
+                    application,
+                    &change,
+                );
+            }
+            write_change_record(&mut changes, &now, &person_ref, "pcb", comment);
+
+            edits.push(doc.replace_start_tag(record, start_tag.into_string()));
+            for revision in file_revisions.iter().skip(1) {
+                edits.push(doc.delete(*revision));
+            }
+            edits.push(doc.append_inside(record, changes.into_string()));
+            edits
         }
         None => {
             let mut writer = XmlWriter::new();
@@ -84,9 +101,10 @@ pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
                 .into_iter()
                 .find(|&child| !matches!(doc.name(child), "Content" | "LogisticHeader"));
             match anchor {
-                Some(node) => vec![doc.insert_before(node, writer.into_string())],
-                None => vec![doc.append_inside(root, writer.into_string())],
+                Some(node) => edits.push(doc.insert_before(node, writer.into_string())),
+                None => edits.push(doc.append_inside(root, writer.into_string())),
             }
+            edits
         }
     };
 
@@ -148,28 +166,107 @@ fn write_file_revision(writer: &mut XmlWriter, revision_id: u32, comment: &str) 
     writer.end_element("FileRevision");
 }
 
-fn write_change_record(writer: &mut XmlWriter, datetime: &str, person_ref: &str, comment: &str) {
+fn write_change_record(
+    writer: &mut XmlWriter,
+    datetime: &str,
+    person_ref: &str,
+    application: &str,
+    comment: &str,
+) {
     writer.empty_element(
         "ChangeRec",
         &[
             ("datetime", datetime),
             ("personRef", person_ref),
-            ("application", "pcb"),
+            ("application", application),
             ("change", comment),
         ],
     );
 }
 
-fn history_person_ref(doc: &Doc, root: Node) -> String {
-    doc.child(root, "LogisticHeader")
-        .and_then(|header| {
-            doc.children(header)
-                .into_iter()
-                .find(|&child| doc.name(child) == "Person")
+fn legacy_revision_change(doc: &Doc, revision: Node, package: Option<Node>) -> String {
+    if let Some(comment) = doc.attr(revision, "comment") {
+        return comment.to_string();
+    }
+
+    let id = doc.attr(revision, "fileRevisionId").unwrap_or("unknown");
+    let package_details = package
+        .map(|package| {
+            let name = doc.attr(package, "name").unwrap_or("unknown");
+            let revision = doc.attr(package, "revision").unwrap_or("unknown");
+            format!("{name} revision {revision}")
         })
-        .and_then(|person| doc.attr(person, "name"))
-        .unwrap_or("pcb")
-        .to_string()
+        .unwrap_or_else(|| "unknown application".to_string());
+    format!("Legacy FileRevision {id} ({package_details})")
+}
+
+fn ensure_history_person(doc: &Doc, root: Node) -> Result<(String, Vec<Edit>)> {
+    const PERSON_NAME: &str = "pcb";
+
+    if let Some(header) = doc.child(root, "LogisticHeader") {
+        if let Some(person) = doc
+            .children(header)
+            .into_iter()
+            .find(|&child| doc.name(child) == "Person")
+        {
+            if let Some(name) = doc.attr(person, "name") {
+                return Ok((name.to_string(), Vec::new()));
+            }
+        }
+
+        let role_ref = doc
+            .children(header)
+            .into_iter()
+            .find(|&child| doc.name(child) == "Role")
+            .and_then(|role| doc.attr(role, "id"))
+            .ok_or_else(|| anyhow::anyhow!("LogisticHeader has no Role for history Person"))?;
+        let enterprise_ref = doc
+            .children(header)
+            .into_iter()
+            .find(|&child| doc.name(child) == "Enterprise")
+            .and_then(|enterprise| doc.attr(enterprise, "id"))
+            .ok_or_else(|| {
+                anyhow::anyhow!("LogisticHeader has no Enterprise for history Person")
+            })?;
+
+        let mut writer = XmlWriter::new();
+        writer.empty_element(
+            "Person",
+            &[
+                ("name", PERSON_NAME),
+                ("enterpriseRef", enterprise_ref),
+                ("roleRef", role_ref),
+            ],
+        );
+        return Ok((
+            PERSON_NAME.to_string(),
+            vec![doc.append_inside(header, writer.into_string())],
+        ));
+    }
+
+    let mut writer = XmlWriter::new();
+    writer.start_element("LogisticHeader", &[]);
+    writer.empty_element("Role", &[("id", PERSON_NAME), ("roleFunction", "SENDER")]);
+    writer.empty_element("Enterprise", &[("id", PERSON_NAME), ("code", "NONE")]);
+    writer.empty_element(
+        "Person",
+        &[
+            ("name", PERSON_NAME),
+            ("enterpriseRef", PERSON_NAME),
+            ("roleRef", PERSON_NAME),
+        ],
+    );
+    writer.end_element("LogisticHeader");
+
+    let anchor = doc
+        .children(root)
+        .into_iter()
+        .find(|&child| doc.name(child) != "Content");
+    let edit = match anchor {
+        Some(node) => doc.insert_before(node, writer.into_string()),
+        None => doc.append_inside(root, writer.into_string()),
+    };
+    Ok((PERSON_NAME.to_string(), vec![edit]))
 }
 
 #[cfg(test)]
@@ -239,6 +336,38 @@ mod tests {
         // New edit appended as a third ChangeRec.
         assert_eq!(result.matches("<ChangeRec").count(), 3);
         assert!(result.contains("change=\"Third edit\""));
+    }
+
+    #[test]
+    fn test_migrates_legacy_file_revisions() {
+        let original = r#"<?xml version="1.0"?>
+<IPC-2581>
+  <Content roleRef="Owner"/>
+  <HistoryRecord number="3" origination="2025-10-23T16:30:12Z" software="pcb" lastChange="2025-11-17T20:00:00Z">
+    <FileRevision fileRevisionId="1" comment="Initial" label="">
+      <SoftwarePackage name="KiCad" revision="9.0.5" vendor="KiCad EDA"/>
+    </FileRevision>
+    <FileRevision fileRevisionId="2" comment="First edit" label="">
+      <SoftwarePackage name="pcb" revision="0.2.25" vendor="Diode"/>
+    </FileRevision>
+    <FileRevision fileRevisionId="3" comment="Second edit" label="">
+      <SoftwarePackage name="pcb" revision="0.2.26" vendor="Diode"/>
+    </FileRevision>
+  </HistoryRecord>
+  <Ecad/>
+</IPC-2581>"#;
+
+        let result = append_file_revision(original, "Third edit").unwrap();
+
+        assert_eq!(result.matches("<FileRevision").count(), 1);
+        assert_eq!(result.matches("<ChangeRec").count(), 3);
+        assert!(!result.contains("fileRevisionId=\"2\""));
+        assert!(!result.contains("fileRevisionId=\"3\""));
+        assert!(result.contains("datetime=\"2025-11-17T20:00:00Z\""));
+        assert!(result.contains("application=\"pcb\" change=\"First edit\""));
+        assert!(result.contains("application=\"pcb\" change=\"Second edit\""));
+        assert!(result.contains("change=\"Third edit\""));
+        assert!(result.contains("<Person name=\"pcb\""));
     }
 
     #[test]
