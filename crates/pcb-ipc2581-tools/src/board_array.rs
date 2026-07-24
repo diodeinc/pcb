@@ -791,6 +791,8 @@ mod tests {
               <Line startX="5" startY="0" endX="5" endY="24">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
               </Line>
+            </Features>
+            <Features>
               <Line startX="0" startY="5.5" endX="44" endY="5.5">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
               </Line>
@@ -876,12 +878,18 @@ mod tests {
               <Line startX="5" startY="0" endX="5" endY="20">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
               </Line>
+            </Features>
+            <Features>
               <Line startX="15" startY="0" endX="15" endY="20">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
               </Line>
+            </Features>
+            <Features>
               <Line startX="0" startY="5" endX="20" endY="5">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
               </Line>
+            </Features>
+            <Features>
               <Line startX="0" startY="15" endX="20" endY="15">
                 <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
               </Line>

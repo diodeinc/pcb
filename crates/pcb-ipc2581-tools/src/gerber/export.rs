@@ -1572,6 +1572,8 @@ mod tests {
               <Line startX="4.2" startY="4.6" endX="5.8" endY="4.6">
                 <LineDesc lineWidth="0.5" lineEnd="ROUND"/>
               </Line>
+            </Features>
+            <Features>
               <Line startX="4.2" startY="5.4" endX="5.8" endY="5.4">
                 <LineDesc lineWidth="0.5" lineEnd="ROUND"/>
               </Line>

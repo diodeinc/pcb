@@ -305,36 +305,23 @@ pub(super) fn write_set_features(
     features: &[SetFeature],
     names: &mut GeneratedNameState,
 ) -> Result<()> {
-    let mut features_open = false;
     for feature in features {
         match feature {
             SetFeature::Line(line) => {
-                if !features_open {
-                    writer.start_element("Features", &[]);
-                    features_open = true;
-                }
+                writer.start_element("Features", &[]);
                 write::line(writer, units, line)?;
+                writer.end_element("Features");
             }
             SetFeature::Fiducial(fiducial) => {
-                close_features_element(writer, &mut features_open);
                 write::fiducial(writer, units, fiducial)?;
             }
             SetFeature::Hole(hole) => {
-                close_features_element(writer, &mut features_open);
                 write::hole(writer, units, hole, &names.next_hole_name());
             }
             _ => bail!("generated board array layer feature has unsupported feature kind"),
         }
     }
-    close_features_element(writer, &mut features_open);
     Ok(())
-}
-
-pub(super) fn close_features_element(writer: &mut XmlWriter, features_open: &mut bool) {
-    if *features_open {
-        writer.end_element("Features");
-        *features_open = false;
-    }
 }
 
 pub(super) fn rectangle_polygon(width_mm: f64, height_mm: f64) -> Polygon {

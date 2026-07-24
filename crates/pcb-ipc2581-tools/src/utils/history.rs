@@ -1,29 +1,26 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use ipc2581::XmlWriter;
 use ipc2581::edit::{self, Doc, Edit, Node};
 
 /// PCB tool version from Cargo.toml
 const PCB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Append a FileRevision entry to HistoryRecord per IPC-2581C spec
+/// Append a schema-valid history entry to HistoryRecord per IPC-2581C spec.
 ///
 /// Per IPC-2581C Section 6.1 & 6.2:
 /// - HistoryRecord number must be incremented on every modification
 /// - lastChange must be updated to current timestamp
-/// - FileRevision elements track the sequence of changes and tools used
-/// - ALL previous FileRevision elements must be preserved (audit trail)
+/// - HistoryRecord contains one FileRevision followed by ChangeRec entries
+/// - ChangeRec entries preserve the audit trail for subsequent modifications
 ///
 /// This function:
 /// - Increments HistoryRecord/@number
 /// - Updates HistoryRecord/@lastChange to current timestamp
 /// - Updates HistoryRecord/@software to "pcb"
 /// - Preserves HistoryRecord/@origination
-/// - Preserves ALL existing FileRevision elements (untouched bytes)
 /// - Creates a HistoryRecord if the file does not already have one
-/// - Appends NEW FileRevision element with:
-///   - Incremented fileRevisionId
-///   - Descriptive comment about what changed
-///   - SoftwarePackage element with pcb version info
+/// - Creates the initial FileRevision when the record is empty
+/// - Appends a ChangeRec when the record already contains its FileRevision
 pub fn append_file_revision(original_xml: &str, comment: &str) -> Result<String> {
     let doc = Doc::parse(original_xml)?;
     let edits = file_revision_edits(&doc, comment)?;
@@ -46,21 +43,26 @@ pub fn file_revision_edits(doc: &Doc, comment: &str) -> Result<Vec<Edit>> {
             vec![doc.replace(record, writer.into_string())]
         }
         Some(record) => {
-            let next_id = doc
+            let file_revision_count = doc
                 .children(record)
                 .into_iter()
                 .filter(|&child| doc.name(child) == "FileRevision")
-                .filter_map(|child| doc.attr(child, "fileRevisionId")?.parse::<u32>().ok())
-                .map(|id| id + 1)
-                .max()
-                .unwrap_or(1);
+                .count();
+            match file_revision_count {
+                0 => bail!("HistoryRecord has no FileRevision"),
+                1 => {}
+                _ => bail!(
+                    "HistoryRecord contains multiple FileRevision elements; IPC-2581C allows exactly one"
+                ),
+            }
+
             let mut start_tag = XmlWriter::new();
             start_tag.start_element_with("HistoryRecord", updated_history_attrs(doc, record, &now));
-            let mut revision = XmlWriter::new();
-            write_file_revision(&mut revision, next_id, comment);
+            let mut change = XmlWriter::new();
+            write_change_record(&mut change, &now, &history_person_ref(doc, root), comment);
             vec![
                 doc.replace_start_tag(record, start_tag.into_string()),
-                doc.append_inside(record, revision.into_string()),
+                doc.append_inside(record, change.into_string()),
             ]
         }
         None => {
@@ -141,9 +143,33 @@ fn write_file_revision(writer: &mut XmlWriter, revision_id: u32, comment: &str) 
             ("vendor", "Diode"),
         ],
     );
-    writer.empty_element("Certification", &[("certificationStatus", "NONE")]);
+    writer.empty_element("Certification", &[("certificationStatus", "SELFTEST")]);
     writer.end_element("SoftwarePackage");
     writer.end_element("FileRevision");
+}
+
+fn write_change_record(writer: &mut XmlWriter, datetime: &str, person_ref: &str, comment: &str) {
+    writer.empty_element(
+        "ChangeRec",
+        &[
+            ("datetime", datetime),
+            ("personRef", person_ref),
+            ("application", "pcb"),
+            ("change", comment),
+        ],
+    );
+}
+
+fn history_person_ref(doc: &Doc, root: Node) -> String {
+    doc.child(root, "LogisticHeader")
+        .and_then(|header| {
+            doc.children(header)
+                .into_iter()
+                .find(|&child| doc.name(child) == "Person")
+        })
+        .and_then(|person| doc.attr(person, "name"))
+        .unwrap_or("pcb")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -177,27 +203,24 @@ mod tests {
         assert!(result.contains("Initial export"));
         assert!(result.contains("KiCad"));
 
-        // New FileRevision appended
-        assert!(result.contains("fileRevisionId=\"2\""));
-        assert!(result.contains("BOM alternatives added"));
-        assert!(result.contains("name=\"pcb\""));
-        assert!(result.contains("vendor=\"Diode\""));
+        // A subsequent edit is recorded as ChangeRec; HistoryRecord allows
+        // only one FileRevision.
+        assert_eq!(result.matches("<FileRevision").count(), 1);
+        assert!(result.contains("<ChangeRec"));
+        assert!(result.contains("application=\"pcb\""));
+        assert!(result.contains("change=\"BOM alternatives added\""));
     }
 
     #[test]
-    fn test_multiple_revisions_preserved() {
+    fn test_existing_change_records_preserved() {
         let original = r#"<?xml version="1.0"?>
 <IPC-2581>
   <HistoryRecord number="3" origination="2025-10-23T16:30:12" software="pcb" lastChange="2025-11-17T20:00:00">
     <FileRevision fileRevisionId="1" comment="Initial" label="">
       <SoftwarePackage name="KiCad" revision="9.0.5" vendor="KiCad EDA"/>
     </FileRevision>
-    <FileRevision fileRevisionId="2" comment="First edit" label="">
-      <SoftwarePackage name="pcb" revision="0.2.25" vendor="Diode"/>
-    </FileRevision>
-    <FileRevision fileRevisionId="3" comment="Second edit" label="">
-      <SoftwarePackage name="pcb" revision="0.2.26" vendor="Diode"/>
-    </FileRevision>
+    <ChangeRec datetime="2025-11-01T20:00:00Z" personRef="pcb" application="pcb" change="First edit"/>
+    <ChangeRec datetime="2025-11-10T20:00:00Z" personRef="pcb" application="pcb" change="Second edit"/>
   </HistoryRecord>
 </IPC-2581>"#;
 
@@ -206,17 +229,16 @@ mod tests {
         // Number incremented from 3 to 4
         assert!(result.contains("number=\"4\""));
 
-        // All three previous revisions preserved
+        // The original revision and both existing changes are preserved.
+        assert_eq!(result.matches("<FileRevision").count(), 1);
         assert!(result.contains("fileRevisionId=\"1\""));
         assert!(result.contains("Initial"));
-        assert!(result.contains("fileRevisionId=\"2\""));
         assert!(result.contains("First edit"));
-        assert!(result.contains("fileRevisionId=\"3\""));
         assert!(result.contains("Second edit"));
 
-        // New revision appended as ID 4
-        assert!(result.contains("fileRevisionId=\"4\""));
-        assert!(result.contains("Third edit"));
+        // New edit appended as a third ChangeRec.
+        assert_eq!(result.matches("<ChangeRec").count(), 3);
+        assert!(result.contains("change=\"Third edit\""));
     }
 
     #[test]

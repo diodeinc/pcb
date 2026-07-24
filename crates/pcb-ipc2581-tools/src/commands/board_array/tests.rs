@@ -151,6 +151,31 @@ fn board_array_creation_adds_history_record() {
 }
 
 #[test]
+fn generated_board_array_xml_validates_with_existing_history_and_callouts() {
+    let input = schema_valid_board_fixture_mm();
+    let xml = create_board_array_xml(
+        &input,
+        &BoardArrayCreateOptions {
+            columns: 6,
+            rows: 6,
+            board_margin_mm: board_margin(5.0, 5.0),
+            edge_rail_mm: BoardMarginMm::all(5.0),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(xml.matches("<FileRevision").count(), 1);
+    assert_eq!(xml.matches("<ChangeRec").count(), 1);
+    assert!(xml.matches("<Line ").count() > 1);
+    assert_eq!(
+        xml.matches("<Features>").count(),
+        xml.matches("<Line ").count()
+    );
+
+    crate::ipc2581::validate(&xml).expect("generated board array XML should validate");
+}
+
+#[test]
 fn auto_create_projects_board_to_a7_array() {
     let xml = create_auto_board_array_xml(board_fixture_mm()).unwrap();
 
@@ -1409,6 +1434,25 @@ fn board_fixture_mm() -> &'static str {
 </CadData>
   </Ecad>
 </IPC-2581>"#
+}
+
+fn schema_valid_board_fixture_mm() -> String {
+    board_fixture_mm().replace(
+        "  <Ecad>",
+        r#"  <LogisticHeader>
+    <Role id="Owner" roleFunction="SENDER"/>
+    <Enterprise id="UNKNOWN" code="NONE"/>
+    <Person name="UNKNOWN" enterpriseRef="UNKNOWN" roleRef="Owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-01-01T00:00:00Z" software="KiCad EDA" lastChange="2026-01-01T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="Initial export">
+      <SoftwarePackage name="KiCad" revision="10.0.4" vendor="KiCad EDA">
+        <Certification certificationStatus="SELFTEST"/>
+      </SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Ecad name="board">"#,
+    )
 }
 
 fn rounded_corner_board_fixture_mm() -> &'static str {
