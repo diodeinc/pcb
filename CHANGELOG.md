@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - E-series helpers now consider the nearest value in the adjacent decade without changing exact E-series inputs.
 - IPC-2581 board-array output now uses schema-valid history changes and one feature per generated geometry container.
+- Prevent `textDocument/didSave` from republishing an open-buffer netlist already emitted by `textDocument/didChange`.
 
 ## [0.4.11] - 2026-07-23
 

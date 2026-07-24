@@ -23,6 +23,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use dupe::Dupe;
@@ -123,6 +126,8 @@ struct TestServerContext {
     dirs: Arc<RwLock<HashSet<PathBuf>>>,
     builtin_docs: Arc<HashMap<LspUrl, String>>,
     builtin_symbols: Arc<HashMap<String, LspUrl>>,
+    netlist_subscribed: AtomicBool,
+    netlist_update_counter: AtomicU64,
 }
 
 impl LspContext for TestServerContext {
@@ -313,9 +318,28 @@ impl LspContext for TestServerContext {
                 result: Some(serde_json::to_value(format!("echo:{payload}")).unwrap()),
                 error: None,
             })
+        } else if req.method == "test/subscribeNetlist" {
+            self.netlist_subscribed.store(true, Ordering::Relaxed);
+            Some(lsp_server::Response {
+                id: req.id.clone(),
+                result: Some(serde_json::Value::Bool(true)),
+                error: None,
+            })
         } else {
             None
         }
+    }
+
+    fn netlist_update(&self, _uri: &LspUrl) -> anyhow::Result<Option<serde_json::Value>> {
+        if !self.netlist_subscribed.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+
+        let evaluator_id = self.netlist_update_counter.fetch_add(1, Ordering::Relaxed);
+        Ok(Some(serde_json::json!({
+            "contentHash": "unchanged",
+            "evaluatorId": evaluator_id,
+        })))
     }
 
     fn watched_file_changed(&self, uri: &LspUrl) -> bool {
@@ -464,6 +488,8 @@ impl TestServer {
             dirs: dirs.dupe(),
             builtin_docs: builtin_docs.dupe(),
             builtin_symbols,
+            netlist_subscribed: AtomicBool::new(false),
+            netlist_update_counter: AtomicU64::new(0),
         };
 
         let server_thread = std::thread::spawn(|| {
@@ -595,6 +621,13 @@ impl TestServer {
             "Did not get a notification of type `{}` in 10 retries",
             T::METHOD
         ))
+    }
+
+    pub fn notification_count(&self, method: &str) -> usize {
+        self.notifications
+            .iter()
+            .filter(|notification| notification.method == method)
+            .count()
     }
 
     /// Attempt to receive a message and either put it in the `responses` map if it's a
