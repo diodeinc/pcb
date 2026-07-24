@@ -34,6 +34,11 @@ fn assembly_panel_xml_at(min_x: f64, min_y: f64, width_mm: f64, height_mm: f64) 
     <CadHeader units="MILLIMETER"/>
     <CadData>
       <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Stackup name="Primary" overallThickness="0.035" tolPlus="0" tolMinus="0" whereMeasured="METAL" stackupStatus="PROPOSED">
+        <StackupGroup name="Primary_Group" thickness="0.035" tolPlus="0" tolMinus="0">
+          <StackupLayer layerOrGroupRef="TOP" thickness="0.035" tolPlus="0" tolMinus="0" sequence="0"/>
+        </StackupGroup>
+      </Stackup>
       <Step name="panel" type="PALLET">
         <Datum x="0" y="0"/>
         <Profile>
@@ -44,6 +49,15 @@ fn assembly_panel_xml_at(min_x: f64, min_y: f64, width_mm: f64, height_mm: f64) 
             <PolyStepSegment x="{min_x}" y="{max_y}"/>
           </Polygon>
         </Profile>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Features>
+              <Line startX="{min_x}" startY="{min_y}" endX="{max_x}" endY="{min_y}">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
       </Step>
     </CadData>
   </Ecad>
@@ -52,7 +66,7 @@ fn assembly_panel_xml_at(min_x: f64, min_y: f64, width_mm: f64, height_mm: f64) 
 }
 
 #[test]
-fn merges_colliding_source_names_and_builds_full_fab_profile() {
+fn shares_the_first_stackup_across_sources_and_builds_full_fab_profile() {
     let sources = vec![
         assembly_panel_xml_at(10.0, 20.0, 100.0, 80.0),
         assembly_panel_xml_at(-15.0, 7.0, 120.0, 90.0),
@@ -61,8 +75,22 @@ fn merges_colliding_source_names_and_builds_full_fab_profile() {
 
     assert!(generated.contains(r#"<Step name="fab_0_panel" type="PALLET">"#));
     assert!(generated.contains(r#"<Step name="fab_1_panel" type="PALLET">"#));
-    assert!(generated.contains(r#"<Layer name="fab_0_TOP""#));
-    assert!(generated.contains(r#"<Layer name="fab_1_TOP""#));
+    assert_eq!(generated.matches(r#"<Layer name="TOP""#).count(), 1);
+    assert!(!generated.contains(r#"<Layer name="fab_0_TOP""#));
+    assert!(!generated.contains(r#"<Layer name="fab_1_TOP""#));
+    assert_eq!(
+        generated
+            .matches(r#"<Stackup name="fab_0_Primary""#)
+            .count(),
+        1
+    );
+    assert!(!generated.contains(r#"<Stackup name="fab_1_Primary""#));
+    assert_eq!(
+        generated
+            .matches(r#"<LayerFeature layerRef="TOP">"#)
+            .count(),
+        2
+    );
     assert!(generated.contains(r#"stepRef="fab_0_panel""#));
     assert!(generated.contains(r#"stepRef="fab_1_panel""#));
 
@@ -112,7 +140,7 @@ fn repeating_an_input_reuses_its_definitions_and_adds_placements() {
     let imported_layers = doc
         .find_all("Layer")
         .into_iter()
-        .filter(|layer| doc.attr(*layer, "name") == Some("fab_0_TOP"))
+        .filter(|layer| doc.attr(*layer, "name") == Some("TOP"))
         .count();
     let placements = doc
         .find_all("StepRepeat")
@@ -123,6 +151,45 @@ fn repeating_an_input_reuses_its_definitions_and_adds_placements() {
     assert_eq!(imported_steps, 1);
     assert_eq!(imported_layers, 1);
     assert_eq!(placements, 3);
+}
+
+#[test]
+fn rejects_a_stackup_that_differs_from_the_first_input() {
+    let first = assembly_panel_xml(100.0, 80.0);
+    let second = assembly_panel_xml(120.0, 90.0).replace(
+        r#"thickness="0.035" tolPlus="0" tolMinus="0" sequence="0""#,
+        r#"thickness="0.070" tolPlus="0" tolMinus="0" sequence="0""#,
+    );
+
+    let error = create_fab_panel_xml(&[first, second], &[0, 1]).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("stackup layer 1 ('TOP') differs from assembly panel input 1")
+    );
+}
+
+#[test]
+fn rejects_an_input_without_exactly_one_stackup() {
+    let first = assembly_panel_xml(100.0, 80.0);
+    let second = assembly_panel_xml(120.0, 90.0).replace(
+        r#"      <Stackup name="Primary" overallThickness="0.035" tolPlus="0" tolMinus="0" whereMeasured="METAL" stackupStatus="PROPOSED">
+        <StackupGroup name="Primary_Group" thickness="0.035" tolPlus="0" tolMinus="0">
+          <StackupLayer layerOrGroupRef="TOP" thickness="0.035" tolPlus="0" tolMinus="0" sequence="0"/>
+        </StackupGroup>
+      </Stackup>
+"#,
+        "",
+    );
+
+    let error = create_fab_panel_xml(&[first, second], &[0, 1]).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("assembly panel input 2 must contain exactly one physical stackup")
+    );
 }
 
 #[test]

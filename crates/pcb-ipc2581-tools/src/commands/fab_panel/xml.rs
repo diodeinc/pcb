@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::{Context, Result, bail};
 use ipc2581::edit::{self, Doc, Edit, Node};
 use ipc2581::types::Units;
@@ -12,21 +14,31 @@ const FAB_ROLE_ID: &str = "fab_panel_role";
 const FAB_ENTERPRISE_ID: &str = "fab_panel_enterprise";
 const FAB_PERSON_NAME: &str = "pcb";
 
-pub(super) fn namespace_source(xml: &str, prefix: &str) -> Result<String> {
+pub(super) fn namespace_source(
+    xml: &str,
+    prefix: &str,
+    shared_stackup_layers: &HashSet<String>,
+) -> Result<String> {
     let doc = Doc::parse(xml)?;
     let root = doc.root()?;
     let mut edits = Vec::new();
-    collect_namespace_edits(&doc, root, prefix, &mut edits);
+    collect_namespace_edits(&doc, root, prefix, shared_stackup_layers, &mut edits);
     Ok(edit::apply(xml, edits)?)
 }
 
-fn collect_namespace_edits(doc: &Doc, node: Node, prefix: &str, edits: &mut Vec<Edit>) {
+fn collect_namespace_edits(
+    doc: &Doc,
+    node: Node,
+    prefix: &str,
+    shared_stackup_layers: &HashSet<String>,
+    edits: &mut Vec<Edit>,
+) {
     let element = doc.name(node);
     let mut changed = false;
     let attrs = doc
         .attrs(node)
         .map(|(name, value)| {
-            let value = if should_namespace_attr(element, name) {
+            let value = if should_namespace_attr(element, name, value, shared_stackup_layers) {
                 changed = true;
                 format!("{prefix}{value}")
             } else {
@@ -47,11 +59,31 @@ fn collect_namespace_edits(doc: &Doc, node: Node, prefix: &str, edits: &mut Vec<
     }
 
     for child in doc.children(node) {
-        collect_namespace_edits(doc, child, prefix, edits);
+        collect_namespace_edits(doc, child, prefix, shared_stackup_layers, edits);
     }
 }
 
-fn should_namespace_attr(element: &str, attr: &str) -> bool {
+fn should_namespace_attr(
+    element: &str,
+    attr: &str,
+    value: &str,
+    shared_stackup_layers: &HashSet<String>,
+) -> bool {
+    let is_layer_reference = matches!(
+        attr,
+        "layerRef"
+            | "layerRefTopside"
+            | "secondaryLayerRef"
+            | "fromLayer"
+            | "toLayer"
+            | "startCutLayer"
+            | "layerId"
+            | "layerOrGroupRef"
+    ) || (attr == "name" && matches!(element, "Layer" | "LayerRef"));
+    if is_layer_reference && shared_stackup_layers.contains(value) {
+        return false;
+    }
+
     if matches!(
         attr,
         "enterpriseRef"
@@ -148,6 +180,7 @@ pub(super) fn write_fab_panel_xml(
     sources: &[SourcePanel],
     occurrences: &[usize],
     placements: &[Placement],
+    shared_stackup_layers: &HashSet<String>,
 ) -> Result<String> {
     let docs = sources
         .iter()
@@ -172,7 +205,7 @@ pub(super) fn write_fab_panel_xml(
             ("xmlns", "http://webstds.ipc.org/2581"),
         ],
     );
-    write_content(&mut writer, &docs, has_avl)?;
+    write_content(&mut writer, &docs, has_avl, shared_stackup_layers)?;
     write_logistic_header(&mut writer, &docs)?;
     write_history_record(&mut writer);
     write_boms(&mut writer, &docs)?;
@@ -183,6 +216,7 @@ pub(super) fn write_fab_panel_xml(
         occurrences,
         placements,
         first.units,
+        shared_stackup_layers,
     )?;
     if has_avl {
         write_avl(&mut writer, &docs)?;
@@ -194,17 +228,25 @@ pub(super) fn write_fab_panel_xml(
     Ok(xml)
 }
 
-fn write_content(writer: &mut XmlWriter, docs: &[Doc<'_>], has_avl: bool) -> Result<()> {
+fn write_content(
+    writer: &mut XmlWriter,
+    docs: &[Doc<'_>],
+    has_avl: bool,
+    shared_stackup_layers: &HashSet<String>,
+) -> Result<()> {
     writer.start_element("Content", &[("roleRef", FAB_ROLE_ID)]);
     writer.empty_element("FunctionMode", &[("mode", "FABRICATION")]);
     writer.empty_element("StepRef", &[("name", FAB_STEP_NAME)]);
 
-    for doc in docs {
+    for (doc_index, doc) in docs.iter().enumerate() {
         let cad_data = cad_data(doc)?;
         for layer in children_named(doc, cad_data, "Layer") {
             let name = doc
                 .attr(layer, "name")
                 .context("IPC-2581 Layer has no name")?;
+            if doc_index > 0 && shared_stackup_layers.contains(name) {
+                continue;
+            }
             writer.empty_element("LayerRef", &[("name", name)]);
         }
     }
@@ -373,6 +415,7 @@ fn write_ecad(
     occurrences: &[usize],
     placements: &[Placement],
     units: Units,
+    shared_stackup_layers: &HashSet<String>,
 ) -> Result<()> {
     writer.start_element("Ecad", &[("name", FAB_STEP_NAME)]);
     writer.start_element("CadHeader", &[("units", units_attr(units))]);
@@ -385,17 +428,24 @@ fn write_ecad(
     writer.end_element("CadHeader");
 
     writer.start_element("CadData", &[]);
-    for doc in docs {
+    for (doc_index, doc) in docs.iter().enumerate() {
         let cad_data = cad_data(doc)?;
         for layer in children_named(doc, cad_data, "Layer") {
+            let name = doc
+                .attr(layer, "name")
+                .context("IPC-2581 Layer has no name")?;
+            if doc_index > 0 && shared_stackup_layers.contains(name) {
+                continue;
+            }
             writer.raw(doc.source(layer));
         }
     }
-    for doc in docs {
-        let cad_data = cad_data(doc)?;
-        for stackup in children_named(doc, cad_data, "Stackup") {
-            writer.raw(doc.source(stackup));
-        }
+    let first_doc = docs
+        .first()
+        .context("at least one assembly panel source is required")?;
+    let first_cad_data = cad_data(first_doc)?;
+    for stackup in children_named(first_doc, first_cad_data, "Stackup") {
+        writer.raw(first_doc.source(stackup));
     }
     for doc in docs {
         let cad_data = cad_data(doc)?;

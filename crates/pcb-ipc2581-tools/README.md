@@ -24,7 +24,9 @@ Run `pcb ipc2581 <command> --help` for arguments and output options.
 path when the source document must remain unchanged.
 
 `fab-panel create` uses a 5 mm edge rail and a 5 mm gap between assembly
-panels. Repeat an input path to request more than one copy:
+panels. All inputs must have identical physical stackups. The first input
+provides the fab panel stackup and canonical physical layer definitions.
+Repeat an input path to request more than one copy:
 
 ```bash
 pcb ipc2581 fab-panel create \
