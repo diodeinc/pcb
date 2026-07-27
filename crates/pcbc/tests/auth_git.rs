@@ -72,7 +72,8 @@ impl TestContext {
             .env("PCB_CONFIG_DIR", &self.config_dir)
             .env("DIODE_API_URL", &self.api_url)
             .env("NO_PROXY", "127.0.0.1,localhost")
-            .env("no_proxy", "127.0.0.1,localhost");
+            .env("no_proxy", "127.0.0.1,localhost")
+            .env_remove("RUST_LOG");
     }
 }
 
