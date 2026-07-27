@@ -927,8 +927,7 @@ pub struct SearchArgs {
     #[arg(short = 'f', long, value_enum, default_value_t = SearchOutputFormat::Human)]
     pub format: SearchOutputFormat,
 
-    /// Search mode to launch TUI in
-    /// Default: registry:modules if available, otherwise kicad:components if available, otherwise web:components
+    /// Search mode; web:components is deprecated (use `pcb component search`)
     #[arg(short = 'm', long, value_enum)]
     pub mode: Option<crate::registry::tui::SearchMode>,
 

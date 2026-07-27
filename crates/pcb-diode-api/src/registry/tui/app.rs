@@ -287,7 +287,7 @@ pub enum SearchMode {
     /// Search KiCad components index (fast, local)
     #[value(name = "kicad:components")]
     KicadSymbols,
-    /// Search online APIs for components (slow, requires network)
+    /// Deprecated: use `pcb component search`
     #[value(name = "web:components")]
     WebComponents,
 }

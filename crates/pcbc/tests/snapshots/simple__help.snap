@@ -34,6 +34,7 @@ Commands:
   fork        Reserved subcommand for future use
   embed-step  Embed a STEP model into a KiCad footprint
   scan        Scan datasheets from local PDFs or URLs
+  component   Access the component API
   search      Search for electronic components
   simulate    Run SPICE simulations
   ipc2581     IPC-2581 parser and inspection tool

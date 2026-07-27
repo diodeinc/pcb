@@ -153,6 +153,9 @@ enum Commands {
     /// Scan datasheets from local PDFs or URLs
     Scan(pcb_diode_api::ScanArgs),
 
+    /// Access the component API
+    Component(pcb_diode_api::ComponentArgs),
+
     /// Search for electronic components
     Search(pcb_diode_api::SearchArgs),
 
@@ -240,6 +243,7 @@ fn run() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::Scan(args) => pcb_diode_api::execute_scan(args),
+        Commands::Component(args) => pcb_diode_api::execute_component(args),
         Commands::Search(args) => pcb_diode_api::execute_search(args),
         Commands::EmbedStep(args) => embed_step::execute(args),
         Commands::Route(args) => route::execute(args),
