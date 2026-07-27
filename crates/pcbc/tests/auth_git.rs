@@ -66,6 +66,28 @@ impl TestContext {
         command
     }
 
+    fn git_credential_with_fallback(&self, credential_file: &std::path::Path) -> Command {
+        let helper = format!(
+            "!\"{}\" auth git",
+            env!("CARGO_BIN_EXE_pcbc").replace('\\', "/")
+        );
+
+        let mut command = Command::new("git");
+        command
+            .args(["-c", "credential.helper="])
+            .arg("-c")
+            .arg(format!("credential.helper={helper}"))
+            .arg("-c")
+            .arg(format!(
+                "credential.helper=store --file={}",
+                credential_file.display()
+            ))
+            .args(["-c", "credential.useHttpPath=true"])
+            .args(["credential", "fill"]);
+        self.configure_environment(&mut command);
+        command
+    }
+
     fn configure_environment(&self, command: &mut Command) {
         command
             .current_dir(self._tempdir.path())
@@ -230,6 +252,32 @@ fn modern_git_honors_quit_when_the_exchange_fails() {
     assert!(stderr.contains("credential helper"));
     assert!(stderr.contains("told us to quit"));
     exchange.assert_calls(1);
+}
+
+#[test]
+fn global_helper_ignores_unrelated_hosts() {
+    let context = TestContext::new("http://127.0.0.1:1".to_string());
+    let credential_file = context._tempdir.path().join("credentials");
+    fs::write(
+        &credential_file,
+        "https://fallback-user:fallback-password@github.com/acme/widget.git\n",
+    )
+    .expect("write fallback credentials");
+
+    let fill = run_with_input(
+        context.git_credential_with_fallback(&credential_file),
+        "capability[]=authtype\n\
+         protocol=https\n\
+         host=github.com\n\
+         path=acme/widget.git\n\
+         \n",
+    );
+    assert_success(&fill);
+    assert!(fill.stderr.is_empty());
+
+    let credential = String::from_utf8(fill.stdout).unwrap();
+    assert!(credential.contains("username=fallback-user"));
+    assert!(credential.contains("password=fallback-password"));
 }
 
 #[test]
