@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 /// Name of the import extraction report, written inside `materialize::create_diagnostics_dir`.
@@ -84,9 +84,9 @@ pub(super) fn write_import_extraction_report(
 ) -> Result<()> {
     let mut value = serde_json::to_value(payload)?;
     sort_json_objects(&mut value);
-    std::fs::write(out_path, serde_json::to_string_pretty(&value)?)
-        .with_context(|| format!("Failed to write {}", out_path.display()))?;
-    Ok(())
+    // Renamed into place rather than truncated, for the same reasons as the validation diagnostics: no
+    // partial JSON at a path consumers read, and a symlinked destination is replaced, not followed.
+    super::output::write_atomic(out_path, serde_json::to_string_pretty(&value)?.as_bytes())
 }
 
 fn sort_json_objects(value: &mut serde_json::Value) {

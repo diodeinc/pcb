@@ -419,14 +419,11 @@ fn verify_registry_component_parts(
 /// Check that a component whose `.zen` this run did not generate still carries the footprint the
 /// KiCad source names.
 ///
-/// `registry_entrypoints` are exempt. A registry substitution's footprint identity is settled at
-/// selection time by comparing land patterns, which deliberately accepts a *different name* for the
-/// same copper — one library calls the u-blox land pattern `ublox_SAM-M8Q`, another
-/// `SAM-M10Q-00B` — and its part identity is checked by [`verify_registry_component_parts`].
-/// Requiring name equality here as well would reject every substitution the land-pattern gate exists
-/// to allow, and because a failure with substitutions in play triggers the no-reuse retry, the
-/// substitution would be discarded silently rather than reported. Registry entrypoints still take part
-/// in [`verify_physical_partitions`], which is what guards their connectivity.
+/// `registry_entrypoints` are exempt: their footprint identity is already settled at selection time by
+/// comparing land patterns, which deliberately accepts a different *name* for the same copper. Requiring
+/// name equality here too would reject every substitution that gate exists to allow. Their connectivity is
+/// still checked by [`verify_physical_partitions`] and their part identity by
+/// [`verify_registry_component_parts`].
 fn verify_reused_component_footprints(
     ir: &ImportIr,
     schematic: &Schematic,

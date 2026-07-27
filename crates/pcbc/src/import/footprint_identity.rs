@@ -9,26 +9,34 @@ use std::collections::{BTreeMap, BTreeSet};
 /// far above float-formatting noise.
 const LENGTH_EPSILON_MM: f64 = 1e-6;
 
-/// Pad fields this comparison deliberately does not read, from a survey of 25,000 real footprints
-/// (647,000 pads): `uuid` and `property` identify or annotate the pad; `clearance`, the solder mask and
-/// paste margins, `zone_connect` and `thermal_bridge_angle` are fabrication rules applied *to* the
-/// copper rather than its shape; `remove_unused_layers` and `keep_end_layers` govern which inner layers
-/// of a multilayer board the barrel touches, which a land pattern does not describe — and at 60% of
-/// files, comparing them would reject almost everything for no physical reason.
+/// Pad fields whose presence makes a footprint incomparable, rather than being read.
 ///
-/// Keys whose presence makes a footprint incomparable rather than being read.
+/// Each describes an outline this comparison cannot reduce to [`PadLand`]: a `custom` pad's shape lives
+/// in `primitives`, anchored per `options`, and a `trapezoid`'s taper lives in `rect_delta`. Calling two
+/// such outlines equal on the fields that *are* read would be a false match, so [`has_incomparable_pad`]
+/// reports the whole footprint as having no comparable geometry and the caller compares names instead.
+const PAD_FIELDS_REFUSED: [&str; 3] = ["options", "primitives", "rect_delta"];
+
+/// Footprint-level primitives that can carry copper, making the footprint incomparable.
 ///
-/// A `custom` pad's outline lives in `primitives`, anchored per `options`. Instead of comparing an
-/// anchor size and calling two arbitrary shapes equal, [`has_incomparable_pad`] reports the whole
-/// footprint as having no comparable geometry and the caller falls back to comparing names.
-const PAD_FIELDS_REFUSED: [&str; 2] = ["options", "primitives"];
+/// Copper is normally in the pads, but a footprint may also place it as free graphics or a zone. None of
+/// that is reduced to [`PadLand`], so a footprint containing any of it on a copper layer is refused for
+/// the same reason as [`PAD_FIELDS_REFUSED`]: two footprints with identical pads and different
+/// footprint-level copper are different land patterns.
+const COPPER_PRIMITIVE_LISTS: [&str; 6] = [
+    "fp_poly",
+    "fp_line",
+    "fp_rect",
+    "fp_circle",
+    "fp_curve",
+    "zone",
+];
 
 /// One pad reduced to what makes a land pattern physically the same.
 ///
 /// Deliberately excluded: `uuid`, net assignment, solder-mask and paste layers, mask/paste margins,
-/// thermal relief, and the pad's own name beyond its number. Those differ freely between libraries
-/// describing one physical part — the `ublox_SAM-M8Q` and `SAM-M10Q-00B` libraries for the same module
-/// differ only by an `F.Paste` layer — and none of them changes where copper meets the board.
+/// thermal relief, and the pad's own name beyond its number. Two libraries describing one physical part
+/// differ freely in those, and none of them changes where copper meets the board.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct PadLand {
     /// `smd`, `thru_hole`, `np_thru_hole`, ... — a through-hole pad is not an SMD pad.
@@ -38,14 +46,11 @@ pub(super) struct PadLand {
     /// `rect` and `oval` as interchangeable would let a substitution change the outline.
     shape: String,
     /// `roundrect_rratio`, the corner radius as a fraction of the shorter side; zero for a square
-    /// corner. Part of identity: two `roundrect` pads of the same size and different radius are
-    /// different copper, and the corpus carries 26 distinct values.
+    /// corner. Two `roundrect` pads of the same size and different radius are different copper.
     corner_ratio: f64,
-    /// `chamfer_ratio` and the `chamfer` corner list, which cut one or more corners off the outline.
-    ///
-    /// These matter more than their rarity suggests: a chamfered pad is written as a `roundrect` with
-    /// `(roundrect_rratio 0)`, which the shape normalization below would otherwise reduce to a plain
-    /// `rect` — making a cut corner invisible.
+    /// `chamfer_ratio` and the `chamfer` corner list, which cut corners off the outline. Load-bearing: a
+    /// chamfered pad is written as a `roundrect` with `(roundrect_rratio 0)`, which the shape
+    /// normalization below would otherwise reduce to a plain `rect`, hiding the cut corner.
     chamfer_ratio: f64,
     chamfer_corners: BTreeSet<String>,
     x_mm: f64,
@@ -63,11 +68,10 @@ pub(super) struct PadLand {
     /// The hole's `(drill ...)` dimensions in millimetres, empty for a surface-mount pad.
     ///
     /// Part of identity: two through-hole pads can present the same copper and take a different hole,
-    /// which is a different part. Ignoring it let a substitution reuse a module whose lead diameter
-    /// does not fit.
+    /// which is a different part.
     drill_mm: Vec<f64>,
     /// The hole's `(offset ...)` within the pad. A shifted hole puts the lead somewhere else relative to
-    /// the copper, so it is identity even though it is rare — `FlexyPin` uses it to bias every hole.
+    /// the copper, so it is part of identity even though it is rare.
     drill_offset_mm: Vec<f64>,
 }
 
@@ -99,10 +103,9 @@ fn same_lengths(left: &[f64], right: &[f64]) -> bool {
 
 /// Fold a pad's rotation into its dimensions so that one land pattern has one representation.
 ///
-/// A rectangle 1.8 x 1.5 at 0 degrees and a rectangle 1.5 x 1.8 at 90 degrees are the same copper.
-/// Real libraries disagree on which they write — the two u-blox SAM-M10Q footprints in this repo
-/// differ in exactly that way on all 20 pads — so comparing the literal `(size ...)` and `(at ...)`
-/// values rejects footprints that are physically identical.
+/// A rectangle 1.8 x 1.5 at 0 degrees and a rectangle 1.5 x 1.8 at 90 degrees are the same copper. Real
+/// libraries disagree on which they write, so comparing the literal `(size ...)` and `(at ...)` values
+/// rejects footprints that are physically identical.
 ///
 /// A right angle swaps the axes; a half turn leaves them alone. Any other angle is kept as residual
 /// rotation, reduced modulo 180 degrees because a symmetric pad outline is unchanged by a half turn.
@@ -111,12 +114,11 @@ fn same_lengths(left: &[f64], right: &[f64]) -> bool {
 /// somewhere, so folding the angle away would compare two different pads as equal.
 fn normalize_rotation(pad: &mut PadLand, rotation: f64, symmetric: bool) {
     if !symmetric {
-        // Compared at its literal angle, modulo a full turn. Folding would be unsound: a half turn
-        // moves a chamfered corner to the opposite corner and an offset hole to the opposite side, so
-        // two physically different pads would match, while a valid quarter-turn rewrite of an offset
-        // hole would not. Transforming the corner names and the offset vector correctly is possible but
-        // is its own source of sign errors, and both features are rare — 71 chamfered and 47 offset
-        // pads among 647,000 surveyed.
+        // Compared at its literal angle, modulo a full turn. Folding would be unsound: a half turn moves
+        // a chamfered corner to the opposite corner and an offset hole to the opposite side, so two
+        // physically different pads would match. Transforming the corner names and the offset vector
+        // instead is possible but is its own source of sign errors, and the cost of not doing it is only
+        // a missed substitution.
         pad.rotation_deg = rotation.rem_euclid(360.0);
         return;
     }
@@ -124,9 +126,7 @@ fn normalize_rotation(pad: &mut PadLand, rotation: f64, symmetric: bool) {
     let reduced = rotation.rem_euclid(180.0);
     if close(reduced, 90.0) {
         // A quarter turn exchanges the pad's own axes, so every dimension expressed in that frame swaps
-        // with it — the copper extents and an oval hole's two dimensions alike. Missing the hole
-        // rejected a `1.5 x 1.8` pad drilled `oval 0.6 1.2` against the identical `1.8 x 1.5` pad
-        // drilled `oval 1.2 0.6`.
+        // with it — the copper extents and an oval hole's two dimensions alike.
         std::mem::swap(&mut pad.width_mm, &mut pad.height_mm);
         if pad.drill_mm.len() == 2 {
             pad.drill_mm.swap(0, 1);
@@ -141,13 +141,9 @@ fn normalize_rotation(pad: &mut PadLand, rotation: f64, symmetric: bool) {
 
 /// The numbered pads of a `.kicad_mod` or embedded `(footprint ...)`, grouped by pad number.
 ///
-/// Grouped rather than keyed one-to-one: a single number can name *several* physical pads — a split
-/// thermal pad, a via array under a ground pad — and how many there are and where they sit is part of
-/// the land pattern. Keeping one pad per number silently discarded the rest, so a footprint with 55
-/// pads numbered "25" (real: `Quectel_LG290P`) compared equal to one with a single pad numbered "25".
-///
-/// Pads with no number (mechanical, courtyard-only) are skipped: they carry no connectivity and
-/// libraries add or omit them freely.
+/// Grouped rather than keyed one-to-one: one number can name several physical pads — a split thermal
+/// pad, a via array under a ground pad — and how many there are is part of the land pattern. Unnumbered
+/// pads are skipped; they carry no connectivity and libraries add or omit them freely.
 pub(super) fn pad_lands(source: &str) -> Result<BTreeMap<KiCadPinNumber, Vec<PadLand>>> {
     let root = pcb_sexpr::parse(source).map_err(|error| anyhow::anyhow!(error))?;
     let mut lands: BTreeMap<KiCadPinNumber, Vec<PadLand>> = BTreeMap::new();
@@ -290,6 +286,14 @@ fn as_f64(value: &pcb_sexpr::Sexpr) -> Option<f64> {
 /// says nothing — the same u-blox module is `ublox_SAM-M8Q` in one library and `SAM-M10Q-00B` in
 /// another, while two genuinely different parts can share a name across libraries.
 pub(super) fn same_land_pattern(source: &str, candidate: &str) -> Result<bool> {
+    // Checked on both sides here, not only where the source geometry is offered: this is the single
+    // place a comparison can answer "same", so a footprint carrying copper the comparison cannot see
+    // must never reach the field-by-field check — on either side — or it answers "same" on the strength
+    // of the fields it happens to read.
+    if has_incomparable_pad(source) || has_incomparable_pad(candidate) {
+        return Ok(false);
+    }
+
     let source_lands = pad_lands(source).context("failed to read source footprint pads")?;
     let candidate_lands =
         pad_lands(candidate).context("failed to read candidate footprint pads")?;
@@ -327,39 +331,56 @@ fn same_pads(source: &[PadLand], candidate: &[PadLand]) -> bool {
     true
 }
 
-/// Whether the footprint has a pad whose copper this comparison cannot see.
+/// Whether the footprint carries copper this comparison cannot see.
 ///
-/// A `custom` pad's outline lives in `(primitives ...)`, which is not read — only its anchor `size` and
-/// the `custom` token would be compared, so two arbitrarily different shapes looked identical. Rather
-/// than compare geometry it cannot see, the caller treats such a footprint as having no comparable
-/// geometry and falls back to comparing footprint names: weaker evidence, but never a false match.
-///
-/// Rare in practice: 46 pads across 35 of 40,000 surveyed footprints.
+/// True for a pad described by a refused field and for any footprint-level copper primitive. Comparing
+/// only the fields that *are* read would call two different outlines identical, so the caller treats such
+/// a footprint as having no comparable geometry and falls back to footprint names: weaker evidence, but
+/// never a false match.
 fn has_incomparable_pad(source: &str) -> bool {
     let Ok(root) = pcb_sexpr::parse(source) else {
         return false;
     };
-    root.find_all_lists("pad").into_iter().any(|pad| {
-        // Keyed on the fields rather than on the `custom` shape token: the outline is incomparable
-        // exactly when it is described by something unread, whatever the shape happens to be called.
+    let refused_pad = root.find_all_lists("pad").into_iter().any(|pad| {
+        // Keyed on the fields rather than on the shape token: the outline is incomparable exactly when
+        // it is described by something unread, whatever the shape happens to be called.
         PAD_FIELDS_REFUSED
             .iter()
             .any(|field| pcb_sexpr::find_child_list(pad, field).is_some())
-    })
+    });
+    refused_pad
+        || COPPER_PRIMITIVE_LISTS.iter().any(|list| {
+            root.find_all_lists(list)
+                .into_iter()
+                .any(primitive_is_on_copper)
+        })
+}
+
+/// Whether a footprint-level primitive sits on a copper layer.
+///
+/// Silkscreen, mask, courtyard and fabrication graphics are not copper and must not make a footprint
+/// incomparable — almost every real footprint has them. Only a `*.Cu` layer counts.
+fn primitive_is_on_copper(primitive: &[pcb_sexpr::Sexpr]) -> bool {
+    let Some(layers) = pcb_sexpr::find_child_list(primitive, "layer")
+        .or_else(|| pcb_sexpr::find_child_list(primitive, "layers"))
+    else {
+        return false;
+    };
+    layers
+        .iter()
+        .skip(1)
+        .filter_map(|value| value.as_str().or_else(|| value.as_sym()))
+        .any(|layer| layer.ends_with(".Cu") || layer == "*.Cu")
 }
 
 /// The footprint source for a component in library form, when import resolved geometry for it.
 ///
-/// A `BoardInstance` is de-instanced first. A footprint embedded in a `.kicad_pcb` carries *absolute*
-/// pad angles — the placement rotation is folded into each pad — while a library `.kicad_mod` stores
-/// local ones. Comparing the raw board text against a library candidate therefore fails for any
-/// footprint placed at a non-zero angle, even when the copper is identical. Generation already
-/// de-instances before writing a `.kicad_mod`; this is the same conversion for the same reason.
+/// A `BoardInstance` is de-instanced first: a footprint embedded in a `.kicad_pcb` folds the placement
+/// rotation into each pad's angle, where a library `.kicad_mod` stores local ones, so comparing the raw
+/// board text would reject any footprint placed at an angle even when the copper is identical.
 ///
-/// `None` when there is nothing comparable: `StandardLibrary` is a bundled-stdlib reference with no
-/// local text, `Unresolved` has no geometry, a board instance that will not convert is treated as
-/// absent, and so is a footprint carrying a `custom` pad — see [`has_incomparable_pad`]. In each case
-/// the caller falls back to comparing names rather than to comparing geometry it cannot trust.
+/// `None` when there is nothing comparable — a stdlib reference, unresolved geometry, a board instance
+/// that will not convert, or copper this comparison cannot read. The caller then compares names.
 pub(super) fn component_footprint_source(
     component: &ImportComponentData,
 ) -> Option<std::borrow::Cow<'_, str>> {
@@ -529,8 +550,8 @@ mod tests {
             "a different corner is a different outline"
         );
 
-        // One number can name many pads — a split thermal pad, a via array. `Quectel_LG290P` carries
-        // pad "25" fifty-five times, and collapsing them made it equal to a single-pad footprint.
+        // One number can name many pads — a split thermal pad, a via array — and collapsing them would
+        // make such a footprint equal to a single-pad one.
         let array = r#"(footprint "a" (layer "F.Cu")
         (pad "9" smd rect (at 2 0) (size 1 1) (layers "F.Cu"))
         (pad "9" smd rect (at 3 0) (size 1 1) (layers "F.Cu")))"#;
@@ -588,6 +609,34 @@ mod tests {
             ))
             .is_none(),
             "a custom pad is offered as having no comparable geometry"
+        );
+
+        // A trapezoid's taper lives in `rect_delta`, which is not read: without refusing it, two pads
+        // tapering opposite ways compare equal on every field that is read.
+        let taper = |delta: &str| {
+            format!(
+                r#"(footprint "t" (layer "F.Cu")
+        (pad "1" smd trapezoid (at 0 0) (size 2 2) (rect_delta {delta}) (layers "F.Cu")))"#
+            )
+        };
+        assert!(has_incomparable_pad(&taper("0.5 0")));
+        assert!(
+            !same_land_pattern(&taper("0.5 0"), &taper("-0.5 0")).unwrap(),
+            "opposite tapers are not the same land pattern"
+        );
+
+        // Copper can also sit outside the pads. Identical pads plus different footprint-level copper is a
+        // different land pattern, so it is refused — but only when the primitive is on a copper layer.
+        let with_copper = r#"(footprint "z" (layer "F.Cu")
+        (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+        (fp_poly (pts (xy 0 0) (xy 3 0) (xy 3 3)) (layer "F.Cu") (width 0)))"#;
+        assert!(has_incomparable_pad(with_copper));
+        let silkscreen_only = r#"(footprint "z" (layer "F.Cu")
+        (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+        (fp_line (start 0 0) (end 1 0) (layer "F.SilkS") (width 0.1)))"#;
+        assert!(
+            !has_incomparable_pad(silkscreen_only),
+            "silkscreen is not copper; refusing it would reject nearly every real footprint"
         );
 
         let library = r#"(footprint "p" (layer "F.Cu")

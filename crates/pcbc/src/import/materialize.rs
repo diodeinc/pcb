@@ -2,7 +2,6 @@ use super::*;
 use anyhow::{Context, Result};
 use pcb_zen_core::Diagnostics;
 use serde::Serialize;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Name of the validation diagnostics file `materialize` writes on every import, inside
@@ -15,17 +14,15 @@ pub(super) const IMPORT_DIAGNOSTICS_DIR: &str = ".pcb/import";
 
 /// Create the directory holding this board's conversion diagnostics.
 ///
-/// It lives under the output repository's `.pcb/`, which is already gitignored, and both files are
-/// overwritten on every run. That is what keeps them from doing any of the three things they used to:
-/// churning `git status` (they are ignored), colliding with themselves on re-import (they are written
-/// directly, not through the no-overwrite policy), and accumulating forever in the shared system temp
-/// directory (there is now exactly one set per board instead of one per run — an earlier version kept
-/// a `TempDir` per run and left ~740 of them, 50 MB, on a single developer machine).
+/// It lives under the output repository's gitignored `.pcb/`, next to the board it describes, and both
+/// files are overwritten on every run rather than going through the no-overwrite policy.
 ///
-/// They also stay next to the board they describe, so they are findable without reading stderr.
+/// Created through the writer's guard, not `create_dir_all`: these paths are inside the output directory
+/// like every other, so a symlink standing in for one of them must be refused here too. Import promises
+/// not to write outside the directory it was given, and that promise cannot have an exception.
 fn create_diagnostics_dir(board_dir: &Path) -> Result<PathBuf> {
     let dir = board_dir.join(IMPORT_DIAGNOSTICS_DIR);
-    fs::create_dir_all(&dir).with_context(|| {
+    output::create_dir_checked(&dir, board_dir).with_context(|| {
         format!(
             "Failed to create import diagnostics directory {}",
             dir.display()
@@ -118,9 +115,9 @@ fn try_write_validation_diagnostics(
         diagnostics,
     };
 
-    fs::write(out_path, serde_json::to_string_pretty(&payload)?)
-        .with_context(|| format!("Failed to write {}", out_path.display()))?;
-    Ok(())
+    // Renamed into place rather than truncated: a crash mid-write would otherwise leave invalid JSON
+    // at a path consumers read, and the rename replaces a symlinked destination instead of following it.
+    output::write_atomic(out_path, serde_json::to_string_pretty(&payload)?.as_bytes())
 }
 
 fn copy_layout_sources(
@@ -205,8 +202,35 @@ mod tests {
         }
     }
 
+    /// A symlink standing in for the diagnostics directory would redirect the write out of the output
+    /// tree, which is the one thing import promises never to do. The guard applies here like anywhere
+    /// else, with no exception for the gitignored `.pcb/`.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_diagnostics_directory_is_refused() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let board_dir = temp.path().join("board");
+        let elsewhere = temp.path().join("elsewhere");
+        fs::create_dir_all(board_dir.join(".pcb")).expect("board dir");
+        fs::create_dir_all(&elsewhere).expect("outside dir");
+        std::os::unix::fs::symlink(&elsewhere, board_dir.join(IMPORT_DIAGNOSTICS_DIR))
+            .expect("symlink");
+
+        let error = create_diagnostics_dir(&board_dir)
+            .expect_err("a symlinked diagnostics directory must be refused");
+        assert!(
+            format!("{error:#}").contains("symlink"),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(
+            fs::read_dir(&elsewhere).expect("read outside dir").count(),
+            0,
+            "nothing may be written through the link"
+        );
+    }
+
     /// Diagnostics live under the output repository's gitignored `.pcb/`, and re-running overwrites
-    /// them in place. Nothing accumulates: an earlier version kept one temp directory per *run*.
+    /// them in place, so nothing accumulates across runs.
     #[test]
     fn diagnostics_live_under_the_output_pcb_dir_and_are_reused_across_runs() {
         let temp = tempfile::tempdir().expect("tempdir");

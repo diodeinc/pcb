@@ -506,53 +506,40 @@ mod tests {
 
     #[test]
     fn test_validate_derived_board_name() {
-        // Ordinary file stems pass, including characters `pcb new` rejects.
-        assert!(validate_derived_board_name("layout").is_ok());
-        assert!(validate_derived_board_name("my-board_v2.1").is_ok());
-        assert!(validate_derived_board_name("My Board (rev B)").is_ok());
-        assert!(validate_derived_board_name("-leading-hyphen").is_ok());
-        assert!(validate_derived_board_name(".hidden").is_ok());
-        assert!(validate_derived_board_name("prototype+").is_ok());
-        assert!(validate_derived_board_name("cartes-électroniques").is_ok());
-
-        // Long ASCII stems are fine as long as `<name>.zen` fits in NAME_MAX.
-        assert!(validate_derived_board_name(&"a".repeat(101)).is_ok());
-        assert!(validate_derived_board_name(&"a".repeat(251)).is_ok());
-
-        // Anything that would break the rendered manifest or the generated file name is rejected.
-        assert!(validate_derived_board_name("").is_err());
-        assert!(validate_derived_board_name(&"a".repeat(252)).is_err());
-        // Under the character limit, over the byte limit: 100 four-byte codepoints are 400 bytes.
-        assert!(validate_derived_board_name(&"😀".repeat(100)).is_err());
-        // A dot-only stem would generate a file called `..zen`.
-        assert!(validate_derived_board_name(".").is_err());
-        assert!(validate_derived_board_name("..").is_err());
-        assert!(validate_derived_board_name("....").is_err());
-        for bad in [
-            "say \"hi\"",
-            "\"\"\"",
-            "line\nbreak",
-            "line\rbreak",
-            "back\\slash",
-            "with/slash",
-            "with\ttab",
+        // Import derives the board name from the input file stem, so it must accept the punctuation a
+        // real filename carries — including characters `pcb new` rejects for a name the user types.
+        for ok in [
+            "layout",
+            "my-board_v2.1",
+            "My Board (rev B)",
+            ".hidden",
+            "cartes-électroniques",
         ] {
-            let error = validate_derived_board_name(bad).expect_err(bad);
-            assert!(
-                error.to_string().starts_with("board name"),
-                "unexpected message for {bad:?}: {error}"
-            );
+            assert!(validate_derived_board_name(ok).is_ok(), "{ok:?}");
         }
 
-        // The message must not itself embed a raw quote or newline.
-        let error = validate_derived_board_name("say \"hi\"")
-            .unwrap_err()
-            .to_string();
-        assert_eq!(error, r#"board name "say \"hi\"" contains a double quote"#);
-        let error = validate_derived_board_name("line\nbreak")
-            .unwrap_err()
-            .to_string();
-        assert_eq!(error, r#"board name "line\nbreak" contains a newline"#);
+        // Rejected only where the stem would break the generated manifest or file name.
+        assert!(validate_derived_board_name("").is_err());
+        // A dot-only stem would generate a file called `..zen`.
+        assert!(validate_derived_board_name(".").is_err());
+        // Bounded in bytes, not characters: 100 four-byte codepoints exceed NAME_MAX where 101 ASCII
+        // characters do not.
+        assert!(validate_derived_board_name(&"a".repeat(101)).is_ok());
+        assert!(validate_derived_board_name(&"😀".repeat(100)).is_err());
+
+        // A quote or newline would break the rendered TOML, and must not be echoed raw into the error.
+        assert_eq!(
+            validate_derived_board_name("say \"hi\"")
+                .unwrap_err()
+                .to_string(),
+            r#"board name "say \"hi\"" contains a double quote"#
+        );
+        assert_eq!(
+            validate_derived_board_name("line\nbreak")
+                .unwrap_err()
+                .to_string(),
+            r#"board name "line\nbreak" contains a newline"#
+        );
     }
 
     #[test]

@@ -1486,25 +1486,13 @@ fn collapse_verbatim_path(path: &Path) -> PathBuf {
 
 /// Collapse `.` and `..` inside a Windows verbatim (`\\?\`) path.
 ///
-/// A verbatim path is passed to the filesystem uninterpreted, so Windows does **not** resolve `.` or
-/// `..` within one: `\\?\C:\project\..\shared.pretty` names a path that cannot be opened rather than
-/// `\\?\C:\shared.pretty`. Import canonicalizes the project file, which yields a verbatim prefix on
-/// Windows, and `KIPRJMOD` is bound to that — so a `fp-lib-table` URI like
-/// `${KIPRJMOD}/../shared.pretty`, which is how KiCad projects reference a library one directory up,
-/// expands to exactly that unopenable form. Collapsing the components here is what makes such a URI
-/// resolve at all on Windows.
+/// Windows passes a verbatim path to the filesystem uninterpreted, so `..` inside one is a literal
+/// component and `\\?\C:\project\..\lib.pretty` cannot be opened. Import canonicalizes the project
+/// directory, which is verbatim on Windows, so without this no reference walking up a directory resolves.
 ///
-/// Collapsing `..` lexically diverges from the filesystem when a component it removes is a link: the
-/// canonicalized prefix contains none, but a `..` in the reference itself can cross a junction, in which
-/// case Windows lands somewhere macOS and Linux would not. That difference is contained rather than
-/// dangerous — the resolved file is canonicalized and re-checked against the project directory
-/// afterwards, so a collapse can never place a file outside it — but it does mean a URI written to walk
-/// through a junction can select different geometry per platform. Non-verbatim paths
-/// are returned unchanged — Windows normalizes those itself, and this is a no-op on other platforms
-/// where no verbatim prefix exists.
-///
-/// Only Windows calls this, but it is plain string handling and stays compiled and unit-tested
-/// everywhere so the logic cannot rot on the one platform that needs it.
+/// Collapsing lexically can diverge from the filesystem across a junction, but never escapes the project:
+/// the result is canonicalized and re-checked for containment. Non-verbatim paths are returned unchanged,
+/// which makes this a no-op off Windows — where it stays compiled and tested so it cannot rot.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn collapse_verbatim_relative_components(path: &str) -> String {
     const VERBATIM_PREFIX: &str = r"\\?\";

@@ -27,19 +27,13 @@ struct EvaluatedCandidate {
 /// Run-scoped context for registry-module reuse: the staged board it substitutes into, the workspace
 /// resolution used to evaluate candidates, and the per-entrypoint evaluation memo.
 ///
-/// Candidates are evaluated in the *importer's* workspace, resolved once, rather than each in its
-/// own. A cached registry package carries an empty `pcb.toml`, so resolving from the package makes
-/// the package its own workspace root — which materializes a full stdlib copy (~36 MB, ~1300 files)
-/// into `~/.pcb/cache/.../<mpn>/<version>/.pcb/stdlib` for every distinct package evaluated, and then
-/// byte-compares both trees on every later evaluation of it. That is permanent growth in a shared
-/// cache directory, caused entirely by a read-only compatibility check. The staged board is the
-/// workspace the selected package actually builds in, so resolving there is both cheaper and more
-/// faithful; its stdlib is materialized once per run and is needed by the staged build regardless.
+/// Candidates are evaluated in the *importer's* workspace, resolved once, rather than each in its own. A
+/// cached registry package carries an empty `pcb.toml`, so resolving from the package would make it its
+/// own workspace root and materialize a full stdlib copy into the shared cache for every candidate —
+/// permanent growth in `~/.pcb/cache` caused by a read-only compatibility check.
 ///
-/// Evaluation is also memoized per entrypoint, including failures. One module is reachable through
-/// several candidate records (deduped on symbol, not module), through two source MPN spellings that
-/// normalize equal, and through distinct part groups that share an MPN — so without a memo the same
-/// entrypoint is evaluated several times per import.
+/// Evaluation is memoized per entrypoint, failures included: one module is reachable through several
+/// candidate records, through MPN spellings that normalize equal, and through part groups sharing an MPN.
 pub(super) struct RegistryReuseContext {
     board_dir: PathBuf,
     /// Built on first use so an import with no cached candidates resolves nothing.
@@ -1080,7 +1074,7 @@ Component(
 
     /// A real cached registry package ships its own empty `pcb.toml`, which makes it its own
     /// workspace root when resolution starts from inside it. Evaluating a candidate must not
-    /// materialize a stdlib there: it is ~36 MB across ~1300 files written into a *shared* cache
+    /// materialize a stdlib there: that is a full stdlib copy written into a *shared* cache
     /// directory, per package, and never reclaimed — all for a read-only compatibility check that
     /// may well reject the candidate. Candidates are evaluated in the staged board's workspace
     /// instead, which is where a selected package actually builds.

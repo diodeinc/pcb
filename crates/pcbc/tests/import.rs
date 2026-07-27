@@ -204,9 +204,9 @@ fn standalone_schematic_imports_and_builds_without_synthetic_layout() {
     let compact_board: String = board.chars().filter(|c| !c.is_whitespace()).collect();
     assert!(compact_board.contains("layout_path=\"layout\""));
     assert!(compact_board.contains("layers=4"));
-    assert!(board.contains("# pcb:sch R1"));
-    assert!(board.contains("# pcb:sch R2"));
-    assert!(board.contains("# pcb:sch R3"));
+    for refdes in ["R1", "R2", "R3"] {
+        assert!(board.contains(&format!("# pcb:sch {refdes}")), "{refdes}");
+    }
 
     assert!(!output.join("layout").exists());
     assert!(!output.join("layout.kicad_pro").exists());
@@ -254,41 +254,6 @@ fn standalone_schematic_imports_and_builds_without_synthetic_layout() {
         .filter(|instance| instance["kind"] == "Component")
         .collect::<Vec<_>>();
     assert_eq!(components.len(), 3);
-
-    fs::create_dir_all(output.join("modules/authored")).expect("create authored module directory");
-    fs::create_dir_all(output.join("layout")).expect("create authored layout directory");
-    fs::write(
-        output.join("modules/authored/Keep.zen"),
-        "AUTHORED = True\n",
-    )
-    .expect("write authored module");
-    fs::write(output.join("layout/keep.txt"), "authored layout\n")
-        .expect("write authored layout file");
-    let board_before = fs::read(&board_path).expect("snapshot board");
-    let manifest_before = fs::read(output.join("pcb.toml")).expect("snapshot manifest");
-
-    let rerun = sandbox
-        .run("pcbc", ["import", "../layout.kicad_sch", "."])
-        .stdout_capture()
-        .stderr_capture()
-        .unchecked()
-        .run()
-        .expect("rerun pcbc import");
-    assert!(
-        rerun.status.success(),
-        "non-destructive rerun failed:\n{}",
-        String::from_utf8_lossy(&rerun.stderr)
-    );
-    assert_eq!(fs::read(&board_path).unwrap(), board_before);
-    assert_eq!(fs::read(output.join("pcb.toml")).unwrap(), manifest_before);
-    assert_eq!(
-        fs::read_to_string(output.join("modules/authored/Keep.zen")).unwrap(),
-        "AUTHORED = True\n"
-    );
-    assert_eq!(
-        fs::read_to_string(output.join("layout/keep.txt")).unwrap(),
-        "authored layout\n"
-    );
 }
 
 /// Output-relative path -> bytes for every tracked file, i.e. everything outside the untracked
@@ -345,7 +310,17 @@ fn default_reimport_after_a_source_edit_keeps_existing_design_files() {
         first_report["generated"]
     );
 
+    // Authored files at the root, inside a generated package root, and inside `layout/` — the three
+    // places a re-import could plausibly write over something it did not create.
     fs::write(output.join("authored.txt"), "authored\n").expect("write authored file");
+    fs::create_dir_all(output.join("modules/authored")).expect("authored module dir");
+    fs::write(
+        output.join("modules/authored/Keep.zen"),
+        "AUTHORED = True\n",
+    )
+    .expect("write authored module");
+    fs::create_dir_all(output.join("layout")).expect("authored layout dir");
+    fs::write(output.join("layout/keep.txt"), "authored layout\n").expect("write authored layout");
     let before = tracked_files(&output);
 
     // A symbol-only source edit: the component's `.kicad_sym` regenerates differently while its

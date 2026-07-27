@@ -1916,6 +1916,9 @@ fn generate_imported_components(
                     writer
                         .write(&fp_path, mod_text.as_bytes())
                         .with_context(|| format!("Failed to write {}", fp_path.display()))?;
+                    if writer.was_kept(&fp_path) {
+                        warn_kept_footprint_geometry(&fp_path, mod_text);
+                    }
                 }
                 let zen_path = out_dir.join(&zen.filename);
                 writer
@@ -2199,6 +2202,30 @@ fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
         lib_name,
         value,
     }
+}
+
+/// Say so when a kept footprint's copper differs from what the KiCad source now describes.
+///
+/// A kept `.kicad_mod` is reported like any other kept file, but that report says only "your version was
+/// kept" — which is unremarkable for a `.zen` and much less so here, because the board will be laid out
+/// against the land pattern in the kept file rather than the one in the schematic. Reuse validation
+/// cannot catch it: it loads `.zen` entrypoints and checks connectivity, and copper is neither.
+///
+/// A difference is warned about rather than refused. Hand-tuning a footprint's copper is legitimate, so
+/// the useful thing is to name the file whose geometry no longer matches the source, not to block the
+/// import. Geometry that cannot be compared is passed over silently — refusing to warn is better than
+/// warning on every footprint carrying a custom pad.
+fn warn_kept_footprint_geometry(path: &Path, generated: &str) {
+    let Ok(existing) = fs::read_to_string(path) else {
+        return;
+    };
+    if footprint_identity::same_land_pattern(&existing, generated).unwrap_or(true) {
+        return;
+    }
+    eprintln!(
+        "Kept footprint {} has a different land pattern than the KiCad source; the board will be laid out against the kept geometry. Re-import with --force to replace it",
+        path.display()
+    );
 }
 
 fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -> String {
@@ -4120,5 +4147,34 @@ mod tests {
 
         let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
         assert!(out.contains("\n\n# pcb:sch R162.R x=364.6000 y=624.0000 rot=270 mirror=y\n"));
+    }
+
+    /// A kept `.kicad_mod` decides the board's copper, and nothing else checks it: reuse validation
+    /// loads `.zen` entrypoints and compares connectivity, not geometry. So the difference has to be
+    /// noticed here, and only when the land pattern really differs.
+    #[test]
+    fn a_kept_footprint_with_different_copper_is_noticed() {
+        let pad = |size: &str| {
+            format!(
+                r#"(footprint "F" (layer "F.Cu")
+        (pad "1" smd rect (at 0 0) (size {size}) (layers "F.Cu")))"#
+            )
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("F.kicad_mod");
+
+        // Same copper written the same way: nothing to say.
+        fs::write(&path, pad("1 2")).unwrap();
+        assert!(footprint_identity::same_land_pattern(&pad("1 2"), &pad("1 2")).unwrap());
+
+        // Different pad size is a different land pattern, which is what the warning exists for.
+        assert!(!footprint_identity::same_land_pattern(&pad("1 2"), &pad("3 2")).unwrap());
+
+        // Both paths must be reachable without panicking, including unreadable and unparseable input.
+        warn_kept_footprint_geometry(&path, &pad("3 2"));
+        warn_kept_footprint_geometry(&path, &pad("1 2"));
+        warn_kept_footprint_geometry(&dir.path().join("missing.kicad_mod"), &pad("1 2"));
+        fs::write(&path, "(footprint unterminated").unwrap();
+        warn_kept_footprint_geometry(&path, &pad("1 2"));
     }
 }
