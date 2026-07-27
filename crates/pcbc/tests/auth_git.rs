@@ -80,7 +80,7 @@ impl TestContext {
             .arg("-c")
             .arg(format!(
                 "credential.helper=store --file={}",
-                credential_file.display()
+                credential_file.display().to_string().replace('\\', "/")
             ))
             .args(["-c", "credential.useHttpPath=true"])
             .args(["credential", "fill"]);
