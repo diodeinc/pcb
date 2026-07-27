@@ -1,6 +1,6 @@
 ---
 name: datasheet-reader
-description: Read datasheets and technical PDFs with `pcb scan`, including local files, URLs, and KiCad `Datasheet` properties.
+description: Use `pcb scan` to read datasheets or technical PDFs from files, URLs, or KiCad `Datasheet` properties.
 ---
 
 # Datasheet Reader

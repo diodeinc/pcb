@@ -1,6 +1,6 @@
 ---
 name: registry-search
-description: Search the registry for prepared Zener modules, reference designs, and component symbols while designing a board, subsystem, or spec. Use for board-facing part/module selection with `pcb search -m registry:modules` and `pcb search -m registry:components`, API inspection, sourcing comparison, and deciding what to instantiate. If no suitable registry package exists, prepare a librarian request instead of importing or authoring components inline.
+description: Use during board work to find and evaluate existing registry modules, reference designs, or component packages before authoring anything new.
 ---
 
 # Registry Search

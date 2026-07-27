@@ -1,235 +1,136 @@
 ---
 name: zener-language
-description: Canonical Zener HDL semantics and workflow. Use before reading or modifying `.zen` files. Covers module loading and instantiation, `io()`/`config()` API design, nets/interfaces/power domains, components and sourcing, `pcb.toml` manifests, stdlib/package discovery with `pcb doc`, physical units, generics, checks, DNP patterns, naming, and validation.
+description: Use before reading or changing `.zen` files for Zener semantics, package APIs, dependency workflow, stable topology, and validation.
 ---
 
 # Zener Language
 
-Canonical Zener HDL semantics and authoring guidance.
+Zener is Starlark plus PCB-specific modules, typed electrical connections, physical parts, sourcing, layout, and validation.
 
-## Workflow
+## Discover Before Authoring
 
-1. Use `pcb doc --package @stdlib` or `pcb doc --package <package>` to find the public API and source root (`<!-- source: ... -->`); add `--list` for the file tree. Read source from that root for exact behavior.
-2. Preserve `# pcb:sch ...` comments; see "Schematic Position Comments" below.
-3. After adding, removing, or changing package `Module()` / `load()` imports, run `pcb sync` from the relevant workspace or package, then run `pcb build <path>` to validate. `pcb sync` is the dependency reconciliation step; `pcb build` is the validation step.
-4. For recent Zener, stdlib, and `pcb` CLI changes, check the pcb changelog entries for the installed version and nearby previous releases: <https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md>
+Use `pcb doc --package @stdlib` or `pcb doc --package <package>` to inspect public APIs and their source roots. Read the installed implementation when exact behavior matters.
 
-## Language
+For toolchain behavior that may have changed, inspect the installed version and nearby entries in the [`pcb` changelog](https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md) instead of relying on old examples.
 
-Base language is normal Starlark — expressions, functions, loops, comprehensions, dicts, lists, `load()`. Below is the Zener-specific layer.
+## Modules and Components
 
-Modules:
+A `.zen` file can be:
 
-- A `.zen` file is either a normal Starlark module loaded with `load()` or an instantiable schematic module loaded with `Module()`.
-- `load("./foo.zen", "helper")` imports Starlark symbols. `Foo = Module("./Foo.zen")` or `Foo = Module("github.com/org/repo/path/Foo.zen")` loads a subcircuit.
-- `./` paths are relative to the current file and resolve within the same package. Cross-package `load()` and `Module()` require the full package URL.
-- Instantiation always passes `name=...` first, then any `io()` / `config()` inputs. Useful extras: `properties`, `dnp`, `schematic`.
+- a normal Starlark module imported with `load()`; or
+- an instantiable schematic module imported with `Module()`.
 
-Nets and interfaces:
+Relative paths stay within the current package. Cross-package imports use full package URLs:
 
-- `Net(name=None, voltage=None, impedance=None)` is the base connection type.
-- `Power`, `Ground`, and `NotConnected` are specialized net types; more specialized net types live in stdlib.
-- Across `io()` boundaries: `NotConnected` can promote to any net type; specialized nets can demote to plain `Net`; plain `Net` does not auto-promote to specialized types. Use explicit casts like `Power(net, voltage=...)` or `Net(power_net)` when needed.
+```zen
+load("./helpers.zen", "helper")
+LocalBlock = Module("./LocalBlock.zen")
+RemoteBlock = Module("github.com/org/repo/modules/RemoteBlock.zen")
+```
 
-Components and sourcing:
+An instantiation passes `name=...`, its public `io()` and `config()` inputs, and optional properties such as `dnp`, `properties`, or `schematic`.
 
-- `Component(...)` is the primitive physical-part constructor. Required fields are effectively `name`, `symbol`, and `pins`.
-- The symbol is the source of truth for footprint, part metadata, and datasheet metadata. Make the symbol properties correct; do not repeat `footprint=`, `part=`, or `datasheet=` in `Component()` when they are already provided by the symbol.
-- Prefer `part=Part(mpn=..., manufacturer=...)` over legacy scalar `mpn` and `manufacturer` when part metadata is not already in the symbol.
-- `Symbol(library, name=None)` points at a `.kicad_sym`; `name` is required for multi-symbol libraries.
-- Omit `no_connect` pins from `pins`; `Component()` wires `NotConnected()` automatically.
+`Component()` creates a physical part from `name`, `symbol`, and `pins`. The selected symbol is the authority for its footprint, part identity, datasheet, and pins. Keep those properties correct in `.kicad_sym` rather than repeating them in Zener. Omit true `no_connect` pins; they are wired to `NotConnected()` automatically.
 
-`io()`:
+Use `Symbol(library, name=...)` for multi-symbol libraries. Use `Part(mpn=..., manufacturer=...)` only when the symbol does not already provide part identity.
 
-- Preferred form: flat top-level `NAME = io(template, ...)` where `template` is a net/interface type or instance, e.g. `Power(voltage="3.3V")`.
-- Do not introduce `Pins = struct(...)` wrappers for component pins; that older style is deprecated. Existing packages may still use it, but new and touched `.zen` should expose pins as top-level `io()`s.
-- Name is inferred from the assignment target. `optional=True` means omitted inputs get auto-generated nets or interfaces.
+`Layout(name, path)` associates reusable layout metadata with a module.
 
-`config()`:
+## IO and Config
 
-- Preferred form: `name = config(typ, default=..., ...)`; name is inferred from the assignment target.
-- `typ` can be primitive types, enums, records, or physical values such as `Voltage`, `Current`, or `Resistance`.
-- Use physical types from `@stdlib/units.zen` for every physical-value config, even when only a few choices are valid. Constrain discrete choices with `allowed=[...]`; strings auto-convert, e.g. `config(Current, default="3A", allowed=["1A", "2A", "3A"])`.
-- Use `enum()` only for non-physical design choices such as operating mode, protocol variant, polarity, or enablement strategy.
-
-Public compatibility:
-
-- For reusable packages, compatibility means existing consumers can update without changing their Zener, layout, or integration assumptions.
-- Breaking changes include public interface changes (`io()`, `config()`, entrypoints, module call shape), substantial layout/physical integration changes, or behavior changes that require consumer action. Collapsing loose ios into one interface is breaking even if the netlist still builds.
-- `pcb build` passing only validates the current package; it does not prove existing consumers remain compatible. When making a breaking change, document the migration and mark the commit as breaking.
-
-Utilities:
-
-- `Layout(name, path)` associates reusable layout metadata to a module.
-- `check(condition, message)`, `warn(message)`, and `error(message)` are the validation and diagnostic primitives.
-
-## Authoring Idioms
-
-### Power, Interfaces, And Checks
-
-- Keep rails explicit with prelude `Power(voltage=...)` and `Ground`; each public `Power` `io()` declares its voltage range unless the local API intentionally keeps it generic.
-- Use `@stdlib/interfaces.zen` interfaces for buses and grouped signals that are not in the prelude; prefer public bus interfaces such as `I2c`, `Spi`, `Qspi`, `Uart`, `Usb2`, or `DiffPair` over separate loose top-level nets when the grouped signal semantics are clear.
-- Use typed values and validation primitives (`check(...)`, `warn(...)`, `error(...)`, `@stdlib/checks.zen`) for electrical constraints instead of comments when possible.
-- Connect `Power` and `Ground` ios directly to pins and passives.
+Define public electrical connections as flat top-level assignments:
 
 ```zen
 VDD = io(Power(voltage="3.0V to 5.5V"))
 GND = io(Ground)
-EN = io(Net, help="High to enable the regulator")
+EN = io(Net, optional=True)
 ```
 
-### Configs And Computation
+Do not introduce legacy `Pins = struct(...)` wrappers in new or touched APIs.
 
-- Expose meaningful design choices, not incidental implementation details. Good configs include output voltage, gain, cutoff frequency, address, mode, or optional feature enablement. Avoid configs for fixed decoupling values, passive package sizes, and test-point style unless local code already makes them public API.
-- Prefer one meaningful physical config over raw R/C/L strings. For example, expose a cutoff `Frequency` and compute snapped passives internally.
-- Put non-trivial calculations in named functions with datasheet section or equation references when available. Snap results to E-series values with `e96()`, `e24()`, or the appropriate stdlib utility.
+With `optional=True`, an omitted IO receives an automatically generated net or interface.
+
+`Net` is the base connection type. `Power`, `Ground`, `NotConnected`, and stdlib interfaces add constraints and semantics. Across an `io()` boundary, `NotConnected` can promote to any net type, a specialized net can demote to `Net`, and a plain `Net` does not automatically gain specialized semantics. Adapt intentionally with casts such as `Power(net, voltage=...)` or `Net(power_net)`.
+
+Use stdlib interfaces such as `DiffPair`, `I2c`, `I3c`, `Spi`, `Qspi`, `Uart`, `Usart`, `Swd`, `Jtag`, `Usb2`, and `Usb3` when the grouped protocol semantics are meaningful.
+
+Use `UartPair()` and `UsartPair()` when a point-to-point link should cross-connect the two endpoints.
+
+Declare a voltage range on every public `Power` IO unless the API is intentionally generic.
+
+Define non-electrical choices with typed `config()`:
 
 ```zen
-def load_r(v_out, v_sense):
-    """Datasheet §8.1.1 / Eq 4: V_OUT = V_SENSE × gm × R_L"""
-    GM = Current("200uA") / Voltage("1V")
-    return e96(v_out / (v_sense * GM))
+output_voltage = config(Voltage, default="3.3V", allowed=["3.3V", "5V"])
 ```
 
-### DNP And Optional Circuitry
+Load physical value types from `@stdlib/units.zen`: `Voltage`, `Current`, `Resistance`, `Capacitance`, `Inductance`, `Impedance`, `Frequency`, `Temperature`, `Time`, and `Power`. String defaults and allowed values auto-convert to the declared physical type. Use enums for non-physical modes and strategies. Expose application-level choices rather than internal passive values or implementation details.
 
-- Configs may change component values and `dnp=` state, but they should not change which instances or nets exist in the schematic.
-- Never use conditional instantiation to add, remove, or reconnect circuitry. Always instantiate the relevant components and use `dnp=` for population state.
-- When a config selects a value on the same two nets, prefer one component with a computed value.
-- When a config selects between mutually exclusive net straps, instantiate each strap option and DNP the inactive ones so topology stays stable.
-- Leverage an IC's internal pull-up or pull-down when the default mode uses it; use external bias components with `dnp=` only for populated alternatives.
+Physical constructors accept point values, engineering notation, ranges, and tolerances. Arithmetic tracks units. Equality between two physical values is strict; use `.matches(...)` for coercive comparison with a string or scalar.
+
+Useful physical-value operations include `.with_tolerance(...)`, `.with_value(...)`, `.abs()`, `.diff(...)`, `.within(...)`, and `.matches(...)`.
+
+Enum defaults use the selected string value:
 
 ```zen
-load("@stdlib/units.zen", "Voltage", "Resistance")
-load("@stdlib/utils.zen", "e96")
-
-Resistor = Module("@stdlib/generics/Resistor.zen")
-
-Mode = enum("PFM", "PWM")
-mode = config(Mode, default="PFM")
-voltage_out = config(Voltage, default="5V", allowed=["3.3V", "5V"])
-
-VOUT = io(Power(voltage=voltage_out))
-GND = io(Ground())
-
-VFB_REF = Voltage("0.8V")
-R_FB_TOP_VAL = Resistance("100kohm")
-
-def fb_bottom(vout):
-    """Datasheet Table 1: R2 = R1 × VFB / (VOUT − VFB)"""
-    return e96(R_FB_TOP_VAL * VFB_REF / (vout - VFB_REF))
-
-VCC = Power()
-FB = Net()
-MSYNC = Net()
-
-# Same feedback divider instances and nets for every output voltage; only value changes.
-Resistor(name="R_FB_TOP", value=R_FB_TOP_VAL.with_tolerance("1%"), package="0402", P1=VOUT, P2=FB)
-Resistor(name="R_FB_BOT", value=fb_bottom(voltage_out).with_tolerance("1%"), package="0402", P1=FB, P2=GND)
-
-# Same strap options and nets for every mode; only population changes.
-Resistor(name="R_MSYNC_GND", value="0ohm", package="0402", P1=MSYNC, P2=GND, dnp=mode != Mode("PFM"))
-Resistor(name="R_MSYNC_VCC", value="0ohm", package="0402", P1=MSYNC, P2=VCC, dnp=mode != Mode("PWM"))
+Mode = enum("PULLUP", "PULLDOWN")
+mode = config(Mode, default="PULLUP")
 ```
 
-### Style
+## Stable Topology
 
-- Prefer concise one-line `io()` and `config()` declarations when readable.
-- Avoid overly verbose `help=` text. Use `help=` only when it adds integrator-visible meaning that is not already obvious from the name, type, or default.
-- Omit comments and help text that merely restate the code.
-- Do not use decorative section-divider comments such as `# ===== Config =====`, `# ----- IOs -----`, or multi-line banner blocks. They add no value.
-- These comment-cleanup rules never apply to `# pcb:sch` lines; see "Schematic Position Comments".
+Configs may change values and `dnp=` state, but should not add, remove, or reconnect schematic instances. Stable instance and net identity preserves layout and reviewability.
 
-### Naming
+- Compute a selected value on one component when the nets do not change.
+- Instantiate every mutually exclusive strap or option and DNP the inactive alternatives.
+- Do not use conditional instantiation to change topology.
+- Use an IC's internal pull-up or pull-down for its default mode when appropriate; add external bias components with `dnp=` only for populated alternatives.
 
-| Element | Convention | Example |
-|---|---|---|
-| `io()` names | UPPERCASE | `VDD`, `GND`, `I2C` |
-| `config()` names | lowercase | `input_filter`, `output_voltage` |
-| Components | Uppercase functional prefix | `R_LOAD`, `C_VDD`, `U_LDO` |
-| Differential pairs | `_P` / `_N` suffixes | `IN_P`, `IN_N` |
+Put non-trivial electrical calculations in named functions. Cite the relevant datasheet equation or table and snap calculated values with the appropriate stdlib E-series helper.
 
-## Schematic Position Comments (`# pcb:sch`)
+The available E-series helpers in `@stdlib/utils.zen` are `e3`, `e6`, `e12`, `e24`, `e48`, `e96`, and `e192`.
 
-Schematic placement is stored in `# pcb:sch <ID> x=... y=... rot=...` comments at the end of a `.zen` file. Treat existing records as persisted layout state, not as ordinary comments.
+Use `check`, `warn`, `error`, and stdlib checks for enforceable electrical constraints rather than documenting them only in comments.
 
-- Preserve existing placement records through textual Zener edits. Add new code above the block.
-- When renaming a component or net, update the matching names inside its records. When deleting a component, remove only its own records.
-- Do not add records for new components, edit coordinates by hand, or otherwise change placement unless the user explicitly asks for schematic layout changes. Schematic editor/MCP layout operations may update these records as part of layout persistence. Unpositioned new items may be displayed with auto-placement, but that does not make existing placement records disposable.
+For reusable power-rail boundary checks, inspect and prefer `voltage_within(...)` from `@stdlib/checks.zen` instead of duplicating the constraint.
 
-## Packages And Manifests
+## Public Compatibility
 
-Imports and dependencies:
+Reusable-package compatibility includes the public `io()` and `config()` API, entrypoints, behavior, layout, and physical integration assumptions. A build of the current package does not prove existing consumers remain compatible.
 
-- `@stdlib/...` is implicit and toolchain-managed; do not declare it in `[dependencies]`.
-- Package imports in `.zen` use full package URLs without versions.
-- Do not manually edit `pcb.toml` to add or remove package dependencies. Add or remove the `Module()` / `load()` import in `.zen`, then run `pcb sync`.
-- `pcb sync` updates package manifests: `[dependencies]` for direct package imports and `[dependencies.indirect]` for the resolved transitive dependency state.
-- Let `pcb sync` maintain `pcb.toml`, especially `[dependencies.indirect]`. Commit `pcb.toml` files after `pcb sync` changes them.
+If consumers must change to adopt an update, treat it as breaking. Document the migration and use a breaking commit.
 
-Updating dependency versions:
+## Schematic Position State
 
-- Run dependency update commands from the package directory.
-- `pcb list -m -u` is read-only. It shows direct remote dependencies, the latest compatible update in brackets, and the latest breaking update as `[breaking: ...]`.
-- `pcb add -u` updates all direct remote dependencies to the latest stable compatible version; `pcb add -u <url>` updates one.
-- For a specific or breaking version, check versions with `pcb list -m -versions <url>`, then run `pcb add <url>@<version>`. Do not edit `pcb.toml`.
-- Do not use `pcb update`; it is for legacy dependency manifests.
+`# pcb:sch <ID> ...` comments persist schematic placement. Preserve them during textual edits and add new code above the block.
 
-`pcb.toml` per repository/package type:
+When renaming or deleting an item, update or remove only its corresponding records. Do not add records or edit coordinates by hand unless the user requested schematic layout work.
 
-- Board repository root: `[workspace]` metadata, `[board]` with `name`, `path`, and `description`, and board `[dependencies]`.
-- Registry repository root: `[workspace]` metadata and top-level `components/**` / `modules/*` members; no `[board]`.
-- Reusable packages (modules, components): `[dependencies]` and optional default `parts`.
+## Packages and Dependencies
 
-## Stdlib
+The stdlib is toolchain-managed and does not belong in `[dependencies]`. For other packages, change the `load()` or `Module()` import in `.zen`, then run `pcb sync`. Let `pcb sync` maintain direct and indirect dependency state in `pcb.toml`.
 
-Prelude symbols available in `.zen` files without `load()`: `Net`, `Power`, `Ground`, `NotConnected`, `Board`, `Layout`, `Part`. Local definitions can shadow them.
+Use `pcb list -m -u` to inspect compatible and breaking updates. Use `pcb add -u` for compatible updates and `pcb list -m -versions <url>` plus `pcb add <url>@<version>` for a specific or breaking version. Do not hand-edit resolved versions or use the legacy `pcb update` workflow.
 
-`@stdlib/board_config.zen`:
+Board roots contain workspace and board metadata. Registry roots contain reusable component and module members without a root board. Reusable packages contain their own direct dependencies and optional default parts.
 
-- `Board` is a prelude helper backed by `@stdlib/board_config.zen`. For standard boards, prefer the `layers=` helper instead of manually writing stackups and design rules:
+## Style
 
-  ```zen
-  Board(name="MainBoard", layout_path="layout/MainBoard", layers=4)
-  ```
+Match the surrounding Zener code. Keep declarations concise, use comments for evidence or non-obvious judgment, and avoid decorative section banners or prose that restates the code. These cleanup rules never apply to `# pcb:sch` records.
 
-- `layers` selects default stackup, netclasses, constraints, and predefined sizes for common 2/4/6/8/10-layer boards.
-- `outer_copper_weight`, `copper_finish`, `solder_mask_color`, `track_widths`, and `via_dimensions` customize those defaults. Extra track widths and vias are appended, deduplicated, and sorted.
-- Use explicit `BoardConfig`, `Stackup`, `DesignRules`, `NetClass`, and related records only when the standard defaults are insufficient; if both `layers` and `config` are provided, `config` is merged over the layers-derived defaults.
+Use established naming:
 
-`@stdlib/interfaces.zen`:
+- public `io()` names: uppercase;
+- `config()` names: lowercase;
+- component instances: uppercase functional names; and
+- differential signals: `_P` and `_N`.
 
-- Common interfaces: `DiffPair`, `I2c`, `I3c`, `Spi`, `Qspi`, `Uart`, `Usart`, `Swd`, `Jtag`, `Usb2`, `Usb3`, and others.
-- `UartPair()` and `UsartPair()` generate cross-connected point-to-point links.
+Prefer stdlib generics for common passives, discretes, connectors, test points, and mechanical features. Inspect the current stdlib package rather than relying on a memorized inventory. Use `Rectifier`, `Zener`, or `Tvs` instead of the deprecated generic `Diode`.
 
-`@stdlib/units.zen`:
+For ordinary boards, prefer `Board(..., layers=<count>)`; standard defaults exist for 2, 4, 6, 8, and 10 layers. Customize them with `outer_copper_weight`, `copper_finish`, `solder_mask_color`, `track_widths`, and `via_dimensions`. Use explicit stackup and design-rule records only when those defaults are insufficient; an explicit `config` merges over the layers-derived defaults.
 
-- Physical types: `Voltage`, `Current`, `Resistance`, `Capacitance`, `Inductance`, `Impedance`, `Frequency`, `Temperature`, `Time`, `Power`.
-- Constructors accept point values and ranges:
+## Validation
 
-  ```python
-  Voltage("3.3V")             # point value
-  Resistance("4k7")           # 4.7kΩ resistor notation
-  Capacitance("100nF")
-  Voltage("1.1–3.6V")          # range
-  Voltage("11–26V (12V)")      # range with explicit nominal
-  ```
+After changing imports, run `pcb sync` from the relevant workspace or package. Run `pcb fmt` on changed Zener and `pcb build <path>` for the affected entrypoints. Use `pcb bom <entrypoint>.zen -f json` when sourceability or part selection is relevant.
 
-- Arithmetic tracks units automatically: `Voltage("3.3V") * Current("0.5A")` → `1.65W`; `Voltage("5V") / Current("100mA")` → `50Ω`.
-- Properties: `.value` (alias for `.nominal`), `.nominal`, `.min`, `.max`, `.tolerance`, `.unit`.
-- Methods: `.with_tolerance(t)`, `.with_value(v)`, `.with_unit(u)`, `.abs()`, `.diff(other)`, `.within(other)`, `.matches(other)`.
-- Operators: `+`, `-`, `*`, `/` (with unit tracking), `<`, `>`, `<=`, `>=`, `==` (strict equality against another `PhysicalValue`), unary `-`. Use `.matches(other)` for coercive comparisons against strings or scalars, e.g. `Voltage("5V").matches("5V")`.
-- String formatting: point → `"3.3V"`; symmetric tolerance → `"10k 5%"`; range → `"11–26V (16V nom.)"`.
-
-`@stdlib/checks.zen`:
-
-- `voltage_within(...)` is the main reusable `io()`-boundary power-rail check.
-
-`@stdlib/utils.zen`:
-
-- `e3`, `e6`, `e12`, `e24`, `e48`, `e96`, `e192` snap physical values to standard E-series.
-
-`@stdlib/generics/*`:
-
-- Prefer generics for common parts: `Resistor`, `Capacitor`, `Inductor`, `FerriteBead`, `Led`, `Rectifier`, `Zener`, `Tvs`, `Crystal`, `TestPoint`, `PinHeader`, `NetTie`, `SolderJumper`, `MountingHole`, `Fiducial`, `Version`.
-- `Diode` is deprecated; use `Rectifier` (standard/Schottky), `Zener` (breakdown/reference), or `Tvs` (transient suppressor).
+Verification should cover the public API, electrical constraints, stable topology, dependencies, sourceability where applicable, and preservation of schematic position state.
