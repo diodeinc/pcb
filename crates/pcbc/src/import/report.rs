@@ -16,6 +16,8 @@ pub(super) struct ReportGenerationOutcome<'a> {
     /// fell back because the choice was ambiguous rather than because nothing matched.
     pub(super) registry_ambiguous_by_refdes:
         &'a std::collections::BTreeMap<super::KiCadRefDes, usize>,
+    /// Why connectivity validation rejected the board, when it did. `None` means it passed.
+    pub(super) validation_failure: Option<String>,
 }
 
 pub(super) fn build_import_report(
@@ -53,6 +55,7 @@ pub(super) fn build_import_report(
         registry_ambiguous_compatible_entrypoints_by_refdes: outcome
             .registry_ambiguous_by_refdes
             .clone(),
+        validation_failure: outcome.validation_failure.clone(),
     };
 
     super::ImportReport {

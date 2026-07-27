@@ -1384,6 +1384,12 @@ fn resolve_file_reference(
         } else {
             base_dir.join(ref_path)
         };
+        // Collapsed after the join, not before: a relative reference carries no verbatim prefix of its
+        // own, and `join` is purely lexical, so `base_dir` — always canonicalized, hence verbatim on
+        // Windows — is what contributes the prefix. Doing this on the expanded string alone would fix
+        // `${KIPRJMOD}/../lib.pretty` while still failing the more common `../common/power.kicad_sch`
+        // sheet reference. Absolute references are unaffected: `candidate` is then `ref_path` itself.
+        let candidate = collapse_verbatim_path(&candidate);
         last_candidate = Some(candidate.clone());
 
         let metadata = match fs::symlink_metadata(&candidate) {
@@ -1455,6 +1461,8 @@ fn normalize_expanded_reference_for_fs(expanded: &str) -> String {
         // KiCad strings commonly use forward slashes even on Windows. Convert to a
         // Windows-friendly form after variable expansion, so `${KIPRJMOD}/...`
         // continues to work even when `KIPRJMOD` is a verbatim (`\\?\...`) path.
+        // Any `..` this leaves behind is collapsed once the reference has been joined onto its base
+        // directory, in `resolve_file_reference` — see `collapse_verbatim_path`.
         expanded.replace('/', "\\")
     }
 
@@ -1462,6 +1470,81 @@ fn normalize_expanded_reference_for_fs(expanded: &str) -> String {
     {
         expanded.to_string()
     }
+}
+
+/// [`collapse_verbatim_relative_components`] over a path, for the resolution chain.
+///
+/// A no-op on any path without a verbatim prefix, which is every path on a non-Windows host.
+fn collapse_verbatim_path(path: &Path) -> PathBuf {
+    match path.to_str() {
+        // A non-UTF-8 path cannot contain a verbatim prefix this would act on without also being
+        // lossy to rewrite, so it is passed through untouched.
+        Some(text) => PathBuf::from(collapse_verbatim_relative_components(text)),
+        None => path.to_path_buf(),
+    }
+}
+
+/// Collapse `.` and `..` inside a Windows verbatim (`\\?\`) path.
+///
+/// A verbatim path is passed to the filesystem uninterpreted, so Windows does **not** resolve `.` or
+/// `..` within one: `\\?\C:\project\..\shared.pretty` names a path that cannot be opened rather than
+/// `\\?\C:\shared.pretty`. Import canonicalizes the project file, which yields a verbatim prefix on
+/// Windows, and `KIPRJMOD` is bound to that — so a `fp-lib-table` URI like
+/// `${KIPRJMOD}/../shared.pretty`, which is how KiCad projects reference a library one directory up,
+/// expands to exactly that unopenable form. Collapsing the components here is what makes such a URI
+/// resolve at all on Windows.
+///
+/// Collapsing `..` lexically diverges from the filesystem when a component it removes is a link: the
+/// canonicalized prefix contains none, but a `..` in the reference itself can cross a junction, in which
+/// case Windows lands somewhere macOS and Linux would not. That difference is contained rather than
+/// dangerous — the resolved file is canonicalized and re-checked against the project directory
+/// afterwards, so a collapse can never place a file outside it — but it does mean a URI written to walk
+/// through a junction can select different geometry per platform. Non-verbatim paths
+/// are returned unchanged — Windows normalizes those itself, and this is a no-op on other platforms
+/// where no verbatim prefix exists.
+///
+/// Only Windows calls this, but it is plain string handling and stays compiled and unit-tested
+/// everywhere so the logic cannot rot on the one platform that needs it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn collapse_verbatim_relative_components(path: &str) -> String {
+    const VERBATIM_PREFIX: &str = r"\\?\";
+
+    let Some(rest) = path.strip_prefix(VERBATIM_PREFIX) else {
+        return path.to_string();
+    };
+    if !rest.split('\\').any(|part| part == "." || part == "..") {
+        return path.to_string();
+    }
+
+    // How many leading components name the volume and so must never be popped: one for a drive
+    // (`C:`), three for a UNC share (`UNC\server\share`). Popping into either would produce a path
+    // that names nothing.
+    let root_components = if rest.starts_with("UNC\\") { 3 } else { 1 };
+
+    let mut kept: Vec<&str> = Vec::new();
+    for part in rest.split('\\') {
+        match part {
+            "" | "." => {}
+            // A `..` with only the volume root left is dropped, matching how Windows clamps at the
+            // root rather than erroring.
+            ".." => {
+                if kept.len() > root_components {
+                    kept.pop();
+                }
+            }
+            part => kept.push(part),
+        }
+    }
+
+    // A path reduced to its root keeps a trailing separator. Without one, `\\?\C:` parses as a prefix
+    // with no root, which is not absolute — `resolve_file_reference` would then join it onto the base
+    // directory and report a failure against a nonsense path.
+    let separator = if kept.len() == root_components {
+        "\\"
+    } else {
+        ""
+    };
+    format!("{VERBATIM_PREFIX}{}{separator}", kept.join("\\"))
 }
 
 fn extension_of_reference(reference: &str) -> Option<String> {
@@ -1618,6 +1701,77 @@ mod tests {
 
         Ok(())
     }
+    /// `${KIPRJMOD}/../lib.pretty` is how a KiCad project names a library one directory up, and on
+    /// Windows `KIPRJMOD` expands to a verbatim path the OS will not normalize, so the `..` has to be
+    /// collapsed before the path reaches the filesystem.
+    #[test]
+    fn verbatim_paths_collapse_relative_components() {
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\C:\project\..\shared.pretty"),
+            r"\\?\C:\shared.pretty"
+        );
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\C:\a\b\..\.\c"),
+            r"\\?\C:\a\c"
+        );
+        // Nothing to collapse, and non-verbatim paths Windows normalizes itself, are left alone —
+        // including POSIX paths, where the whole operation must be a no-op.
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\C:\project\lib.pretty"),
+            r"\\?\C:\project\lib.pretty"
+        );
+        assert_eq!(
+            collapse_verbatim_relative_components(r"C:\project\..\lib.pretty"),
+            r"C:\project\..\lib.pretty"
+        );
+        assert_eq!(
+            collapse_verbatim_relative_components("/tmp/project/../lib.pretty"),
+            "/tmp/project/../lib.pretty"
+        );
+        // A `..` with only the volume root left clamps instead of escaping it.
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\C:\..\..\lib.pretty"),
+            r"\\?\C:\lib.pretty"
+        );
+        // A UNC share root is three components, not one; popping into it would name nothing.
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\UNC\server\share\project\..\lib.pretty"),
+            r"\\?\UNC\server\share\lib.pretty"
+        );
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\UNC\server\share\..\..\..\lib.pretty"),
+            r"\\?\UNC\server\share\lib.pretty"
+        );
+    }
+
+    /// The collapse has to happen after a relative reference is joined onto its base directory: the
+    /// reference carries no verbatim prefix itself, and on Windows the canonicalized base is what
+    /// contributes one. Resolving a real file through a `..` is what pins that ordering — on Windows
+    /// this fails outright if the collapse is applied to the expanded string alone.
+    #[test]
+    fn a_relative_reference_resolves_through_a_parent_directory() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        let sheets = project.join("sheets");
+        let common = project.join("common");
+        fs::create_dir_all(&sheets)?;
+        fs::create_dir_all(&common)?;
+        let target = common.join("power.kicad_sch");
+        fs::write(&target, "(kicad_sch)")?;
+        let project = project.canonicalize()?;
+
+        let resolver = build_kicad_variable_resolver(&project, &Value::Null);
+        let resolved = resolve_reference_path(
+            &project,
+            &project.join("sheets").canonicalize()?,
+            "../common/power.kicad_sch",
+            &resolver,
+        )?;
+
+        assert_eq!(resolved, target.canonicalize()?);
+        Ok(())
+    }
+
     #[test]
     fn rejects_footprint_libraries_outside_project() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -1669,11 +1823,14 @@ mod tests {
         )?;
         let table = dir.join(table_name);
         let disabled_flag = if disabled { " (disabled)" } else { "" };
+        // A backslash opens an escape sequence inside an s-expression string, so an unescaped Windows
+        // path silently loses its separators when the table is parsed back. KiCad escapes them when it
+        // writes the table; the helper has to as well, or these tests exercise a corrupted URI.
+        let uri = library.display().to_string().replace('\\', r"\\");
         fs::write(
             &table,
             format!(
-                "(fp_lib_table (version 7) (lib (name \"{nickname}\") (type \"KiCad\") (uri \"{}\") (options \"\") (descr \"\"){disabled_flag}))",
-                library.display()
+                "(fp_lib_table (version 7) (lib (name \"{nickname}\") (type \"KiCad\") (uri \"{uri}\") (options \"\") (descr \"\"){disabled_flag}))"
             ),
         )?;
         Ok((table, footprint.canonicalize()?))

@@ -538,6 +538,81 @@ fn reimport_reuses_compatible_zener_collision_and_rejects_incompatible_collision
         "keep\n"
     );
 }
+/// Connectivity validation is the one failure import refuses to ship a board over, so it has to leave a
+/// structured record: an agent driving import reads the report at a fixed path, and before this it found
+/// either nothing or a previous run's report describing a board that no longer existed.
+#[test]
+fn a_connectivity_failure_is_recorded_in_the_extraction_report() {
+    let mut sandbox = Sandbox::new();
+    sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);
+    let first = sandbox
+        .run("pcbc", ["import", "layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("initial import");
+    assert!(
+        first.status.success(),
+        "initial import failed:\n{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let report_path = extraction_report(&String::from_utf8_lossy(&first.stderr));
+    let succeeded: serde_json::Value =
+        serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
+    assert!(
+        succeeded["generated"].get("validation_failure").is_none(),
+        "a successful import must not record a validation failure"
+    );
+
+    // Drop physical pin 2 from the kept component's `pin_defs` and `pins` while leaving its `io`
+    // declared, so the package still loads and still satisfies the board's interface, and fails on
+    // connectivity — the check this test is about — rather than on evaluation.
+    let output = sandbox.root_path().join("out");
+    let component_zen = first_component_zen(&output);
+    let original = fs::read_to_string(&component_zen).unwrap();
+    let dropped = original
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            line != "\"2\": \"2\"," && line != "\"2\": P2,"
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        original.lines().count() - dropped.lines().count(),
+        2,
+        "fixture did not drop physical pin 2 from both pin_defs and pins:\n{original}"
+    );
+    fs::write(&component_zen, &dropped).unwrap();
+
+    let failed = sandbox
+        .run("pcbc", ["import", "layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("re-import over a component missing a physical pin");
+    let stderr = String::from_utf8_lossy(&failed.stderr).into_owned();
+    assert!(
+        !failed.status.success(),
+        "import should have failed:\n{stderr}"
+    );
+
+    let report: serde_json::Value = serde_json::from_slice(&fs::read(&report_path).unwrap())
+        .expect("report written on failure");
+    let recorded = report["generated"]["validation_failure"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no validation_failure recorded; report:\n{report:#}"));
+    // The record has to name the component, which is what an agent needs in order to act on it.
+    assert!(
+        recorded.contains("physical pins"),
+        "unexpected recorded failure: {recorded}"
+    );
+    // The kept edit survives the failed run: import still never overwrites.
+    assert_eq!(fs::read_to_string(&component_zen).unwrap(), dropped);
+}
+
 fn duplicate_pin_connectivity_fixture() -> String {
     let mut schematic = STANDALONE_FIXTURE.to_string();
     schematic = schematic.replace(

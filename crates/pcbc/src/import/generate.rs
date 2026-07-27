@@ -2218,7 +2218,7 @@ fn footprint_qualified_component_dir_name(base: &str, footprint_name: &str) -> S
     sanitize_component_dir_name(&format!("{base}__{footprint_name}"))
 }
 
-fn sanitize_component_dir_name(raw: &str) -> String {
+pub(super) fn sanitize_component_dir_name(raw: &str) -> String {
     // Reuse the strict, shared sanitizer used by `pcb search` component generation.
     // This keeps import outputs consistent and ensures names are compatible with
     // Zener `Component(name=...)` validation rules.

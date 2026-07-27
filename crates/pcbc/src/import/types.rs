@@ -781,6 +781,19 @@ pub(super) struct GeneratedArtifacts {
     /// difference reproducible after the fact.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) registry_ambiguous_compatible_entrypoints_by_refdes: BTreeMap<KiCadRefDes, usize>,
+    /// Why connectivity validation rejected this board, when it did.
+    ///
+    /// Import refuses to ship a board whose built connectivity disagrees with the KiCad source, and
+    /// that refusal is the one failure a consumer most needs to act on — so it is recorded here rather
+    /// than existing only as an error message on stderr. Every other incomplete outcome import reports
+    /// (an unresolved footprint, incomplete sourcing, an ambiguous registry candidate) is already
+    /// per-refdes structured data; this keeps the hard failure legible the same way.
+    ///
+    /// `None` means validation passed. When it is set the import failed: the output directory holds
+    /// generated files that did not pass validation, and nothing should treat them as a converted
+    /// design.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) validation_failure: Option<String>,
 }
 
 pub(super) struct ImportValidationRun {

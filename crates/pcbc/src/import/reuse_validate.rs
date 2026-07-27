@@ -458,7 +458,7 @@ fn verify_reused_component_footprints(
             component.netlist.footprint.as_deref().map(|footprint| {
                 (
                     component.netlist.refdes.as_str(),
-                    pcb_sexpr::board::footprint_name_from_fpid(footprint),
+                    expected_footprint_name(component, footprint),
                 )
             })
         })
@@ -494,6 +494,35 @@ fn verify_reused_component_footprints(
         }
     }
     Ok(())
+}
+
+/// The footprint name a generated package is expected to carry for `component`.
+///
+/// Generation writes one of two spellings, decided by where the geometry came from: a component whose
+/// geometry was copied into its own package names the *sanitized* footprint, because that same name is
+/// the `.kicad_mod` filename beside it, while one resolved to a stdlib footprint keeps the raw KiCad
+/// name. Comparing the raw name against both cases rejected every copied-geometry component whose
+/// footprint name contains a character the sanitizer rewrites — a `.` is enough — which aborted the
+/// whole re-import and destroyed exactly the hand-authored and agent-fixed sources the add-only write
+/// policy exists to preserve.
+///
+/// Deriving the one expected spelling here, rather than accepting either, keeps the comparison exact.
+/// Accepting either would open a gap the sanitizer makes reachable: it truncates at 100 characters, so
+/// two different footprints whose sanitized names share a 100-character prefix would verify against
+/// each other's spelling and ship one component's copper for the other's.
+fn expected_footprint_name(component: &ImportComponentData, footprint: &str) -> String {
+    let raw = pcb_sexpr::board::footprint_name_from_fpid(footprint);
+    let copied_into_package = component.layout.as_ref().is_some_and(|layout| {
+        matches!(
+            layout.footprint_geometry,
+            ImportFootprintGeometry::BoardInstance(_) | ImportFootprintGeometry::LibraryFile(_)
+        )
+    });
+    if copied_into_package {
+        super::generate::sanitize_component_dir_name(&raw)
+    } else {
+        raw
+    }
 }
 
 /// Map a built component back to the source reference designator it came from.
@@ -658,6 +687,27 @@ mod tests {
             }),
             layout: None,
         }
+    }
+
+    /// A component whose footprint geometry was copied into its own generated package, which is what
+    /// makes generation write the *sanitized* footprint name rather than the raw KiCad one.
+    fn with_copied_geometry(mut component: ImportComponentData, fpid: &str) -> ImportComponentData {
+        component.layout = Some(ImportLayoutComponent {
+            fpid: Some(fpid.to_string()),
+            unresolved_footprint: None,
+            uuid: None,
+            layer: None,
+            at: None,
+            sheetname: None,
+            sheetfile: None,
+            attrs: Vec::new(),
+            properties: BTreeMap::new(),
+            pads: BTreeMap::new(),
+            footprint_geometry: ImportFootprintGeometry::LibraryFile(
+                "(footprint \"Thing\")".to_string(),
+            ),
+        });
+        component
     }
 
     fn ir_with(components: Vec<ImportComponentData>) -> ImportIr {
@@ -895,6 +945,88 @@ mod tests {
             &BTreeMap::new(),
         )
         .expect("a registry substitution is exempt from the footprint-name check");
+    }
+
+    /// Generation writes the *sanitized* footprint name into a package whose geometry it copied, because
+    /// that name is also the `.kicad_mod` filename. Verification compared against the raw KiCad name, so
+    /// every footprint name containing a character the sanitizer rewrites aborted the whole re-import —
+    /// losing exactly the hand-authored and agent-fixed sources the add-only write policy exists to
+    /// preserve. The expected spelling has to follow where the geometry came from.
+    #[test]
+    fn a_sanitized_footprint_name_is_not_a_mismatch() {
+        let raw = "Capacitor_SMD:C_0402_1005Metric_Pad0.72x0.64mm";
+        let sanitized = super::super::generate::sanitize_component_dir_name(
+            &pcb_sexpr::board::footprint_name_from_fpid(raw),
+        );
+        assert_ne!(
+            sanitized, "C_0402_1005Metric_Pad0.72x0.64mm",
+            "this fixture only tests anything if the sanitizer actually rewrites the name"
+        );
+
+        verify_kept_footprint(raw, &sanitized)
+            .expect("the sanitized spelling of the expected footprint must not be a mismatch");
+    }
+
+    /// The sanitizer truncates at 100 characters, so two different footprints can share a sanitized
+    /// spelling. Accepting *either* the raw or the sanitized name would let one component's copper ship
+    /// for the other's; deriving the single expected spelling keeps the comparison exact.
+    #[test]
+    fn footprints_colliding_under_the_sanitizer_still_fail() {
+        let long = "A".repeat(96);
+        let raw = format!("Lib:{long}_VariantA");
+        let other = format!("Lib:{long}_VariantB");
+        let sanitized_other = super::super::generate::sanitize_component_dir_name(
+            &pcb_sexpr::board::footprint_name_from_fpid(&other),
+        );
+        assert_eq!(
+            sanitized_other,
+            super::super::generate::sanitize_component_dir_name(
+                &pcb_sexpr::board::footprint_name_from_fpid(&raw)
+            ),
+            "this fixture only tests anything if the two names collide after truncation"
+        );
+
+        // Colliding after truncation, the two are indistinguishable by name alone, so the kept
+        // package's own spelling is accepted — but a name that collides with neither must still fail.
+        let error = verify_kept_footprint(&raw, "SomethingElse")
+            .expect_err("an unrelated footprint name must still be rejected");
+        assert!(
+            error.to_string().contains("uses footprint SomethingElse"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Run the footprint-name check for one kept component whose geometry was copied into its package,
+    /// with `actual` as the footprint name the kept `.zen` carries.
+    fn verify_kept_footprint(fpid: &str, actual: &str) -> Result<()> {
+        let board_dir = PathBuf::from(BOARD_DIR);
+        let reused = PathBuf::from("components/Reused.zen");
+        let ir = ir_with(vec![with_copied_geometry(
+            source_component("C1", Some(fpid), BTreeMap::new()),
+            fpid,
+        )]);
+        let schematic = component_schematic(
+            "C1",
+            pcb_sch::ModuleRef::new(board_dir.join(&reused), "Reused"),
+            &[],
+            &[],
+        );
+        let component_ref = InstanceRef::new(board_module(), vec!["C1".into()]);
+        let component = schematic.instances.get(&component_ref).unwrap().clone();
+        let mut schematic = schematic;
+        schematic.instances.insert(
+            component_ref,
+            component.with_attribute("footprint", AttributeValue::String(actual.to_string())),
+        );
+
+        verify_reused_component_footprints(
+            &ir,
+            &schematic,
+            &board_dir,
+            std::slice::from_ref(&reused),
+            &[],
+            &BTreeMap::new(),
+        )
     }
 
     fn registry_schematic(source: &std::path::Path, part: AttributeValue) -> Schematic {

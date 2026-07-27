@@ -45,6 +45,11 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
     if let Some(warning) = format_kept_existing_warning(&kept_existing) {
         eprintln!("{warning}");
     }
+    // A validation failure is recorded rather than returned here, so the extraction report below is
+    // written for the failed run too. That report is the only structured account of what import
+    // produced; returning early left the hard failure legible on stderr alone, and left a report from
+    // a *previous* successful run in place to be mistaken for this one's.
+    let mut validation_failure: Option<anyhow::Error> = None;
     if let Err(error) = reuse_validate::validate_reused_zen(
         &board,
         &ir,
@@ -54,47 +59,53 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
         &generation.instance_name_by_refdes,
     ) {
         if generation.registry_reused_entrypoints.is_empty() {
-            return Err(error);
-        }
-        log::debug!("Staged-board validation failed with cached registry substitution: {error:#}");
-        eprintln!(
-            "Staged-board validation failed; retrying the import without cached registry substitutions"
-        );
-        // The retry disables reuse altogether, so it rediscovers no ambiguity — but the components
-        // the first pass found ambiguous were ambiguous all the same and must stay in the report.
-        // Unlike the kept-file list below, this one is not re-derived by the retry.
-        let first_pass_ambiguity = std::mem::take(&mut generation.registry_ambiguous_by_refdes);
-        writer.discard_generated(&board.board_zen)?;
-        generation = generate::generate(&board, &selection.board_name, &ir, false, &mut writer)?;
-        for (refdes, count) in first_pass_ambiguity {
-            generation
-                .registry_ambiguous_by_refdes
-                .entry(refdes)
-                .or_insert(count);
-        }
-        // Authoritative: the retry regenerates every package and decides its collisions again, and
-        // `discard_generated` dropped the first pass's keeps within that scope, so this is the retry's
-        // own answer rather than the union of both passes.
-        let retried_kept = writer.kept_paths();
-        if retried_kept != kept_existing {
-            // The list printed before validation described the first pass. Correct it rather than
-            // leaving a stale claim that edits are not reflected.
-            match format_kept_existing_warning(&retried_kept) {
-                Some(warning) => eprintln!("After the retry, the kept file(s) are:\n{warning}"),
-                None => {
-                    eprintln!("The retry regenerated every file that was previously kept")
+            validation_failure = Some(error);
+        } else {
+            log::debug!(
+                "Staged-board validation failed with cached registry substitution: {error:#}"
+            );
+            eprintln!(
+                "Staged-board validation failed; retrying the import without cached registry substitutions"
+            );
+            // The retry disables reuse altogether, so it rediscovers no ambiguity — but the components
+            // the first pass found ambiguous were ambiguous all the same and must stay in the report.
+            // Unlike the kept-file list below, this one is not re-derived by the retry.
+            let first_pass_ambiguity = std::mem::take(&mut generation.registry_ambiguous_by_refdes);
+            writer.discard_generated(&board.board_zen)?;
+            generation =
+                generate::generate(&board, &selection.board_name, &ir, false, &mut writer)?;
+            for (refdes, count) in first_pass_ambiguity {
+                generation
+                    .registry_ambiguous_by_refdes
+                    .entry(refdes)
+                    .or_insert(count);
+            }
+            // Authoritative: the retry regenerates every package and decides its collisions again, and
+            // `discard_generated` dropped the first pass's keeps within that scope, so this is the
+            // retry's own answer rather than the union of both passes.
+            let retried_kept = writer.kept_paths();
+            if retried_kept != kept_existing {
+                // The list printed before validation described the first pass. Correct it rather than
+                // leaving a stale claim that edits are not reflected.
+                match format_kept_existing_warning(&retried_kept) {
+                    Some(warning) => eprintln!("After the retry, the kept file(s) are:\n{warning}"),
+                    None => {
+                        eprintln!("The retry regenerated every file that was previously kept")
+                    }
                 }
             }
+            kept_existing = retried_kept;
+            if let Err(retry_error) = reuse_validate::validate_reused_zen(
+                &board,
+                &ir,
+                &kept_zen(&kept_existing),
+                &[],
+                &generation.expected_pins_by_refdes,
+                &generation.instance_name_by_refdes,
+            ) {
+                validation_failure = Some(retry_error);
+            }
         }
-        kept_existing = retried_kept;
-        reuse_validate::validate_reused_zen(
-            &board,
-            &ir,
-            &kept_zen(&kept_existing),
-            &[],
-            &generation.expected_pins_by_refdes,
-            &generation.instance_name_by_refdes,
-        )?;
     }
 
     let report = report::build_import_report(
@@ -108,19 +119,25 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
             sourcing_by_refdes: &generation.sourcing_by_refdes,
             kept_existing_files: &kept_existing,
             registry_ambiguous_by_refdes: &generation.registry_ambiguous_by_refdes,
+            validation_failure: validation_failure
+                .as_ref()
+                .map(|error| format!("{error:#}")),
         },
     );
-    // Non-fatal for the same reason as the validation diagnostics: the report describes the
-    // conversion rather than the design, and the conversion already succeeded, so an unwritable temp
-    // filesystem must not fail an import that has written nothing to the destination yet.
+    // Non-fatal: the report describes the conversion rather than the design, so failing to write it must
+    // not be what fails an import — and on the validation-failure path the import is failing anyway,
+    // with its own error.
     if let Err(error) =
         report::write_import_extraction_report(&board.import_extraction_json, &report)
     {
         eprintln!("Failed to write import extraction report (continuing): {error:#}");
+        // The report sits at a stable per-board path, so a failed write leaves the *previous* run's
+        // report — or a half-written one, since the write truncates in place — to be read as describing
+        // this run. Remove it rather than leave a lie in a documented location. Unconditional: a stale
+        // report claiming a failure that has since been fixed misleads exactly as much as the reverse.
+        let _ = std::fs::remove_file(&board.import_extraction_json);
     }
 
-    // Printed before `commit`: both diagnostics files live in a kept temp directory that nothing
-    // cleans up, so the printed path is their only handle — and a failed commit must not swallow it.
     // Each path is printed only if its write landed, so a warned-about failure is never followed by a
     // path that does not exist.
     for (prefix, path) in [
@@ -133,6 +150,13 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
         if let Some(line) = format_diagnostics_path(prefix, path) {
             eprintln!("{line}");
         }
+    }
+
+    // Returned after the report is written and its path announced, so the structured account of the
+    // failure — including which refdes it concerns, in `validation_failure` — is on disk and findable
+    // before the error reaches the user.
+    if let Some(error) = validation_failure {
+        return Err(error);
     }
 
     eprintln!("Wrote imported board to {}", board.board_zen.display());
