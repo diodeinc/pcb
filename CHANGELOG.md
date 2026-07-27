@@ -17,8 +17,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Deprecated legacy component API access through `pcb search -m web:components` and the online paths of `pcb new component`.
 
-- Added opt-in DiodeHub registry migration support.
-
 ## [0.4.12] - 2026-07-24
 
 ### Changed
