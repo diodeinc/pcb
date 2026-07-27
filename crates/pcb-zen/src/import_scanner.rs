@@ -38,7 +38,7 @@ pub fn extract_imports(content: &str) -> Option<CollectedImports> {
 
 fn extract_from_load(s: &str, result: &mut CollectedImports) {
     if let Some(spec) = LoadSpec::parse(s) {
-        collect_spec(s, spec, result);
+        collect_spec(spec, result);
     }
 }
 
@@ -52,15 +52,15 @@ fn extract_from_literal(s: &str, result: &mut CollectedImports) {
     }
 
     if let Some(spec) = LoadSpec::parse(s) {
-        collect_spec(s, spec, result);
+        collect_spec(spec, result);
     }
 }
 
-fn collect_spec(s: &str, spec: LoadSpec, result: &mut CollectedImports) {
+fn collect_spec(spec: LoadSpec, result: &mut CollectedImports) {
     match spec {
         LoadSpec::Stdlib { .. } | LoadSpec::PackageUri { .. } | LoadSpec::Package { .. } => {}
-        LoadSpec::Url { .. } => {
-            result.urls.insert(s.to_string());
+        LoadSpec::Url { url } => {
+            result.urls.insert(url);
         }
         LoadSpec::Path { path, .. } => {
             result.relative_paths.push(path);

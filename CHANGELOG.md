@@ -12,6 +12,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added `pcb ipc2581 fab-panel create` to tile up to 32 assembly panels with identical stackups into a fixed 18 by 24 inch fabrication panel.
 
+- Added opt-in DiodeHub registry migration support.
+
 ## [0.4.12] - 2026-07-24
 
 ### Changed
