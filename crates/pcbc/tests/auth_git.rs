@@ -15,6 +15,7 @@ const GIT_USE_HTTP_PATH_CONFIG: &str = "credential.https://code.diode.computer.u
 const REPOSITORY_PATH: &str = "acme/boards/widget.git";
 const USER_ACCESS_TOKEN: &str = "user-access-token";
 const REPOSITORY_TOKEN: &str = "repository-token";
+const REPOSITORY_TOKEN_EXPIRES_AT: u64 = 4_102_444_800;
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct TestContext {
@@ -84,6 +85,21 @@ impl TestContext {
         command
     }
 
+    fn git_credential_cache(&self, action: &str) -> Command {
+        let mut command = Command::new("git");
+        command
+            .arg("credential-cache")
+            .arg(format!("--socket={}", self.cache_socket().display()))
+            .arg("--timeout=3300")
+            .arg(action);
+        self.configure_environment(&mut command);
+        command
+    }
+
+    fn cache_socket(&self) -> PathBuf {
+        self.config_dir.join("git-credential-cache/socket")
+    }
+
     fn run_git_config(&self, args: &[&str]) -> Output {
         self.git()
             .args(["config", "--global"])
@@ -124,6 +140,12 @@ impl TestContext {
             .env("no_proxy", "127.0.0.1,localhost")
             .env("PATH", &self.path)
             .env_remove("RUST_LOG");
+    }
+}
+
+impl Drop for TestContext {
+    fn drop(&mut self) {
+        let _ = self.git_credential_cache("exit").output();
     }
 }
 
@@ -203,7 +225,7 @@ fn mock_exchange<'a>(server: &'a MockServer, status: u16) -> Mock<'a> {
                     "scheme": "Bearer",
                     "token": REPOSITORY_TOKEN,
                 },
-                "expiresAt": 4102444800u64,
+                "expiresAt": REPOSITORY_TOKEN_EXPIRES_AT,
             }));
         } else {
             then.status(status);
@@ -253,10 +275,11 @@ fn configure_is_idempotent_and_preserves_unrelated_global_config() {
     assert_clean_success(&context.run_config_command("configure"));
     assert_clean_success(&context.run_config_command("configure"));
 
-    assert_eq!(
-        context.git_config_values(GIT_HELPER_CONFIG),
-        ["", "!pcb auth git"]
-    );
+    let helpers = context.git_config_values(GIT_HELPER_CONFIG);
+    assert_eq!(helpers.len(), 3);
+    assert_eq!(helpers[0], "");
+    assert!(helpers[1].starts_with("cache --timeout=3300 --socket="));
+    assert_eq!(helpers[2], "!pcb auth git");
     assert_eq!(
         context.git_config_values(GIT_USE_HTTP_PATH_CONFIG),
         ["true"]
@@ -283,10 +306,26 @@ fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
         "developer",
     ]));
     assert_clean_success(&context.run_config_command("configure"));
+    let cached_credential = format!(
+        "capability[]=authtype\n\
+         protocol=https\n\
+         host={GIT_HOST}\n\
+         path={REPOSITORY_PATH}\n\
+         authtype=Bearer\n\
+         credential={REPOSITORY_TOKEN}\n\
+         password_expiry_utc={REPOSITORY_TOKEN_EXPIRES_AT}\n\
+         \n"
+    );
+    assert_clean_success(&run_with_input(
+        context.git_credential_cache("store"),
+        &cached_credential,
+    ));
+    assert!(context.cache_socket().exists());
 
     assert_clean_success(&context.run_config_command("unconfigure"));
     assert_clean_success(&context.run_config_command("unconfigure"));
 
+    assert!(!context.cache_socket().exists());
     assert!(context.git_config_values(GIT_HELPER_CONFIG).is_empty());
     assert!(
         context
@@ -304,7 +343,7 @@ fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
 }
 
 #[test]
-fn modern_git_fill_receives_an_ephemeral_bearer_credential() {
+fn modern_git_fill_caches_the_bearer_credential_until_rejected() {
     let server = MockServer::start();
     let exchange = mock_exchange(&server, 200);
     let context = TestContext::new(server.base_url());
@@ -319,10 +358,11 @@ fn modern_git_fill_receives_an_ephemeral_bearer_credential() {
     assert_eq!(lines.first(), Some(&"capability[]=authtype"));
     assert!(lines.contains(&"authtype=Bearer"));
     assert!(lines.contains(&format!("credential={REPOSITORY_TOKEN}").as_str()));
-    assert!(lines.contains(&"ephemeral=1"));
+    assert!(lines.contains(&format!("password_expiry_utc={REPOSITORY_TOKEN_EXPIRES_AT}").as_str()));
     assert!(lines.contains(&"protocol=https"));
     assert!(lines.contains(&format!("host={GIT_HOST}").as_str()));
     assert!(lines.contains(&format!("path={REPOSITORY_PATH}").as_str()));
+    assert!(!credential.contains("ephemeral="));
     assert!(!credential.contains("username="));
     assert!(!credential.contains("password="));
     exchange.assert_calls(1);
@@ -332,10 +372,76 @@ fn modern_git_fill_receives_an_ephemeral_bearer_credential() {
     assert!(approve.stdout.is_empty());
     assert!(approve.stderr.is_empty());
 
-    let reject = run_with_input(context.git_credential("reject"), &credential);
+    let cached_fill = run_with_input(context.git_credential("fill"), &credential_request());
+    assert_success(&cached_fill);
+    assert!(cached_fill.stderr.is_empty());
+    let cached_credential = String::from_utf8(cached_fill.stdout).unwrap();
+    assert_eq!(cached_credential, credential);
+    exchange.assert_calls(1);
+
+    let reject = run_with_input(context.git_credential("reject"), &cached_credential);
     assert_success(&reject);
     assert!(reject.stdout.is_empty());
     assert!(reject.stderr.is_empty());
+
+    let refreshed_fill = run_with_input(context.git_credential("fill"), &credential_request());
+    assert_success(&refreshed_fill);
+    assert!(refreshed_fill.stderr.is_empty());
+    exchange.assert_calls(2);
+}
+
+#[test]
+fn modern_git_ignores_an_expired_cached_bearer_credential() {
+    let server = MockServer::start();
+    let exchange = mock_exchange(&server, 200);
+    let context = TestContext::new(server.base_url());
+    assert_clean_success(&context.run_config_command("configure"));
+    let expired_credential = format!(
+        "capability[]=authtype\n\
+         protocol=https\n\
+         host={GIT_HOST}\n\
+         path={REPOSITORY_PATH}\n\
+         authtype=Bearer\n\
+         credential=expired-repository-token\n\
+         password_expiry_utc=1\n\
+         \n"
+    );
+    assert_clean_success(&run_with_input(
+        context.git_credential_cache("store"),
+        &expired_credential,
+    ));
+
+    let fill = run_with_input(context.git_credential("fill"), &credential_request());
+    assert_success(&fill);
+    assert!(fill.stderr.is_empty());
+    let credential = String::from_utf8(fill.stdout).unwrap();
+    assert!(credential.contains(&format!("credential={REPOSITORY_TOKEN}")));
+    assert!(!credential.contains("expired-repository-token"));
+    exchange.assert_calls(1);
+}
+
+#[test]
+fn auth_logout_stops_the_git_credential_cache() {
+    let server = MockServer::start();
+    let exchange = mock_exchange(&server, 200);
+    let context = TestContext::new(server.base_url());
+    assert_clean_success(&context.run_config_command("configure"));
+
+    let fill = run_with_input(context.git_credential("fill"), &credential_request());
+    assert_success(&fill);
+    assert_clean_success(&run_with_input(
+        context.git_credential("approve"),
+        &String::from_utf8(fill.stdout).unwrap(),
+    ));
+    assert!(context.cache_socket().exists());
+
+    let logout = context
+        .pcbc()
+        .args(["auth", "logout"])
+        .output()
+        .expect("run pcb auth logout");
+    assert_success(&logout);
+    assert!(!context.cache_socket().exists());
     exchange.assert_calls(1);
 }
 

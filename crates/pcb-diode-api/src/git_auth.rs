@@ -2,7 +2,9 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -14,6 +16,7 @@ const DIODEHUB_CREDENTIAL_HELPER_CONFIG: &str = "credential.https://code.diode.c
 const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
     "credential.https://code.diode.computer.useHttpPath";
 const DIODEHUB_CREDENTIAL_HELPER: &str = "!pcb auth git";
+const DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS: u64 = 55 * 60;
 const DIODEHUB_HOST: &str = "code.diode.computer";
 const GIT_CONFIG_NOT_FOUND: i32 = 5;
 const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
@@ -67,6 +70,11 @@ enum GitCredentialScheme {
     Bearer,
 }
 
+struct MintedGitCredential {
+    token: String,
+    expires_at: u64,
+}
+
 pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
@@ -98,7 +106,9 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
 }
 
 fn configure() -> Result<()> {
+    let cache_helper = credential_cache_helper()?;
     run_git_config(&["--replace-all", DIODEHUB_CREDENTIAL_HELPER_CONFIG, ""])?;
+    run_git_config(&["--add", DIODEHUB_CREDENTIAL_HELPER_CONFIG, &cache_helper])?;
     run_git_config(&[
         "--add",
         DIODEHUB_CREDENTIAL_HELPER_CONFIG,
@@ -112,8 +122,56 @@ fn configure() -> Result<()> {
 }
 
 fn unconfigure() -> Result<()> {
+    clear_credential_cache();
     unset_git_config(DIODEHUB_CREDENTIAL_HELPER_CONFIG)?;
     unset_git_config(DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG)
+}
+
+fn credential_cache_socket() -> Result<PathBuf> {
+    let config_dir = crate::auth::get_auth_dir()?;
+    let config_dir = if config_dir.is_absolute() {
+        config_dir
+    } else {
+        std::env::current_dir()
+            .context("Failed to resolve PCB config directory")?
+            .join(config_dir)
+    };
+    Ok(config_dir.join("git-credential-cache").join("socket"))
+}
+
+fn credential_cache_helper() -> Result<String> {
+    let socket = credential_cache_socket()?;
+    let socket = socket
+        .to_str()
+        .context("PCB config directory is not valid UTF-8")?;
+    Ok(format!(
+        "cache --timeout={DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS} --socket={}",
+        shell_quote(socket)
+    ))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn stop_credential_cache() -> Result<()> {
+    let socket = credential_cache_socket()?;
+    let mut socket_argument = OsString::from("--socket=");
+    socket_argument.push(socket);
+    let output = Command::new("git")
+        .arg("credential-cache")
+        .arg(socket_argument)
+        .arg("exit")
+        .output()
+        .context("Failed to stop Git credential cache")?;
+    if !output.status.success() {
+        bail!("`git credential-cache exit` failed with {}", output.status);
+    }
+    Ok(())
+}
+
+pub(crate) fn clear_credential_cache() {
+    let _ = stop_credential_cache();
 }
 
 fn run_git_config(args: &[&str]) -> Result<()> {
@@ -170,15 +228,19 @@ fn provide_credential(
 
     writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
     writeln!(output, "authtype=Bearer")?;
-    writeln!(output, "credential={credential}")?;
-    writeln!(output, "ephemeral=true")?;
+    writeln!(output, "credential={}", credential.token)?;
+    writeln!(output, "password_expiry_utc={}", credential.expires_at)?;
     writeln!(output)?;
     output.flush()?;
 
     Ok(())
 }
 
-fn exchange_credential(ctx: &WorkspaceContext, host: &str, path: &str) -> Result<String> {
+fn exchange_credential(
+    ctx: &WorkspaceContext,
+    host: &str,
+    path: &str,
+) -> Result<MintedGitCredential> {
     let api_token = ctx
         .token()
         .context("Failed to get a valid Diode API token")?;
@@ -224,7 +286,7 @@ fn exchange_credential(ctx: &WorkspaceContext, host: &str, path: &str) -> Result
         bail!("Git credential exchange returned an invalid credential");
     }
 
-    Ok(token)
+    Ok(MintedGitCredential { token, expires_at })
 }
 
 fn read_credential_request(mut input: impl BufRead) -> Result<CredentialRequest> {
@@ -299,6 +361,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(request.capabilities, [b"state".to_vec()]);
+    }
+
+    #[test]
+    fn quotes_credential_cache_socket_for_the_shell() {
+        assert_eq!(
+            shell_quote("/tmp/PCB's cache/socket"),
+            "'/tmp/PCB'\\''s cache/socket'"
+        );
     }
 
     #[test]
