@@ -1010,11 +1010,17 @@ fn test_registry_migration_rewrites_manifest_and_builds_legacy_import_from_tag_o
     let manifest = format!(
         r#"[workspace]
 pcb-version = "0.4"
+repository = "github.com/example/demo"
 vendor = ["{LEGACY_REPOSITORY}/**"]
 
-[board]
+[dependencies]
+"gitlab.com/kicad/libraries/kicad-footprints" = "7.0.0"
+"#
+    );
+    let board_manifest = format!(
+        r#"[board]
 name = "Main"
-path = "board.zen"
+path = "Main.zen"
 
 [dependencies]
 "{LEGACY_REPOSITORY}/components/Foo" = "1.0.0"
@@ -1030,16 +1036,20 @@ Foo(name = "R1", value = "1kOhm", P1 = Net("P1"), P2 = Net("P2"))
 
     sandbox
         .write("pcb.toml", manifest)
-        .write("board.zen", &board)
+        .write("boards/Main/pcb.toml", board_manifest)
+        .write("boards/Main/Main.zen", &board)
         .sync();
 
-    let migrated = read_root_manifest(&sandbox);
-    assert!(!migrated.contains(LEGACY_REPOSITORY));
-    assert!(migrated.contains(&format!(
+    let root_manifest = read_root_manifest(&sandbox);
+    assert!(!root_manifest.contains(LEGACY_REPOSITORY));
+    assert!(root_manifest.contains(&format!("vendor = [\"{CANONICAL_REPOSITORY}/**\"]")));
+    assert!(root_manifest.contains("\"gitlab.com/kicad/libraries/kicad-footprints\" = \"7.0.0\""));
+
+    let migrated_board_manifest = read_sandbox_file(&sandbox, "boards/Main/pcb.toml");
+    assert!(migrated_board_manifest.contains(&format!(
         "\"{CANONICAL_REPOSITORY}/components/Foo\" = \"1.0.0\""
     )));
-    assert!(migrated.contains(&format!("vendor = [\"{CANONICAL_REPOSITORY}/**\"]")));
-    assert_eq!(read_sandbox_file(&sandbox, "board.zen"), board);
+    assert_eq!(read_sandbox_file(&sandbox, "boards/Main/Main.zen"), board);
     assert!(
         sandbox
             .default_cwd()
@@ -1049,7 +1059,7 @@ Foo(name = "R1", value = "1kOhm", P1 = Net("P1"), P2 = Net("P2"))
             .exists()
     );
 
-    let build = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen"]);
+    let build = run_pcbc_unchecked(&mut sandbox, ["build", "boards/Main/Main.zen"]);
     assert!(
         build.status.success(),
         "expected migrated legacy import to build:\n{}",

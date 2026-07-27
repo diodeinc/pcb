@@ -118,7 +118,8 @@ impl PcbToml {
         Ok(self)
     }
 
-    fn canonicalize_package_references(&mut self) -> Result<()> {
+    /// Apply enabled package-identity migrations without other parse finalization.
+    pub fn canonicalize_package_references(&mut self) -> Result<()> {
         canonicalize_map_keys(&mut self.dependencies.direct, "direct dependency")?;
         canonicalize_map_keys(&mut self.dependencies.indirect, "indirect dependency")?;
         canonicalize_map_keys(&mut self.patch, "patch")?;

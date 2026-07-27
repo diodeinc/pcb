@@ -50,13 +50,10 @@ pub(crate) fn plan_canonical_manifest(path: PathBuf) -> Result<Option<ManifestEd
 
     let original = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
-    if !original.contains(pcb_zen_core::package_url::LEGACY_REGISTRY_REPOSITORY) {
-        return Ok(None);
-    }
-
-    let unmodified: PcbToml =
+    let mut canonical: PcbToml =
         toml::from_str(&original).with_context(|| format!("Failed to parse {}", path.display()))?;
-    let canonical = PcbToml::parse_with_path(&original, &path)?;
+    let unmodified = canonical.clone();
+    canonical.canonicalize_package_references()?;
     if canonical == unmodified {
         return Ok(None);
     }
