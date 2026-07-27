@@ -1,28 +1,44 @@
 use httpmock::Mock;
 use httpmock::prelude::*;
 use serde_json::json;
+use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::sync::{Mutex, MutexGuard};
 
+const GIT_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
 const GIT_HOST: &str = "code.diode.computer";
+const GIT_USE_HTTP_PATH_CONFIG: &str = "credential.https://code.diode.computer.useHttpPath";
 const REPOSITORY_PATH: &str = "acme/boards/widget.git";
 const USER_ACCESS_TOKEN: &str = "user-access-token";
 const REPOSITORY_TOKEN: &str = "repository-token";
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct TestContext {
+    _test_lock: MutexGuard<'static, ()>,
     _tempdir: tempfile::TempDir,
     config_dir: PathBuf,
+    git_config: PathBuf,
+    path: OsString,
     api_url: String,
 }
 
 impl TestContext {
     fn new(api_url: String) -> Self {
+        let test_lock = TEST_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         let tempdir = tempfile::tempdir().expect("create test directory");
         let config_dir = tempdir.path().join("pcb");
         let auth_dir = config_dir.join("auth");
         fs::create_dir_all(&auth_dir).expect("create auth directory");
+        let bin_dir = tempdir.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin directory");
+        let pcb_path = bin_dir.join(format!("pcb{}", env::consts::EXE_SUFFIX));
+        if fs::hard_link(env!("CARGO_BIN_EXE_pcbc"), &pcb_path).is_err() {
+            fs::copy(env!("CARGO_BIN_EXE_pcbc"), pcb_path).expect("copy pcbc test binary as pcb");
+        }
         fs::write(
             auth_dir.join(format!("{}.toml", auth_scope_slug(&api_url))),
             format!(
@@ -33,9 +49,18 @@ impl TestContext {
         )
         .expect("write auth tokens");
 
+        let path = env::join_paths(
+            std::iter::once(bin_dir)
+                .chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+        )
+        .expect("construct test PATH");
+
         Self {
+            _test_lock: test_lock,
+            git_config: tempdir.path().join("gitconfig"),
             _tempdir: tempdir,
             config_dir,
+            path,
             api_url,
         }
     }
@@ -47,45 +72,44 @@ impl TestContext {
     }
 
     fn git_credential(&self, action: &str) -> Command {
-        let helper = format!(
-            "!\"{}\" auth git",
-            env!("CARGO_BIN_EXE_pcbc").replace('\\', "/")
-        );
-        let credential_context = format!("credential.https://{GIT_HOST}");
-
         let mut command = Command::new("git");
-        command
-            .arg("-c")
-            .arg(format!("{credential_context}.helper="))
-            .arg("-c")
-            .arg(format!("{credential_context}.helper={helper}"))
-            .arg("-c")
-            .arg(format!("{credential_context}.useHttpPath=true"))
-            .args(["credential", action]);
+        command.args(["credential", action]);
         self.configure_environment(&mut command);
         command
     }
 
-    fn git_credential_with_fallback(&self, credential_file: &std::path::Path) -> Command {
-        let helper = format!(
-            "!\"{}\" auth git",
-            env!("CARGO_BIN_EXE_pcbc").replace('\\', "/")
-        );
-
+    fn git(&self) -> Command {
         let mut command = Command::new("git");
-        command
-            .args(["-c", "credential.helper="])
-            .arg("-c")
-            .arg(format!("credential.helper={helper}"))
-            .arg("-c")
-            .arg(format!(
-                "credential.helper=store --file={}",
-                credential_file.display().to_string().replace('\\', "/")
-            ))
-            .args(["-c", "credential.useHttpPath=true"])
-            .args(["credential", "fill"]);
         self.configure_environment(&mut command);
         command
+    }
+
+    fn run_git_config(&self, args: &[&str]) -> Output {
+        self.git()
+            .args(["config", "--global"])
+            .args(args)
+            .output()
+            .expect("run git config")
+    }
+
+    fn git_config_values(&self, key: &str) -> Vec<String> {
+        let output = self.run_git_config(&["--get-all", key]);
+        if output.status.code() == Some(1) {
+            return Vec::new();
+        }
+        assert_success(&output);
+        String::from_utf8(output.stdout)
+            .expect("git config output is UTF-8")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn run_config_command(&self, operation: &str) -> Output {
+        self.pcbc()
+            .args(["auth", "git", operation])
+            .output()
+            .expect("run pcb auth git configuration command")
     }
 
     fn configure_environment(&self, command: &mut Command) {
@@ -93,8 +117,12 @@ impl TestContext {
             .current_dir(self._tempdir.path())
             .env("PCB_CONFIG_DIR", &self.config_dir)
             .env("DIODE_API_URL", &self.api_url)
+            .env("GIT_CONFIG_GLOBAL", &self.git_config)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
             .env("NO_PROXY", "127.0.0.1,localhost")
             .env("no_proxy", "127.0.0.1,localhost")
+            .env("PATH", &self.path)
             .env_remove("RUST_LOG");
     }
 }
@@ -145,10 +173,17 @@ fn run_with_input(mut command: Command, input: &str) -> Output {
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
-        "command failed\nstdout:\n{}\nstderr:\n{}",
+        "command failed with {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn assert_clean_success(output: &Output) {
+    assert_success(output);
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
 }
 
 fn mock_exchange<'a>(server: &'a MockServer, status: u16) -> Mock<'a> {
@@ -203,10 +238,77 @@ fn advertises_authtype_and_ignores_unknown_operations() {
 }
 
 #[test]
+fn configure_is_idempotent_and_preserves_unrelated_global_config() {
+    let context = TestContext::new("http://127.0.0.1:1".to_string());
+    assert_clean_success(&context.run_git_config(&["--add", "user.email", "dev@example.com"]));
+    assert_clean_success(&context.run_git_config(&["--add", "credential.helper", "store"]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        "credential.https://code.diode.computer.username",
+        "developer",
+    ]));
+    assert_clean_success(&context.run_git_config(&["--add", GIT_HELPER_CONFIG, "!old-helper"]));
+    assert_clean_success(&context.run_git_config(&["--add", GIT_USE_HTTP_PATH_CONFIG, "false"]));
+
+    assert_clean_success(&context.run_config_command("configure"));
+    assert_clean_success(&context.run_config_command("configure"));
+
+    assert_eq!(
+        context.git_config_values(GIT_HELPER_CONFIG),
+        ["", "!pcb auth git"]
+    );
+    assert_eq!(
+        context.git_config_values(GIT_USE_HTTP_PATH_CONFIG),
+        ["true"]
+    );
+    assert_eq!(context.git_config_values("user.email"), ["dev@example.com"]);
+    assert_eq!(context.git_config_values("credential.helper"), ["store"]);
+    assert_eq!(
+        context.git_config_values("credential.https://code.diode.computer.username"),
+        ["developer"]
+    );
+}
+
+#[test]
+fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
+    let context = TestContext::new("http://127.0.0.1:1".to_string());
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        "credential.https://github.com.helper",
+        "!github-helper",
+    ]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        "credential.https://code.diode.computer.username",
+        "developer",
+    ]));
+    assert_clean_success(&context.run_config_command("configure"));
+
+    assert_clean_success(&context.run_config_command("unconfigure"));
+    assert_clean_success(&context.run_config_command("unconfigure"));
+
+    assert!(context.git_config_values(GIT_HELPER_CONFIG).is_empty());
+    assert!(
+        context
+            .git_config_values(GIT_USE_HTTP_PATH_CONFIG)
+            .is_empty()
+    );
+    assert_eq!(
+        context.git_config_values("credential.https://github.com.helper"),
+        ["!github-helper"]
+    );
+    assert_eq!(
+        context.git_config_values("credential.https://code.diode.computer.username"),
+        ["developer"]
+    );
+}
+
+#[test]
 fn modern_git_fill_receives_an_ephemeral_bearer_credential() {
     let server = MockServer::start();
     let exchange = mock_exchange(&server, 200);
     let context = TestContext::new(server.base_url());
+    assert_clean_success(&context.run_config_command("configure"));
 
     let fill = run_with_input(context.git_credential("fill"), &credential_request());
     assert_success(&fill);
@@ -242,6 +344,7 @@ fn modern_git_honors_quit_when_the_exchange_fails() {
     let server = MockServer::start();
     let exchange = mock_exchange(&server, 403);
     let context = TestContext::new(server.base_url());
+    assert_clean_success(&context.run_config_command("configure"));
 
     let fill = run_with_input(context.git_credential("fill"), &credential_request());
     assert!(!fill.status.success());
@@ -263,9 +366,18 @@ fn global_helper_ignores_unrelated_hosts() {
         "https://fallback-user:fallback-password@github.com/acme/widget.git\n",
     )
     .expect("write fallback credentials");
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        "credential.helper",
+        &format!(
+            "store --file={}",
+            credential_file.display().to_string().replace('\\', "/")
+        ),
+    ]));
+    assert_clean_success(&context.run_config_command("configure"));
 
     let fill = run_with_input(
-        context.git_credential_with_fallback(&credential_file),
+        context.git_credential("fill"),
         "capability[]=authtype\n\
          protocol=https\n\
          host=github.com\n\

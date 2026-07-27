@@ -3,19 +3,25 @@ use clap::Args;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
+use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use crate::WorkspaceContext;
 
 const AUTHTYPE_CAPABILITY: &str = "authtype";
+const DIODEHUB_CREDENTIAL_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
+const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
+    "credential.https://code.diode.computer.useHttpPath";
+const DIODEHUB_CREDENTIAL_HELPER: &str = "!pcb auth git";
 const DIODEHUB_HOST: &str = "code.diode.computer";
+const GIT_CONFIG_NOT_FOUND: i32 = 5;
 const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
 
 #[derive(Args, Debug)]
-#[command(about = "Provide Git credentials using PCB authentication")]
+#[command(about = "Configure or provide Git credentials using PCB authentication")]
 pub struct GitAuthArgs {
-    /// Git credential helper operation
+    /// Git credential helper operation, `configure`, or `unconfigure`
     operation: String,
 }
 
@@ -66,6 +72,8 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
     let mut stdout = io::stdout().lock();
 
     match args.operation.as_str() {
+        "configure" => configure()?,
+        "unconfigure" => unconfigure()?,
         "capability" => {
             writeln!(stdout, "version 0")?;
             writeln!(stdout, "capability {AUTHTYPE_CAPABILITY}")?;
@@ -86,6 +94,51 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
         _ => {}
     }
 
+    Ok(())
+}
+
+fn configure() -> Result<()> {
+    run_git_config(&["--replace-all", DIODEHUB_CREDENTIAL_HELPER_CONFIG, ""])?;
+    run_git_config(&[
+        "--add",
+        DIODEHUB_CREDENTIAL_HELPER_CONFIG,
+        DIODEHUB_CREDENTIAL_HELPER,
+    ])?;
+    run_git_config(&[
+        "--replace-all",
+        DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG,
+        "true",
+    ])
+}
+
+fn unconfigure() -> Result<()> {
+    unset_git_config(DIODEHUB_CREDENTIAL_HELPER_CONFIG)?;
+    unset_git_config(DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG)
+}
+
+fn run_git_config(args: &[&str]) -> Result<()> {
+    let status = Command::new("git")
+        .args(["config", "--global"])
+        .args(args)
+        .status()
+        .context("Failed to run `git config`")?;
+    if !status.success() {
+        bail!(
+            "`git config --global {}` failed with {status}",
+            args.join(" ")
+        );
+    }
+    Ok(())
+}
+
+fn unset_git_config(key: &str) -> Result<()> {
+    let status = Command::new("git")
+        .args(["config", "--global", "--unset-all", key])
+        .status()
+        .context("Failed to run `git config`")?;
+    if !status.success() && status.code() != Some(GIT_CONFIG_NOT_FOUND) {
+        bail!("`git config --global --unset-all {key}` failed with {status}");
+    }
     Ok(())
 }
 

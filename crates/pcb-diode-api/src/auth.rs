@@ -456,7 +456,7 @@ pub enum AuthCommand {
     Refresh,
     /// Print a valid access token to stdout (refreshes if expired)
     Token,
-    /// Provide Git credentials using PCB authentication
+    /// Configure or provide Git credentials using PCB authentication
     Git(crate::git_auth::GitAuthArgs),
 }
 
