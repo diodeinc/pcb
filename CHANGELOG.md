@@ -22,6 +22,23 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added `pcb auth git configure` and `pcb auth git unconfigure` to manage host-specific global Git credential configuration for DiodeHub.
 - PCB now authenticates its own DiodeHub Git operations without requiring global Git configuration.
+- `pcb import` accepts a standalone `.kicad_sch` as well as a `.kicad_pro`, and the output directory is now optional, defaulting to `./<input-file-stem>`.
+- `pcb import` preserves connectivity exactly: every KiCad physical pin becomes its own Zener signal, so duplicate pin names, separate no-connect terminals, and pinless mechanical footprints stay distinct. It builds the result and checks every net against the source before finishing.
+- `pcb import` substitutes a cached registry component when it is provably the same part — matching MPN, manufacturer, land pattern, numbered pads and connectivity — and generates a component from the schematic otherwise. It never downloads; a candidate must already be cached.
+- `pcb import` resolves footprints from the global KiCad `fp-lib-table` as well as the project's, and copies the geometry it finds into the generated component, so the output does not depend on the machine's KiCad configuration afterwards.
+- `pcb import --archive-sources` writes `<board>.kicad.archive.zip`, preserving the referenced KiCad source files. Off by default.
+
+### Changed
+
+- `pcb import` never overwrites. Re-importing keeps any existing file whose generated version differs, names it on stderr, and still adds what is new, so hand-authored and agent-fixed sources survive. `--force` replaces what that run generates, and never `pcb.toml`.
+- `pcb import` writes only the converted sources plus `pcb.toml` and `.gitignore` when absent — no `git init`, no `README.md`, no vendored stdlib — and puts its extraction report and validation diagnostics under the gitignored `<output>/.pcb/import/`.
+- `pcb import` keeps what it cannot convert instead of failing: an unresolved footprint or incomplete sourcing is retained as provenance and reported by `pcb build` as `bom.imported_incomplete`. The board builds; it is not layout-ready until the footprint is supplied.
+- `pcb import` runs KiCad ERC, DRC, and netlist export on temporary copies, so it no longer rewrites your project preference files.
+- `pcb import` names the footprint libraries it could not find, where it looked for them, and whether every footprint or only some failed to resolve — and says so differently when a component names no footprint at all, which no library can supply.
+
+### Fixed
+
+- `pcb import` ignores KiCad `(disabled)` rows in `fp-lib-table` / `sym-lib-table`, so a disabled project nickname falls through to the global table the way KiCad does.
 
 ### Changed
 
