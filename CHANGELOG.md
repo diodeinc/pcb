@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-07-27
+
 ### Added
 
 - Added `pcb auth git` as a Git credential helper that exchanges PCB authentication for short-lived DiodeHub Bearer credentials.
@@ -1367,7 +1369,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.12...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.13...HEAD
+[0.4.13]: https://github.com/diodeinc/pcb/compare/v0.4.12...v0.4.13
 [0.4.12]: https://github.com/diodeinc/pcb/compare/v0.4.11...v0.4.12
 [0.4.11]: https://github.com/diodeinc/pcb/compare/v0.4.10...v0.4.11
 [0.4.10]: https://github.com/diodeinc/pcb/compare/v0.4.9...v0.4.10
