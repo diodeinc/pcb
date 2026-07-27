@@ -63,33 +63,155 @@ Use `kicad-symbol` for symbol-file structure, editing, `extends`, rendering, and
 
 ## Artifact Acquisition
 
-Use web component search only for registry authoring, not ordinary board consumption.
+Use `pcb component` for authenticated catalog and EDA access. The CLI resolves
+the configured API server and authentication. Use JSON output when composing
+commands with `jq`.
 
-```bash
-pcb search -m web:components <MPN> -f json
+```text
+pcb component search QUERY
+  [--backends cse,lcsc,ncti | --backends none] [--limit 1..100] -f json
+  -> [{mpn, manufacturer, cse, lcsc, ncti, digikey, offers}, ...]
+
+pcb component download
+  --mpn <MPN>
+  --manufacturer <MANUFACTURER>
+  exactly one of:
+    --cse-part-ref <REF>
+    --lcsc-part-number <PART_NUMBER>
+    --ncti-component-id <ID>
+  -f json
+  -> {mpn, manufacturer, <provider>: {
+       <provider-id>, symbol_url, footprint_url, step_url
+     }}
 ```
 
-`web:components` results include `component_id`, source, model availability, datasheets, and availability. Prefer results with ECAD artifacts and STEP when they match the datasheet and the intended physical package.
+Search always returns an array. `cse`, `lcsc`, and `ncti` are null or contain
+the provider reference, description, category, package, `symbol`, `footprint`,
+`step`, and `datasheet_url`. `digikey` contains catalog metadata, including
+`datasheet_url`; `offers` contains sourcing data. Download returns only the
+selected provider. Its `footprint_url` and `step_url` may be null.
 
-Import web artifacts into a workspace with:
+| Provider | Search reference | Download option |
+| --- | --- | --- |
+| CSE | `.cse.part_ref` | `--cse-part-ref` |
+| LCSC | `.lcsc.part_number` | `--lcsc-part-number` |
+| NCTI | `.ncti.component_id` | `--ncti-component-id` |
+
+Search merges catalog and EDA data by canonical manufacturer and MPN. Omit
+`--backends` to search all EDA providers and enrich results with DigiKey data.
+Use `--backends none` for DigiKey catalog data without EDA providers. Require
+an exact MPN and manufacturer match before using a provider reference. Download
+with exactly one provider reference so the symbol, footprint, and STEP remain
+one coherent asset set. Download URLs are signed and temporary.
+
+Prefer URL references over checked-in PDFs. Use the selected EDA provider's
+verified `datasheet_url` in the curated symbol's `Datasheet` property. If that
+provider has no usable datasheet URL, use `digikey.datasheet_url` from the same
+search row. Keep the source URL in metadata and use `datasheet-reader` to
+inspect it; never copy the PDF into `docs/`.
+
+Run the acquisition stages below only after registry search confirms that no suitable package exists. A published package returned by registry search still counts as existing content; inspect and patch that package instead of creating a duplicate.
+
+For a justified new package, keep acquisition inspectable: select one exact search row, request one provider's asset set, select the datasheet URL, then fetch the signed assets. Pass provider references exactly as returned. If a returned reference cannot be downloaded, report the API or provider failure; do not rewrite provider IDs or add client-side fallback logic.
+
+### Search One Part
 
 ```bash
-pcb new component --component-id <ID> --part-number <MPN> --manufacturer <MFR>
+search_json="/tmp/tps54331dr-search.json"
+part_json="/tmp/tps54331dr-part.json"
+
+pcb component search TPS54331DR \
+  --backends cse \
+  --limit 10 \
+  -f json > "$search_json"
+
+jq -e '
+  [.[] | select(
+    .mpn == "TPS54331DR" and
+    .manufacturer == "Texas Instruments"
+  )] |
+  if length == 1 then .[0] else error("expected one exact match") end
+' "$search_json" > "$part_json"
 ```
 
-Use `pcb new component <DIR>` when importing a downloaded local ECAD directory.
+### Discover A Family
 
-Fetched artifacts are starting points, not authority. Check every symbol, pin, footprint, datasheet link, sourcing field, and 3D model against the manufacturer datasheet. Footprints need an embedded STEP; imported or KiCad-copied footprints often only reference external models, which you must locate or download and embed.
+```bash
+for mpn in TPS70912QDRVRQ1 TPS70933QDRVRQ1 TPS70950QDRVRQ1; do
+  pcb component search "$mpn" \
+    --backends cse \
+    --limit 10 \
+    -f json |
+    jq --arg mpn "$mpn" '
+      .[] |
+      select(
+        .mpn == $mpn and
+        .manufacturer == "Texas Instruments"
+      )
+    '
+done
+```
 
-Prefer URL references over checked-in PDFs. Set the symbol's `Datasheet` property to a URL that `pcb scan <url>` resolves, and use `datasheet-reader` to inspect it. Link supplemental documents from READMEs or `.zen` docstrings. PDFs under `docs/` are allowed but discouraged, especially large files.
+### Download One CSE Asset Set
+
+```bash
+part_json="/tmp/tps54331dr-part.json"
+assets_json="/tmp/tps54331dr-assets.json"
+
+jq -e '.cse.symbol and .cse.footprint and .cse.step' "$part_json" \
+  > /dev/null
+
+pcb component download \
+  --mpn "$(jq -r '.mpn' "$part_json")" \
+  --manufacturer "$(jq -r '.manufacturer' "$part_json")" \
+  --cse-part-ref "$(jq -r '.cse.part_ref' "$part_json")" \
+  -f json > "$assets_json"
+
+jq -e '.cse.symbol_url and .cse.footprint_url and .cse.step_url' \
+  "$assets_json" > /dev/null
+```
+
+### Select The Datasheet URL
+
+```bash
+part_json="/tmp/tps54331dr-part.json"
+datasheet_url="$(
+  jq -er '.cse.datasheet_url // .digikey.datasheet_url' "$part_json"
+)"
+printf '%s\n' "$datasheet_url"
+```
+
+### Fetch The Signed Assets
+
+```bash
+assets_json="/tmp/tps54331dr-assets.json"
+out="components/Texas_Instruments/TPS54331DR"
+
+mkdir -p "$(dirname "$out")"
+mkdir "$out"
+curl -fL "$(jq -er '.cse.symbol_url' "$assets_json")" \
+  -o "$out/TPS54331DR.kicad_sym"
+curl -fL "$(jq -er '.cse.footprint_url' "$assets_json")" \
+  -o "$out/TPS54331DR.kicad_mod"
+curl -fL "$(jq -er '.cse.step_url' "$assets_json")" \
+  -o "$out/TPS54331DR.step"
+touch "$out/pcb.toml"
+```
+
+Treat downloaded artifacts as inputs to curation, not finished registry content. Verify the symbol, pins, footprint, package, datasheet, sourcing fields, and model against manufacturer evidence. Set the symbol's `Datasheet` property, embed the verified STEP, author the package `.zen` and README, and complete the build, BOM, formatting, and sourceability checks below.
 
 If trusted footprint or STEP artifacts are unavailable, report what you checked and ask before creating scratch geometry. After approved scratch work, label it as scratch/generated, cite the evidence used, render/verify it, and call out the risk in the README and completion report.
 
-Embed real STEP models with `pcb embed-step`; do not hand-edit model blocks:
+Upgrade imported KiCad files before editing. Keep one verified model transform before embedding because `pcb embed-step` rewrites every model reference.
 
 ```bash
+kicad-cli sym upgrade <symbol.kicad_sym>
+kicad-cli fp upgrade <package-directory>
+rg -n '^\s*\(model ' <footprint.kicad_mod>
 pcb embed-step <footprint.kicad_mod> <model.step>
 ```
+
+Do not commit the standalone STEP after verifying the embedded model.
 
 ## Package Shape
 
