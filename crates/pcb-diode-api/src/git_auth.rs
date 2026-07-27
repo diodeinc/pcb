@@ -2,23 +2,14 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::ffi::OsString;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use crate::WorkspaceContext;
 
 const AUTHTYPE_CAPABILITY: &str = "authtype";
-const DIODEHUB_CREDENTIAL_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
-const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
-    "credential.https://code.diode.computer.useHttpPath";
-const DIODEHUB_CREDENTIAL_HELPER: &str = "!pcb auth git";
-const DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS: u64 = 55 * 60;
 const DIODEHUB_HOST: &str = "code.diode.computer";
-const GIT_CONFIG_NOT_FOUND: i32 = 5;
 const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
 
 #[derive(Args, Debug)]
@@ -80,8 +71,8 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
     let mut stdout = io::stdout().lock();
 
     match args.operation.as_str() {
-        "configure" => configure()?,
-        "unconfigure" => unconfigure()?,
+        "configure" => pcb_zen::git::configure_diodehub_credentials_globally()?,
+        "unconfigure" => pcb_zen::git::unconfigure_diodehub_credentials_globally()?,
         "capability" => {
             writeln!(stdout, "version 0")?;
             writeln!(stdout, "capability {AUTHTYPE_CAPABILITY}")?;
@@ -102,101 +93,6 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
         _ => {}
     }
 
-    Ok(())
-}
-
-fn configure() -> Result<()> {
-    let cache_helper = credential_cache_helper()?;
-    run_git_config(&["--replace-all", DIODEHUB_CREDENTIAL_HELPER_CONFIG, ""])?;
-    run_git_config(&["--add", DIODEHUB_CREDENTIAL_HELPER_CONFIG, &cache_helper])?;
-    run_git_config(&[
-        "--add",
-        DIODEHUB_CREDENTIAL_HELPER_CONFIG,
-        DIODEHUB_CREDENTIAL_HELPER,
-    ])?;
-    run_git_config(&[
-        "--replace-all",
-        DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG,
-        "true",
-    ])
-}
-
-fn unconfigure() -> Result<()> {
-    clear_credential_cache();
-    unset_git_config(DIODEHUB_CREDENTIAL_HELPER_CONFIG)?;
-    unset_git_config(DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG)
-}
-
-fn credential_cache_socket() -> Result<PathBuf> {
-    let config_dir = crate::auth::get_auth_dir()?;
-    let config_dir = if config_dir.is_absolute() {
-        config_dir
-    } else {
-        std::env::current_dir()
-            .context("Failed to resolve PCB config directory")?
-            .join(config_dir)
-    };
-    Ok(config_dir.join("git-credential-cache").join("socket"))
-}
-
-fn credential_cache_helper() -> Result<String> {
-    let socket = credential_cache_socket()?;
-    let socket = socket
-        .to_str()
-        .context("PCB config directory is not valid UTF-8")?;
-    Ok(format!(
-        "cache --timeout={DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS} --socket={}",
-        shell_quote(socket)
-    ))
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn stop_credential_cache() -> Result<()> {
-    let socket = credential_cache_socket()?;
-    let mut socket_argument = OsString::from("--socket=");
-    socket_argument.push(socket);
-    let output = Command::new("git")
-        .arg("credential-cache")
-        .arg(socket_argument)
-        .arg("exit")
-        .output()
-        .context("Failed to stop Git credential cache")?;
-    if !output.status.success() {
-        bail!("`git credential-cache exit` failed with {}", output.status);
-    }
-    Ok(())
-}
-
-pub(crate) fn clear_credential_cache() {
-    let _ = stop_credential_cache();
-}
-
-fn run_git_config(args: &[&str]) -> Result<()> {
-    let status = Command::new("git")
-        .args(["config", "--global"])
-        .args(args)
-        .status()
-        .context("Failed to run `git config`")?;
-    if !status.success() {
-        bail!(
-            "`git config --global {}` failed with {status}",
-            args.join(" ")
-        );
-    }
-    Ok(())
-}
-
-fn unset_git_config(key: &str) -> Result<()> {
-    let status = Command::new("git")
-        .args(["config", "--global", "--unset-all", key])
-        .status()
-        .context("Failed to run `git config`")?;
-    if !status.success() && status.code() != Some(GIT_CONFIG_NOT_FOUND) {
-        bail!("`git config --global --unset-all {key}` failed with {status}");
-    }
     Ok(())
 }
 
@@ -361,14 +257,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(request.capabilities, [b"state".to_vec()]);
-    }
-
-    #[test]
-    fn quotes_credential_cache_socket_for_the_shell() {
-        assert_eq!(
-            shell_quote("/tmp/PCB's cache/socket"),
-            "'/tmp/PCB'\\''s cache/socket'"
-        );
     }
 
     #[test]

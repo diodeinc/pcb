@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::ffi::OsString;
 
+use anyhow::{Context, bail};
 use jiff::{
     Timestamp,
     tz::{Offset, TimeZone},
@@ -10,13 +12,23 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tar::Archive;
 
+const DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS: u64 = 55 * 60;
+const DIODEHUB_CREDENTIAL_HELPER: &str = "!pcb auth git";
+const DIODEHUB_CREDENTIAL_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
+const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
+    "credential.https://code.diode.computer.useHttpPath";
+const DIODEHUB_HOST: &str = "code.diode.computer";
+const DIODEHUB_SSH_URL_PREFIX: &str = "ssh://git@code.diode.computer:23231/";
+const DIODEHUB_URL_REWRITE_CONFIG: &str = "url.https://code.diode.computer/.insteadOf";
+const GIT_CONFIG_NOT_FOUND: i32 = 5;
+
 #[derive(Debug, Clone)]
 pub struct TagMetadata {
     pub timestamp: String,
 }
 
 fn git(repo_root: &Path) -> Command {
-    let mut cmd = Command::new("git");
+    let mut cmd = git_global();
     cmd.arg("-C").arg(repo_root);
     cmd
 }
@@ -25,19 +37,87 @@ fn git_global() -> Command {
     Command::new("git")
 }
 
-fn git_global_noninteractive() -> Command {
-    let mut cmd = git_global();
+fn make_noninteractive(cmd: &mut Command) {
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GCM_INTERACTIVE", "never");
-    cmd
 }
 
-fn git_global_with_prompt(interactive: bool) -> Command {
-    if interactive {
-        git_global()
-    } else {
-        git_global_noninteractive()
+fn git_network(repo_root: &Path) -> anyhow::Result<Command> {
+    let mut cmd = git_global_network()?;
+    make_noninteractive(&mut cmd);
+    cmd.arg("-C").arg(repo_root);
+    Ok(cmd)
+}
+
+fn git_global_network() -> anyhow::Result<Command> {
+    let mut cmd = git_global();
+    add_diodehub_auth_config(&mut cmd, &credential_cache_socket()?)?;
+    Ok(cmd)
+}
+
+fn git_global_network_with_prompt(interactive: bool) -> anyhow::Result<Command> {
+    let mut cmd = git_global_network()?;
+    if !interactive {
+        make_noninteractive(&mut cmd);
     }
+    Ok(cmd)
+}
+
+fn credential_cache_socket() -> anyhow::Result<PathBuf> {
+    let config_dir = if let Ok(config_dir) = std::env::var("PCB_CONFIG_DIR") {
+        PathBuf::from(config_dir)
+    } else {
+        dirs::home_dir()
+            .context("Failed to get home directory")?
+            .join(".pcb")
+    };
+    let config_dir = if config_dir.is_absolute() {
+        config_dir
+    } else {
+        std::env::current_dir()
+            .context("Failed to resolve PCB config directory")?
+            .join(config_dir)
+    };
+    Ok(config_dir.join("git-credential-cache").join("socket"))
+}
+
+fn credential_cache_helper(socket: &Path) -> anyhow::Result<String> {
+    let socket = socket
+        .to_str()
+        .context("PCB config directory is not valid UTF-8")?;
+    Ok(format!(
+        "cache --timeout={DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS} --socket={}",
+        shell_quote(socket)
+    ))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn add_git_config(cmd: &mut Command, key: &str, value: &str) {
+    cmd.arg("-c").arg(format!("{key}={value}"));
+}
+
+fn add_diodehub_auth_config(cmd: &mut Command, cache_socket: &Path) -> anyhow::Result<()> {
+    let cache_helper = credential_cache_helper(cache_socket)?;
+    add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, "");
+    add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, &cache_helper);
+    add_git_config(
+        cmd,
+        DIODEHUB_CREDENTIAL_HELPER_CONFIG,
+        DIODEHUB_CREDENTIAL_HELPER,
+    );
+    add_git_config(cmd, DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG, "true");
+    for ssh_prefix in [
+        "code.diode.computer:",
+        "git@code.diode.computer:",
+        "ssh://git@code.diode.computer/",
+        DIODEHUB_SSH_URL_PREFIX,
+    ] {
+        add_git_config(cmd, DIODEHUB_URL_REWRITE_CONFIG, ssh_prefix);
+    }
+    Ok(())
 }
 
 fn run_silent(mut cmd: Command) -> anyhow::Result<()> {
@@ -89,6 +169,12 @@ pub fn run_in(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
     run_silent(cmd)
 }
 
+fn run_network_in(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
+    let mut cmd = git_network(repo_root)?;
+    cmd.args(args);
+    run_silent(cmd)
+}
+
 pub fn run_output(repo_root: &Path, args: &[&str]) -> anyhow::Result<String> {
     let mut cmd = git(repo_root);
     cmd.args(args);
@@ -99,6 +185,90 @@ pub fn run_output_opt(repo_root: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = git(repo_root);
     cmd.args(args);
     run_stdout_opt(cmd)
+}
+
+pub fn init(repo_root: &Path) -> anyhow::Result<()> {
+    if repo_root.join(".git").exists() {
+        return Ok(());
+    }
+
+    let status = git(repo_root)
+        .args(["init", "-b", "main"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("Failed to run `git init`")?;
+    if !status.success() {
+        bail!("`git init` failed with {status}");
+    }
+    Ok(())
+}
+
+pub fn configure_diodehub_credentials_globally() -> anyhow::Result<()> {
+    let cache_helper = credential_cache_helper(&credential_cache_socket()?)?;
+    run_git_config(&["--replace-all", DIODEHUB_CREDENTIAL_HELPER_CONFIG, ""])?;
+    run_git_config(&["--add", DIODEHUB_CREDENTIAL_HELPER_CONFIG, &cache_helper])?;
+    run_git_config(&[
+        "--add",
+        DIODEHUB_CREDENTIAL_HELPER_CONFIG,
+        DIODEHUB_CREDENTIAL_HELPER,
+    ])?;
+    run_git_config(&[
+        "--replace-all",
+        DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG,
+        "true",
+    ])
+}
+
+pub fn unconfigure_diodehub_credentials_globally() -> anyhow::Result<()> {
+    clear_diodehub_credential_cache();
+    unset_git_config(DIODEHUB_CREDENTIAL_HELPER_CONFIG)?;
+    unset_git_config(DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG)
+}
+
+pub fn clear_diodehub_credential_cache() {
+    let _ = stop_credential_cache();
+}
+
+fn stop_credential_cache() -> anyhow::Result<()> {
+    let mut socket_argument = OsString::from("--socket=");
+    socket_argument.push(credential_cache_socket()?);
+    let output = git_global()
+        .arg("credential-cache")
+        .arg(socket_argument)
+        .arg("exit")
+        .output()
+        .context("Failed to stop Git credential cache")?;
+    if !output.status.success() {
+        bail!("`git credential-cache exit` failed with {}", output.status);
+    }
+    Ok(())
+}
+
+fn run_git_config(args: &[&str]) -> anyhow::Result<()> {
+    let status = git_global()
+        .args(["config", "--global"])
+        .args(args)
+        .status()
+        .context("Failed to run `git config`")?;
+    if !status.success() {
+        bail!(
+            "`git config --global {}` failed with {status}",
+            args.join(" ")
+        );
+    }
+    Ok(())
+}
+
+fn unset_git_config(key: &str) -> anyhow::Result<()> {
+    let status = git_global()
+        .args(["config", "--global", "--unset-all", key])
+        .status()
+        .context("Failed to run `git config`")?;
+    if !status.success() && status.code() != Some(GIT_CONFIG_NOT_FOUND) {
+        bail!("`git config --global --unset-all {key}` failed with {status}");
+    }
+    Ok(())
 }
 
 pub fn rev_parse(repo_root: &Path, ref_name: &str) -> Option<String> {
@@ -379,7 +549,7 @@ fn parse_git_timezone_offset(offset: &str) -> Option<i32> {
 }
 
 fn clone(remote_url: &str, dest_dir: &Path, prompt: bool) -> anyhow::Result<()> {
-    let mut cmd = git_global_with_prompt(prompt);
+    let mut cmd = git_global_network_with_prompt(prompt)?;
     cmd.arg("clone");
     cmd.args(["--quiet", "--no-checkout", remote_url])
         .arg(dest_dir);
@@ -387,7 +557,7 @@ fn clone(remote_url: &str, dest_dir: &Path, prompt: bool) -> anyhow::Result<()> 
 }
 
 pub fn fetch_in_source_repo(source_repo: &Path) -> anyhow::Result<()> {
-    run_in(
+    run_network_in(
         source_repo,
         &[
             "fetch",
@@ -407,7 +577,7 @@ pub fn ensure_rev_in_source_repo(source_repo: &Path, rev: &str) -> anyhow::Resul
         return Ok(());
     }
 
-    run_in(source_repo, &["fetch", "origin", "--quiet", rev])
+    run_network_in(source_repo, &["fetch", "origin", "--quiet", rev])
 }
 
 pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyhow::Result<()> {
@@ -435,12 +605,12 @@ pub fn archive_to_dir(repo_root: &Path, treeish: &str, dest_dir: &Path) -> anyho
 }
 
 pub fn fetch_branch(repo_root: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
-    run_in(repo_root, &["fetch", remote, branch, "--quiet"])
+    run_network_in(repo_root, &["fetch", remote, branch, "--quiet"])
 }
 
 /// Fetch and sync tags from remote, pruning deleted tags and force-updating moved ones
 pub fn fetch_tags(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
-    run_in(
+    run_network_in(
         repo_root,
         &[
             "fetch",
@@ -454,31 +624,32 @@ pub fn fetch_tags(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
 }
 
 pub fn push_tag(repo_root: &Path, tag_name: &str, remote: &str) -> anyhow::Result<()> {
-    run_in(repo_root, &["push", remote, tag_name])
+    run_network_in(repo_root, &["push", remote, tag_name])
 }
 
 pub fn push_tags(repo_root: &Path, tag_names: &[&str], remote: &str) -> anyhow::Result<()> {
     let mut args = vec!["push", remote];
     args.extend(tag_names);
-    run_in(repo_root, &args)
+    run_network_in(repo_root, &args)
 }
 
 pub fn push_branch(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Result<()> {
-    run_in(repo_root, &["push", remote, branch])
+    run_network_in(repo_root, &["push", remote, branch])
 }
 
 pub fn push_branch_force(repo_root: &Path, branch: &str, remote: &str) -> anyhow::Result<()> {
-    run_in(repo_root, &["push", "--force", remote, branch])
+    run_network_in(repo_root, &["push", "--force", remote, branch])
 }
 
 /// Clone a repository with HTTPS, falling back to SSH
 pub fn clone_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
     let https_url = format!("https://{}.git", repo_url);
-    if clone(&https_url, dest, false).is_ok() {
-        return Ok(());
+    match clone(&https_url, dest, false) {
+        Ok(()) => Ok(()),
+        Err(error) if is_diodehub_repo(repo_url) => Err(error),
+        Err(_) => clone(&format_ssh_url(repo_url), dest, true),
     }
-    clone(&format_ssh_url(repo_url), dest, true)
 }
 
 /// Create or reset a branch to point at a specific ref
@@ -492,7 +663,7 @@ pub fn checkout_branch_reset(
 
 /// Fetch from remote
 pub fn fetch(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
-    run_in(repo_root, &["fetch", remote, "--quiet"])
+    run_network_in(repo_root, &["fetch", remote, "--quiet"])
 }
 
 pub fn prune_worktrees(bare_repo: &Path) -> anyhow::Result<()> {
@@ -619,6 +790,12 @@ pub fn format_ssh_url(module_path: &str) -> String {
     }
 }
 
+fn is_diodehub_repo(repo_url: &str) -> bool {
+    repo_url
+        .split_once('/')
+        .is_some_and(|(host, _)| host == DIODEHUB_HOST)
+}
+
 pub fn parse_remote_url(url: &str) -> anyhow::Result<String> {
     if let Some(rest) = url.strip_prefix("https://") {
         return Ok(rest.strip_suffix(".git").unwrap_or(rest).to_string());
@@ -642,25 +819,31 @@ pub fn ls_remote_with_fallback(
 ) -> anyhow::Result<(String, String)> {
     let (repo_url, _) = split_repo_and_subpath(module_path);
     let https_url = format!("https://{}.git", repo_url);
-    let ssh_url = format_ssh_url(repo_url);
+    if let Some(commit) = ls_remote(&https_url, refspec, false)? {
+        return Ok((commit, https_url));
+    }
 
-    for (url, interactive) in [(&https_url, false), (&ssh_url, true)] {
-        let mut cmd = git_global_with_prompt(interactive);
-        let out = cmd.args(["ls-remote", url, refspec]).output()?;
-        if out.status.success()
-            && let Some(commit) = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().next())
-        {
-            return Ok((commit.to_string(), url.clone()));
+    if !is_diodehub_repo(repo_url) {
+        let ssh_url = format_ssh_url(repo_url);
+        if let Some(commit) = ls_remote(&ssh_url, refspec, true)? {
+            return Ok((commit, ssh_url));
         }
     }
-    anyhow::bail!(
-        "Failed to ls-remote {} for {} (tried HTTPS and SSH)",
-        refspec,
-        module_path
-    )
+
+    anyhow::bail!("Failed to ls-remote {} for {}", refspec, module_path)
+}
+
+fn ls_remote(url: &str, refspec: &str, interactive: bool) -> anyhow::Result<Option<String>> {
+    let mut cmd = git_global_network_with_prompt(interactive)?;
+    let out = cmd.args(["ls-remote", url, refspec]).output()?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .map(str::to_string))
 }
 
 pub fn resolve_branch_head(module_path: &str, branch: &str) -> anyhow::Result<String> {
@@ -710,6 +893,56 @@ pub fn lock_dir(dir: &Path) -> anyhow::Result<fslock::LockFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::io::Write;
+    use std::process::Output;
+
+    struct CredentialCacheGuard(PathBuf);
+
+    impl Drop for CredentialCacheGuard {
+        fn drop(&mut self) {
+            let mut socket_argument = OsString::from("--socket=");
+            socket_argument.push(&self.0);
+            let _ = git_global()
+                .arg("credential-cache")
+                .arg(socket_argument)
+                .arg("exit")
+                .output();
+        }
+    }
+
+    fn run_with_input(mut command: Command, input: &str) -> Output {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    fn isolate_git_config(command: &mut Command, config: &Path) {
+        command
+            .env("GIT_CONFIG_GLOBAL", config)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TERMINAL_PROMPT", "0");
+    }
+
+    fn assert_success(output: &Output) {
+        assert!(
+            output.status.success(),
+            "command failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn test_lock_path_appends_suffix() {
@@ -775,5 +1008,125 @@ mod tests {
             format_ssh_url("gitlab.com/group/project"),
             "git@gitlab.com:group/project.git"
         );
+    }
+
+    #[test]
+    fn quotes_credential_cache_socket_for_the_shell() {
+        assert_eq!(
+            shell_quote("/tmp/PCB's cache/socket"),
+            "'/tmp/PCB'\\''s cache/socket'"
+        );
+    }
+
+    #[test]
+    fn repository_network_commands_are_noninteractive() {
+        let command = git_network(Path::new(".")).unwrap();
+        let env = |key| {
+            command
+                .get_envs()
+                .find(|(name, _)| name == &key)
+                .and_then(|(_, value)| value)
+        };
+
+        assert_eq!(
+            env(std::ffi::OsStr::new("GIT_TERMINAL_PROMPT")),
+            Some(std::ffi::OsStr::new("0"))
+        );
+        assert_eq!(
+            env(std::ffi::OsStr::new("GCM_INTERACTIVE")),
+            Some(std::ffi::OsStr::new("never"))
+        );
+    }
+
+    #[test]
+    fn process_local_auth_uses_the_pcb_cache_without_mutating_global_config() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let git_config = tempdir.path().join("gitconfig");
+        let original_config = b"[user]\n\temail = dev@example.com\n";
+        fs::write(&git_config, original_config).unwrap();
+        let cache_socket = tempdir.path().join("git-credential-cache/socket");
+        let _cache_guard = CredentialCacheGuard(cache_socket.clone());
+        let cached_credential = "capability[]=authtype\n\
+                                 protocol=https\n\
+                                 host=code.diode.computer\n\
+                                 path=diode/registry.git\n\
+                                 authtype=Bearer\n\
+                                 credential=repository-token\n\
+                                 password_expiry_utc=4102444800\n\
+                                 \n";
+
+        let mut socket_argument = OsString::from("--socket=");
+        socket_argument.push(&cache_socket);
+        let mut store = git_global();
+        store
+            .arg("credential-cache")
+            .arg(socket_argument)
+            .arg("--timeout=3300")
+            .arg("store");
+        isolate_git_config(&mut store, &git_config);
+        assert_success(&run_with_input(store, cached_credential));
+
+        let mut fill = git_global();
+        add_diodehub_auth_config(&mut fill, &cache_socket).unwrap();
+        fill.args(["credential", "fill"]);
+        isolate_git_config(&mut fill, &git_config);
+        let output = run_with_input(
+            fill,
+            "capability[]=authtype\n\
+             protocol=https\n\
+             host=code.diode.computer\n\
+             path=diode/registry.git\n\
+             \n",
+        );
+        assert_success(&output);
+
+        let credential = String::from_utf8(output.stdout).unwrap();
+        assert!(credential.contains("authtype=Bearer"));
+        assert!(credential.contains("credential=repository-token"));
+        assert!(credential.contains("path=diode/registry.git"));
+        assert_eq!(fs::read(&git_config).unwrap(), original_config);
+    }
+
+    #[test]
+    fn process_local_auth_rewrites_diodehub_ssh_without_changing_the_remote() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let repo = tempdir.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        init(&repo).unwrap();
+        let git_config = tempdir.path().join("gitconfig");
+        fs::write(&git_config, "").unwrap();
+        for (remote, stored_url) in [
+            ("bare", "code.diode.computer:diode/registry.git"),
+            ("scp", "git@code.diode.computer:diode/registry.git"),
+            (
+                "ssh",
+                "ssh://git@code.diode.computer:23231/diode/registry.git",
+            ),
+        ] {
+            run_in(&repo, &["remote", "add", remote, stored_url]).unwrap();
+
+            let mut command = git_global();
+            add_diodehub_auth_config(
+                &mut command,
+                &tempdir.path().join("git-credential-cache/socket"),
+            )
+            .unwrap();
+            command
+                .arg("-C")
+                .arg(&repo)
+                .args(["remote", "get-url", remote]);
+            isolate_git_config(&mut command, &git_config);
+            let output = command.output().unwrap();
+            assert_success(&output);
+
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap().trim(),
+                "https://code.diode.computer/diode/registry.git"
+            );
+            assert_eq!(
+                run_output(&repo, &["config", "--get", &format!("remote.{remote}.url")]).unwrap(),
+                stored_url
+            );
+        }
     }
 }

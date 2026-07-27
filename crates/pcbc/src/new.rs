@@ -6,7 +6,6 @@ use minijinja::{Environment, context};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::config::{PcbToml, find_workspace_root, pcb_version_from_cargo};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use crate::codegen;
 
@@ -266,23 +265,6 @@ fn prompt_new_package() -> Result<()> {
     execute_new_package(&path)
 }
 
-fn init_git(dir: &Path) -> Result<()> {
-    if !dir.join(".git").exists() {
-        let status = Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .context("Failed to run 'git init'")?;
-        if !status.success() {
-            bail!("'git init' failed with exit code: {:?}", status.code());
-        }
-    }
-
-    Ok(())
-}
-
 fn execute_new_board(board: &str, repo: &str) -> Result<()> {
     if get_workspace().is_some() {
         bail!("Cannot create a board inside an existing workspace");
@@ -314,7 +296,7 @@ fn execute_new_board(board: &str, repo: &str) -> Result<()> {
 }
 
 pub(crate) fn init_board_repo(dir: &Path, board: &str, repository: &str) -> Result<()> {
-    init_git(dir)?;
+    pcb_zen::git::init(dir)?;
 
     let env = create_template_env();
     let ctx = context! {
