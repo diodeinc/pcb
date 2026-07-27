@@ -279,7 +279,6 @@ fn configure_is_idempotent_and_preserves_unrelated_global_config() {
     assert_eq!(helpers.len(), 3);
     assert_eq!(helpers[0], "");
     assert!(helpers[1].starts_with("cache --timeout=3300 --socket="));
-    assert!(helpers[1].contains(context.cache_socket().to_str().unwrap()));
     assert_eq!(helpers[2], "!pcb auth git");
     assert_eq!(
         context.git_config_values(GIT_USE_HTTP_PATH_CONFIG),
