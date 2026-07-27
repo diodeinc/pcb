@@ -1,6 +1,22 @@
 use anyhow::{Context, Result};
-use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Name of the import extraction report, written inside `materialize::create_diagnostics_dir`.
+pub(super) const IMPORT_EXTRACTION_REPORT_NAME: &str = ".kicad.import.extraction.json";
+
+/// What generation and staging decided for this run, as opposed to what extraction found in the
+/// KiCad source. Grouped so the report builder keeps a readable parameter list.
+pub(super) struct ReportGenerationOutcome<'a> {
+    pub(super) registry_reused_entrypoints: &'a [PathBuf],
+    pub(super) sourcing_by_refdes:
+        &'a std::collections::BTreeMap<super::KiCadRefDes, super::ImportGeneratedSourcingStatus>,
+    /// Destination-relative paths staging kept instead of refreshing from the KiCad source.
+    pub(super) kept_existing_files: &'a [PathBuf],
+    /// Refdes -> number of competing compatible cached registry entrypoints, for components that
+    /// fell back because the choice was ambiguous rather than because nothing matched.
+    pub(super) registry_ambiguous_by_refdes:
+        &'a std::collections::BTreeMap<super::KiCadRefDes, usize>,
+}
 
 pub(super) fn build_import_report(
     paths: &super::ImportPaths,
@@ -8,25 +24,35 @@ pub(super) fn build_import_report(
     validation: &super::ImportValidationRun,
     ir: super::ImportIr,
     materialized: &super::MaterializedBoard,
+    outcome: &ReportGenerationOutcome<'_>,
 ) -> super::ImportReport {
     let generated = super::GeneratedArtifacts {
         board_dir: super::rel_to_root(&paths.workspace_root, &materialized.board_dir),
         board_zen: super::rel_to_root(&paths.workspace_root, &materialized.board_zen),
-        validation_diagnostics_json: super::rel_to_root(
-            &paths.workspace_root,
-            &materialized.validation_diagnostics_json,
-        ),
-        import_extraction_json: super::rel_to_root(
-            &paths.workspace_root,
-            &materialized.import_extraction_json,
-        ),
         layout_dir: super::rel_to_root(&paths.workspace_root, &materialized.layout_dir),
-        layout_kicad_pro: super::rel_to_root(&paths.workspace_root, &materialized.layout_kicad_pro),
-        layout_kicad_pcb: super::rel_to_root(&paths.workspace_root, &materialized.layout_kicad_pcb),
-        portable_kicad_project_zip: super::rel_to_root(
-            &paths.workspace_root,
-            &materialized.portable_kicad_project_zip,
-        ),
+        layout_kicad_pro: materialized
+            .layout_kicad_pro
+            .as_ref()
+            .map(|path| super::rel_to_root(&paths.workspace_root, path)),
+        layout_kicad_pcb: materialized
+            .layout_kicad_pcb
+            .as_ref()
+            .map(|path| super::rel_to_root(&paths.workspace_root, path)),
+        portable_kicad_project_zip: materialized
+            .portable_kicad_project_zip
+            .as_ref()
+            .map(|path| super::rel_to_root(&paths.workspace_root, path)),
+        registry_reused_entrypoints: outcome
+            .registry_reused_entrypoints
+            .iter()
+            .map(|path| super::rel_to_root(&paths.workspace_root, path))
+            .collect(),
+        sourcing_by_refdes: outcome.sourcing_by_refdes.clone(),
+        // Already destination-relative, which is what `board_dir` is the root of.
+        kept_existing_files: outcome.kept_existing_files.to_vec(),
+        registry_ambiguous_compatible_entrypoints_by_refdes: outcome
+            .registry_ambiguous_by_refdes
+            .clone(),
     };
 
     super::ImportReport {
@@ -50,11 +76,32 @@ pub(super) fn build_import_report(
 }
 
 pub(super) fn write_import_extraction_report(
-    board_dir: &Path,
+    out_path: &Path,
     payload: &super::ImportReport,
-) -> Result<PathBuf> {
-    let out_path = board_dir.join(".kicad.import.extraction.json");
-    fs::write(&out_path, serde_json::to_string_pretty(payload)?)
+) -> Result<()> {
+    let mut value = serde_json::to_value(payload)?;
+    sort_json_objects(&mut value);
+    std::fs::write(out_path, serde_json::to_string_pretty(&value)?)
         .with_context(|| format!("Failed to write {}", out_path.display()))?;
-    Ok(out_path)
+    Ok(())
+}
+
+fn sort_json_objects(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            let old = std::mem::take(object);
+            let mut entries = old.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            for (key, mut value) in entries {
+                sort_json_objects(&mut value);
+                object.insert(key, value);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                sort_json_objects(value);
+            }
+        }
+        _ => {}
+    }
 }

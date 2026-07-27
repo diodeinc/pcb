@@ -116,6 +116,9 @@ pub mod attrs {
     pub const PADS: &str = "pads";
     pub const DNP: &str = "dnp";
     pub const SKIP_BOM: &str = "skip_bom";
+    /// Importer provenance marker for a populated component whose source schematic did not
+    /// provide enough information to construct a complete `Part`.
+    pub const IMPORTED_BOM_SOURCE_INCOMPLETE: &str = "__imported_bom_source_incomplete";
     pub const SKIP_POS: &str = "skip_pos";
     pub const DATASHEET: &str = "datasheet";
     pub const DESCRIPTION: &str = "description";

@@ -109,7 +109,7 @@ enum Commands {
     /// Display workspace and board information
     Info(info::InfoArgs),
 
-    /// Import KiCad projects into a Zener board repository
+    /// Import a KiCad schematic or project into a Zener board repository
     Import(import::ImportArgs),
 
     /// Generate package documentation

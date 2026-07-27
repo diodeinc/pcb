@@ -9,53 +9,73 @@ use pcb_zen_core::lang::error::CategorizedDiagnostic;
 pub(super) fn validate(
     paths: &ImportPaths,
     selection: &ImportSelection,
-    _args: &ImportArgs,
 ) -> Result<ImportValidationRun> {
-    let kicad_pro_abs = paths.kicad_project_root.join(&selection.selected.kicad_pro);
-    let kicad_sch_abs = paths.kicad_project_root.join(&selection.selected.kicad_sch);
-    let kicad_pcb_abs = paths.kicad_project_root.join(&selection.selected.kicad_pcb);
-
-    if !kicad_pro_abs.exists() {
-        anyhow::bail!(
-            "Selected KiCad project file does not exist: {}",
-            kicad_pro_abs.display()
-        );
-    }
-
+    // KiCad CLI can update project-local preference files while running ERC/DRC. Validate a
+    // contained copy so import never changes its source repository.
+    let validation_sources = portable::stage_project_files(&selection.portable)?;
+    let validation_root = validation_sources.path();
+    let validation_sch = validation_root.join(&selection.selected.kicad_sch);
+    let source_sch = paths.kicad_project_root.join(&selection.selected.kicad_sch);
     let mut diagnostics = Diagnostics::default();
 
-    // ERC (schematic)
-    let erc_report = pcb_kicad::run_erc_report(&kicad_sch_abs, Some(&paths.kicad_project_root))
+    // ERC is the only source validation available for standalone schematics.
+    let erc_report = pcb_kicad::run_erc_report(&validation_sch, Some(validation_root))
         .context("KiCad ERC failed")?;
-    erc_report.add_to_diagnostics(&mut diagnostics, &kicad_sch_abs.to_string_lossy());
+    erc_report.add_to_diagnostics(&mut diagnostics, &source_sch.to_string_lossy());
     let (erc_errors, erc_warnings) = count_erc(&erc_report);
 
-    // DRC + schematic parity (layout)
-    let drc_output =
-        tempfile::NamedTempFile::new().context("Failed to create temporary file for DRC output")?;
-    let drc_report = pcb_kicad::run_drc(
-        &kicad_pcb_abs,
-        true,
-        Some(&paths.kicad_project_root),
-        drc_output.path(),
-    )
-    .context("KiCad DRC failed")?;
-    drc_report.add_to_diagnostics(&mut diagnostics, &kicad_pcb_abs.to_string_lossy());
-    drc_report
-        .add_unconnected_items_to_diagnostics(&mut diagnostics, &kicad_pcb_abs.to_string_lossy());
-    drc_report
-        .add_schematic_parity_to_diagnostics(&mut diagnostics, &kicad_pcb_abs.to_string_lossy());
+    let mut schematic_parity_ok = true;
+    let mut schematic_parity_violations = 0;
+    let mut schematic_parity_tolerated = 0;
+    let mut schematic_parity_blocking = 0;
+    let mut drc_errors = 0;
+    let mut drc_warnings = 0;
 
-    let (drc_errors, drc_warnings) = drc_report.violation_counts();
-    let schematic_parity_violations = drc_report.schematic_parity.len();
+    if selection.portable.source_kind == ImportSourceKind::Project {
+        let kicad_pro = selection
+            .selected
+            .kicad_pro
+            .as_ref()
+            .context("Project import is missing a selected .kicad_pro file")?;
+        let kicad_pcb = selection
+            .selected
+            .kicad_pcb
+            .as_ref()
+            .context("Project import is missing a selected .kicad_pcb file")?;
+        let validation_pro = validation_root.join(kicad_pro);
+        let validation_pcb = validation_root.join(kicad_pcb);
+        let source_pcb = paths.kicad_project_root.join(kicad_pcb);
+        if !validation_pro.exists() {
+            anyhow::bail!(
+                "Selected KiCad project file does not exist: {}",
+                paths.kicad_project_root.join(kicad_pro).display()
+            );
+        }
 
-    let pcb_text_for_parity =
-        std::fs::read_to_string(&kicad_pcb_abs).context("Failed to read KiCad PCB for parity")?;
-    let footprint_index = build_kicad_pcb_footprint_index(&pcb_text_for_parity).ok();
+        let drc_output = tempfile::NamedTempFile::new()
+            .context("Failed to create temporary file for DRC output")?;
+        let drc_report = pcb_kicad::run_drc(
+            &validation_pcb,
+            true,
+            Some(validation_root),
+            drc_output.path(),
+        )
+        .context("KiCad DRC failed")?;
+        drc_report.add_to_diagnostics(&mut diagnostics, &source_pcb.to_string_lossy());
+        drc_report
+            .add_unconnected_items_to_diagnostics(&mut diagnostics, &source_pcb.to_string_lossy());
+        drc_report
+            .add_schematic_parity_to_diagnostics(&mut diagnostics, &source_pcb.to_string_lossy());
 
-    let (schematic_parity_tolerated, schematic_parity_blocking) =
-        classify_schematic_parity(&drc_report.schematic_parity, footprint_index.as_ref());
-    let schematic_parity_ok = schematic_parity_blocking == 0;
+        (drc_errors, drc_warnings) = drc_report.violation_counts();
+        schematic_parity_violations = drc_report.schematic_parity.len();
+        let pcb_text_for_parity = std::fs::read_to_string(&validation_pcb)
+            .context("Failed to read KiCad PCB for parity")?;
+        let footprint_index = build_kicad_pcb_footprint_index(&pcb_text_for_parity).ok();
+        (schematic_parity_tolerated, schematic_parity_blocking) =
+            classify_schematic_parity(&drc_report.schematic_parity, footprint_index.as_ref());
+        schematic_parity_ok = schematic_parity_blocking == 0;
+    }
 
     let summary = ImportValidation {
         selected: selection.selected.clone(),
@@ -73,7 +93,6 @@ pub(super) fn validate(
     let diagnostics_for_file = Diagnostics {
         diagnostics: diagnostics.diagnostics.clone(),
     };
-
     // Render diagnostics for the user (this is intentionally noisy and useful).
     let mut diagnostics_for_render = diagnostics;
     crate::drc::render_diagnostics(&mut diagnostics_for_render, &[]);

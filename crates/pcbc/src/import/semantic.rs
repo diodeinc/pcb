@@ -5,6 +5,7 @@ pub(super) fn analyze(ir: &ImportIr) -> ImportSemanticAnalysis {
     ImportSemanticAnalysis {
         passives: detect_passives(ir),
         net_kinds: detect_net_kinds(ir),
+        registry_mpn_lookup: ImportRegistryMpnLookup::default(),
     }
 }
 
@@ -136,6 +137,9 @@ fn detect_passives(ir: &ImportIr) -> ImportPassiveAnalysis {
             (Some(ImportPassiveKind::Capacitor), Some(ImportPassiveConfidence::Low)) => {
                 summary.capacitor_low += 1;
             }
+            (None, _) if classification.pad_count.is_none() => {
+                summary.unknown_pad_count += 1;
+            }
             (None, _) if classification.pad_count != Some(2) => {
                 summary.non_two_pad += 1;
             }
@@ -248,9 +252,18 @@ mod net_kind_tests {
 fn classify_passive(component: &ImportComponentData) -> ImportPassiveClassification {
     let mut signals: BTreeSet<String> = BTreeSet::new();
 
-    let pad_count = component.layout.as_ref().map(|l| l.pads.len());
+    // An unresolved footprint carries no pad geometry, so its pad count is unknown rather than
+    // zero. Reporting it as a known count would claim import determined the component is not a
+    // two-pad passive, which it did not.
+    let pad_count = component
+        .layout
+        .as_ref()
+        .filter(|layout| layout.unresolved_footprint.is_none())
+        .map(|layout| layout.pads.len());
     if let Some(n) = pad_count {
         signals.insert(format!("pad_count:{n}"));
+    } else {
+        signals.insert("pad_count:unknown".to_string());
     }
 
     let ref_prefix = refdes_prefix(component.netlist.refdes.as_str());
@@ -921,6 +934,95 @@ fn is_number(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn layout_component(refdes: &str, unresolved: bool, pad_count: usize) -> ImportComponentData {
+        let pads = (1..=pad_count)
+            .map(|number| {
+                (
+                    KiCadPinNumber::from(number.to_string()),
+                    ImportLayoutPad {
+                        net_names: BTreeSet::new(),
+                        uuids: BTreeSet::new(),
+                    },
+                )
+            })
+            .collect();
+        ImportComponentData {
+            netlist: ImportNetlistComponent {
+                refdes: KiCadRefDes::from(refdes.to_string()),
+                value: None,
+                footprint: Some("Lib:Thing".to_string()),
+                sheetpath_names: Some("/".to_string()),
+                unit_pcb_paths: Vec::new(),
+            },
+            schematic: None,
+            layout: Some(ImportLayoutComponent {
+                fpid: Some("Lib:Thing".to_string()),
+                unresolved_footprint: unresolved
+                    .then_some(ImportUnresolvedFootprint { source_id: None }),
+                uuid: None,
+                layer: None,
+                at: None,
+                sheetname: None,
+                sheetfile: None,
+                attrs: Vec::new(),
+                properties: BTreeMap::new(),
+                pads,
+                footprint_geometry: if unresolved {
+                    ImportFootprintGeometry::Unresolved
+                } else {
+                    ImportFootprintGeometry::StandardLibrary
+                },
+            }),
+        }
+    }
+
+    /// An unresolved footprint has no pads, but that is a pad count import could not determine, not
+    /// a component it determined is not a two-pad passive. The two must be counted separately.
+    #[test]
+    fn unknown_pad_count_is_counted_separately_from_a_known_non_two_count() {
+        let mut components = BTreeMap::new();
+        for (index, component) in [
+            layout_component("U1", true, 0),
+            layout_component("U2", true, 0),
+            layout_component("U3", false, 3),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            components.insert(
+                KiCadUuidPathKey {
+                    sheetpath_tstamps: "/".to_string(),
+                    symbol_uuid: format!("u{index}"),
+                },
+                component,
+            );
+        }
+
+        let ir = ImportIr {
+            components,
+            nets: BTreeMap::new(),
+            schematic_lib_symbols: BTreeMap::new(),
+            schematic_power_symbol_decls: Vec::new(),
+            schematic_sheet_tree: ImportSheetTree {
+                root_schematic: std::path::PathBuf::from("root.kicad_sch"),
+                nodes: BTreeMap::new(),
+            },
+            hierarchy_plan: ImportHierarchyPlan::default(),
+            semantic: ImportSemanticAnalysis::default(),
+        };
+
+        let summary = detect_passives(&ir).summary;
+        assert_eq!(summary.unknown_pad_count, 2);
+        assert_eq!(summary.non_two_pad, 1);
+
+        let unresolved = &detect_passives(&ir).by_component[&KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "u0".to_string(),
+        }];
+        assert_eq!(unresolved.pad_count, None);
+        assert!(unresolved.signals.contains("pad_count:unknown"));
+    }
 
     #[test]
     fn test_parse_package() {

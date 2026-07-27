@@ -441,6 +441,18 @@ impl ModuleConverter {
                 .reference_designator
                 .as_deref()
                 .unwrap_or(instance.type_ref.module_name.as_ref());
+            if instance.boolean_attr(&[crate::attrs::IMPORTED_BOM_SOURCE_INCOMPLETE]) == Some(true)
+            {
+                diagnostics.push(Diagnostic::categorized(
+                    &instance.type_ref.source_path.to_string_lossy(),
+                    &format!(
+                        "Imported component '{name}' is included in the BOM, but its source schematic did not provide complete sourcing information. Replace the generated component or specify `part=Part(...)`."
+                    ),
+                    "bom.imported_incomplete",
+                    EvalSeverity::Warning,
+                ));
+                continue;
+            }
             let (kind, body) = match instance.string_attr(&[crate::attrs::BOM_MPN]) {
                 Some(_) => (
                     "bom.underspecified",

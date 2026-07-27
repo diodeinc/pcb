@@ -1,15 +1,18 @@
 use super::*;
 use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+
+/// Prefixes of the printed diagnostics paths. The paths are the only handle callers have on files
+/// written outside the output repository, so each literal is named once here rather than repeated at
+/// its use sites. `tests/import.rs` carries its own copies: `pcbc` is a `[[bin]]`-only crate, so the
+/// integration test cannot import these.
+const EXTRACTION_REPORT_PREFIX: &str = "Wrote import extraction report to ";
+const VALIDATION_DIAGNOSTICS_PREFIX: &str = "Wrote import validation diagnostics to ";
 
 pub(super) fn execute(args: ImportArgs) -> Result<()> {
     let ctx = ImportContext::new(args)?;
 
     let discovered = Discovered::run(ctx)?;
-    prepare_output(
-        &discovered.ctx.paths,
-        &discovered.selection,
-        &discovered.ctx.args,
-    )?;
     let validated = Validated::run(discovered)?;
     let extracted = Extracted::run(validated)?;
     let hierarchized = Hierarchized::run(extracted);
@@ -26,19 +29,145 @@ fn generate_and_report(materialized: Materialized) -> Result<()> {
         validation,
         ir,
         board,
+        mut writer,
     } = materialized;
 
-    generate::generate(&board, &selection.board_name, &ir)?;
-    eprintln!("Wrote imported board to {}", board.board_zen.display());
+    let mut generation = generate::generate(&board, &selection.board_name, &ir, true, &mut writer)?;
 
-    let report = report::build_import_report(&ctx.paths, &selection, &validation, ir, &board);
-    let report_path = report::write_import_extraction_report(&board.board_dir, &report)?;
-    eprintln!(
-        "Wrote import extraction report to {}",
-        report_path.display()
+    let mut kept_existing = writer.kept_paths();
+    let mut validated_zen = generation.registry_reused_entrypoints.clone();
+    validated_zen.extend(kept_zen(&kept_existing));
+    validated_zen.sort();
+    validated_zen.dedup();
+    // Printed before validation rather than after `commit`: staged-board validation can reject a kept
+    // file, and the user needs to know a file was kept — and that `--force` is the remedy — on the
+    // failure path too, not only when the import lands.
+    if let Some(warning) = format_kept_existing_warning(&kept_existing) {
+        eprintln!("{warning}");
+    }
+    if let Err(error) = reuse_validate::validate_reused_zen(
+        &board,
+        &ir,
+        &validated_zen,
+        &generation.registry_reused_entrypoints,
+        &generation.expected_pins_by_refdes,
+        &generation.instance_name_by_refdes,
+    ) {
+        if generation.registry_reused_entrypoints.is_empty() {
+            return Err(error);
+        }
+        log::debug!("Staged-board validation failed with cached registry substitution: {error:#}");
+        eprintln!(
+            "Staged-board validation failed; retrying the import without cached registry substitutions"
+        );
+        // The retry disables reuse altogether, so it rediscovers no ambiguity — but the components
+        // the first pass found ambiguous were ambiguous all the same and must stay in the report.
+        // Unlike the kept-file list below, this one is not re-derived by the retry.
+        let first_pass_ambiguity = std::mem::take(&mut generation.registry_ambiguous_by_refdes);
+        writer.discard_generated(&board.board_zen)?;
+        generation = generate::generate(&board, &selection.board_name, &ir, false, &mut writer)?;
+        for (refdes, count) in first_pass_ambiguity {
+            generation
+                .registry_ambiguous_by_refdes
+                .entry(refdes)
+                .or_insert(count);
+        }
+        // Authoritative: the retry regenerates every package and decides its collisions again, and
+        // `discard_generated` dropped the first pass's keeps within that scope, so this is the retry's
+        // own answer rather than the union of both passes.
+        let retried_kept = writer.kept_paths();
+        if retried_kept != kept_existing {
+            // The list printed before validation described the first pass. Correct it rather than
+            // leaving a stale claim that edits are not reflected.
+            match format_kept_existing_warning(&retried_kept) {
+                Some(warning) => eprintln!("After the retry, the kept file(s) are:\n{warning}"),
+                None => {
+                    eprintln!("The retry regenerated every file that was previously kept")
+                }
+            }
+        }
+        kept_existing = retried_kept;
+        reuse_validate::validate_reused_zen(
+            &board,
+            &ir,
+            &kept_zen(&kept_existing),
+            &[],
+            &generation.expected_pins_by_refdes,
+            &generation.instance_name_by_refdes,
+        )?;
+    }
+
+    let report = report::build_import_report(
+        &ctx.paths,
+        &selection,
+        &validation,
+        ir,
+        &board,
+        &report::ReportGenerationOutcome {
+            registry_reused_entrypoints: &generation.registry_reused_entrypoints,
+            sourcing_by_refdes: &generation.sourcing_by_refdes,
+            kept_existing_files: &kept_existing,
+            registry_ambiguous_by_refdes: &generation.registry_ambiguous_by_refdes,
+        },
     );
+    // Non-fatal for the same reason as the validation diagnostics: the report describes the
+    // conversion rather than the design, and the conversion already succeeded, so an unwritable temp
+    // filesystem must not fail an import that has written nothing to the destination yet.
+    if let Err(error) =
+        report::write_import_extraction_report(&board.import_extraction_json, &report)
+    {
+        eprintln!("Failed to write import extraction report (continuing): {error:#}");
+    }
 
+    // Printed before `commit`: both diagnostics files live in a kept temp directory that nothing
+    // cleans up, so the printed path is their only handle — and a failed commit must not swallow it.
+    // Each path is printed only if its write landed, so a warned-about failure is never followed by a
+    // path that does not exist.
+    for (prefix, path) in [
+        (EXTRACTION_REPORT_PREFIX, &board.import_extraction_json),
+        (
+            VALIDATION_DIAGNOSTICS_PREFIX,
+            &board.validation_diagnostics_json,
+        ),
+    ] {
+        if let Some(line) = format_diagnostics_path(prefix, path) {
+            eprintln!("{line}");
+        }
+    }
+
+    eprintln!("Wrote imported board to {}", board.board_zen.display());
     Ok(())
+}
+
+/// The line announcing a diagnostics file, or `None` when the file is not there.
+///
+/// Both diagnostics writes are non-fatal, so the announcement is conditional on the file existing:
+/// the printed path is the user's only handle on it, and a path to a file that was never written is
+/// worse than no path at all.
+fn format_diagnostics_path(prefix: &str, path: &Path) -> Option<String> {
+    path.is_file()
+        .then(|| format!("{prefix}{}", path.display()))
+}
+
+/// The `.zen` subset of the kept paths, which is what reuse validation reasons about: an entrypoint
+/// the staged build will actually load.
+fn kept_zen(kept_existing: &[PathBuf]) -> Vec<PathBuf> {
+    kept_existing
+        .iter()
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("zen"))
+        .cloned()
+        .collect()
+}
+
+fn format_kept_existing_warning(kept_existing: &[PathBuf]) -> Option<String> {
+    if kept_existing.is_empty() {
+        return None;
+    }
+    let capped = &kept_existing[..kept_existing.len().min(16)];
+    Some(format!(
+        "Kept existing file(s) and discarded the newly generated version: {}\nEdits to the KiCad source are not reflected in those files; re-import with --force to overwrite them",
+        output::join_paths(capped)
+    ))
 }
 
 struct ImportContext {
@@ -60,62 +189,9 @@ struct Discovered {
 
 impl Discovered {
     fn run(ctx: ImportContext) -> Result<Self> {
-        let selection = discover::discover_and_select(&ctx.paths, &ctx.args)?;
+        let selection = discover::discover_and_select(&ctx.paths)?;
         Ok(Self { ctx, selection })
     }
-}
-
-fn prepare_output(
-    paths: &ImportPaths,
-    selection: &ImportSelection,
-    args: &ImportArgs,
-) -> Result<()> {
-    let board_repo = &paths.workspace_root;
-    let pcb_toml = board_repo.join("pcb.toml");
-    let existing_board_repo = pcb_toml.exists();
-
-    if existing_board_repo && !args.force {
-        anyhow::bail!(
-            "Board repository already exists: {}. Use --force to overwrite generated files.",
-            board_repo.display()
-        );
-    }
-
-    if args.force {
-        remove_generated_output(board_repo, &selection.board_name)?;
-    }
-
-    if !existing_board_repo {
-        crate::new::init_board_repo(board_repo, &selection.board_name, "")?;
-    }
-
-    let portable_kicad_project_zip =
-        board_repo.join(format!("{}.kicad.archive.zip", selection.board_name));
-    portable::write_portable_zip(&selection.portable, &portable_kicad_project_zip)
-        .context("Failed to write portable KiCad project archive")?;
-    Ok(())
-}
-
-fn remove_generated_output(board_dir: &std::path::Path, board_name: &str) -> Result<()> {
-    for path in [
-        board_dir.join(format!("{board_name}.zen")),
-        board_dir.join("modules"),
-        board_dir.join("components"),
-        board_dir.join("layout"),
-        board_dir.join(".kicad.import.extraction.json"),
-        board_dir.join(".kicad.validation.diagnostics.json"),
-        board_dir.join(format!("{board_name}.kicad.archive.zip")),
-    ] {
-        if path.is_dir() {
-            std::fs::remove_dir_all(&path)
-                .with_context(|| format!("Failed to remove {}", path.display()))?;
-        } else if path.exists() {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("Failed to remove {}", path.display()))?;
-        }
-    }
-
-    Ok(())
 }
 
 struct Validated {
@@ -127,7 +203,7 @@ struct Validated {
 impl Validated {
     fn run(discovered: Discovered) -> Result<Self> {
         let Discovered { ctx, selection } = discovered;
-        let validation = validate::validate(&ctx.paths, &selection, &ctx.args)?;
+        let validation = validate::validate(&ctx.paths, &selection)?;
         Ok(Self {
             ctx,
             selection,
@@ -206,13 +282,19 @@ impl Analyzed {
             ctx,
             selection,
             validation,
-            ir,
+            mut ir,
         } = hierarchized;
 
-        let semantic = semantic::analyze(&ir);
+        registry_lookup::inherit_embedded_symbol_properties(
+            &mut ir.components,
+            &ir.schematic_lib_symbols,
+        );
+        let mut semantic = semantic::analyze(&ir);
+        semantic.registry_mpn_lookup =
+            registry_lookup::lookup_cached_registry_mpns(&ir.components, &ctx.paths.workspace_root);
 
         eprintln!(
-            "Passive detection (2-pad only): R={} (h:{} m:{} l:{}), C={} (h:{} m:{} l:{}), unknown:{}, non-2-pad:{}",
+            "Passive detection (2-pad only): R={} (h:{} m:{} l:{}), C={} (h:{} m:{} l:{}), unknown:{}, known-non-2-pad:{}, pad-count-unknown:{}",
             semantic.passives.summary.resistor_high
                 + semantic.passives.summary.resistor_medium
                 + semantic.passives.summary.resistor_low,
@@ -227,7 +309,25 @@ impl Analyzed {
             semantic.passives.summary.capacitor_low,
             semantic.passives.summary.unknown,
             semantic.passives.summary.non_two_pad,
+            semantic.passives.summary.unknown_pad_count,
         );
+
+        if let Some(error) = &semantic.registry_mpn_lookup.lookup_error {
+            eprintln!("Registry exact-MPN lookup skipped: {error}");
+        } else if semantic.registry_mpn_lookup.cached_index_available {
+            let candidate_count = semantic
+                .registry_mpn_lookup
+                .candidates_by_mpn
+                .values()
+                .map(Vec::len)
+                .sum::<usize>();
+            eprintln!(
+                "Registry exact-MPN lookup: {} queried, {} matched, {} candidate module(s)",
+                semantic.registry_mpn_lookup.queried_mpns.len(),
+                semantic.registry_mpn_lookup.candidates_by_mpn.len(),
+                candidate_count,
+            );
+        }
 
         let ir = ImportIr { semantic, ..ir };
 
@@ -246,6 +346,7 @@ struct Materialized {
     validation: ImportValidationRun,
     ir: ImportIr,
     board: MaterializedBoard,
+    writer: output::ImportWriter,
 }
 
 impl Materialized {
@@ -257,7 +358,35 @@ impl Materialized {
             ir,
         } = analyzed;
 
-        let board = materialize::materialize_board(&ctx.paths, &selection, &validation)?;
+        let mut writer = output::ImportWriter::new(
+            &ctx.paths.workspace_root,
+            &selection.board_name,
+            ctx.args.force,
+        )?;
+        // The archive is a copy of the input the user already has, so it is opt-in rather than part
+        // of every import's output.
+        let portable_kicad_project_zip = if ctx.args.archive_sources {
+            let archive = writer
+                .root()
+                .join(format!("{}.kicad.archive.zip", selection.board_name));
+            let bytes = portable::build_portable_zip(&selection.portable)
+                .context("Failed to build portable KiCad project archive")?;
+            // Through the writer, so the archive obeys the same no-overwrite rule as the sources: an
+            // existing archive is kept unless `--force`, and the write lands by rename.
+            writer
+                .write(&archive, &bytes)
+                .context("Failed to write portable KiCad project archive")?;
+            Some(archive)
+        } else {
+            None
+        };
+        let board = materialize::materialize_board(
+            &ctx.paths,
+            &selection,
+            &validation,
+            portable_kicad_project_zip,
+            &mut writer,
+        )?;
 
         Ok(Self {
             ctx,
@@ -265,6 +394,7 @@ impl Materialized {
             validation,
             ir,
             board,
+            writer,
         })
     }
 }
@@ -272,83 +402,35 @@ impl Materialized {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
-    fn force_import_preserves_existing_board_repo_metadata() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let board_repo = temp.path().join("board");
-        std::fs::create_dir(&board_repo)?;
+    fn no_warning_without_kept_files() {
+        assert!(format_kept_existing_warning(&[]).is_none());
+    }
 
-        let pcb_toml = board_repo.join("pcb.toml");
-        let readme = board_repo.join("README.md");
-        let gitignore = board_repo.join(".gitignore");
-        let board_zen = board_repo.join("ImportedBoard.zen");
-        let modules = board_repo.join("modules");
+    /// A diagnostics write that failed leaves nothing at the path, and the import must then say
+    /// nothing about it rather than print a path the user cannot open.
+    #[test]
+    fn a_missing_diagnostics_file_is_not_announced() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let missing = temp.path().join("missing.json");
+        assert_eq!(format_diagnostics_path("Wrote ", &missing), None);
 
-        let pcb_toml_contents = r#"[workspace]
-repository = "github.com/example/custom-board"
-endpoint = "https://example.invalid"
+        let written = temp.path().join("written.json");
+        std::fs::write(&written, "{}").expect("write");
+        assert_eq!(
+            format_diagnostics_path("Wrote ", &written),
+            Some(format!("Wrote {}", written.display()))
+        );
+    }
 
-[board]
-name = "ImportedBoard"
-path = "ImportedBoard.zen"
-description = "Custom board description."
-
-[dependencies]
-foo = { path = "modules/foo" }
-"#;
-        let readme_contents = "# Custom README\n";
-        let gitignore_contents = "custom-ignore\n";
-
-        std::fs::write(&pcb_toml, pcb_toml_contents)?;
-        std::fs::write(&readme, readme_contents)?;
-        std::fs::write(&gitignore, gitignore_contents)?;
-        std::fs::write(&board_zen, "old generated board\n")?;
-        std::fs::create_dir(&modules)?;
-        std::fs::write(modules.join("old.zen"), "old generated module\n")?;
-
-        let paths = ImportPaths {
-            workspace_root: board_repo.clone(),
-            kicad_project_root: temp.path().to_path_buf(),
-            kicad_pro_abs: temp.path().join("ImportedBoard.kicad_pro"),
-        };
-        let selection = ImportSelection {
-            board_name: "ImportedBoard".to_string(),
-            board_name_source: BoardNameSource::KicadProArgument,
-            files: KicadDiscoveredFiles::default(),
-            selected: SelectedKicadFiles {
-                kicad_pro: PathBuf::from("ImportedBoard.kicad_pro"),
-                kicad_sch: PathBuf::from("ImportedBoard.kicad_sch"),
-                kicad_pcb: PathBuf::from("ImportedBoard.kicad_pcb"),
-            },
-            portable: PortableKicadProject {
-                project_dir: temp.path().to_path_buf(),
-                project_name: "ImportedBoard".to_string(),
-                kicad_pro_rel: PathBuf::from("ImportedBoard.kicad_pro"),
-                root_schematic_rel: PathBuf::from("ImportedBoard.kicad_sch"),
-                primary_kicad_pcb_rel: PathBuf::from("ImportedBoard.kicad_pcb"),
-                schematic_files_rel: Vec::new(),
-                files_to_bundle_rel: Vec::new(),
-                extra_files_to_bundle: Vec::new(),
-                manifest_json: "{}".to_string(),
-            },
-        };
-        let args = ImportArgs {
-            kicad_pro: paths.kicad_pro_abs.clone(),
-            output_dir: board_repo.clone(),
-            force: true,
-        };
-
-        prepare_output(&paths, &selection, &args)?;
-
-        assert_eq!(std::fs::read_to_string(&pcb_toml)?, pcb_toml_contents);
-        assert_eq!(std::fs::read_to_string(&readme)?, readme_contents);
-        assert_eq!(std::fs::read_to_string(&gitignore)?, gitignore_contents);
-        assert!(!board_zen.exists());
-        assert!(!modules.exists());
-        assert!(board_repo.join("ImportedBoard.kicad.archive.zip").is_file());
-
-        Ok(())
+    #[test]
+    fn only_zen_paths_reach_reuse_validation() {
+        let kept = [
+            PathBuf::from("components/R/R.kicad_sym"),
+            PathBuf::from("components/R/R.zen"),
+            PathBuf::from("pcb.toml"),
+        ];
+        assert_eq!(kept_zen(&kept), vec![PathBuf::from("components/R/R.zen")]);
     }
 }

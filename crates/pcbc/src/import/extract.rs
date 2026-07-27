@@ -13,13 +13,20 @@ pub(super) fn extract_ir(
     selection: &ImportSelection,
     validation: &ImportValidationRun,
 ) -> Result<ImportIr> {
-    let pcb_refdes_to_anchor_key = extract_kicad_pcb_refdes_to_anchor_key(
-        &paths.kicad_project_root,
-        &validation.summary.selected,
-    )?;
+    let pcb_refdes_to_anchor_key = if selection.portable.source_kind == ImportSourceKind::Project {
+        extract_kicad_pcb_refdes_to_anchor_key(
+            &paths.kicad_project_root,
+            &validation.summary.selected,
+        )?
+    } else {
+        BTreeMap::new()
+    };
 
+    // KiCad netlist export can update project-local preference files. Run it against the same
+    // contained source copy used for validation, then parse the original source files read-only.
+    let netlist_sources = portable::stage_project_files(&selection.portable)?;
     let mut netlist = extract_kicad_netlist(
-        &paths.kicad_project_root,
+        netlist_sources.path(),
         &validation.summary.selected,
         &pcb_refdes_to_anchor_key,
     )?;
@@ -38,11 +45,15 @@ pub(super) fn extract_ir(
         &schematic.sheet_symbols_by_uuid,
     );
 
-    extract_kicad_layout_data(
-        &paths.kicad_project_root,
-        &validation.summary.selected,
-        &mut netlist.components,
-    )?;
+    if selection.portable.source_kind == ImportSourceKind::Project {
+        extract_kicad_layout_data(
+            &paths.kicad_project_root,
+            &validation.summary.selected,
+            &mut netlist.components,
+        )?;
+    } else {
+        resolve_standalone_footprints(selection, &mut netlist.components)?;
+    }
 
     Ok(ImportIr {
         components: netlist.components,
@@ -87,7 +98,11 @@ fn extract_kicad_pcb_refdes_to_anchor_key(
     kicad_project_root: &Path,
     selected: &SelectedKicadFiles,
 ) -> Result<BTreeMap<KiCadRefDes, KiCadUuidPathKey>> {
-    let pcb_abs = kicad_project_root.join(&selected.kicad_pcb);
+    let kicad_pcb = selected
+        .kicad_pcb
+        .as_ref()
+        .context("Project import is missing a selected .kicad_pcb file")?;
+    let pcb_abs = kicad_project_root.join(kicad_pcb);
     if !pcb_abs.exists() {
         anyhow::bail!("PCB file not found: {}", pcb_abs.display());
     }
@@ -488,7 +503,11 @@ fn extract_kicad_layout_data(
     selected: &SelectedKicadFiles,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
 ) -> Result<()> {
-    let pcb_abs = kicad_project_root.join(&selected.kicad_pcb);
+    let kicad_pcb = selected
+        .kicad_pcb
+        .as_ref()
+        .context("Project import is missing a selected .kicad_pcb file")?;
+    let pcb_abs = kicad_project_root.join(kicad_pcb);
     if !pcb_abs.exists() {
         anyhow::bail!("PCB file not found: {}", pcb_abs.display());
     }
@@ -542,6 +561,7 @@ fn extract_kicad_layout_data(
 
         let layout = ImportLayoutComponent {
             fpid: fp.fpid,
+            unresolved_footprint: None,
             uuid: fp.uuid,
             layer: fp.layer,
             at: fp.at.map(|at| ImportLayoutAt {
@@ -554,7 +574,7 @@ fn extract_kicad_layout_data(
             attrs: fp.attrs,
             properties: fp.properties,
             pads,
-            footprint_sexpr: sexpr,
+            footprint_geometry: ImportFootprintGeometry::BoardInstance(sexpr),
         };
 
         if component.layout.replace(layout).is_some() {
@@ -566,6 +586,361 @@ fn extract_kicad_layout_data(
     }
 
     Ok(())
+}
+
+fn resolve_standalone_footprints(
+    selection: &ImportSelection,
+    components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+) -> Result<()> {
+    let stdlib_root = pcb_zen_core::stdlib::native::discover_source()
+        .context("Failed to locate the Zener standard library for KiCad footprint resolution")?;
+    let schematic_path = selection
+        .portable
+        .project_dir
+        .join(&selection.portable.root_schematic_rel);
+    let kicad_major = schematic_generator_major(&schematic_path);
+    let cache_dir = dirs::home_dir().map(|home| home.join(".pcb/cache"));
+    let cached_roots = cache_dir
+        .as_deref()
+        .zip(kicad_major)
+        .map(|(cache, major)| cached_kicad_footprint_roots(cache, major))
+        .unwrap_or_default();
+    let mut unresolved: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Keyed by fpid and holding the *outcome*, so a footprint no library provides is searched once
+    // rather than once per component that references it. On a design whose libraries are not installed
+    // that is the common path — every component misses — and each miss walked all four locations again.
+    type ResolvedFootprint = (
+        BTreeMap<KiCadPinNumber, ImportLayoutPad>,
+        ImportFootprintGeometry,
+    );
+    let mut resolved_by_fpid: BTreeMap<String, Option<ResolvedFootprint>> = BTreeMap::new();
+
+    for component in components.values_mut() {
+        let Some(fpid) = component
+            .netlist
+            .footprint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "~")
+        else {
+            unresolved
+                .entry(NO_FOOTPRINT_KEY.to_string())
+                .or_default()
+                .push(component.netlist.refdes.as_str().to_string());
+            component.layout = Some(unresolved_layout_component(None));
+            continue;
+        };
+
+        // Many components share one footprint, so resolve, read, and parse each fpid once.
+        let resolved = match resolved_by_fpid.get(fpid) {
+            // Already known to resolve nowhere: record the component and move on without searching.
+            Some(None) => {
+                unresolved
+                    .entry(fpid.to_string())
+                    .or_default()
+                    .push(component.netlist.refdes.as_str().to_string());
+                component.layout = Some(unresolved_layout_component(Some(fpid)));
+                continue;
+            }
+            Some(Some(resolved)) => resolved,
+            None => {
+                // Ordered by precedence: the project's own libraries, then the bundled stdlib
+                // subset, then the version-matched KiCad cache. `copy_to_component` says whether the
+                // geometry must be copied into the generated package; the stdlib is a library
+                // reference the built board already resolves.
+                let lookup = selection
+                    .portable
+                    .resolved_project_footprints
+                    .get(fpid)
+                    .map(|path| (path.clone(), true))
+                    .or_else(|| {
+                        resolve_footprint_in_root(&stdlib_root.join("kicad-footprints"), fpid)
+                            .map(|path| (path, false))
+                    })
+                    .or_else(|| {
+                        resolve_footprint_from_roots(&cached_roots, fpid).map(|path| (path, true))
+                    });
+                let Some((path, copy_to_component)) = lookup else {
+                    resolved_by_fpid.insert(fpid.to_string(), None);
+                    unresolved
+                        .entry(fpid.to_string())
+                        .or_default()
+                        .push(component.netlist.refdes.as_str().to_string());
+                    component.layout = Some(unresolved_layout_component(Some(fpid)));
+                    continue;
+                };
+                let footprint_text = fs::read_to_string(&path)
+                    .with_context(|| format!("Failed to read footprint {}", path.display()))?;
+                let pads = parse_standalone_footprint_pads(&footprint_text)
+                    .with_context(|| format!("Failed to parse footprint {fpid}"))?;
+                let geometry = if copy_to_component {
+                    ImportFootprintGeometry::LibraryFile(footprint_text)
+                } else {
+                    ImportFootprintGeometry::StandardLibrary
+                };
+                resolved_by_fpid
+                    .entry(fpid.to_string())
+                    .or_insert(Some((pads, geometry)))
+                    .as_ref()
+                    .expect("just inserted a resolved footprint")
+            }
+        };
+
+        component.layout = Some(ImportLayoutComponent {
+            fpid: Some(fpid.to_string()),
+            unresolved_footprint: None,
+            uuid: None,
+            layer: None,
+            at: None,
+            sheetname: None,
+            sheetfile: None,
+            attrs: Vec::new(),
+            properties: BTreeMap::new(),
+            pads: resolved.0.clone(),
+            footprint_geometry: resolved.1.clone(),
+        });
+    }
+
+    if !unresolved.is_empty() {
+        eprintln!(
+            "{}",
+            unresolved_footprint_warning(
+                &unresolved,
+                components.len(),
+                &selection.portable.project_dir,
+                kicad_major,
+            )
+        );
+    }
+
+    Ok(())
+}
+
+/// A design can reference many broken libraries; list enough to identify the cause without
+/// flooding stderr.
+const UNRESOLVED_LIBRARY_LIST_LIMIT: usize = 5;
+
+/// Stands in for a component whose schematic names no footprint at all.
+///
+/// Kept out of the library grouping in [`unresolved_footprint_warning`]: it is not a library nickname,
+/// and treating it as one told the user that a library called `<missing footprint>` was not registered
+/// — pointing at `fp-lib-table` when the field is simply empty or `~` in KiCad.
+const NO_FOOTPRINT_KEY: &str = "<missing footprint>";
+
+/// Builds the unresolved-footprint warning.
+///
+/// The warning has to be self-diagnosing: which library nicknames failed, where import looked for
+/// them, and whether *every* referenced footprint failed (a library that is not registered where
+/// import looks) or only some did (a per-footprint gap in the design). Import continues either
+/// way, because the structural conversion succeeded and is the valuable part.
+fn unresolved_footprint_warning(
+    unresolved: &BTreeMap<String, Vec<String>>,
+    total_components: usize,
+    project_dir: &Path,
+    kicad_major: Option<u64>,
+) -> String {
+    let footprint_count = unresolved.len();
+    let component_count = unresolved.values().map(Vec::len).sum::<usize>();
+    let without_footprint = unresolved.get(NO_FOOTPRINT_KEY).map_or(0, Vec::len);
+
+    // Group by library nickname: the nickname is what the user registers in KiCad, so it is what
+    // makes the warning actionable. Components naming no footprint have no nickname to register and
+    // are reported separately.
+    let mut by_library: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for (fpid, refdeses) in unresolved
+        .iter()
+        .filter(|(fpid, _)| *fpid != NO_FOOTPRINT_KEY)
+    {
+        let nickname = fpid.split_once(':').map_or(fpid.as_str(), |(name, _)| name);
+        let entry = by_library.entry(nickname).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += refdeses.len();
+    }
+    let mut ranked = by_library.into_iter().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| right.1.1.cmp(&left.1.1).then_with(|| left.0.cmp(right.0)));
+
+    let diagnosis = if ranked.is_empty() {
+        // Nothing was looked up at all: every unresolved component simply names no footprint.
+        "no component names a footprint, so there is no library to register — set the Footprint field \
+         in KiCad"
+            .to_string()
+    } else if component_count >= total_components && ranked.len() == 1 {
+        format!(
+            "every component's footprint is unresolved and they all come from library '{}', so the library is most likely not registered where import looks rather than the design being unusual",
+            ranked[0].0
+        )
+    } else if component_count >= total_components {
+        "every component's footprint is unresolved, so these libraries are most likely not registered where import looks rather than the design being unusual".to_string()
+    } else {
+        format!(
+            "{} of {total_components} component(s) resolved, so this is a per-footprint gap rather than a library that is missing entirely",
+            total_components - component_count
+        )
+    };
+
+    let cached_library = match kicad_major {
+        Some(major) => format!("the cached kicad-footprints package for KiCad {major}"),
+        None => {
+            "the cached kicad-footprints package matching the schematic's KiCad version".to_string()
+        }
+    };
+
+    let mut listed = ranked
+        .iter()
+        .take(UNRESOLVED_LIBRARY_LIST_LIMIT)
+        .map(|(nickname, (footprints, components))| {
+            format!("{nickname} ({footprints} footprint(s), {components} component(s))")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    if let Some(remaining) = ranked.len().checked_sub(UNRESOLVED_LIBRARY_LIST_LIMIT)
+        && remaining > 0
+    {
+        listed.push_str(&format!(", and {remaining} more library nickname(s)"));
+    }
+
+    let no_footprint_note = if without_footprint > 0 {
+        format!(
+            "\n  {without_footprint} component(s) name no footprint at all, which no library can supply; set the Footprint field in KiCad."
+        )
+    } else {
+        String::new()
+    };
+
+    // With no library in play there is nothing to register, so the list and the search locations would
+    // only mislead.
+    if ranked.is_empty() {
+        return format!(
+            "Warning: {component_count} component(s) have {footprint_count} unresolved footprint definition(s); {diagnosis}\n  \
+             The board still imports with connectivity intact but is not layout-ready."
+        );
+    }
+
+    format!(
+        "Warning: {component_count} component(s) have {footprint_count} unresolved footprint definition(s); {diagnosis}\n  \
+         Unresolved libraries: {listed}\n  \
+         Looked in: the project fp-lib-table ({}), the global KiCad fp-lib-table (KICAD_CONFIG_HOME or the platform KiCad configuration directory), the bundled KiCad footprint subset, and {cached_library}\n  \
+         The board still imports with connectivity intact but is not layout-ready; generated Zener retains the available source footprint IDs. Register the missing library in KiCad or in the project fp-lib-table, then re-import with --force to complete the footprints.{no_footprint_note}",
+        project_dir.join("fp-lib-table").display()
+    )
+}
+
+fn unresolved_layout_component(fpid: Option<&str>) -> ImportLayoutComponent {
+    ImportLayoutComponent {
+        fpid: fpid.map(str::to_string),
+        unresolved_footprint: Some(ImportUnresolvedFootprint {
+            source_id: fpid.map(str::to_string),
+        }),
+        uuid: None,
+        layer: None,
+        at: None,
+        sheetname: None,
+        sheetfile: None,
+        attrs: Vec::new(),
+        properties: BTreeMap::new(),
+        pads: BTreeMap::new(),
+        footprint_geometry: ImportFootprintGeometry::Unresolved,
+    }
+}
+
+fn schematic_generator_major(path: &Path) -> Option<u64> {
+    let text = fs::read_to_string(path).ok()?;
+    let root = pcb_sexpr::parse(&text).ok()?;
+    let items = root.as_list()?;
+    let version = items.iter().find_map(|item| {
+        let list = item.as_list()?;
+        (list.first().and_then(Sexpr::as_sym) == Some("generator_version"))
+            .then(|| {
+                list.get(1)
+                    .and_then(|value| value.as_str().or_else(|| value.as_sym()))
+            })
+            .flatten()
+    })?;
+    version.split('.').next()?.parse().ok()
+}
+
+fn cached_kicad_footprint_roots(cache_dir: &Path, major: u64) -> Vec<PathBuf> {
+    let package_root = cache_dir.join("gitlab.com/kicad/libraries/kicad-footprints");
+    let Ok(entries) = fs::read_dir(package_root) else {
+        return Vec::new();
+    };
+    let mut versions = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_dir() || file_type.is_symlink() {
+                return None;
+            }
+            let version = semver::Version::parse(entry.file_name().to_str()?).ok()?;
+            if version.major != major {
+                return None;
+            }
+            Some((version, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    versions.sort_by(|(left, _), (right, _)| right.cmp(left));
+    versions.into_iter().map(|(_, path)| path).collect()
+}
+
+fn resolve_footprint_from_roots(roots: &[PathBuf], fpid: &str) -> Option<PathBuf> {
+    roots
+        .iter()
+        .find_map(|root| resolve_footprint_in_root(root, fpid))
+}
+
+fn resolve_footprint_in_root(root: &Path, fpid: &str) -> Option<PathBuf> {
+    let (library, footprint) = fpid.split_once(':')?;
+    if library.is_empty()
+        || footprint.is_empty()
+        || footprint.contains(':')
+        || library.contains(['/', '\\'])
+        || footprint.contains(['/', '\\'])
+    {
+        return None;
+    }
+    let library_path = root.join(format!("{library}.pretty"));
+    let library_metadata = fs::symlink_metadata(&library_path).ok()?;
+    if !library_metadata.is_dir() || library_metadata.file_type().is_symlink() {
+        return None;
+    }
+    let path = library_path.join(format!("{footprint}.kicad_mod"));
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    let canonical_root = root.canonicalize().ok()?;
+    let canonical_path = path.canonicalize().ok()?;
+    canonical_path
+        .starts_with(&canonical_root)
+        .then_some(canonical_path)
+}
+
+fn parse_standalone_footprint_pads(
+    footprint_text: &str,
+) -> Result<BTreeMap<KiCadPinNumber, ImportLayoutPad>> {
+    let root = pcb_sexpr::parse(footprint_text)
+        .context("Failed to parse .kicad_mod as an S-expression")?;
+    let mut pads = BTreeMap::new();
+    for pad in root.find_all_lists("pad") {
+        let Some(number) = pad
+            .get(1)
+            .and_then(|value| value.as_str().or_else(|| value.as_sym()))
+        else {
+            continue;
+        };
+        if number.is_empty() {
+            continue;
+        }
+        pads.entry(KiCadPinNumber::from(number.to_string()))
+            .or_insert_with(|| ImportLayoutPad {
+                net_names: BTreeSet::new(),
+                uuids: BTreeSet::new(),
+            });
+    }
+    // Mechanical and documentation footprints such as logos and mounting holes can legitimately
+    // have no numbered pads. Keep their geometry and represent them as pinless components rather
+    // than blocking structural schematic import.
+    Ok(pads)
 }
 
 fn extract_kicad_netlist(
@@ -632,6 +1007,8 @@ fn parse_kicad_sexpr_netlist_components(
     let mut by_key: BTreeMap<KiCadUuidPathKey, ImportComponentData> = BTreeMap::new();
     let mut refdes_to_key: BTreeMap<KiCadRefDes, KiCadUuidPathKey> = BTreeMap::new();
     let mut unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
+    let mut duplicate_refdeses: BTreeMap<KiCadRefDes, BTreeSet<KiCadUuidPathKey>> = BTreeMap::new();
+    let mut duplicate_paths: BTreeMap<KiCadUuidPathKey, BTreeSet<KiCadRefDes>> = BTreeMap::new();
 
     for node in components.iter().skip(1) {
         let Some(comp) = node.as_list() else {
@@ -688,29 +1065,55 @@ fn parse_kicad_sexpr_netlist_components(
             unit_pcb_paths: unit_keys.clone(),
         };
 
-        if refdes_to_key
-            .insert(refdes.clone(), anchor_key.clone())
-            .is_some()
-        {
-            anyhow::bail!("Duplicate refdes in netlist: {}", refdes.as_str());
+        if let Some(existing_key) = refdes_to_key.get(&refdes) {
+            let paths = duplicate_refdeses.entry(refdes.clone()).or_default();
+            paths.insert(existing_key.clone());
+            paths.insert(anchor_key.clone());
+        } else {
+            refdes_to_key.insert(refdes.clone(), anchor_key.clone());
         }
 
-        if by_key
-            .insert(
+        if let Some(existing_component) = by_key.get(&anchor_key) {
+            let refdeses = duplicate_paths.entry(anchor_key.clone()).or_default();
+            refdeses.insert(existing_component.netlist.refdes.clone());
+            refdeses.insert(refdes.clone());
+        } else {
+            by_key.insert(
                 anchor_key.clone(),
                 ImportComponentData {
                     netlist: netlist_component,
                     schematic: None,
                     layout: None,
                 },
-            )
-            .is_some()
-        {
-            debug!(
-                "Duplicate netlist component key {}; overwriting",
-                anchor_key
             );
         }
+    }
+
+    if !duplicate_refdeses.is_empty() || !duplicate_paths.is_empty() {
+        let mut lines = vec!["Ambiguous KiCad component identities:".to_string()];
+        for (refdes, paths) in duplicate_refdeses {
+            lines.push(format!(
+                "  - refdes {} maps to paths {}",
+                refdes,
+                paths
+                    .iter()
+                    .map(KiCadUuidPathKey::pcb_path)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        for (path, refdeses) in duplicate_paths {
+            lines.push(format!(
+                "  - path {} maps to refdeses {}",
+                path.pcb_path(),
+                refdeses
+                    .iter()
+                    .map(KiCadRefDes::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        anyhow::bail!(lines.join("\n"));
     }
 
     Ok(KiCadNetlistComponentsExtraction {
@@ -1119,6 +1522,277 @@ mod tests {
             "expected to extract a power symbol decl via Reference=#PWR..."
         );
 
+        Ok(())
+    }
+
+    fn standalone_selection(
+        root: &Path,
+        resolved_project_footprints: BTreeMap<String, PathBuf>,
+    ) -> ImportSelection {
+        ImportSelection {
+            board_name: "root".to_string(),
+            board_name_source: BoardNameSource::KicadSchArgument,
+            files: KicadDiscoveredFiles::default(),
+            selected: SelectedKicadFiles {
+                kicad_pro: None,
+                kicad_sch: PathBuf::from("root.kicad_sch"),
+                kicad_pcb: None,
+            },
+            portable: PortableKicadProject {
+                project_dir: root.to_path_buf(),
+                project_name: "root".to_string(),
+                source_kind: ImportSourceKind::Schematic,
+                kicad_pro_rel: None,
+                root_schematic_rel: PathBuf::from("root.kicad_sch"),
+                primary_kicad_pcb_rel: None,
+                schematic_files_rel: vec![PathBuf::from("root.kicad_sch")],
+                files_to_bundle_rel: vec![PathBuf::from("root.kicad_sch")],
+                resolved_project_footprints,
+                extra_files_to_bundle: Vec::new(),
+                manifest_json: "{}".to_string(),
+            },
+        }
+    }
+
+    fn component(refdes: &str, fpid: Option<&str>, uuid: &str) -> ImportComponentData {
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: uuid.to_string(),
+        };
+        ImportComponentData {
+            netlist: ImportNetlistComponent {
+                refdes: KiCadRefDes::from(refdes.to_string()),
+                value: Some("value".to_string()),
+                footprint: fpid.map(ToOwned::to_owned),
+                sheetpath_names: Some("/".to_string()),
+                unit_pcb_paths: vec![anchor],
+            },
+            schematic: None,
+            layout: None,
+        }
+    }
+    #[test]
+    fn accepts_padless_mechanical_footprint() -> Result<()> {
+        let pads = parse_standalone_footprint_pads(
+            r#"(footprint "oshw-logo" (layer "F.Cu")
+                (fp_rect (start 0 0) (end 1 1) (stroke (width 0.1) (type default)) (fill none) (layer "F.SilkS")))"#,
+        )?;
+        assert!(pads.is_empty());
+        Ok(())
+    }
+    #[test]
+    fn standalone_standard_footprint_preserves_kicad_id() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let selection = standalone_selection(dir.path(), BTreeMap::new());
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "r1".to_string(),
+        };
+        let mut components = BTreeMap::from([(
+            anchor.clone(),
+            component("R1", Some("Resistor_SMD:R_0402_1005Metric"), "r1"),
+        )]);
+
+        resolve_standalone_footprints(&selection, &mut components)?;
+        let footprint = components
+            .get(&anchor)
+            .and_then(|component| component.layout.as_ref())
+            .expect("resolved footprint");
+        assert_eq!(
+            footprint.fpid.as_deref(),
+            Some("Resistor_SMD:R_0402_1005Metric")
+        );
+        assert!(matches!(
+            &footprint.footprint_geometry,
+            ImportFootprintGeometry::StandardLibrary
+        ));
+        assert!(
+            footprint
+                .pads
+                .contains_key(&KiCadPinNumber::from("1".to_string()))
+        );
+        assert!(
+            footprint
+                .pads
+                .contains_key(&KiCadPinNumber::from("2".to_string()))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_project_footprint_copies_exact_geometry() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let footprint_path = dir.path().join("Local.pretty/Thing.kicad_mod");
+        fs::create_dir_all(footprint_path.parent().unwrap())?;
+        let footprint_text = r#"(footprint "Thing"
+  (version 20240108)
+  (generator pcbnew)
+  (pad "1" thru_hole circle (at 0 0) (size 1 1) (drill 0.5) (layers "*.Cu" "*.Mask"))
+  (pad "2" thru_hole circle (at 2 0) (size 1 1) (drill 0.5) (layers "*.Cu" "*.Mask")))"#;
+        fs::write(&footprint_path, footprint_text)?;
+        let selection = standalone_selection(
+            dir.path(),
+            BTreeMap::from([("Local:Thing".to_string(), footprint_path)]),
+        );
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "u1".to_string(),
+        };
+        let mut components =
+            BTreeMap::from([(anchor.clone(), component("U1", Some("Local:Thing"), "u1"))]);
+
+        resolve_standalone_footprints(&selection, &mut components)?;
+        let resolved = components[&anchor].layout.as_ref().unwrap();
+        assert!(matches!(
+            &resolved.footprint_geometry,
+            ImportFootprintGeometry::LibraryFile(text) if text == footprint_text
+        ));
+        assert_eq!(resolved.pads.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn unresolved_footprints_are_retained_for_later_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let selection = standalone_selection(dir.path(), BTreeMap::new());
+        let a = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "a".to_string(),
+        };
+        let b = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "b".to_string(),
+        };
+        let c = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "c".to_string(),
+        };
+        let mut components = BTreeMap::from([
+            (a, component("U1", Some("Missing:One"), "a")),
+            (b, component("U2", Some("Missing:One"), "b")),
+            (c, component("U3", None, "c")),
+        ]);
+
+        resolve_standalone_footprints(&selection, &mut components).unwrap();
+        for component in components.values() {
+            let layout = component
+                .layout
+                .as_ref()
+                .expect("unresolved footprint record");
+            assert!(matches!(
+                layout.footprint_geometry,
+                ImportFootprintGeometry::Unresolved
+            ));
+            assert!(layout.pads.is_empty());
+            assert!(layout.unresolved_footprint.is_some());
+        }
+    }
+
+    /// Every footprint failing from one library is a library-registration problem; a few failing is
+    /// A component whose schematic names no footprint has no library to register. Grouping it with the
+    /// real libraries told the user a library called `<missing footprint>` was not registered, pointing
+    /// at `fp-lib-table` when the Footprint field is simply empty in KiCad.
+    #[test]
+    fn a_component_naming_no_footprint_is_not_reported_as_a_missing_library() {
+        let only_missing = BTreeMap::from([(
+            NO_FOOTPRINT_KEY.to_string(),
+            vec!["R1".to_string(), "R2".to_string()],
+        )]);
+        let warning = unresolved_footprint_warning(&only_missing, 2, Path::new("/design"), Some(9));
+
+        assert!(
+            !warning.contains("library '<missing footprint>'"),
+            "must not name the placeholder as a library: {warning}"
+        );
+        assert!(
+            warning.contains("no component names a footprint"),
+            "must say what is actually wrong: {warning}"
+        );
+        assert!(
+            !warning.contains("fp-lib-table"),
+            "there is no library to register, so the search locations only mislead: {warning}"
+        );
+
+        // Mixed: a real library *and* components with no footprint. Both get said, separately.
+        let mixed = BTreeMap::from([
+            ("SparkFun-Cap:C_0402".to_string(), vec!["C1".to_string()]),
+            (NO_FOOTPRINT_KEY.to_string(), vec!["R1".to_string()]),
+        ]);
+        let warning = unresolved_footprint_warning(&mixed, 4, Path::new("/design"), Some(9));
+        assert!(warning.contains("SparkFun-Cap (1 footprint(s), 1 component(s))"));
+        assert!(
+            !warning.contains("<missing footprint> ("),
+            "the placeholder must stay out of the library list: {warning}"
+        );
+        assert!(
+            warning.contains("1 component(s) name no footprint at all"),
+            "and be counted on its own: {warning}"
+        );
+    }
+
+    /// a design quirk. The warning has to say which happened, and name the library either way.
+    #[test]
+    fn unresolved_warning_names_the_library_and_distinguishes_total_from_partial_failure() {
+        let all_unresolved = BTreeMap::from([
+            (
+                "antmicro-footprints:R_0402".to_string(),
+                vec!["R1".to_string(), "R2".to_string()],
+            ),
+            (
+                "antmicro-footprints:C_0402".to_string(),
+                vec!["C1".to_string()],
+            ),
+        ]);
+        let warning =
+            unresolved_footprint_warning(&all_unresolved, 3, Path::new("/design"), Some(9));
+        assert!(warning.starts_with(
+            "Warning: 3 component(s) have 2 unresolved footprint definition(s); every component's footprint is unresolved and they all come from library 'antmicro-footprints'"
+        ));
+        assert!(warning.contains(
+            "Unresolved libraries: antmicro-footprints (2 footprint(s), 3 component(s))"
+        ));
+        // Built with `join` so the assertion holds wherever the path separator differs.
+        assert!(warning.contains(&format!(
+            "the project fp-lib-table ({})",
+            Path::new("/design").join("fp-lib-table").display()
+        )));
+        assert!(warning.contains("the global KiCad fp-lib-table (KICAD_CONFIG_HOME"));
+        assert!(warning.contains("the cached kicad-footprints package for KiCad 9"));
+        assert!(warning.contains("connectivity intact but is not layout-ready"));
+        assert!(warning.contains("re-import with --force"));
+
+        let partial = BTreeMap::from([("OneOff:Thing".to_string(), vec!["U9".to_string()])]);
+        let warning = unresolved_footprint_warning(&partial, 40, Path::new("/design"), None);
+        assert!(warning.contains(
+            "39 of 40 component(s) resolved, so this is a per-footprint gap rather than a library that is missing entirely"
+        ));
+        assert!(warning.contains("Unresolved libraries: OneOff (1 footprint(s), 1 component(s))"));
+        assert!(
+            warning.contains("the cached kicad-footprints package matching the schematic's KiCad")
+        );
+    }
+
+    #[test]
+    fn ambiguous_netlist_identities_report_paths_and_refdeses_together() -> Result<()> {
+        let netlist = r#"
+(export (version "E")
+  (components
+    (comp (ref "R1") (value "1k") (footprint "Resistor_SMD:R_0402_1005Metric")
+      (sheetpath (names "/") (tstamps "/")) (tstamps "same"))
+    (comp (ref "R2") (value "2k") (footprint "Resistor_SMD:R_0402_1005Metric")
+      (sheetpath (names "/") (tstamps "/")) (tstamps "same"))
+    (comp (ref "U1") (value "A") (footprint "Package_DIP:DIP-8_W7.62mm")
+      (sheetpath (names "/") (tstamps "/")) (tstamps "u-a"))
+    (comp (ref "U1") (value "B") (footprint "Package_DIP:DIP-8_W7.62mm")
+      (sheetpath (names "/child/") (tstamps "/child/")) (tstamps "u-b")))
+  (nets))
+"#;
+        let root = pcb_sexpr::parse(netlist)?;
+        let error = parse_kicad_sexpr_netlist_components(&root, &BTreeMap::new())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("path /same maps to refdeses R1, R2"));
+        assert!(error.contains("refdes U1 maps to paths /u-a, /child/u-b"));
         Ok(())
     }
 }
