@@ -1,0 +1,274 @@
+use anyhow::{Context, Result, bail};
+use clap::Args;
+use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use std::io::{self, BufRead, Write};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
+
+use crate::WorkspaceContext;
+
+const AUTHTYPE_CAPABILITY: &str = "authtype";
+const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
+
+#[derive(Args, Debug)]
+#[command(about = "Provide Git credentials using PCB authentication")]
+pub struct GitAuthArgs {
+    /// Git credential helper operation
+    operation: String,
+}
+
+#[derive(Debug, Default)]
+struct CredentialRequest {
+    protocol: Option<Vec<u8>>,
+    host: Option<Vec<u8>>,
+    path: Option<Vec<u8>>,
+    capabilities: Vec<Vec<u8>>,
+}
+
+#[derive(Serialize)]
+struct GitCredentialExchangeRequest<'a> {
+    host: &'a str,
+    path: &'a str,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCredentialExchangeResponse {
+    repository_id: String,
+    #[serde(rename = "provider")]
+    _provider: GitProvider,
+    credential: GitCredential,
+    expires_at: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GitProvider {
+    Diodehub,
+}
+
+#[derive(Deserialize)]
+struct GitCredential {
+    #[serde(rename = "scheme")]
+    _scheme: GitCredentialScheme,
+    token: String,
+}
+
+#[derive(Deserialize)]
+enum GitCredentialScheme {
+    Bearer,
+}
+
+pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout().lock();
+
+    match args.operation.as_str() {
+        "capability" => {
+            writeln!(stdout, "version 0")?;
+            writeln!(stdout, "capability {AUTHTYPE_CAPABILITY}")?;
+        }
+        "get" => {
+            let result = read_credential_request(stdin.lock())
+                .and_then(|request| provide_credential(ctx, request, &mut stdout));
+            if let Err(error) = result {
+                writeln!(stdout, "quit=true")?;
+                writeln!(stdout)?;
+                stdout.flush()?;
+                eprintln!("pcb auth git: {error:#}");
+            }
+        }
+        "store" | "erase" => {
+            read_credential_request(stdin.lock())?;
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn provide_credential(
+    ctx: &WorkspaceContext,
+    request: CredentialRequest,
+    output: &mut impl Write,
+) -> Result<()> {
+    if request.protocol.as_deref() != Some(b"https") {
+        return Ok(());
+    }
+
+    let Some(host) = request.host.as_deref().filter(|host| !host.is_empty()) else {
+        return Ok(());
+    };
+    let Some(path) = request.path.as_deref().filter(|path| !path.is_empty()) else {
+        return Ok(());
+    };
+
+    if !request
+        .capabilities
+        .iter()
+        .any(|capability| capability == AUTHTYPE_CAPABILITY.as_bytes())
+    {
+        bail!("Git did not advertise the `authtype` credential capability");
+    }
+
+    let host = std::str::from_utf8(host).context("Git credential host is not UTF-8")?;
+    let path = std::str::from_utf8(path).context("Git credential path is not UTF-8")?;
+    let credential = exchange_credential(ctx, host, path)?;
+
+    writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
+    writeln!(output, "authtype=Bearer")?;
+    writeln!(output, "credential={credential}")?;
+    writeln!(output, "ephemeral=true")?;
+    writeln!(output)?;
+    output.flush()?;
+
+    Ok(())
+}
+
+fn exchange_credential(ctx: &WorkspaceContext, host: &str, path: &str) -> Result<String> {
+    let api_token = ctx
+        .token()
+        .context("Failed to get a valid Diode API token")?;
+    let url = format!("{}/api/git/credentials", ctx.api_base_url());
+    let client = Client::builder()
+        .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(Duration::from_secs(30))
+        .build()
+        .context("Failed to create Git credential HTTP client")?;
+
+    let response = client
+        .post(url)
+        .bearer_auth(api_token)
+        .json(&GitCredentialExchangeRequest { host, path })
+        .send()
+        .context("Failed to exchange Diode authentication for a Git credential")?;
+
+    if !response.status().is_success() {
+        bail!("Git credential exchange failed: {}", response.status());
+    }
+
+    let response: GitCredentialExchangeResponse = response
+        .json()
+        .context("Failed to parse Git credential exchange response")?;
+    let GitCredentialExchangeResponse {
+        repository_id,
+        _provider: _,
+        credential,
+        expires_at,
+    } = response;
+    let GitCredential { _scheme: _, token } = credential;
+    Uuid::parse_str(&repository_id)
+        .context("Git credential exchange returned an invalid repository ID")?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("System clock is before the Unix epoch")?
+        .as_secs();
+
+    if expires_at <= now {
+        bail!("Git credential exchange returned an expired credential");
+    }
+    if token.is_empty() || token.contains(['\r', '\n', '\0']) {
+        bail!("Git credential exchange returned an invalid credential");
+    }
+
+    Ok(token)
+}
+
+fn read_credential_request(mut input: impl BufRead) -> Result<CredentialRequest> {
+    let mut request = CredentialRequest::default();
+    let mut line = Vec::new();
+
+    loop {
+        line.clear();
+        let bytes_read = input
+            .read_until(b'\n', &mut line)
+            .context("Failed to read Git credential request")?;
+        if bytes_read == 0 {
+            break;
+        }
+        if line.len() > MAX_CREDENTIAL_LINE_BYTES {
+            bail!("Git credential request line exceeds 65535 bytes");
+        }
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        if line.is_empty() {
+            break;
+        }
+        if line.contains(&b'\0') {
+            bail!("Git credential request contains a NUL byte");
+        }
+
+        let Some(separator) = line.iter().position(|byte| *byte == b'=') else {
+            bail!("Invalid Git credential request line");
+        };
+        let (key, value) = (&line[..separator], &line[separator + 1..]);
+
+        match key {
+            b"protocol" => request.protocol = Some(value.to_vec()),
+            b"host" => request.host = Some(value.to_vec()),
+            b"path" => request.path = Some(value.to_vec()),
+            b"capability[]" if value.is_empty() => request.capabilities.clear(),
+            b"capability[]" => request.capabilities.push(value.to_vec()),
+            _ => {}
+        }
+    }
+
+    Ok(request)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn parses_known_attributes_and_ignores_extensions() {
+        let request = read_credential_request(Cursor::new(
+            b"capability[]=authtype\nprotocol=https\nhost=code.diode.computer\npath=acme/widget.git\nwwwauth[]=Bearer\n\n",
+        ))
+        .unwrap();
+
+        assert_eq!(request.protocol.as_deref(), Some(b"https".as_slice()));
+        assert_eq!(
+            request.host.as_deref(),
+            Some(b"code.diode.computer".as_slice())
+        );
+        assert_eq!(request.path.as_deref(), Some(b"acme/widget.git".as_slice()));
+        assert_eq!(request.capabilities, [b"authtype".to_vec()]);
+    }
+
+    #[test]
+    fn empty_capability_resets_the_capability_list() {
+        let request = read_credential_request(Cursor::new(
+            b"capability[]=authtype\ncapability[]=\ncapability[]=state\n\n",
+        ))
+        .unwrap();
+
+        assert_eq!(request.capabilities, [b"state".to_vec()]);
+    }
+
+    #[test]
+    fn accepts_a_line_at_the_protocol_limit() {
+        let mut input = b"extension=".to_vec();
+        input.resize(MAX_CREDENTIAL_LINE_BYTES - 1, b'x');
+        input.push(b'\n');
+
+        let request = read_credential_request(Cursor::new(input)).unwrap();
+
+        assert!(request.protocol.is_none());
+    }
+
+    #[test]
+    fn rejects_lines_longer_than_the_protocol_limit() {
+        let input = vec![b'x'; MAX_CREDENTIAL_LINE_BYTES + 1];
+        let error = read_credential_request(Cursor::new(input)).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Git credential request line exceeds 65535 bytes")
+        );
+    }
+}

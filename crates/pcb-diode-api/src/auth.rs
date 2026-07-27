@@ -456,6 +456,8 @@ pub enum AuthCommand {
     Refresh,
     /// Print a valid access token to stdout (refreshes if expired)
     Token,
+    /// Provide Git credentials using PCB authentication
+    Git(crate::git_auth::GitAuthArgs),
 }
 
 pub fn token_with_context(ctx: &WorkspaceContext) -> Result<()> {
@@ -476,6 +478,7 @@ pub fn execute(args: AuthArgs, ctx: &WorkspaceContext) -> Result<()> {
         Some(AuthCommand::Status) => status_with_context(ctx),
         Some(AuthCommand::Refresh) => refresh_with_context(ctx),
         Some(AuthCommand::Token) => token_with_context(ctx),
+        Some(AuthCommand::Git(args)) => crate::git_auth::execute(args, ctx),
     }
 }
 
