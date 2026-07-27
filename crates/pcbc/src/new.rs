@@ -50,7 +50,7 @@ pub enum NewCommand {
     /// Create a new package at the given path (requires existing workspace)
     Package(NewPackageArgs),
 
-    /// Create a new component by searching online, or import from local directory
+    /// Import a local component; no-DIR online search and --component-id are deprecated
     Component(NewComponentArgs),
 }
 
@@ -78,15 +78,15 @@ pub struct NewComponentArgs {
     #[arg(value_name = "DIR", conflicts_with = "component_id")]
     pub dir: Option<PathBuf>,
 
-    /// Download and add a component returned by web component search
+    /// Deprecated: use `pcb component download`
     #[arg(long, value_name = "ID")]
     pub component_id: Option<String>,
 
-    /// Optional fallback MPN if the download response does not include one
+    /// Deprecated: fallback MPN for --component-id
     #[arg(long, value_name = "MPN", requires = "component_id")]
     pub part_number: Option<String>,
 
-    /// Optional manufacturer override or fallback
+    /// Deprecated: manufacturer override for --component-id
     #[arg(long, value_name = "MFR", requires = "component_id")]
     pub manufacturer: Option<String>,
 }

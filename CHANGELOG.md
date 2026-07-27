@@ -11,6 +11,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added `pcb ipc2581 fab-panel create` to tile up to 32 assembly panels with identical stackups into a fixed 18 by 24 inch fabrication panel.
+- Added read-only `pcb component search` and `pcb component download` commands with pretty and raw JSON output.
+
+### Changed
+
+- Deprecated legacy component API access through `pcb search -m web:components` and the online paths of `pcb new component`.
 
 ## [0.4.12] - 2026-07-24
 

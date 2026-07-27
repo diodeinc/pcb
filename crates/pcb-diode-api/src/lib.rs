@@ -5,6 +5,7 @@ pub mod auth;
 mod aws_auth;
 pub mod bom;
 pub mod component;
+mod component_api;
 pub mod datasheet;
 pub mod diode_uri;
 mod download_support;
@@ -24,6 +25,7 @@ pub use component::{
     execute as execute_search, execute_component_from_id, execute_component_from_local_dir,
     execute_web_components_tui, search_components, search_components_with_availability,
 };
+pub use component_api::{ComponentArgs, execute_component};
 pub use diode_uri::{DiodeUri, DiodeUriParseError, SandboxFileUri, is_diode_uri};
 pub use endpoint::WorkspaceContext;
 pub use kicad_symbols::KicadSymbolsClient;
