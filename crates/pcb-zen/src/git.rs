@@ -44,6 +44,7 @@ fn make_noninteractive(cmd: &mut Command) {
 
 fn git_network(repo_root: &Path) -> anyhow::Result<Command> {
     let mut cmd = git_global_network()?;
+    make_noninteractive(&mut cmd);
     cmd.arg("-C").arg(repo_root);
     Ok(cmd)
 }
@@ -1014,6 +1015,26 @@ mod tests {
         assert_eq!(
             shell_quote("/tmp/PCB's cache/socket"),
             "'/tmp/PCB'\\''s cache/socket'"
+        );
+    }
+
+    #[test]
+    fn repository_network_commands_are_noninteractive() {
+        let command = git_network(Path::new(".")).unwrap();
+        let env = |key| {
+            command
+                .get_envs()
+                .find(|(name, _)| name == &key)
+                .and_then(|(_, value)| value)
+        };
+
+        assert_eq!(
+            env(std::ffi::OsStr::new("GIT_TERMINAL_PROMPT")),
+            Some(std::ffi::OsStr::new("0"))
+        );
+        assert_eq!(
+            env(std::ffi::OsStr::new("GCM_INTERACTIVE")),
+            Some(std::ffi::OsStr::new("never"))
         );
     }
 
