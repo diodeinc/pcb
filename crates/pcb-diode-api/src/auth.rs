@@ -312,7 +312,7 @@ pub fn login_with_context(ctx: &WorkspaceContext) -> Result<()> {
         tokens.expires_at,
         tokens.email.as_deref(),
     )?;
-    crate::git_auth::clear_credential_cache();
+    pcb_zen::git::clear_diodehub_credential_cache();
 
     println!("✓ Authentication successful!");
     if let Some(email) = &tokens.email {
@@ -328,7 +328,7 @@ pub fn login() -> Result<()> {
 }
 
 pub fn logout_with_context(ctx: &WorkspaceContext) -> Result<()> {
-    crate::git_auth::clear_credential_cache();
+    pcb_zen::git::clear_diodehub_credential_cache();
     clear_tokens_with_context(ctx)?;
     aws_auth::clear_service_token(ctx)?;
     println!("✓ Logged out successfully");
