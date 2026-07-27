@@ -5130,6 +5130,7 @@ dependencies = [
  "env_logger",
  "gerberx2",
  "glam",
+ "httpmock",
  "ignore",
  "inquire",
  "insta",

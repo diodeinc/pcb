@@ -10,6 +10,7 @@ pub mod datasheet;
 pub mod diode_uri;
 mod download_support;
 mod endpoint;
+mod git_auth;
 pub mod kicad_symbols;
 pub mod registry;
 pub mod release;
