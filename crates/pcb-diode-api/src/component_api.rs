@@ -307,7 +307,11 @@ pub fn execute_component(args: ComponentArgs) -> Result<()> {
             };
             let response =
                 post_component_api(auth_token.as_deref(), COMPONENT_SEARCH_PATH, &request)?;
-            output_component_response(response, args.format, print_component_search_results)
+            output_component_response::<Vec<ComponentSearchResult>>(
+                response,
+                args.format,
+                |results| print_component_search_results(results),
+            )
         }
         ComponentCommand::Download(args) => {
             let request = if let Some(part_ref) = args.cse_part_ref {
@@ -369,7 +373,7 @@ fn write_component_json_response(writer: &mut impl Write, body: &str) -> io::Res
     writer.flush()
 }
 
-fn print_component_search_results(results: &Vec<ComponentSearchResult>) {
+fn print_component_search_results(results: &[ComponentSearchResult]) {
     if results.is_empty() {
         println!("No components found.");
         return;
