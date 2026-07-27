@@ -15,6 +15,7 @@ pub mod graph;
 pub mod lang;
 pub mod load_spec;
 mod moved;
+pub mod package_url;
 pub mod passes;
 pub mod resolution;
 pub mod stdlib;

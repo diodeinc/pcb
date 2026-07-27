@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use self::request::resolve_direct_dependency_request;
 use self::target::{AddTarget, discover_add_targets, discover_package_target};
-use self::writeback::{ManifestEdit, plan_package_manifest};
+use self::writeback::{ManifestEdit, plan_canonical_manifest, plan_package_manifest};
 
 type DirectOverrides = BTreeMap<String, DependencySpec>;
 
@@ -445,6 +445,15 @@ fn run_resolution(
     let mut resolver = PackageResolver::new(workspace.clone())?;
     let mut selected_remote = BTreeSet::new();
     let mut manifest_edits = Vec::new();
+
+    let root_manifest = workspace.root.join("pcb.toml");
+    if !targets
+        .iter()
+        .any(|target| target.pcb_toml_path == root_manifest)
+        && let Some(edit) = plan_canonical_manifest(root_manifest)?
+    {
+        manifest_edits.push(edit);
+    }
 
     for target in targets {
         let overrides = direct_overrides

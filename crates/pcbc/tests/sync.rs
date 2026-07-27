@@ -987,3 +987,102 @@ pcb-version = "0.4"
         "expected covered import to skip remote discovery warning:\n{output}"
     );
 }
+
+#[test]
+fn test_registry_migration_rewrites_manifest_and_builds_legacy_import_from_tag_only_commit() {
+    const LEGACY_REPOSITORY: &str = "github.com/diodeinc/registry";
+    const CANONICAL_REPOSITORY: &str = "code.diode.computer/diode/registry";
+
+    let mut sandbox = Sandbox::new();
+    sandbox.env("PCB_REGISTRY_MIGRATION", "1");
+
+    let mut fixture = sandbox.git_fixture("https://code.diode.computer/diode/registry.git");
+    fixture.write("README.md", "main\n").commit("main");
+    fixture.with_branch("package-release", |repo| {
+        repo.write("components/Foo/pcb.toml", "[dependencies]\n")
+            .write("components/Foo/Foo.zen", SIMPLE_RESISTOR_ZEN)
+            .write("components/Foo/test.kicad_mod", TEST_KICAD_MOD)
+            .commit("tagged packages")
+            .tag("components/Foo/v1.0.0", true);
+    });
+    fixture.push_mirror();
+
+    let manifest = format!(
+        r#"[workspace]
+pcb-version = "0.4"
+vendor = ["{LEGACY_REPOSITORY}/**"]
+
+[board]
+name = "Main"
+path = "board.zen"
+
+[dependencies]
+"{LEGACY_REPOSITORY}/components/Foo" = "1.0.0"
+"#
+    );
+    let board = format!(
+        r#"
+Foo = Module("{LEGACY_REPOSITORY}/components/Foo/Foo.zen")
+
+Foo(name = "R1", value = "1kOhm", P1 = Net("P1"), P2 = Net("P2"))
+"#
+    );
+
+    sandbox
+        .write("pcb.toml", manifest)
+        .write("board.zen", &board)
+        .sync();
+
+    let migrated = read_root_manifest(&sandbox);
+    assert!(!migrated.contains(LEGACY_REPOSITORY));
+    assert!(migrated.contains(&format!(
+        "\"{CANONICAL_REPOSITORY}/components/Foo\" = \"1.0.0\""
+    )));
+    assert!(migrated.contains(&format!("vendor = [\"{CANONICAL_REPOSITORY}/**\"]")));
+    assert_eq!(read_sandbox_file(&sandbox, "board.zen"), board);
+    assert!(
+        sandbox
+            .default_cwd()
+            .join("vendor")
+            .join(CANONICAL_REPOSITORY)
+            .join("components/Foo/1.0.0/pcb.toml")
+            .exists()
+    );
+
+    let build = run_pcbc_unchecked(&mut sandbox, ["build", "board.zen"]);
+    assert!(
+        build.status.success(),
+        "expected migrated legacy import to build:\n{}",
+        command_output(&build)
+    );
+
+    let check = run_sync_check(&mut sandbox);
+    assert!(
+        check.status.success(),
+        "expected migrated workspace to pass sync --check:\n{}",
+        command_output(&check)
+    );
+}
+
+#[test]
+fn test_registry_migration_is_disabled_by_default() {
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write(
+            "pcb.toml",
+            r#"[workspace]
+pcb-version = "0.4"
+vendor = ["github.com/diodeinc/registry/**"]
+
+[board]
+name = "Main"
+path = "board.zen"
+"#,
+        )
+        .write("board.zen", "Net(\"P1\")\n")
+        .sync();
+
+    let manifest = read_root_manifest(&sandbox);
+    assert!(manifest.contains("github.com/diodeinc/registry/**"));
+    assert!(!manifest.contains("code.diode.computer/diode/registry"));
+}

@@ -1,7 +1,7 @@
 //! git_sandbox.rs
 //!
 //! Hermetic, offline Git test sandbox for Rust tests.
-//! - Rewrites GitHub/GitLab URLs for fixture repos to local `file://` bare repos via a private `.gitconfig`
+//! - Rewrites supported remote URLs for fixture repos to local `file://` bare repos via a private `.gitconfig`
 //! - Disables all network protocols (whitelists `file` only)
 //! - Isolates cache directory via `DIODE_STAR_CACHE_DIR`
 //! - Lets you create fixture repos (files/commits/tags) and mirror-push them
@@ -69,6 +69,7 @@ pub struct Sandbox {
     pub gitconfig: PathBuf,
     pub mock_github: PathBuf,
     pub mock_gitlab: PathBuf,
+    pub mock_diodehub: PathBuf,
     pub cache_dir: PathBuf,
     fixture_rewrites: BTreeSet<RepoRewrite>,
     default_cwd: PathBuf,
@@ -92,11 +93,13 @@ impl Sandbox {
         let gitconfig = home.join(".gitconfig");
         let mock_github = root.child("mock/github").to_path_buf();
         let mock_gitlab = root.child("mock/gitlab").to_path_buf();
+        let mock_diodehub = root.child("mock/diodehub").to_path_buf();
         let cache_dir = root.child("cache").to_path_buf();
 
         fs::create_dir_all(&home).expect("create home dir");
         fs::create_dir_all(&mock_github).expect("create mock github dir");
         fs::create_dir_all(&mock_gitlab).expect("create mock gitlab dir");
+        fs::create_dir_all(&mock_diodehub).expect("create mock DiodeHub dir");
         fs::create_dir_all(&cache_dir).expect("create cache dir");
 
         let default_cwd = root.path().to_path_buf();
@@ -107,6 +110,7 @@ impl Sandbox {
             gitconfig,
             mock_github,
             mock_gitlab,
+            mock_diodehub,
             cache_dir,
             fixture_rewrites: BTreeSet::new(),
             default_cwd,
@@ -282,6 +286,7 @@ impl Sandbox {
         let base = match host {
             "github.com" => &self.mock_github,
             "gitlab.com" => &self.mock_gitlab,
+            "code.diode.computer" => &self.mock_diodehub,
             _ => panic!("unsupported host: {host}"),
         };
 
@@ -597,6 +602,7 @@ impl Sandbox {
             let base = match rewrite.host.as_str() {
                 "github.com" => &self.mock_github,
                 "gitlab.com" => &self.mock_gitlab,
+                "code.diode.computer" => &self.mock_diodehub,
                 other => panic!("unsupported host: {other}"),
             };
             let rel = ensure_dot_git(rewrite.repo.clone());
@@ -836,10 +842,10 @@ fn file_url(p: &Path) -> String {
     format!("file://{s}")
 }
 
-/// Parse minimal forms for GitHub/GitLab: https, ssh, scp.
+/// Parse minimal forms for supported fixture hosts: https, ssh, scp.
 /// Returns (host, "org/repo[.git]").
 fn parse_supported_url(url: &str) -> (&'static str, String) {
-    for host in ["github.com", "gitlab.com"] {
+    for host in ["github.com", "gitlab.com", "code.diode.computer"] {
         let https = format!("https://{host}/");
         if let Some(rest) = url.strip_prefix(&https) {
             return (host, rest.trim_start_matches('/').to_string());

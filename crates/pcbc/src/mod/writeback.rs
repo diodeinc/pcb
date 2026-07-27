@@ -26,8 +26,7 @@ pub(crate) fn plan_package_manifest(
 ) -> Result<Option<ManifestEdit>> {
     let original = std::fs::read_to_string(&target.pcb_toml_path)
         .with_context(|| format!("Failed to read {}", target.pcb_toml_path.display()))?;
-    let mut config: PcbToml = toml::from_str(&original)
-        .with_context(|| format!("Failed to parse {}", target.pcb_toml_path.display()))?;
+    let mut config = PcbToml::parse_with_path(&original, &target.pcb_toml_path)?;
 
     config.dependencies.direct = resolution.direct.clone();
     config.dependencies.indirect = indirect_dependencies(resolution);
@@ -42,6 +41,28 @@ pub(crate) fn plan_package_manifest(
         path: target.pcb_toml_path.clone(),
         rendered,
     }))
+}
+
+pub(crate) fn plan_canonical_manifest(path: PathBuf) -> Result<Option<ManifestEdit>> {
+    if !pcb_zen_core::package_url::registry_migration_enabled() {
+        return Ok(None);
+    }
+
+    let original = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    if !original.contains(pcb_zen_core::package_url::LEGACY_REGISTRY_REPOSITORY) {
+        return Ok(None);
+    }
+
+    let unmodified: PcbToml =
+        toml::from_str(&original).with_context(|| format!("Failed to parse {}", path.display()))?;
+    let canonical = PcbToml::parse_with_path(&original, &path)?;
+    if canonical == unmodified {
+        return Ok(None);
+    }
+
+    let rendered = render_manifest(&canonical)?;
+    Ok((rendered != original).then_some(ManifestEdit { path, rendered }))
 }
 
 fn indirect_dependencies(resolution: &PackageResolution) -> BTreeMap<String, DependencySpec> {
