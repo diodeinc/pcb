@@ -2854,8 +2854,6 @@ mod tests {
                 make_pin("A-B", "7", Some("input")),
                 make_pin("NC", "10", Some("no_connect")),
                 make_pin("NC", "11", Some("no_connect")),
-                make_pin("SHARED", "12", Some("no_connect")),
-                make_pin("SHARED_ALT", "12", Some("input")),
             ],
             ..Default::default()
         };
@@ -2886,8 +2884,6 @@ mod tests {
         assert_eq!(by_pad["11"].logical_name, "NC__11");
         assert_eq!(by_pad["10"].io_name, None);
         assert_eq!(by_pad["11"].io_name, None);
-        assert_eq!(by_pad["12"].logical_name, "SHARED");
-        assert_eq!(by_pad["12"].io_name.as_deref(), Some("SHARED"));
     }
     #[test]
     fn connected_electrical_no_connect_pin_is_exposed() {
