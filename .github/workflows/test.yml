@@ -27,6 +27,7 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
           cache-bin: false
 
@@ -86,13 +87,15 @@ jobs:
       - name: Install KiCad (macOS)
         if: contains(matrix.config.name, 'macOS') && steps.cache-kicad-mac.outputs.cache-hit != 'true'
         run: |
-          brew update
-          # Uninstall existing KiCad if present to avoid conflicts
           brew uninstall --cask kicad 2>/dev/null || true
-          # Remove any remaining KiCad installation
           rm -rf /Applications/KiCad 2>/dev/null || true
-          # Install KiCad fresh
-          brew install --cask kicad
+          dmg="$RUNNER_TEMP/kicad.dmg"
+          mount_point="$RUNNER_TEMP/kicad-mount"
+          curl -fL "https://github.com/KiCad/kicad-source-mirror/releases/download/${KICAD_VERSION}/kicad-unified-universal-${KICAD_VERSION}.dmg" -o "$dmg"
+          mkdir -p "$mount_point"
+          hdiutil attach "$dmg" -mountpoint "$mount_point" -nobrowse
+          trap 'hdiutil detach "$mount_point"' EXIT
+          cp -R "$mount_point/KiCad" /Applications/KiCad
 
       - name: Install KiCad (Windows)
         if: matrix.config.name == 'Windows'
@@ -126,6 +129,7 @@ jobs:
         if: runner.os != 'Windows'
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
           cache-bin: false
 
