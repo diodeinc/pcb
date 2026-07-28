@@ -73,8 +73,6 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             runner: macos-15-xlarge
-          - target: x86_64-apple-darwin
-            runner: macos-15-large
           - target: aarch64-unknown-linux-gnu
             runner: ubicloud-standard-16-arm
           - target: aarch64-unknown-linux-musl
