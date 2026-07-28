@@ -35,6 +35,24 @@ fn validation_diagnostics(stderr: &str) -> std::path::PathBuf {
 }
 
 #[test]
+fn import_requires_output_directory() {
+    let import = sandbox()
+        .run("pcbc", ["import", "layout.kicad_sch"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("run pcbc import");
+
+    assert!(!import.status.success());
+    let stderr = String::from_utf8_lossy(&import.stderr);
+    assert!(
+        stderr.contains("<OUTPUT_DIR>"),
+        "unexpected stderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn standalone_import_uses_existing_scaffolding_and_root_reports() {
     let mut sandbox = sandbox();
     sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);

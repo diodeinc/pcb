@@ -100,9 +100,9 @@ pub struct ImportArgs {
     #[arg(value_name = "KICAD_INPUT", value_hint = clap::ValueHint::AnyPath)]
     pub kicad_input: PathBuf,
 
-    /// Output directory; defaults to ./<input-file-stem>
+    /// Output directory (a board repository will be created if needed)
     #[arg(value_name = "OUTPUT_DIR", value_hint = clap::ValueHint::AnyPath)]
-    pub output_dir: Option<PathBuf>,
+    pub output_dir: PathBuf,
 
     /// Overwrite generated files if the board repository already exists
     #[arg(long = "force")]

@@ -3,10 +3,9 @@
 This module converts a KiCad project or standalone schematic into a Zener board repository.
 
 ```bash
-pcb import <design.kicad_sch|project.kicad_pro> [output-directory]
+pcb import <design.kicad_sch|project.kicad_pro> <output-directory>
 ```
 
-When `output-directory` is omitted, import writes to `./<input-file-stem>`.
 `flow.rs` coordinates the pipeline, and `mod.rs` defines the module boundary.
 
 ## Pipeline

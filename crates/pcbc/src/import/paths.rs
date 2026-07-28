@@ -11,35 +11,12 @@ pub(super) fn resolve_paths(args: &ImportArgs) -> Result<ImportPaths> {
         .context("A KiCad input path must have a parent directory")?
         .to_path_buf();
 
-    let output_dir = match &args.output_dir {
-        Some(output_dir) => output_dir.clone(),
-        None => default_output_dir(
-            &kicad_input_abs,
-            &std::env::current_dir().context("Failed to resolve current directory")?,
-        )?,
-    };
-    let workspace_root = ensure_board_repo_root(&output_dir)?;
+    let workspace_root = ensure_board_repo_root(&args.output_dir)?;
     Ok(ImportPaths {
         workspace_root,
         kicad_project_root,
         kicad_input_abs,
     })
-}
-
-fn default_output_dir(kicad_input: &Path, current_dir: &Path) -> Result<PathBuf> {
-    let stem = kicad_input
-        .file_stem()
-        .filter(|stem| !stem.is_empty())
-        .context("KiCad input filename has no usable stem for the default output directory")?;
-    // `..kicad_sch` yields a `.` stem and `...kicad_sch` yields `..`, which would resolve the
-    // default output directory onto the current or parent directory.
-    if matches!(stem.to_str(), Some(".") | Some("..")) {
-        anyhow::bail!(
-            "KiCad input filename has no usable stem for the default output directory: {}. Pass an explicit output directory.",
-            kicad_input.display()
-        );
-    }
-    Ok(current_dir.join(stem))
 }
 
 fn require_kicad_input_file(path: &Path) -> Result<PathBuf> {
@@ -147,34 +124,4 @@ fn canonicalize_missing_path(path: &Path) -> Result<PathBuf> {
         resolved.push(name);
     }
     Ok(resolved)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_output_uses_input_stem_under_current_directory() {
-        assert_eq!(
-            default_output_dir(
-                Path::new("/sources/audio-latency-tester-board.kicad_pro"),
-                Path::new("/work")
-            )
-            .unwrap(),
-            PathBuf::from("/work/audio-latency-tester-board")
-        );
-    }
-
-    #[test]
-    fn default_output_rejects_dot_and_dot_dot_stems() {
-        for input in ["/sources/..kicad_sch", "/sources/...kicad_sch"] {
-            let error = default_output_dir(Path::new(input), Path::new("/work"))
-                .expect_err("a `.`/`..` stem must not resolve to the current or parent directory")
-                .to_string();
-            assert!(
-                error.contains("no usable stem"),
-                "unexpected error for {input}: {error}"
-            );
-        }
-    }
 }

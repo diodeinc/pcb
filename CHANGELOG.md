@@ -22,7 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added `pcb auth git configure` and `pcb auth git unconfigure` to manage host-specific global Git credential configuration for DiodeHub.
 - PCB now authenticates its own DiodeHub Git operations without requiring global Git configuration.
-- `pcb import` accepts a standalone `.kicad_sch` as well as a `.kicad_pro`, and the output directory is now optional, defaulting to `./<input-file-stem>`.
+- `pcb import` accepts a standalone `.kicad_sch` as well as a `.kicad_pro`.
 - `pcb import` preserves each KiCad physical pin as a distinct Zener signal and validates the generated net partitions against the source schematic.
 - `pcb import` resolves standalone schematic footprints from project, global, bundled, and cached KiCad libraries.
 
