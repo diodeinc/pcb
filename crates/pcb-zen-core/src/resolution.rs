@@ -942,7 +942,22 @@ impl ResolutionResult {
 
     /// Resolve a package URI (`package://…`) to an absolute filesystem path.
     pub fn resolve_package_uri(&self, uri: &str) -> anyhow::Result<PathBuf> {
-        pcb_sch::resolve_package_uri(uri, &self.indexes.package_roots)
+        let original_error = match pcb_sch::resolve_package_uri(uri, &self.indexes.package_roots) {
+            Ok(path) => return Ok(path),
+            Err(error) => error,
+        };
+        let Some(reference) = uri.strip_prefix(pcb_sch::PACKAGE_URI_PREFIX) else {
+            return Err(original_error);
+        };
+
+        let canonical = crate::package_url::canonicalize_package_reference(reference);
+        if canonical == reference {
+            return Err(original_error);
+        }
+
+        let canonical_uri = format!("{}{canonical}", pcb_sch::PACKAGE_URI_PREFIX);
+        pcb_sch::resolve_package_uri(&canonical_uri, &self.indexes.package_roots)
+            .map_err(|_| original_error)
     }
 
     /// Format an absolute path as a stable URI (`package://…`).
@@ -1028,6 +1043,47 @@ mod tests {
         );
 
         assert_eq!(result.package_roots().get(dep_coord), Some(&dep_root));
+    }
+
+    #[test]
+    fn package_uri_resolves_migrated_registry_alias() {
+        let dep = crate::package_url::CANONICAL_REGISTRY_REPOSITORY.to_string() + "/components/Foo";
+        let dep_root = PathBuf::from("/cache").join(&dep).join("1.2.3");
+        let result = ResolutionResult::frozen(
+            WorkspaceInfo {
+                root: PathBuf::from("/workspace"),
+                cache_dir: PathBuf::new(),
+                config: None,
+                packages: BTreeMap::new(),
+                errors: vec![],
+            },
+            BTreeMap::from([(
+                "github.com/acme/root".into(),
+                FrozenResolutionMap {
+                    selected_remote: BTreeMap::new(),
+                    packages: BTreeMap::from([(
+                        PathBuf::from("/workspace"),
+                        FrozenPackage {
+                            identity: FrozenPackageIdentity::Workspace(
+                                "github.com/acme/root".into(),
+                            ),
+                            deps: BTreeMap::from([(dep, dep_root.clone())]),
+                            parts: Vec::new(),
+                        },
+                    )]),
+                },
+            )]),
+            HashMap::new(),
+        );
+
+        let legacy_uri = format!(
+            "package://{}/components/Foo@1.2.3/Foo.kicad_mod",
+            crate::package_url::LEGACY_REGISTRY_REPOSITORY
+        );
+        assert_eq!(
+            result.resolve_package_uri(&legacy_uri).unwrap(),
+            dep_root.join("Foo.kicad_mod")
+        );
     }
 
     #[test]

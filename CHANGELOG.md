@@ -13,6 +13,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Added `pcb auth git configure` and `pcb auth git unconfigure` to manage host-specific global Git credential configuration for DiodeHub.
 - PCB now authenticates its own DiodeHub Git operations without requiring global Git configuration.
 
+### Changed
+
+- `pcb migrate` now rewrites legacy GitHub registry references to DiodeHub.
+
 ## [0.4.13] - 2026-07-27
 
 ### Added

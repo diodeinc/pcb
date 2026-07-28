@@ -1,16 +1,9 @@
 use std::borrow::Cow;
 
-/// Opt-in gate for the Diode registry package-identity migration.
-pub const REGISTRY_MIGRATION_ENV: &str = "PCB_REGISTRY_MIGRATION";
-/// Legacy package repository accepted while the registry moves to DiodeHub.
+/// Legacy package repository migrated to DiodeHub.
 pub const LEGACY_REGISTRY_REPOSITORY: &str = "github.com/diodeinc/registry";
-/// Canonical package repository used when the migration is enabled.
+/// Canonical package repository on DiodeHub.
 pub const CANONICAL_REGISTRY_REPOSITORY: &str = "code.diode.computer/diode/registry";
-
-/// Whether the opt-in Diode registry migration is enabled for this process.
-pub fn registry_migration_enabled() -> bool {
-    std::env::var(REGISTRY_MIGRATION_ENV).as_deref() == Ok("1")
-}
 
 /// Canonicalize a package URL, dependency key, or package-prefix glob.
 ///
@@ -18,13 +11,6 @@ pub fn registry_migration_enabled() -> bool {
 /// repository path, a slash-delimited child path, or a version selector on the
 /// repository root.
 pub fn canonicalize_package_reference(value: &str) -> Cow<'_, str> {
-    if !registry_migration_enabled() {
-        return Cow::Borrowed(value);
-    }
-    canonicalize_registry_reference(value)
-}
-
-fn canonicalize_registry_reference(value: &str) -> Cow<'_, str> {
     if value == LEGACY_REGISTRY_REPOSITORY {
         return Cow::Borrowed(CANONICAL_REGISTRY_REPOSITORY);
     }
@@ -39,6 +25,30 @@ fn canonicalize_registry_reference(value: &str) -> Cow<'_, str> {
     Cow::Owned(format!("{CANONICAL_REGISTRY_REPOSITORY}{suffix}"))
 }
 
+/// Resolve a package reference literally, then retry its canonical identity.
+pub fn resolve_package_reference<'a, T>(
+    value: &'a str,
+    mut resolve: impl FnMut(&str) -> Option<T>,
+) -> Option<(Cow<'a, str>, T)> {
+    if let Some(resolved) = resolve(value) {
+        return Some((Cow::Borrowed(value), resolved));
+    }
+
+    let canonical = canonicalize_package_reference(value);
+    if canonical.as_ref() == value {
+        return None;
+    }
+    resolve(&canonical).map(|resolved| (canonical, resolved))
+}
+
+/// Whether a package reference belongs to the canonical registry repository.
+pub fn is_canonical_registry_reference(value: &str) -> bool {
+    value == CANONICAL_REGISTRY_REPOSITORY
+        || value
+            .strip_prefix(CANONICAL_REGISTRY_REPOSITORY)
+            .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with('@'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,28 +56,53 @@ mod tests {
     #[test]
     fn canonicalizes_only_the_legacy_registry_boundary() {
         assert_eq!(
-            canonicalize_registry_reference(LEGACY_REGISTRY_REPOSITORY),
+            canonicalize_package_reference(LEGACY_REGISTRY_REPOSITORY),
             CANONICAL_REGISTRY_REPOSITORY
         );
         assert_eq!(
-            canonicalize_registry_reference("github.com/diodeinc/registry/components/Foo/Foo.zen"),
+            canonicalize_package_reference("github.com/diodeinc/registry/components/Foo/Foo.zen"),
             "code.diode.computer/diode/registry/components/Foo/Foo.zen"
         );
         assert_eq!(
-            canonicalize_registry_reference("github.com/diodeinc/registry/components/Foo@0.4"),
+            canonicalize_package_reference("github.com/diodeinc/registry/components/Foo@0.4"),
             "code.diode.computer/diode/registry/components/Foo@0.4"
         );
         assert_eq!(
-            canonicalize_registry_reference("github.com/diodeinc/registry@0.4"),
+            canonicalize_package_reference("github.com/diodeinc/registry@0.4"),
             "code.diode.computer/diode/registry@0.4"
         );
         assert_eq!(
-            canonicalize_registry_reference("github.com/diodeinc/registry-old/components/Foo"),
+            canonicalize_package_reference("github.com/diodeinc/registry-old/components/Foo"),
             "github.com/diodeinc/registry-old/components/Foo"
         );
         assert_eq!(
-            canonicalize_registry_reference("https://github.com/diodeinc/registry"),
+            canonicalize_package_reference("https://github.com/diodeinc/registry"),
             "https://github.com/diodeinc/registry"
         );
+    }
+
+    #[test]
+    fn resolves_literal_before_registry_alias() {
+        let legacy = "github.com/diodeinc/registry/components/Foo/Foo.zen";
+        let canonical = "code.diode.computer/diode/registry/components/Foo/Foo.zen";
+
+        assert_eq!(
+            resolve_package_reference(legacy, |candidate| (candidate == legacy)
+                .then_some("literal"))
+            .map(|(matched, resolved)| (matched.into_owned(), resolved)),
+            Some((legacy.to_string(), "literal"))
+        );
+        assert_eq!(
+            resolve_package_reference(legacy, |candidate| {
+                (candidate == canonical).then_some("canonical")
+            })
+            .map(|(matched, resolved)| (matched.into_owned(), resolved)),
+            Some((canonical.to_string(), "canonical"))
+        );
+        assert_eq!(
+            resolve_package_reference(canonical, |_| Some("literal")),
+            Some((Cow::Borrowed(canonical), "literal"))
+        );
+        assert_eq!(resolve_package_reference(canonical, |_| None::<()>), None);
     }
 }

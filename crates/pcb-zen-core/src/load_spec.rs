@@ -108,10 +108,7 @@ impl LoadSpec {
             if uri.is_empty() {
                 return None;
             }
-            let uri = crate::package_url::canonicalize_package_reference(uri);
-            return Some(LoadSpec::PackageUri {
-                uri: format!("{}{uri}", pcb_sch::PACKAGE_URI_PREFIX),
-            });
+            return Some(LoadSpec::PackageUri { uri: s.to_string() });
         }
 
         if let Some(rest) = s.strip_prefix('@') {
@@ -150,9 +147,7 @@ impl LoadSpec {
                 path: PathBuf::from(rel_path),
             })
         } else if is_package_url(s) {
-            Some(LoadSpec::Url {
-                url: crate::package_url::canonicalize_package_reference(s).into_owned(),
-            })
+            Some(LoadSpec::Url { url: s.to_string() })
         } else {
             // Raw file path (relative or absolute)
             Some(LoadSpec::local_path(s))
@@ -167,8 +162,7 @@ impl LoadSpec {
             LoadSpec::Path { .. } => None,
             other => {
                 let url = other.to_string();
-                let url = url.strip_prefix('@').unwrap_or(&url);
-                Some(crate::package_url::canonicalize_package_reference(url).into_owned())
+                Some(url.strip_prefix('@').unwrap_or(&url).to_string())
             }
         }
     }

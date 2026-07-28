@@ -112,13 +112,12 @@ pub fn pcb_version_is_older(current: &str, required: &str) -> Option<bool> {
 
 impl PcbToml {
     fn finish_parse(mut self) -> Result<Self> {
-        self.canonicalize_package_references()?;
         self.dependencies.remove_kicad_library_dependencies();
         self.validate_pcb_version()?;
         Ok(self)
     }
 
-    /// Apply enabled package-identity migrations without other parse finalization.
+    /// Apply package-identity migrations without other parse finalization.
     pub fn canonicalize_package_references(&mut self) -> Result<()> {
         canonicalize_map_keys(&mut self.dependencies.direct, "direct dependency")?;
         canonicalize_map_keys(&mut self.dependencies.indirect, "indirect dependency")?;

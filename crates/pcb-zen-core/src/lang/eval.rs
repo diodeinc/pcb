@@ -703,7 +703,7 @@ impl EvalContextConfig {
         context: &ResolveContext,
         scope: &crate::resolution::ResolvedPackageScope<'_>,
     ) -> Result<PathBuf, anyhow::Error> {
-        let full_url = if let LoadSpec::Stdlib { path } = context.latest_spec() {
+        let mut full_url = if let LoadSpec::Stdlib { path } = context.latest_spec() {
             let stdlib_root = self.resolution.workspace_info.workspace_stdlib_dir();
             return Ok(if path.as_os_str().is_empty() {
                 stdlib_root
@@ -717,7 +717,17 @@ impl EvalContextConfig {
                 .expect("try_resolve_workspace called with non-URL spec")
         };
 
-        let resolved = scope.resolve_package_url(&full_url);
+        let resolved = crate::package_url::resolve_package_reference(&full_url, |candidate| {
+            scope.resolve_package_url(candidate)
+        });
+        let resolved = match resolved {
+            Some((matched_url, resolved)) => {
+                let matched_url = matched_url.into_owned();
+                full_url = matched_url;
+                Some(resolved)
+            }
+            None => None,
+        };
         let is_declared_dependency = matches!(
             resolved.as_ref(),
             Some(PackageUrlResolution::Dependency { .. })
