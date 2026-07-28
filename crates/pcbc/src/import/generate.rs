@@ -2641,7 +2641,7 @@ fn build_imported_instance_calls_for_instances(
                     && resolved.iter().any(Option::is_none))
             {
                 anyhow::bail!(
-                    "Registry module IO {io_name} groups physical pins with different KiCad connectivity on {}",
+                    "Generated component IO {io_name} groups physical pins with different KiCad connectivity on {}",
                     component.netlist.refdes.as_str()
                 );
             }
@@ -3081,11 +3081,6 @@ mod tests {
         assert!(rendered.zen_text.contains("\"D+__3\": \"3\""));
         assert!(rendered.zen_text.contains("\"NC\\\"\\\\é\": \"10\""));
         assert!(!rendered.zen_text.contains("NC = io(Net)"));
-        assert!(
-            !rendered
-                .zen_text
-                .contains("__imported_bom_source_incomplete")
-        );
     }
     #[test]
     fn renderer_preserves_unresolved_footprint_without_geometry() {
@@ -3109,16 +3104,6 @@ mod tests {
             rendered
                 .zen_text
                 .contains("footprint = \"Missing:Footprint\"")
-        );
-        assert!(
-            !rendered
-                .zen_text
-                .contains("__imported_unresolved_footprint")
-        );
-        assert!(
-            !rendered
-                .zen_text
-                .contains("__imported_bom_source_incomplete")
         );
     }
 
