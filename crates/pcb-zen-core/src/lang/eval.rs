@@ -59,6 +59,7 @@ use super::{
     interface::interface_globals,
     module::{ModuleLoader, module_globals},
     path::format_relative_path_as_package_uri,
+    pinmux::pinmux_globals,
     spice_model::model_globals,
     test_bench::test_bench_globals,
 };
@@ -1273,6 +1274,7 @@ impl EvalContext {
                 .with(file_globals)
                 .with(model_globals)
                 .with(test_bench_globals)
+                .with(pinmux_globals)
                 .build()
             })
             .clone()

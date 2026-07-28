@@ -512,6 +512,9 @@ pub struct InterfaceFactoryGen<V: InterfaceCell> {
     interface_type_data: V::InterfaceTypeDataOpt,
     fields: SmallMap<String, V>,
     post_init_fn: Option<V>,
+    /// Interface types this one implies (capability closure): a peripheral
+    /// providing this interface also satisfies requests for any implied one.
+    implies: Vec<V>,
     param_spec: ParametersSpec<FrozenValue>,
 }
 
@@ -528,6 +531,7 @@ impl Freeze for InterfaceFactory<'_> {
             interface_type_data: self.interface_type_data.into_inner(),
             fields: self.fields.freeze(freezer)?,
             post_init_fn: self.post_init_fn.freeze(freezer)?,
+            implies: self.implies.freeze(freezer)?,
             param_spec: self.param_spec,
         })
     }
@@ -766,12 +770,29 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
         let heap = eval.heap();
         let mut fields = SmallMap::new();
         let mut post_init_fn = None;
+        let mut implies: Vec<Value<'v>> = Vec::new();
 
         // Process field specifications and validate reserved names
         for (name, v) in &kwargs {
             if name == "__post_init__" {
                 // Handle __post_init__ as direct function assignment
                 post_init_fn = Some(v.to_value());
+            } else if name == "implies" {
+                let list =
+                    starlark::values::list::ListRef::from_value(v.to_value()).ok_or_else(|| {
+                        anyhow::anyhow!("interface(implies=...) must be a list of interface types")
+                    })?;
+                for item in list.iter() {
+                    if item.downcast_ref::<InterfaceFactory<'v>>().is_none()
+                        && item.downcast_ref::<FrozenInterfaceFactory>().is_none()
+                    {
+                        return Err(anyhow::anyhow!(
+                            "interface(implies=...) entries must be interface types, got `{}`",
+                            item.get_type()
+                        ));
+                    }
+                    implies.push(item);
+                }
             } else if name == "name" {
                 // Reject "name" as field name to avoid conflict with implicit parameter
                 return Err(anyhow::anyhow!(
@@ -819,6 +840,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
             interface_type_data: OnceCell::new(),
             fields,
             post_init_fn,
+            implies,
             param_spec,
         });
 
@@ -888,6 +910,23 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
     #[inline]
     pub fn field(&self, name: &str) -> Option<&V> {
         self.fields.get(name)
+    }
+
+    /// Interface types this one implies (see `interface(implies=...)`).
+    #[inline]
+    pub fn implies(&self) -> &[V] {
+        &self.implies
+    }
+
+    /// Globally unique nominal identity of this interface type.
+    #[inline]
+    pub fn type_instance_id(&self) -> TypeInstanceId {
+        self.id
+    }
+
+    /// Best-effort display name: the exported variable name when known.
+    pub fn type_name(&self) -> Option<String> {
+        V::get_ty(&self.interface_type_data).map(|d| d.name.clone())
     }
 }
 

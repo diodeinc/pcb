@@ -281,7 +281,90 @@ power = PowerIf(vcc = ext)
 
 The standard library provides common interfaces (`Spi`, `I2c`, `Uart`, `Usb2`, `DiffPair`, `Pcie`, `Jtag`, `Swd`, etc.) in `@stdlib/interfaces.zen`. Helper functions `UartPair(a, b)` and `UsartPair(a, b)` create cross-connected pairs for point-to-point links.
 
-## Components and symbols
+### Interface implication (`implies=`)
+
+An interface type may declare that it implies other interface types. This is a
+capability statement consumed by the pin-capability model (below): a resource
+providing the richer interface automatically satisfies requests for any implied
+one — never the reverse.
+
+```python
+Uart  = interface(TX = Net, RX = Net)
+Usart = interface(TX = Net, RX = Net, CK = Net, implies = [Uart])
+# same signals, distinct capability — a "marker" interface:
+LpUart = interface(TX = Net, RX = Net, implies = [Uart])
+```
+
+`implies` forms a DAG (an interface may imply several others), and matching is
+nominal: two structurally identical interfaces remain distinct capabilities.
+
+## Pin capabilities and assignment
+
+Multi-function components (MCUs, multi-unit analog/logic parts) can declare
+what each pin *can do* and let elaboration solve the assignment. This covers
+fixed-function pinouts (AVR), alternate-function matrices (STM32), near-total
+GPIO matrices (ESP32), and classic gate/pin swap, with one model.
+
+```python
+USART1 = peripheral(
+    "USART1",
+    provides = [Usart, UartFlow],       # interface types, closed over implies=
+    rebind   = "firmware",              # "none" | "firmware" | "fixed"
+    signals  = {
+        "TX": [pin("PA9", af = 1), pin("PB6", af = 0)],
+        "RX": [pin("PA10", af = 1), pin("PB7", af = 0)],
+        "CK": [pin("PA8", af = 1)],
+        "RTS": [pin("PA12", af = 1)],
+        "CTS": [pin("PA11", af = 1)],
+    },
+    attrs = {"baud_max": "8MHz"},       # unit strings parse to physical values
+)
+GPIOS = pool("GPIO", provides = [Gpio], pins = ["PB4", "PB5", "PD6"])
+
+result = pin_solve(
+    [USART1, GPIOS],
+    [
+        pin_request("DEBUG", Uart),                       # any provider of Uart
+        pin_request("LED", Gpio, prefer = ["PB4"]),
+        pin_request("SC", Usart),                         # needs CK: USART-class only
+    ],
+)
+```
+
+- **`pin(name, af=, cost=, input_only=, strap=)`** — one candidate physical
+  pin. `cost` biases the solver (e.g. ESP32 IOMUX-direct = 0, matrix = 1);
+  `strap` pins are penalized and warn when chosen; `input_only` pins are
+  excluded from `direction = "output"` requests.
+- **`peripheral(name, provides=, signals=, rebind=, attrs=, symmetric=, unless=)`**
+  — a resource cluster. Every signal of every provided interface (closure
+  included) must have a non-empty candidate list — a declaration cannot
+  overstate the datasheet. `unless = "axis"` disables the peripheral when that
+  key is truthy in `pin_solve(config=...)` (e.g. ESP32 ADC2 vs. WiFi).
+  `rebind` records what a later swap costs: `"none"` (gate swap, no firmware),
+  `"firmware"` (a constant to regenerate), `"fixed"` (never movable).
+- **`pool(name, provides=, pins=, rebind=)`** — sugar for N interchangeable
+  single-signal units (GPIO pools).
+- **`pin_request(name, Iface, uses=, instance=, prefer=, lock=, where=, direction=)`**
+  — a demand: the interface type *is* the request. Only `uses=` signals
+  consume pins (default: all of the interface's signals). `where=` is a
+  predicate over the peripheral's `attrs` (`lambda a: a["baud_max"] >= "1MHz"`
+  works — unit strings coerce in physical-value comparisons). `instance=`,
+  `prefer=`, `lock=` are caller-side overrides.
+- **`pin_solve(peripherals, requests, config=, previous=)`** — deterministic
+  joint instance × pin matching. Exclusivity is structural at both tiers: a
+  pin carries at most one function, and an instance serves at most one request
+  (two `Uart` requests can never share USART1, even on disjoint pin sets).
+  The solver prefers the poorest sufficient instance, honors costs and
+  `prefer=`, and takes `previous=` (a prior assignment) as a stability seed so
+  adding a request does not reshuffle an already-routed design. Infeasibility
+  is a build error with per-candidate rejection reasons.
+
+`pin_solve` returns `{"assignment": ..., "swap_classes": ...}` and stores both
+as the module properties `pin_assignment` and `swap_classes` (JSON), which
+flow through the netlist into schematic fields: the chosen assignment
+(including `af=` indices, sufficient for firmware pin-init generation) and the
+residual swap freedom (pool classes with spare pins, `rebind = "none"`
+clusters for gate swap) reach layout tools with no side files.
 
 ### Component
 

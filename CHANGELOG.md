@@ -10,6 +10,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Pin-capability model: new builtins `pin()`, `peripheral()`, `pool()`, `pin_request()` and `pin_solve()` declare what a multi-function component's pins can do and solve the instance × pin assignment deterministically at elaboration (exclusivity at both tiers, costs, `previous=` stability). The solved `pin_assignment` and residual `swap_classes` are stored as module properties (JSON) and flow into the netlist.
+- `interface(implies = [...])`: an interface type can imply others; capability matching is nominal and closed over the implication DAG (a `Usart` provider satisfies a `Uart` request, never the reverse).
 - Added `pcb auth git configure` and `pcb auth git unconfigure` to manage host-specific global Git credential configuration for DiodeHub.
 - PCB now authenticates its own DiodeHub Git operations without requiring global Git configuration.
 
