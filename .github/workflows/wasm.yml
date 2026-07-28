@@ -26,7 +26,8 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev jq git openssh-client zstd
+          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev jq git openssh-client zstd e2fsprogs
+          git config --global --add safe.directory /blacksmith-git-mirror/diodeinc/pcb/v1/diodeinc-pcb.git
 
       - uses: useblacksmith/checkout@v1.1
         with:

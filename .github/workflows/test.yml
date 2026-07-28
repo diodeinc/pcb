@@ -72,7 +72,8 @@ jobs:
         if: matrix.config.name == 'Ubuntu'
         run: |
           apt-get update
-          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev
+          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev e2fsprogs
+          git config --global --add safe.directory /blacksmith-git-mirror/diodeinc/pcb/v1/diodeinc-pcb.git
 
       - name: Checkout with Blacksmith cache
         if: matrix.config.name == 'Ubuntu'
