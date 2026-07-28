@@ -28,7 +28,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: useblacksmith/checkout@v1
         with:
           ref: ${{ inputs.dry_run && github.ref_name || inputs.tag || github.ref_name }}
           submodules: recursive
@@ -90,7 +90,7 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
 
-      - uses: actions/checkout@v5
+      - uses: useblacksmith/checkout@v1
         with:
           ref: ${{ inputs.dry_run && github.ref_name || needs.prepare.outputs.tag }}
           submodules: recursive
@@ -176,7 +176,7 @@ jobs:
       - build
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v5
+      - uses: useblacksmith/checkout@v1
         with:
           ref: ${{ inputs.dry_run && github.ref_name || needs.prepare.outputs.tag }}
 

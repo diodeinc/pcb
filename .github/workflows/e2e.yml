@@ -38,7 +38,7 @@ jobs:
           apt-get update
           apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev
 
-      - uses: actions/checkout@v5
+      - uses: useblacksmith/checkout@v1
 
       - name: Cache KiCad (macOS)
         if: matrix.config.name == 'macOS'
@@ -93,7 +93,7 @@ jobs:
 
       - name: Checkout kicad-test-fixtures
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/checkout@v5
+        uses: useblacksmith/checkout@v1
         with:
           repository: diodeinc/kicad-test-fixtures
           token: ${{ secrets.DIODE_ROBOT_TOKEN }}
