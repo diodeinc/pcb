@@ -114,13 +114,6 @@ pub struct GenerateComponentPin {
     pub io_name: Option<String>,
 }
 
-#[derive(Debug, Default)]
-struct SignalPinMetadata {
-    sanitized_name: String,
-    saw_pin_type: bool,
-    saw_non_no_connect: bool,
-}
-
 fn pin_type_candidates(pin: &Pin) -> impl Iterator<Item = &str> {
     pin.electrical_type.as_deref().into_iter().chain(
         pin.alternates
@@ -129,37 +122,39 @@ fn pin_type_candidates(pin: &Pin) -> impl Iterator<Item = &str> {
     )
 }
 
-fn update_signal_pin_metadata(metadata: &mut SignalPinMetadata, pin: &Pin) {
-    for pin_type in pin_type_candidates(pin) {
-        metadata.saw_pin_type = true;
-        if pin_type != "no_connect" {
-            metadata.saw_non_no_connect = true;
+/// Returns whether a pin group declares electrical types that are all `no_connect`.
+///
+/// Primary and alternate pin types are both considered. A group without any declared electrical
+/// type is not treated as `no_connect`.
+pub fn pins_are_only_no_connect<'a>(pins: impl IntoIterator<Item = &'a Pin>) -> bool {
+    let mut saw_pin_type = false;
+    for pin in pins {
+        for pin_type in pin_type_candidates(pin) {
+            saw_pin_type = true;
+            if pin_type != "no_connect" {
+                return false;
+            }
         }
     }
-}
-
-fn signal_is_only_no_connect(metadata: &SignalPinMetadata) -> bool {
-    metadata.saw_pin_type && !metadata.saw_non_no_connect
+    saw_pin_type
 }
 
 pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
-    let mut signals: BTreeMap<String, SignalPinMetadata> = BTreeMap::new();
+    let mut signals: BTreeMap<String, Vec<&Pin>> = BTreeMap::new();
     for pin in symbol.canonical_pins() {
-        let signal_name = pin.signal_name().to_string();
-        let metadata = signals
-            .entry(signal_name)
-            .or_insert_with_key(|signal_name| SignalPinMetadata {
-                sanitized_name: sanitize_pin_name(signal_name),
-                ..Default::default()
-            });
-        update_signal_pin_metadata(metadata, pin);
+        signals
+            .entry(pin.signal_name().to_string())
+            .or_default()
+            .push(pin);
     }
 
     signals
         .into_iter()
-        .filter_map(|(signal_name, metadata)| {
-            (!signal_is_only_no_connect(&metadata))
-                .then_some((signal_name, metadata.sanitized_name))
+        .filter_map(|(signal_name, pins)| {
+            (!pins_are_only_no_connect(pins)).then(|| {
+                let sanitized_name = sanitize_pin_name(&signal_name);
+                (signal_name, sanitized_name)
+            })
         })
         .collect()
 }
@@ -269,6 +264,46 @@ mod tests {
         assert_eq!(sanitize_pin_name("A+B"), "A_B");
         assert_eq!(sanitize_pin_name("CS#"), "CSH");
         assert_eq!(sanitize_pin_name("1V8"), "P1V8");
+    }
+
+    #[test]
+    fn only_no_connect_requires_declared_primary_types() {
+        let untyped = Pin::default();
+        let no_connect = Pin {
+            electrical_type: Some("no_connect".to_string()),
+            ..Default::default()
+        };
+        let input = Pin {
+            electrical_type: Some("input".to_string()),
+            ..Default::default()
+        };
+
+        assert!(!pins_are_only_no_connect([&untyped]));
+        assert!(pins_are_only_no_connect([&no_connect]));
+        assert!(pins_are_only_no_connect([&no_connect, &no_connect]));
+        assert!(!pins_are_only_no_connect([&no_connect, &input]));
+    }
+
+    #[test]
+    fn only_no_connect_considers_alternate_types() {
+        let alternate_no_connect = Pin {
+            alternates: vec![pcb_eda::PinAlternate {
+                electrical_type: Some("no_connect".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let alternate_input = Pin {
+            electrical_type: Some("no_connect".to_string()),
+            alternates: vec![pcb_eda::PinAlternate {
+                electrical_type: Some("input".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert!(pins_are_only_no_connect([&alternate_no_connect]));
+        assert!(!pins_are_only_no_connect([&alternate_input]));
     }
 
     #[test]

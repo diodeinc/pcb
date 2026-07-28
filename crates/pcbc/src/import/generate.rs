@@ -2291,23 +2291,6 @@ struct PhysicalPinPlan {
     io_pins: BTreeMap<String, KiCadPinNumber>,
 }
 
-#[derive(Debug, Default)]
-struct PhysicalPinTypeMetadata {
-    saw_pin_type: bool,
-    saw_non_no_connect: bool,
-}
-
-fn update_physical_pin_type_metadata(metadata: &mut PhysicalPinTypeMetadata, pin: &pcb_eda::Pin) {
-    for pin_type in pin.electrical_type.as_deref().into_iter().chain(
-        pin.alternates
-            .iter()
-            .filter_map(|alternate| alternate.electrical_type.as_deref()),
-    ) {
-        metadata.saw_pin_type = true;
-        metadata.saw_non_no_connect |= pin_type != "no_connect";
-    }
-}
-
 fn sanitize_pin_number_suffix(raw: &str) -> String {
     let mut out = String::new();
     let mut previous_underscore = false;
@@ -2389,14 +2372,12 @@ fn build_physical_pin_plan(
         exposed: bool,
     }
 
-    let mut pin_types: BTreeMap<KiCadPinNumber, PhysicalPinTypeMetadata> = BTreeMap::new();
+    let mut physical_pins: BTreeMap<KiCadPinNumber, Vec<&pcb_eda::Pin>> = BTreeMap::new();
     for pin in &symbol.pins {
-        update_physical_pin_type_metadata(
-            pin_types
-                .entry(KiCadPinNumber::from(pin.number.clone()))
-                .or_default(),
-            pin,
-        );
+        physical_pins
+            .entry(KiCadPinNumber::from(pin.number.clone()))
+            .or_default()
+            .push(pin);
     }
 
     let mut canonical_pins: Vec<&pcb_eda::Pin> = symbol.canonical_pins().collect();
@@ -2416,9 +2397,9 @@ fn build_physical_pin_plan(
     let mut pins = Vec::with_capacity(canonical_pins.len());
     for pin in canonical_pins {
         let number = KiCadPinNumber::from(pin.number.clone());
-        let metadata = pin_types.get(&number);
-        let only_no_connect =
-            metadata.is_some_and(|metadata| metadata.saw_pin_type && !metadata.saw_non_no_connect);
+        let only_no_connect = physical_pins
+            .get(&number)
+            .is_some_and(|pins| component_gen::pins_are_only_no_connect(pins.iter().copied()));
         let mut has_real_connection = false;
         for anchor in instances {
             let component = components.get(anchor).with_context(|| {
@@ -2873,6 +2854,8 @@ mod tests {
                 make_pin("A-B", "7", Some("input")),
                 make_pin("NC", "10", Some("no_connect")),
                 make_pin("NC", "11", Some("no_connect")),
+                make_pin("SHARED", "12", Some("no_connect")),
+                make_pin("SHARED_ALT", "12", Some("input")),
             ],
             ..Default::default()
         };
@@ -2903,6 +2886,8 @@ mod tests {
         assert_eq!(by_pad["11"].logical_name, "NC__11");
         assert_eq!(by_pad["10"].io_name, None);
         assert_eq!(by_pad["11"].io_name, None);
+        assert_eq!(by_pad["12"].logical_name, "SHARED");
+        assert_eq!(by_pad["12"].io_name.as_deref(), Some("SHARED"));
     }
     #[test]
     fn connected_electrical_no_connect_pin_is_exposed() {
