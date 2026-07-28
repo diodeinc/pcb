@@ -1,5 +1,3 @@
-#![cfg(not(target_os = "windows"))]
-
 use pcb_test_utils::sandbox::Sandbox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -13,8 +11,18 @@ const VALIDATION_DIAGNOSTICS_PREFIX: &str = "Wrote import validation diagnostics
 
 fn sandbox() -> Sandbox {
     let mut sandbox = Sandbox::new();
-    let inherited = std::env::var("PATH").unwrap_or_default();
-    sandbox.env("PATH", format!("/usr/bin:/bin:{inherited}"));
+    let mut paths = Vec::new();
+    #[cfg(not(target_os = "windows"))]
+    paths.extend(["/usr/bin", "/bin"].map(std::path::PathBuf::from));
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    sandbox.env(
+        "PATH",
+        std::env::join_paths(paths)
+            .expect("construct test PATH")
+            .to_string_lossy(),
+    );
     sandbox
 }
 
@@ -35,6 +43,7 @@ fn validation_diagnostics(stderr: &str) -> std::path::PathBuf {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn import_requires_output_directory() {
     let import = sandbox()
         .run("pcbc", ["import", "layout.kicad_sch"])
@@ -54,8 +63,6 @@ fn import_requires_output_directory() {
 
 #[test]
 fn validation_and_extraction_share_one_source_snapshot() {
-    use std::os::unix::fs::PermissionsExt;
-
     let mut sandbox = sandbox();
     sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);
     sandbox.write("mutated-source", "not a KiCad schematic\n");
@@ -65,31 +72,23 @@ fn validation_and_extraction_share_one_source_snapshot() {
         .filter(|path| path.is_file())
         .or_else(|| {
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .map(|dir| dir.join("kicad-cli"))
+                .map(|dir| {
+                    dir.join(if cfg!(target_os = "windows") {
+                        "kicad-cli.exe"
+                    } else {
+                        "kicad-cli"
+                    })
+                })
                 .find(|path| path.is_file())
         })
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli")
-        });
+        .or_else(platform_kicad_cli);
     assert!(
-        real_kicad_cli.is_file(),
+        real_kicad_cli.as_ref().is_some_and(|path| path.is_file()),
         "could not locate the real kicad-cli"
     );
+    let real_kicad_cli = real_kicad_cli.unwrap();
 
-    let wrapper = sandbox.root_path().join("kicad-cli-wrapper");
-    fs::write(
-        &wrapper,
-        r#"#!/bin/sh
-if [ "$1" = "sch" ] && [ "$2" = "erc" ]; then
-    cp "$PCB_TEST_MUTATED_SOURCE" "$PCB_TEST_ORIGINAL_SOURCE"
-fi
-exec "$PCB_TEST_REAL_KICAD_CLI" "$@"
-"#,
-    )
-    .expect("write kicad-cli wrapper");
-    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&wrapper, permissions).expect("make kicad-cli wrapper executable");
+    let wrapper = write_kicad_cli_wrapper(sandbox.root_path());
 
     let source = sandbox.root_path().join("layout.kicad_sch");
     let mutated_source = sandbox.root_path().join("mutated-source");
@@ -115,7 +114,64 @@ exec "$PCB_TEST_REAL_KICAD_CLI" "$@"
     assert!(import.status.success(), "import failed:\n{stderr}");
 }
 
+#[cfg(target_os = "linux")]
+fn platform_kicad_cli() -> Option<std::path::PathBuf> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn platform_kicad_cli() -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli");
+    path.is_file().then_some(path)
+}
+
+#[cfg(target_os = "windows")]
+fn platform_kicad_cli() -> Option<std::path::PathBuf> {
+    [
+        r"C:\Program Files\KiCad\10.0\bin\kicad-cli.exe",
+        r"C:\Program Files\KiCad\9.0\bin\kicad-cli.exe",
+    ]
+    .into_iter()
+    .map(std::path::PathBuf::from)
+    .find(|path| path.is_file())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn write_kicad_cli_wrapper(root: &std::path::Path) -> std::path::PathBuf {
+    let wrapper = root.join("kicad-cli-wrapper");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+if [ "$1" = "sch" ] && [ "$2" = "erc" ]; then
+    cp "$PCB_TEST_MUTATED_SOURCE" "$PCB_TEST_ORIGINAL_SOURCE"
+fi
+exec "$PCB_TEST_REAL_KICAD_CLI" "$@"
+"#,
+    )
+    .expect("write kicad-cli wrapper");
+    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    fs::set_permissions(&wrapper, permissions).expect("make kicad-cli wrapper executable");
+    wrapper
+}
+
+#[cfg(target_os = "windows")]
+fn write_kicad_cli_wrapper(root: &std::path::Path) -> std::path::PathBuf {
+    let wrapper = root.join("kicad-cli-wrapper.bat");
+    fs::write(
+        &wrapper,
+        r#"@echo off
+if "%~1"=="sch" if "%~2"=="erc" copy /Y "%PCB_TEST_MUTATED_SOURCE%" "%PCB_TEST_ORIGINAL_SOURCE%" >NUL
+"%PCB_TEST_REAL_KICAD_CLI%" %*
+exit /b %ERRORLEVEL%
+"#,
+    )
+    .expect("write kicad-cli wrapper");
+    wrapper
+}
+
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn standalone_import_uses_existing_scaffolding_and_root_reports() {
     let mut sandbox = sandbox();
     sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);
@@ -172,6 +228,7 @@ fn standalone_import_uses_existing_scaffolding_and_root_reports() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn project_import_preserves_sources_and_existing_archive_behavior() {
     let mut sandbox = sandbox();
     sandbox.write("source/layout.kicad_sch", STANDALONE_FIXTURE);
@@ -222,6 +279,7 @@ fn project_import_preserves_sources_and_existing_archive_behavior() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn reimport_refuses_without_force_and_force_regenerates() {
     let mut sandbox = sandbox();
     sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);
@@ -265,6 +323,7 @@ fn reimport_refuses_without_force_and_force_regenerates() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn missing_footprint_assignment_preserves_unset_marker_and_still_imports() {
     let mut sandbox = sandbox();
     sandbox.write(
@@ -293,6 +352,7 @@ fn missing_footprint_assignment_preserves_unset_marker_and_still_imports() {
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn unavailable_footprints_emit_a_short_warning_and_stay_in_the_report() {
     let mut sandbox = sandbox();
     let unresolved_fpid = "UnavailableLibrary:R_0402_1005Metric";
@@ -430,6 +490,7 @@ fn generated_physical_partitions(netlist: &serde_json::Value) -> BTreeSet<Vec<St
 }
 
 #[test]
+#[cfg(not(target_os = "windows"))]
 fn standalone_import_preserves_duplicate_display_name_pin_partitions() {
     let mut sandbox = sandbox();
     sandbox.write("layout.kicad_sch", duplicate_pin_connectivity_fixture());
