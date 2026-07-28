@@ -1803,10 +1803,11 @@ fn generate_imported_components(
         }
 
         let unresolved_footprint = component.layout.as_ref().and_then(|layout| {
-            layout
-                .unresolved_footprint
-                .as_ref()
-                .and_then(|unresolved| unresolved.source_id.as_deref())
+            layout.unresolved_footprint.as_ref().map(|unresolved| {
+                // Component() requires a footprint string even when the KiCad symbol has no
+                // footprint assignment. Preserve KiCad's unset marker without inventing geometry.
+                unresolved.source_id.as_deref().unwrap_or("~")
+            })
         });
         let zen = render_component_zen(
             &part_dir.component_dir,

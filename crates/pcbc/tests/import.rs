@@ -172,6 +172,34 @@ fn reimport_refuses_without_force_and_force_regenerates() {
 }
 
 #[test]
+fn missing_footprint_assignment_preserves_unset_marker_and_still_imports() {
+    let mut sandbox = sandbox();
+    sandbox.write(
+        "layout.kicad_sch",
+        STANDALONE_FIXTURE.replacen("Resistor_SMD:R_0402_1005Metric", "~", 1),
+    );
+
+    let import = sandbox
+        .run("pcbc", ["import", "layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("run pcbc import");
+    let stderr = String::from_utf8_lossy(&import.stderr).into_owned();
+    assert!(import.status.success(), "import failed:\n{stderr}");
+    assert!(stderr.contains("<missing footprint>"));
+
+    let generated_component = fs::read_to_string(
+        sandbox
+            .root_path()
+            .join("out/components/ERJ-2RKF1003X/ERJ-2RKF1003X.zen"),
+    )
+    .expect("read generated component without a footprint assignment");
+    assert!(generated_component.contains("footprint=\"~\""));
+}
+
+#[test]
 fn unavailable_footprints_emit_a_short_warning_and_stay_in_the_report() {
     let mut sandbox = sandbox();
     let unresolved_fpid = "UnavailableLibrary:R_0402_1005Metric";
