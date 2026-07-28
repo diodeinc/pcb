@@ -76,6 +76,18 @@ fn standalone_import_uses_existing_scaffolding_and_root_reports() {
             serde_json::from_slice(&fs::read(path).expect("read diagnostics")).expect("parse JSON");
         assert!(value.is_object());
     }
+
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(extraction_report(&stderr)).expect("read report"))
+            .expect("parse report JSON");
+    assert_eq!(
+        report["generated"]["validation_diagnostics_json"],
+        ".kicad.validation.diagnostics.json"
+    );
+    assert_eq!(
+        report["generated"]["import_extraction_json"],
+        ".kicad.import.extraction.json"
+    );
 }
 
 #[test]

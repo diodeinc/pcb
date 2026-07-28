@@ -712,6 +712,8 @@ pub(super) struct ImportValidation {
 pub(super) struct GeneratedArtifacts {
     pub(super) board_dir: PathBuf,
     pub(super) board_zen: PathBuf,
+    pub(super) validation_diagnostics_json: PathBuf,
+    pub(super) import_extraction_json: PathBuf,
     pub(super) layout_dir: PathBuf,
     pub(super) layout_kicad_pro: Option<PathBuf>,
     pub(super) layout_kicad_pcb: Option<PathBuf>,

@@ -14,6 +14,14 @@ pub(super) fn build_import_report(
     let generated = super::GeneratedArtifacts {
         board_dir: super::rel_to_root(&paths.workspace_root, &materialized.board_dir),
         board_zen: super::rel_to_root(&paths.workspace_root, &materialized.board_zen),
+        validation_diagnostics_json: super::rel_to_root(
+            &paths.workspace_root,
+            &materialized.validation_diagnostics_json,
+        ),
+        import_extraction_json: super::rel_to_root(
+            &paths.workspace_root,
+            &materialized.import_extraction_json,
+        ),
         layout_dir: super::rel_to_root(&paths.workspace_root, &materialized.layout_dir),
         layout_kicad_pro: materialized
             .layout_kicad_pro
@@ -53,29 +61,7 @@ pub(super) fn write_import_extraction_report(
     out_path: &Path,
     payload: &super::ImportReport,
 ) -> Result<()> {
-    let mut value = serde_json::to_value(payload)?;
-    sort_json_objects(&mut value);
-    fs::write(out_path, serde_json::to_string_pretty(&value)?)
+    fs::write(out_path, serde_json::to_string_pretty(payload)?)
         .with_context(|| format!("Failed to write {}", out_path.display()))?;
     Ok(())
-}
-
-fn sort_json_objects(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(object) => {
-            let old = std::mem::take(object);
-            let mut entries = old.into_iter().collect::<Vec<_>>();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            for (key, mut value) in entries {
-                sort_json_objects(&mut value);
-                object.insert(key, value);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                sort_json_objects(value);
-            }
-        }
-        _ => {}
-    }
 }
