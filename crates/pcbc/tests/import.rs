@@ -206,39 +206,47 @@ fn platform_kicad_cli() -> Option<std::path::PathBuf> {
     .find(|path| path.is_file())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn write_kicad_cli_wrapper(root: &std::path::Path) -> std::path::PathBuf {
-    let wrapper = root.join("kicad-cli-wrapper");
+    let source = root.join("kicad-cli-wrapper.rs");
     fs::write(
-        &wrapper,
-        r#"#!/bin/sh
-cp "$PCB_TEST_MUTATED_SCHEMATIC" "$PCB_TEST_ORIGINAL_SCHEMATIC"
-cp "$PCB_TEST_MUTATED_PROJECT" "$PCB_TEST_ORIGINAL_PROJECT"
-cp "$PCB_TEST_MUTATED_PCB" "$PCB_TEST_ORIGINAL_PCB"
-exec "$PCB_TEST_REAL_KICAD_CLI" "$@"
-"#,
-    )
-    .expect("write kicad-cli wrapper");
-    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-    fs::set_permissions(&wrapper, permissions).expect("make kicad-cli wrapper executable");
-    wrapper
-}
+        &source,
+        r#"use std::{env, fs, process::Command};
 
-#[cfg(target_os = "windows")]
-fn write_kicad_cli_wrapper(root: &std::path::Path) -> std::path::PathBuf {
-    let wrapper = root.join("kicad-cli-wrapper.bat");
-    fs::write(
-        &wrapper,
-        r#"@echo off
-copy /Y "%PCB_TEST_MUTATED_SCHEMATIC%" "%PCB_TEST_ORIGINAL_SCHEMATIC%" >NUL
-copy /Y "%PCB_TEST_MUTATED_PROJECT%" "%PCB_TEST_ORIGINAL_PROJECT%" >NUL
-copy /Y "%PCB_TEST_MUTATED_PCB%" "%PCB_TEST_ORIGINAL_PCB%" >NUL
-"%PCB_TEST_REAL_KICAD_CLI%" %*
-exit /b %ERRORLEVEL%
+fn main() {
+    for (source, destination) in [
+        ("PCB_TEST_MUTATED_SCHEMATIC", "PCB_TEST_ORIGINAL_SCHEMATIC"),
+        ("PCB_TEST_MUTATED_PROJECT", "PCB_TEST_ORIGINAL_PROJECT"),
+        ("PCB_TEST_MUTATED_PCB", "PCB_TEST_ORIGINAL_PCB"),
+    ] {
+        fs::copy(env::var_os(source).unwrap(), env::var_os(destination).unwrap()).unwrap();
+    }
+
+    let status = Command::new(env::var_os("PCB_TEST_REAL_KICAD_CLI").unwrap())
+        .args(env::args_os().skip(1))
+        .status()
+        .unwrap();
+    std::process::exit(status.code().unwrap_or(1));
+}
 "#,
     )
-    .expect("write kicad-cli wrapper");
+    .expect("write kicad-cli wrapper source");
+    let wrapper = root.join(if cfg!(target_os = "windows") {
+        "kicad-cli-wrapper.exe"
+    } else {
+        "kicad-cli-wrapper"
+    });
+    let output = std::process::Command::new("rustc")
+        .args(["--edition", "2024"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&wrapper)
+        .output()
+        .expect("compile kicad-cli wrapper");
+    assert!(
+        output.status.success(),
+        "failed to compile kicad-cli wrapper:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     wrapper
 }
 
