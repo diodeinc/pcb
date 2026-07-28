@@ -28,7 +28,7 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
-      - uses: useblacksmith/checkout@v1.1
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.dry_run && github.ref_name || inputs.tag || github.ref_name }}
           submodules: recursive
@@ -107,16 +107,7 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
 
-      - name: Checkout with Blacksmith cache
-        if: runner.os == 'Linux'
-        uses: useblacksmith/checkout@v1.1
-        with:
-          ref: ${{ inputs.dry_run && github.ref_name || needs.prepare.outputs.tag }}
-          submodules: recursive
-
-      - name: Checkout
-        if: runner.os != 'Linux'
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.dry_run && github.ref_name || needs.prepare.outputs.tag }}
           submodules: recursive

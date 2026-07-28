@@ -30,25 +30,15 @@ jobs:
             runs-on: blacksmith-16vcpu-ubuntu-2404
             container:
               image: ghcr.io/diodeinc/kicad:10.0.4
-              options: --user root --privileged -v /dev:/dev
+              options: --user root
     steps:
       - name: Install Dependencies (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
         run: |
           apt-get update
-          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev e2fsprogs
-          git config --global --add safe.directory /blacksmith-git-mirror/diodeinc/pcb/v1/diodeinc-pcb.git
-          git config --global --add safe.directory /blacksmith-git-mirror/diodeinc/kicad-test-fixtures/v1/diodeinc-kicad-test-fixtures.git
+          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev
 
-      - name: Checkout with Blacksmith cache
-        if: matrix.config.name == 'Ubuntu'
-        uses: useblacksmith/checkout@v1.1
-        with:
-          allow-inside-container: true
-
-      - name: Checkout
-        if: matrix.config.name != 'Ubuntu'
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Cache KiCad (macOS)
         if: matrix.config.name == 'macOS'
@@ -101,17 +91,8 @@ jobs:
       - name: Test stdlib builds
         run: pcb +local build lib/std/ -S bom
 
-      - name: Checkout kicad-test-fixtures with Blacksmith cache
-        if: matrix.config.name == 'Ubuntu' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
-        uses: useblacksmith/checkout@v1.1
-        with:
-          repository: diodeinc/kicad-test-fixtures
-          token: ${{ secrets.DIODE_ROBOT_TOKEN }}
-          path: kicad-test-fixtures
-          allow-inside-container: true
-
       - name: Checkout kicad-test-fixtures
-        if: matrix.config.name != 'Ubuntu' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/checkout@v5
         with:
           repository: diodeinc/kicad-test-fixtures

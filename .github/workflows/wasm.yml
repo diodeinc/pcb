@@ -20,18 +20,15 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     container:
       image: ghcr.io/diodeinc/kicad:10.0.4
-      options: --user root --privileged -v /dev:/dev
+      options: --user root
     timeout-minutes: 30
     steps:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev jq git openssh-client zstd e2fsprogs
-          git config --global --add safe.directory /blacksmith-git-mirror/diodeinc/pcb/v1/diodeinc-pcb.git
+          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev jq git openssh-client zstd
 
-      - uses: useblacksmith/checkout@v1.1
-        with:
-          allow-inside-container: true
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
