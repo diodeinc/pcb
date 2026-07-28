@@ -33,11 +33,11 @@ USART1 = peripheral(
     provides = [Usart, UartFlow],
     rebind = "firmware",
     signals = {
-        "TX": [pin("PA9", af = 1), pin("PB6", af = 0)],
-        "RX": [pin("PA10", af = 1), pin("PB7", af = 0)],
-        "CK": [pin("PA8", af = 1)],
-        "RTS": [pin("PA12", af = 1)],
-        "CTS": [pin("PA11", af = 1)],
+        "TX": [pin("PA9", data = {"af": 1}), pin("PB6", data = {"af": 0})],
+        "RX": [pin("PA10", data = {"af": 1}), pin("PB7", data = {"af": 0})],
+        "CK": [pin("PA8", data = {"af": 1})],
+        "RTS": [pin("PA12", data = {"af": 1})],
+        "CTS": [pin("PA11", data = {"af": 1})],
     },
     attrs = {"baud_max": "8MHz"},
 )
@@ -47,8 +47,8 @@ USART2 = peripheral(
     provides = [Uart],
     rebind = "firmware",
     signals = {
-        "TX": [pin("PA2", af = 1), pin("PA14", af = 1)],
-        "RX": [pin("PA3", af = 1), pin("PA15", af = 1)],
+        "TX": [pin("PA2", data = {"af": 1}), pin("PA14", data = {"af": 1})],
+        "RX": [pin("PA3", data = {"af": 1}), pin("PA15", data = {"af": 1})],
     },
     attrs = {"baud_max": "4MHz"},
 )
@@ -58,9 +58,9 @@ SPI1 = peripheral(
     provides = [Spi],
     rebind = "firmware",
     signals = {
-        "SCK": [pin("PA5", af = 0), pin("PB3", af = 0)],
-        "MISO": [pin("PA6", af = 0), pin("PB4", af = 0)],
-        "MOSI": [pin("PA7", af = 0), pin("PB5", af = 0)],
+        "SCK": [pin("PA5", data = {"af": 0}), pin("PB3", data = {"af": 0})],
+        "MISO": [pin("PA6", data = {"af": 0}), pin("PB4", data = {"af": 0})],
+        "MOSI": [pin("PA7", data = {"af": 0}), pin("PB5", data = {"af": 0})],
     },
 )
 
@@ -69,8 +69,8 @@ I2C1 = peripheral(
     provides = [I2c],
     rebind = "firmware",
     signals = {
-        "SDA": [pin("PB7", af = 6)],
-        "SCL": [pin("PB6", af = 6)],
+        "SDA": [pin("PB7", data = {"af": 6})],
+        "SCL": [pin("PB6", data = {"af": 6})],
     },
 )
 
@@ -107,8 +107,8 @@ UART0 = peripheral(
     provides = [Uart],
     rebind = "firmware",
     signals = {
-        "TX": [pin("GPIO21", cost = 0)] + _matrix(["GPIO21"]),
-        "RX": [pin("GPIO20", cost = 0)] + _matrix(["GPIO20"]),
+        "TX": [pin("GPIO21", cost = 0, data = {"iomux_func": 0})] + _matrix(["GPIO21"]),
+        "RX": [pin("GPIO20", cost = 0, data = {"iomux_func": 0})] + _matrix(["GPIO20"]),
     },
 )
 
@@ -405,6 +405,7 @@ a = res["assignment"]
 check(a["CONSOLE"]["instance"] == "UART0", "console instance")
 check(a["CONSOLE"]["signals"]["TX"]["pin"] == "GPIO21", "console TX iomux")
 check(a["CONSOLE"]["signals"]["RX"]["pin"] == "GPIO20", "console RX iomux")
+check(a["CONSOLE"]["signals"]["TX"]["iomux_func"] == 0, "iomux realization data")
 check(a["GPS"]["instance"] == "UART1", "gps instance")
 check(not (a["GPS"]["signals"]["TX"]["pin"] in ["GPIO2", "GPIO8", "GPIO9"]), "gps TX strap avoided")
 check(not (a["GPS"]["signals"]["RX"]["pin"] in ["GPIO2", "GPIO8", "GPIO9"]), "gps RX strap avoided")

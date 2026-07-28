@@ -311,11 +311,11 @@ USART1 = peripheral(
     provides = [Usart, UartFlow],       # interface types, closed over implies=
     rebind   = "firmware",              # "none" | "firmware" | "fixed"
     signals  = {
-        "TX": [pin("PA9", af = 1), pin("PB6", af = 0)],
-        "RX": [pin("PA10", af = 1), pin("PB7", af = 0)],
-        "CK": [pin("PA8", af = 1)],
-        "RTS": [pin("PA12", af = 1)],
-        "CTS": [pin("PA11", af = 1)],
+        "TX": [pin("PA9", data = {"af": 1}), pin("PB6", data = {"af": 0})],
+        "RX": [pin("PA10", data = {"af": 1}), pin("PB7", data = {"af": 0})],
+        "CK": [pin("PA8", data = {"af": 1})],
+        "RTS": [pin("PA12", data = {"af": 1})],
+        "CTS": [pin("PA11", data = {"af": 1})],
     },
     attrs = {"baud_max": "8MHz"},       # unit strings parse to physical values
 )
@@ -331,8 +331,12 @@ result = pin_solve(
 )
 ```
 
-- **`pin(name, af=, cost=, input_only=, strap=)`** — one candidate physical
-  pin. `cost` biases the solver (e.g. ESP32 IOMUX-direct = 0, matrix = 1);
+- **`pin(name, data=, cost=, input_only=, strap=)`** — one candidate physical
+  pin. `data` is opaque *realization* information — whatever downstream
+  tooling needs to realize this candidate (an STM32 AF index `{"af": 1}`, an
+  ESP32 IOMUX FUNC number `{"iomux_func": 0}`) — never consulted by the
+  solver, splatted verbatim next to `"pin"` in the solved assignment.
+  `cost` biases the solver (e.g. ESP32 IOMUX-direct = 0, matrix = 1);
   `strap` pins are penalized and warn when chosen; `input_only` pins are
   excluded from `direction = "output"` requests.
 - **`peripheral(name, provides=, signals=, rebind=, attrs=, symmetric=, unless=)`**
@@ -362,7 +366,7 @@ result = pin_solve(
 `pin_solve` returns `{"assignment": ..., "swap_classes": ...}` and stores both
 as the module properties `pin_assignment` and `swap_classes` (JSON), which
 flow through the netlist into schematic fields: the chosen assignment
-(including `af=` indices, sufficient for firmware pin-init generation) and the
+(including per-pin realization `data`, sufficient for firmware pin-init generation) and the
 residual swap freedom (pool classes with spare pins, `rebind = "none"`
 clusters for gate swap) reach layout tools with no side files.
 

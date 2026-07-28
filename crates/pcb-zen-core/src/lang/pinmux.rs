@@ -124,7 +124,10 @@ fn is_kind<'v>(v: Value<'v>, heap: Heap<'v>, kind: &str) -> bool {
 #[derive(Clone, Debug)]
 struct RPin {
     name: String,
-    af: Option<i32>,
+    /// Opaque realization data (e.g. an STM32 AF index, an ESP32 IOMUX FUNC
+    /// number): whatever downstream tooling needs to realize this candidate.
+    /// Never consulted by the solver; carried verbatim into the assignment.
+    data: Vec<(String, serde_json::Value)>,
     cost: i64,
     input_only: bool,
     strap: bool,
@@ -188,7 +191,7 @@ fn parse_rpin<'v>(v: Value<'v>, heap: Heap<'v>, ctx: &str) -> anyhow::Result<RPi
     if let Some(s) = v.unpack_str() {
         return Ok(RPin {
             name: s.to_owned(),
-            af: None,
+            data: Vec::new(),
             cost: 0,
             input_only: false,
             strap: false,
@@ -201,10 +204,28 @@ fn parse_rpin<'v>(v: Value<'v>, heap: Heap<'v>, ctx: &str) -> anyhow::Result<RPi
             "{ctx}: pin candidate must be pin() or a string"
         ));
     }
+    let mut data = Vec::new();
+    if let Some(dv) = dict_get(&d, heap, "data")
+        && let Some(dd) = DictRef::from_value(dv)
+    {
+        for (k, val) in dd.iter() {
+            let key = k
+                .unpack_str()
+                .ok_or_else(|| anyhow::anyhow!("{ctx}: pin() data keys must be strings"))?;
+            let json = val
+                .to_json()
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("{ctx}: pin() data value for `{key}` is not serializable")
+                })?;
+            data.push((key.to_owned(), json));
+        }
+    }
     Ok(RPin {
         name: dict_get_str(&d, heap, "name")
             .ok_or_else(|| anyhow::anyhow!("{ctx}: pin() missing name"))?,
-        af: dict_get(&d, heap, "af").and_then(|v| v.unpack_i32()),
+        data,
         cost: dict_get(&d, heap, "cost")
             .and_then(|v| v.unpack_i32())
             .unwrap_or(0) as i64,
@@ -718,7 +739,7 @@ fn normalize_candidates<'v>(
 fn alloc_pin_dict<'v>(
     heap: Heap<'v>,
     name: &str,
-    af: Option<i32>,
+    data: Option<Value<'v>>,
     cost: i32,
     input_only: bool,
     strap: bool,
@@ -726,10 +747,7 @@ fn alloc_pin_dict<'v>(
     let pairs: Vec<(Value, Value)> = vec![
         (heap.alloc("kind"), heap.alloc("pin")),
         (heap.alloc("name"), heap.alloc(name)),
-        (
-            heap.alloc("af"),
-            af.map(|a| heap.alloc(a)).unwrap_or_else(Value::new_none),
-        ),
+        (heap.alloc("data"), data.unwrap_or_else(Value::new_none)),
         (heap.alloc("cost"), heap.alloc(cost)),
         (heap.alloc("input_only"), Value::new_bool(input_only)),
         (heap.alloc("strap"), Value::new_bool(strap)),
@@ -739,23 +757,36 @@ fn alloc_pin_dict<'v>(
 
 #[starlark_module]
 pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
-    /// One candidate physical pin for a peripheral signal.
+    /// One candidate physical pin for a peripheral signal. `data=` carries
+    /// opaque realization info (e.g. `{"af": 1}` on STM32, `{"iomux_func": 0}`
+    /// on ESP32) verbatim into the solved assignment; the solver ignores it.
     fn pin<'v>(
         #[starlark(require = pos)] name: String,
-        #[starlark(require = named, default = NoneOr::None)] af: NoneOr<i32>,
+        #[starlark(require = named, default = SmallMap::default())] data: SmallMap<
+            String,
+            Value<'v>,
+        >,
         #[starlark(require = named, default = 0)] cost: i32,
         #[starlark(require = named, default = false)] input_only: bool,
         #[starlark(require = named, default = false)] strap: bool,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
-        Ok(alloc_pin_dict(
-            eval.heap(),
-            &name,
-            af.into_option(),
-            cost,
-            input_only,
-            strap,
-        ))
+        let heap = eval.heap();
+        let data_v = if data.is_empty() {
+            None
+        } else {
+            if data.contains_key("pin") {
+                return Err(anyhow::anyhow!(
+                    "pin `{name}`: data key `pin` is reserved (it names the pin itself in the assignment)"
+                ));
+            }
+            let pairs: Vec<(Value, Value)> = data
+                .iter()
+                .map(|(k, v)| (heap.alloc(k.as_str()), *v))
+                .collect();
+            Some(heap.alloc(AllocDict(pairs)))
+        };
+        Ok(alloc_pin_dict(heap, &name, data_v, cost, input_only, strap))
     }
 
     /// A resource cluster: signals -> candidate pins, provided interfaces,
@@ -1046,8 +1077,10 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
             for (sig, p) in &combo.pins {
                 let mut entry = serde_json::Map::new();
                 entry.insert("pin".into(), serde_json::Value::String(p.name.clone()));
-                if let Some(af) = p.af {
-                    entry.insert("af".into(), serde_json::Value::Number(af.into()));
+                // Realization data is splatted next to "pin" so consumers see
+                // e.g. {"pin": "PA9", "af": 1} without a vendor-specific schema.
+                for (k, val) in &p.data {
+                    entry.insert(k.clone(), val.clone());
                 }
                 signals.insert(sig.clone(), serde_json::Value::Object(entry));
                 if p.strap {
