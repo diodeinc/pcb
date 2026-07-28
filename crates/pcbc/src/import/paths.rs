@@ -122,29 +122,6 @@ fn read_pcb_toml(pcb_toml: &Path) -> Result<pcb_zen_core::config::PcbToml> {
         .with_context(|| format!("Failed to parse {}", pcb_toml.display()))
 }
 
-/// Warn when the destination already declares a *different* board than the one being imported.
-///
-/// `pcb.toml` holds a single `[board]` table, and import never rewrites a file the user owns, so a
-/// second board imported into an existing board repository lands beside the declared one without
-/// being declared itself. The output is still buildable — `pcb build` filters on workspace-package
-/// membership rather than on `[board]` — so this is a warning and not an error. Returns `None` when
-/// the destination has no `pcb.toml`, when it declares the board being imported, or when it cannot be
-/// parsed (`resolve_paths` has already reported that).
-pub(super) fn declared_board_mismatch_warning(root: &Path, board_name: &str) -> Option<String> {
-    let pcb_toml = root.join("pcb.toml");
-    if !pcb_toml.exists() {
-        return None;
-    }
-    let declared = read_pcb_toml(&pcb_toml).ok()?.board?.name;
-    if declared == board_name {
-        return None;
-    }
-    Some(format!(
-        "{} declares board '{declared}', so the imported board '{board_name}' is not this repository's declared board.\nImport left pcb.toml unchanged; build the imported board explicitly with `pcb build {board_name}.zen`, or point [board] at it yourself.",
-        pcb_toml.display()
-    ))
-}
-
 fn canonicalize_missing_path(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -199,39 +176,5 @@ mod tests {
                 "unexpected error for {input}: {error}"
             );
         }
-    }
-
-    #[test]
-    fn a_different_declared_board_is_warned_about() {
-        let temp = tempfile::tempdir().unwrap();
-        let manifest = "[workspace]\n[board]\nname='Bar'\npath='Bar.zen'\n";
-        fs::write(temp.path().join("pcb.toml"), manifest).unwrap();
-
-        let warning = declared_board_mismatch_warning(temp.path(), "Foo").expect("warning");
-
-        assert!(warning.contains("declares board 'Bar'"), "{warning}");
-        assert!(
-            warning.contains("imported board 'Foo' is not this repository's declared board"),
-            "{warning}"
-        );
-        assert!(warning.contains("pcb build Foo.zen"), "{warning}");
-        // The warning is the whole remedy: the user's manifest is never rewritten.
-        assert_eq!(
-            fs::read_to_string(temp.path().join("pcb.toml")).unwrap(),
-            manifest
-        );
-    }
-
-    #[test]
-    fn a_matching_or_absent_declaration_is_not_warned_about() {
-        let temp = tempfile::tempdir().unwrap();
-        assert_eq!(declared_board_mismatch_warning(temp.path(), "Foo"), None);
-
-        fs::write(
-            temp.path().join("pcb.toml"),
-            "[workspace]\n[board]\nname='Foo'\npath='Foo.zen'\n",
-        )
-        .unwrap();
-        assert_eq!(declared_board_mismatch_warning(temp.path(), "Foo"), None);
     }
 }

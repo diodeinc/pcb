@@ -33,8 +33,8 @@ pub use kicad_symbols::KicadSymbolsClient;
 pub use registry::{
     DigikeyClassifications, DigikeyData, DigikeyPriceBreak, ModuleRelations, ParsedQuery,
     RegistryClient, RegistryInfo, RegistryModule, RegistryModuleDependency,
-    RegistryModuleEntrypoint, RegistryModuleHit, RegistryModuleSymbol, RegistryMpnCandidate,
-    RegistrySearchClient, RegistrySymbol, RegistrySymbolHit, SearchHit, normalize_mpn_for_lookup,
+    RegistryModuleEntrypoint, RegistryModuleHit, RegistryModuleSymbol, RegistrySearchClient,
+    RegistrySymbol, RegistrySymbolHit, SearchHit,
 };
 pub use release::{upload_preview, upload_release};
 pub use sandbox::{

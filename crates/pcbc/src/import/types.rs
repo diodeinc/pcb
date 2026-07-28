@@ -104,13 +104,9 @@ pub struct ImportArgs {
     #[arg(value_name = "OUTPUT_DIR", value_hint = clap::ValueHint::AnyPath)]
     pub output_dir: Option<PathBuf>,
 
-    /// Overwrite existing files that this import regenerates; without it, colliding files are kept
+    /// Overwrite generated files if the board repository already exists
     #[arg(long = "force")]
     pub force: bool,
-
-    /// Also write a portable archive of the KiCad sources next to the imported board
-    #[arg(long = "archive-sources")]
-    pub archive_sources: bool,
 }
 
 pub(super) struct ImportPaths {
@@ -172,11 +168,9 @@ pub(super) struct MaterializedBoard {
     pub(super) layout_dir: PathBuf,
     pub(super) layout_kicad_pro: Option<PathBuf>,
     pub(super) layout_kicad_pcb: Option<PathBuf>,
-    /// Present only when `--archive-sources` asked for the portable KiCad source archive.
+    /// Present for project imports, which preserve the source archive as before.
     pub(super) portable_kicad_project_zip: Option<PathBuf>,
-    /// Absolute path under the output repository's gitignored `.pcb/import/`.
     pub(super) validation_diagnostics_json: PathBuf,
-    /// Absolute path under the output repository's gitignored `.pcb/import/`.
     pub(super) import_extraction_json: PathBuf,
 }
 
@@ -229,29 +223,6 @@ pub(super) struct ImportExtractionReport {
 pub(super) struct ImportSemanticAnalysis {
     pub(super) passives: ImportPassiveAnalysis,
     pub(super) net_kinds: ImportNetKindAnalysis,
-    #[serde(default)]
-    pub(super) registry_mpn_lookup: ImportRegistryMpnLookup,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub(super) struct ImportRegistryMpnLookup {
-    pub(super) cached_index_available: bool,
-    pub(super) queried_mpns: BTreeSet<String>,
-    pub(super) candidates_by_mpn: BTreeMap<String, Vec<ImportRegistryMpnCandidate>>,
-    pub(super) lookup_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct ImportRegistryMpnCandidate {
-    pub(super) registry_id: String,
-    pub(super) registry_mpn: String,
-    pub(super) manufacturer: String,
-    pub(super) footprint: String,
-    pub(super) module_url: String,
-    pub(super) module_version: String,
-    pub(super) entrypoints: Vec<String>,
-    pub(super) symbol_preferred: bool,
-    pub(super) module_preferred: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -652,8 +623,6 @@ pub(super) enum ImportFootprintGeometry {
     Unresolved,
 }
 
-pub(super) const IMPORT_UNRESOLVED_FOOTPRINT_PROPERTY: &str = "__imported_unresolved_footprint";
-
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ImportUnresolvedFootprint {
     /// Original KiCad footprint ID, or `None` when the source has no footprint field.
@@ -739,17 +708,6 @@ pub(super) struct ImportValidation {
     pub(super) drc_warnings: usize,
 }
 
-#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ImportGeneratedSourcingStatus {
-    Excluded,
-    Parametric,
-    SourcePart,
-    RegistryMetadataEnriched,
-    RegistryModuleReused,
-    Incomplete,
-}
-
 #[derive(Debug, Serialize, Clone)]
 pub(super) struct GeneratedArtifacts {
     pub(super) board_dir: PathBuf,
@@ -759,41 +717,6 @@ pub(super) struct GeneratedArtifacts {
     pub(super) layout_kicad_pcb: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) portable_kicad_project_zip: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(super) registry_reused_entrypoints: Vec<PathBuf>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub(super) sourcing_by_refdes: BTreeMap<KiCadRefDes, ImportGeneratedSourcingStatus>,
-    /// Destination-relative paths whose existing content this run kept instead of refreshing it
-    /// from the KiCad source, because a default (non-`--force`) import does not overwrite a file it
-    /// would have generated differently.
-    ///
-    /// These files are stale with respect to the current KiCad source; re-importing with `--force`
-    /// regenerates them.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(super) kept_existing_files: Vec<PathBuf>,
-    /// Reference designators that fell back to a generated component because more than one cached
-    /// registry entrypoint was electrically compatible with the imported symbol, mapped to the
-    /// number of competing compatible entrypoints (always 2 or more).
-    ///
-    /// This distinguishes "a usable registry module existed but could not be chosen" from "no
-    /// registry module matched at all"; both otherwise look identical in `sourcing_by_refdes`.
-    /// Which entrypoints are cached locally varies per machine, so this record is what makes the
-    /// difference reproducible after the fact.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub(super) registry_ambiguous_compatible_entrypoints_by_refdes: BTreeMap<KiCadRefDes, usize>,
-    /// Why connectivity validation rejected this board, when it did.
-    ///
-    /// Import refuses to ship a board whose built connectivity disagrees with the KiCad source, and
-    /// that refusal is the one failure a consumer most needs to act on — so it is recorded here rather
-    /// than existing only as an error message on stderr. Every other incomplete outcome import reports
-    /// (an unresolved footprint, incomplete sourcing, an ambiguous registry candidate) is already
-    /// per-refdes structured data; this keeps the hard failure legible the same way.
-    ///
-    /// `None` means validation passed. When it is set the import failed: the output directory holds
-    /// generated files that did not pass validation, and nothing should treat them as a converted
-    /// design.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) validation_failure: Option<String>,
 }
 
 pub(super) struct ImportValidationRun {

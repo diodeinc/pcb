@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::bom::ComponentKey;
@@ -110,27 +110,6 @@ impl RegistrySymbol {
     pub fn availability_lookup_key(&self) -> Option<ComponentKey> {
         component_lookup_key(Some(&self.mpn), Some(&self.manufacturer))
     }
-}
-
-/// Exact registry candidate for a normalized manufacturer part number.
-///
-/// This is intentionally separate from ranked registry search: import uses it only to build a
-/// deterministic shortlist that must be validated before module reuse.
-#[derive(Debug, Clone, Serialize)]
-pub struct RegistryMpnCandidate {
-    pub registry: RegistryInfo,
-    pub symbol_id: i64,
-    pub symbol_url: String,
-    pub symbol_preferred: bool,
-    pub mpn: String,
-    pub mpn_normalized: String,
-    pub manufacturer: String,
-    pub footprint: String,
-    pub module_id: i64,
-    pub module_url: String,
-    pub module_version: String,
-    pub module_preferred: bool,
-    pub entrypoints: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -417,11 +396,6 @@ fn canonicalize_identifier(s: &str) -> String {
         .to_uppercase()
 }
 
-/// Normalize an MPN to the exact-match representation stored in registry indexes.
-pub fn normalize_mpn_for_lookup(mpn: &str) -> String {
-    canonicalize_identifier(mpn.trim())
-}
-
 fn tokenize_for_words(s: &str) -> Vec<String> {
     s.split(|c: char| c.is_whitespace() || c == ',' || c == ';')
         .map(|w| w.trim().to_lowercase())
@@ -551,89 +525,6 @@ impl RegistryClient {
         self.conn
             .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
             .map_err(Into::into)
-    }
-
-    pub fn find_component_candidates_by_mpn(&self, mpn: &str) -> Result<Vec<RegistryMpnCandidate>> {
-        let normalized = normalize_mpn_for_lookup(mpn);
-        if normalized.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT s.id, s.url, s.preferred, s.mpn, s.mpn_normalized,
-                   s.manufacturer, s.footprint,
-                   m.id, m.url, m.version, m.preferred,
-                   e.url
-            FROM symbols s
-            JOIN modules m ON m.id = s.module_id
-            LEFT JOIN module_zen_entrypoints e ON e.module_id = m.id
-            WHERE s.mpn_normalized = ?1
-            ORDER BY s.preferred DESC, m.preferred DESC, m.published_at DESC,
-                     s.url, e.url
-            "#,
-        )?;
-        let rows = stmt.query_map([normalized], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, bool>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, String>(9)?,
-                row.get::<_, bool>(10)?,
-                row.get::<_, Option<String>>(11)?,
-            ))
-        })?;
-
-        let mut candidates: Vec<RegistryMpnCandidate> = Vec::new();
-        let mut index_by_symbol: HashMap<i64, usize> = HashMap::new();
-        for row in rows {
-            let (
-                symbol_id,
-                symbol_url,
-                symbol_preferred,
-                mpn,
-                mpn_normalized,
-                manufacturer,
-                footprint,
-                module_id,
-                module_url,
-                module_version,
-                module_preferred,
-                entrypoint,
-            ) = row?;
-            let index = if let Some(index) = index_by_symbol.get(&symbol_id).copied() {
-                index
-            } else {
-                let index = candidates.len();
-                candidates.push(RegistryMpnCandidate {
-                    registry: self.registry.clone(),
-                    symbol_id,
-                    symbol_url,
-                    symbol_preferred,
-                    mpn,
-                    mpn_normalized,
-                    manufacturer,
-                    footprint,
-                    module_id,
-                    module_url,
-                    module_version,
-                    module_preferred,
-                    entrypoints: Vec::new(),
-                });
-                index_by_symbol.insert(symbol_id, index);
-                index
-            };
-            if let Some(entrypoint) = entrypoint {
-                candidates[index].entrypoints.push(entrypoint);
-            }
-        }
-        Ok(candidates)
     }
 
     pub fn search_modules_rrf(&self, query: &str) -> ModuleRrfSearchOutput {
@@ -1207,49 +1098,6 @@ impl RegistrySearchClient {
             .try_fold(0, |acc, count| count.map(|count| acc + count))
     }
 
-    pub fn find_component_candidates_by_mpn(&self, mpn: &str) -> Result<Vec<RegistryMpnCandidate>> {
-        let mut candidates = self
-            .clients
-            .iter()
-            .map(|client| client.find_component_candidates_by_mpn(mpn))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        candidates.sort_by(|left, right| {
-            right
-                .symbol_preferred
-                .cmp(&left.symbol_preferred)
-                .then_with(|| right.module_preferred.cmp(&left.module_preferred))
-                .then_with(|| left.registry.id.cmp(&right.registry.id))
-                .then_with(|| left.module_url.cmp(&right.module_url))
-                .then_with(|| left.symbol_url.cmp(&right.symbol_url))
-        });
-        Ok(candidates)
-    }
-
-    pub fn find_component_candidates_by_mpns<I, S>(
-        &self,
-        mpns: I,
-    ) -> Result<BTreeMap<String, Vec<RegistryMpnCandidate>>>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let normalized_mpns = mpns
-            .into_iter()
-            .map(|mpn| normalize_mpn_for_lookup(mpn.as_ref()))
-            .filter(|mpn| !mpn.is_empty())
-            .collect::<BTreeSet<_>>();
-        normalized_mpns
-            .into_iter()
-            .map(|normalized| {
-                self.find_component_candidates_by_mpn(&normalized)
-                    .map(|candidates| (normalized, candidates))
-            })
-            .collect()
-    }
-
     pub fn search_modules_rrf(&self, query: &str) -> ModuleRrfSearchOutput {
         const MERGED_LIMIT: usize = 100;
         let outputs = self
@@ -1454,90 +1302,4 @@ fn map_module_dependency(row: &rusqlite::Row) -> rusqlite::Result<RegistryModule
         published_at: row.get(3)?,
         description: row.get(4)?,
     })
-}
-
-#[cfg(test)]
-mod exact_mpn_tests {
-    use super::*;
-
-    #[test]
-    fn exact_mpn_lookup_returns_owning_module_and_entrypoints() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("registry.db");
-        let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(
-            r#"
-            CREATE TABLE modules (
-                id INTEGER PRIMARY KEY,
-                url TEXT NOT NULL UNIQUE,
-                version TEXT NOT NULL,
-                published_at TEXT,
-                preferred INTEGER NOT NULL,
-                description TEXT NOT NULL
-            );
-            CREATE TABLE symbols (
-                id INTEGER PRIMARY KEY,
-                url TEXT NOT NULL UNIQUE,
-                module_id INTEGER NOT NULL,
-                preferred INTEGER NOT NULL,
-                footprint TEXT NOT NULL,
-                datasheet TEXT NOT NULL,
-                manufacturer TEXT NOT NULL,
-                mpn TEXT NOT NULL,
-                mpn_normalized TEXT NOT NULL,
-                kicad_description TEXT,
-                kicad_keywords TEXT,
-                digikey BLOB,
-                image_sha256 TEXT
-            );
-            CREATE INDEX idx_symbols_mpn_normalized ON symbols(mpn_normalized);
-            CREATE TABLE module_zen_entrypoints (
-                id INTEGER PRIMARY KEY,
-                module_id INTEGER NOT NULL,
-                url TEXT NOT NULL UNIQUE
-            );
-            INSERT INTO modules VALUES (
-                7, 'github.com/diodeinc/registry/components/SAM-M10Q-00B',
-                '0.1.2', '2026-01-01', 1, 'GNSS module'
-            );
-            INSERT INTO symbols VALUES (
-                11, 'github.com/diodeinc/registry/components/SAM-M10Q-00B/SAM.kicad_sym:SAM-M10Q-00B',
-                7, 1, 'SAM-M10Q-00B', '', 'u-blox', 'SAM-M10Q-00B', 'SAMM10Q00B',
-                NULL, NULL, NULL, NULL
-            );
-            INSERT INTO module_zen_entrypoints VALUES (
-                13, 7, 'github.com/diodeinc/registry/components/SAM-M10Q-00B/SAM-M10Q-00B.zen'
-            );
-            "#,
-        )
-        .unwrap();
-        drop(conn);
-
-        let client = RegistryClient::open_path(&path).unwrap();
-        let candidates = client
-            .find_component_candidates_by_mpn(" sam-m10q-00b ")
-            .unwrap();
-
-        assert_eq!(candidates.len(), 1);
-        let candidate = &candidates[0];
-        assert_eq!(candidate.mpn, "SAM-M10Q-00B");
-        assert_eq!(candidate.manufacturer, "u-blox");
-        assert_eq!(candidate.module_id, 7);
-        assert_eq!(candidate.module_version, "0.1.2");
-        assert_eq!(candidate.entrypoints.len(), 1);
-        assert!(candidate.entrypoints[0].ends_with("SAM-M10Q-00B.zen"));
-        assert!(
-            client
-                .find_component_candidates_by_mpn("SAM-M10Q")
-                .unwrap()
-                .is_empty()
-        );
-
-        let search = RegistrySearchClient::single(client);
-        let batch = search
-            .find_component_candidates_by_mpns(["SAM-M10Q-00B", "sam_m10q_00b"])
-            .unwrap();
-        assert_eq!(batch.len(), 1);
-        assert_eq!(batch["SAMM10Q00B"].len(), 1);
-    }
 }

@@ -444,10 +444,7 @@ pub fn local_registry_index(path: PathBuf) -> RegistryIndexFile {
 
 pub fn cached_default_registry_index() -> Result<Option<RegistryIndexFile>> {
     let path = default_registry_db_path()?;
-    let available = std::fs::symlink_metadata(&path)
-        .map(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
-        .unwrap_or(false);
-    Ok(available.then_some(RegistryIndexFile {
+    Ok(path.exists().then_some(RegistryIndexFile {
         registry: RegistryInfo::default_registry(),
         path,
         downloaded: false,
@@ -475,10 +472,7 @@ fn cached_registry_indexes() -> Result<Vec<RegistryIndexFile>> {
         }
 
         let path = entry.path().join("packages.db");
-        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
+        if !path.exists() {
             continue;
         }
         let Some(id) = entry.file_name().to_str().map(str::to_string) else {
@@ -497,29 +491,6 @@ fn cached_registry_indexes() -> Result<Vec<RegistryIndexFile>> {
         seen_urls.insert(normalize_registry_selector(&index.registry.registry_url))
     });
     Ok(indexes)
-}
-
-/// Resolve the default registry search scope using only indexes already present on disk.
-///
-/// This never performs registry discovery or downloads, so read-oriented operations can use
-/// registry metadata without introducing network access or modifying the local cache.
-pub fn cached_registry_search_scope(
-    workspace_root: Option<&Path>,
-) -> Result<Option<RegistrySearchScope>> {
-    let indexes = cached_registry_indexes()?;
-    let registries = default_registry_scope(
-        indexes.iter().map(|index| index.registry.clone()).collect(),
-        workspace_root,
-    );
-    let selected_ids = registries
-        .into_iter()
-        .map(|registry| registry.id)
-        .collect::<HashSet<_>>();
-    let indexes = indexes
-        .into_iter()
-        .filter(|index| selected_ids.contains(&index.registry.id))
-        .collect::<Vec<_>>();
-    Ok((!indexes.is_empty()).then_some(RegistrySearchScope::IndexFiles(indexes)))
 }
 
 fn infer_cached_registry_url(path: &Path) -> Option<String> {

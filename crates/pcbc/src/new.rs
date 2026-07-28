@@ -118,9 +118,6 @@ fn validate_name(name: &str, kind: &str) -> Result<()> {
 }
 
 /// Validate a board name for use as a directory/git repo name.
-///
-/// For a name derived from an input file instead of typed by the user, use
-/// [`validate_derived_board_name`], which is deliberately more permissive.
 fn validate_board_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("Board name cannot be empty");
@@ -147,21 +144,11 @@ fn validate_board_name(name: &str) -> Result<()> {
 }
 
 /// Validate a board name that was derived from an input file name rather than typed by the user.
-///
-/// Deliberately narrower than [`validate_board_name`]: a KiCad file stem may legitimately contain
-/// spaces, parentheses, `+`, or non-ASCII letters, all of which `pcb new` rejects, and none of which
-/// break anything downstream. This rejects only what would produce a malformed `pcb.toml` — the
-/// board name is interpolated into TOML basic strings by `templates/board_pcb_toml.jinja` — or an
-/// unusable file name, since the name is also used for `<name>.zen`.
-///
-/// For a name typed by the user, use [`validate_board_name`] instead.
 pub(crate) fn validate_derived_board_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("board name is empty");
     }
 
-    // What matters is the generated file name, so bound its bytes against NAME_MAX rather than
-    // counting characters: a 101-character ASCII stem is fine, 100 four-byte codepoints are not.
     let zen_file_name = format!("{name}.zen");
     if zen_file_name.len() > 255 {
         bail!(
@@ -171,7 +158,6 @@ pub(crate) fn validate_derived_board_name(name: &str) -> Result<()> {
         );
     }
 
-    // `..kicad_sch` yields the stem `.`, which would generate a file called `..zen`.
     if name.chars().all(|c| c == '.') {
         bail!("board name {name:?} consists only of dots");
     }
@@ -344,39 +330,6 @@ fn execute_new_board(board: &str, repo: &str) -> Result<()> {
     Ok(())
 }
 
-/// Write the minimum a board directory needs to be buildable: the workspace manifest, plus the
-/// `.gitignore` that keeps `.pcb/` — where `pcb build` and `pcb import` put their untracked output —
-/// out of `git status`. Neither file is written when it already exists.
-///
-/// Used by `pcb import`, which must not scaffold a repository around the design it converts: no
-/// `git init`, no `README.md`, and no template board `.zen`, because generation writes the real one.
-pub(crate) fn write_board_scaffolding(dir: &Path, board: &str) -> Result<()> {
-    let pcb_toml = dir.join("pcb.toml");
-    if !pcb_toml.exists() {
-        std::fs::write(&pcb_toml, render_board_pcb_toml(board, "")?)
-            .context("Failed to write pcb.toml")?;
-    }
-
-    let gitignore = dir.join(".gitignore");
-    if !gitignore.exists() {
-        std::fs::write(&gitignore, GITIGNORE_TEMPLATE).context("Failed to write .gitignore")?;
-    }
-
-    Ok(())
-}
-
-fn render_board_pcb_toml(board: &str, repository: &str) -> Result<String> {
-    create_template_env()
-        .get_template("board_pcb_toml")
-        .unwrap()
-        .render(context! {
-            board => board,
-            repository => repository,
-            pcb_version => pcb_version_from_cargo(),
-        })
-        .context("Failed to render pcb.toml template")
-}
-
 pub(crate) fn init_board_repo(dir: &Path, board: &str, repository: &str) -> Result<()> {
     pcb_zen::git::init(dir)?;
 
@@ -387,11 +340,12 @@ pub(crate) fn init_board_repo(dir: &Path, board: &str, repository: &str) -> Resu
         pcb_version => pcb_version_from_cargo(),
     };
 
-    std::fs::write(
-        dir.join("pcb.toml"),
-        render_board_pcb_toml(board, repository)?,
-    )
-    .context("Failed to write pcb.toml")?;
+    let pcb_toml_content = env
+        .get_template("board_pcb_toml")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render pcb.toml template")?;
+    std::fs::write(dir.join("pcb.toml"), pcb_toml_content).context("Failed to write pcb.toml")?;
 
     let zen_content = env
         .get_template("board_zen")
@@ -502,44 +456,6 @@ mod tests {
         assert!(validate_board_name("has spaces").is_err());
         assert!(validate_board_name("has/slash").is_err());
         assert!(validate_board_name(&"a".repeat(41)).is_err());
-    }
-
-    #[test]
-    fn test_validate_derived_board_name() {
-        // Import derives the board name from the input file stem, so it must accept the punctuation a
-        // real filename carries — including characters `pcb new` rejects for a name the user types.
-        for ok in [
-            "layout",
-            "my-board_v2.1",
-            "My Board (rev B)",
-            ".hidden",
-            "cartes-électroniques",
-        ] {
-            assert!(validate_derived_board_name(ok).is_ok(), "{ok:?}");
-        }
-
-        // Rejected only where the stem would break the generated manifest or file name.
-        assert!(validate_derived_board_name("").is_err());
-        // A dot-only stem would generate a file called `..zen`.
-        assert!(validate_derived_board_name(".").is_err());
-        // Bounded in bytes, not characters: 100 four-byte codepoints exceed NAME_MAX where 101 ASCII
-        // characters do not.
-        assert!(validate_derived_board_name(&"a".repeat(101)).is_ok());
-        assert!(validate_derived_board_name(&"😀".repeat(100)).is_err());
-
-        // A quote or newline would break the rendered TOML, and must not be echoed raw into the error.
-        assert_eq!(
-            validate_derived_board_name("say \"hi\"")
-                .unwrap_err()
-                .to_string(),
-            r#"board name "say \"hi\"" contains a double quote"#
-        );
-        assert_eq!(
-            validate_derived_board_name("line\nbreak")
-                .unwrap_err()
-                .to_string(),
-            r#"board name "line\nbreak" contains a newline"#
-        );
     }
 
     #[test]

@@ -5,7 +5,6 @@ pub(super) fn analyze(ir: &ImportIr) -> ImportSemanticAnalysis {
     ImportSemanticAnalysis {
         passives: detect_passives(ir),
         net_kinds: detect_net_kinds(ir),
-        registry_mpn_lookup: ImportRegistryMpnLookup::default(),
     }
 }
 

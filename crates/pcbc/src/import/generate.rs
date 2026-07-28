@@ -20,15 +20,10 @@ use pcb_sexpr::{PatchSet, Span, board as sexpr_board};
 use pcb_zen_core::lang::stackup as zen_stackup;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use uuid::Uuid;
 
 pub(super) struct GenerationResult {
-    pub(super) registry_reused_entrypoints: Vec<PathBuf>,
-    /// Refdes -> number of competing compatible cached registry entrypoints, for components that
-    /// fell back because the choice was ambiguous rather than because nothing matched.
-    pub(super) registry_ambiguous_by_refdes: BTreeMap<KiCadRefDes, usize>,
-    pub(super) sourcing_by_refdes: BTreeMap<KiCadRefDes, ImportGeneratedSourcingStatus>,
     pub(super) expected_pins_by_refdes: BTreeMap<KiCadRefDes, BTreeSet<KiCadPinNumber>>,
     /// The Zener instance name generated for each source reference designator.
     ///
@@ -39,12 +34,31 @@ pub(super) struct GenerationResult {
     pub(super) instance_name_by_refdes: BTreeMap<KiCadRefDes, String>,
 }
 
+fn ensure_parent(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create output directory {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn write_file(path: &Path, content: &[u8]) -> Result<()> {
+    ensure_parent(path)?;
+    fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))
+}
+
+fn write_zen(path: &Path, content: &str) -> Result<()> {
+    ensure_parent(path)?;
+    crate::codegen::zen::write_zen_formatted(path, content)
+        .with_context(|| format!("Failed to write {}", path.display()))
+}
+
 pub(super) fn generate(
     materialized: &MaterializedBoard,
     board_name: &str,
     ir: &ImportIr,
-    allow_registry_reuse: bool,
-    writer: &mut output::ImportWriter,
 ) -> Result<GenerationResult> {
     let port_to_net = build_port_to_net_map(&ir.nets)?;
     let not_connected_nets = build_not_connected_nets(&ir.nets);
@@ -54,20 +68,15 @@ pub(super) fn generate(
 
     let refdes_instance_names = build_refdes_instance_name_map(&ir.components);
 
-    let component_modules = generate_imported_components(
-        GenerateImportedComponentsArgs {
-            board_dir: &materialized.board_dir,
-            components: &ir.components,
-            reserved_idents: &reserved_idents,
-            schematic_lib_symbols: &ir.schematic_lib_symbols,
-            passive_by_component: &ir.semantic.passives.by_component,
-            registry_lookup: &ir.semantic.registry_mpn_lookup,
-            allow_registry_reuse,
-            port_to_net: &port_to_net,
-            not_connected_nets: &not_connected_nets,
-        },
-        writer,
-    )?;
+    let component_modules = generate_imported_components(GenerateImportedComponentsArgs {
+        board_dir: &materialized.board_dir,
+        components: &ir.components,
+        reserved_idents: &reserved_idents,
+        schematic_lib_symbols: &ir.schematic_lib_symbols,
+        passive_by_component: &ir.semantic.passives.by_component,
+        port_to_net: &port_to_net,
+        not_connected_nets: &not_connected_nets,
+    })?;
 
     let expected_pins_by_refdes = component_modules
         .expected_pins_by_anchor
@@ -78,46 +87,37 @@ pub(super) fn generate(
         })
         .collect();
 
-    let sheet_modules = generate_sheet_modules(
-        GenerateSheetModulesArgs {
-            board_dir: &materialized.board_dir,
-            board_name,
-            ir,
-            port_to_net: &port_to_net,
-            refdes_instance_names: &refdes_instance_names,
-            net_decls: &net_decls,
-            components: &component_modules,
-            not_connected_nets: &not_connected_nets,
-        },
-        writer,
-    )?;
+    let sheet_modules = generate_sheet_modules(GenerateSheetModulesArgs {
+        board_dir: &materialized.board_dir,
+        board_name,
+        ir,
+        port_to_net: &port_to_net,
+        refdes_instance_names: &refdes_instance_names,
+        net_decls: &net_decls,
+        components: &component_modules,
+        not_connected_nets: &not_connected_nets,
+    })?;
 
-    write_imported_board_zen(
-        writer,
-        ImportedBoardZenArgs {
-            board_zen: &materialized.board_zen,
-            board_name,
-            layout_kicad_pro: materialized.layout_kicad_pro.as_deref(),
-            layout_kicad_pcb: materialized.layout_kicad_pcb.as_deref(),
-            port_to_net: &port_to_net,
-            refdes_instance_names: &refdes_instance_names,
-            components: &ir.components,
-            hierarchy_plan: &ir.hierarchy_plan,
-            schematic_sheet_tree: &ir.schematic_sheet_tree,
-            schematic_lib_symbols: &ir.schematic_lib_symbols,
-            schematic_power_symbol_decls: &ir.schematic_power_symbol_decls,
-            net_kinds_by_net: &ir.semantic.net_kinds.by_net,
-            net_decls: &net_decls,
-            component_modules: &component_modules,
-            sheet_modules: &sheet_modules,
-            not_connected_nets: &not_connected_nets,
-        },
-    )?;
+    write_imported_board_zen(ImportedBoardZenArgs {
+        board_zen: &materialized.board_zen,
+        board_name,
+        layout_kicad_pro: materialized.layout_kicad_pro.as_deref(),
+        layout_kicad_pcb: materialized.layout_kicad_pcb.as_deref(),
+        port_to_net: &port_to_net,
+        refdes_instance_names: &refdes_instance_names,
+        components: &ir.components,
+        hierarchy_plan: &ir.hierarchy_plan,
+        schematic_sheet_tree: &ir.schematic_sheet_tree,
+        schematic_lib_symbols: &ir.schematic_lib_symbols,
+        schematic_power_symbol_decls: &ir.schematic_power_symbol_decls,
+        net_kinds_by_net: &ir.semantic.net_kinds.by_net,
+        net_decls: &net_decls,
+        component_modules: &component_modules,
+        sheet_modules: &sheet_modules,
+        not_connected_nets: &not_connected_nets,
+    })?;
 
     Ok(GenerationResult {
-        registry_reused_entrypoints: component_modules.registry_reused_entrypoints,
-        registry_ambiguous_by_refdes: component_modules.registry_ambiguous_by_refdes,
-        sourcing_by_refdes: component_modules.sourcing_by_refdes,
         expected_pins_by_refdes,
         instance_name_by_refdes: refdes_instance_names,
     })
@@ -142,10 +142,7 @@ struct ImportedBoardZenArgs<'a> {
     not_connected_nets: &'a BTreeSet<KiCadNetName>,
 }
 
-fn write_imported_board_zen(
-    writer: &mut output::ImportWriter,
-    args: ImportedBoardZenArgs<'_>,
-) -> Result<()> {
+fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
     let mut copper_layers = 4;
     let mut stackup = None;
     let mut design_rules = None;
@@ -170,18 +167,15 @@ fn write_imported_board_zen(
                 .flatten();
         }
 
-        prepatch_imported_layout_kicad_pcb(
-            writer,
-            LayoutPrepatchArgs {
-                layout_kicad_pcb,
-                pcb_text: &pcb_text,
-                components: args.components,
-                refdes_instance_names: args.refdes_instance_names,
-                net_ident_by_kicad_name: &args.net_decls.zener_name_by_kicad_name,
-                generated_components: args.component_modules,
-                sheet_modules: args.sheet_modules,
-            },
-        )
+        prepatch_imported_layout_kicad_pcb(LayoutPrepatchArgs {
+            layout_kicad_pcb,
+            pcb_text: &pcb_text,
+            components: args.components,
+            refdes_instance_names: args.refdes_instance_names,
+            net_ident_by_kicad_name: &args.net_decls.zener_name_by_kicad_name,
+            generated_components: args.component_modules,
+            sheet_modules: args.sheet_modules,
+        })
         .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
     }
 
@@ -281,9 +275,7 @@ fn write_imported_board_zen(
         &root_schematic_positions,
         args.schematic_lib_symbols,
     );
-    writer
-        .write_zen(args.board_zen, &board_zen_content)
-        .with_context(|| format!("Failed to write {}", args.board_zen.display()))?;
+    write_zen(args.board_zen, &board_zen_content)?;
 
     Ok(())
 }
@@ -298,10 +290,7 @@ struct LayoutPrepatchArgs<'a> {
     sheet_modules: &'a GeneratedSheetModules,
 }
 
-fn prepatch_imported_layout_kicad_pcb(
-    writer: &mut output::ImportWriter,
-    args: LayoutPrepatchArgs<'_>,
-) -> Result<()> {
+fn prepatch_imported_layout_kicad_pcb(args: LayoutPrepatchArgs<'_>) -> Result<()> {
     let LayoutPrepatchArgs {
         layout_kicad_pcb,
         pcb_text,
@@ -340,8 +329,7 @@ fn prepatch_imported_layout_kicad_pcb(
     patches
         .write_to(pcb_text, &mut out)
         .with_context(|| format!("Failed to apply patches to {}", layout_kicad_pcb.display()))?;
-    writer
-        .write(layout_kicad_pcb, &out)
+    fs::write(layout_kicad_pcb, &out)
         .with_context(|| format!("Failed to write patched {}", layout_kicad_pcb.display()))?;
 
     Ok(())
@@ -727,10 +715,7 @@ struct GenerateSheetModulesArgs<'a> {
     not_connected_nets: &'a BTreeSet<KiCadNetName>,
 }
 
-fn generate_sheet_modules(
-    args: GenerateSheetModulesArgs<'_>,
-    writer: &mut output::ImportWriter,
-) -> Result<GeneratedSheetModules> {
+fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<GeneratedSheetModules> {
     let board_dir = args.board_dir;
     let board_name = args.board_name;
     let ir = args.ir;
@@ -1022,9 +1007,7 @@ fn generate_sheet_modules(
                 &ir.schematic_lib_symbols,
             );
         }
-        writer
-            .write_zen(&module_zen, &module_zen_content)
-            .with_context(|| format!("Failed to write {}", module_zen.display()))?;
+        write_zen(&module_zen, &module_zen_content)?;
     }
 
     Ok(GeneratedSheetModules {
@@ -1334,9 +1317,6 @@ struct GeneratedComponents {
     module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>>,
     module_skip_defaults: BTreeMap<String, ModuleSkipDefaults>,
     expected_pins_by_anchor: BTreeMap<KiCadUuidPathKey, BTreeSet<KiCadPinNumber>>,
-    registry_reused_entrypoints: Vec<PathBuf>,
-    registry_ambiguous_by_refdes: BTreeMap<KiCadRefDes, usize>,
-    sourcing_by_refdes: BTreeMap<KiCadRefDes, ImportGeneratedSourcingStatus>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1391,31 +1371,12 @@ struct GenerateImportedComponentsArgs<'a> {
     reserved_idents: &'a BTreeSet<String>,
     schematic_lib_symbols: &'a BTreeMap<KiCadLibId, String>,
     passive_by_component: &'a BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
-    registry_lookup: &'a ImportRegistryMpnLookup,
-    allow_registry_reuse: bool,
     port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
     not_connected_nets: &'a BTreeSet<KiCadNetName>,
 }
 
-/// Record an ambiguous registry-reuse count for every instance in a part group.
-///
-/// Reuse is decided once per part group using one representative instance, but the report keys
-/// ambiguity by reference designator, so twenty resistors sharing an ambiguous part each need an
-/// entry rather than only the representative's.
-fn record_ambiguous_entrypoints(
-    registry_ambiguous_by_refdes: &mut BTreeMap<KiCadRefDes, usize>,
-    instances: &[KiCadUuidPathKey],
-    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-    count: usize,
-) {
-    for instance in instances.iter().filter_map(|anchor| components.get(anchor)) {
-        registry_ambiguous_by_refdes.insert(instance.netlist.refdes.clone(), count);
-    }
-}
-
 fn generate_imported_components(
     args: GenerateImportedComponentsArgs<'_>,
-    writer: &mut output::ImportWriter,
 ) -> Result<GeneratedComponents> {
     let GenerateImportedComponentsArgs {
         board_dir,
@@ -1423,16 +1384,10 @@ fn generate_imported_components(
         reserved_idents,
         schematic_lib_symbols,
         passive_by_component,
-        registry_lookup,
-        allow_registry_reuse,
         port_to_net,
         not_connected_nets,
     } = args;
     let components_root = board_dir.join("components");
-
-    // One evaluation context for the whole run: candidates resolve against the staged board's
-    // workspace once, instead of each cached package becoming its own workspace root.
-    let mut registry_context = registry_reuse::RegistryReuseContext::new(board_dir);
 
     let mut endpoint_pins_by_component: BTreeMap<KiCadUuidPathKey, BTreeSet<KiCadPinNumber>> =
         BTreeMap::new();
@@ -1761,9 +1716,6 @@ fn generate_imported_components(
         BTreeMap::new();
     let mut module_skip_defaults: BTreeMap<String, ModuleSkipDefaults> = BTreeMap::new();
     let mut expected_pins_by_anchor = BTreeMap::new();
-    let mut registry_reused_entrypoints = Vec::new();
-    let mut registry_ambiguous_by_refdes = BTreeMap::new();
-    let mut sourcing_by_refdes = BTreeMap::new();
 
     for (part_key, part_dir) in part_dir_by_key {
         let Some(instances) = part_to_instances.get(&part_key) else {
@@ -1843,110 +1795,48 @@ fn generate_imported_components(
             }
         }
 
-        let sourcing = derive_imported_sourcing(component, registry_lookup);
-        let registry_plan = if !allow_registry_reuse || flags.any_skip_bom || flags.any_skip_pos {
-            None
-        } else {
-            match registry_reuse::try_reuse_registry_component(
-                registry_reuse::RegistryReuseRequest {
-                    component,
-                    instance_anchors: instances,
-                    components,
-                    port_to_net,
-                    expected_pins: &expected_pins,
-                    lookup: registry_lookup,
-                },
-                &mut registry_context,
-                writer,
-            )? {
-                registry_reuse::RegistryReuseOutcome::Reused(plan) => Some(plan),
-                registry_reuse::RegistryReuseOutcome::Ambiguous(count) => {
-                    record_ambiguous_entrypoints(
-                        &mut registry_ambiguous_by_refdes,
-                        instances,
-                        components,
-                        count,
-                    );
-                    None
-                }
-                registry_reuse::RegistryReuseOutcome::NoMatch => None,
-            }
+        let unresolved_footprint = component.layout.as_ref().and_then(|layout| {
+            layout
+                .unresolved_footprint
+                .as_ref()
+                .and_then(|unresolved| unresolved.source_id.as_deref())
+        });
+        let zen = render_component_zen(
+            &part_dir.component_dir,
+            &symbol.symbol,
+            &symbol.filename,
+            flags,
+            &pin_plan,
+            unresolved_footprint,
+        )
+        .with_context(|| format!("Failed to render .zen for {}", out_dir.display()))?;
+
+        let sym_path = out_dir.join(&symbol.filename);
+        write_file(&sym_path, symbol.library_text.as_bytes())?;
+        if let Some((filename, mod_text)) = &footprint.local_file {
+            let fp_path = out_dir.join(filename);
+            write_file(&fp_path, mod_text.as_bytes())?;
+        }
+        let zen_path = out_dir.join(&zen.filename);
+        write_zen(&zen_path, &zen.zen_text)?;
+
+        let module_path = match &part_dir.manufacturer_dir {
+            Some(mfr) => format!(
+                "components/{mfr}/{name}/{name}.zen",
+                name = part_dir.component_dir
+            ),
+            None => format!(
+                "components/{name}/{name}.zen",
+                name = part_dir.component_dir
+            ),
         };
-
-        let registry_was_reused = registry_plan.is_some();
-        let (module_path, io_pins, skip_defaults, component_name) =
-            if let Some(plan) = registry_plan {
-                registry_reused_entrypoints.push(plan.staged_entrypoint);
-                (
-                    plan.module_path,
-                    plan.io_pins,
-                    ModuleSkipDefaults {
-                        include_skip_bom: false,
-                        skip_bom_default: false,
-                        include_skip_pos: false,
-                        skip_pos_default: false,
-                    },
-                    plan.component_name,
-                )
-            } else {
-                let unresolved_footprint = component.layout.as_ref().and_then(|layout| {
-                    layout.unresolved_footprint.as_ref().map(|unresolved| {
-                        unresolved
-                            .source_id
-                            .as_deref()
-                            .unwrap_or("<missing footprint>")
-                    })
-                });
-                let zen = render_component_zen(
-                    &part_dir.component_dir,
-                    &symbol.filename,
-                    flags,
-                    &pin_plan,
-                    &sourcing,
-                    unresolved_footprint,
-                )
-                .with_context(|| format!("Failed to render .zen for {}", out_dir.display()))?;
-
-                let sym_path = out_dir.join(&symbol.filename);
-                writer
-                    .write(&sym_path, symbol.library_text.as_bytes())
-                    .with_context(|| format!("Failed to write {}", sym_path.display()))?;
-                if let Some((filename, mod_text)) = &footprint.local_file {
-                    let fp_path = out_dir.join(filename);
-                    writer
-                        .write(&fp_path, mod_text.as_bytes())
-                        .with_context(|| format!("Failed to write {}", fp_path.display()))?;
-                    if writer.was_kept(&fp_path) {
-                        warn_kept_footprint_geometry(&fp_path, mod_text);
-                    }
-                }
-                let zen_path = out_dir.join(&zen.filename);
-                writer
-                    .write_zen(&zen_path, &zen.zen_text)
-                    .with_context(|| format!("Failed to write {}", zen_path.display()))?;
-
-                let module_path = match &part_dir.manufacturer_dir {
-                    Some(mfr) => format!(
-                        "components/{mfr}/{name}/{name}.zen",
-                        name = part_dir.component_dir
-                    ),
-                    None => format!(
-                        "components/{name}/{name}.zen",
-                        name = part_dir.component_dir
-                    ),
-                };
-                let io_pins = pin_plan
-                    .io_pins
-                    .iter()
-                    .map(|(io, pin)| (io.clone(), BTreeSet::from([pin.clone()])))
-                    .collect();
-                (
-                    module_path,
-                    io_pins,
-                    ModuleSkipDefaults::from(flags),
-                    component_gen::sanitize_mpn_for_path(&part_dir.component_dir),
-                )
-            };
+        let io_pins = pin_plan
+            .io_pins
+            .iter()
+            .map(|(io, pin)| (io.clone(), BTreeSet::from([pin.clone()])))
+            .collect();
+        let skip_defaults = ModuleSkipDefaults::from(flags);
+        let component_name = component_gen::sanitize_mpn_for_path(&part_dir.component_dir);
 
         if module_io_pins.insert(ident.clone(), io_pins).is_some() {
             anyhow::bail!("Duplicate module IO mapping for {ident}");
@@ -1959,25 +1849,6 @@ fn generate_imported_components(
         }
 
         for anchor in instances {
-            let Some(instance) = components.get(anchor) else {
-                continue;
-            };
-            let (_, skip_bom, _) = derive_import_instance_flags(instance);
-            let sourcing_status = if skip_bom {
-                ImportGeneratedSourcingStatus::Excluded
-            } else if registry_was_reused {
-                ImportGeneratedSourcingStatus::RegistryModuleReused
-            } else if sourcing.mpn.is_some() && sourcing.manufacturer.is_some() {
-                if sourcing.manufacturer_from_registry {
-                    ImportGeneratedSourcingStatus::RegistryMetadataEnriched
-                } else {
-                    ImportGeneratedSourcingStatus::SourcePart
-                }
-            } else {
-                ImportGeneratedSourcingStatus::Incomplete
-            };
-            sourcing_by_refdes.insert(instance.netlist.refdes.clone(), sourcing_status);
-
             if anchor_to_module_ident
                 .insert(anchor.clone(), ident.clone())
                 .is_some()
@@ -2117,17 +1988,6 @@ fn generate_imported_components(
                 anchor.pcb_path()
             );
         }
-        if let Some(component) = components.get(&anchor) {
-            let (_, skip_bom, _) = derive_import_instance_flags(component);
-            sourcing_by_refdes.insert(
-                component.netlist.refdes.clone(),
-                if skip_bom {
-                    ImportGeneratedSourcingStatus::Excluded
-                } else {
-                    ImportGeneratedSourcingStatus::Parametric
-                },
-            );
-        }
         expected_pins_by_anchor.insert(
             anchor.clone(),
             BTreeSet::from([
@@ -2146,9 +2006,6 @@ fn generate_imported_components(
         module_io_pins,
         module_skip_defaults,
         expected_pins_by_anchor,
-        registry_reused_entrypoints,
-        registry_ambiguous_by_refdes,
-        sourcing_by_refdes,
     })
 }
 
@@ -2163,11 +2020,50 @@ fn module_ident_from_component_dir(dir_name: &str) -> String {
     frag
 }
 
+fn explicit_sourcing_property<'a>(
+    component: &'a ImportComponentData,
+    aliases: &[&str],
+) -> Option<&'a str> {
+    component
+        .best_properties()
+        .and_then(|properties| find_property_ci(properties, aliases))
+}
+
+fn explicit_mpn(component: &ImportComponentData) -> Option<&str> {
+    explicit_sourcing_property(
+        component,
+        &[
+            "mpn",
+            "manufacturer_part_number",
+            "manufacturer part number",
+            "mfr part number",
+            "manufacturer_pn",
+            "part number",
+            "mp",
+            "snapeda_pn",
+        ],
+    )
+}
+
+fn explicit_manufacturer(component: &ImportComponentData) -> Option<&str> {
+    explicit_sourcing_property(
+        component,
+        &[
+            "manufacturer",
+            "manufacturer_name",
+            "manufacturer name",
+            "mfr",
+            "mfr_name",
+            "mfg",
+        ],
+    )
+}
+
 fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
     let props = component.best_properties();
 
-    let mpn = registry_lookup::explicit_mpn(component).map(str::to_string);
-    let manufacturer = registry_lookup::explicit_manufacturer(component).map(str::to_string);
+    let mpn = explicit_mpn(component).map(str::to_string);
+    let manufacturer = explicit_manufacturer(component).map(str::to_string);
 
     let footprint = component
         .netlist
@@ -2202,30 +2098,6 @@ fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
         lib_name,
         value,
     }
-}
-
-/// Say so when a kept footprint's copper differs from what the KiCad source now describes.
-///
-/// A kept `.kicad_mod` is reported like any other kept file, but that report says only "your version was
-/// kept" — which is unremarkable for a `.zen` and much less so here, because the board will be laid out
-/// against the land pattern in the kept file rather than the one in the schematic. Reuse validation
-/// cannot catch it: it loads `.zen` entrypoints and checks connectivity, and copper is neither.
-///
-/// A difference is warned about rather than refused. Hand-tuning a footprint's copper is legitimate, so
-/// the useful thing is to name the file whose geometry no longer matches the source, not to block the
-/// import. Geometry that cannot be compared is passed over silently — refusing to warn is better than
-/// warning on every footprint carrying a custom pad.
-fn warn_kept_footprint_geometry(path: &Path, generated: &str) {
-    let Ok(existing) = fs::read_to_string(path) else {
-        return;
-    };
-    if footprint_identity::same_land_pattern(&existing, generated).unwrap_or(true) {
-        return;
-    }
-    eprintln!(
-        "Kept footprint {} has a different land pattern than the KiCad source; the board will be laid out against the kept geometry. Re-import with --force to replace it",
-        path.display()
-    );
 }
 
 fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -> String {
@@ -2674,172 +2546,42 @@ struct RenderedComponentZen {
     zen_text: String,
 }
 
-#[derive(Debug, Clone)]
-struct ImportedSourcing {
-    mpn: Option<String>,
-    manufacturer: Option<String>,
-    manufacturer_from_registry: bool,
-}
-
-fn derive_imported_sourcing(
-    component: &ImportComponentData,
-    registry_lookup: &ImportRegistryMpnLookup,
-) -> ImportedSourcing {
-    let mpn = registry_lookup::explicit_mpn(component).map(str::to_string);
-    let explicit_manufacturer =
-        registry_lookup::explicit_manufacturer(component).map(str::to_string);
-    if explicit_manufacturer.is_some() || mpn.is_none() {
-        return ImportedSourcing {
-            mpn,
-            manufacturer: explicit_manufacturer,
-            manufacturer_from_registry: false,
-        };
-    }
-
-    // An exact MPN is already source design intent. It is safe to fill its missing manufacturer
-    // only when every cached exact-MPN record that names one agrees. Module compatibility is not
-    // required for this metadata-only enrichment.
-    let normalized = pcb_diode_api::normalize_mpn_for_lookup(mpn.as_deref().unwrap_or_default());
-    // Keyed by folding key so spelling variants of one manufacturer agree; the mapped value is the
-    // first-seen original spelling and is the only form ever written to generated output.
-    let mut spelling_by_manufacturer_key: BTreeMap<String, String> = BTreeMap::new();
-    for candidate in registry_lookup
-        .candidates_by_mpn
-        .iter()
-        .filter(|(candidate_mpn, _)| {
-            pcb_diode_api::normalize_mpn_for_lookup(candidate_mpn) == normalized
-        })
-        .flat_map(|(_, candidates)| candidates)
-    {
-        let key = registry_lookup::manufacturer_key(&candidate.manufacturer);
-        if key.is_empty() {
-            continue;
-        }
-        spelling_by_manufacturer_key
-            .entry(key)
-            .or_insert_with(|| candidate.manufacturer.trim().to_string());
-    }
-    let manufacturer = (spelling_by_manufacturer_key.len() == 1)
-        .then(|| spelling_by_manufacturer_key.into_values().next())
-        .flatten();
-
-    ImportedSourcing {
-        mpn,
-        manufacturer_from_registry: manufacturer.is_some(),
-        manufacturer,
-    }
-}
-
 fn render_component_zen(
     component_name: &str,
+    symbol: &pcb_eda::Symbol,
     symbol_filename: &str,
     flags: ImportPartFlags,
     pin_plan: &PhysicalPinPlan,
-    sourcing: &ImportedSourcing,
     unresolved_footprint: Option<&str>,
 ) -> Result<RenderedComponentZen> {
-    // `component_name` is the already-sanitized, collision-resolved filesystem segment. Preserve
-    // it exactly so the rendered filename matches the module path emitted by the caller.
-    let string = crate::codegen::starlark::string;
-    let mut zen =
-        format!("\"\"\"\n{component_name}\n\nAuto-generated using `pcb import`.\n\"\"\"\n\n");
-    if flags.any_skip_bom {
-        zen.push_str(&format!(
-            "skip_bom = config(bool, default = {})\n",
-            crate::codegen::starlark::bool(flags.all_skip_bom)
-        ));
-    }
-    if flags.any_skip_pos {
-        zen.push_str(&format!(
-            "skip_pos = config(bool, default = {})\n",
-            crate::codegen::starlark::bool(flags.all_skip_pos)
-        ));
-    }
-    if flags.any_skip_bom || flags.any_skip_pos {
-        zen.push('\n');
-    }
-    for binding in &pin_plan.bindings {
-        if let Some(io_name) = &binding.io_name {
-            zen.push_str(&format!("{io_name} = io(Net)\n"));
-        }
-    }
-    zen.push_str("Component(\n");
-    zen.push_str(&format!("    name = {},\n", string(component_name)));
-    match (&sourcing.mpn, &sourcing.manufacturer) {
-        (Some(mpn), Some(manufacturer)) => {
-            zen.push_str(&format!(
-                "    part = Part(mpn = {}, manufacturer = {}),\n",
-                string(mpn),
-                string(manufacturer)
-            ));
-            if sourcing.manufacturer_from_registry {
-                zen.push_str("    # Manufacturer enriched from unanimous cached exact-MPN registry metadata.\n");
-            }
-        }
-        (Some(mpn), None) => {
-            zen.push_str(&format!("    mpn = {},\n", string(mpn)));
-        }
-        (None, _) => {}
-    }
-    let sourcing_is_incomplete =
-        !flags.all_skip_bom && (sourcing.mpn.is_none() || sourcing.manufacturer.is_none());
-    if sourcing_is_incomplete {
-        zen.push_str("    # Source schematic did not provide complete sourcing; preserve this for agent follow-up.\n");
-    }
-    if unresolved_footprint.is_some() {
-        zen.push_str("    # Source footprint geometry was unavailable; retain its provenance for agent follow-up.\n");
-    }
-    if sourcing_is_incomplete || unresolved_footprint.is_some() {
-        zen.push_str("    properties = {\n");
-        if sourcing_is_incomplete {
-            zen.push_str("        \"__imported_bom_source_incomplete\": True,\n");
-        }
-        if let Some(footprint) = unresolved_footprint {
-            zen.push_str(&format!(
-                "        {}: {},\n",
-                string(IMPORT_UNRESOLVED_FOOTPRINT_PROPERTY),
-                string(footprint)
-            ));
-        }
-        zen.push_str("    },\n");
-    }
-    if flags.any_skip_bom {
-        zen.push_str("    skip_bom = skip_bom,\n");
-    }
-    if flags.any_skip_pos {
-        zen.push_str("    skip_pos = skip_pos,\n");
-    }
-    if let Some(footprint) = unresolved_footprint {
-        // An explicit unresolved KiCad ID bypasses local geometry inference while keeping the
-        // original design intent visible. Layout remains intentionally incomplete until replaced.
-        zen.push_str(&format!("    footprint = {},\n", string(footprint)));
-    }
-    zen.push_str(&format!(
-        "    symbol = Symbol(library = {}),\n",
-        string(symbol_filename)
-    ));
-    zen.push_str("    pin_defs = {\n");
-    for binding in &pin_plan.bindings {
-        zen.push_str(&format!(
-            "        {}: {},\n",
-            string(&binding.logical_name),
-            string(binding.pad_number.as_str())
-        ));
-    }
-    zen.push_str("    },\n    pins = {\n");
-    for binding in &pin_plan.bindings {
-        if let Some(io_name) = &binding.io_name {
-            zen.push_str(&format!(
-                "        {}: {io_name},\n",
-                string(&binding.logical_name)
-            ));
-        }
-    }
-    zen.push_str("    },\n)\n");
+    let pins = pin_plan
+        .bindings
+        .iter()
+        .map(|binding| component_gen::GenerateComponentPin {
+            logical_name: binding.logical_name.clone(),
+            pad_number: binding.pad_number.as_str().to_string(),
+            io_name: binding.io_name.clone(),
+        })
+        .collect::<Vec<_>>();
+    let zen_text = component_gen::generate_component_zen_with_pins(
+        component_gen::GenerateComponentZenArgs {
+            component_name,
+            symbol,
+            symbol_filename,
+            generated_by: "pcb import",
+            include_skip_bom: flags.any_skip_bom,
+            include_skip_pos: flags.any_skip_pos,
+            skip_bom_default: flags.all_skip_bom,
+            skip_pos_default: flags.all_skip_pos,
+        },
+        &pins,
+        unresolved_footprint,
+    )
+    .context("Failed to generate component .zen")?;
 
     Ok(RenderedComponentZen {
         filename: format!("{component_name}.zen"),
-        zen_text: zen,
+        zen_text,
     })
 }
 
@@ -3082,32 +2824,7 @@ mod tests {
             module_io_pins: BTreeMap::new(),
             module_skip_defaults: BTreeMap::new(),
             expected_pins_by_anchor: BTreeMap::new(),
-            registry_reused_entrypoints: Vec::new(),
-            registry_ambiguous_by_refdes: BTreeMap::new(),
-            sourcing_by_refdes: BTreeMap::new(),
         }
-    }
-
-    /// Ambiguity is discovered once per part group, but the report is per reference designator: every
-    /// instance sharing the ambiguous part must get an entry, not just the representative.
-    #[test]
-    fn ambiguous_entrypoints_are_recorded_for_every_instance() {
-        let instances = [make_anchor("r1"), make_anchor("r2"), make_anchor("missing")];
-        let components = BTreeMap::from([
-            (instances[0].clone(), make_component("R1", BTreeMap::new())),
-            (instances[1].clone(), make_component("R2", BTreeMap::new())),
-        ]);
-
-        let mut ambiguous = BTreeMap::new();
-        record_ambiguous_entrypoints(&mut ambiguous, &instances, &components, 2);
-
-        assert_eq!(
-            ambiguous,
-            BTreeMap::from([
-                (KiCadRefDes::from("R1".to_string()), 2),
-                (KiCadRefDes::from("R2".to_string()), 2),
-            ])
-        );
     }
 
     #[test]
@@ -3349,17 +3066,13 @@ mod tests {
         };
         let rendered = render_component_zen(
             "USB_DEVICE__VARIANT",
+            &pcb_eda::Symbol::default(),
             "USB_DEVICE.kicad_sym",
             ImportPartFlags {
                 all_skip_bom: false,
                 ..ImportPartFlags::default()
             },
             &plan,
-            &ImportedSourcing {
-                mpn: None,
-                manufacturer: None,
-                manufacturer_from_registry: false,
-            },
             None,
         )
         .unwrap();
@@ -3369,7 +3082,7 @@ mod tests {
         assert!(rendered.zen_text.contains("\"NC\\\"\\\\é\": \"10\""));
         assert!(!rendered.zen_text.contains("NC = io(Net)"));
         assert!(
-            rendered
+            !rendered
                 .zen_text
                 .contains("__imported_bom_source_incomplete")
         );
@@ -3378,6 +3091,7 @@ mod tests {
     fn renderer_preserves_unresolved_footprint_without_geometry() {
         let rendered = render_component_zen(
             "DEVICE",
+            &pcb_eda::Symbol::default(),
             "DEVICE.kicad_sym",
             ImportPartFlags {
                 all_skip_bom: false,
@@ -3386,11 +3100,6 @@ mod tests {
             &PhysicalPinPlan {
                 bindings: Vec::new(),
                 io_pins: BTreeMap::new(),
-            },
-            &ImportedSourcing {
-                mpn: Some("ABC-123".to_string()),
-                manufacturer: Some("Acme".to_string()),
-                manufacturer_from_registry: false,
             },
             Some("Missing:Footprint"),
         )
@@ -3402,88 +3111,15 @@ mod tests {
                 .contains("footprint = \"Missing:Footprint\"")
         );
         assert!(
-            rendered
+            !rendered
                 .zen_text
-                .contains("\"__imported_unresolved_footprint\": \"Missing:Footprint\"")
+                .contains("__imported_unresolved_footprint")
         );
         assert!(
             !rendered
                 .zen_text
                 .contains("__imported_bom_source_incomplete")
         );
-    }
-
-    #[test]
-    fn exact_registry_metadata_can_complete_explicit_source_mpn() {
-        let mut unit = make_unit(Some(1), None);
-        unit.properties.insert(
-            "Manufacturer_Part_Number".to_string(),
-            "ABC-123".to_string(),
-        );
-        let component = make_component("U1", BTreeMap::from([(make_anchor("u1"), unit)]));
-        let lookup = ImportRegistryMpnLookup {
-            candidates_by_mpn: BTreeMap::from([(
-                "ABC-123".to_string(),
-                vec![ImportRegistryMpnCandidate {
-                    registry_id: "registry".to_string(),
-                    registry_mpn: "ABC-123".to_string(),
-                    manufacturer: "Acme".to_string(),
-                    footprint: "FP".to_string(),
-                    module_url: "example/component".to_string(),
-                    module_version: "1.0.0".to_string(),
-                    entrypoints: vec![],
-                    symbol_preferred: false,
-                    module_preferred: false,
-                }],
-            )]),
-            ..ImportRegistryMpnLookup::default()
-        };
-        let sourcing = derive_imported_sourcing(&component, &lookup);
-        assert_eq!(sourcing.mpn.as_deref(), Some("ABC-123"));
-        assert_eq!(sourcing.manufacturer.as_deref(), Some("Acme"));
-        assert!(sourcing.manufacturer_from_registry);
-    }
-
-    #[test]
-    fn registry_manufacturer_enrichment_folds_case_and_emits_an_original_spelling() {
-        let mut unit = make_unit(Some(1), None);
-        unit.properties.insert(
-            "Manufacturer_Part_Number".to_string(),
-            "ABC-123".to_string(),
-        );
-        let component = make_component("U1", BTreeMap::from([(make_anchor("u1"), unit)]));
-        let record = |manufacturer: &str| ImportRegistryMpnCandidate {
-            registry_id: "registry".to_string(),
-            registry_mpn: "ABC-123".to_string(),
-            manufacturer: manufacturer.to_string(),
-            footprint: "FP".to_string(),
-            module_url: "example/component".to_string(),
-            module_version: "1.0.0".to_string(),
-            entrypoints: vec![],
-            symbol_preferred: false,
-            module_preferred: false,
-        };
-        let lookup_for = |records: Vec<ImportRegistryMpnCandidate>| ImportRegistryMpnLookup {
-            candidates_by_mpn: BTreeMap::from([("ABC-123".to_string(), records)]),
-            ..ImportRegistryMpnLookup::default()
-        };
-
-        // Records that disagree only by case name one manufacturer, and the enriched value must be
-        // an original spelling: emitting the folded key would write "acme" into generated .zen.
-        let sourcing = derive_imported_sourcing(
-            &component,
-            &lookup_for(vec![record(" Acme "), record("ACME")]),
-        );
-        assert_eq!(sourcing.manufacturer.as_deref(), Some("Acme"));
-        assert!(sourcing.manufacturer_from_registry);
-
-        // Genuinely different manufacturers still block enrichment.
-        let sourcing = derive_imported_sourcing(
-            &component,
-            &lookup_for(vec![record("Acme"), record("Other")]),
-        );
-        assert_eq!(sourcing.manufacturer, None);
-        assert!(!sourcing.manufacturer_from_registry);
     }
 
     #[test]
@@ -4147,34 +3783,5 @@ mod tests {
 
         let out = append_schematic_position_comments(content, &positions, &schematic_lib_symbols);
         assert!(out.contains("\n\n# pcb:sch R162.R x=364.6000 y=624.0000 rot=270 mirror=y\n"));
-    }
-
-    /// A kept `.kicad_mod` decides the board's copper, and nothing else checks it: reuse validation
-    /// loads `.zen` entrypoints and compares connectivity, not geometry. So the difference has to be
-    /// noticed here, and only when the land pattern really differs.
-    #[test]
-    fn a_kept_footprint_with_different_copper_is_noticed() {
-        let pad = |size: &str| {
-            format!(
-                r#"(footprint "F" (layer "F.Cu")
-        (pad "1" smd rect (at 0 0) (size {size}) (layers "F.Cu")))"#
-            )
-        };
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("F.kicad_mod");
-
-        // Same copper written the same way: nothing to say.
-        fs::write(&path, pad("1 2")).unwrap();
-        assert!(footprint_identity::same_land_pattern(&pad("1 2"), &pad("1 2")).unwrap());
-
-        // Different pad size is a different land pattern, which is what the warning exists for.
-        assert!(!footprint_identity::same_land_pattern(&pad("1 2"), &pad("3 2")).unwrap());
-
-        // Both paths must be reachable without panicking, including unreadable and unparseable input.
-        warn_kept_footprint_geometry(&path, &pad("3 2"));
-        warn_kept_footprint_geometry(&path, &pad("1 2"));
-        warn_kept_footprint_geometry(&dir.path().join("missing.kicad_mod"), &pad("1 2"));
-        fs::write(&path, "(footprint unterminated").unwrap();
-        warn_kept_footprint_geometry(&path, &pad("1 2"));
     }
 }

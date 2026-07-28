@@ -1,24 +1,8 @@
-use anyhow::Result;
-use std::path::{Path, PathBuf};
+use anyhow::{Context, Result};
+use std::fs;
+use std::path::Path;
 
-/// Name of the import extraction report, written inside `materialize::create_diagnostics_dir`.
 pub(super) const IMPORT_EXTRACTION_REPORT_NAME: &str = ".kicad.import.extraction.json";
-
-/// What generation and staging decided for this run, as opposed to what extraction found in the
-/// KiCad source. Grouped so the report builder keeps a readable parameter list.
-pub(super) struct ReportGenerationOutcome<'a> {
-    pub(super) registry_reused_entrypoints: &'a [PathBuf],
-    pub(super) sourcing_by_refdes:
-        &'a std::collections::BTreeMap<super::KiCadRefDes, super::ImportGeneratedSourcingStatus>,
-    /// Destination-relative paths staging kept instead of refreshing from the KiCad source.
-    pub(super) kept_existing_files: &'a [PathBuf],
-    /// Refdes -> number of competing compatible cached registry entrypoints, for components that
-    /// fell back because the choice was ambiguous rather than because nothing matched.
-    pub(super) registry_ambiguous_by_refdes:
-        &'a std::collections::BTreeMap<super::KiCadRefDes, usize>,
-    /// Why connectivity validation rejected the board, when it did. `None` means it passed.
-    pub(super) validation_failure: Option<String>,
-}
 
 pub(super) fn build_import_report(
     paths: &super::ImportPaths,
@@ -26,7 +10,6 @@ pub(super) fn build_import_report(
     validation: &super::ImportValidationRun,
     ir: super::ImportIr,
     materialized: &super::MaterializedBoard,
-    outcome: &ReportGenerationOutcome<'_>,
 ) -> super::ImportReport {
     let generated = super::GeneratedArtifacts {
         board_dir: super::rel_to_root(&paths.workspace_root, &materialized.board_dir),
@@ -44,18 +27,6 @@ pub(super) fn build_import_report(
             .portable_kicad_project_zip
             .as_ref()
             .map(|path| super::rel_to_root(&paths.workspace_root, path)),
-        registry_reused_entrypoints: outcome
-            .registry_reused_entrypoints
-            .iter()
-            .map(|path| super::rel_to_root(&paths.workspace_root, path))
-            .collect(),
-        sourcing_by_refdes: outcome.sourcing_by_refdes.clone(),
-        // Already destination-relative, which is what `board_dir` is the root of.
-        kept_existing_files: outcome.kept_existing_files.to_vec(),
-        registry_ambiguous_compatible_entrypoints_by_refdes: outcome
-            .registry_ambiguous_by_refdes
-            .clone(),
-        validation_failure: outcome.validation_failure.clone(),
     };
 
     super::ImportReport {
@@ -84,9 +55,9 @@ pub(super) fn write_import_extraction_report(
 ) -> Result<()> {
     let mut value = serde_json::to_value(payload)?;
     sort_json_objects(&mut value);
-    // Renamed into place rather than truncated, for the same reasons as the validation diagnostics: no
-    // partial JSON at a path consumers read, and a symlinked destination is replaced, not followed.
-    super::output::write_atomic(out_path, serde_json::to_string_pretty(&value)?.as_bytes())
+    fs::write(out_path, serde_json::to_string_pretty(&value)?)
+        .with_context(|| format!("Failed to write {}", out_path.display()))?;
+    Ok(())
 }
 
 fn sort_json_objects(value: &mut serde_json::Value) {

@@ -33,27 +33,3 @@ pub fn write_zen_formatted(path: &Path, content: &str) -> Result<()> {
 
     Ok(())
 }
-
-/// Format `content` as Zener source and return the result, writing nothing.
-///
-/// For callers that must decide *whether* to write: import compares the formatted bytes against what is
-/// already on disk, which needs the formatted output before the decision. The scratch file the formatter
-/// requires goes in the system temp directory, deliberately not the destination — it is read back and
-/// discarded, never renamed into place, so keeping it off the destination means comparing against a
-/// read-only output tree stays a silent no-op instead of failing for want of somewhere to write.
-pub fn format_zen(content: &str) -> Result<Vec<u8>> {
-    let mut tmp = Builder::new()
-        .prefix(".pcb.codegen.")
-        .suffix(".zen")
-        .tempfile()
-        .context("Failed to create a temp file to format Zener in")?;
-    tmp.write_all(content.as_bytes())
-        .context("Failed to write Zener to a temp file")?;
-    tmp.flush().context("Failed to flush Zener temp file")?;
-
-    RuffFormatter::default()
-        .format_file(tmp.path())
-        .context("Failed to format generated Zener")?;
-
-    std::fs::read(tmp.path()).context("Failed to read back formatted Zener")
-}

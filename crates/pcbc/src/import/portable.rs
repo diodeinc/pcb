@@ -535,9 +535,20 @@ fn discover_schematic_and_validate(kicad_sch_abs: &Path) -> Result<PortableKicad
     })
 }
 
+fn private_tempdir(prefix: &str) -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir()
+}
+
 pub(super) fn stage_project_files(project: &PortableKicadProject) -> Result<tempfile::TempDir> {
     // 0700: the staged tree is a copy of the user's KiCad sources in a shared temp directory.
-    let temp = super::output::private_tempdir("pcb-import-kicad-sources-")
+    let temp = private_tempdir("pcb-import-kicad-sources-")
         .context("Failed to stage KiCad source files")?;
     for relative in &project.files_to_bundle_rel {
         let source = project.project_dir.join(relative);
@@ -552,11 +563,6 @@ pub(super) fn stage_project_files(project: &PortableKicadProject) -> Result<temp
 }
 
 /// Build the portable KiCad source archive in memory.
-///
-/// Returns the bytes rather than writing them, so the caller puts the archive through
-/// [`output::ImportWriter`] like every other output. Writing the file here would truncate whatever is
-/// at that path with `File::create` — bypassing the no-overwrite rule, destroying an existing archive
-/// if the write failed part-way, and following a symlink instead of replacing it.
 pub(super) fn build_portable_zip(project: &PortableKicadProject) -> Result<Vec<u8>> {
     let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
 

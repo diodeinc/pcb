@@ -702,126 +702,32 @@ fn resolve_standalone_footprints(
     }
 
     if !unresolved.is_empty() {
-        eprintln!(
-            "{}",
-            unresolved_footprint_warning(
-                &unresolved,
-                components.len(),
-                &selection.portable.project_dir,
-                kicad_major,
-            )
-        );
+        eprintln!("{}", unresolved_footprint_warning(&unresolved));
     }
 
     Ok(())
 }
 
-/// A design can reference many broken libraries; list enough to identify the cause without
-/// flooding stderr.
-const UNRESOLVED_LIBRARY_LIST_LIMIT: usize = 5;
-
-/// Stands in for a component whose schematic names no footprint at all.
-///
-/// Kept out of the library grouping in [`unresolved_footprint_warning`]: it is not a library nickname,
-/// and treating it as one told the user that a library called `<missing footprint>` was not registered
-/// — pointing at `fp-lib-table` when the field is simply empty or `~` in KiCad.
+const UNRESOLVED_FOOTPRINT_LIST_LIMIT: usize = 8;
 const NO_FOOTPRINT_KEY: &str = "<missing footprint>";
 
-/// Builds the unresolved-footprint warning.
-///
-/// The warning has to be self-diagnosing: which library nicknames failed, where import looked for
-/// them, and whether *every* referenced footprint failed (a library that is not registered where
-/// import looks) or only some did (a per-footprint gap in the design). Import continues either
-/// way, because the structural conversion succeeded and is the valuable part.
-fn unresolved_footprint_warning(
-    unresolved: &BTreeMap<String, Vec<String>>,
-    total_components: usize,
-    project_dir: &Path,
-    kicad_major: Option<u64>,
-) -> String {
-    let footprint_count = unresolved.len();
+fn unresolved_footprint_warning(unresolved: &BTreeMap<String, Vec<String>>) -> String {
     let component_count = unresolved.values().map(Vec::len).sum::<usize>();
-    let without_footprint = unresolved.get(NO_FOOTPRINT_KEY).map_or(0, Vec::len);
-
-    // Group by library nickname: the nickname is what the user registers in KiCad, so it is what
-    // makes the warning actionable. Components naming no footprint have no nickname to register and
-    // are reported separately.
-    let mut by_library: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
-    for (fpid, refdeses) in unresolved
-        .iter()
-        .filter(|(fpid, _)| *fpid != NO_FOOTPRINT_KEY)
-    {
-        let nickname = fpid.split_once(':').map_or(fpid.as_str(), |(name, _)| name);
-        let entry = by_library.entry(nickname).or_insert((0, 0));
-        entry.0 += 1;
-        entry.1 += refdeses.len();
-    }
-    let mut ranked = by_library.into_iter().collect::<Vec<_>>();
-    ranked.sort_by(|left, right| right.1.1.cmp(&left.1.1).then_with(|| left.0.cmp(right.0)));
-
-    let diagnosis = if ranked.is_empty() {
-        // Nothing was looked up at all: every unresolved component simply names no footprint.
-        "no component names a footprint, so there is no library to register — set the Footprint field \
-         in KiCad"
-            .to_string()
-    } else if component_count >= total_components && ranked.len() == 1 {
-        format!(
-            "every component's footprint is unresolved and they all come from library '{}', so the library is most likely not registered where import looks rather than the design being unusual",
-            ranked[0].0
-        )
-    } else if component_count >= total_components {
-        "every component's footprint is unresolved, so these libraries are most likely not registered where import looks rather than the design being unusual".to_string()
-    } else {
-        format!(
-            "{} of {total_components} component(s) resolved, so this is a per-footprint gap rather than a library that is missing entirely",
-            total_components - component_count
-        )
-    };
-
-    let cached_library = match kicad_major {
-        Some(major) => format!("the cached kicad-footprints package for KiCad {major}"),
-        None => {
-            "the cached kicad-footprints package matching the schematic's KiCad version".to_string()
-        }
-    };
-
-    let mut listed = ranked
-        .iter()
-        .take(UNRESOLVED_LIBRARY_LIST_LIMIT)
-        .map(|(nickname, (footprints, components))| {
-            format!("{nickname} ({footprints} footprint(s), {components} component(s))")
-        })
+    let mut listed = unresolved
+        .keys()
+        .take(UNRESOLVED_FOOTPRINT_LIST_LIMIT)
+        .cloned()
         .collect::<Vec<_>>()
         .join(", ");
-    if let Some(remaining) = ranked.len().checked_sub(UNRESOLVED_LIBRARY_LIST_LIMIT)
-        && remaining > 0
-    {
-        listed.push_str(&format!(", and {remaining} more library nickname(s)"));
-    }
-
-    let no_footprint_note = if without_footprint > 0 {
-        format!(
-            "\n  {without_footprint} component(s) name no footprint at all, which no library can supply; set the Footprint field in KiCad."
-        )
-    } else {
-        String::new()
-    };
-
-    // With no library in play there is nothing to register, so the list and the search locations would
-    // only mislead.
-    if ranked.is_empty() {
-        return format!(
-            "Warning: {component_count} component(s) have {footprint_count} unresolved footprint definition(s); {diagnosis}\n  \
-             The board still imports with connectivity intact but is not layout-ready."
-        );
+    let omitted = unresolved
+        .len()
+        .saturating_sub(UNRESOLVED_FOOTPRINT_LIST_LIMIT);
+    if omitted > 0 {
+        listed.push_str(&format!(", and {omitted} more"));
     }
 
     format!(
-        "Warning: {component_count} component(s) have {footprint_count} unresolved footprint definition(s); {diagnosis}\n  \
-         Unresolved libraries: {listed}\n  \
-         Looked in: the project fp-lib-table ({}), the global KiCad fp-lib-table (KICAD_CONFIG_HOME or the platform KiCad configuration directory), the bundled KiCad footprint subset, and {cached_library}\n  \
-         The board still imports with connectivity intact but is not layout-ready; generated Zener retains the available source footprint IDs. Register the missing library in KiCad or in the project fp-lib-table, then re-import with --force to complete the footprints.{no_footprint_note}",
-        project_dir.join("fp-lib-table").display()
+        "Warning: {component_count} component(s) have unresolved footprints: {listed}. The board imported with connectivity intact but is not layout-ready."
     )
 }
 
@@ -1688,88 +1594,23 @@ mod tests {
         }
     }
 
-    /// Every footprint failing from one library is a library-registration problem; a few failing is
-    /// A component whose schematic names no footprint has no library to register. Grouping it with the
-    /// real libraries told the user a library called `<missing footprint>` was not registered, pointing
-    /// at `fp-lib-table` when the Footprint field is simply empty in KiCad.
     #[test]
-    fn a_component_naming_no_footprint_is_not_reported_as_a_missing_library() {
-        let only_missing = BTreeMap::from([(
-            NO_FOOTPRINT_KEY.to_string(),
-            vec!["R1".to_string(), "R2".to_string()],
-        )]);
-        let warning = unresolved_footprint_warning(&only_missing, 2, Path::new("/design"), Some(9));
+    fn unresolved_warning_lists_footprint_ids_and_caps_the_output() {
+        let unresolved = (0..10)
+            .map(|index| {
+                (
+                    format!("Missing:Footprint_{index}"),
+                    vec![format!("U{index}")],
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let warning = unresolved_footprint_warning(&unresolved);
 
-        assert!(
-            !warning.contains("library '<missing footprint>'"),
-            "must not name the placeholder as a library: {warning}"
-        );
-        assert!(
-            warning.contains("no component names a footprint"),
-            "must say what is actually wrong: {warning}"
-        );
-        assert!(
-            !warning.contains("fp-lib-table"),
-            "there is no library to register, so the search locations only mislead: {warning}"
-        );
-
-        // Mixed: a real library *and* components with no footprint. Both get said, separately.
-        let mixed = BTreeMap::from([
-            ("SparkFun-Cap:C_0402".to_string(), vec!["C1".to_string()]),
-            (NO_FOOTPRINT_KEY.to_string(), vec!["R1".to_string()]),
-        ]);
-        let warning = unresolved_footprint_warning(&mixed, 4, Path::new("/design"), Some(9));
-        assert!(warning.contains("SparkFun-Cap (1 footprint(s), 1 component(s))"));
-        assert!(
-            !warning.contains("<missing footprint> ("),
-            "the placeholder must stay out of the library list: {warning}"
-        );
-        assert!(
-            warning.contains("1 component(s) name no footprint at all"),
-            "and be counted on its own: {warning}"
-        );
-    }
-
-    /// a design quirk. The warning has to say which happened, and name the library either way.
-    #[test]
-    fn unresolved_warning_names_the_library_and_distinguishes_total_from_partial_failure() {
-        let all_unresolved = BTreeMap::from([
-            (
-                "antmicro-footprints:R_0402".to_string(),
-                vec!["R1".to_string(), "R2".to_string()],
-            ),
-            (
-                "antmicro-footprints:C_0402".to_string(),
-                vec!["C1".to_string()],
-            ),
-        ]);
-        let warning =
-            unresolved_footprint_warning(&all_unresolved, 3, Path::new("/design"), Some(9));
-        assert!(warning.starts_with(
-            "Warning: 3 component(s) have 2 unresolved footprint definition(s); every component's footprint is unresolved and they all come from library 'antmicro-footprints'"
-        ));
-        assert!(warning.contains(
-            "Unresolved libraries: antmicro-footprints (2 footprint(s), 3 component(s))"
-        ));
-        // Built with `join` so the assertion holds wherever the path separator differs.
-        assert!(warning.contains(&format!(
-            "the project fp-lib-table ({})",
-            Path::new("/design").join("fp-lib-table").display()
-        )));
-        assert!(warning.contains("the global KiCad fp-lib-table (KICAD_CONFIG_HOME"));
-        assert!(warning.contains("the cached kicad-footprints package for KiCad 9"));
+        assert!(warning.starts_with("Warning: 10 component(s) have unresolved footprints:"));
+        assert!(warning.contains("Missing:Footprint_0"));
+        assert!(warning.contains("and 2 more"));
+        assert!(!warning.contains("Looked in:"));
         assert!(warning.contains("connectivity intact but is not layout-ready"));
-        assert!(warning.contains("re-import with --force"));
-
-        let partial = BTreeMap::from([("OneOff:Thing".to_string(), vec!["U9".to_string()])]);
-        let warning = unresolved_footprint_warning(&partial, 40, Path::new("/design"), None);
-        assert!(warning.contains(
-            "39 of 40 component(s) resolved, so this is a per-footprint gap rather than a library that is missing entirely"
-        ));
-        assert!(warning.contains("Unresolved libraries: OneOff (1 footprint(s), 1 component(s))"));
-        assert!(
-            warning.contains("the cached kicad-footprints package matching the schematic's KiCad")
-        );
     }
 
     #[test]

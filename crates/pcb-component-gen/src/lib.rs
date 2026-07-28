@@ -103,6 +103,17 @@ pub struct GenerateComponentZenArgs<'a> {
     pub skip_pos_default: bool,
 }
 
+/// One explicit logical-signal-to-physical-pin mapping supplied by an EDA importer.
+///
+/// Most component generation groups pins by the signal names in the symbol. Importers that must
+/// preserve physical-pin identity can provide this plan instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerateComponentPin {
+    pub logical_name: String,
+    pub pad_number: String,
+    pub io_name: Option<String>,
+}
+
 #[derive(Debug, Default)]
 struct SignalPinMetadata {
     sanitized_name: String,
@@ -154,22 +165,70 @@ pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
 }
 
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
+    generate_component_zen_inner(args, None, None)
+}
+
+pub fn generate_component_zen_with_pins(
+    args: GenerateComponentZenArgs<'_>,
+    pins: &[GenerateComponentPin],
+    footprint: Option<&str>,
+) -> Result<String> {
+    generate_component_zen_inner(args, Some(pins), footprint)
+}
+
+fn generate_component_zen_inner(
+    args: GenerateComponentZenArgs<'_>,
+    explicit_pins: Option<&[GenerateComponentPin]>,
+    footprint: Option<&str>,
+) -> Result<String> {
     let component_name = sanitize_mpn_for_path(args.component_name);
     let signal_io_names = generated_signal_io_names(args.symbol);
 
-    let pin_groups_vec: Vec<_> = signal_io_names
-        .values()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(|name| serde_json::json!({"sanitized_name": name}))
-        .collect();
+    let pin_groups_vec: Vec<_> = match explicit_pins {
+        Some(pins) => pins
+            .iter()
+            .filter_map(|pin| pin.io_name.as_ref())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|name| serde_json::json!({"sanitized_name": name}))
+            .collect(),
+        None => signal_io_names
+            .values()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|name| serde_json::json!({"sanitized_name": name}))
+            .collect(),
+    };
 
-    let pin_mappings: Vec<_> = signal_io_names
+    let pin_mappings: Vec<_> = match explicit_pins {
+        Some(pins) => pins
+            .iter()
+            .filter_map(|pin| {
+                pin.io_name.as_ref().map(|io_name| {
+                    serde_json::json!({
+                        "original_name_literal": serde_json::to_string(&pin.logical_name).expect("serialize pin name"),
+                        "sanitized_name": io_name
+                    })
+                })
+            })
+            .collect(),
+        None => signal_io_names
+            .iter()
+            .map(|(signal_name, io_name)| {
+                serde_json::json!({
+                    "original_name_literal": serde_json::to_string(signal_name).expect("serialize signal name"),
+                    "sanitized_name": io_name
+                })
+            })
+            .collect(),
+    };
+    let pin_defs: Vec<_> = explicit_pins
+        .unwrap_or_default()
         .iter()
-        .map(|(signal_name, io_name)| {
+        .map(|pin| {
             serde_json::json!({
-                "original_name": signal_name,
-                "sanitized_name": io_name
+                "logical_name_literal": serde_json::to_string(&pin.logical_name).expect("serialize logical name"),
+                "pad_number_literal": serde_json::to_string(&pin.pad_number).expect("serialize pad number"),
             })
         })
         .collect();
@@ -180,10 +239,12 @@ pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<Stri
     let content = env
         .get_template("component.zen")?
         .render(serde_json::json!({
-            "component_name": component_name,
-            "sym_path": args.symbol_filename,
+            "component_name_literal": serde_json::to_string(&component_name)?,
+            "sym_path_literal": serde_json::to_string(args.symbol_filename)?,
             "pin_groups": pin_groups_vec,
             "pin_mappings": pin_mappings,
+            "pin_defs": pin_defs,
+            "footprint_literal": footprint.map(serde_json::to_string).transpose()?,
             "generated_by": args.generated_by,
             "include_skip_bom": args.include_skip_bom,
             "include_skip_pos": args.include_skip_pos,

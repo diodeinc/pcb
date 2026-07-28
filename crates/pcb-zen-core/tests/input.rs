@@ -1270,44 +1270,6 @@ fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
     );
 }
 
-#[test]
-fn imported_incomplete_sourcing_is_a_warning() {
-    let eval_result = eval_zen(vec![(
-        "test.zen".to_string(),
-        r#"
-            a = Net("A")
-            Component(
-                name = "U1",
-                footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
-                pin_defs = {"1": "1"},
-                pins = {"1": a},
-                properties = {"__imported_bom_source_incomplete": True},
-            )
-        "#
-        .to_string(),
-    )]);
-
-    assert!(!eval_result.diagnostics.has_errors());
-    let eval_output = eval_result.output.expect("expected eval output");
-    let diagnostics = eval_output.to_schematic_with_diagnostics().diagnostics;
-    let categorized = diagnostics
-        .iter()
-        .filter_map(|diagnostic| {
-            diagnostic
-                .downcast_error_ref::<CategorizedDiagnostic>()
-                .map(|category| (diagnostic.severity, category.kind.as_str()))
-        })
-        .collect::<Vec<_>>();
-    assert!(categorized.iter().any(|(severity, kind)| {
-        matches!(severity, EvalSeverity::Warning) && *kind == "bom.imported_incomplete"
-    }));
-    assert!(
-        !categorized
-            .iter()
-            .any(|(_, kind)| { matches!(*kind, "bom.unspecified" | "bom.underspecified") })
-    );
-}
-
 snapshot_eval!(io_interface_incompatible, {
     "Module.zen" => r#"
         signal = io(Net)
