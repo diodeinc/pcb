@@ -72,8 +72,11 @@ pub(crate) fn load_manifest_for_module_version(
     };
     let content = std::fs::read_to_string(&pcb_toml_path)
         .with_context(|| format!("Failed to read {}", pcb_toml_path.display()))?;
-    let manifest = pcb_zen_core::config::PcbToml::parse(&content)
+    let mut manifest = pcb_zen_core::config::PcbToml::parse(&content)
         .with_context(|| format!("Failed to parse {}", pcb_toml_path.display()))?;
+    if pcb_zen_core::package_url::is_canonical_registry_reference(module_path) {
+        manifest.canonicalize_package_references()?;
+    }
     let has_indirect_table = manifest_has_indirect_table(&content)?;
 
     let indirect = if has_indirect_table {

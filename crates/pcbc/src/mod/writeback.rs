@@ -43,25 +43,6 @@ pub(crate) fn plan_package_manifest(
     }))
 }
 
-pub(crate) fn plan_canonical_manifest(path: PathBuf) -> Result<Option<ManifestEdit>> {
-    if !pcb_zen_core::package_url::registry_migration_enabled() {
-        return Ok(None);
-    }
-
-    let original = std::fs::read_to_string(&path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
-    let mut canonical: PcbToml =
-        toml::from_str(&original).with_context(|| format!("Failed to parse {}", path.display()))?;
-    let unmodified = canonical.clone();
-    canonical.canonicalize_package_references()?;
-    if canonical == unmodified {
-        return Ok(None);
-    }
-
-    let rendered = render_manifest(&canonical)?;
-    Ok((rendered != original).then_some(ManifestEdit { path, rendered }))
-}
-
 fn indirect_dependencies(resolution: &PackageResolution) -> BTreeMap<String, DependencySpec> {
     resolution
         .resolved_remote
