@@ -240,7 +240,7 @@ fn create_preview(
     let preview_url = if let Some(url) = json["previewUrl"].as_str() {
         url.to_string()
     } else {
-        format!("{}/preview/{}", web_base_url, &preview_id)
+        format!("{}/preview/{}", web_base_url, preview_id)
     };
 
     Ok(PreviewResult {
