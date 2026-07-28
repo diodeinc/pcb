@@ -25,7 +25,7 @@ jobs:
       tag: ${{ steps.nightly.outputs.tag }}
       base_url: ${{ steps.nightly.outputs.base_url }}
     steps:
-      - uses: useblacksmith/checkout@v1
+      - uses: useblacksmith/checkout@v1.1
         with:
           ref: ${{ inputs.dry_run && github.ref_name || 'main' }}
           submodules: recursive
@@ -108,7 +108,7 @@ jobs:
 
       - name: Checkout with Blacksmith cache
         if: runner.os == 'Linux'
-        uses: useblacksmith/checkout@v1
+        uses: useblacksmith/checkout@v1.1
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
