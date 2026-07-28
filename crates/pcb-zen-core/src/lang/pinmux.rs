@@ -39,7 +39,9 @@ use starlark::values::typing::TypeInstanceId;
 use starlark::values::{Heap, Value, ValueLike};
 
 use crate::lang::evaluator_ext::EvaluatorExt;
-use crate::lang::interface::{FrozenInterfaceFactory, InterfaceFactory};
+use crate::lang::interface::{
+    FrozenInterfaceFactory, FrozenInterfaceValue, InterfaceFactory, InterfaceValue,
+};
 
 const REBIND_VALUES: [&str; 3] = ["none", "firmware", "fixed"];
 const PINMAP_CAP: usize = 512;
@@ -167,6 +169,9 @@ struct RReq<'v> {
     lock: bool,
     where_fn: Option<Value<'v>>,
     direction: Option<String>,
+    /// Serve this request only when the module input of the same name was
+    /// actually connected by the caller (io() slot pattern).
+    if_connected: bool,
 }
 
 #[derive(Clone)]
@@ -339,6 +344,9 @@ fn parse_rreq<'v>(v: Value<'v>, heap: Heap<'v>) -> anyhow::Result<RReq<'v>> {
             .unwrap_or(false),
         where_fn: dict_get(&d, heap, "where").filter(|v| !v.is_none()),
         direction: dict_get_str(&d, heap, "direction"),
+        if_connected: dict_get(&d, heap, "if_connected")
+            .map(|v| v.to_bool())
+            .unwrap_or(false),
     })
 }
 
@@ -519,24 +527,63 @@ fn combos_for_request<'v>(
 }
 
 // ---------------------------------------------------------------------------
-// Backtracking assignment (deterministic, bounded)
+// Optimal assignment: deterministic branch-and-bound
 // ---------------------------------------------------------------------------
 
+/// Deterministic branch-and-bound over the joint assignment space.
+///
+/// Candidates are explored in per-request cost order and subtrees are pruned
+/// with an admissible lower bound (each unplaced request costs at least its
+/// cheapest combo), so the returned solution minimizes the *total* cost — not
+/// merely the first feasible one. Note this is constraint optimization, not
+/// plain bipartite matching: pin conflicts couple otherwise independent
+/// instance choices, which is why Hungarian-style matching does not apply
+/// directly. On budget exhaustion the best solution found so far is returned
+/// (feasibility stays exact; only optimality can degrade on pathological
+/// instances).
 fn assign<'v>(reqs: &[RReq<'v>], all_combos: &[Vec<Combo>]) -> Option<Vec<usize>> {
+    let n = reqs.len();
+    if n == 0 {
+        return Some(Vec::new());
+    }
     // Evaluation order: locked first, then fewest candidates, then declaration order.
-    let mut order: Vec<usize> = (0..reqs.len()).collect();
+    let mut order: Vec<usize> = (0..n).collect();
     order.sort_by_key(|&i| (!reqs[i].lock, all_combos[i].len(), i));
 
-    let mut choice = vec![0usize; reqs.len()];
+    // Admissible bound: combos are cost-sorted, so index 0 is each request's floor.
+    // suffix_min[k] = total floor of everything not yet placed at position k.
+    let mut suffix_min = vec![0i64; n + 1];
+    for k in (0..n).rev() {
+        suffix_min[k] = suffix_min[k + 1] + all_combos[order[k]][0].cost;
+    }
+
+    let mut choice = vec![0usize; n];
     // chosen combo index per request (by original request index)
-    let mut assigned: Vec<Option<usize>> = vec![None; reqs.len()];
+    let mut assigned: Vec<Option<usize>> = vec![None; n];
+    let mut partial_cost = vec![0i64; n + 1];
     let mut used_inst: HashSet<usize> = HashSet::new();
     let mut used_pin: HashSet<String> = HashSet::new();
+    let mut best: Option<(i64, Vec<usize>)> = None;
     let mut pos: usize = 0;
 
     for _ in 0..SOLVER_BUDGET {
-        if pos == order.len() {
-            return Some(assigned.iter().map(|c| c.unwrap()).collect());
+        if pos == n {
+            let total = partial_cost[n];
+            // Strict improvement keeps the first (deterministic) optimum.
+            if best.as_ref().map(|(b, _)| total < *b).unwrap_or(true) {
+                best = Some((total, assigned.iter().map(|c| c.unwrap()).collect()));
+            }
+            // Keep searching for a cheaper solution: force a backtrack.
+            pos -= 1;
+            let back_ri = order[pos];
+            let back = &all_combos[back_ri][assigned[back_ri].unwrap()];
+            used_inst.remove(&back.periph_idx);
+            for (_, p) in &back.pins {
+                used_pin.remove(&p.name);
+            }
+            assigned[back_ri] = None;
+            choice[pos] += 1;
+            continue;
         }
         let ri = order[pos];
         let combos = &all_combos[ri];
@@ -544,6 +591,13 @@ fn assign<'v>(reqs: &[RReq<'v>], all_combos: &[Vec<Combo>]) -> Option<Vec<usize>
         let mut ci = choice[pos];
         while ci < combos.len() {
             let c = &combos[ci];
+            // Cost-sorted candidates: once the bound reaches the incumbent,
+            // every later candidate in this subtree is at least as expensive.
+            if let Some((b, _)) = &best
+                && partial_cost[pos] + c.cost + suffix_min[pos + 1] >= *b
+            {
+                break;
+            }
             let clash = used_inst.contains(&c.periph_idx)
                 || c.pins.iter().any(|(_, p)| used_pin.contains(&p.name));
             if !clash {
@@ -553,6 +607,7 @@ fn assign<'v>(reqs: &[RReq<'v>], all_combos: &[Vec<Combo>]) -> Option<Vec<usize>
                 for (_, p) in &c.pins {
                     used_pin.insert(p.name.clone());
                 }
+                partial_cost[pos + 1] = partial_cost[pos] + c.cost;
                 placed = true;
                 break;
             }
@@ -560,13 +615,13 @@ fn assign<'v>(reqs: &[RReq<'v>], all_combos: &[Vec<Combo>]) -> Option<Vec<usize>
         }
         if placed {
             pos += 1;
-            if pos < order.len() {
+            if pos < n {
                 choice[pos] = 0;
             }
         } else {
             choice[pos] = 0;
             if pos == 0 {
-                return None;
+                break;
             }
             pos -= 1;
             let back_ri = order[pos];
@@ -579,7 +634,7 @@ fn assign<'v>(reqs: &[RReq<'v>], all_combos: &[Vec<Combo>]) -> Option<Vec<usize>
             choice[pos] += 1;
         }
     }
-    None
+    best.map(|(_, sol)| sol)
 }
 
 // ---------------------------------------------------------------------------
@@ -890,7 +945,9 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
     }
 
     /// A capability demand: the interface type is the request. Only connected
-    /// signals (`uses=`) consume pins.
+    /// signals (`uses=`) consume pins. With `if_connected=True` the request is
+    /// served only when the caller actually connected the module input of the
+    /// same name — the `io(Iface, optional=True)` slot pattern.
     fn pin_request<'v>(
         #[starlark(require = pos)] name: String,
         #[starlark(require = pos)] iface: Value<'v>,
@@ -900,6 +957,7 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named, default = false)] lock: bool,
         #[starlark(require = named, default = NoneOr::None)] r#where: NoneOr<Value<'v>>,
         #[starlark(require = named, default = NoneOr::None)] direction: NoneOr<String>,
+        #[starlark(require = named, default = false)] if_connected: bool,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let heap = eval.heap();
@@ -964,6 +1022,7 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
                     NoneOr::None => Value::new_none(),
                 },
             ),
+            (heap.alloc("if_connected"), Value::new_bool(if_connected)),
         ];
         Ok(heap.alloc(AllocDict(pairs)))
     }
@@ -1022,6 +1081,20 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
                 ));
             }
         }
+
+        // io() slot pattern: an `if_connected` request is served only when the
+        // caller actually connected the module input of the same name.
+        let connected: HashSet<String> = eval
+            .context_value()
+            .map(|ctx| {
+                ctx.module()
+                    .inputs()
+                    .iter()
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        reqs.retain(|r| !r.if_connected || connected.contains(&r.name));
 
         let prev_map = match previous {
             NoneOr::Other(v) => parse_previous(v, heap),
@@ -1253,4 +1326,73 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
         ];
         Ok(heap.alloc(AllocDict(pairs)))
     }
+
+    /// Turn a solved assignment into a `Component(pins=...)`-ready dict:
+    /// physical pin name -> the net carried by the matching interface field.
+    /// `ifaces` maps request names to the io()/interface instances holding the
+    /// nets (a bare Net is accepted for single-signal requests). Requests
+    /// absent from the assignment (e.g. dropped by `if_connected`) are
+    /// skipped, so the two dicts can be declared side by side.
+    fn pin_map<'v>(
+        #[starlark(require = pos)] assignment: Value<'v>,
+        #[starlark(require = pos)] ifaces: SmallMap<String, Value<'v>>,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let heap = eval.heap();
+        let ad = DictRef::from_value(assignment).ok_or_else(|| {
+            anyhow::anyhow!("pin_map: first argument must be the `assignment` dict from pin_solve")
+        })?;
+        let mut out: Vec<(Value, Value)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for (req_name, iface_val) in ifaces.iter() {
+            let Some(entry) = dict_get(&ad, heap, req_name) else {
+                continue;
+            };
+            let sigs = DictRef::from_value(entry)
+                .and_then(|ed| dict_get(&ed, heap, "signals"))
+                .and_then(DictRef::from_value)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("pin_map: malformed assignment entry for `{req_name}`")
+                })?;
+            let sig_count = sigs.iter().count();
+            for (s, pv) in sigs.iter() {
+                let sig = s.unpack_str().unwrap_or_default().to_owned();
+                let pin_name = DictRef::from_value(pv)
+                    .and_then(|pd| dict_get_str(&pd, heap, "pin"))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "pin_map: malformed assignment entry for `{req_name}`/`{sig}`"
+                        )
+                    })?;
+                let net = match interface_field(*iface_val, &sig) {
+                    Some(n) => n,
+                    None if sig_count == 1 => *iface_val,
+                    None => {
+                        return Err(anyhow::anyhow!(
+                            "pin_map: request `{req_name}`: no field `{sig}` on the provided value \
+                             (pass the io()/interface instance, or a bare Net for single-signal requests)"
+                        ));
+                    }
+                };
+                if !seen.insert(pin_name.clone()) {
+                    return Err(anyhow::anyhow!(
+                        "pin_map: physical pin `{pin_name}` mapped by two requests"
+                    ));
+                }
+                out.push((heap.alloc(pin_name.as_str()), net));
+            }
+        }
+        Ok(heap.alloc(AllocDict(out)))
+    }
+}
+
+/// Field of an interface *instance* (mutable or frozen), if `v` is one.
+fn interface_field<'v>(v: Value<'v>, field: &str) -> Option<Value<'v>> {
+    if let Some(i) = v.downcast_ref::<InterfaceValue<'v>>() {
+        return i.fields().get(field).map(|x| x.to_value());
+    }
+    if let Some(i) = v.downcast_ref::<FrozenInterfaceValue>() {
+        return i.fields().get(field).map(|x| x.to_value());
+    }
+    None
 }

@@ -348,20 +348,34 @@ result = pin_solve(
   `"firmware"` (a constant to regenerate), `"fixed"` (never movable).
 - **`pool(name, provides=, pins=, rebind=)`** — sugar for N interchangeable
   single-signal units (GPIO pools).
-- **`pin_request(name, Iface, uses=, instance=, prefer=, lock=, where=, direction=)`**
+- **`pin_request(name, Iface, uses=, instance=, prefer=, lock=, where=, direction=, if_connected=)`**
   — a demand: the interface type *is* the request. Only `uses=` signals
   consume pins (default: all of the interface's signals). `where=` is a
   predicate over the peripheral's `attrs` (`lambda a: a["baud_max"] >= "1MHz"`
   works — unit strings coerce in physical-value comparisons). `instance=`,
-  `prefer=`, `lock=` are caller-side overrides.
+  `prefer=`, `lock=` are caller-side overrides. With `if_connected = True`
+  the request is served only when the caller actually connected the module
+  input of the same name — pair it with `io(Iface, optional = True)` to
+  pre-declare capability slots that consume resources only when used.
 - **`pin_solve(peripherals, requests, config=, previous=)`** — deterministic
-  joint instance × pin matching. Exclusivity is structural at both tiers: a
-  pin carries at most one function, and an instance serves at most one request
-  (two `Uart` requests can never share USART1, even on disjoint pin sets).
-  The solver prefers the poorest sufficient instance, honors costs and
-  `prefer=`, and takes `previous=` (a prior assignment) as a stability seed so
-  adding a request does not reshuffle an already-routed design. Infeasibility
-  is a build error with per-candidate rejection reasons.
+  joint instance × pin matching by branch-and-bound: the returned assignment
+  minimizes total cost, not merely the first feasible one. Exclusivity is
+  structural at both tiers: a pin carries at most one function, and an
+  instance serves at most one request (two `Uart` requests can never share
+  USART1, even on disjoint pin sets). `previous=` (a prior assignment) acts
+  as a stability seed so adding a request does not reshuffle an already-routed
+  design. Infeasibility is a build error with per-candidate rejection reasons.
+  The cost of a candidate combines, in dominance order: surplus capability
+  traits of the instance (+100 each — prefer the poorest sufficient
+  instance), strapping pins (+50 each), per-pin `cost`, `prefer=` hits
+  (−10 each), and previous-assignment matches (−20 instance, −5 per pin).
+  Absolute values are arbitrary; only the relative order is contractual.
+- **`pin_map(assignment, ifaces)`** — turn `pin_solve`'s `assignment` into a
+  `Component(pins=...)`-ready dict mapping each physical pin to the net
+  carried by the matching interface field (`{"COM": uart_io, "LED": led_net}`;
+  a bare `Net` is accepted for single-signal requests). Requests absent from
+  the assignment — e.g. dropped by `if_connected` — are skipped, so both
+  dicts can be declared unconditionally.
 
 `pin_solve` returns `{"assignment": ..., "swap_classes": ...}` and stores both
 as the module properties `pin_assignment` and `swap_classes` (JSON), which

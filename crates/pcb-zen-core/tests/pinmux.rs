@@ -539,3 +539,106 @@ check(a["BTN"]["signals"]["PIN"]["pin"] == "PA10", "BTN on freed pin")
     );
     assert_ok(&result);
 }
+
+#[test]
+fn optimal_not_merely_greedy() {
+    // Greedy first-feasible would let A grab (P1, X, cost 0) and force B onto
+    // (P2, Z, cost 10) — total 10. Branch-and-bound must return the global
+    // optimum (total 1): A on P2/X, B on P1/Y.
+    let result = eval_with_fixtures(
+        r#"
+load("./ifaces.zen", "Gpio")
+
+P1 = peripheral("P1", provides = [Gpio], rebind = "firmware",
+    signals = {"PIN": [pin("X"), pin("Y", cost = 1)]})
+P2 = peripheral("P2", provides = [Gpio], rebind = "firmware",
+    signals = {"PIN": [pin("X"), pin("Z", cost = 10)]})
+
+res = pin_solve([P1, P2], [pin_request("A", Gpio), pin_request("B", Gpio)])
+a = res["assignment"]
+pins = [a["A"]["signals"]["PIN"]["pin"], a["B"]["signals"]["PIN"]["pin"]]
+check(not ("Z" in pins), "suboptimal: Z (cost 10) used while X+Y (cost 1) was feasible: " + str(pins))
+"#,
+    );
+    assert_ok(&result);
+}
+
+const MCU_SLOTS: &str = r#"
+load("./ifaces.zen", "Uart", "Usart")
+load("./stm32.zen", "PERIPHS")
+
+DEBUG = io(Uart, optional = True)
+SC = io(Usart, optional = True)
+
+res = pin_solve(PERIPHS, [
+    pin_request("DEBUG", Uart, if_connected = True),
+    pin_request("SC", Usart, if_connected = True),
+])
+builtin.add_property("dbg_served", str("DEBUG" in res["assignment"]))
+builtin.add_property("sc_served", str("SC" in res["assignment"]))
+"#;
+
+#[test]
+fn if_connected_serves_only_connected_slots() {
+    // The MCU module pre-declares one optional io() slot per capability; the
+    // caller connects only DEBUG. The solver must serve DEBUG and drop SC.
+    let result = eval_zen(vec![
+        ("/ifaces.zen".to_string(), IFACES.to_string()),
+        ("/stm32.zen".to_string(), STM32.to_string()),
+        ("/mcu.zen".to_string(), MCU_SLOTS.to_string()),
+        (
+            "/test.zen".to_string(),
+            r#"
+load("./ifaces.zen", "Uart")
+Mcu = Module("/mcu.zen")
+Mcu(name = "MCU1", DEBUG = Uart("DBG"))
+"#
+            .to_string(),
+        ),
+    ]);
+    assert_ok(&result);
+    let tree = result.output.as_ref().unwrap().module_tree();
+    let child = tree
+        .values()
+        .find(|m| m.properties().contains_key("dbg_served"))
+        .expect("child MCU module with pinmux properties not found");
+    let get = |key: &str| {
+        child
+            .properties()
+            .get(key)
+            .and_then(|v| v.to_value().unpack_str().map(|s| s.to_owned()))
+            .unwrap_or_default()
+    };
+    assert_eq!(get("dbg_served"), "True", "connected slot must be served");
+    assert_eq!(
+        get("sc_served"),
+        "False",
+        "unconnected slot must be dropped"
+    );
+}
+
+#[test]
+fn pin_map_builds_component_pins() {
+    // pin_map turns the assignment into {physical pin -> net}, pulling nets
+    // from interface fields (or a bare Net for single-signal requests).
+    let result = eval_with_fixtures(
+        r#"
+load("./stm32.zen", "PERIPHS")
+load("./ifaces.zen", "Uart", "Gpio")
+
+DBG = Uart("DBG")
+LED = Net("LED")
+
+res = pin_solve(PERIPHS, [
+    pin_request("COM", Uart, instance = "USART1"),
+    pin_request("LED", Gpio, prefer = ["PB0"], lock = True),
+])
+m = pin_map(res["assignment"], {"COM": DBG, "LED": LED})
+check(len(m) == 3, "expected 3 mapped pins, got " + str(len(m)))
+check(m["PA9"] == DBG.TX, "PA9 must carry DBG.TX")
+check(m["PA10"] == DBG.RX, "PA10 must carry DBG.RX")
+check(m["PB0"] == LED, "PB0 must carry the LED net")
+"#,
+    );
+    assert_ok(&result);
+}
