@@ -239,6 +239,7 @@ fn generate_component_zen_inner(
     let content = env
         .get_template("component.zen")?
         .render(serde_json::json!({
+            "component_name": component_name,
             "component_name_literal": serde_json::to_string(&component_name)?,
             "sym_path_literal": serde_json::to_string(args.symbol_filename)?,
             "pin_groups": pin_groups_vec,
@@ -305,7 +306,7 @@ mod tests {
         })
         .unwrap();
 
-        assert!(zen.contains("Auto-generated using `pcb import`."));
+        assert!(zen.starts_with("\"\"\"\nMPN1\n\nAuto-generated using `pcb import`."));
         assert!(zen.contains("N_INT = io(Net)"));
         assert!(zen.contains("\"~{INT}\": N_INT"));
         assert!(zen.contains("VCC"));
