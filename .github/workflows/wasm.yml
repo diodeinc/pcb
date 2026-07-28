@@ -17,7 +17,7 @@ concurrency:
 jobs:
   wasm:
     name: Evaluate publish bundles
-    runs-on: ubicloud-standard-16
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     container:
       image: ghcr.io/diodeinc/kicad:10.0.4
       options: --user root

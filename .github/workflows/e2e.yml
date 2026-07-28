@@ -25,9 +25,9 @@ jobs:
       matrix:
         config:
           - name: macOS
-            runs-on: macos-15-xlarge
+            runs-on: blacksmith-6vcpu-macos-15
           - name: Ubuntu
-            runs-on: ubicloud-standard-16
+            runs-on: blacksmith-16vcpu-ubuntu-2404
             container:
               image: ghcr.io/diodeinc/kicad:10.0.4
               options: --user root
