@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_TEST_DEBUG: 0
-  KICAD_VERSION: 10.0.4  # Update container image below when changing this
+  KICAD_VERSION: 10.0.5  # Update container image below when changing this
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -65,7 +65,7 @@ jobs:
           - name: Ubuntu
             runs-on: blacksmith-16vcpu-ubuntu-2404
             container:
-              image: ghcr.io/diodeinc/kicad:10.0.4  # Keep in sync with KICAD_VERSION
+              image: ghcr.io/diodeinc/kicad:10.0.5  # Keep in sync with KICAD_VERSION
               options: --user root
     steps:
       - name: Install Dependencies (Ubuntu)
@@ -87,15 +87,10 @@ jobs:
       - name: Install KiCad (macOS)
         if: contains(matrix.config.name, 'macOS') && steps.cache-kicad-mac.outputs.cache-hit != 'true'
         run: |
+          brew update
           brew uninstall --cask kicad 2>/dev/null || true
           rm -rf /Applications/KiCad 2>/dev/null || true
-          dmg="$RUNNER_TEMP/kicad.dmg"
-          mount_point="$RUNNER_TEMP/kicad-mount"
-          curl -fL "https://github.com/KiCad/kicad-source-mirror/releases/download/${KICAD_VERSION}/kicad-unified-universal-${KICAD_VERSION}.dmg" -o "$dmg"
-          mkdir -p "$mount_point"
-          hdiutil attach "$dmg" -mountpoint "$mount_point" -nobrowse
-          trap 'hdiutil detach "$mount_point"' EXIT
-          cp -R "$mount_point/KiCad" /Applications/KiCad
+          brew install --cask kicad
 
       - name: Install KiCad (Windows)
         if: matrix.config.name == 'Windows'

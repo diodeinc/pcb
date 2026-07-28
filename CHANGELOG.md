@@ -17,6 +17,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb migrate` now rewrites legacy GitHub registry references to DiodeHub.
 
+### Fixed
+
+- Fixed hierarchical layout placement with KiCad 10.0.5.
+
 ## [0.4.13] - 2026-07-27
 
 ### Added
