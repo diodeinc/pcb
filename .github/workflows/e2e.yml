@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  KICAD_VERSION: 10.0.4
+  KICAD_VERSION: 10.0.5
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,11 +25,11 @@ jobs:
       matrix:
         config:
           - name: macOS
-            runs-on: macos-15-xlarge
+            runs-on: blacksmith-6vcpu-macos-15
           - name: Ubuntu
-            runs-on: ubicloud-standard-16
+            runs-on: blacksmith-16vcpu-ubuntu-2404
             container:
-              image: ghcr.io/diodeinc/kicad:10.0.4
+              image: ghcr.io/diodeinc/kicad:10.0.5
               options: --user root
     steps:
       - name: Install Dependencies (Ubuntu)
@@ -59,6 +59,7 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           cache-bin: false
 
       - name: Install local pcb toolchain

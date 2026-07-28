@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_TEST_DEBUG: 0
-  KICAD_VERSION: 10.0.4  # Update container image below when changing this
+  KICAD_VERSION: 10.0.5
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -19,7 +19,7 @@ concurrency:
 jobs:
   lint:
     name: Lint and Check
-    runs-on: ubicloud-standard-16
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -27,6 +27,7 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
           cache-bin: false
 
@@ -58,13 +59,13 @@ jobs:
       matrix:
         config:
           - name: Windows
-            runs-on: diode-windows
+            runs-on: blacksmith-16vcpu-windows-2025
           - name: macOS
-            runs-on: macos-15-xlarge
+            runs-on: blacksmith-6vcpu-macos-15
           - name: Ubuntu
-            runs-on: ubicloud-standard-16
+            runs-on: blacksmith-16vcpu-ubuntu-2404
             container:
-              image: ghcr.io/diodeinc/kicad:10.0.4  # Keep in sync with KICAD_VERSION
+              image: ghcr.io/diodeinc/kicad:10.0.5
               options: --user root
     steps:
       - name: Install Dependencies (Ubuntu)
@@ -87,11 +88,8 @@ jobs:
         if: contains(matrix.config.name, 'macOS') && steps.cache-kicad-mac.outputs.cache-hit != 'true'
         run: |
           brew update
-          # Uninstall existing KiCad if present to avoid conflicts
           brew uninstall --cask kicad 2>/dev/null || true
-          # Remove any remaining KiCad installation
           rm -rf /Applications/KiCad 2>/dev/null || true
-          # Install KiCad fresh
           brew install --cask kicad
 
       - name: Install KiCad (Windows)
@@ -126,6 +124,7 @@ jobs:
         if: runner.os != 'Windows'
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
           cache-bin: false
 
@@ -146,7 +145,7 @@ jobs:
 
   python-tests:
     name: Python Tests
-    runs-on: ubicloud-standard-4
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     defaults:
       run:
@@ -162,7 +161,7 @@ jobs:
 
   check_readme:
     name: Check README Sync
-    runs-on: ubicloud-standard-2
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
 

@@ -1226,15 +1226,11 @@ fn parse_range_syntax(
         } else {
             nom_part
         };
-        if let Some(parts) = split_range(range_part.trim()) {
-            (parts.0, parts.1, Some(nom_str))
-        } else {
-            return None;
-        }
-    } else if let Some(parts) = split_range(s) {
-        (parts.0, parts.1, None)
+        let parts = split_range(range_part.trim())?;
+        (parts.0, parts.1, Some(nom_str))
     } else {
-        return None;
+        let parts = split_range(s)?;
+        (parts.0, parts.1, None)
     };
 
     // Parse left and right values

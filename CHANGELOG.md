@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb migrate` now rewrites legacy GitHub registry references to DiodeHub.
+- Dropped support for Intel Macs; macOS now requires Apple silicon.
 
 ## [0.4.13] - 2026-07-27
 

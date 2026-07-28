@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: ubicloud-standard-16
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
@@ -36,6 +36,7 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           cache-bin: false
 
       - id: release
@@ -72,19 +73,17 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-15-xlarge
-          - target: x86_64-apple-darwin
-            runner: macos-15-large
+            runner: blacksmith-6vcpu-macos-15
           - target: aarch64-unknown-linux-gnu
-            runner: ubicloud-standard-16-arm
+            runner: blacksmith-16vcpu-ubuntu-2404-arm
           - target: aarch64-unknown-linux-musl
-            runner: ubicloud-standard-16-arm
+            runner: blacksmith-16vcpu-ubuntu-2404-arm
           - target: x86_64-unknown-linux-gnu
-            runner: ubicloud-standard-16
+            runner: blacksmith-16vcpu-ubuntu-2404
           - target: x86_64-unknown-linux-musl
-            runner: ubicloud-standard-16
+            runner: blacksmith-16vcpu-ubuntu-2404
           - target: x86_64-pc-windows-msvc
-            runner: diode-windows
+            runner: blacksmith-16vcpu-windows-2025
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Enable Windows long paths
@@ -175,7 +174,7 @@ jobs:
     needs:
       - prepare
       - build
-    runs-on: ubicloud-standard-16
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
         with:

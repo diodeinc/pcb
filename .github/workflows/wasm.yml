@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  KICAD_VERSION: 10.0.4
+  KICAD_VERSION: 10.0.5
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,9 +17,9 @@ concurrency:
 jobs:
   wasm:
     name: Evaluate publish bundles
-    runs-on: ubicloud-standard-16
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     container:
-      image: ghcr.io/diodeinc/kicad:10.0.4
+      image: ghcr.io/diodeinc/kicad:10.0.5
       options: --user root
     timeout-minutes: 30
     steps:
@@ -33,6 +33,7 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           target: wasm32-unknown-unknown
           cache-bin: false
 

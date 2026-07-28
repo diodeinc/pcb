@@ -98,7 +98,6 @@ platform="$(uname -s)-$(uname -m)"
 download_targets=""
 case "$platform" in
   Darwin-arm64) target="aarch64-apple-darwin"; download_targets="$target"; data_dir="$HOME/Library/Application Support/pcb" ;;
-  Darwin-x86_64) target="x86_64-apple-darwin"; download_targets="$target"; data_dir="$HOME/Library/Application Support/pcb" ;;
   Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu"; download_targets="aarch64-unknown-linux-musl $target"; data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pcb" ;;
   Linux-x86_64) target="x86_64-unknown-linux-gnu"; download_targets="x86_64-unknown-linux-musl $target"; data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pcb" ;;
   *) echo "unsupported platform: $platform" >&2; exit 1 ;;

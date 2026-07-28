@@ -302,11 +302,11 @@ struct ComponentFilePaths {
 fn component_file_paths(component_dir: &Path, mpn: &str) -> ComponentFilePaths {
     let sanitized_mpn = pcb_component_gen::sanitize_mpn_for_path(mpn);
     ComponentFilePaths {
-        symbol_path: component_dir.join(format!("{}.kicad_sym", &sanitized_mpn)),
-        footprint_path: component_dir.join(format!("{}.kicad_mod", &sanitized_mpn)),
-        step_path: component_dir.join(format!("{}.step", &sanitized_mpn)),
-        pdf_path: component_docs_dir(component_dir).join(format!("{}.pdf", &sanitized_mpn)),
-        zen_path: component_dir.join(format!("{}.zen", &sanitized_mpn)),
+        symbol_path: component_dir.join(format!("{}.kicad_sym", sanitized_mpn)),
+        footprint_path: component_dir.join(format!("{}.kicad_mod", sanitized_mpn)),
+        step_path: component_dir.join(format!("{}.step", sanitized_mpn)),
+        pdf_path: component_docs_dir(component_dir).join(format!("{}.pdf", sanitized_mpn)),
+        zen_path: component_dir.join(format!("{}.zen", sanitized_mpn)),
         sanitized_mpn,
     }
 }
@@ -756,7 +756,7 @@ fn finalize_component(
     let content = generate_zen_file(
         &files.sanitized_mpn,
         symbol,
-        &format!("{}.kicad_sym", &files.sanitized_mpn),
+        &format!("{}.kicad_sym", files.sanitized_mpn),
     )?;
 
     write_component_files(&files.zen_path, component_dir, &content)?;
@@ -1181,32 +1181,32 @@ fn execute_from_dir(dir: &Path, workspace_root: &Path) -> Result<()> {
     );
 
     // Copy the selected symbol with standardized name
-    let sym_filename = format!("{}.kicad_sym", &component_files.sanitized_mpn);
+    let sym_filename = format!("{}.kicad_sym", component_files.sanitized_mpn);
     install_component_asset(&selected_symbol, &component_dir, &sym_filename, "Symbol")?;
 
     // Copy backup symbol files (*.orig.kicad_sym)
     for orig_sym in &files.orig_symbols {
-        let orig_filename = format!("{}.orig.kicad_sym", &component_files.sanitized_mpn);
+        let orig_filename = format!("{}.orig.kicad_sym", component_files.sanitized_mpn);
         install_component_asset(orig_sym, &component_dir, &orig_filename, "Backup")?;
     }
 
     // Copy first footprint if available
     let has_footprint = !files.footprints.is_empty();
     if let Some(fp) = files.footprints.first() {
-        let fp_filename = format!("{}.kicad_mod", &component_files.sanitized_mpn);
+        let fp_filename = format!("{}.kicad_mod", component_files.sanitized_mpn);
         install_component_asset(fp, &component_dir, &fp_filename, "Footprint")?;
     }
 
     // Copy first STEP file if available
     if let Some(sp) = files.steps.first() {
-        let step_filename = format!("{}.step", &component_files.sanitized_mpn);
+        let step_filename = format!("{}.step", component_files.sanitized_mpn);
         install_component_asset(sp, &component_dir, &step_filename, "3D Model")?;
     }
 
     // Copy first PDF with standardized name
     let has_datasheet = !files.pdfs.is_empty();
     if let Some(pdf) = files.pdfs.first() {
-        let pdf_filename = format!("{}.pdf", &component_files.sanitized_mpn);
+        let pdf_filename = format!("{}.pdf", component_files.sanitized_mpn);
         copy_file_to_dir(pdf, &component_docs_dir(&component_dir), &pdf_filename)?;
         println!(
             "  {} Datasheet: {} → {}",
