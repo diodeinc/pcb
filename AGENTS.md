@@ -38,6 +38,13 @@ Never run `cargo insta accept` without explicit user approval.
 - In `.zen` files, remember Zener is Starlark-based, not Python: do not use f-strings.
 - Language behavior may come from the pinned `diodeinc/starlark-rust` fork in `Cargo.toml`; check that fork when local code does not explain Starlark behavior.
 
+## Change Scope and Pipeline Integrity
+
+- Keep pull requests within the explicitly agreed scope. Do not combine unrelated CLI behavior, scaffolding, or repository setup changes.
+- Treat established reports, generated artifacts, and output paths as compatibility surfaces. Preserve them unless their removal is explicitly in scope.
+- Reuse shared helpers at existing crate boundaries instead of duplicating domain logic.
+- When a pipeline validates and extracts user input, capture one source snapshot and use it throughout the pipeline. Do not independently reload input between stages.
+
 ## Documentation Rules
 
 - For user-visible changes, add one succinct `CHANGELOG.md` entry under `Unreleased` per logical change.
