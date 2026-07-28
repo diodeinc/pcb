@@ -9,6 +9,7 @@ pub(super) fn materialize_board(
     paths: &ImportPaths,
     selection: &ImportSelection,
     validation: &ImportValidationRun,
+    staged_root: &Path,
 ) -> Result<MaterializedBoard> {
     let board_dir = paths.workspace_root.clone();
     let board_zen = board_dir.join(format!("{}.zen", selection.board_name));
@@ -25,15 +26,17 @@ pub(super) fn materialize_board(
 
     let (layout_dir, layout_kicad_pro, layout_kicad_pcb) =
         if selection.portable.source_kind == ImportSourceKind::Project {
-            let (layout_dir, kicad_pro, kicad_pcb) = copy_layout_sources(
-                &paths.kicad_project_root,
-                &validation.summary.selected,
-                &board_dir,
-            )?;
+            let (layout_dir, kicad_pro, kicad_pcb) =
+                copy_layout_sources(staged_root, &validation.summary.selected, &board_dir)?;
             (layout_dir, Some(kicad_pro), Some(kicad_pcb))
         } else {
             (board_dir.join("layout"), None, None)
         };
+
+    if let Some(output_zip) = &portable_kicad_project_zip {
+        portable::write_portable_zip(&selection.portable, staged_root, output_zip)
+            .context("Failed to write portable KiCad project archive")?;
+    }
 
     Ok(MaterializedBoard {
         board_dir,

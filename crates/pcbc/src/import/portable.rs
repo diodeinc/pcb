@@ -563,7 +563,11 @@ pub(super) fn stage_project_files(project: &PortableKicadProject) -> Result<temp
 }
 
 /// Write the portable KiCad source archive using the established streaming project-import path.
-pub(super) fn write_portable_zip(project: &PortableKicadProject, output_zip: &Path) -> Result<()> {
+pub(super) fn write_portable_zip(
+    project: &PortableKicadProject,
+    staged_root: &Path,
+    output_zip: &Path,
+) -> Result<()> {
     if let Some(parent) = output_zip.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -580,7 +584,7 @@ pub(super) fn write_portable_zip(project: &PortableKicadProject, output_zip: &Pa
     let mut zip = ZipWriter::new(BufWriter::new(output_file));
 
     for relative in &project.files_to_bundle_rel {
-        let absolute = project.project_dir.join(relative);
+        let absolute = staged_root.join(relative);
         let archive_path = format!(
             "{}/{}",
             project.project_name,
@@ -1705,7 +1709,7 @@ mod tests {
         project.project_name = "layout board".to_string();
         let dir = tempfile::tempdir()?;
         let zip_path = dir.path().join("out.zip");
-        write_portable_zip(&project, &zip_path)?;
+        write_portable_zip(&project, &project.project_dir, &zip_path)?;
 
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;
@@ -2026,7 +2030,7 @@ mod tests {
 
         let project = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
         let zip_path = dir.path().join("out.zip");
-        write_portable_zip(&project, &zip_path)?;
+        write_portable_zip(&project, &project.project_dir, &zip_path)?;
 
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;

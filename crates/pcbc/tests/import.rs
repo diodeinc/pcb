@@ -1,6 +1,7 @@
 use pcb_test_utils::sandbox::Sandbox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 
 const STANDALONE_FIXTURE: &str = include_str!("../../pcb-sch/test/kicad-bom/layout.kicad_sch");
 const PROJECT_FIXTURE: &str = include_str!("../../pcb-sch/test/kicad-bom/layout.kicad_pro");
@@ -62,10 +63,14 @@ fn import_requires_output_directory() {
 }
 
 #[test]
-fn validation_and_extraction_share_one_source_snapshot() {
+fn validation_extraction_and_materialization_share_one_source_snapshot() {
     let mut sandbox = sandbox();
-    sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);
-    sandbox.write("mutated-source", "not a KiCad schematic\n");
+    sandbox.write("source/layout.kicad_sch", STANDALONE_FIXTURE);
+    sandbox.write("source/layout.kicad_pro", PROJECT_FIXTURE);
+    sandbox.write("source/layout.kicad_pcb", PCB_FIXTURE);
+    sandbox.write("mutated-schematic", "not a KiCad schematic\n");
+    sandbox.write("mutated-project", "not a KiCad project\n");
+    sandbox.write("mutated-pcb", "not a KiCad PCB\n");
 
     let real_kicad_cli = std::env::var_os("KICAD_CLI")
         .map(std::path::PathBuf::from)
@@ -90,16 +95,40 @@ fn validation_and_extraction_share_one_source_snapshot() {
 
     let wrapper = write_kicad_cli_wrapper(sandbox.root_path());
 
-    let source = sandbox.root_path().join("layout.kicad_sch");
-    let mutated_source = sandbox.root_path().join("mutated-source");
+    let source_root = sandbox.root_path().join("source");
+    let source_schematic = source_root.join("layout.kicad_sch");
+    let source_project = source_root.join("layout.kicad_pro");
+    let source_pcb = source_root.join("layout.kicad_pcb");
+    let initial_schematic = fs::read(&source_schematic).unwrap();
+    let initial_project = fs::read(&source_project).unwrap();
+    let initial_pcb = fs::read(&source_pcb).unwrap();
+    let mutated_schematic = sandbox.root_path().join("mutated-schematic");
+    let mutated_project = sandbox.root_path().join("mutated-project");
+    let mutated_pcb = sandbox.root_path().join("mutated-pcb");
     sandbox
         .env("KICAD_CLI", wrapper.to_string_lossy())
         .env("PCB_TEST_REAL_KICAD_CLI", real_kicad_cli.to_string_lossy())
-        .env("PCB_TEST_MUTATED_SOURCE", mutated_source.to_string_lossy())
-        .env("PCB_TEST_ORIGINAL_SOURCE", source.to_string_lossy());
+        .env(
+            "PCB_TEST_MUTATED_SCHEMATIC",
+            mutated_schematic.to_string_lossy(),
+        )
+        .env(
+            "PCB_TEST_MUTATED_PROJECT",
+            mutated_project.to_string_lossy(),
+        )
+        .env("PCB_TEST_MUTATED_PCB", mutated_pcb.to_string_lossy())
+        .env(
+            "PCB_TEST_ORIGINAL_SCHEMATIC",
+            source_schematic.to_string_lossy(),
+        )
+        .env(
+            "PCB_TEST_ORIGINAL_PROJECT",
+            source_project.to_string_lossy(),
+        )
+        .env("PCB_TEST_ORIGINAL_PCB", source_pcb.to_string_lossy());
 
     let import = sandbox
-        .run("pcbc", ["import", "layout.kicad_sch", "out"])
+        .run("pcbc", ["import", "source/layout.kicad_pro", "out"])
         .stdout_capture()
         .stderr_capture()
         .unchecked()
@@ -108,10 +137,51 @@ fn validation_and_extraction_share_one_source_snapshot() {
     let stderr = String::from_utf8_lossy(&import.stderr);
 
     assert_eq!(
-        fs::read_to_string(source).unwrap(),
-        "not a KiCad schematic\n"
+        fs::read(&source_schematic).unwrap(),
+        fs::read(&mutated_schematic).unwrap()
+    );
+    assert_eq!(
+        fs::read(&source_project).unwrap(),
+        fs::read(&mutated_project).unwrap()
+    );
+    assert_eq!(
+        fs::read(&source_pcb).unwrap(),
+        fs::read(&mutated_pcb).unwrap()
     );
     assert!(import.status.success(), "import failed:\n{stderr}");
+
+    let output = sandbox.root_path().join("out");
+    assert_eq!(
+        fs::read(output.join("layout/layout.kicad_pro")).unwrap(),
+        initial_project
+    );
+    assert_ne!(
+        fs::read(output.join("layout/layout.kicad_pcb")).unwrap(),
+        fs::read(&mutated_pcb).unwrap()
+    );
+
+    let archive = output.join("layout.kicad.archive.zip");
+    assert_eq!(
+        read_zip_entry(&archive, "layout/layout.kicad_sch"),
+        initial_schematic
+    );
+    assert_eq!(
+        read_zip_entry(&archive, "layout/layout.kicad_pro"),
+        initial_project
+    );
+    assert_eq!(
+        read_zip_entry(&archive, "layout/layout.kicad_pcb"),
+        initial_pcb
+    );
+}
+
+fn read_zip_entry(archive_path: &std::path::Path, entry_name: &str) -> Vec<u8> {
+    let file = fs::File::open(archive_path).expect("open KiCad archive");
+    let mut archive = zip::ZipArchive::new(file).expect("read KiCad archive");
+    let mut entry = archive.by_name(entry_name).expect("find archived source");
+    let mut bytes = Vec::new();
+    entry.read_to_end(&mut bytes).expect("read archived source");
+    bytes
 }
 
 #[cfg(target_os = "linux")]
@@ -142,9 +212,9 @@ fn write_kicad_cli_wrapper(root: &std::path::Path) -> std::path::PathBuf {
     fs::write(
         &wrapper,
         r#"#!/bin/sh
-if [ "$1" = "sch" ] && [ "$2" = "erc" ]; then
-    cp "$PCB_TEST_MUTATED_SOURCE" "$PCB_TEST_ORIGINAL_SOURCE"
-fi
+cp "$PCB_TEST_MUTATED_SCHEMATIC" "$PCB_TEST_ORIGINAL_SCHEMATIC"
+cp "$PCB_TEST_MUTATED_PROJECT" "$PCB_TEST_ORIGINAL_PROJECT"
+cp "$PCB_TEST_MUTATED_PCB" "$PCB_TEST_ORIGINAL_PCB"
 exec "$PCB_TEST_REAL_KICAD_CLI" "$@"
 "#,
     )
@@ -161,7 +231,9 @@ fn write_kicad_cli_wrapper(root: &std::path::Path) -> std::path::PathBuf {
     fs::write(
         &wrapper,
         r#"@echo off
-if "%~1"=="sch" if "%~2"=="erc" copy /Y "%PCB_TEST_MUTATED_SOURCE%" "%PCB_TEST_ORIGINAL_SOURCE%" >NUL
+copy /Y "%PCB_TEST_MUTATED_SCHEMATIC%" "%PCB_TEST_ORIGINAL_SCHEMATIC%" >NUL
+copy /Y "%PCB_TEST_MUTATED_PROJECT%" "%PCB_TEST_ORIGINAL_PROJECT%" >NUL
+copy /Y "%PCB_TEST_MUTATED_PCB%" "%PCB_TEST_ORIGINAL_PCB%" >NUL
 "%PCB_TEST_REAL_KICAD_CLI%" %*
 exit /b %ERRORLEVEL%
 "#,

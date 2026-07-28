@@ -108,12 +108,6 @@ fn prepare_output(
         crate::new::init_board_repo(board_repo, &selection.board_name, "")?;
     }
 
-    if selection.portable.source_kind == ImportSourceKind::Project {
-        let output_zip = board_repo.join(format!("{}.kicad.archive.zip", selection.board_name));
-        portable::write_portable_zip(&selection.portable, &output_zip)
-            .context("Failed to write portable KiCad project archive")?;
-    }
-
     Ok(())
 }
 
@@ -165,6 +159,7 @@ impl Validated {
 struct Extracted {
     ctx: ImportContext,
     selection: ImportSelection,
+    staged_sources: tempfile::TempDir,
     validation: ImportValidationRun,
     ir: ImportIr,
 }
@@ -181,6 +176,7 @@ impl Extracted {
         Ok(Self {
             ctx,
             selection,
+            staged_sources,
             validation,
             ir,
         })
@@ -190,6 +186,7 @@ impl Extracted {
 struct Hierarchized {
     ctx: ImportContext,
     selection: ImportSelection,
+    staged_sources: tempfile::TempDir,
     validation: ImportValidationRun,
     ir: ImportIr,
 }
@@ -199,6 +196,7 @@ impl Hierarchized {
         let Extracted {
             ctx,
             selection,
+            staged_sources,
             validation,
             ir,
         } = extracted;
@@ -210,6 +208,7 @@ impl Hierarchized {
         Self {
             ctx,
             selection,
+            staged_sources,
             validation,
             ir,
         }
@@ -219,6 +218,7 @@ impl Hierarchized {
 struct Analyzed {
     ctx: ImportContext,
     selection: ImportSelection,
+    staged_sources: tempfile::TempDir,
     validation: ImportValidationRun,
     ir: ImportIr,
 }
@@ -228,6 +228,7 @@ impl Analyzed {
         let Hierarchized {
             ctx,
             selection,
+            staged_sources,
             validation,
             ir,
         } = hierarchized;
@@ -256,6 +257,7 @@ impl Analyzed {
         Self {
             ctx,
             selection,
+            staged_sources,
             validation,
             ir,
         }
@@ -275,10 +277,16 @@ impl Materialized {
         let Analyzed {
             ctx,
             selection,
+            staged_sources,
             validation,
             ir,
         } = analyzed;
-        let board = materialize::materialize_board(&ctx.paths, &selection, &validation)?;
+        let board = materialize::materialize_board(
+            &ctx.paths,
+            &selection,
+            &validation,
+            staged_sources.path(),
+        )?;
         Ok(Self {
             ctx,
             selection,
