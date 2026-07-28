@@ -74,7 +74,7 @@ jobs:
           apt-get update
           apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev
 
-      - uses: useblacksmith/checkout@v1
+      - uses: actions/checkout@v5
 
       - name: Cache KiCad (macOS)
         if: contains(matrix.config.name, 'macOS')

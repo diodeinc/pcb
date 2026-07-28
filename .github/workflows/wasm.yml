@@ -28,7 +28,7 @@ jobs:
           apt-get update
           apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev jq git openssh-client zstd
 
-      - uses: useblacksmith/checkout@v1
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1

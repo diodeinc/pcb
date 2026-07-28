@@ -106,7 +106,16 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
 
-      - uses: useblacksmith/checkout@v1
+      - name: Checkout with Blacksmith cache
+        if: runner.os == 'Linux'
+        uses: useblacksmith/checkout@v1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          submodules: recursive
+
+      - name: Checkout
+        if: runner.os != 'Linux'
+        uses: actions/checkout@v5
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
