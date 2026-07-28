@@ -2547,14 +2547,23 @@ fn build_physical_pin_plan(
                 ImportFootprintGeometry::Unresolved
             )
         {
-            let footprint_pins = layout.pads.keys().cloned().collect::<BTreeSet<_>>();
-            if footprint_pins != all_pins {
+            let footprint_pins = layout
+                .pads
+                .keys()
+                .filter(|pin| !pin.as_str().is_empty())
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let missing_pins = all_pins
+                .difference(&footprint_pins)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if !missing_pins.is_empty() {
                 anyhow::bail!(
-                    "KiCad component {} symbol defines physical pins {:?}, but footprint {} has numbered pads {:?}",
+                    "KiCad component {} footprint {} is missing numbered pads {:?} required by symbol physical pins {:?}",
                     component.netlist.refdes,
-                    all_pins,
                     layout.fpid.as_deref().unwrap_or("<unknown>"),
-                    footprint_pins
+                    missing_pins,
+                    all_pins
                 );
             }
         }
@@ -3041,7 +3050,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_footprint_pad_set_must_match_symbol_physical_pins() {
+    fn resolved_footprint_must_contain_symbol_physical_pins() {
         let anchor = make_anchor("u1");
         let mut component = make_component("U1", BTreeMap::new());
         component.layout = Some(ImportLayoutComponent {
@@ -3054,13 +3063,22 @@ mod tests {
             sheetfile: None,
             attrs: Vec::new(),
             properties: BTreeMap::new(),
-            pads: BTreeMap::from([(
-                KiCadPinNumber::from("1".to_string()),
-                ImportLayoutPad {
-                    net_names: BTreeSet::new(),
-                    uuids: BTreeSet::new(),
-                },
-            )]),
+            pads: BTreeMap::from([
+                (
+                    KiCadPinNumber::from(String::new()),
+                    ImportLayoutPad {
+                        net_names: BTreeSet::new(),
+                        uuids: BTreeSet::new(),
+                    },
+                ),
+                (
+                    KiCadPinNumber::from("1".to_string()),
+                    ImportLayoutPad {
+                        net_names: BTreeSet::new(),
+                        uuids: BTreeSet::new(),
+                    },
+                ),
+            ]),
             footprint_geometry: ImportFootprintGeometry::LibraryFile("(footprint)".to_string()),
         });
         let components = BTreeMap::from([(anchor.clone(), component)]);
@@ -3077,10 +3095,11 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
         )
-        .expect_err("resolved footprint must contain exactly the symbol's physical pins")
+        .expect_err("resolved footprint must contain every symbol physical pin")
         .to_string();
-        assert!(error.contains("symbol defines physical pins"));
-        assert!(error.contains("footprint Local:OnePad has numbered pads"));
+        assert!(error.contains("footprint Local:OnePad is missing numbered pads"));
+        assert!(error.contains("required by symbol physical pins"));
+        assert!(!error.contains("KiCadPinNumber(\"\")"));
     }
 
     #[test]
