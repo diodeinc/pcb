@@ -1108,7 +1108,10 @@ def _apply_fragment_routing(
 
     def _dup_and_add(src: Any, net_name: str = "") -> Any:
         """Duplicate item, offset it, set net, and add to board+group."""
-        item = src.Duplicate(False)
+        try:
+            item = src.Duplicate(False)
+        except TypeError:
+            item = src.Duplicate()
         if net_name:
             _set_net(item, net_name)
         kicad_board.Add(item)

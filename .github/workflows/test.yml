@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_TEST_DEBUG: 0
-  KICAD_VERSION: 10.0.5  # Update container image below when changing this
+  KICAD_VERSION: 10.0.5
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -65,7 +65,7 @@ jobs:
           - name: Ubuntu
             runs-on: blacksmith-16vcpu-ubuntu-2404
             container:
-              image: ghcr.io/diodeinc/kicad:10.0.5  # Keep in sync with KICAD_VERSION
+              image: ghcr.io/diodeinc/kicad:10.0.4
               options: --user root
     steps:
       - name: Install Dependencies (Ubuntu)
