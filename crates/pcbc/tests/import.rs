@@ -53,6 +53,69 @@ fn import_requires_output_directory() {
 }
 
 #[test]
+fn validation_and_extraction_share_one_source_snapshot() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut sandbox = sandbox();
+    sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);
+    sandbox.write("mutated-source", "not a KiCad schematic\n");
+
+    let real_kicad_cli = std::env::var_os("KICAD_CLI")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|dir| dir.join("kicad-cli"))
+                .find(|path| path.is_file())
+        })
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli")
+        });
+    assert!(
+        real_kicad_cli.is_file(),
+        "could not locate the real kicad-cli"
+    );
+
+    let wrapper = sandbox.root_path().join("kicad-cli-wrapper");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+if [ "$1" = "sch" ] && [ "$2" = "erc" ]; then
+    cp "$PCB_TEST_MUTATED_SOURCE" "$PCB_TEST_ORIGINAL_SOURCE"
+fi
+exec "$PCB_TEST_REAL_KICAD_CLI" "$@"
+"#,
+    )
+    .expect("write kicad-cli wrapper");
+    let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wrapper, permissions).expect("make kicad-cli wrapper executable");
+
+    let source = sandbox.root_path().join("layout.kicad_sch");
+    let mutated_source = sandbox.root_path().join("mutated-source");
+    sandbox
+        .env("KICAD_CLI", wrapper.to_string_lossy())
+        .env("PCB_TEST_REAL_KICAD_CLI", real_kicad_cli.to_string_lossy())
+        .env("PCB_TEST_MUTATED_SOURCE", mutated_source.to_string_lossy())
+        .env("PCB_TEST_ORIGINAL_SOURCE", source.to_string_lossy());
+
+    let import = sandbox
+        .run("pcbc", ["import", "layout.kicad_sch", "out"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("run pcbc import");
+    let stderr = String::from_utf8_lossy(&import.stderr);
+
+    assert_eq!(
+        fs::read_to_string(source).unwrap(),
+        "not a KiCad schematic\n"
+    );
+    assert!(import.status.success(), "import failed:\n{stderr}");
+}
+
+#[test]
 fn standalone_import_uses_existing_scaffolding_and_root_reports() {
     let mut sandbox = sandbox();
     sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);

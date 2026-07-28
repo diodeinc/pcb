@@ -66,12 +66,18 @@ impl ImportContext {
 struct Discovered {
     ctx: ImportContext,
     selection: ImportSelection,
+    staged_sources: tempfile::TempDir,
 }
 
 impl Discovered {
     fn run(ctx: ImportContext) -> Result<Self> {
         let selection = discover::discover_and_select(&ctx.paths)?;
-        Ok(Self { ctx, selection })
+        let staged_sources = portable::stage_project_files(&selection.portable)?;
+        Ok(Self {
+            ctx,
+            selection,
+            staged_sources,
+        })
     }
 }
 
@@ -135,16 +141,22 @@ fn remove_generated_output(board_dir: &Path, board_name: &str) -> Result<()> {
 struct Validated {
     ctx: ImportContext,
     selection: ImportSelection,
+    staged_sources: tempfile::TempDir,
     validation: ImportValidationRun,
 }
 
 impl Validated {
     fn run(discovered: Discovered) -> Result<Self> {
-        let Discovered { ctx, selection } = discovered;
-        let validation = validate::validate(&ctx.paths, &selection)?;
+        let Discovered {
+            ctx,
+            selection,
+            staged_sources,
+        } = discovered;
+        let validation = validate::validate(&ctx.paths, &selection, staged_sources.path())?;
         Ok(Self {
             ctx,
             selection,
+            staged_sources,
             validation,
         })
     }
@@ -162,9 +174,10 @@ impl Extracted {
         let Validated {
             ctx,
             selection,
+            staged_sources,
             validation,
         } = validated;
-        let ir = extract::extract_ir(&ctx.paths, &selection, &validation)?;
+        let ir = extract::extract_ir(&ctx.paths, &selection, &validation, staged_sources.path())?;
         Ok(Self {
             ctx,
             selection,

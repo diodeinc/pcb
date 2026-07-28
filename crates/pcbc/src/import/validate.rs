@@ -9,17 +9,16 @@ use pcb_zen_core::lang::error::CategorizedDiagnostic;
 pub(super) fn validate(
     paths: &ImportPaths,
     selection: &ImportSelection,
+    staged_root: &Path,
 ) -> Result<ImportValidationRun> {
-    // KiCad CLI can update project-local preference files while running ERC/DRC. Validate a
-    // contained copy so import never changes its source repository.
-    let validation_sources = portable::stage_project_files(&selection.portable)?;
-    let validation_root = validation_sources.path();
-    let validation_sch = validation_root.join(&selection.selected.kicad_sch);
+    // KiCad CLI can update project-local preference files while running ERC/DRC. Validate the
+    // retained source snapshot so import never changes its source repository.
+    let validation_sch = staged_root.join(&selection.selected.kicad_sch);
     let source_sch = paths.kicad_project_root.join(&selection.selected.kicad_sch);
     let mut diagnostics = Diagnostics::default();
 
     // ERC is the only source validation available for standalone schematics.
-    let erc_report = pcb_kicad::run_erc_report(&validation_sch, Some(validation_root))
+    let erc_report = pcb_kicad::run_erc_report(&validation_sch, Some(staged_root))
         .context("KiCad ERC failed")?;
     erc_report.add_to_diagnostics(&mut diagnostics, &source_sch.to_string_lossy());
     let (erc_errors, erc_warnings) = count_erc(&erc_report);
@@ -42,8 +41,8 @@ pub(super) fn validate(
             .kicad_pcb
             .as_ref()
             .context("Project import is missing a selected .kicad_pcb file")?;
-        let validation_pro = validation_root.join(kicad_pro);
-        let validation_pcb = validation_root.join(kicad_pcb);
+        let validation_pro = staged_root.join(kicad_pro);
+        let validation_pcb = staged_root.join(kicad_pcb);
         let source_pcb = paths.kicad_project_root.join(kicad_pcb);
         if !validation_pro.exists() {
             anyhow::bail!(
@@ -54,13 +53,9 @@ pub(super) fn validate(
 
         let drc_output = tempfile::NamedTempFile::new()
             .context("Failed to create temporary file for DRC output")?;
-        let drc_report = pcb_kicad::run_drc(
-            &validation_pcb,
-            true,
-            Some(validation_root),
-            drc_output.path(),
-        )
-        .context("KiCad DRC failed")?;
+        let drc_report =
+            pcb_kicad::run_drc(&validation_pcb, true, Some(staged_root), drc_output.path())
+                .context("KiCad DRC failed")?;
         drc_report.add_to_diagnostics(&mut diagnostics, &source_pcb.to_string_lossy());
         drc_report
             .add_unconnected_items_to_diagnostics(&mut diagnostics, &source_pcb.to_string_lossy());
