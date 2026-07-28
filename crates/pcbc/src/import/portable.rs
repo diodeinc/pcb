@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Component, Path, PathBuf};
 use zip::ZipWriter;
 
@@ -562,14 +562,30 @@ pub(super) fn stage_project_files(project: &PortableKicadProject) -> Result<temp
     Ok(temp)
 }
 
-/// Build the portable KiCad source archive in memory.
-pub(super) fn build_portable_zip(project: &PortableKicadProject) -> Result<Vec<u8>> {
-    let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+/// Write the portable KiCad source archive using the established streaming project-import path.
+pub(super) fn write_portable_zip(project: &PortableKicadProject, output_zip: &Path) -> Result<()> {
+    if let Some(parent) = output_zip.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create output directory for archive: {}",
+                parent.display()
+            )
+        })?;
+    }
 
-    let archive_project_dir = sanitize_archive_segment(&project.project_name);
+    let output_file = fs::File::create(output_zip)
+        .with_context(|| format!("Failed to create archive: {}", output_zip.display()))?;
+    let mut zip = ZipWriter::new(BufWriter::new(output_file));
+
     for relative in &project.files_to_bundle_rel {
         let absolute = project.project_dir.join(relative);
-        let archive_path = format!("{}/{}", archive_project_dir, path_to_posix_string(relative));
+        let archive_path = format!(
+            "{}/{}",
+            project.project_name,
+            path_to_posix_string(relative)
+        );
         add_file_to_zip(&mut zip, &absolute, &archive_path)?;
     }
 
@@ -585,10 +601,9 @@ pub(super) fn build_portable_zip(project: &PortableKicadProject) -> Result<Vec<u
     zip.write_all(project.manifest_json.as_bytes())
         .context("Failed to write project manifest to archive")?;
 
-    let archive = zip
-        .finish()
-        .context("Failed to finalize portable KiCad source archive")?;
-    Ok(archive.into_inner())
+    zip.finish()
+        .with_context(|| format!("Failed to finalize archive: {}", output_zip.display()))?;
+    Ok(())
 }
 
 fn add_file_to_zip<W: Write + std::io::Seek>(
@@ -676,7 +691,15 @@ fn kicad_config_roots() -> BTreeSet<PathBuf> {
     if let Ok(config_home) = env::var("KICAD_CONFIG_HOME")
         && !config_home.is_empty()
     {
+        // KiCad treats this as an override for the platform configuration root, not an
+        // additional lower-priority location.
         roots.insert(PathBuf::from(config_home));
+        return roots;
+    }
+
+    // `dirs::config_dir` honors XDG_CONFIG_HOME on Linux and APPDATA on Windows.
+    if let Some(config_dir) = dirs::config_dir() {
+        roots.insert(config_dir.join("kicad"));
     }
 
     if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
@@ -1668,7 +1691,7 @@ mod tests {
     fn discovers_root_schematic_from_kicad_pro_and_bundles_zip() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../pcb-sch/test/kicad-bom");
         let pro = root.join("layout.kicad_pro");
-        let project = discover_and_validate(&pro)?;
+        let mut project = discover_and_validate(&pro)?;
         assert_eq!(project.project_name, "layout");
         assert!(
             project
@@ -1677,9 +1700,12 @@ mod tests {
                 .any(|p| p == Path::new("layout.kicad_sch"))
         );
 
+        // Preserve the project-name archive root exactly, including characters that are valid in
+        // project filenames. This is established project-import behavior.
+        project.project_name = "layout board".to_string();
         let dir = tempfile::tempdir()?;
         let zip_path = dir.path().join("out.zip");
-        std::fs::write(&zip_path, build_portable_zip(&project)?)?;
+        write_portable_zip(&project, &zip_path)?;
 
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;
@@ -1688,9 +1714,9 @@ mod tests {
             .collect::<Vec<_>>();
         names.sort();
 
-        assert!(names.contains(&"layout/layout.kicad_pro".to_string()));
-        assert!(names.contains(&"layout/layout.kicad_pcb".to_string()));
-        assert!(names.contains(&"layout/layout.kicad_sch".to_string()));
+        assert!(names.contains(&"layout board/layout.kicad_pro".to_string()));
+        assert!(names.contains(&"layout board/layout.kicad_pcb".to_string()));
+        assert!(names.contains(&"layout board/layout.kicad_sch".to_string()));
         assert!(names.contains(&MANIFEST_FILE_NAME.to_string()));
 
         Ok(())
@@ -2000,7 +2026,7 @@ mod tests {
 
         let project = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
         let zip_path = dir.path().join("out.zip");
-        std::fs::write(&zip_path, build_portable_zip(&project)?)?;
+        write_portable_zip(&project, &zip_path)?;
 
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;

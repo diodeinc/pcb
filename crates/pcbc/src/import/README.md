@@ -78,6 +78,7 @@ An enabled project table entry wins when a project and global table use the same
 A disabled project entry falls through to the global table, matching KiCad behavior.
 Import copies project, global, and cached footprint geometry into the generated component package.
 Bundled standard-library footprints remain library references.
+For resolved geometry, the footprint's numbered pad set must match the embedded symbol's physical pin set.
 
 If a footprint cannot be resolved, import preserves its KiCad footprint ID and continues the structural conversion.
 The warning prints a capped list of unresolved footprint IDs.

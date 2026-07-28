@@ -88,15 +88,9 @@ fn verify_physical_partitions(
         .iter()
         .flat_map(|partition| partition.iter().cloned())
         .collect::<BTreeSet<_>>();
-    let source_refdeses = ir
-        .components
-        .values()
-        .map(|component| component.netlist.refdes.as_str().to_string())
-        .collect::<BTreeSet<_>>();
     let built_partitions = built_partitions(
         schematic,
         &source_endpoints,
-        &source_refdeses,
         expected_pins_by_refdes,
         refdes_by_instance_name,
     )?;
@@ -150,7 +144,6 @@ fn source_partitions(ir: &ImportIr) -> Result<PhysicalPartitions> {
 fn built_partitions(
     schematic: &Schematic,
     source_endpoints: &BTreeSet<PhysicalEndpoint>,
-    source_refdeses: &BTreeSet<String>,
     expected_pins_by_refdes: &BTreeMap<KiCadRefDes, BTreeSet<KiCadPinNumber>>,
     refdes_by_instance_name: &BTreeMap<String, String>,
 ) -> Result<PhysicalPartitions> {
@@ -161,12 +154,7 @@ fn built_partitions(
         if instance.kind != InstanceKind::Component {
             continue;
         }
-        let refdes = source_refdes_for_instance(
-            instance_ref,
-            instance,
-            source_refdeses,
-            refdes_by_instance_name,
-        )
+        let refdes = source_refdes_for_instance(instance_ref, refdes_by_instance_name)
             .with_context(|| {
                 // Naming the instance is the whole value of this error: without it the failure says
                 // only that *some* component could not be mapped, on a board with hundreds.
@@ -215,6 +203,24 @@ fn built_partitions(
                 expected_pins
             );
         }
+    }
+
+    // Pinless components contribute no net endpoints, so partition comparison alone cannot detect
+    // one being dropped. Compare component presence explicitly before validating connectivity.
+    let expected_refdeses = expected_pins_by_refdes
+        .keys()
+        .map(|refdes| refdes.as_str().to_string())
+        .collect::<BTreeSet<_>>();
+    let missing_components = expected_refdeses
+        .difference(&built_refdeses)
+        .take(16)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_components.is_empty() {
+        bail!(
+            "built board is missing source physical components: {}",
+            missing_components.join(", ")
+        );
     }
 
     let mut partitions = PhysicalPartitions::new();
@@ -282,31 +288,19 @@ fn built_partitions(
 /// Map a built component back to the source reference designator it came from.
 fn source_refdes_for_instance(
     instance_ref: &InstanceRef,
-    instance: &pcb_sch::Instance,
-    source_refdeses: &BTreeSet<String>,
     refdes_by_instance_name: &BTreeMap<String, String>,
 ) -> Option<String> {
+    // Generated boards instantiate a component module under the source instance name; the module's
+    // inner `Component(name=...)` is the leaf. Only the immediate parent identifies the source.
+    // Searching every path segment or using the inner component's assigned refdes can mistake its
+    // component name for another source instance.
     instance_ref
         .instance_path
         .iter()
         .rev()
+        .nth(1)
         .map(ToString::to_string)
-        .find_map(|segment| refdes_by_instance_name.get(&segment).cloned())
-        .or_else(|| {
-            instance_ref
-                .instance_path
-                .iter()
-                .rev()
-                .map(ToString::to_string)
-                .find(|segment| source_refdeses.contains(segment))
-        })
-        .or_else(|| {
-            instance
-                .reference_designator
-                .as_ref()
-                .filter(|refdes| source_refdeses.contains(*refdes))
-                .cloned()
-        })
+        .and_then(|name| refdes_by_instance_name.get(&name).cloned())
 }
 
 /// One `refdes.pin` endpoint as every diagnostic in this module renders it.
@@ -325,9 +319,6 @@ fn format_partition(partition: &PhysicalPartition) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
-    const BOARD_DIR: &str = "/import-test-board";
 
     fn board_module() -> pcb_sch::ModuleRef {
         pcb_sch::ModuleRef::new("/board/board.zen", "Board")
@@ -342,7 +333,7 @@ mod tests {
         nets: &[(&str, &[&str])],
     ) -> Schematic {
         let module = board_module();
-        let component_ref = InstanceRef::new(module.clone(), vec![refdes.into()]);
+        let component_ref = InstanceRef::new(module.clone(), vec![refdes.into(), "PART".into()]);
         let mut component =
             pcb_sch::Instance::component(type_ref).with_reference_designator(refdes.to_string());
         let mut schematic = Schematic::default();
@@ -395,6 +386,10 @@ mod tests {
         )])
     }
 
+    fn refdes_map(refdes: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([(refdes.to_string(), refdes.to_string())])
+    }
+
     #[test]
     fn built_net_shorting_source_no_connect_pad_fails() {
         // The built net shorts pad 7 (a source no-connect) into the live net on pad 1.
@@ -408,9 +403,8 @@ mod tests {
         let error = built_partitions(
             &schematic,
             &source_endpoints(&[("U1", "1")]),
-            &BTreeSet::from(["U1".to_string()]),
             &expected_pins("U1", &["1", "7"]),
-            &BTreeMap::new(),
+            &refdes_map("U1"),
         )
         .expect_err("shorted source no-connect pad must fail verification");
         assert_eq!(
@@ -432,9 +426,8 @@ mod tests {
         let partitions = built_partitions(
             &schematic,
             &source_endpoints(&[("U1", "1")]),
-            &BTreeSet::from(["U1".to_string()]),
             &expected_pins("U1", &["1", "7"]),
-            &BTreeMap::new(),
+            &refdes_map("U1"),
         )
         .expect("an isolated endpoint with no source connection must be accepted");
         assert_eq!(
@@ -451,14 +444,28 @@ mod tests {
         let error = built_partitions(
             &schematic,
             &source_endpoints(&[("U1", "1"), ("U1", "2")]),
-            &BTreeSet::from(["U1".to_string()]),
             &expected_pins("U1", &["1"]),
-            &BTreeMap::new(),
+            &refdes_map("U1"),
         )
         .expect_err("a dropped source physical endpoint must fail verification");
         assert_eq!(
             error.to_string(),
             "built board is missing source physical endpoints: U1.2"
+        );
+    }
+
+    #[test]
+    fn missing_pinless_component_fails() {
+        let error = built_partitions(
+            &Schematic::default(),
+            &BTreeSet::new(),
+            &expected_pins("MH1", &[]),
+            &refdes_map("MH1"),
+        )
+        .expect_err("a dropped pinless component must fail verification");
+        assert_eq!(
+            error.to_string(),
+            "built board is missing source physical components: MH1"
         );
     }
 
@@ -474,9 +481,8 @@ mod tests {
         let error = built_partitions(
             &schematic,
             &source_endpoints(&[("U1", "1"), ("U1", "2")]),
-            &BTreeSet::from(["U1".to_string()]),
             &expected_pins("U1", &["1", "2", "3"]),
-            &BTreeMap::new(),
+            &refdes_map("U1"),
         )
         .expect_err("a physical-pin set mismatch must fail verification");
         let actual = BTreeSet::from([
@@ -498,50 +504,37 @@ mod tests {
     ///
     /// Real case: `AM32_esc_development_board` labels its test points `TP_3.3v1`, and the generated
     /// instance name is `TP_3_3v1` — the dot is not a legal Zener identifier. Matching built path
-    /// segments against raw refdeses could never recover that, and because the generated component
-    /// carries no designator either, the fallback saw an auto-assigned `TP1` that the source never had.
-    /// The whole import failed with "Built component cannot be mapped to a source reference designator".
+    /// segments against raw refdeses could never recover that.
     #[test]
     fn a_sanitized_instance_name_still_maps_to_its_source_refdes() {
         let refdes_by_instance_name =
             BTreeMap::from([("TP_3_3v1".to_string(), "TP_3.3v1".to_string())]);
-        let source_refdeses = BTreeSet::from(["TP_3.3v1".to_string()]);
-
         let component_ref = InstanceRef::new(board_module(), vec!["TP_3_3v1".into(), "NC".into()]);
-        let schematic = component_schematic(
-            "TP1",
-            pcb_sch::ModuleRef::new(PathBuf::from(BOARD_DIR).join("components/NC/NC.zen"), "NC"),
-            &[],
-            &[],
-        );
-        let instance = schematic
-            .instances
-            .values()
-            .find(|instance| instance.kind == InstanceKind::Component)
-            .expect("a component instance");
 
         assert_eq!(
-            source_refdes_for_instance(
-                &component_ref,
-                instance,
-                &source_refdeses,
-                &refdes_by_instance_name,
-            )
-            .as_deref(),
+            source_refdes_for_instance(&component_ref, &refdes_by_instance_name).as_deref(),
             Some("TP_3.3v1"),
             "the generated instance name is the exact route back to the source refdes"
         );
 
-        // Without the map there is nothing to match: the path segment is sanitized and the built
-        // designator was auto-assigned, so neither appears among the source refdeses.
         assert_eq!(
-            source_refdes_for_instance(
-                &component_ref,
-                instance,
-                &source_refdeses,
-                &BTreeMap::new(),
-            ),
+            source_refdes_for_instance(&component_ref, &BTreeMap::new()),
             None
+        );
+    }
+
+    #[test]
+    fn component_name_cannot_be_mistaken_for_another_source_instance() {
+        let refdes_by_instance_name = BTreeMap::from([
+            ("U1".to_string(), "U1".to_string()),
+            ("R2".to_string(), "R2".to_string()),
+        ]);
+        // `R2` is the inner Component name, while `U1` is the source module instance that owns it.
+        let component_ref = InstanceRef::new(board_module(), vec!["U1".into(), "R2".into()]);
+
+        assert_eq!(
+            source_refdes_for_instance(&component_ref, &refdes_by_instance_name).as_deref(),
+            Some("U1")
         );
     }
 }

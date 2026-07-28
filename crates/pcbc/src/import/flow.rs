@@ -104,10 +104,8 @@ fn prepare_output(
 
     if selection.portable.source_kind == ImportSourceKind::Project {
         let output_zip = board_repo.join(format!("{}.kicad.archive.zip", selection.board_name));
-        let bytes = portable::build_portable_zip(&selection.portable)
-            .context("Failed to build portable KiCad project archive")?;
-        std::fs::write(&output_zip, bytes)
-            .with_context(|| format!("Failed to write {}", output_zip.display()))?;
+        portable::write_portable_zip(&selection.portable, &output_zip)
+            .context("Failed to write portable KiCad project archive")?;
     }
 
     Ok(())

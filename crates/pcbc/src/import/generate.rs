@@ -1487,8 +1487,15 @@ fn generate_imported_components(
     ) -> Option<PromotedPassive> {
         let class = passive_by_component.get(anchor)?;
 
-        component.layout.as_ref()?;
-        if class.pad_count != Some(2) {
+        let layout = component.layout.as_ref()?;
+        if class.pad_count != Some(2)
+            || layout
+                .pads
+                .keys()
+                .map(KiCadPinNumber::as_str)
+                .collect::<BTreeSet<_>>()
+                != BTreeSet::from(["1", "2"])
+        {
             return None;
         }
         if class.confidence != Some(ImportPassiveConfidence::High) {
@@ -2533,6 +2540,24 @@ fn build_physical_pin_plan(
                 }
             }
         }
+
+        if let Some(layout) = component.layout.as_ref()
+            && !matches!(
+                layout.footprint_geometry,
+                ImportFootprintGeometry::Unresolved
+            )
+        {
+            let footprint_pins = layout.pads.keys().cloned().collect::<BTreeSet<_>>();
+            if footprint_pins != all_pins {
+                anyhow::bail!(
+                    "KiCad component {} symbol defines physical pins {:?}, but footprint {} has numbered pads {:?}",
+                    component.netlist.refdes,
+                    all_pins,
+                    layout.fpid.as_deref().unwrap_or("<unknown>"),
+                    footprint_pins
+                );
+            }
+        }
     }
 
     Ok(PhysicalPinPlan { bindings, io_pins })
@@ -3013,6 +3038,49 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(error.contains("does not define that pin"));
+    }
+
+    #[test]
+    fn resolved_footprint_pad_set_must_match_symbol_physical_pins() {
+        let anchor = make_anchor("u1");
+        let mut component = make_component("U1", BTreeMap::new());
+        component.layout = Some(ImportLayoutComponent {
+            fpid: Some("Local:OnePad".to_string()),
+            unresolved_footprint: None,
+            uuid: None,
+            layer: None,
+            at: None,
+            sheetname: None,
+            sheetfile: None,
+            attrs: Vec::new(),
+            properties: BTreeMap::new(),
+            pads: BTreeMap::from([(
+                KiCadPinNumber::from("1".to_string()),
+                ImportLayoutPad {
+                    net_names: BTreeSet::new(),
+                    uuids: BTreeSet::new(),
+                },
+            )]),
+            footprint_geometry: ImportFootprintGeometry::LibraryFile("(footprint)".to_string()),
+        });
+        let components = BTreeMap::from([(anchor.clone(), component)]);
+        let symbol = pcb_eda::Symbol {
+            pins: vec![make_pin("A", "1", None), make_pin("B", "2", None)],
+            ..Default::default()
+        };
+
+        let error = build_physical_pin_plan(
+            &symbol,
+            std::slice::from_ref(&anchor),
+            &components,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        )
+        .expect_err("resolved footprint must contain exactly the symbol's physical pins")
+        .to_string();
+        assert!(error.contains("symbol defines physical pins"));
+        assert!(error.contains("footprint Local:OnePad has numbered pads"));
     }
 
     #[test]

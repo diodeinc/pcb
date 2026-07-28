@@ -592,8 +592,12 @@ fn resolve_standalone_footprints(
     selection: &ImportSelection,
     components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
 ) -> Result<()> {
-    let stdlib_root = pcb_zen_core::stdlib::native::discover_source()
-        .context("Failed to locate the Zener standard library for KiCad footprint resolution")?;
+    // Installed binaries do not necessarily have the repository's `lib/std` source tree nearby.
+    // Treat that footprint source as one optional lookup location rather than making it a
+    // prerequisite for project/global libraries, the package cache, or unresolved import.
+    let stdlib_footprints = pcb_zen_core::stdlib::native::discover_source()
+        .ok()
+        .map(|root| root.join("kicad-footprints"));
     let schematic_path = selection
         .portable
         .project_dir
@@ -644,17 +648,19 @@ fn resolve_standalone_footprints(
             }
             Some(Some(resolved)) => resolved,
             None => {
-                // Ordered by precedence: the project's own libraries, then the bundled stdlib
-                // subset, then the version-matched KiCad cache. `copy_to_component` says whether the
-                // geometry must be copied into the generated package; the stdlib is a library
-                // reference the built board already resolves.
+                // Ordered by precedence: project/global KiCad library tables, the repository
+                // stdlib source when available, then the version-matched KiCad cache.
+                // `copy_to_component` says whether the geometry must be copied into the generated
+                // package; the stdlib is a library reference the built board already resolves.
                 let lookup = selection
                     .portable
                     .resolved_project_footprints
                     .get(fpid)
                     .map(|path| (path.clone(), true))
                     .or_else(|| {
-                        resolve_footprint_in_root(&stdlib_root.join("kicad-footprints"), fpid)
+                        stdlib_footprints
+                            .as_deref()
+                            .and_then(|root| resolve_footprint_in_root(root, fpid))
                             .map(|path| (path, false))
                     })
                     .or_else(|| {

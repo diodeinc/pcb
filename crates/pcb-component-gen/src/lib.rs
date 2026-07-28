@@ -1,6 +1,6 @@
 use anyhow::Result;
 use deunicode::deunicode;
-use minijinja::Environment;
+use minijinja::{Environment, UndefinedBehavior};
 use pcb_eda::{Pin, Symbol};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -234,6 +234,7 @@ fn generate_component_zen_inner(
         .collect();
 
     let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.add_template("component.zen", COMPONENT_ZEN_TEMPLATE)?;
 
     let content = env
@@ -306,13 +307,57 @@ mod tests {
         })
         .unwrap();
 
-        assert!(zen.starts_with("\"\"\"\nMPN1\n\nAuto-generated using `pcb import`."));
+        let mut docstring_lines = zen.lines();
+        assert_eq!(docstring_lines.next(), Some("\"\"\""));
+        assert_eq!(docstring_lines.next(), Some("MPN1"));
+        assert_eq!(docstring_lines.next(), Some(""));
+        assert_eq!(
+            docstring_lines.next(),
+            Some("Auto-generated using `pcb import`.")
+        );
         assert!(zen.contains("N_INT = io(Net)"));
         assert!(zen.contains("\"~{INT}\": N_INT"));
         assert!(zen.contains("VCC"));
         assert!(!zen.contains("pin_defs"));
         assert!(!zen.contains("Pins = struct("));
         assert!(!zen.contains("Pins."));
+    }
+
+    #[test]
+    fn explicit_pin_plan_renders_pin_defs_and_optional_footprint() {
+        let zen = generate_component_zen_with_pins(
+            GenerateComponentZenArgs {
+                component_name: "DEVICE",
+                symbol: &pcb_eda::Symbol::default(),
+                symbol_filename: "DEVICE.kicad_sym",
+                generated_by: "pcb import",
+                include_skip_bom: false,
+                include_skip_pos: false,
+                skip_bom_default: false,
+                skip_pos_default: false,
+            },
+            &[
+                GenerateComponentPin {
+                    logical_name: "D+__3".to_string(),
+                    pad_number: "3".to_string(),
+                    io_name: Some("D_POS_3".to_string()),
+                },
+                GenerateComponentPin {
+                    logical_name: "NC\"\\é".to_string(),
+                    pad_number: "10".to_string(),
+                    io_name: None,
+                },
+            ],
+            Some("Missing:Footprint"),
+        )
+        .unwrap();
+
+        assert!(zen.contains("D_POS_3 = io(Net)"));
+        assert!(zen.contains("footprint = \"Missing:Footprint\""));
+        assert!(zen.contains("\"D+__3\": \"3\""));
+        assert!(zen.contains("\"NC\\\"\\\\é\": \"10\""));
+        assert!(zen.contains("\"D+__3\": D_POS_3"));
+        assert!(!zen.contains("NC = io(Net)"));
     }
 
     #[test]
