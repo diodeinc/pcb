@@ -38,6 +38,8 @@ pcb search -m registry:components <query> -f json
 
 Patch or extend an existing package when it is the right home. Create a new package only when no suitable package exists or the physical package/footprint, pinout, or fundamental schematic topology differs.
 
+Once search and family scoping show that a new package is the right home, establish its final directory and create `pcb.toml` before package-local authoring. `pcb.toml` declares the package boundary: it makes the work discoverable as a module and gives its evolving artifacts a stable home while curation continues.
+
 ## Family-First, Symbol-First
 
 When a request names one MPN, first look for the related part family before authoring. A good component package usually covers all parts with the same physical package/footprint, pinout, feature set, and fundamental schematic topology.
@@ -48,12 +50,13 @@ A typical flow:
 
 1. Understand the request and intended deliverable, including whether reference circuitry is warranted.
 2. Find the related part group/family.
-3. Fetch or import ECAD artifacts.
-4. Clean the symbols against the datasheet.
-5. Represent each functional variant symbol without duplicating order-code variants.
-6. Clean the footprint and embedded STEP against the datasheet.
-7. Ensure the footprint has an embedded STEP: find and embed any referenced local model, otherwise download a matching model and embed it with `pcb embed-step`.
-8. Write the primitive API, reference circuitry, or selector logic.
+3. Establish the package directory and `pcb.toml`.
+4. Fetch or import ECAD artifacts.
+5. Clean the symbols against the datasheet.
+6. Represent each functional variant symbol without duplicating order-code variants.
+7. Clean the footprint and embedded STEP against the datasheet.
+8. Ensure the footprint has an embedded STEP: find and embed any referenced local model, otherwise download a matching model and embed it with `pcb embed-step`.
+9. Write the primitive API, reference circuitry, or selector logic.
 
 Treat this as the default direction, not a rigid script. Focused patches may only touch one stage.
 
@@ -189,13 +192,13 @@ out="components/Texas_Instruments/TPS54331DR"
 
 mkdir -p "$(dirname "$out")"
 mkdir "$out"
+touch "$out/pcb.toml"
 curl -fL "$(jq -er '.cse.symbol_url' "$assets_json")" \
   -o "$out/TPS54331DR.kicad_sym"
 curl -fL "$(jq -er '.cse.footprint_url' "$assets_json")" \
   -o "$out/TPS54331DR.kicad_mod"
 curl -fL "$(jq -er '.cse.step_url' "$assets_json")" \
   -o "$out/TPS54331DR.step"
-touch "$out/pcb.toml"
 ```
 
 Treat downloaded artifacts as inputs to curation, not finished registry content. Verify the symbol, pins, footprint, package, datasheet, sourcing fields, and model against manufacturer evidence. Set the symbol's `Datasheet` property, embed the verified STEP, author the package `.zen` and README, and complete the build, BOM, formatting, and sourceability checks below.
@@ -229,7 +232,7 @@ components/<Manufacturer>/<NAME>/
 
 Include a real `.kicad_mod`; note whether it is datasheet-exact, KiCad-stock-derived, vendor-derived, or intentionally adjusted.
 
-Each `.zen` entrypoint should be a complete public API for one primitive component or one reference design. A package may contain multiple `.zen` entrypoints when one curated part/family has multiple useful datasheet-backed application circuits; avoid thin local wrappers that only re-export another `.zen`.
+Every top-level `.zen` file in a directory containing `pcb.toml` is a public package entrypoint. Each should therefore represent a coherent primitive component or reusable subschematic/reference design with a complete public API. A package may contain multiple entrypoints when one curated part/family has multiple useful datasheet-backed application circuits; avoid thin local wrappers that only re-export another `.zen`.
 
 The README is for realistic usage examples and concise integration notes only. Put rationale and design evidence in the `.zen` docstring.
 
