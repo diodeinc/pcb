@@ -136,6 +136,7 @@ fn validation_extraction_and_materialization_share_one_source_snapshot() {
         .expect("run pcbc import");
     let stderr = String::from_utf8_lossy(&import.stderr);
 
+    assert!(import.status.success(), "import failed:\n{stderr}");
     assert_eq!(
         fs::read(&source_schematic).unwrap(),
         fs::read(&mutated_schematic).unwrap()
@@ -148,7 +149,6 @@ fn validation_extraction_and_materialization_share_one_source_snapshot() {
         fs::read(&source_pcb).unwrap(),
         fs::read(&mutated_pcb).unwrap()
     );
-    assert!(import.status.success(), "import failed:\n{stderr}");
 
     let output = sandbox.root_path().join("out");
     assert_eq!(
