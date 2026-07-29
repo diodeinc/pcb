@@ -122,10 +122,7 @@ jobs:
       - name: Verify KiCad installation (Windows)
         if: matrix.config.name == 'Windows'
         shell: pwsh
-        run: |
-          if (-not (Test-Path "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe")) {
-            throw "KiCad CLI was not restored or installed"
-          }
+        run: '& "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" version --format about'
 
       - name: Install Rust (Windows)
         if: runner.os == 'Windows'
