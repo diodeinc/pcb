@@ -46,6 +46,7 @@ use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::interface::{
     FrozenInterfaceFactory, FrozenInterfaceValue, InterfaceFactory, InterfaceValue,
 };
+use crate::lang::net::{FrozenNetValue, NetValue};
 
 const REBIND_VALUES: [&str; 3] = ["none", "firmware", "fixed"];
 const PINMAP_CAP: usize = 512;
@@ -1069,6 +1070,21 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
             }
             NoneOr::None => (None, None, false),
         };
+        // Validate the bound value early, with the role name in the message —
+        // otherwise a bad dict entry only surfaces at Component() as
+        // "Pin 'PAx' must be connected to a Net", naming the solved pin
+        // instead of the role.
+        if let Some(v) = bind_val
+            && v.downcast_ref::<NetValue<'v>>().is_none()
+            && v.downcast_ref::<FrozenNetValue>().is_none()
+            && v.downcast_ref::<InterfaceValue<'v>>().is_none()
+            && v.downcast_ref::<FrozenInterfaceValue>().is_none()
+        {
+            return Err(anyhow::anyhow!(
+                "pin_request `{name}`: bind must be a Net or interface instance (optionally wrapped in at()), got `{}`",
+                v.get_type()
+            ));
+        }
         let info = iface_info(iface).ok_or_else(|| {
             anyhow::anyhow!(
                 "pin_request `{name}`: expected an interface type, got `{}`",
