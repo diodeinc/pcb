@@ -229,11 +229,20 @@ fn main() {
         fs::copy(env::var_os(source).unwrap(), env::var_os(destination).unwrap()).unwrap();
     }
 
-    let status = Command::new(env::var_os("PCB_TEST_REAL_KICAD_CLI").unwrap())
-        .args(args)
-        .status()
+    let real_kicad_cli = env::var_os("PCB_TEST_REAL_KICAD_CLI").unwrap();
+    let output = Command::new(&real_kicad_cli)
+        .args(&args)
+        .output()
         .unwrap();
-    std::process::exit(status.code().unwrap_or(1));
+    if !output.status.success() {
+        eprintln!(
+            "real KiCad CLI {real_kicad_cli:?} failed with {:?}\nargs: {args:?}\nstdout:\n{}\nstderr:\n{}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+    std::process::exit(output.status.code().unwrap_or(1));
 }
 "#,
     )
