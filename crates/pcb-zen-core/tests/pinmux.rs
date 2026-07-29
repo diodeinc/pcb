@@ -643,3 +643,75 @@ check(m["PB0"] == LED, "PB0 must carry the LED net")
     assert_ok(&result);
 }
 
+const MCU_AT: &str = r#"
+load("./ifaces.zen", "Gpio")
+load("./stm32.zen", "PERIPHS")
+
+IO0 = io(Net, optional = True)
+
+res = pin_solve(PERIPHS, [pin_request("IO0", Gpio, if_connected = True)])
+a = res["assignment"]
+builtin.add_property("io0_pin", a["IO0"]["signals"]["PIN"]["pin"] if "IO0" in a else "none")
+"#;
+
+fn eval_mcu_at(parent: &str) -> WithDiagnostics<EvalOutput> {
+    eval_zen(vec![
+        ("/ifaces.zen".to_string(), IFACES.to_string()),
+        ("/stm32.zen".to_string(), STM32.to_string()),
+        ("/mcu_at.zen".to_string(), MCU_AT.to_string()),
+        ("/test.zen".to_string(), parent.to_string()),
+    ])
+}
+
+fn io0_pin(result: &WithDiagnostics<EvalOutput>) -> String {
+    let tree = result.output.as_ref().unwrap().module_tree();
+    tree.values()
+        .filter_map(|m| m.properties().get("io0_pin").cloned())
+        .filter_map(|v| v.to_value().unpack_str().map(|s| s.to_owned()))
+        .find(|s| s != "none")
+        .unwrap_or_default()
+}
+
+#[test]
+fn at_constrains_pin_on_the_connection() {
+    // The caller pins the capability at the connection site; the wrapper is
+    // transparent for the net binding and hard for the solver.
+    let result = eval_mcu_at(
+        r#"
+Mcu = Module("/mcu_at.zen")
+Mcu(name = "M1", IO0 = at(Net("LED"), "PA10"))
+"#,
+    );
+    assert_ok(&result);
+    assert_eq!(io0_pin(&result), "PA10");
+}
+
+#[test]
+fn at_hard_constraint_fails_loudly() {
+    // PA13 is not in this fixture's GPIO pool: a hard at() must fail the
+    // build (zero candidates survive the lock filter), never silently
+    // fall back.
+    let result = eval_mcu_at(
+        r#"
+Mcu = Module("/mcu_at.zen")
+Mcu(name = "M1", IO0 = at(Net("LED"), "PA13"))
+"#,
+    );
+    assert_fails_with(&result, "has no candidate");
+}
+
+#[test]
+fn at_soft_constraint_falls_back() {
+    let result = eval_mcu_at(
+        r#"
+Mcu = Module("/mcu_at.zen")
+Mcu(name = "M1", IO0 = at(Net("LED"), "PA13", soft = True))
+"#,
+    );
+    assert_ok(&result);
+    let pin = io0_pin(&result);
+    assert!(
+        !pin.is_empty() && pin != "PA13",
+        "soft must fall back, got {pin:?}"
+    );
+}

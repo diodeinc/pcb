@@ -80,6 +80,12 @@ pub struct ContextValue<'v> {
     #[allocative(skip)]
     #[serde(skip)]
     pending_children: RefCell<Vec<PendingChild<'v>>>,
+    /// Pin constraints attached by the caller at the connection site via
+    /// `at()`, keyed by io() input name. Consumed by `pin_solve` during this
+    /// module's evaluation; not preserved across freeze.
+    #[allocative(skip)]
+    #[serde(skip)]
+    pin_constraints: RefCell<std::collections::HashMap<String, (Vec<String>, bool)>>,
 }
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
@@ -165,6 +171,7 @@ impl<'v> ContextValue<'v> {
             missing_inputs: RefCell::new(Vec::new()),
             diagnostics: RefCell::new(Vec::new()),
             pending_children: RefCell::new(Vec::new()),
+            pin_constraints: RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -191,6 +198,18 @@ impl<'v> ContextValue<'v> {
 
     pub(crate) fn add_missing_input(&self, name: String) {
         self.missing_inputs.borrow_mut().push(name);
+    }
+
+    /// Record a caller-side pin constraint (`at()` wrapper) for an io() input.
+    pub(crate) fn add_pin_constraint(&self, name: &str, pins: Vec<String>, soft: bool) {
+        self.pin_constraints
+            .borrow_mut()
+            .insert(name.to_owned(), (pins, soft));
+    }
+
+    /// Caller-side pin constraint recorded for an io() input, if any.
+    pub(crate) fn pin_constraint(&self, name: &str) -> Option<(Vec<String>, bool)> {
+        self.pin_constraints.borrow().get(name).cloned()
     }
 
     pub(crate) fn add_diagnostic<D: Into<crate::Diagnostic>>(&self, diag: D) {

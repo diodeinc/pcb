@@ -492,6 +492,9 @@ fn resolve_io<'v>(
     };
 
     let (value, metadata_default) = if let Some(provided) = eval.request_input(name)? {
+        // `at()` pin-constraint wrapper: record the constraint for pin_solve
+        // and bind the inner value as if it had been passed directly.
+        let provided = crate::lang::pinmux::unwrap_pin_at(name, provided, eval);
         let converted = validate_or_convert(name, provided, normalized.typ, eval)?;
         let converted = register_provided_io_net(name, converted, normalized.typ, eval)?;
         for failure in run_implicit_checks(name, &normalized.implicit_checks, converted) {

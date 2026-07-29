@@ -23,6 +23,7 @@
 //! module properties `pin_assignment` and `swap_classes` (JSON), which flow
 //! through the netlist into schematic/board fields.
 
+use allocative::Allocative;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
@@ -31,12 +32,15 @@ use pcb_sch::physical::PhysicalValue;
 use starlark::collections::SmallMap;
 use starlark::environment::GlobalsBuilder;
 use starlark::eval::Evaluator;
-use starlark::starlark_module;
 use starlark::values::dict::{AllocDict, DictRef};
 use starlark::values::list::{ListRef, UnpackList};
 use starlark::values::none::NoneOr;
 use starlark::values::typing::TypeInstanceId;
-use starlark::values::{Heap, Value, ValueLike};
+use starlark::values::{
+    Coerce, Freeze, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace, Value,
+    ValueLifetimeless, ValueLike, starlark_value,
+};
+use starlark::{starlark_complex_value, starlark_module};
 
 use crate::lang::evaluator_ext::EvaluatorExt;
 use crate::lang::interface::{
@@ -678,6 +682,59 @@ fn warn_at_call_site(eval: &mut Evaluator<'_, '_, '_>, msg: String) {
 }
 
 // ---------------------------------------------------------------------------
+// `at()` — pin constraint attached at the connection site
+// ---------------------------------------------------------------------------
+
+/// Wrapper produced by `at(value, pins, soft=)`: the caller constrains which
+/// physical pin(s) a capability may land on, on the connection itself
+/// (`Mcu(IO0 = at(led_net, "PA8"))`). `io()` unwraps it at binding time: the
+/// inner value flows as if passed directly, and the constraint is recorded on
+/// the module context for `pin_solve` to consume.
+#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
+#[repr(C)]
+pub struct PinAtGen<V: ValueLifetimeless> {
+    pub inner: V,
+    pub pins: Vec<String>,
+    pub soft: bool,
+}
+
+starlark_complex_value!(pub PinAt);
+
+#[starlark_value(type = "PinAt")]
+impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for PinAtGen<V> where Self: ProvidesStaticType<'v> {}
+
+impl<'v, V: ValueLike<'v>> std::fmt::Display for PinAtGen<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "at({}, {:?})", self.inner, self.pins)
+    }
+}
+
+/// If `value` is an `at()` wrapper, record its constraint against the io()
+/// input `name` and return the inner value; otherwise return `value` as-is.
+pub(crate) fn unwrap_pin_at<'v>(
+    name: &str,
+    value: Value<'v>,
+    eval: &mut Evaluator<'v, '_, '_>,
+) -> Value<'v> {
+    let unwrapped = if let Some(w) = value.downcast_ref::<PinAt<'v>>() {
+        Some((w.inner.to_value(), w.pins.clone(), w.soft))
+    } else if let Some(w) = value.downcast_ref::<FrozenPinAt>() {
+        Some((w.inner.to_value(), w.pins.clone(), w.soft))
+    } else {
+        None
+    };
+    match unwrapped {
+        Some((inner, pins, soft)) => {
+            if let Some(ctx) = eval.context_value() {
+                ctx.add_pin_constraint(name, pins, soft);
+            }
+            inner
+        }
+        None => value,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Builtins
 // ---------------------------------------------------------------------------
 
@@ -812,6 +869,41 @@ fn alloc_pin_dict<'v>(
 
 #[starlark_module]
 pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
+    /// Constrain which physical pin(s) a connection may use, at the
+    /// connection site: `Mcu(IO0 = at(led_net, "PA8"))`. Hard by default
+    /// (build error if unsatisfiable); `soft = True` makes it a preference
+    /// the solver may fall back from.
+    fn at<'v>(
+        #[starlark(require = pos)] value: Value<'v>,
+        #[starlark(require = pos)] pins: Value<'v>,
+        #[starlark(require = named, default = false)] soft: bool,
+        eval: &mut Evaluator<'v, '_, '_>,
+    ) -> anyhow::Result<Value<'v>> {
+        let pin_list: Vec<String> = if let Some(s) = pins.unpack_str() {
+            vec![s.to_owned()]
+        } else if let Some(l) = ListRef::from_value(pins) {
+            l.iter()
+                .map(|v| {
+                    v.unpack_str().map(|s| s.to_owned()).ok_or_else(|| {
+                        anyhow::anyhow!("at(): pins must be a pin name or a list of pin names")
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+        } else {
+            return Err(anyhow::anyhow!(
+                "at(): pins must be a pin name or a list of pin names, got `{}`",
+                pins.get_type()
+            ));
+        };
+        if pin_list.is_empty() {
+            return Err(anyhow::anyhow!("at(): pins must not be empty"));
+        }
+        Ok(eval.heap().alloc(PinAt {
+            inner: value,
+            pins: pin_list,
+            soft,
+        }))
+    }
     /// One candidate physical pin for a peripheral signal. `data=` carries
     /// opaque realization info (e.g. `{"af": 1}` on STM32, `{"iomux_func": 0}`
     /// on ESP32) verbatim into the solved assignment; the solver ignores it.
@@ -1095,6 +1187,17 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
             })
             .unwrap_or_default();
         reqs.retain(|r| !r.if_connected || connected.contains(&r.name));
+
+        // `at()` constraints recorded at io-binding time override any
+        // request-side prefer/lock defaults.
+        if let Some(ctx) = eval.context_value() {
+            for r in reqs.iter_mut() {
+                if let Some((pins, soft)) = ctx.pin_constraint(&r.name) {
+                    r.prefer = pins;
+                    r.lock = !soft;
+                }
+            }
+        }
 
         let prev_map = match previous {
             NoneOr::Other(v) => parse_previous(v, heap),

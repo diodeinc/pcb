@@ -94,26 +94,13 @@ GPIO_POOL = pool(
 
 PERIPHS = [USART1, USART2, SPI1, I2C1, SWD_PORT] + ADC_CH + GPIO_POOL
 
-# --- Caller-side pin constraints ----------------------------------------------
-# pin_locks maps a capability slot to the exact pin(s) the design insists on:
-#   Mcu(..., pin_locks = {"LED": "PA8"})
-# A locked pin that the package doesn't have, or that another capability
-# already claimed, is a build error — never a silent fallback. Use
-# pin_prefers for the soft version (solver tries it, falls back if taken).
-pin_locks = config(dict, default = {})
-pin_prefers = config(dict, default = {})
-
-def _aslist(v):
-    return v if type(v) == "list" else [v]
-
-def _constraint(slot):
-    if slot in pin_locks:
-        return {"prefer": _aslist(pin_locks[slot]), "lock": True}
-    if slot in pin_prefers:
-        return {"prefer": _aslist(pin_prefers[slot]), "lock": False}
-    return {}
-
 # --- Capability slots: connect only what the design uses ----------------------
+# Slots are named after the HARDWARE capability they expose (a generic GPIO,
+# an ADC input), never after an application role: this module cannot know the
+# design will hang a LED on IO0 — and "LED" must not become a capability.
+# The caller constrains pins on the connection itself when it needs to:
+#   Mcu(IO0 = at(led_net, "PA8"))            # hard: build error if impossible
+#   Mcu(IO0 = at(led_net, "PA8", soft = True))  # preference with fallback
 
 VDD = io(Power)
 VSS = io(Ground)
@@ -123,18 +110,18 @@ SWD = io(Swd)
 DEBUG = io(Uart, optional = True)
 FLASH = io(Spi, optional = True)
 SENSOR = io(I2c, optional = True)
-LED = io(Net, optional = True)
-BTN = io(Net, optional = True)
-AIN = io(Net, optional = True)
+IO0 = io(Net, optional = True)
+IO1 = io(Net, optional = True)
+AIN0 = io(Net, optional = True)
 
 res = pin_solve(PERIPHS, [
     pin_request("SWD", Swd, instance = "SWD"),
-    pin_request("DEBUG", Uart, if_connected = True, **_constraint("DEBUG")),
-    pin_request("FLASH", Spi, if_connected = True, **_constraint("FLASH")),
-    pin_request("SENSOR", I2c, if_connected = True, **_constraint("SENSOR")),
-    pin_request("LED", GpioPin, if_connected = True, direction = "output", **_constraint("LED")),
-    pin_request("BTN", GpioPin, if_connected = True, **_constraint("BTN")),
-    pin_request("AIN", AdcIn, if_connected = True, **_constraint("AIN")),
+    pin_request("DEBUG", Uart, if_connected = True),
+    pin_request("FLASH", Spi, if_connected = True),
+    pin_request("SENSOR", I2c, if_connected = True),
+    pin_request("IO0", GpioPin, if_connected = True),
+    pin_request("IO1", GpioPin, if_connected = True),
+    pin_request("AIN0", AdcIn, if_connected = True),
 ])
 
 m = pin_map(res["assignment"], {
@@ -142,9 +129,9 @@ m = pin_map(res["assignment"], {
     "DEBUG": DEBUG,
     "FLASH": FLASH,
     "SENSOR": SENSOR,
-    "LED": LED,
-    "BTN": BTN,
-    "AIN": AIN,
+    "IO0": IO0,
+    "IO1": IO1,
+    "AIN0": AIN0,
 })
 
 # Unclaimed mux pins are intentionally open.

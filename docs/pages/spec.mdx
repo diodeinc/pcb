@@ -370,12 +370,26 @@ result = pin_solve(
   instance), strapping pins (+50 each), per-pin `cost`, `prefer=` hits
   (−10 each), and previous-assignment matches (−20 instance, −5 per pin).
   Absolute values are arbitrary; only the relative order is contractual.
+- **`at(value, pins, soft=)`** — constrain which physical pin(s) a
+  connection may use, on the connection itself:
+  `Mcu(IO0 = at(led_net, "PA8"))`. The wrapper is transparent — `io()`
+  unwraps it at binding time, the inner net flows as if passed directly, and
+  the constraint reaches the module's `pin_solve` keyed by the input name.
+  Hard by default (unsatisfiable → build error, and the pin leaves the swap
+  classes); `soft = True` is a preference the solver may fall back from.
 - **`pin_map(assignment, ifaces)`** — turn `pin_solve`'s `assignment` into a
   `Component(pins=...)`-ready dict mapping each physical pin to the net
   carried by the matching interface field (`{"COM": uart_io, "LED": led_net}`;
   a bare `Net` is accepted for single-signal requests). Requests absent from
   the assignment — e.g. dropped by `if_connected` — are skipped, so both
   dicts can be declared unconditionally.
+
+Two conventions keep the model sound. **Capabilities name hardware
+peripherals** — `Gpio`, `AdcIn`, `Uart` are facts about the silicon;
+application roles (LED, buzzer, button) are net names on the design side and
+must never become capability interfaces. And **component modules expose
+generic slots** (`IO0 = io(Net, optional = True)` requesting `Gpio`), because
+a reusable component cannot know what the design will hang on them.
 
 `pin_solve` returns `{"assignment": ..., "swap_classes": ...}` and stores both
 as the module properties `pin_assignment` and `swap_classes` (JSON), which

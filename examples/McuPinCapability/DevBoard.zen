@@ -31,11 +31,12 @@ Mcu(
     SWD = SWD,
     DEBUG = DEBUG,
     FLASH = FLASH,
-    LED = LED_CTRL,
-    AIN = VBAT_SENSE,
-    # The design insists: this LED lives on PA8 (hard lock — build error if
-    # PA8 is missing or taken). The locked pin also leaves the swap classes.
-    pin_locks = {"LED": "PA8"},
+    # The LED is a design role, not a capability: it rides a generic GPIO
+    # slot. The design insists on PA8, on the connection itself — a hard
+    # constraint (build error if PA8 is missing or taken; the pin also
+    # leaves the swap classes). Drop at() to let the solver choose.
+    IO0 = at(LED_CTRL, "PA8"),
+    AIN0 = VBAT_SENSE,
 )
 
 Capacitor(name = "C1", value = "100nF", package = "0402", P1 = VDD, P2 = GND)
