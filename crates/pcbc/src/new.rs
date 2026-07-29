@@ -143,6 +143,41 @@ fn validate_board_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a board name that was derived from an input file name rather than typed by the user.
+pub(crate) fn validate_derived_board_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("board name is empty");
+    }
+
+    let zen_file_name = format!("{name}.zen");
+    if zen_file_name.len() > 255 {
+        bail!(
+            "board name is too long: {} would be a {}-byte file name, over the 255-byte limit",
+            zen_file_name,
+            zen_file_name.len()
+        );
+    }
+
+    if name.chars().all(|c| c == '.') {
+        bail!("board name {name:?} consists only of dots");
+    }
+
+    for c in name.chars() {
+        let reason = match c {
+            '"' => "a double quote",
+            '\\' => "a backslash",
+            '/' => "a path separator",
+            '\n' => "a newline",
+            '\r' => "a carriage return",
+            c if c.is_control() => "a control character",
+            _ => continue,
+        };
+        bail!("board name {name:?} contains {reason}");
+    }
+
+    Ok(())
+}
+
 /// Clean a git repository URL to the canonical format (e.g., "github.com/user/repo")
 fn clean_repo_url(url: &str) -> Result<String> {
     let url = url.trim();

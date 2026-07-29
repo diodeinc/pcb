@@ -20,14 +20,61 @@ use pcb_sexpr::{PatchSet, Span, board as sexpr_board};
 use pcb_zen_core::lang::stackup as zen_stackup;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use uuid::Uuid;
+
+pub(super) struct GenerationResult {
+    pub(super) expected_pins_by_refdes: BTreeMap<KiCadRefDes, BTreeSet<KiCadPinNumber>>,
+    /// The Zener instance name generated for each source reference designator.
+    ///
+    /// Exposed because validation has to map a *built* component back to its source refdes, and the
+    /// instance name is sanitized on the way out — `TP_3.3v1` becomes `TP_3_3v1`. Matching path
+    /// segments against raw refdeses therefore fails for any refdes the sanitizer had to change, and
+    /// the component then cannot be mapped at all.
+    pub(super) instance_name_by_refdes: BTreeMap<KiCadRefDes, String>,
+}
+
+fn ensure_parent(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create output directory {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn write_file(path: &Path, content: &[u8]) -> Result<()> {
+    ensure_parent(path)?;
+    let parent = path
+        .parent()
+        .context("Expected generated file path to have a parent directory")?;
+    let mut temp = tempfile::Builder::new()
+        .prefix(".pcb.import.")
+        .tempfile_in(parent)
+        .with_context(|| format!("Failed to create temp file in {}", parent.display()))?;
+    temp.write_all(content)
+        .with_context(|| format!("Failed to write temp file for {}", path.display()))?;
+    temp.flush()
+        .with_context(|| format!("Failed to flush temp file for {}", path.display()))?;
+    temp.persist(path)
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!(error))
+        .with_context(|| format!("Failed to persist {}", path.display()))
+}
+
+fn write_zen(path: &Path, content: &str) -> Result<()> {
+    ensure_parent(path)?;
+    crate::codegen::zen::write_zen_formatted(path, content)
+        .with_context(|| format!("Failed to write {}", path.display()))
+}
 
 pub(super) fn generate(
     materialized: &MaterializedBoard,
     board_name: &str,
     ir: &ImportIr,
-) -> Result<()> {
+) -> Result<GenerationResult> {
     let port_to_net = build_port_to_net_map(&ir.nets)?;
     let not_connected_nets = build_not_connected_nets(&ir.nets);
     let net_decls = build_net_decls(&ir.nets, &not_connected_nets, &ir.semantic.net_kinds.by_net);
@@ -36,13 +83,24 @@ pub(super) fn generate(
 
     let refdes_instance_names = build_refdes_instance_name_map(&ir.components);
 
-    let component_modules = generate_imported_components(
-        &materialized.board_dir,
-        &ir.components,
-        &reserved_idents,
-        &ir.schematic_lib_symbols,
-        &ir.semantic.passives.by_component,
-    )?;
+    let component_modules = generate_imported_components(GenerateImportedComponentsArgs {
+        board_dir: &materialized.board_dir,
+        components: &ir.components,
+        reserved_idents: &reserved_idents,
+        schematic_lib_symbols: &ir.schematic_lib_symbols,
+        passive_by_component: &ir.semantic.passives.by_component,
+        port_to_net: &port_to_net,
+        not_connected_nets: &not_connected_nets,
+    })?;
+
+    let expected_pins_by_refdes = component_modules
+        .expected_pins_by_anchor
+        .iter()
+        .filter_map(|(anchor, pins)| {
+            let component = ir.components.get(anchor)?;
+            Some((component.netlist.refdes.clone(), pins.clone()))
+        })
+        .collect();
 
     let sheet_modules = generate_sheet_modules(GenerateSheetModulesArgs {
         board_dir: &materialized.board_dir,
@@ -58,8 +116,8 @@ pub(super) fn generate(
     write_imported_board_zen(ImportedBoardZenArgs {
         board_zen: &materialized.board_zen,
         board_name,
-        layout_kicad_pro: &materialized.layout_kicad_pro,
-        layout_kicad_pcb: &materialized.layout_kicad_pcb,
+        layout_kicad_pro: materialized.layout_kicad_pro.as_deref(),
+        layout_kicad_pcb: materialized.layout_kicad_pcb.as_deref(),
         port_to_net: &port_to_net,
         refdes_instance_names: &refdes_instance_names,
         components: &ir.components,
@@ -74,14 +132,17 @@ pub(super) fn generate(
         not_connected_nets: &not_connected_nets,
     })?;
 
-    Ok(())
+    Ok(GenerationResult {
+        expected_pins_by_refdes,
+        instance_name_by_refdes: refdes_instance_names,
+    })
 }
 
 struct ImportedBoardZenArgs<'a> {
     board_zen: &'a Path,
     board_name: &'a str,
-    layout_kicad_pro: &'a Path,
-    layout_kicad_pcb: &'a Path,
+    layout_kicad_pro: Option<&'a Path>,
+    layout_kicad_pcb: Option<&'a Path>,
     port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
     refdes_instance_names: &'a BTreeMap<KiCadRefDes, String>,
     components: &'a BTreeMap<KiCadUuidPathKey, ImportComponentData>,
@@ -97,34 +158,41 @@ struct ImportedBoardZenArgs<'a> {
 }
 
 fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
-    let pcb_text = fs::read_to_string(args.layout_kicad_pcb).with_context(|| {
-        format!(
-            "Failed to read KiCad PCB for stackup extraction: {}",
-            args.layout_kicad_pcb.display()
-        )
-    })?;
+    let mut copper_layers = 4;
+    let mut stackup = None;
+    let mut design_rules = None;
 
-    let (copper_layers, stackup) = match try_extract_stackup(&pcb_text, args.layout_kicad_pcb) {
-        Ok(v) => v,
-        Err(e) => {
-            debug!("{e:#}");
-            (4, None)
+    if let Some(layout_kicad_pcb) = args.layout_kicad_pcb {
+        let pcb_text = fs::read_to_string(layout_kicad_pcb).with_context(|| {
+            format!(
+                "Failed to read KiCad PCB for stackup extraction: {}",
+                layout_kicad_pcb.display()
+            )
+        })?;
+        match try_extract_stackup(&pcb_text, layout_kicad_pcb) {
+            Ok((layers, extracted_stackup)) => {
+                copper_layers = layers;
+                stackup = extracted_stackup;
+            }
+            Err(e) => debug!("{e:#}"),
         }
-    };
-    let design_rules = pcb_layout::extract_design_rules_from_kicad_pro(args.layout_kicad_pro)
-        .ok()
-        .flatten();
+        if let Some(layout_kicad_pro) = args.layout_kicad_pro {
+            design_rules = pcb_layout::extract_design_rules_from_kicad_pro(layout_kicad_pro)
+                .ok()
+                .flatten();
+        }
 
-    prepatch_imported_layout_kicad_pcb(
-        args.layout_kicad_pcb,
-        &pcb_text,
-        args.components,
-        args.refdes_instance_names,
-        &args.net_decls.zener_name_by_kicad_name,
-        args.component_modules,
-        args.sheet_modules,
-    )
-    .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
+        prepatch_imported_layout_kicad_pcb(LayoutPrepatchArgs {
+            layout_kicad_pcb,
+            pcb_text: &pcb_text,
+            components: args.components,
+            refdes_instance_names: args.refdes_instance_names,
+            net_ident_by_kicad_name: &args.net_decls.zener_name_by_kicad_name,
+            generated_components: args.component_modules,
+            sheet_modules: args.sheet_modules,
+        })
+        .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
+    }
 
     let root_sheet = KiCadSheetPath::root();
     let root_plan = args
@@ -222,21 +290,31 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
         &root_schematic_positions,
         args.schematic_lib_symbols,
     );
-    crate::codegen::zen::write_zen_formatted(args.board_zen, &board_zen_content)
-        .with_context(|| format!("Failed to write {}", args.board_zen.display()))?;
+    write_zen(args.board_zen, &board_zen_content)?;
 
     Ok(())
 }
 
-fn prepatch_imported_layout_kicad_pcb(
-    layout_kicad_pcb: &Path,
-    pcb_text: &str,
-    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-    refdes_instance_names: &BTreeMap<KiCadRefDes, String>,
-    net_ident_by_kicad_name: &BTreeMap<KiCadNetName, String>,
-    generated_components: &GeneratedComponents,
-    sheet_modules: &GeneratedSheetModules,
-) -> Result<()> {
+struct LayoutPrepatchArgs<'a> {
+    layout_kicad_pcb: &'a Path,
+    pcb_text: &'a str,
+    components: &'a BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    refdes_instance_names: &'a BTreeMap<KiCadRefDes, String>,
+    net_ident_by_kicad_name: &'a BTreeMap<KiCadNetName, String>,
+    generated_components: &'a GeneratedComponents,
+    sheet_modules: &'a GeneratedSheetModules,
+}
+
+fn prepatch_imported_layout_kicad_pcb(args: LayoutPrepatchArgs<'_>) -> Result<()> {
+    let LayoutPrepatchArgs {
+        layout_kicad_pcb,
+        pcb_text,
+        components,
+        refdes_instance_names,
+        net_ident_by_kicad_name,
+        generated_components,
+        sheet_modules,
+    } = args;
     let board = pcb_sexpr::parse(pcb_text).map_err(|e| anyhow::anyhow!(e))?;
 
     let net_renames: std::collections::HashMap<String, String> = net_ident_by_kicad_name
@@ -266,7 +344,7 @@ fn prepatch_imported_layout_kicad_pcb(
     patches
         .write_to(pcb_text, &mut out)
         .with_context(|| format!("Failed to apply patches to {}", layout_kicad_pcb.display()))?;
-    fs::write(layout_kicad_pcb, out)
+    fs::write(layout_kicad_pcb, &out)
         .with_context(|| format!("Failed to write patched {}", layout_kicad_pcb.display()))?;
 
     Ok(())
@@ -542,10 +620,10 @@ fn build_net_decls(
             continue;
         }
         let ident_base = sanitize_screaming_snake_identifier(net_name.as_str(), "NET");
-        let ident = alloc_unique_ident(&ident_base, &mut used_idents);
+        let ident = alloc_unique_ident(&ident_base, "_", &mut used_idents);
 
         let name_base = sanitize_kicad_name_for_zener(net_name.as_str(), "NET");
-        let name = alloc_unique_ident(&name_base, &mut used_net_names);
+        let name = alloc_unique_ident(&name_base, "_", &mut used_net_names);
 
         let kind = net_kinds
             .get(net_name)
@@ -662,8 +740,6 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
     let components = args.components;
     let not_connected_nets = args.not_connected_nets;
     let modules_root = board_dir.join("modules");
-    fs::create_dir_all(&modules_root)
-        .with_context(|| format!("Failed to create {}", modules_root.display()))?;
 
     let mut anchors_by_sheet: BTreeMap<KiCadSheetPath, Vec<KiCadUuidPathKey>> = BTreeMap::new();
     for (anchor, component) in &ir.components {
@@ -875,7 +951,7 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
 
             let module_path = format!("../{child_dir}/{child_dir}.zen");
             let module_ident_base = module_ident_from_component_dir(&child_dir);
-            let module_ident = alloc_unique_ident(&module_ident_base, &mut used_idents);
+            let module_ident = alloc_unique_ident(&module_ident_base, "_", &mut used_idents);
             child_module_decls.insert(module_ident.clone(), module_path);
 
             let child_plan = ir
@@ -913,8 +989,6 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
         }
 
         let module_dir_abs = modules_root.join(&module_dir);
-        fs::create_dir_all(&module_dir_abs)
-            .with_context(|| format!("Failed to create {}", module_dir_abs.display()))?;
         let module_zen = module_dir_abs.join(format!("{module_dir}.zen"));
 
         let module_doc = format!(
@@ -948,8 +1022,7 @@ fn generate_sheet_modules(args: GenerateSheetModulesArgs<'_>) -> Result<Generate
                 &ir.schematic_lib_symbols,
             );
         }
-        crate::codegen::zen::write_zen_formatted(&module_zen, &module_zen_content)
-            .with_context(|| format!("Failed to write {}", module_zen.display()))?;
+        write_zen(&module_zen, &module_zen_content)?;
     }
 
     Ok(GeneratedSheetModules {
@@ -1021,7 +1094,7 @@ fn assign_sheet_instance_names(
                 .unwrap_or_else(|| "sheet".to_string());
 
             let base = sanitize_screaming_snake_identifier(&name, "SHEET");
-            let inst = alloc_unique_ident(&base, &mut used);
+            let inst = alloc_unique_ident(&base, "_", &mut used);
             out.insert(child_path.clone(), inst);
         }
     }
@@ -1107,7 +1180,7 @@ fn build_root_sheet_module_calls(
         let module_path = format!("modules/{child_dir}/{child_dir}.zen");
 
         let module_ident_base = module_ident_from_component_dir(&child_dir);
-        let module_ident = alloc_unique_ident(&module_ident_base, &mut used_idents);
+        let module_ident = alloc_unique_ident(&module_ident_base, "_", &mut used_idents);
         module_decls.insert(module_ident.clone(), module_path);
 
         let child_plan = hierarchy_plan
@@ -1237,8 +1310,10 @@ fn sanitize_screaming_snake_fragment(raw: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ImportPartKey {
     mpn: Option<String>,
+    manufacturer: Option<String>,
     footprint: Option<String>,
     lib_id: Option<KiCadLibId>,
+    lib_name: Option<KiCadLibId>,
     value: Option<String>,
 }
 
@@ -1256,6 +1331,7 @@ struct GeneratedComponents {
     anchor_to_config_args: BTreeMap<KiCadUuidPathKey, BTreeMap<String, String>>,
     module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>>,
     module_skip_defaults: BTreeMap<String, ModuleSkipDefaults>,
+    expected_pins_by_anchor: BTreeMap<KiCadUuidPathKey, BTreeSet<KiCadPinNumber>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1296,20 +1372,46 @@ impl Default for ImportPartFlags {
     }
 }
 
+fn has_standard_promoted_passive_pins(symbol: &pcb_eda::Symbol) -> bool {
+    symbol
+        .canonical_pins()
+        .map(|pin| pin.number.as_str())
+        .collect::<BTreeSet<_>>()
+        == BTreeSet::from(["1", "2"])
+}
+
+struct GenerateImportedComponentsArgs<'a> {
+    board_dir: &'a Path,
+    components: &'a BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    reserved_idents: &'a BTreeSet<String>,
+    schematic_lib_symbols: &'a BTreeMap<KiCadLibId, String>,
+    passive_by_component: &'a BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
+    port_to_net: &'a BTreeMap<ImportNetPort, KiCadNetName>,
+    not_connected_nets: &'a BTreeSet<KiCadNetName>,
+}
+
 fn generate_imported_components(
-    board_dir: &Path,
-    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
-    reserved_idents: &BTreeSet<String>,
-    schematic_lib_symbols: &BTreeMap<KiCadLibId, String>,
-    passive_by_component: &BTreeMap<KiCadUuidPathKey, ImportPassiveClassification>,
+    args: GenerateImportedComponentsArgs<'_>,
 ) -> Result<GeneratedComponents> {
+    let GenerateImportedComponentsArgs {
+        board_dir,
+        components,
+        reserved_idents,
+        schematic_lib_symbols,
+        passive_by_component,
+        port_to_net,
+        not_connected_nets,
+    } = args;
     let components_root = board_dir.join("components");
-    fs::create_dir_all(&components_root).with_context(|| {
-        format!(
-            "Failed to create components output directory {}",
-            components_root.display()
-        )
-    })?;
+
+    let mut endpoint_pins_by_component: BTreeMap<KiCadUuidPathKey, BTreeSet<KiCadPinNumber>> =
+        BTreeMap::new();
+    for port in port_to_net.keys() {
+        endpoint_pins_by_component
+            .entry(port.component.clone())
+            .or_default()
+            .insert(port.pin.clone());
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum PromotedPassiveKind {
@@ -1331,7 +1433,7 @@ fn generate_imported_components(
         if used.insert(underscored.clone()) {
             return underscored;
         }
-        alloc_unique_ident(base, used)
+        alloc_unique_ident(base, "_", used)
     }
 
     fn canonical_dielectric(raw: &str) -> Option<&'static str> {
@@ -1400,8 +1502,15 @@ fn generate_imported_components(
     ) -> Option<PromotedPassive> {
         let class = passive_by_component.get(anchor)?;
 
-        component.layout.as_ref()?;
-        if class.pad_count != Some(2) {
+        let layout = component.layout.as_ref()?;
+        if class.pad_count != Some(2)
+            || layout
+                .pads
+                .keys()
+                .map(KiCadPinNumber::as_str)
+                .collect::<BTreeSet<_>>()
+                != BTreeSet::from(["1", "2"])
+        {
             return None;
         }
         if class.confidence != Some(ImportPassiveConfidence::High) {
@@ -1443,11 +1552,26 @@ fn generate_imported_components(
         Some(PromotedPassive { kind, config_args })
     }
 
-    // Compute promoted-passive candidates per-instance.
+    // Compute promoted-passive candidates per-instance. The stdlib modules hardcode pins 1 and
+    // 2, so verify the schematic symbol before promotion. This check must remain paired with the
+    // missing-endpoint NotConnected() fallback in instance generation; otherwise a custom A/K
+    // passive could be silently disconnected.
     let mut candidate_by_anchor: BTreeMap<KiCadUuidPathKey, PromotedPassive> = BTreeMap::new();
     for (anchor, component) in components {
-        if let Some(p) = promotable_passive_kind(anchor, component, passive_by_component) {
-            candidate_by_anchor.insert(anchor.clone(), p);
+        let Some(candidate) = promotable_passive_kind(anchor, component, passive_by_component)
+        else {
+            continue;
+        };
+        let rendered =
+            render_component_symbol("passive-pin-check", component, schematic_lib_symbols)
+                .with_context(|| {
+                    format!(
+                        "Failed to verify passive pin numbers for {}",
+                        component.netlist.refdes
+                    )
+                })?;
+        if has_standard_promoted_passive_pins(&rendered.symbol) {
+            candidate_by_anchor.insert(anchor.clone(), candidate);
         }
     }
 
@@ -1542,9 +1666,9 @@ fn generate_imported_components(
             continue;
         };
 
-        let manufacturer_dir_candidate = component
-            .best_properties()
-            .and_then(|props| find_property_ci(props, &["manufacturer", "mfr", "mfg"]))
+        let manufacturer_dir_candidate = part_key
+            .manufacturer
+            .as_deref()
             .map(sanitize_component_dir_name);
         if let Some(mfr) = &manufacturer_dir_candidate {
             let key = mfr.to_ascii_lowercase();
@@ -1591,7 +1715,7 @@ fn generate_imported_components(
 
         let mut desired = candidate.component_dir_base.clone();
         if used.contains(&desired.to_ascii_lowercase()) {
-            desired = format!("{desired}__{}", candidate.footprint_name);
+            desired = footprint_qualified_component_dir_name(&desired, &candidate.footprint_name);
         }
         let component_dir = alloc_unique_fs_segment(&desired, used);
 
@@ -1613,11 +1737,17 @@ fn generate_imported_components(
     let mut module_io_pins: BTreeMap<String, BTreeMap<String, BTreeSet<KiCadPinNumber>>> =
         BTreeMap::new();
     let mut module_skip_defaults: BTreeMap<String, ModuleSkipDefaults> = BTreeMap::new();
+    let mut expected_pins_by_anchor = BTreeMap::new();
 
     for (part_key, part_dir) in part_dir_by_key {
         let Some(instances) = part_to_instances.get(&part_key) else {
             continue;
         };
+        // ImportPartKey includes both library and instance-local symbol identities, so instances
+        // in this group are expected to share one embedded symbol definition. Use one
+        // representative for package pin metadata, then audit
+        // every instance's source endpoints against its canonical physical pins below. A real net
+        // on any instance also forces an electrical no_connect pin to remain externally exposed.
         let Some(component) = instances
             .iter()
             .filter_map(|a| components.get(a))
@@ -1646,42 +1776,72 @@ fn generate_imported_components(
         let footprint = render_component_footprint(component)
             .with_context(|| format!("Failed to render footprint for {}", out_dir.display()))?;
 
-        // Patch the symbol's Footprint property to the local footprint stem so
-        // that `Component()` can infer it during build.
-        let fp_stem = footprint
-            .filename
-            .strip_suffix(".kicad_mod")
-            .unwrap_or(&footprint.filename);
-        symbol.library_text = patch_symbol_footprint_property(&symbol.library_text, fp_stem)
-            .with_context(|| {
-                format!("Failed to patch symbol Footprint for {}", out_dir.display())
-            })?;
+        // File-backed and board-instance geometry uses a colocated footprint stem;
+        // bundled stdlib geometry keeps its resolvable KiCad `<lib>:<footprint>` ID.
+        symbol.library_text =
+            patch_symbol_footprint_property(&symbol.library_text, &footprint.symbol_property)
+                .with_context(|| {
+                    format!("Failed to patch symbol Footprint for {}", out_dir.display())
+                })?;
 
+        let pin_plan = build_physical_pin_plan(
+            &symbol.symbol,
+            instances,
+            components,
+            port_to_net,
+            not_connected_nets,
+            &endpoint_pins_by_component,
+        )
+        .with_context(|| {
+            format!(
+                "Failed to preserve physical pin connectivity for {}",
+                out_dir.display()
+            )
+        })?;
+        let ident_base = module_ident_from_component_dir(&part_dir.component_dir);
+        let ident = alloc_unique_ident(&ident_base, "_", &mut used_module_idents);
+        let expected_pins = pin_plan
+            .bindings
+            .iter()
+            .map(|binding| binding.pad_number.clone())
+            .collect::<BTreeSet<_>>();
+        for anchor in instances {
+            if expected_pins_by_anchor
+                .insert(anchor.clone(), expected_pins.clone())
+                .is_some()
+            {
+                anyhow::bail!(
+                    "Duplicate expected physical-pin mapping for {}",
+                    anchor.pcb_path()
+                );
+            }
+        }
+
+        let unresolved_footprint = component.layout.as_ref().and_then(|layout| {
+            layout.unresolved_footprint.as_ref().map(|unresolved| {
+                // Component() requires a footprint string even when the KiCad symbol has no
+                // footprint assignment. Preserve KiCad's unset marker without inventing geometry.
+                unresolved.source_id.as_deref().unwrap_or("~")
+            })
+        });
         let zen = render_component_zen(
             &part_dir.component_dir,
             &symbol.symbol,
             &symbol.filename,
             flags,
+            &pin_plan,
+            unresolved_footprint,
         )
         .with_context(|| format!("Failed to render .zen for {}", out_dir.display()))?;
 
-        fs::create_dir_all(&out_dir)
-            .with_context(|| format!("Failed to create {}", out_dir.display()))?;
-
         let sym_path = out_dir.join(&symbol.filename);
-        fs::write(&sym_path, &symbol.library_text)
-            .with_context(|| format!("Failed to write {}", sym_path.display()))?;
-
-        let fp_path = out_dir.join(&footprint.filename);
-        fs::write(&fp_path, &footprint.mod_text)
-            .with_context(|| format!("Failed to write {}", fp_path.display()))?;
-
+        write_file(&sym_path, symbol.library_text.as_bytes())?;
+        if let Some((filename, mod_text)) = &footprint.local_file {
+            let fp_path = out_dir.join(filename);
+            write_file(&fp_path, mod_text.as_bytes())?;
+        }
         let zen_path = out_dir.join(&zen.filename);
-        crate::codegen::zen::write_zen_formatted(&zen_path, &zen.zen_text)
-            .with_context(|| format!("Failed to write {}", zen_path.display()))?;
-
-        let ident_base = module_ident_from_component_dir(&part_dir.component_dir);
-        let ident = alloc_unique_ident(&ident_base, &mut used_module_idents);
+        write_zen(&zen_path, &zen.zen_text)?;
 
         let module_path = match &part_dir.manufacturer_dir {
             Some(mfr) => format!(
@@ -1693,12 +1853,19 @@ fn generate_imported_components(
                 name = part_dir.component_dir
             ),
         };
+        let io_pins = pin_plan
+            .io_pins
+            .iter()
+            .map(|(io, pin)| (io.clone(), BTreeSet::from([pin.clone()])))
+            .collect();
+        let skip_defaults = ModuleSkipDefaults::from(flags);
+        let component_name = component_gen::sanitize_mpn_for_path(&part_dir.component_dir);
 
-        if module_io_pins.insert(ident.clone(), zen.io_pins).is_some() {
+        if module_io_pins.insert(ident.clone(), io_pins).is_some() {
             anyhow::bail!("Duplicate module IO mapping for {ident}");
         }
         if module_skip_defaults
-            .insert(ident.clone(), ModuleSkipDefaults::from(flags))
+            .insert(ident.clone(), skip_defaults)
             .is_some()
         {
             anyhow::bail!("Duplicate module skip defaults for {ident}");
@@ -1714,11 +1881,8 @@ fn generate_imported_components(
                     anchor.pcb_path()
                 );
             }
-            // Component name inside the module uses the same sanitizer as the directory name
-            // generation and should be stable across runs.
-            let component_name = component_gen::sanitize_mpn_for_path(&part_dir.component_dir);
             if anchor_to_component_name
-                .insert(anchor.clone(), component_name)
+                .insert(anchor.clone(), component_name.clone())
                 .is_some()
             {
                 anyhow::bail!(
@@ -1847,6 +2011,13 @@ fn generate_imported_components(
                 anchor.pcb_path()
             );
         }
+        expected_pins_by_anchor.insert(
+            anchor.clone(),
+            BTreeSet::from([
+                KiCadPinNumber::from("1".to_string()),
+                KiCadPinNumber::from("2".to_string()),
+            ]),
+        );
         anchor_to_config_args.insert(anchor, passive.config_args);
     }
 
@@ -1857,6 +2028,7 @@ fn generate_imported_components(
         anchor_to_config_args,
         module_io_pins,
         module_skip_defaults,
+        expected_pins_by_anchor,
     })
 }
 
@@ -1871,22 +2043,50 @@ fn module_ident_from_component_dir(dir_name: &str) -> String {
     frag
 }
 
+fn explicit_sourcing_property<'a>(
+    component: &'a ImportComponentData,
+    aliases: &[&str],
+) -> Option<&'a str> {
+    component
+        .best_properties()
+        .and_then(|properties| find_property_ci(properties, aliases))
+}
+
+fn explicit_mpn(component: &ImportComponentData) -> Option<&str> {
+    explicit_sourcing_property(
+        component,
+        &[
+            "mpn",
+            "manufacturer_part_number",
+            "manufacturer part number",
+            "mfr part number",
+            "manufacturer_pn",
+            "part number",
+            "mp",
+            "snapeda_pn",
+        ],
+    )
+}
+
+fn explicit_manufacturer(component: &ImportComponentData) -> Option<&str> {
+    explicit_sourcing_property(
+        component,
+        &[
+            "manufacturer",
+            "manufacturer_name",
+            "manufacturer name",
+            "mfr",
+            "mfr_name",
+            "mfg",
+        ],
+    )
+}
+
 fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
     let props = component.best_properties();
 
-    let mpn = props
-        .and_then(|p| {
-            find_property_ci(
-                p,
-                &[
-                    "mpn",
-                    "manufacturer_part_number",
-                    "manufacturer part number",
-                ],
-            )
-            .or_else(|| find_property_ci(p, &["mfr part number", "manufacturer_pn", "part number"]))
-        })
-        .map(|s| s.to_string());
+    let mpn = explicit_mpn(component).map(str::to_string);
+    let manufacturer = explicit_manufacturer(component).map(str::to_string);
 
     let footprint = component
         .netlist
@@ -1898,6 +2098,13 @@ fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
         .schematic
         .as_ref()
         .and_then(|s| s.units.values().find_map(|u| u.lib_id.clone()));
+    let lib_name = component.schematic.as_ref().and_then(|schematic| {
+        schematic.units.values().find_map(|unit| {
+            unit.lib_name
+                .as_ref()
+                .map(|name| KiCadLibId::from(name.clone()))
+        })
+    });
 
     let value = component
         .netlist
@@ -1908,8 +2115,10 @@ fn derive_part_key(component: &ImportComponentData) -> ImportPartKey {
 
     ImportPartKey {
         mpn,
+        manufacturer,
         footprint,
         lib_id,
+        lib_name,
         value,
     }
 }
@@ -1923,7 +2132,28 @@ fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -
     sanitize_component_dir_name(raw)
 }
 
-fn sanitize_component_dir_name(raw: &str) -> String {
+/// Disambiguate two parts that share a component directory name by appending their footprint.
+///
+/// The result must remain a valid sanitized component name, because it becomes the directory name,
+/// the generated `.zen` filename, and the `Component(name=...)` value.
+fn footprint_qualified_component_dir_name(base: &str, footprint_name: &str) -> String {
+    let mut base = base.to_string();
+    let mut footprint_name = sanitize_component_dir_name(footprint_name);
+    let mut excess = base
+        .len()
+        .saturating_add(2)
+        .saturating_add(footprint_name.len())
+        .saturating_sub(100);
+    if excess > 0 {
+        let remove_from_base = excess.min(base.len().saturating_sub(1));
+        base.truncate(base.len() - remove_from_base);
+        excess -= remove_from_base;
+        footprint_name.truncate(footprint_name.len() - excess);
+    }
+    format!("{base}__{footprint_name}")
+}
+
+pub(super) fn sanitize_component_dir_name(raw: &str) -> String {
     // Reuse the strict, shared sanitizer used by `pcb search` component generation.
     // This keeps import outputs consistent and ensures names are compatible with
     // Zener `Component(name=...)` validation rules.
@@ -2008,8 +2238,8 @@ fn patch_symbol_footprint_property(library_text: &str, footprint_stem: &str) -> 
 
 #[derive(Debug, Clone)]
 struct RenderedComponentFootprint {
-    filename: String,
-    mod_text: String,
+    symbol_property: String,
+    local_file: Option<(String, String)>,
 }
 
 fn render_component_footprint(
@@ -2017,38 +2247,347 @@ fn render_component_footprint(
 ) -> Result<RenderedComponentFootprint> {
     let Some(layout) = &component.layout else {
         anyhow::bail!(
-            "Missing layout footprint for {}",
+            "Missing resolved footprint for {}",
             component.netlist.refdes.as_str()
         );
     };
+
+    if matches!(
+        &layout.footprint_geometry,
+        ImportFootprintGeometry::Unresolved
+    ) {
+        return Ok(RenderedComponentFootprint {
+            // Remove the unresolved KiCad library reference from the copied symbol so the
+            // generated Zener remains portable and evaluable without inventing geometry.
+            symbol_property: String::new(),
+            local_file: None,
+        });
+    }
 
     let fpid = layout
         .fpid
         .as_deref()
         .or(component.netlist.footprint.as_deref())
-        .unwrap_or("footprint");
+        .context("Resolved footprint is missing its KiCad footprint ID")?;
+
+    if matches!(
+        &layout.footprint_geometry,
+        ImportFootprintGeometry::StandardLibrary
+    ) {
+        return Ok(RenderedComponentFootprint {
+            symbol_property: fpid.to_string(),
+            local_file: None,
+        });
+    }
+
     let fp_name = sanitize_component_dir_name(&sexpr_board::footprint_name_from_fpid(fpid));
     let filename = format!("{fp_name}.kicad_mod");
+    let mod_text = match &layout.footprint_geometry {
+        ImportFootprintGeometry::BoardInstance(sexpr) => {
+            sexpr_board::transform_board_instance_footprint_to_standalone(sexpr)
+                .map_err(|e| anyhow::anyhow!(e))
+                .with_context(|| {
+                    format!(
+                        "Failed to transform footprint {} for {}",
+                        fpid,
+                        component.netlist.refdes.as_str()
+                    )
+                })?
+        }
+        ImportFootprintGeometry::LibraryFile(sexpr) => sexpr.clone(),
+        ImportFootprintGeometry::StandardLibrary | ImportFootprintGeometry::Unresolved => {
+            unreachable!()
+        }
+    };
 
-    let mod_text =
-        sexpr_board::transform_board_instance_footprint_to_standalone(&layout.footprint_sexpr)
-            .map_err(|e| anyhow::anyhow!(e))
-            .with_context(|| {
+    Ok(RenderedComponentFootprint {
+        symbol_property: fp_name,
+        local_file: Some((filename, mod_text)),
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImportComponentPinBinding {
+    logical_name: String,
+    pad_number: KiCadPinNumber,
+    io_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PhysicalPinPlan {
+    bindings: Vec<ImportComponentPinBinding>,
+    io_pins: BTreeMap<String, KiCadPinNumber>,
+}
+
+fn sanitize_pin_number_suffix(raw: &str) -> String {
+    let mut out = String::new();
+    let mut previous_underscore = false;
+    for c in raw.trim().chars() {
+        let mapped = if c.is_ascii_alphanumeric() {
+            c.to_ascii_uppercase()
+        } else {
+            '_'
+        };
+        if mapped == '_' {
+            if previous_underscore {
+                continue;
+            }
+            previous_underscore = true;
+        } else {
+            previous_underscore = false;
+        }
+        out.push(mapped);
+    }
+    let out = out.trim_matches('_');
+    if out.is_empty() {
+        "PIN".to_string()
+    } else {
+        out.to_string()
+    }
+}
+
+fn component_port_keys(
+    anchor: &KiCadUuidPathKey,
+    component: &ImportComponentData,
+) -> BTreeSet<KiCadUuidPathKey> {
+    std::iter::once(anchor.clone())
+        .chain(component.netlist.unit_pcb_paths.iter().cloned())
+        .collect()
+}
+
+pub(super) fn resolve_instance_pin_net(
+    anchor: &KiCadUuidPathKey,
+    component: &ImportComponentData,
+    pin: &KiCadPinNumber,
+    port_to_net: &BTreeMap<ImportNetPort, KiCadNetName>,
+) -> Result<Option<KiCadNetName>> {
+    let mut nets = BTreeSet::new();
+    for key in component_port_keys(anchor, component) {
+        let port = ImportNetPort {
+            component: key,
+            pin: pin.clone(),
+        };
+        if let Some(net) = port_to_net.get(&port) {
+            nets.insert(net.clone());
+        }
+    }
+    if nets.len() > 1 {
+        anyhow::bail!(
+            "KiCad component {} pin {} resolves to multiple nets: {}",
+            component.netlist.refdes,
+            pin,
+            nets.iter()
+                .map(KiCadNetName::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(nets.into_iter().next())
+}
+
+fn build_physical_pin_plan(
+    symbol: &pcb_eda::Symbol,
+    instances: &[KiCadUuidPathKey],
+    components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+    port_to_net: &BTreeMap<ImportNetPort, KiCadNetName>,
+    not_connected_nets: &BTreeSet<KiCadNetName>,
+    endpoint_pins_by_component: &BTreeMap<KiCadUuidPathKey, BTreeSet<KiCadPinNumber>>,
+) -> Result<PhysicalPinPlan> {
+    #[derive(Debug)]
+    struct PinInfo {
+        number: KiCadPinNumber,
+        raw_name: String,
+        exposed: bool,
+    }
+
+    let mut physical_pins: BTreeMap<KiCadPinNumber, Vec<&pcb_eda::Pin>> = BTreeMap::new();
+    for pin in &symbol.pins {
+        physical_pins
+            .entry(KiCadPinNumber::from(pin.number.clone()))
+            .or_default()
+            .push(pin);
+    }
+
+    let mut canonical_pins: Vec<&pcb_eda::Pin> = symbol.canonical_pins().collect();
+    canonical_pins.sort_by(|left, right| {
+        left.number
+            .cmp(&right.number)
+            .then_with(|| left.signal_name().cmp(right.signal_name()))
+    });
+
+    let mut raw_name_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for pin in &canonical_pins {
+        *raw_name_counts
+            .entry(pin.signal_name().to_string())
+            .or_default() += 1;
+    }
+
+    let mut pins = Vec::with_capacity(canonical_pins.len());
+    for pin in canonical_pins {
+        let number = KiCadPinNumber::from(pin.number.clone());
+        let only_no_connect = physical_pins
+            .get(&number)
+            .is_some_and(|pins| component_gen::pins_are_only_no_connect(pins.iter().copied()));
+        let mut has_real_connection = false;
+        for anchor in instances {
+            let component = components.get(anchor).with_context(|| {
                 format!(
-                    "Failed to transform footprint {} for {}",
-                    fpid,
-                    component.netlist.refdes.as_str()
+                    "Missing component instance {} while planning pins",
+                    anchor.pcb_path()
                 )
             })?;
+            if let Some(net) = resolve_instance_pin_net(anchor, component, &number, port_to_net)?
+                && !not_connected_nets.contains(&net)
+            {
+                has_real_connection = true;
+            }
+        }
+        pins.push(PinInfo {
+            number,
+            raw_name: pin.signal_name().to_string(),
+            exposed: !only_no_connect || has_real_connection,
+        });
+    }
 
-    Ok(RenderedComponentFootprint { filename, mod_text })
+    // Reserve names originating from unique KiCad signal names before allocating names derived
+    // from duplicate signals. This keeps a generated suffix from stealing a real source name.
+    let mut used_logical_names: BTreeSet<String> = raw_name_counts
+        .iter()
+        .filter(|(_, count)| **count == 1)
+        .map(|(name, _)| name.clone())
+        .collect();
+    let mut logical_names: BTreeMap<KiCadPinNumber, String> = BTreeMap::new();
+    for pin in &pins {
+        let logical_name = if raw_name_counts.get(&pin.raw_name) == Some(&1) {
+            pin.raw_name.clone()
+        } else {
+            alloc_unique_ident(
+                &format!("{}__{}", pin.raw_name, pin.number.as_str()),
+                "__",
+                &mut used_logical_names,
+            )
+        };
+        logical_names.insert(pin.number.clone(), logical_name);
+    }
+
+    // Allocate unique-pin IO names first, then duplicate-derived names in the same shared
+    // namespace. The pin-number suffix deliberately has no leading-digit guard: it follows an
+    // already-valid identifier, so D+ pin 3 becomes D_POS_3 rather than D_POS_P3.
+    let mut used_io_names = BTreeSet::new();
+    let mut io_names: BTreeMap<KiCadPinNumber, String> = BTreeMap::new();
+    for duplicate_group in [false, true] {
+        for pin in &pins {
+            if !pin.exposed {
+                continue;
+            }
+            let is_duplicate = raw_name_counts.get(&pin.raw_name).copied().unwrap_or(0) > 1;
+            if is_duplicate != duplicate_group {
+                continue;
+            }
+            let mut base = component_gen::sanitize_pin_name(&pin.raw_name);
+            if base.is_empty() {
+                base = "PIN".to_string();
+            }
+            if is_duplicate {
+                base.push('_');
+                base.push_str(&sanitize_pin_number_suffix(pin.number.as_str()));
+            }
+            io_names.insert(
+                pin.number.clone(),
+                alloc_unique_ident(&base, "_", &mut used_io_names),
+            );
+        }
+    }
+
+    let mut bindings = Vec::with_capacity(pins.len());
+    let mut io_pins = BTreeMap::new();
+    let mut all_pins = BTreeSet::new();
+    for pin in pins {
+        anyhow::ensure!(
+            all_pins.insert(pin.number.clone()),
+            "Duplicate canonical physical pin {}",
+            pin.number
+        );
+        let io_name = io_names.get(&pin.number).cloned();
+        if let Some(io_name) = &io_name {
+            anyhow::ensure!(
+                io_pins
+                    .insert(io_name.clone(), pin.number.clone())
+                    .is_none(),
+                "Duplicate generated IO name {io_name}"
+            );
+        }
+        let logical_name = logical_names
+            .remove(&pin.number)
+            .context("Missing generated logical pin name")?;
+        bindings.push(ImportComponentPinBinding {
+            logical_name,
+            pad_number: pin.number,
+            io_name,
+        });
+    }
+
+    // Every source endpoint for every instance in the package must refer to a physical pin in
+    // the representative symbol. This catches unit or library divergence before files are written.
+    for anchor in instances {
+        let component = components.get(anchor).with_context(|| {
+            format!(
+                "Missing component instance {} while auditing pins",
+                anchor.pcb_path()
+            )
+        })?;
+        for key in component_port_keys(anchor, component) {
+            let Some(endpoint_pins) = endpoint_pins_by_component.get(&key) else {
+                continue;
+            };
+            for pin in endpoint_pins {
+                if !all_pins.contains(pin) {
+                    anyhow::bail!(
+                        "KiCad component {} has netlist endpoint on pin {}, but its embedded symbol does not define that pin",
+                        component.netlist.refdes,
+                        pin
+                    );
+                }
+            }
+        }
+
+        if let Some(layout) = component.layout.as_ref()
+            && !matches!(
+                layout.footprint_geometry,
+                ImportFootprintGeometry::Unresolved
+            )
+        {
+            let footprint_pins = layout
+                .pads
+                .keys()
+                .filter(|pin| !pin.as_str().is_empty())
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let missing_pins = all_pins
+                .difference(&footprint_pins)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            if !missing_pins.is_empty() {
+                anyhow::bail!(
+                    "KiCad component {} footprint {} is missing numbered pads {:?} required by symbol physical pins {:?}",
+                    component.netlist.refdes,
+                    layout.fpid.as_deref().unwrap_or("<unknown>"),
+                    missing_pins,
+                    all_pins
+                );
+            }
+        }
+    }
+
+    Ok(PhysicalPinPlan { bindings, io_pins })
 }
 
 #[derive(Debug, Clone)]
+/// The rendered component package files. The IO-name-to-pad mapping is *not* here: the caller owns
+/// the [`PhysicalPinPlan`] that decided it, and rendering only consumes that decision.
 struct RenderedComponentZen {
     filename: String,
     zen_text: String,
-    io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>>,
 }
 
 fn render_component_zen(
@@ -2056,23 +2595,20 @@ fn render_component_zen(
     symbol: &pcb_eda::Symbol,
     symbol_filename: &str,
     flags: ImportPartFlags,
+    pin_plan: &PhysicalPinPlan,
+    unresolved_footprint: Option<&str>,
 ) -> Result<RenderedComponentZen> {
-    let generated_io_names = component_gen::generated_signal_io_names(symbol);
-    let mut io_pins: BTreeMap<String, BTreeSet<KiCadPinNumber>> = BTreeMap::new();
-    for pin in symbol.canonical_pins() {
-        let signal_name = pin.signal_name().to_string();
-        let Some(io_name) = generated_io_names.get(&signal_name) else {
-            continue;
-        };
-        let pin_number = KiCadPinNumber::from(pin.number.clone());
-        io_pins
-            .entry(io_name.clone())
-            .or_default()
-            .insert(pin_number);
-    }
-
-    let zen_content =
-        component_gen::generate_component_zen(component_gen::GenerateComponentZenArgs {
+    let pins = pin_plan
+        .bindings
+        .iter()
+        .map(|binding| component_gen::GenerateComponentPin {
+            logical_name: binding.logical_name.clone(),
+            pad_number: binding.pad_number.as_str().to_string(),
+            io_name: binding.io_name.clone(),
+        })
+        .collect::<Vec<_>>();
+    let zen_text = component_gen::generate_component_zen_with_pins(
+        component_gen::GenerateComponentZenArgs {
             component_name,
             symbol,
             symbol_filename,
@@ -2081,13 +2617,15 @@ fn render_component_zen(
             include_skip_pos: flags.any_skip_pos,
             skip_bom_default: flags.all_skip_bom,
             skip_pos_default: flags.all_skip_pos,
-        })
-        .context("Failed to generate component .zen")?;
+        },
+        &pins,
+        unresolved_footprint,
+    )
+    .context("Failed to generate component .zen")?;
 
     Ok(RenderedComponentZen {
         filename: format!("{component_name}.zen"),
-        zen_text: zen_content,
-        io_pins,
+        zen_text,
     })
 }
 
@@ -2135,62 +2673,34 @@ fn build_imported_instance_calls_for_instances(
             };
         let mut io_nets: BTreeMap<String, String> = BTreeMap::new();
 
-        for (io_name, pin_numbers) in io_pins {
-            let mut connected: BTreeSet<KiCadNetName> = BTreeSet::new();
-            for pin in pin_numbers {
-                for key in &component.netlist.unit_pcb_paths {
-                    let port = ImportNetPort {
-                        component: key.clone(),
-                        pin: pin.clone(),
-                    };
-                    if let Some(net_name) = port_to_net.get(&port) {
-                        connected.insert(net_name.clone());
-                        break;
-                    }
-                }
-            }
-
-            let net_ident = if connected.is_empty() {
+        for (io_name, pins) in io_pins {
+            let resolved = pins
+                .iter()
+                .map(|pin| resolve_instance_pin_net(anchor, component, pin, port_to_net))
+                .collect::<Result<Vec<_>>>()?;
+            let connected_nets = resolved.iter().flatten().cloned().collect::<BTreeSet<_>>();
+            if connected_nets.len() > 1
+                || (pins.len() > 1
+                    && !connected_nets.is_empty()
+                    && resolved.iter().any(Option::is_none))
+            {
                 anyhow::bail!(
-                    "Missing KiCad connectivity for component {} IO {} (pins {}). This is likely an import bug.",
-                    refdes,
-                    io_name,
-                    pin_numbers
-                        .iter()
-                        .map(|p| p.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "Generated component IO {io_name} groups physical pins with different KiCad connectivity on {}",
+                    component.netlist.refdes.as_str()
                 );
-            } else {
-                let chosen = connected
-                    .iter()
-                    .find(|n| !not_connected_nets.contains(*n))
-                    .unwrap_or_else(|| connected.iter().next().unwrap());
-                if connected.len() > 1 {
-                    debug!(
-                        "Component {} IO {} spans multiple KiCad nets ({}); using {}",
-                        refdes,
-                        io_name,
-                        connected
-                            .iter()
-                            .map(|n| n.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        chosen.as_str()
-                    );
-                }
-                if not_connected_nets.contains(chosen) {
-                    "NotConnected()".to_string()
-                } else {
-                    net_ident_by_kicad_name
-                        .get(chosen)
-                        .cloned()
-                        .with_context(|| {
-                            format!("Missing net identifier for KiCad net {}", chosen.as_str())
-                        })?
-                }
+            }
+            let connected = connected_nets.into_iter().next();
+            let net_ident = match connected {
+                Some(net) if !not_connected_nets.contains(&net) => net_ident_by_kicad_name
+                    .get(&net)
+                    .cloned()
+                    .with_context(|| {
+                        format!("Missing net identifier for KiCad net {}", net.as_str())
+                    })?,
+                // KiCad omits pins from unplaced symbol units. They still exist on the physical
+                // package and must remain independent open terminals in generated Zener.
+                Some(_) | None => "NotConnected()".to_string(),
             };
-
             io_nets.insert(io_name.clone(), net_ident);
         }
 
@@ -2225,7 +2735,7 @@ fn build_refdes_instance_name_map(
 
     for refdes in refdeses {
         let base = sanitize_kicad_name_for_zener(refdes.as_str(), "REF");
-        let name = alloc_unique_ident(&base, &mut used);
+        let name = alloc_unique_ident(&base, "_", &mut used);
         out.insert(refdes, name);
     }
 
@@ -2255,17 +2765,22 @@ fn derive_import_instance_flags(component: &ImportComponentData) -> (bool, bool,
     (dnp, skip_bom, skip_pos)
 }
 
-fn alloc_unique_ident(base: &str, used: &mut BTreeSet<String>) -> String {
+/// `base` if it is unused, otherwise `base` with `separator` and the lowest free ordinal appended.
+///
+/// `separator` distinguishes the two namespaces this allocates in: Zener identifiers disambiguate
+/// with `_`, while logical signal names use `__` so a suffix cannot collide with a pin name that
+/// already contains an underscore.
+fn alloc_unique_ident(base: &str, separator: &str, used: &mut BTreeSet<String>) -> String {
     if used.insert(base.to_string()) {
         return base.to_string();
     }
-    let mut n: usize = 2;
+    let mut ordinal = 2usize;
     loop {
-        let candidate = format!("{base}_{n}");
+        let candidate = format!("{base}{separator}{ordinal}");
         if used.insert(candidate.clone()) {
             return candidate;
         }
-        n += 1;
+        ordinal += 1;
     }
 }
 
@@ -2291,6 +2806,37 @@ mod tests {
     use super::schematic_types::{ImportSchematicPositionComment, ImportSchematicTargetKind};
     use super::*;
     use std::path::PathBuf;
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_file_replaces_symlink_without_writing_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let target = temp.path().join("user-file");
+        let generated = temp.path().join("generated.kicad_sym");
+        fs::write(&target, "user content").expect("write user file");
+        symlink(&target, &generated).expect("create generated-file symlink");
+
+        write_file(&generated, b"generated content").expect("write generated file");
+
+        assert_eq!(fs::read_to_string(target).unwrap(), "user content");
+        assert_eq!(fs::read_to_string(&generated).unwrap(), "generated content");
+        assert!(
+            !fs::symlink_metadata(generated)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[test]
+    fn footprint_qualifier_preserves_its_separator() {
+        assert_eq!(
+            footprint_qualified_component_dir_name("Part", "SO 8"),
+            "Part__SO_8"
+        );
+    }
 
     fn make_anchor(symbol_uuid: &str) -> KiCadUuidPathKey {
         KiCadUuidPathKey {
@@ -2333,6 +2879,15 @@ mod tests {
         }
     }
 
+    fn make_pin(name: &str, number: &str, electrical_type: Option<&str>) -> pcb_eda::Pin {
+        pcb_eda::Pin {
+            name: name.to_string(),
+            number: number.to_string(),
+            electrical_type: electrical_type.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
     fn make_generated_components(
         anchor_to_component_name: BTreeMap<KiCadUuidPathKey, String>,
     ) -> GeneratedComponents {
@@ -2343,7 +2898,355 @@ mod tests {
             anchor_to_config_args: BTreeMap::new(),
             module_io_pins: BTreeMap::new(),
             module_skip_defaults: BTreeMap::new(),
+            expected_pins_by_anchor: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn physical_pin_plan_keeps_duplicate_display_names_independent() {
+        let symbol = pcb_eda::Symbol {
+            pins: vec![
+                make_pin("D+", "3", Some("bidirectional")),
+                make_pin("D+", "4", Some("bidirectional")),
+                make_pin("D_POS_3", "5", Some("input")),
+                make_pin("A+B", "6", Some("input")),
+                make_pin("A-B", "7", Some("input")),
+                make_pin("NC", "10", Some("no_connect")),
+                make_pin("NC", "11", Some("no_connect")),
+            ],
+            ..Default::default()
+        };
+
+        let plan = build_physical_pin_plan(
+            &symbol,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let by_pad: BTreeMap<_, _> = plan
+            .bindings
+            .iter()
+            .map(|binding| (binding.pad_number.as_str(), binding))
+            .collect();
+
+        assert_eq!(by_pad["3"].logical_name, "D+__3");
+        assert_eq!(by_pad["4"].logical_name, "D+__4");
+        assert_eq!(by_pad["3"].io_name.as_deref(), Some("D_POS_3_2"));
+        assert_eq!(by_pad["4"].io_name.as_deref(), Some("D_POS_4"));
+        assert_eq!(by_pad["5"].io_name.as_deref(), Some("D_POS_3"));
+        assert_eq!(by_pad["6"].io_name.as_deref(), Some("A_B"));
+        assert_eq!(by_pad["7"].io_name.as_deref(), Some("A_B_2"));
+        assert_eq!(by_pad["10"].logical_name, "NC__10");
+        assert_eq!(by_pad["11"].logical_name, "NC__11");
+        assert_eq!(by_pad["10"].io_name, None);
+        assert_eq!(by_pad["11"].io_name, None);
+    }
+    #[test]
+    fn connected_electrical_no_connect_pin_is_exposed() {
+        let anchor = make_anchor("u1");
+        let component = make_component("U1", BTreeMap::new());
+        let components = BTreeMap::from([(anchor.clone(), component)]);
+        let port_to_net = BTreeMap::from([(
+            ImportNetPort {
+                component: anchor.clone(),
+                pin: KiCadPinNumber::from("10".to_string()),
+            },
+            KiCadNetName::from("REAL".to_string()),
+        )]);
+        let symbol = pcb_eda::Symbol {
+            pins: vec![make_pin("NC", "10", Some("no_connect"))],
+            ..Default::default()
+        };
+
+        let endpoint_pins = BTreeMap::from([(
+            anchor.clone(),
+            BTreeSet::from([KiCadPinNumber::from("10".to_string())]),
+        )]);
+        let plan = build_physical_pin_plan(
+            &symbol,
+            std::slice::from_ref(&anchor),
+            &components,
+            &port_to_net,
+            &BTreeSet::new(),
+            &endpoint_pins,
+        )
+        .unwrap();
+        assert_eq!(plan.bindings[0].io_name.as_deref(), Some("NC"));
+        assert_eq!(plan.io_pins["NC"].as_str(), "10");
+    }
+
+    #[test]
+    fn imported_instance_maps_each_physical_pin_and_leaves_absent_pins_open() {
+        let anchor = make_anchor("u1");
+        let mut component = make_component("U1", BTreeMap::new());
+        component.netlist.unit_pcb_paths = vec![anchor.clone()];
+        let components = BTreeMap::from([(anchor.clone(), component)]);
+        let port_to_net = BTreeMap::from([
+            (
+                ImportNetPort {
+                    component: anchor.clone(),
+                    pin: KiCadPinNumber::from("3".to_string()),
+                },
+                KiCadNetName::from("A".to_string()),
+            ),
+            (
+                ImportNetPort {
+                    component: anchor.clone(),
+                    pin: KiCadPinNumber::from("4".to_string()),
+                },
+                KiCadNetName::from("A".to_string()),
+            ),
+        ]);
+        let symbol = pcb_eda::Symbol {
+            pins: vec![
+                make_pin("D+", "3", Some("bidirectional")),
+                make_pin("D+", "4", Some("bidirectional")),
+                make_pin("UNPLACED", "5", Some("input")),
+            ],
+            ..Default::default()
+        };
+        let plan = build_physical_pin_plan(
+            &symbol,
+            std::slice::from_ref(&anchor),
+            &components,
+            &port_to_net,
+            &BTreeSet::new(),
+            &BTreeMap::from([(
+                anchor.clone(),
+                BTreeSet::from([
+                    KiCadPinNumber::from("3".to_string()),
+                    KiCadPinNumber::from("4".to_string()),
+                ]),
+            )]),
+        )
+        .unwrap();
+        let mut generated = make_generated_components(BTreeMap::new());
+        generated
+            .anchor_to_module_ident
+            .insert(anchor.clone(), "DEVICE".to_string());
+        generated.module_io_pins.insert(
+            "DEVICE".to_string(),
+            plan.io_pins
+                .into_iter()
+                .map(|(io, pin)| (io, BTreeSet::from([pin])))
+                .collect(),
+        );
+        generated.module_skip_defaults.insert(
+            "DEVICE".to_string(),
+            ModuleSkipDefaults::from(ImportPartFlags::default()),
+        );
+        let refs = BTreeMap::from([(KiCadRefDes::from("U1".to_string()), "U1".to_string())]);
+        let net_idents =
+            BTreeMap::from([(KiCadNetName::from("A".to_string()), "NET_A".to_string())]);
+
+        let calls = build_imported_instance_calls_for_instances(
+            vec![(&anchor, &components[&anchor])],
+            &port_to_net,
+            &refs,
+            &net_idents,
+            &generated,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].io_nets["D_POS_3"], "NET_A");
+        assert_eq!(calls[0].io_nets["D_POS_4"], "NET_A");
+        assert_eq!(calls[0].io_nets["UNPLACED"], "NotConnected()");
+    }
+
+    #[test]
+    fn source_endpoint_missing_from_symbol_is_an_error() {
+        let anchor = make_anchor("u1");
+        let component = make_component("U1", BTreeMap::new());
+        let components = BTreeMap::from([(anchor.clone(), component)]);
+        let port_to_net = BTreeMap::from([(
+            ImportNetPort {
+                component: anchor.clone(),
+                pin: KiCadPinNumber::from("9".to_string()),
+            },
+            KiCadNetName::from("A".to_string()),
+        )]);
+        let symbol = pcb_eda::Symbol {
+            pins: vec![make_pin("IN", "1", Some("input"))],
+            ..Default::default()
+        };
+        let endpoint_pins = BTreeMap::from([(
+            anchor.clone(),
+            BTreeSet::from([KiCadPinNumber::from("9".to_string())]),
+        )]);
+        let error = build_physical_pin_plan(
+            &symbol,
+            std::slice::from_ref(&anchor),
+            &components,
+            &port_to_net,
+            &BTreeSet::new(),
+            &endpoint_pins,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("does not define that pin"));
+    }
+
+    #[test]
+    fn resolved_footprint_must_contain_symbol_physical_pins() {
+        let anchor = make_anchor("u1");
+        let mut component = make_component("U1", BTreeMap::new());
+        component.layout = Some(ImportLayoutComponent {
+            fpid: Some("Local:OnePad".to_string()),
+            unresolved_footprint: None,
+            uuid: None,
+            layer: None,
+            at: None,
+            sheetname: None,
+            sheetfile: None,
+            attrs: Vec::new(),
+            properties: BTreeMap::new(),
+            pads: BTreeMap::from([
+                (
+                    KiCadPinNumber::from(String::new()),
+                    ImportLayoutPad {
+                        net_names: BTreeSet::new(),
+                        uuids: BTreeSet::new(),
+                    },
+                ),
+                (
+                    KiCadPinNumber::from("1".to_string()),
+                    ImportLayoutPad {
+                        net_names: BTreeSet::new(),
+                        uuids: BTreeSet::new(),
+                    },
+                ),
+            ]),
+            footprint_geometry: ImportFootprintGeometry::LibraryFile("(footprint)".to_string()),
+        });
+        let components = BTreeMap::from([(anchor.clone(), component)]);
+        let symbol = pcb_eda::Symbol {
+            pins: vec![make_pin("A", "1", None), make_pin("B", "2", None)],
+            ..Default::default()
+        };
+
+        let error = build_physical_pin_plan(
+            &symbol,
+            std::slice::from_ref(&anchor),
+            &components,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        )
+        .expect_err("resolved footprint must contain every symbol physical pin")
+        .to_string();
+        assert!(error.contains("footprint Local:OnePad is missing numbered pads"));
+        assert!(error.contains("required by symbol physical pins"));
+        assert!(!error.contains("KiCadPinNumber(\"\")"));
+    }
+
+    #[test]
+    fn inconsistent_multi_anchor_pin_connectivity_is_an_error() {
+        let anchor = make_anchor("anchor");
+        let unit = make_anchor("unit");
+        let mut component = make_component("U1", BTreeMap::new());
+        component.netlist.unit_pcb_paths = vec![unit.clone()];
+        let pin = KiCadPinNumber::from("1".to_string());
+        let port_to_net = BTreeMap::from([
+            (
+                ImportNetPort {
+                    component: anchor.clone(),
+                    pin: pin.clone(),
+                },
+                KiCadNetName::from("A".to_string()),
+            ),
+            (
+                ImportNetPort {
+                    component: unit,
+                    pin: pin.clone(),
+                },
+                KiCadNetName::from("B".to_string()),
+            ),
+        ]);
+        let error = resolve_instance_pin_net(&anchor, &component, &pin, &port_to_net)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("resolves to multiple nets"));
+    }
+
+    #[test]
+    fn renderer_emits_explicit_pin_defs_and_escapes_starlark_strings() {
+        let plan = PhysicalPinPlan {
+            bindings: vec![
+                ImportComponentPinBinding {
+                    logical_name: "D+__3".to_string(),
+                    pad_number: KiCadPinNumber::from("3".to_string()),
+                    io_name: Some("D_POS_3".to_string()),
+                },
+                ImportComponentPinBinding {
+                    logical_name: "NC\"\\é".to_string(),
+                    pad_number: KiCadPinNumber::from("10".to_string()),
+                    io_name: None,
+                },
+            ],
+            io_pins: BTreeMap::from([(
+                "D_POS_3".to_string(),
+                KiCadPinNumber::from("3".to_string()),
+            )]),
+        };
+        let rendered = render_component_zen(
+            "USB_DEVICE__VARIANT",
+            &pcb_eda::Symbol::default(),
+            "USB_DEVICE.kicad_sym",
+            ImportPartFlags {
+                all_skip_bom: false,
+                ..ImportPartFlags::default()
+            },
+            &plan,
+            None,
+        )
+        .unwrap();
+        assert_eq!(rendered.filename, "USB_DEVICE__VARIANT.zen");
+        assert!(rendered.zen_text.contains("D_POS_3 = io(Net)"));
+        assert!(rendered.zen_text.contains("\"D+__3\": \"3\""));
+        assert!(rendered.zen_text.contains("\"NC\\\"\\\\é\": \"10\""));
+        assert!(!rendered.zen_text.contains("NC = io(Net)"));
+    }
+    #[test]
+    fn renderer_preserves_unresolved_footprint_without_geometry() {
+        let rendered = render_component_zen(
+            "DEVICE",
+            &pcb_eda::Symbol::default(),
+            "DEVICE.kicad_sym",
+            ImportPartFlags {
+                all_skip_bom: false,
+                ..ImportPartFlags::default()
+            },
+            &PhysicalPinPlan {
+                bindings: Vec::new(),
+                io_pins: BTreeMap::new(),
+            },
+            Some("Missing:Footprint"),
+        )
+        .unwrap();
+
+        assert!(
+            rendered
+                .zen_text
+                .contains("footprint = \"Missing:Footprint\"")
+        );
+    }
+
+    #[test]
+    fn passive_promotion_requires_physical_pins_one_and_two() {
+        let standard = pcb_eda::Symbol {
+            pins: vec![make_pin("~", "1", None), make_pin("~", "2", None)],
+            ..Default::default()
+        };
+        let custom = pcb_eda::Symbol {
+            pins: vec![make_pin("~", "A", None), make_pin("~", "K", None)],
+            ..Default::default()
+        };
+        assert!(has_standard_promoted_passive_pins(&standard));
+        assert!(!has_standard_promoted_passive_pins(&custom));
     }
 
     fn make_position_comment(

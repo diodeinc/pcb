@@ -1,6 +1,6 @@
 use anyhow::Result;
 use deunicode::deunicode;
-use minijinja::Environment;
+use minijinja::{Environment, UndefinedBehavior};
 use pcb_eda::{Pin, Symbol};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -103,11 +103,15 @@ pub struct GenerateComponentZenArgs<'a> {
     pub skip_pos_default: bool,
 }
 
-#[derive(Debug, Default)]
-struct SignalPinMetadata {
-    sanitized_name: String,
-    saw_pin_type: bool,
-    saw_non_no_connect: bool,
+/// One explicit logical-signal-to-physical-pin mapping supplied by an EDA importer.
+///
+/// Most component generation groups pins by the signal names in the symbol. Importers that must
+/// preserve physical-pin identity can provide this plan instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerateComponentPin {
+    pub logical_name: String,
+    pub pad_number: String,
+    pub io_name: Option<String>,
 }
 
 fn pin_type_candidates(pin: &Pin) -> impl Iterator<Item = &str> {
@@ -118,72 +122,126 @@ fn pin_type_candidates(pin: &Pin) -> impl Iterator<Item = &str> {
     )
 }
 
-fn update_signal_pin_metadata(metadata: &mut SignalPinMetadata, pin: &Pin) {
-    for pin_type in pin_type_candidates(pin) {
-        metadata.saw_pin_type = true;
-        if pin_type != "no_connect" {
-            metadata.saw_non_no_connect = true;
+/// Returns whether a pin group declares electrical types that are all `no_connect`.
+///
+/// Primary and alternate pin types are both considered. A group without any declared electrical
+/// type is not treated as `no_connect`.
+pub fn pins_are_only_no_connect<'a>(pins: impl IntoIterator<Item = &'a Pin>) -> bool {
+    let mut saw_pin_type = false;
+    for pin in pins {
+        for pin_type in pin_type_candidates(pin) {
+            saw_pin_type = true;
+            if pin_type != "no_connect" {
+                return false;
+            }
         }
     }
-}
-
-fn signal_is_only_no_connect(metadata: &SignalPinMetadata) -> bool {
-    metadata.saw_pin_type && !metadata.saw_non_no_connect
+    saw_pin_type
 }
 
 pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
-    let mut signals: BTreeMap<String, SignalPinMetadata> = BTreeMap::new();
+    let mut signals: BTreeMap<String, Vec<&Pin>> = BTreeMap::new();
     for pin in symbol.canonical_pins() {
-        let signal_name = pin.signal_name().to_string();
-        let metadata = signals
-            .entry(signal_name)
-            .or_insert_with_key(|signal_name| SignalPinMetadata {
-                sanitized_name: sanitize_pin_name(signal_name),
-                ..Default::default()
-            });
-        update_signal_pin_metadata(metadata, pin);
+        signals
+            .entry(pin.signal_name().to_string())
+            .or_default()
+            .push(pin);
     }
 
     signals
         .into_iter()
-        .filter_map(|(signal_name, metadata)| {
-            (!signal_is_only_no_connect(&metadata))
-                .then_some((signal_name, metadata.sanitized_name))
+        .filter_map(|(signal_name, pins)| {
+            (!pins_are_only_no_connect(pins)).then(|| {
+                let sanitized_name = sanitize_pin_name(&signal_name);
+                (signal_name, sanitized_name)
+            })
         })
         .collect()
 }
 
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
+    generate_component_zen_inner(args, None, None)
+}
+
+pub fn generate_component_zen_with_pins(
+    args: GenerateComponentZenArgs<'_>,
+    pins: &[GenerateComponentPin],
+    footprint: Option<&str>,
+) -> Result<String> {
+    generate_component_zen_inner(args, Some(pins), footprint)
+}
+
+fn generate_component_zen_inner(
+    args: GenerateComponentZenArgs<'_>,
+    explicit_pins: Option<&[GenerateComponentPin]>,
+    footprint: Option<&str>,
+) -> Result<String> {
     let component_name = sanitize_mpn_for_path(args.component_name);
     let signal_io_names = generated_signal_io_names(args.symbol);
 
-    let pin_groups_vec: Vec<_> = signal_io_names
-        .values()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(|name| serde_json::json!({"sanitized_name": name}))
-        .collect();
+    let pin_groups_vec: Vec<_> = match explicit_pins {
+        Some(pins) => pins
+            .iter()
+            .filter_map(|pin| pin.io_name.as_ref())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|name| serde_json::json!({"sanitized_name": name}))
+            .collect(),
+        None => signal_io_names
+            .values()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|name| serde_json::json!({"sanitized_name": name}))
+            .collect(),
+    };
 
-    let pin_mappings: Vec<_> = signal_io_names
+    let pin_mappings: Vec<_> = match explicit_pins {
+        Some(pins) => pins
+            .iter()
+            .filter_map(|pin| {
+                pin.io_name.as_ref().map(|io_name| {
+                    serde_json::json!({
+                        "original_name_literal": serde_json::to_string(&pin.logical_name).expect("serialize pin name"),
+                        "sanitized_name": io_name
+                    })
+                })
+            })
+            .collect(),
+        None => signal_io_names
+            .iter()
+            .map(|(signal_name, io_name)| {
+                serde_json::json!({
+                    "original_name_literal": serde_json::to_string(signal_name).expect("serialize signal name"),
+                    "sanitized_name": io_name
+                })
+            })
+            .collect(),
+    };
+    let pin_defs: Vec<_> = explicit_pins
+        .unwrap_or_default()
         .iter()
-        .map(|(signal_name, io_name)| {
+        .map(|pin| {
             serde_json::json!({
-                "original_name": signal_name,
-                "sanitized_name": io_name
+                "logical_name_literal": serde_json::to_string(&pin.logical_name).expect("serialize logical name"),
+                "pad_number_literal": serde_json::to_string(&pin.pad_number).expect("serialize pad number"),
             })
         })
         .collect();
 
     let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
     env.add_template("component.zen", COMPONENT_ZEN_TEMPLATE)?;
 
     let content = env
         .get_template("component.zen")?
         .render(serde_json::json!({
             "component_name": component_name,
-            "sym_path": args.symbol_filename,
+            "component_name_literal": serde_json::to_string(&component_name)?,
+            "sym_path_literal": serde_json::to_string(args.symbol_filename)?,
             "pin_groups": pin_groups_vec,
             "pin_mappings": pin_mappings,
+            "pin_defs": pin_defs,
+            "footprint_literal": footprint.map(serde_json::to_string).transpose()?,
             "generated_by": args.generated_by,
             "include_skip_bom": args.include_skip_bom,
             "include_skip_pos": args.include_skip_pos,
@@ -206,6 +264,46 @@ mod tests {
         assert_eq!(sanitize_pin_name("A+B"), "A_B");
         assert_eq!(sanitize_pin_name("CS#"), "CSH");
         assert_eq!(sanitize_pin_name("1V8"), "P1V8");
+    }
+
+    #[test]
+    fn only_no_connect_requires_declared_primary_types() {
+        let untyped = Pin::default();
+        let no_connect = Pin {
+            electrical_type: Some("no_connect".to_string()),
+            ..Default::default()
+        };
+        let input = Pin {
+            electrical_type: Some("input".to_string()),
+            ..Default::default()
+        };
+
+        assert!(!pins_are_only_no_connect([&untyped]));
+        assert!(pins_are_only_no_connect([&no_connect]));
+        assert!(pins_are_only_no_connect([&no_connect, &no_connect]));
+        assert!(!pins_are_only_no_connect([&no_connect, &input]));
+    }
+
+    #[test]
+    fn only_no_connect_considers_alternate_types() {
+        let alternate_no_connect = Pin {
+            alternates: vec![pcb_eda::PinAlternate {
+                electrical_type: Some("no_connect".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let alternate_input = Pin {
+            electrical_type: Some("no_connect".to_string()),
+            alternates: vec![pcb_eda::PinAlternate {
+                electrical_type: Some("input".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert!(pins_are_only_no_connect([&alternate_no_connect]));
+        assert!(!pins_are_only_no_connect([&alternate_input]));
     }
 
     #[test]
@@ -244,13 +342,57 @@ mod tests {
         })
         .unwrap();
 
-        assert!(zen.contains("Auto-generated using `pcb import`."));
+        let mut docstring_lines = zen.lines();
+        assert_eq!(docstring_lines.next(), Some("\"\"\""));
+        assert_eq!(docstring_lines.next(), Some("MPN1"));
+        assert_eq!(docstring_lines.next(), Some(""));
+        assert_eq!(
+            docstring_lines.next(),
+            Some("Auto-generated using `pcb import`.")
+        );
         assert!(zen.contains("N_INT = io(Net)"));
         assert!(zen.contains("\"~{INT}\": N_INT"));
         assert!(zen.contains("VCC"));
         assert!(!zen.contains("pin_defs"));
         assert!(!zen.contains("Pins = struct("));
         assert!(!zen.contains("Pins."));
+    }
+
+    #[test]
+    fn explicit_pin_plan_renders_pin_defs_and_optional_footprint() {
+        let zen = generate_component_zen_with_pins(
+            GenerateComponentZenArgs {
+                component_name: "DEVICE",
+                symbol: &pcb_eda::Symbol::default(),
+                symbol_filename: "DEVICE.kicad_sym",
+                generated_by: "pcb import",
+                include_skip_bom: false,
+                include_skip_pos: false,
+                skip_bom_default: false,
+                skip_pos_default: false,
+            },
+            &[
+                GenerateComponentPin {
+                    logical_name: "D+__3".to_string(),
+                    pad_number: "3".to_string(),
+                    io_name: Some("D_POS_3".to_string()),
+                },
+                GenerateComponentPin {
+                    logical_name: "NC\"\\é".to_string(),
+                    pad_number: "10".to_string(),
+                    io_name: None,
+                },
+            ],
+            Some("Missing:Footprint"),
+        )
+        .unwrap();
+
+        assert!(zen.contains("D_POS_3 = io(Net)"));
+        assert!(zen.contains("footprint = \"Missing:Footprint\""));
+        assert!(zen.contains("\"D+__3\": \"3\""));
+        assert!(zen.contains("\"NC\\\"\\\\é\": \"10\""));
+        assert!(zen.contains("\"D+__3\": D_POS_3"));
+        assert!(!zen.contains("NC = io(Net)"));
     }
 
     #[test]

@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+pub(super) const IMPORT_EXTRACTION_REPORT_NAME: &str = ".kicad.import.extraction.json";
 
 pub(super) fn build_import_report(
     paths: &super::ImportPaths,
@@ -21,12 +23,18 @@ pub(super) fn build_import_report(
             &materialized.import_extraction_json,
         ),
         layout_dir: super::rel_to_root(&paths.workspace_root, &materialized.layout_dir),
-        layout_kicad_pro: super::rel_to_root(&paths.workspace_root, &materialized.layout_kicad_pro),
-        layout_kicad_pcb: super::rel_to_root(&paths.workspace_root, &materialized.layout_kicad_pcb),
-        portable_kicad_project_zip: super::rel_to_root(
-            &paths.workspace_root,
-            &materialized.portable_kicad_project_zip,
-        ),
+        layout_kicad_pro: materialized
+            .layout_kicad_pro
+            .as_ref()
+            .map(|path| super::rel_to_root(&paths.workspace_root, path)),
+        layout_kicad_pcb: materialized
+            .layout_kicad_pcb
+            .as_ref()
+            .map(|path| super::rel_to_root(&paths.workspace_root, path)),
+        portable_kicad_project_zip: materialized
+            .portable_kicad_project_zip
+            .as_ref()
+            .map(|path| super::rel_to_root(&paths.workspace_root, path)),
     };
 
     super::ImportReport {
@@ -50,11 +58,10 @@ pub(super) fn build_import_report(
 }
 
 pub(super) fn write_import_extraction_report(
-    board_dir: &Path,
+    out_path: &Path,
     payload: &super::ImportReport,
-) -> Result<PathBuf> {
-    let out_path = board_dir.join(".kicad.import.extraction.json");
-    fs::write(&out_path, serde_json::to_string_pretty(payload)?)
+) -> Result<()> {
+    fs::write(out_path, serde_json::to_string_pretty(payload)?)
         .with_context(|| format!("Failed to write {}", out_path.display()))?;
-    Ok(out_path)
+    Ok(())
 }

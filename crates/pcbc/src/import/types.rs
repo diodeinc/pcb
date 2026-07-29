@@ -94,11 +94,11 @@ impl From<String> for KiCadLibId {
 }
 
 #[derive(Args, Debug, Clone)]
-#[command(about = "Import KiCad projects into a Zener board repository")]
+#[command(about = "Import KiCad schematics or projects into a Zener board repository")]
 pub struct ImportArgs {
-    /// Path to a KiCad project file (.kicad_pro)
-    #[arg(value_name = "KICAD_PRO", value_hint = clap::ValueHint::AnyPath)]
-    pub kicad_pro: PathBuf,
+    /// Path to a KiCad schematic (.kicad_sch) or project (.kicad_pro)
+    #[arg(value_name = "KICAD_INPUT", value_hint = clap::ValueHint::AnyPath)]
+    pub kicad_input: PathBuf,
 
     /// Output directory (a board repository will be created if needed)
     #[arg(value_name = "OUTPUT_DIR", value_hint = clap::ValueHint::AnyPath)]
@@ -112,18 +112,29 @@ pub struct ImportArgs {
 pub(super) struct ImportPaths {
     pub(super) workspace_root: PathBuf,
     pub(super) kicad_project_root: PathBuf,
-    pub(super) kicad_pro_abs: PathBuf,
+    pub(super) kicad_input_abs: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ImportSourceKind {
+    Schematic,
+    Project,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct PortableKicadProject {
     pub(super) project_dir: PathBuf, // absolute path
     pub(super) project_name: String,
-    pub(super) kicad_pro_rel: PathBuf, // relative to project_dir
-    pub(super) root_schematic_rel: PathBuf, // relative to project_dir
-    pub(super) primary_kicad_pcb_rel: PathBuf, // relative to project_dir
+    pub(super) source_kind: ImportSourceKind,
+    pub(super) kicad_pro_rel: Option<PathBuf>, // relative to project_dir
+    pub(super) root_schematic_rel: PathBuf,    // relative to project_dir
+    pub(super) primary_kicad_pcb_rel: Option<PathBuf>, // relative to project_dir
     pub(super) schematic_files_rel: Vec<PathBuf>,
     pub(super) files_to_bundle_rel: Vec<PathBuf>,
+    /// KiCad footprint ID -> project-local `.kicad_mod` path.
+    pub(super) resolved_project_footprints: BTreeMap<String, PathBuf>,
+    /// Footprint IDs claimed by an enabled project library entry, resolved or not.
+    pub(super) project_footprint_ids: BTreeSet<String>,
     pub(super) extra_files_to_bundle: Vec<PortableExtraFile>,
     pub(super) manifest_json: String,
 }
@@ -142,6 +153,7 @@ pub(super) struct ImportSelection {
     pub(super) portable: PortableKicadProject,
 }
 
+#[derive(Clone)]
 pub(super) struct ImportIr {
     pub(super) components: BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     pub(super) nets: BTreeMap<KiCadNetName, ImportNetData>,
@@ -156,9 +168,10 @@ pub(super) struct MaterializedBoard {
     pub(super) board_dir: PathBuf,
     pub(super) board_zen: PathBuf,
     pub(super) layout_dir: PathBuf,
-    pub(super) layout_kicad_pro: PathBuf,
-    pub(super) layout_kicad_pcb: PathBuf,
-    pub(super) portable_kicad_project_zip: PathBuf,
+    pub(super) layout_kicad_pro: Option<PathBuf>,
+    pub(super) layout_kicad_pcb: Option<PathBuf>,
+    /// Present for project imports, which preserve the source archive as before.
+    pub(super) portable_kicad_project_zip: Option<PathBuf>,
     pub(super) validation_diagnostics_json: PathBuf,
     pub(super) import_extraction_json: PathBuf,
 }
@@ -269,7 +282,11 @@ pub(super) struct ImportPassiveSummary {
     pub(super) capacitor_medium: usize,
     pub(super) capacitor_low: usize,
     pub(super) unknown: usize,
+    /// Components with a known pad count that is not two.
     pub(super) non_two_pad: usize,
+    /// Components whose pad count could not be determined, because the footprint did not resolve
+    /// and therefore carries no pad geometry. Not the same as a known non-two count.
+    pub(super) unknown_pad_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -599,9 +616,26 @@ pub(super) struct ImportSchematicAt {
     pub(super) rot: Option<f64>,
 }
 
+#[derive(Debug, Clone)]
+pub(super) enum ImportFootprintGeometry {
+    BoardInstance(String),
+    LibraryFile(String),
+    StandardLibrary,
+    /// The schematic names a footprint whose geometry is not available locally.
+    Unresolved,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ImportUnresolvedFootprint {
+    /// Original KiCad footprint ID, or `None` when the source has no footprint field.
+    pub(super) source_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ImportLayoutComponent {
     pub(super) fpid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) unresolved_footprint: Option<ImportUnresolvedFootprint>,
     pub(super) uuid: Option<String>,
     pub(super) layer: Option<String>,
     pub(super) at: Option<ImportLayoutAt>,
@@ -611,7 +645,7 @@ pub(super) struct ImportLayoutComponent {
     pub(super) properties: BTreeMap<String, String>,
     pub(super) pads: BTreeMap<KiCadPinNumber, ImportLayoutPad>,
     #[serde(skip_serializing)]
-    pub(super) footprint_sexpr: String,
+    pub(super) footprint_geometry: ImportFootprintGeometry,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -645,6 +679,7 @@ pub(super) struct ImportNetPort {
 #[derive(Debug, Serialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum BoardNameSource {
+    KicadSchArgument,
     KicadProArgument,
 }
 
@@ -682,9 +717,10 @@ pub(super) struct GeneratedArtifacts {
     pub(super) validation_diagnostics_json: PathBuf,
     pub(super) import_extraction_json: PathBuf,
     pub(super) layout_dir: PathBuf,
-    pub(super) layout_kicad_pro: PathBuf,
-    pub(super) layout_kicad_pcb: PathBuf,
-    pub(super) portable_kicad_project_zip: PathBuf,
+    pub(super) layout_kicad_pro: Option<PathBuf>,
+    pub(super) layout_kicad_pcb: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) portable_kicad_project_zip: Option<PathBuf>,
 }
 
 pub(super) struct ImportValidationRun {
@@ -694,12 +730,12 @@ pub(super) struct ImportValidationRun {
 
 #[derive(Debug, Serialize, Clone)]
 pub(super) struct SelectedKicadFiles {
-    /// Relative to `kicad_project_root`
-    pub(super) kicad_pro: PathBuf,
-    /// Relative to `kicad_project_root`
+    /// Relative to `kicad_project_root` when project metadata exists.
+    pub(super) kicad_pro: Option<PathBuf>,
+    /// Relative to `kicad_project_root`.
     pub(super) kicad_sch: PathBuf,
-    /// Relative to `kicad_project_root`
-    pub(super) kicad_pcb: PathBuf,
+    /// Relative to `kicad_project_root` when layout metadata exists.
+    pub(super) kicad_pcb: Option<PathBuf>,
 }
 
 pub(super) fn normalize_sheetpath_tstamps(sheetpath: &str) -> String {

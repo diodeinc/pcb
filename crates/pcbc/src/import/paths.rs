@@ -5,25 +5,34 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(super) fn resolve_paths(args: &ImportArgs) -> Result<ImportPaths> {
-    let kicad_pro_abs = require_kicad_pro_file(&args.kicad_pro)?;
-    let kicad_project_root = kicad_pro_abs
+    let kicad_input_abs = require_kicad_input_file(&args.kicad_input)?;
+    let kicad_project_root = kicad_input_abs
         .parent()
-        .context("A .kicad_pro path must have a parent directory")?
+        .context("A KiCad input path must have a parent directory")?
         .to_path_buf();
 
     let workspace_root = ensure_board_repo_root(&args.output_dir)?;
     Ok(ImportPaths {
         workspace_root,
         kicad_project_root,
-        kicad_pro_abs,
+        kicad_input_abs,
     })
 }
 
-fn require_kicad_pro_file(path: &Path) -> Result<PathBuf> {
+fn require_kicad_input_file(path: &Path) -> Result<PathBuf> {
     let meta = fs::metadata(path)
-        .with_context(|| format!("Failed to stat KiCad project file: {}", path.display()))?;
-    if !meta.is_file() || path.extension() != Some(OsStr::new("kicad_pro")) {
-        anyhow::bail!("Expected a .kicad_pro file, got: {}", path.display());
+        .with_context(|| format!("Failed to stat KiCad input file: {}", path.display()))?;
+    let extension = path.extension();
+    if !meta.is_file()
+        || !matches!(
+            extension,
+            Some(ext) if ext == OsStr::new("kicad_sch") || ext == OsStr::new("kicad_pro")
+        )
+    {
+        anyhow::bail!(
+            "Expected a .kicad_sch or .kicad_pro file, got: {}",
+            path.display()
+        );
     }
     Ok(fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
 }
@@ -40,9 +49,7 @@ fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
 
     let pcb_toml = workspace_root.join("pcb.toml");
     if pcb_toml.exists() {
-        let file_provider = pcb_zen_core::DefaultFileProvider::new();
-        let config = pcb_zen_core::config::PcbToml::from_file(&file_provider, &pcb_toml)
-            .with_context(|| format!("Failed to parse {}", pcb_toml.display()))?;
+        let config = read_pcb_toml(&pcb_toml)?;
         if !config.is_workspace() {
             anyhow::bail!(
                 "Output directory contains a pcb.toml but it is not a workspace: {}",
@@ -75,4 +82,10 @@ fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
     }
 
     Ok(workspace_root)
+}
+
+fn read_pcb_toml(pcb_toml: &Path) -> Result<pcb_zen_core::config::PcbToml> {
+    let file_provider = pcb_zen_core::DefaultFileProvider::new();
+    pcb_zen_core::config::PcbToml::from_file(&file_provider, pcb_toml)
+        .with_context(|| format!("Failed to parse {}", pcb_toml.display()))
 }

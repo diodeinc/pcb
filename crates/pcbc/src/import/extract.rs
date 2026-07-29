@@ -12,19 +12,26 @@ pub(super) fn extract_ir(
     paths: &ImportPaths,
     selection: &ImportSelection,
     validation: &ImportValidationRun,
+    staged_root: &Path,
 ) -> Result<ImportIr> {
-    let pcb_refdes_to_anchor_key = extract_kicad_pcb_refdes_to_anchor_key(
-        &paths.kicad_project_root,
-        &validation.summary.selected,
-    )?;
+    let pcb_refdes_to_anchor_key = if selection.portable.source_kind == ImportSourceKind::Project {
+        extract_kicad_pcb_refdes_to_anchor_key(
+            staged_root,
+            &paths.kicad_project_root,
+            &validation.summary.selected,
+        )?
+    } else {
+        BTreeMap::new()
+    };
 
     let mut netlist = extract_kicad_netlist(
-        &paths.kicad_project_root,
+        staged_root,
         &validation.summary.selected,
         &pcb_refdes_to_anchor_key,
     )?;
 
     let schematic = extract_kicad_schematic_data(
+        staged_root,
         &paths.kicad_project_root,
         &selection.files.kicad_sch,
         &netlist.unit_to_anchor,
@@ -32,17 +39,21 @@ pub(super) fn extract_ir(
     )?;
 
     let schematic_sheet_tree = build_schematic_sheet_tree(
-        &paths.kicad_project_root,
         &validation.summary.selected.kicad_sch,
         &netlist.components,
         &schematic.sheet_symbols_by_uuid,
     );
 
-    extract_kicad_layout_data(
-        &paths.kicad_project_root,
-        &validation.summary.selected,
-        &mut netlist.components,
-    )?;
+    if selection.portable.source_kind == ImportSourceKind::Project {
+        extract_kicad_layout_data(
+            staged_root,
+            &paths.kicad_project_root,
+            &validation.summary.selected,
+            &mut netlist.components,
+        )?;
+    } else {
+        resolve_standalone_footprints(selection, staged_root, &mut netlist.components)?;
+    }
 
     Ok(ImportIr {
         components: netlist.components,
@@ -84,20 +95,26 @@ struct KiCadNetlistComponentsExtraction {
 }
 
 fn extract_kicad_pcb_refdes_to_anchor_key(
-    kicad_project_root: &Path,
+    staged_root: &Path,
+    source_root: &Path,
     selected: &SelectedKicadFiles,
 ) -> Result<BTreeMap<KiCadRefDes, KiCadUuidPathKey>> {
-    let pcb_abs = kicad_project_root.join(&selected.kicad_pcb);
-    if !pcb_abs.exists() {
-        anyhow::bail!("PCB file not found: {}", pcb_abs.display());
+    let kicad_pcb = selected
+        .kicad_pcb
+        .as_ref()
+        .context("Project import is missing a selected .kicad_pcb file")?;
+    let staged_pcb = staged_root.join(kicad_pcb);
+    let source_pcb = source_root.join(kicad_pcb);
+    if !staged_pcb.exists() {
+        anyhow::bail!("PCB file not found: {}", source_pcb.display());
     }
 
-    let text = fs::read_to_string(&pcb_abs)
-        .with_context(|| format!("Failed to read {}", pcb_abs.display()))?;
+    let text = fs::read_to_string(&staged_pcb)
+        .with_context(|| format!("Failed to read {}", source_pcb.display()))?;
     parse_kicad_pcb_refdes_to_anchor_key(&text).with_context(|| {
         format!(
             "Failed to parse KiCad PCB file for refdes/path anchors: {}",
-            pcb_abs.display()
+            source_pcb.display()
         )
     })
 }
@@ -125,7 +142,8 @@ fn parse_kicad_pcb_refdes_to_anchor_key(
 }
 
 fn extract_kicad_schematic_data(
-    kicad_project_root: &Path,
+    staged_root: &Path,
+    source_root: &Path,
     kicad_sch_files: &[PathBuf],
     unit_to_anchor: &BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey>,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
@@ -135,14 +153,15 @@ fn extract_kicad_schematic_data(
     let mut sheet_symbols_by_uuid: BTreeMap<String, SchematicSheetSymbol> = BTreeMap::new();
 
     for rel in kicad_sch_files {
-        let abs = kicad_project_root.join(rel);
-        let text = fs::read_to_string(&abs)
-            .with_context(|| format!("Failed to read {}", abs.display()))?;
+        let staged_abs = staged_root.join(rel);
+        let source_abs = source_root.join(rel);
+        let text = fs::read_to_string(&staged_abs)
+            .with_context(|| format!("Failed to read {}", source_abs.display()))?;
 
         let root = pcb_sexpr::parse(&text).with_context(|| {
             format!(
                 "Failed to parse KiCad schematic as S-expression: {}",
-                abs.display()
+                source_abs.display()
             )
         })?;
 
@@ -176,7 +195,7 @@ fn extract_kicad_schematic_data(
                             "Failed to slice embedded lib_symbol S-expression span {}..{} from {}",
                             node.span.start,
                             node.span.end,
-                            abs.display()
+                            source_abs.display()
                         )
                     })?
                     .to_string();
@@ -204,7 +223,7 @@ fn extract_kicad_schematic_data(
             let sheet_name = props.get("Sheetname").cloned();
             let sheet_file = props
                 .get("Sheetfile")
-                .and_then(|raw| resolve_sheet_file(kicad_project_root, rel, raw));
+                .and_then(|raw| resolve_sheet_file(source_root, rel, raw));
 
             let new = SchematicSheetSymbol {
                 sheet_name,
@@ -408,7 +427,6 @@ fn resolve_sheet_file(
 }
 
 fn build_schematic_sheet_tree(
-    _kicad_project_root: &Path,
     root_schematic_rel: &Path,
     netlist_components: &BTreeMap<KiCadUuidPathKey, ImportComponentData>,
     sheet_symbols_by_uuid: &BTreeMap<String, SchematicSheetSymbol>,
@@ -484,17 +502,23 @@ fn build_schematic_sheet_tree(
 }
 
 fn extract_kicad_layout_data(
-    kicad_project_root: &Path,
+    staged_root: &Path,
+    source_root: &Path,
     selected: &SelectedKicadFiles,
     netlist_components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
 ) -> Result<()> {
-    let pcb_abs = kicad_project_root.join(&selected.kicad_pcb);
-    if !pcb_abs.exists() {
-        anyhow::bail!("PCB file not found: {}", pcb_abs.display());
+    let kicad_pcb = selected
+        .kicad_pcb
+        .as_ref()
+        .context("Project import is missing a selected .kicad_pcb file")?;
+    let staged_pcb = staged_root.join(kicad_pcb);
+    let source_pcb = source_root.join(kicad_pcb);
+    if !staged_pcb.exists() {
+        anyhow::bail!("PCB file not found: {}", source_pcb.display());
     }
 
-    let pcb_text = fs::read_to_string(&pcb_abs)
-        .with_context(|| format!("Failed to read {}", pcb_abs.display()))?;
+    let pcb_text = fs::read_to_string(&staged_pcb)
+        .with_context(|| format!("Failed to read {}", source_pcb.display()))?;
 
     let root = pcb_sexpr::parse(&pcb_text).context("Failed to parse KiCad PCB as S-expression")?;
 
@@ -516,7 +540,7 @@ fn extract_kicad_layout_data(
                     "Failed to slice footprint S-expression span {}..{} from {}",
                     fp.span.start,
                     fp.span.end,
-                    pcb_abs.display()
+                    source_pcb.display()
                 )
             })?
             .to_string();
@@ -542,6 +566,7 @@ fn extract_kicad_layout_data(
 
         let layout = ImportLayoutComponent {
             fpid: fp.fpid,
+            unresolved_footprint: None,
             uuid: fp.uuid,
             layer: fp.layer,
             at: fp.at.map(|at| ImportLayoutAt {
@@ -554,7 +579,7 @@ fn extract_kicad_layout_data(
             attrs: fp.attrs,
             properties: fp.properties,
             pads,
-            footprint_sexpr: sexpr,
+            footprint_geometry: ImportFootprintGeometry::BoardInstance(sexpr),
         };
 
         if component.layout.replace(layout).is_some() {
@@ -568,13 +593,287 @@ fn extract_kicad_layout_data(
     Ok(())
 }
 
+fn resolve_standalone_footprints(
+    selection: &ImportSelection,
+    staged_root: &Path,
+    components: &mut BTreeMap<KiCadUuidPathKey, ImportComponentData>,
+) -> Result<()> {
+    // Installed binaries do not necessarily have the repository's `lib/std` source tree nearby.
+    // Treat that footprint source as one optional lookup location rather than making it a
+    // prerequisite for project/global libraries, the package cache, or unresolved import.
+    let stdlib_footprints = pcb_zen_core::stdlib::native::discover_source()
+        .ok()
+        .map(|root| root.join("kicad-footprints"));
+    let schematic_path = staged_root.join(&selection.portable.root_schematic_rel);
+    let kicad_major = schematic_generator_major(&schematic_path);
+    let cache_dir = dirs::home_dir().map(|home| home.join(".pcb/cache"));
+    let cached_roots = cache_dir
+        .as_deref()
+        .zip(kicad_major)
+        .map(|(cache, major)| cached_kicad_footprint_roots(cache, major))
+        .unwrap_or_default();
+    let mut unresolved: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Keyed by fpid and holding the *outcome*, so a footprint no library provides is searched once
+    // rather than once per component that references it. On a design whose libraries are not installed
+    // that is the common path — every component misses — and each miss walked all four locations again.
+    type ResolvedFootprint = (
+        BTreeMap<KiCadPinNumber, ImportLayoutPad>,
+        ImportFootprintGeometry,
+    );
+    let mut resolved_by_fpid: BTreeMap<String, Option<ResolvedFootprint>> = BTreeMap::new();
+
+    for component in components.values_mut() {
+        let Some(fpid) = component
+            .netlist
+            .footprint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "~")
+        else {
+            unresolved
+                .entry(NO_FOOTPRINT_KEY.to_string())
+                .or_default()
+                .push(component.netlist.refdes.as_str().to_string());
+            component.layout = Some(unresolved_layout_component(None));
+            continue;
+        };
+
+        // Many components share one footprint, so resolve, read, and parse each fpid once.
+        let resolved = match resolved_by_fpid.get(fpid) {
+            // Already known to resolve nowhere: record the component and move on without searching.
+            Some(None) => {
+                unresolved
+                    .entry(fpid.to_string())
+                    .or_default()
+                    .push(component.netlist.refdes.as_str().to_string());
+                component.layout = Some(unresolved_layout_component(Some(fpid)));
+                continue;
+            }
+            Some(Some(resolved)) => resolved,
+            None => {
+                // Ordered by precedence: project/global KiCad library tables, the repository
+                // stdlib source when available, then the version-matched KiCad cache.
+                // `copy_to_component` says whether the geometry must be copied into the generated
+                // package; the stdlib is a library reference the built board already resolves.
+                let project_lookup = selection
+                    .portable
+                    .resolved_project_footprints
+                    .get(fpid)
+                    .map(|path| (path.clone(), true));
+                let lookup = if project_lookup.is_some()
+                    || selection.portable.project_footprint_ids.contains(fpid)
+                {
+                    project_lookup
+                } else {
+                    stdlib_footprints
+                        .as_deref()
+                        .and_then(|root| resolve_footprint_in_root(root, fpid))
+                        .map(|path| (path, false))
+                        .or_else(|| {
+                            resolve_footprint_from_roots(&cached_roots, fpid)
+                                .map(|path| (path, true))
+                        })
+                };
+                let Some((path, copy_to_component)) = lookup else {
+                    resolved_by_fpid.insert(fpid.to_string(), None);
+                    unresolved
+                        .entry(fpid.to_string())
+                        .or_default()
+                        .push(component.netlist.refdes.as_str().to_string());
+                    component.layout = Some(unresolved_layout_component(Some(fpid)));
+                    continue;
+                };
+                let staged_path = path
+                    .strip_prefix(&selection.portable.project_dir)
+                    .map(|relative| staged_root.join(relative))
+                    .unwrap_or_else(|_| path.clone());
+                let footprint_text = fs::read_to_string(&staged_path)
+                    .with_context(|| format!("Failed to read footprint {}", path.display()))?;
+                let pads = parse_standalone_footprint_pads(&footprint_text)
+                    .with_context(|| format!("Failed to parse footprint {fpid}"))?;
+                let geometry = if copy_to_component {
+                    ImportFootprintGeometry::LibraryFile(footprint_text)
+                } else {
+                    ImportFootprintGeometry::StandardLibrary
+                };
+                resolved_by_fpid
+                    .entry(fpid.to_string())
+                    .or_insert(Some((pads, geometry)))
+                    .as_ref()
+                    .expect("just inserted a resolved footprint")
+            }
+        };
+
+        component.layout = Some(ImportLayoutComponent {
+            fpid: Some(fpid.to_string()),
+            unresolved_footprint: None,
+            uuid: None,
+            layer: None,
+            at: None,
+            sheetname: None,
+            sheetfile: None,
+            attrs: Vec::new(),
+            properties: BTreeMap::new(),
+            pads: resolved.0.clone(),
+            footprint_geometry: resolved.1.clone(),
+        });
+    }
+
+    if !unresolved.is_empty() {
+        eprintln!("{}", unresolved_footprint_warning(&unresolved));
+    }
+
+    Ok(())
+}
+
+const UNRESOLVED_FOOTPRINT_LIST_LIMIT: usize = 8;
+const NO_FOOTPRINT_KEY: &str = "<missing footprint>";
+
+fn unresolved_footprint_warning(unresolved: &BTreeMap<String, Vec<String>>) -> String {
+    let component_count = unresolved.values().map(Vec::len).sum::<usize>();
+    let mut listed = unresolved
+        .keys()
+        .take(UNRESOLVED_FOOTPRINT_LIST_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let omitted = unresolved
+        .len()
+        .saturating_sub(UNRESOLVED_FOOTPRINT_LIST_LIMIT);
+    if omitted > 0 {
+        listed.push_str(&format!(", and {omitted} more"));
+    }
+
+    format!(
+        "Warning: {component_count} component(s) have unresolved footprints: {listed}. The board imported with connectivity intact but is not layout-ready."
+    )
+}
+
+fn unresolved_layout_component(fpid: Option<&str>) -> ImportLayoutComponent {
+    ImportLayoutComponent {
+        fpid: fpid.map(str::to_string),
+        unresolved_footprint: Some(ImportUnresolvedFootprint {
+            source_id: fpid.map(str::to_string),
+        }),
+        uuid: None,
+        layer: None,
+        at: None,
+        sheetname: None,
+        sheetfile: None,
+        attrs: Vec::new(),
+        properties: BTreeMap::new(),
+        pads: BTreeMap::new(),
+        footprint_geometry: ImportFootprintGeometry::Unresolved,
+    }
+}
+
+fn schematic_generator_major(path: &Path) -> Option<u64> {
+    let text = fs::read_to_string(path).ok()?;
+    let root = pcb_sexpr::parse(&text).ok()?;
+    let items = root.as_list()?;
+    let version = items.iter().find_map(|item| {
+        let list = item.as_list()?;
+        (list.first().and_then(Sexpr::as_sym) == Some("generator_version"))
+            .then(|| {
+                list.get(1)
+                    .and_then(|value| value.as_str().or_else(|| value.as_sym()))
+            })
+            .flatten()
+    })?;
+    version.split('.').next()?.parse().ok()
+}
+
+fn cached_kicad_footprint_roots(cache_dir: &Path, major: u64) -> Vec<PathBuf> {
+    let package_root = cache_dir.join("gitlab.com/kicad/libraries/kicad-footprints");
+    let Ok(entries) = fs::read_dir(package_root) else {
+        return Vec::new();
+    };
+    let mut versions = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            if !file_type.is_dir() || file_type.is_symlink() {
+                return None;
+            }
+            let version = semver::Version::parse(entry.file_name().to_str()?).ok()?;
+            if version.major != major {
+                return None;
+            }
+            Some((version, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    versions.sort_by(|(left, _), (right, _)| right.cmp(left));
+    versions.into_iter().map(|(_, path)| path).collect()
+}
+
+fn resolve_footprint_from_roots(roots: &[PathBuf], fpid: &str) -> Option<PathBuf> {
+    roots
+        .iter()
+        .find_map(|root| resolve_footprint_in_root(root, fpid))
+}
+
+fn resolve_footprint_in_root(root: &Path, fpid: &str) -> Option<PathBuf> {
+    let (library, footprint) = fpid.split_once(':')?;
+    if library.is_empty()
+        || footprint.is_empty()
+        || footprint.contains(':')
+        || library.contains(['/', '\\'])
+        || footprint.contains(['/', '\\'])
+    {
+        return None;
+    }
+    let library_path = root.join(format!("{library}.pretty"));
+    let library_metadata = fs::symlink_metadata(&library_path).ok()?;
+    if !library_metadata.is_dir() || library_metadata.file_type().is_symlink() {
+        return None;
+    }
+    let path = library_path.join(format!("{footprint}.kicad_mod"));
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    let canonical_root = root.canonicalize().ok()?;
+    let canonical_path = path.canonicalize().ok()?;
+    canonical_path
+        .starts_with(&canonical_root)
+        .then_some(canonical_path)
+}
+
+fn parse_standalone_footprint_pads(
+    footprint_text: &str,
+) -> Result<BTreeMap<KiCadPinNumber, ImportLayoutPad>> {
+    let root = pcb_sexpr::parse(footprint_text)
+        .context("Failed to parse .kicad_mod as an S-expression")?;
+    let mut pads = BTreeMap::new();
+    for pad in root.find_all_lists("pad") {
+        let Some(number) = pad
+            .get(1)
+            .and_then(|value| value.as_str().or_else(|| value.as_sym()))
+        else {
+            continue;
+        };
+        if number.is_empty() {
+            continue;
+        }
+        pads.entry(KiCadPinNumber::from(number.to_string()))
+            .or_insert_with(|| ImportLayoutPad {
+                net_names: BTreeSet::new(),
+                uuids: BTreeSet::new(),
+            });
+    }
+    // Mechanical and documentation footprints such as logos and mounting holes can legitimately
+    // have no numbered pads. Keep their geometry and represent them as pinless components rather
+    // than blocking structural schematic import.
+    Ok(pads)
+}
+
 fn extract_kicad_netlist(
-    kicad_project_root: &Path,
+    staged_root: &Path,
     selected: &SelectedKicadFiles,
     pcb_refdes_to_anchor_key: &BTreeMap<KiCadRefDes, KiCadUuidPathKey>,
 ) -> Result<KiCadNetlistExtraction> {
-    let kicad_sch_abs = kicad_project_root.join(&selected.kicad_sch);
-    let netlist_text = export_kicad_sexpr_netlist(&kicad_sch_abs, kicad_project_root)
+    let kicad_sch_abs = staged_root.join(&selected.kicad_sch);
+    let netlist_text = export_kicad_sexpr_netlist(&kicad_sch_abs, staged_root)
         .context("Failed to export KiCad netlist")?;
     parse_kicad_sexpr_netlist(&netlist_text, pcb_refdes_to_anchor_key)
         .context("Failed to parse KiCad netlist")
@@ -632,6 +931,8 @@ fn parse_kicad_sexpr_netlist_components(
     let mut by_key: BTreeMap<KiCadUuidPathKey, ImportComponentData> = BTreeMap::new();
     let mut refdes_to_key: BTreeMap<KiCadRefDes, KiCadUuidPathKey> = BTreeMap::new();
     let mut unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
+    let mut duplicate_refdeses: BTreeMap<KiCadRefDes, BTreeSet<KiCadUuidPathKey>> = BTreeMap::new();
+    let mut duplicate_paths: BTreeMap<KiCadUuidPathKey, BTreeSet<KiCadRefDes>> = BTreeMap::new();
 
     for node in components.iter().skip(1) {
         let Some(comp) = node.as_list() else {
@@ -688,29 +989,55 @@ fn parse_kicad_sexpr_netlist_components(
             unit_pcb_paths: unit_keys.clone(),
         };
 
-        if refdes_to_key
-            .insert(refdes.clone(), anchor_key.clone())
-            .is_some()
-        {
-            anyhow::bail!("Duplicate refdes in netlist: {}", refdes.as_str());
+        if let Some(existing_key) = refdes_to_key.get(&refdes) {
+            let paths = duplicate_refdeses.entry(refdes.clone()).or_default();
+            paths.insert(existing_key.clone());
+            paths.insert(anchor_key.clone());
+        } else {
+            refdes_to_key.insert(refdes.clone(), anchor_key.clone());
         }
 
-        if by_key
-            .insert(
+        if let Some(existing_component) = by_key.get(&anchor_key) {
+            let refdeses = duplicate_paths.entry(anchor_key.clone()).or_default();
+            refdeses.insert(existing_component.netlist.refdes.clone());
+            refdeses.insert(refdes.clone());
+        } else {
+            by_key.insert(
                 anchor_key.clone(),
                 ImportComponentData {
                     netlist: netlist_component,
                     schematic: None,
                     layout: None,
                 },
-            )
-            .is_some()
-        {
-            debug!(
-                "Duplicate netlist component key {}; overwriting",
-                anchor_key
             );
         }
+    }
+
+    if !duplicate_refdeses.is_empty() || !duplicate_paths.is_empty() {
+        let mut lines = vec!["Ambiguous KiCad component identities:".to_string()];
+        for (refdes, paths) in duplicate_refdeses {
+            lines.push(format!(
+                "  - refdes {} maps to paths {}",
+                refdes,
+                paths
+                    .iter()
+                    .map(KiCadUuidPathKey::pcb_path)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        for (path, refdeses) in duplicate_paths {
+            lines.push(format!(
+                "  - path {} maps to refdeses {}",
+                path.pcb_path(),
+                refdeses
+                    .iter()
+                    .map(KiCadRefDes::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        anyhow::bail!(lines.join("\n"));
     }
 
     Ok(KiCadNetlistComponentsExtraction {
@@ -1029,6 +1356,7 @@ mod tests {
         let unit_to_anchor: BTreeMap<KiCadUuidPathKey, KiCadUuidPathKey> = BTreeMap::new();
         let extracted = extract_kicad_schematic_data(
             dir.path(),
+            dir.path(),
             &[sch_rel],
             &unit_to_anchor,
             &mut netlist_components,
@@ -1104,6 +1432,7 @@ mod tests {
 
         let extracted = extract_kicad_schematic_data(
             dir.path(),
+            dir.path(),
             &[sch_rel],
             &unit_to_anchor,
             &mut netlist_components,
@@ -1119,6 +1448,245 @@ mod tests {
             "expected to extract a power symbol decl via Reference=#PWR..."
         );
 
+        Ok(())
+    }
+
+    fn standalone_selection(
+        root: &Path,
+        resolved_project_footprints: BTreeMap<String, PathBuf>,
+    ) -> ImportSelection {
+        ImportSelection {
+            board_name: "root".to_string(),
+            board_name_source: BoardNameSource::KicadSchArgument,
+            files: KicadDiscoveredFiles::default(),
+            selected: SelectedKicadFiles {
+                kicad_pro: None,
+                kicad_sch: PathBuf::from("root.kicad_sch"),
+                kicad_pcb: None,
+            },
+            portable: PortableKicadProject {
+                project_dir: root.to_path_buf(),
+                project_name: "root".to_string(),
+                source_kind: ImportSourceKind::Schematic,
+                kicad_pro_rel: None,
+                root_schematic_rel: PathBuf::from("root.kicad_sch"),
+                primary_kicad_pcb_rel: None,
+                schematic_files_rel: vec![PathBuf::from("root.kicad_sch")],
+                files_to_bundle_rel: vec![PathBuf::from("root.kicad_sch")],
+                resolved_project_footprints,
+                project_footprint_ids: BTreeSet::new(),
+                extra_files_to_bundle: Vec::new(),
+                manifest_json: "{}".to_string(),
+            },
+        }
+    }
+
+    fn component(refdes: &str, fpid: Option<&str>, uuid: &str) -> ImportComponentData {
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: uuid.to_string(),
+        };
+        ImportComponentData {
+            netlist: ImportNetlistComponent {
+                refdes: KiCadRefDes::from(refdes.to_string()),
+                value: Some("value".to_string()),
+                footprint: fpid.map(ToOwned::to_owned),
+                sheetpath_names: Some("/".to_string()),
+                unit_pcb_paths: vec![anchor],
+            },
+            schematic: None,
+            layout: None,
+        }
+    }
+    #[test]
+    fn accepts_padless_mechanical_footprint() -> Result<()> {
+        let pads = parse_standalone_footprint_pads(
+            r#"(footprint "oshw-logo" (layer "F.Cu")
+                (fp_rect (start 0 0) (end 1 1) (stroke (width 0.1) (type default)) (fill none) (layer "F.SilkS")))"#,
+        )?;
+        assert!(pads.is_empty());
+        Ok(())
+    }
+    #[test]
+    fn standalone_standard_footprint_preserves_kicad_id() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let selection = standalone_selection(dir.path(), BTreeMap::new());
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "r1".to_string(),
+        };
+        let mut components = BTreeMap::from([(
+            anchor.clone(),
+            component("R1", Some("Resistor_SMD:R_0402_1005Metric"), "r1"),
+        )]);
+
+        resolve_standalone_footprints(&selection, dir.path(), &mut components)?;
+        let footprint = components
+            .get(&anchor)
+            .and_then(|component| component.layout.as_ref())
+            .expect("resolved footprint");
+        assert_eq!(
+            footprint.fpid.as_deref(),
+            Some("Resistor_SMD:R_0402_1005Metric")
+        );
+        assert!(matches!(
+            &footprint.footprint_geometry,
+            ImportFootprintGeometry::StandardLibrary
+        ));
+        assert!(
+            footprint
+                .pads
+                .contains_key(&KiCadPinNumber::from("1".to_string()))
+        );
+        assert!(
+            footprint
+                .pads
+                .contains_key(&KiCadPinNumber::from("2".to_string()))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_project_footprint_copies_exact_geometry() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let footprint_path = dir.path().join("Local.pretty/Thing.kicad_mod");
+        fs::create_dir_all(footprint_path.parent().unwrap())?;
+        let footprint_text = r#"(footprint "Thing"
+  (version 20240108)
+  (generator pcbnew)
+  (pad "1" thru_hole circle (at 0 0) (size 1 1) (drill 0.5) (layers "*.Cu" "*.Mask"))
+  (pad "2" thru_hole circle (at 2 0) (size 1 1) (drill 0.5) (layers "*.Cu" "*.Mask")))"#;
+        fs::write(&footprint_path, footprint_text)?;
+        let selection = standalone_selection(
+            dir.path(),
+            BTreeMap::from([("Local:Thing".to_string(), footprint_path)]),
+        );
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "u1".to_string(),
+        };
+        let mut components =
+            BTreeMap::from([(anchor.clone(), component("U1", Some("Local:Thing"), "u1"))]);
+
+        resolve_standalone_footprints(&selection, dir.path(), &mut components)?;
+        let resolved = components[&anchor].layout.as_ref().unwrap();
+        assert!(matches!(
+            &resolved.footprint_geometry,
+            ImportFootprintGeometry::LibraryFile(text) if text == footprint_text
+        ));
+        assert_eq!(resolved.pads.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn unresolved_project_footprint_does_not_fall_through_to_stdlib() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut selection = standalone_selection(dir.path(), BTreeMap::new());
+        let fpid = "Resistor_SMD:R_0402_1005Metric";
+        selection
+            .portable
+            .project_footprint_ids
+            .insert(fpid.to_string());
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "r1".to_string(),
+        };
+        let mut components = BTreeMap::from([(anchor.clone(), component("R1", Some(fpid), "r1"))]);
+
+        resolve_standalone_footprints(&selection, dir.path(), &mut components)?;
+
+        let footprint = components[&anchor].layout.as_ref().unwrap();
+        assert!(matches!(
+            footprint.footprint_geometry,
+            ImportFootprintGeometry::Unresolved
+        ));
+        assert_eq!(
+            footprint
+                .unresolved_footprint
+                .as_ref()
+                .and_then(|entry| entry.source_id.as_deref()),
+            Some(fpid)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unresolved_footprints_are_retained_for_later_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let selection = standalone_selection(dir.path(), BTreeMap::new());
+        let a = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "a".to_string(),
+        };
+        let b = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "b".to_string(),
+        };
+        let c = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "c".to_string(),
+        };
+        let mut components = BTreeMap::from([
+            (a, component("U1", Some("Missing:One"), "a")),
+            (b, component("U2", Some("Missing:One"), "b")),
+            (c, component("U3", None, "c")),
+        ]);
+
+        resolve_standalone_footprints(&selection, dir.path(), &mut components).unwrap();
+        for component in components.values() {
+            let layout = component
+                .layout
+                .as_ref()
+                .expect("unresolved footprint record");
+            assert!(matches!(
+                layout.footprint_geometry,
+                ImportFootprintGeometry::Unresolved
+            ));
+            assert!(layout.pads.is_empty());
+            assert!(layout.unresolved_footprint.is_some());
+        }
+    }
+
+    #[test]
+    fn unresolved_warning_lists_footprint_ids_and_caps_the_output() {
+        let unresolved = (0..10)
+            .map(|index| {
+                (
+                    format!("Missing:Footprint_{index}"),
+                    vec![format!("U{index}")],
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let warning = unresolved_footprint_warning(&unresolved);
+
+        assert!(warning.starts_with("Warning: 10 component(s) have unresolved footprints:"));
+        assert!(warning.contains("Missing:Footprint_0"));
+        assert!(warning.contains("and 2 more"));
+        assert!(!warning.contains("Looked in:"));
+        assert!(warning.contains("connectivity intact but is not layout-ready"));
+    }
+
+    #[test]
+    fn ambiguous_netlist_identities_report_paths_and_refdeses_together() -> Result<()> {
+        let netlist = r#"
+(export (version "E")
+  (components
+    (comp (ref "R1") (value "1k") (footprint "Resistor_SMD:R_0402_1005Metric")
+      (sheetpath (names "/") (tstamps "/")) (tstamps "same"))
+    (comp (ref "R2") (value "2k") (footprint "Resistor_SMD:R_0402_1005Metric")
+      (sheetpath (names "/") (tstamps "/")) (tstamps "same"))
+    (comp (ref "U1") (value "A") (footprint "Package_DIP:DIP-8_W7.62mm")
+      (sheetpath (names "/") (tstamps "/")) (tstamps "u-a"))
+    (comp (ref "U1") (value "B") (footprint "Package_DIP:DIP-8_W7.62mm")
+      (sheetpath (names "/child/") (tstamps "/child/")) (tstamps "u-b")))
+  (nets))
+"#;
+        let root = pcb_sexpr::parse(netlist)?;
+        let error = parse_kicad_sexpr_netlist_components(&root, &BTreeMap::new())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("path /same maps to refdeses R1, R2"));
+        assert!(error.contains("refdes U1 maps to paths /u-a, /child/u-b"));
         Ok(())
     }
 }

@@ -15,17 +15,27 @@ skip_pos = config(bool, default = {{ "True" if skip_pos_default else "False" }})
 {{ pin.sanitized_name }} = io(Net)
 {% endfor %}
 Component(
-    name = "{{ component_name }}",
+    name = {{ component_name_literal }},
 {%- if include_skip_bom %}
     skip_bom = skip_bom,
 {%- endif %}
 {%- if include_skip_pos %}
     skip_pos = skip_pos,
 {%- endif %}
-    symbol = Symbol(library = "{{ sym_path }}"),
+{%- if footprint_literal %}
+    footprint = {{ footprint_literal }},
+{%- endif %}
+    symbol = Symbol(library = {{ sym_path_literal }}),
+{%- if pin_defs %}
+    pin_defs = {
+{%- for pin in pin_defs %}
+        {{ pin.logical_name_literal }}: {{ pin.pad_number_literal }}{{ "," if not loop.last }}
+{%- endfor %}
+    },
+{%- endif %}
     pins = {
 {%- for pin in pin_mappings %}
-        "{{ pin.original_name }}": {{ pin.sanitized_name }}{{ "," if not loop.last }}
+        {{ pin.original_name_literal }}: {{ pin.sanitized_name }}{{ "," if not loop.last }}
 {%- endfor %}
     },
 )

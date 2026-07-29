@@ -1,4 +1,4 @@
-use super::{PortableExtraFile, PortableKicadProject};
+use super::{ImportSourceKind, PortableExtraFile, PortableKicadProject};
 use anyhow::{Context, Result, bail};
 use pcb_sexpr::{Sexpr, parse as parse_sexpr};
 use serde::Serialize;
@@ -16,9 +16,11 @@ const KICAD_PCB_EXT: &str = "kicad_pcb";
 const KICAD_SCH_EXT: &str = "kicad_sch";
 const KICAD_SYM_EXT: &str = "kicad_sym";
 const KICAD_MOD_EXT: &str = "kicad_mod";
+const KICAD_DRU_EXT: &str = "kicad_dru";
 
 const SYM_LIB_TABLE_FILE: &str = "sym-lib-table";
 const FP_LIB_TABLE_FILE: &str = "fp-lib-table";
+const KICAD_COMMON_JSON_FILE: &str = "kicad_common.json";
 
 const MANIFEST_FILE_NAME: &str = "export_manifest.json";
 
@@ -34,18 +36,253 @@ struct KicadVariableResolver {
     vars: BTreeMap<String, String>,
 }
 
+struct ProjectLibraryTables {
+    /// The project library tables that are actually present, for staging alongside the sources. The
+    /// loader has already tested each path, so callers stage these rather than re-checking.
+    existing_tables: Vec<PathBuf>,
+    symbols: BTreeMap<String, String>,
+    footprints: BTreeMap<String, String>,
+    /// Footprint libraries registered in the user's global `fp-lib-table`. Registering a
+    /// third-party library globally is the normal KiCad workflow, so a project table is often
+    /// empty even though every footprint resolves in KiCad.
+    global_footprints: BTreeMap<String, GlobalFootprintLibrary>,
+}
+
+struct GlobalFootprintLibrary {
+    /// Directory of the global table, used as the base for relative URIs.
+    table_dir: PathBuf,
+    uri: String,
+}
+
+#[derive(Default)]
+struct SchematicAssets {
+    files: BTreeSet<PathBuf>,
+    symbol_ids: BTreeSet<String>,
+    footprint_ids: BTreeSet<String>,
+    model_refs: BTreeSet<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct KicadProjectManifest {
     project_dir: String,
-    project_file: String,
+    source_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_file: Option<String>,
     root_schematic: String,
-    pcb_file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pcb_file: Option<String>,
     schematic_files: Vec<String>,
     files: Vec<String>,
     bundled_models: Vec<String>,
 }
 
-pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadProject> {
+pub(super) fn discover_and_validate(kicad_input_abs: &Path) -> Result<PortableKicadProject> {
+    match kicad_input_abs.extension().and_then(|ext| ext.to_str()) {
+        Some(KICAD_PRO_EXT) => discover_project_and_validate(kicad_input_abs),
+        Some(KICAD_SCH_EXT) => discover_schematic_and_validate(kicad_input_abs),
+        _ => bail!(
+            "Expected a .kicad_sch or .kicad_pro file path, got: {}",
+            kicad_input_abs.display()
+        ),
+    }
+}
+
+fn load_project_library_tables(project_dir: &Path) -> Result<ProjectLibraryTables> {
+    let sym_path = project_dir.join(SYM_LIB_TABLE_FILE);
+    let fp_path = project_dir.join(FP_LIB_TABLE_FILE);
+    let symbols = if sym_path.is_file() {
+        parse_library_table(&sym_path, "sym_lib_table")?
+    } else {
+        BTreeMap::new()
+    };
+    let footprints = if fp_path.is_file() {
+        parse_library_table(&fp_path, "fp_lib_table")?
+    } else {
+        BTreeMap::new()
+    };
+    Ok(ProjectLibraryTables {
+        existing_tables: [sym_path, fp_path]
+            .into_iter()
+            .filter(|path| path.is_file())
+            .collect(),
+        symbols,
+        footprints,
+        global_footprints: load_global_footprint_table(),
+    })
+}
+
+/// Footprint libraries from the user's global `fp-lib-table`, keyed by library nickname.
+///
+/// KiCad resolves a footprint through the project table *or* the global one, so a design whose
+/// project table is empty still resolves in KiCad. Import reads global state only to locate the
+/// referenced `.kicad_mod` files, which it then copies into the generated component packages, so
+/// the machine's KiCad configuration is baked into the output at import time rather than becoming
+/// an ongoing dependency of the generated board.
+///
+/// A malformed or unreadable global table is skipped rather than failing the import: it is machine
+/// state the imported design does not own.
+fn load_global_footprint_table() -> BTreeMap<String, GlobalFootprintLibrary> {
+    global_footprint_table_from_paths(&discover_kicad_config_files(FP_LIB_TABLE_FILE))
+}
+
+/// Ascending KiCad version order, so a newer configuration wins on a nickname conflict.
+fn global_footprint_table_from_paths(
+    table_paths: &[PathBuf],
+) -> BTreeMap<String, GlobalFootprintLibrary> {
+    let mut libraries = BTreeMap::new();
+    for table_path in table_paths {
+        let Ok(entries) = parse_library_table(table_path, "fp_lib_table") else {
+            continue;
+        };
+        let Some(table_dir) = table_path.parent().map(Path::to_path_buf) else {
+            continue;
+        };
+        for (nickname, uri) in entries {
+            libraries.insert(
+                nickname,
+                GlobalFootprintLibrary {
+                    table_dir: table_dir.clone(),
+                    uri,
+                },
+            );
+        }
+    }
+    libraries
+}
+
+fn discover_schematic_assets(
+    project_dir: &Path,
+    root_schematic_abs: &Path,
+    variable_resolver: &KicadVariableResolver,
+) -> Result<SchematicAssets> {
+    let mut assets = SchematicAssets::default();
+    let mut visited = BTreeSet::new();
+    let mut queue = VecDeque::from([root_schematic_abs.to_path_buf()]);
+
+    while let Some(current_abs) = queue.pop_front() {
+        if !visited.insert(current_abs.clone()) {
+            continue;
+        }
+        assets.files.insert(current_abs.clone());
+
+        let content = fs::read_to_string(&current_abs)
+            .with_context(|| format!("Failed to read schematic {}", current_abs.display()))?;
+        let discovery = discover_from_sexpr_text(&content)
+            .with_context(|| format!("Failed to parse schematic {}", current_abs.display()))?;
+        assets.symbol_ids.extend(discovery.symbol_ids);
+        assets.footprint_ids.extend(discovery.footprint_ids);
+        assets.model_refs.extend(discovery.model_refs);
+
+        for sheet_ref in discovery.sheetfile_refs {
+            let base_dir = current_abs.parent().unwrap_or(project_dir);
+            let child_abs =
+                resolve_reference_path(project_dir, base_dir, &sheet_ref, variable_resolver)?;
+            if child_abs.extension().and_then(|ext| ext.to_str()) != Some(KICAD_SCH_EXT) {
+                bail!(
+                    "Sheetfile reference must point to .kicad_sch, got '{}' in {}",
+                    sheet_ref,
+                    current_abs.display()
+                );
+            }
+            queue.push_back(child_abs);
+        }
+    }
+
+    Ok(assets)
+}
+
+fn resolve_project_library_assets(
+    project_dir: &Path,
+    variable_resolver: &KicadVariableResolver,
+    tables: &ProjectLibraryTables,
+    assets: &SchematicAssets,
+    abs_files: &mut BTreeSet<PathBuf>,
+) -> (BTreeMap<String, PathBuf>, BTreeSet<String>) {
+    for identifier in &assets.symbol_ids {
+        let Some((library_nickname, _)) = parse_library_identifier(identifier) else {
+            continue;
+        };
+        let Some(uri) = tables.symbols.get(&library_nickname) else {
+            continue;
+        };
+        if let Ok(path) = resolve_symbol_library_uri(project_dir, uri, variable_resolver) {
+            abs_files.insert(path);
+        }
+    }
+
+    let mut footprints = BTreeMap::new();
+    let mut project_footprint_ids = BTreeSet::new();
+    for identifier in &assets.footprint_ids {
+        let Some((library_nickname, entry_name)) = parse_library_identifier(identifier) else {
+            continue;
+        };
+
+        // An enabled project-table entry wins on a nickname conflict, matching KiCad. Disabled
+        // project rows are omitted by `parse_library_table`, so lookup falls through to global.
+        if let Some(uri) = tables.footprints.get(&library_nickname) {
+            project_footprint_ids.insert(identifier.clone());
+            if let Ok(path) = resolve_footprint_library_uri(
+                project_dir,
+                project_dir,
+                uri,
+                &entry_name,
+                variable_resolver,
+                false,
+            ) {
+                abs_files.insert(path.clone());
+                footprints.insert(identifier.clone(), path);
+            }
+            continue;
+        }
+
+        // Global libraries live outside the project directory, so their files are not staged or
+        // archived alongside the project sources; extraction reads the resolved file and embeds
+        // the geometry in the generated component package.
+        let Some(library) = tables.global_footprints.get(&library_nickname) else {
+            continue;
+        };
+        if let Ok(path) = resolve_footprint_library_uri(
+            project_dir,
+            &library.table_dir,
+            &library.uri,
+            &entry_name,
+            variable_resolver,
+            true,
+        ) {
+            footprints.insert(identifier.clone(), path);
+        }
+    }
+    (footprints, project_footprint_ids)
+}
+
+fn bundle_models(
+    project_dir: &Path,
+    model_refs: &BTreeSet<String>,
+    variable_resolver: &KicadVariableResolver,
+) -> Vec<PortableExtraFile> {
+    let mut files = Vec::new();
+    let mut used_paths = BTreeSet::new();
+    for model_ref in model_refs {
+        let Ok(source_path) = resolve_model_path(project_dir, model_ref, variable_resolver) else {
+            continue;
+        };
+        let hint = model_archive_hint(model_ref, &source_path);
+        files.push(PortableExtraFile {
+            source_path,
+            archive_relative_path: ensure_unique_archive_path(&mut used_paths, &hint),
+        });
+    }
+    files
+}
+
+fn relative_sorted(project_dir: &Path, files: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    files
+        .iter()
+        .map(|path| to_relative(project_dir, path))
+        .collect()
+}
+
+fn discover_project_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadProject> {
     if !kicad_pro_abs.exists() {
         bail!(
             "KiCad project file does not exist: {}",
@@ -110,30 +347,21 @@ pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKica
     abs_files.insert(primary_pcb_abs.clone());
     abs_files.insert(root_schematic_abs.clone());
 
-    let sym_lib_table_abs = project_dir.join(SYM_LIB_TABLE_FILE);
-    let fp_lib_table_abs = project_dir.join(FP_LIB_TABLE_FILE);
-    if sym_lib_table_abs.exists() {
-        abs_files.insert(sym_lib_table_abs.clone());
-    }
-    if fp_lib_table_abs.exists() {
-        abs_files.insert(fp_lib_table_abs.clone());
+    // KiCad loads project design rules by the project filename rather than an explicit project
+    // reference. Preserve the conventional rules file in validation staging and the archive.
+    let design_rules_name = format!("{project_name}.{KICAD_DRU_EXT}");
+    let design_rules_path = project_dir.join(&design_rules_name);
+    if design_rules_path.exists() {
+        abs_files.insert(resolve_reference_path(
+            project_dir,
+            project_dir,
+            &design_rules_name,
+            &variable_resolver,
+        )?);
     }
 
-    // Library tables are optional; used for project-local resolution of symbols/footprints.
-    let sym_lib_table = if sym_lib_table_abs.exists() {
-        parse_library_table(&sym_lib_table_abs, "sym_lib_table")?
-    } else {
-        BTreeMap::new()
-    };
-    let fp_lib_table = if fp_lib_table_abs.exists() {
-        parse_library_table(&fp_lib_table_abs, "fp_lib_table")?
-    } else {
-        BTreeMap::new()
-    };
-
-    let mut symbol_ids: BTreeSet<String> = BTreeSet::new();
-    let mut footprint_ids: BTreeSet<String> = BTreeSet::new();
-    let mut model_refs: BTreeSet<String> = BTreeSet::new();
+    let library_tables = load_project_library_tables(project_dir)?;
+    abs_files.extend(library_tables.existing_tables.iter().cloned());
 
     // Include direct project references from .kicad_pro.
     for reference in &kicad_refs {
@@ -148,117 +376,50 @@ pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKica
         abs_files.insert(resolved);
     }
 
-    // Parse primary PCB for additional project-local references.
+    let mut referenced_assets =
+        discover_schematic_assets(project_dir, &root_schematic_abs, &variable_resolver)?;
+    abs_files.extend(referenced_assets.files.iter().cloned());
+
+    // Include references embedded in the PCB in addition to schematic assets.
     let pcb_content = fs::read_to_string(&primary_pcb_abs)
         .with_context(|| format!("Failed to read {}", primary_pcb_abs.display()))?;
     let pcb_discovery = discover_from_sexpr_text(&pcb_content)
         .with_context(|| format!("Failed to parse {}", primary_pcb_abs.display()))?;
-    symbol_ids.extend(pcb_discovery.symbol_ids);
-    footprint_ids.extend(pcb_discovery.footprint_ids);
-    model_refs.extend(pcb_discovery.model_refs);
+    referenced_assets
+        .symbol_ids
+        .extend(pcb_discovery.symbol_ids);
+    referenced_assets
+        .footprint_ids
+        .extend(pcb_discovery.footprint_ids);
+    referenced_assets
+        .model_refs
+        .extend(pcb_discovery.model_refs);
 
-    // Traverse schematic hierarchy from resolved root schematic.
-    let mut visited_schematics: BTreeSet<PathBuf> = BTreeSet::new();
-    let mut queue: VecDeque<PathBuf> = VecDeque::from([root_schematic_abs.clone()]);
-
-    while let Some(current_abs) = queue.pop_front() {
-        if !visited_schematics.insert(current_abs.clone()) {
-            continue;
-        }
-        abs_files.insert(current_abs.clone());
-
-        let content = fs::read_to_string(&current_abs)
-            .with_context(|| format!("Failed to read schematic {}", current_abs.display()))?;
-        let discovery = discover_from_sexpr_text(&content)
-            .with_context(|| format!("Failed to parse schematic {}", current_abs.display()))?;
-
-        symbol_ids.extend(discovery.symbol_ids);
-        footprint_ids.extend(discovery.footprint_ids);
-        model_refs.extend(discovery.model_refs);
-
-        // Follow sheet hierarchy.
-        for sheet_ref in discovery.sheetfile_refs {
-            let base_dir = current_abs.parent().unwrap_or(project_dir);
-            let child_abs =
-                resolve_reference_path(project_dir, base_dir, &sheet_ref, &variable_resolver)?;
-            if child_abs.extension().and_then(|ext| ext.to_str()) != Some(KICAD_SCH_EXT) {
-                bail!(
-                    "Sheetfile reference must point to .kicad_sch, got '{}' in {}",
-                    sheet_ref,
-                    current_abs.display()
-                );
-            }
-            queue.push_back(child_abs);
-        }
-    }
-
-    // Resolve project-local symbol/footprint assets through library tables.
-    for identifier in &symbol_ids {
-        let Some((library_nickname, _entry_name)) = parse_library_identifier(identifier) else {
-            continue;
-        };
-        let Some(uri) = sym_lib_table.get(&library_nickname) else {
-            continue;
-        };
-        if let Ok(path) = resolve_symbol_library_uri(project_dir, uri, &variable_resolver) {
-            abs_files.insert(path);
-        }
-    }
-
-    for identifier in &footprint_ids {
-        let Some((library_nickname, entry_name)) = parse_library_identifier(identifier) else {
-            continue;
-        };
-        let Some(uri) = fp_lib_table.get(&library_nickname) else {
-            continue;
-        };
-        if let Ok(path) =
-            resolve_footprint_library_uri(project_dir, uri, &entry_name, &variable_resolver)
-        {
-            abs_files.insert(path);
-        }
-    }
-
-    let mut extra_files_to_bundle: Vec<PortableExtraFile> = Vec::new();
-    let mut used_extra_paths: BTreeSet<String> = BTreeSet::new();
-    for model_ref in &model_refs {
-        let Ok(resolved_abs) = resolve_model_path(project_dir, model_ref, &variable_resolver)
-        else {
-            continue;
-        };
-
-        let archive_hint = model_archive_hint(model_ref, &resolved_abs);
-        let archive_path = ensure_unique_archive_path(&mut used_extra_paths, &archive_hint);
-
-        extra_files_to_bundle.push(PortableExtraFile {
-            source_path: resolved_abs,
-            archive_relative_path: archive_path,
-        });
-    }
-
-    let mut schematic_files_rel: Vec<PathBuf> = visited_schematics
-        .iter()
-        .map(|abs| to_relative(project_dir, abs))
-        .collect();
-    schematic_files_rel.sort();
-    schematic_files_rel.dedup();
+    let (resolved_project_footprints, project_footprint_ids) = resolve_project_library_assets(
+        project_dir,
+        &variable_resolver,
+        &library_tables,
+        &referenced_assets,
+        &mut abs_files,
+    );
+    let extra_files_to_bundle = bundle_models(
+        project_dir,
+        &referenced_assets.model_refs,
+        &variable_resolver,
+    );
+    let schematic_files_rel = relative_sorted(project_dir, &referenced_assets.files);
 
     let root_schematic_rel = to_relative(project_dir, &root_schematic_abs);
     let primary_kicad_pcb_rel = to_relative(project_dir, &primary_pcb_abs);
-
-    let mut files_to_bundle_rel: Vec<PathBuf> = abs_files
-        .iter()
-        .map(|abs| to_relative(project_dir, abs))
-        .collect();
-    files_to_bundle_rel.sort();
-    files_to_bundle_rel.dedup();
+    let files_to_bundle_rel = relative_sorted(project_dir, &abs_files);
 
     // Emit a small manifest into the archive for reproducibility/debugging.
     let manifest = KicadProjectManifest {
         project_dir: project_dir.display().to_string(),
-        project_file: path_to_posix_string(&kicad_pro_rel),
+        source_kind: "project".to_string(),
+        project_file: Some(path_to_posix_string(&kicad_pro_rel)),
         root_schematic: path_to_posix_string(&root_schematic_rel),
-        pcb_file: path_to_posix_string(&primary_kicad_pcb_rel),
+        pcb_file: Some(path_to_posix_string(&primary_kicad_pcb_rel)),
         schematic_files: schematic_files_rel
             .iter()
             .map(|p| path_to_posix_string(p))
@@ -278,17 +439,139 @@ pub(super) fn discover_and_validate(kicad_pro_abs: &Path) -> Result<PortableKica
     Ok(PortableKicadProject {
         project_dir: project_dir.to_path_buf(),
         project_name,
-        kicad_pro_rel,
+        source_kind: ImportSourceKind::Project,
+        kicad_pro_rel: Some(kicad_pro_rel),
         root_schematic_rel,
-        primary_kicad_pcb_rel,
+        primary_kicad_pcb_rel: Some(primary_kicad_pcb_rel),
         schematic_files_rel,
         files_to_bundle_rel,
+        resolved_project_footprints,
+        project_footprint_ids,
         extra_files_to_bundle,
         manifest_json,
     })
 }
 
-pub(super) fn write_portable_zip(project: &PortableKicadProject, output_zip: &Path) -> Result<()> {
+fn discover_schematic_and_validate(kicad_sch_abs: &Path) -> Result<PortableKicadProject> {
+    if !kicad_sch_abs.is_file()
+        || kicad_sch_abs.extension().and_then(|ext| ext.to_str()) != Some(KICAD_SCH_EXT)
+    {
+        bail!(
+            "Expected a .kicad_sch file path, got: {}",
+            kicad_sch_abs.display()
+        );
+    }
+
+    let kicad_sch_abs = kicad_sch_abs
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize {}", kicad_sch_abs.display()))?;
+    let project_dir = kicad_sch_abs.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Failed to determine schematic directory from {}",
+            kicad_sch_abs.display()
+        )
+    })?;
+    let project_name = kicad_sch_abs
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Failed to infer board name from .kicad_sch filename"))?
+        .to_string();
+    let root_schematic_rel = to_relative(project_dir, &kicad_sch_abs);
+
+    let variable_resolver = build_kicad_variable_resolver(project_dir, &Value::Null);
+    let library_tables = load_project_library_tables(project_dir)?;
+    let schematic_assets =
+        discover_schematic_assets(project_dir, &kicad_sch_abs, &variable_resolver)?;
+
+    let mut abs_files = schematic_assets.files.clone();
+    abs_files.extend(library_tables.existing_tables.iter().cloned());
+    let (resolved_project_footprints, project_footprint_ids) = resolve_project_library_assets(
+        project_dir,
+        &variable_resolver,
+        &library_tables,
+        &schematic_assets,
+        &mut abs_files,
+    );
+    let extra_files_to_bundle = bundle_models(
+        project_dir,
+        &schematic_assets.model_refs,
+        &variable_resolver,
+    );
+    let schematic_files_rel = relative_sorted(project_dir, &schematic_assets.files);
+    let files_to_bundle_rel = relative_sorted(project_dir, &abs_files);
+
+    let manifest = KicadProjectManifest {
+        project_dir: project_dir.display().to_string(),
+        source_kind: "schematic".to_string(),
+        project_file: None,
+        root_schematic: path_to_posix_string(&root_schematic_rel),
+        pcb_file: None,
+        schematic_files: schematic_files_rel
+            .iter()
+            .map(|p| path_to_posix_string(p))
+            .collect(),
+        files: files_to_bundle_rel
+            .iter()
+            .map(|p| path_to_posix_string(p))
+            .collect(),
+        bundled_models: extra_files_to_bundle
+            .iter()
+            .map(|f| f.archive_relative_path.clone())
+            .collect(),
+    };
+    let manifest_json = serde_json::to_string_pretty(&manifest)
+        .context("Failed to serialize portable KiCad manifest")?;
+
+    Ok(PortableKicadProject {
+        project_dir: project_dir.to_path_buf(),
+        project_name,
+        source_kind: ImportSourceKind::Schematic,
+        kicad_pro_rel: None,
+        root_schematic_rel,
+        primary_kicad_pcb_rel: None,
+        schematic_files_rel,
+        files_to_bundle_rel,
+        resolved_project_footprints,
+        project_footprint_ids,
+        extra_files_to_bundle,
+        manifest_json,
+    })
+}
+
+fn private_tempdir(prefix: &str) -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir()
+}
+
+pub(super) fn stage_project_files(project: &PortableKicadProject) -> Result<tempfile::TempDir> {
+    // 0700: the staged tree is a copy of the user's KiCad sources in a shared temp directory.
+    let temp = private_tempdir("pcb-import-kicad-sources-")
+        .context("Failed to stage KiCad source files")?;
+    for relative in &project.files_to_bundle_rel {
+        let source = project.project_dir.join(relative);
+        let destination = temp.path().join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(&source, &destination)
+            .with_context(|| format!("Failed to stage KiCad source {}", source.display()))?;
+    }
+    Ok(temp)
+}
+
+/// Write the portable KiCad source archive using the established streaming project-import path.
+pub(super) fn write_portable_zip(
+    project: &PortableKicadProject,
+    staged_root: &Path,
+    output_zip: &Path,
+) -> Result<()> {
     if let Some(parent) = output_zip.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -305,7 +588,7 @@ pub(super) fn write_portable_zip(project: &PortableKicadProject, output_zip: &Pa
     let mut zip = ZipWriter::new(BufWriter::new(output_file));
 
     for relative in &project.files_to_bundle_rel {
-        let absolute = project.project_dir.join(relative);
+        let absolute = staged_root.join(relative);
         let archive_path = format!(
             "{}/{}",
             project.project_name,
@@ -374,7 +657,7 @@ fn build_kicad_variable_resolver(
     let mut vars = BTreeMap::new();
 
     // KiCad user settings variables from kicad_common.json files.
-    for path in discover_kicad_common_json_files() {
+    for path in discover_kicad_config_files(KICAD_COMMON_JSON_FILE) {
         for (key, value) in load_user_environment_vars_from_common_json(&path) {
             vars.insert(key, value);
         }
@@ -408,13 +691,23 @@ fn build_kicad_variable_resolver(
     KicadVariableResolver { vars }
 }
 
-fn discover_kicad_common_json_files() -> Vec<PathBuf> {
+/// KiCad configuration roots for this machine, honouring `KICAD_CONFIG_HOME` and the platform
+/// defaults. Both `kicad_common.json` and the global `fp-lib-table` live under these.
+fn kicad_config_roots() -> BTreeSet<PathBuf> {
     let mut roots = BTreeSet::new();
 
     if let Ok(config_home) = env::var("KICAD_CONFIG_HOME")
         && !config_home.is_empty()
     {
+        // KiCad treats this as an override for the platform configuration root, not an
+        // additional lower-priority location.
         roots.insert(PathBuf::from(config_home));
+        return roots;
+    }
+
+    // `dirs::config_dir` honors XDG_CONFIG_HOME on Linux and APPDATA on Windows.
+    if let Some(config_dir) = dirs::config_dir() {
+        roots.insert(config_dir.join("kicad"));
     }
 
     if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
@@ -428,9 +721,15 @@ fn discover_kicad_common_json_files() -> Vec<PathBuf> {
         roots.insert(PathBuf::from(app_data).join("kicad"));
     }
 
+    roots
+}
+
+/// Every `file_name` found directly in a KiCad configuration root or in one of its versioned
+/// subdirectories, ordered by ascending KiCad version so later entries override earlier ones.
+fn discover_kicad_config_files(file_name: &str) -> Vec<PathBuf> {
     let mut files = BTreeSet::new();
-    for root in roots {
-        let top = root.join("kicad_common.json");
+    for root in kicad_config_roots() {
+        let top = root.join(file_name);
         if top.is_file() {
             files.insert(top);
         }
@@ -440,7 +739,7 @@ fn discover_kicad_common_json_files() -> Vec<PathBuf> {
                 if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
                     continue;
                 }
-                let candidate = entry.path().join("kicad_common.json");
+                let candidate = entry.path().join(file_name);
                 if candidate.is_file() {
                     files.insert(candidate);
                 }
@@ -665,6 +964,10 @@ fn parse_library_table(path: &Path, table_tag: &str) -> Result<BTreeMap<String, 
 
         let mut name = None::<String>;
         let mut uri = None::<String>;
+        // KiCad's library-table grammar treats `(disabled)` as a flag with no arguments. A
+        // disabled row is ignored for nickname lookup so a later table (global after project,
+        // or a newer global config) can supply the same nickname.
+        let mut disabled = false;
         for field in &lib_items[1..] {
             let Some(field_items) = field.as_list() else {
                 continue;
@@ -680,8 +983,15 @@ fn parse_library_table(path: &Path, table_tag: &str) -> Result<BTreeMap<String, 
                         uri = Some(value.to_string());
                     }
                 }
+                Some("disabled") => {
+                    disabled = true;
+                }
                 _ => {}
             }
+        }
+
+        if disabled {
+            continue;
         }
 
         if let (Some(name), Some(uri)) = (name, uri) {
@@ -755,6 +1065,7 @@ fn resolve_model_path(
         variable_resolver,
         ResolveRefOptions {
             allow_external: true,
+            allow_directory: false,
             kind: "model file",
         },
     )
@@ -921,7 +1232,14 @@ fn resolve_symbol_library_uri(
     uri: &str,
     variable_resolver: &KicadVariableResolver,
 ) -> std::result::Result<PathBuf, String> {
-    let path = resolve_uri_path(project_dir, uri, variable_resolver)?;
+    let path = resolve_uri_path(
+        project_dir,
+        project_dir,
+        uri,
+        variable_resolver,
+        false,
+        false,
+    )?;
     match path.extension().and_then(|ext| ext.to_str()) {
         Some(KICAD_SYM_EXT) => Ok(path),
         Some("lib") => Err(format!(
@@ -935,18 +1253,56 @@ fn resolve_symbol_library_uri(
     }
 }
 
+/// Resolves one footprint inside the library a table entry names.
+///
+/// `base_dir` is the directory a relative URI is taken against: the project directory for a
+/// project table entry, the global table's directory for a global one. `allow_external` relaxes the
+/// project-containment check, which global libraries never satisfy; the containment check against
+/// the library directory itself still applies, so an entry name can never escape its library.
+/// Resolve `path` for a containment comparison, falling back to the path itself.
+///
+/// Both sides of a `starts_with` containment check must be canonicalized the same way. Comparing a
+/// canonicalized candidate against a raw directory silently fails wherever canonicalization rewrites
+/// the prefix: on Windows it yields a `\\?\C:\...` verbatim path that never starts with `C:\...`, so
+/// every project-local footprint library was judged outside the project and no footprint resolved. On
+/// macOS `/var` resolving to `/private/var` has the same effect.
+fn canonical_or_original(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn resolve_footprint_library_uri(
     project_dir: &Path,
+    base_dir: &Path,
     uri: &str,
     footprint_name: &str,
     variable_resolver: &KicadVariableResolver,
+    allow_external: bool,
 ) -> std::result::Result<PathBuf, String> {
-    let base = resolve_uri_path(project_dir, uri, variable_resolver)?;
+    let footprint_path = Path::new(footprint_name);
+    if footprint_path.components().count() != 1
+        || !matches!(
+            footprint_path.components().next(),
+            Some(Component::Normal(_))
+        )
+    {
+        return Err(format!(
+            "Footprint entry name must not contain path components: {footprint_name:?}"
+        ));
+    }
+
+    let base = resolve_uri_path(
+        project_dir,
+        base_dir,
+        uri,
+        variable_resolver,
+        true,
+        allow_external,
+    )?;
     let candidate =
         if base.extension().and_then(|ext| ext.to_str()) == Some("pretty") || base.is_dir() {
             base.join(format!("{footprint_name}.{KICAD_MOD_EXT}"))
         } else if base.extension().and_then(|ext| ext.to_str()) == Some(KICAD_MOD_EXT) {
-            base
+            base.clone()
         } else {
             return Err(format!(
                 "Footprint library URI must point to a .pretty directory or .kicad_mod file: {}",
@@ -974,23 +1330,40 @@ fn resolve_footprint_library_uri(
         ));
     }
 
-    candidate
+    let canonical = candidate
         .canonicalize()
-        .map_err(|e| format!("Failed to canonicalize {}: {}", candidate.display(), e))
+        .map_err(|e| format!("Failed to canonicalize {}: {}", candidate.display(), e))?;
+    if !allow_external && !canonical.starts_with(canonical_or_original(project_dir)) {
+        return Err(format!(
+            "External footprint file is outside project directory: {}",
+            canonical.display()
+        ));
+    }
+    if base.is_dir() && !canonical.starts_with(canonical_or_original(&base)) {
+        return Err(format!(
+            "Footprint file escapes its library directory: {}",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
 }
 
 fn resolve_uri_path(
     project_dir: &Path,
+    base_dir: &Path,
     uri: &str,
     variable_resolver: &KicadVariableResolver,
+    allow_directory: bool,
+    allow_external: bool,
 ) -> std::result::Result<PathBuf, String> {
     resolve_file_reference(
         project_dir,
-        project_dir,
+        base_dir,
         uri,
         variable_resolver,
         ResolveRefOptions {
-            allow_external: false,
+            allow_external,
+            allow_directory,
             kind: "URI path",
         },
     )
@@ -1009,6 +1382,7 @@ fn resolve_reference_path(
         variable_resolver,
         ResolveRefOptions {
             allow_external: false,
+            allow_directory: false,
             kind: "KiCad file",
         },
     )
@@ -1018,6 +1392,7 @@ fn resolve_reference_path(
 #[derive(Debug, Clone, Copy)]
 struct ResolveRefOptions {
     allow_external: bool,
+    allow_directory: bool,
     kind: &'static str,
 }
 
@@ -1046,6 +1421,12 @@ fn resolve_file_reference(
         } else {
             base_dir.join(ref_path)
         };
+        // Collapsed after the join, not before: a relative reference carries no verbatim prefix of its
+        // own, and `join` is purely lexical, so `base_dir` — always canonicalized, hence verbatim on
+        // Windows — is what contributes the prefix. Doing this on the expanded string alone would fix
+        // `${KIPRJMOD}/../lib.pretty` while still failing the more common `../common/power.kicad_sch`
+        // sheet reference. Absolute references are unaffected: `candidate` is then `ref_path` itself.
+        let candidate = collapse_verbatim_path(&candidate);
         last_candidate = Some(candidate.clone());
 
         let metadata = match fs::symlink_metadata(&candidate) {
@@ -1059,10 +1440,15 @@ fn resolve_file_reference(
                 candidate.display()
             ));
         }
-        if !metadata.is_file() {
+        if !(metadata.is_file() || options.allow_directory && metadata.is_dir()) {
             return Err(format!(
-                "Resolved {} is not a file: {}",
+                "Resolved {} is not a file{}: {}",
                 options.kind,
+                if options.allow_directory {
+                    " or directory"
+                } else {
+                    ""
+                },
                 candidate.display()
             ));
         }
@@ -1070,7 +1456,7 @@ fn resolve_file_reference(
         let canonical = candidate
             .canonicalize()
             .map_err(|e| format!("Failed to canonicalize {}: {}", candidate.display(), e))?;
-        if !options.allow_external && !canonical.starts_with(project_dir) {
+        if !options.allow_external && !canonical.starts_with(canonical_or_original(project_dir)) {
             return Err(format!(
                 "External referenced file is outside project directory: {}",
                 canonical.display()
@@ -1112,6 +1498,8 @@ fn normalize_expanded_reference_for_fs(expanded: &str) -> String {
         // KiCad strings commonly use forward slashes even on Windows. Convert to a
         // Windows-friendly form after variable expansion, so `${KIPRJMOD}/...`
         // continues to work even when `KIPRJMOD` is a verbatim (`\\?\...`) path.
+        // Any `..` this leaves behind is collapsed once the reference has been joined onto its base
+        // directory, in `resolve_file_reference` — see `collapse_verbatim_path`.
         expanded.replace('/', "\\")
     }
 
@@ -1119,6 +1507,69 @@ fn normalize_expanded_reference_for_fs(expanded: &str) -> String {
     {
         expanded.to_string()
     }
+}
+
+/// [`collapse_verbatim_relative_components`] over a path, for the resolution chain.
+///
+/// A no-op on any path without a verbatim prefix, which is every path on a non-Windows host.
+fn collapse_verbatim_path(path: &Path) -> PathBuf {
+    match path.to_str() {
+        // A non-UTF-8 path cannot contain a verbatim prefix this would act on without also being
+        // lossy to rewrite, so it is passed through untouched.
+        Some(text) => PathBuf::from(collapse_verbatim_relative_components(text)),
+        None => path.to_path_buf(),
+    }
+}
+
+/// Collapse `.` and `..` inside a Windows verbatim (`\\?\`) path.
+///
+/// Windows passes a verbatim path to the filesystem uninterpreted, so `..` inside one is a literal
+/// component and `\\?\C:\project\..\lib.pretty` cannot be opened. Import canonicalizes the project
+/// directory, which is verbatim on Windows, so without this no reference walking up a directory resolves.
+///
+/// Collapsing lexically can diverge from the filesystem across a junction, but never escapes the project:
+/// the result is canonicalized and re-checked for containment. Non-verbatim paths are returned unchanged,
+/// which makes this a no-op off Windows — where it stays compiled and tested so it cannot rot.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn collapse_verbatim_relative_components(path: &str) -> String {
+    const VERBATIM_PREFIX: &str = r"\\?\";
+
+    let Some(rest) = path.strip_prefix(VERBATIM_PREFIX) else {
+        return path.to_string();
+    };
+    if !rest.split('\\').any(|part| part == "." || part == "..") {
+        return path.to_string();
+    }
+
+    // How many leading components name the volume and so must never be popped: one for a drive
+    // (`C:`), three for a UNC share (`UNC\server\share`). Popping into either would produce a path
+    // that names nothing.
+    let root_components = if rest.starts_with("UNC\\") { 3 } else { 1 };
+
+    let mut kept: Vec<&str> = Vec::new();
+    for part in rest.split('\\') {
+        match part {
+            "" | "." => {}
+            // A `..` with only the volume root left is dropped, matching how Windows clamps at the
+            // root rather than erroring.
+            ".." => {
+                if kept.len() > root_components {
+                    kept.pop();
+                }
+            }
+            part => kept.push(part),
+        }
+    }
+
+    // A path reduced to its root keeps a trailing separator. Without one, `\\?\C:` parses as a prefix
+    // with no root, which is not absolute — `resolve_file_reference` would then join it onto the base
+    // directory and report a failure against a nonsense path.
+    let separator = if kept.len() == root_components {
+        "\\"
+    } else {
+        ""
+    };
+    format!("{VERBATIM_PREFIX}{}{separator}", kept.join("\\"))
 }
 
 fn extension_of_reference(reference: &str) -> Option<String> {
@@ -1248,7 +1699,7 @@ mod tests {
     fn discovers_root_schematic_from_kicad_pro_and_bundles_zip() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../pcb-sch/test/kicad-bom");
         let pro = root.join("layout.kicad_pro");
-        let project = discover_and_validate(&pro)?;
+        let mut project = discover_and_validate(&pro)?;
         assert_eq!(project.project_name, "layout");
         assert!(
             project
@@ -1257,9 +1708,12 @@ mod tests {
                 .any(|p| p == Path::new("layout.kicad_sch"))
         );
 
+        // Preserve the project-name archive root exactly, including characters that are valid in
+        // project filenames. This is established project-import behavior.
+        project.project_name = "layout board".to_string();
         let dir = tempfile::tempdir()?;
         let zip_path = dir.path().join("out.zip");
-        write_portable_zip(&project, &zip_path)?;
+        write_portable_zip(&project, &project.project_dir, &zip_path)?;
 
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;
@@ -1268,11 +1722,299 @@ mod tests {
             .collect::<Vec<_>>();
         names.sort();
 
-        assert!(names.contains(&"layout/layout.kicad_pro".to_string()));
-        assert!(names.contains(&"layout/layout.kicad_pcb".to_string()));
-        assert!(names.contains(&"layout/layout.kicad_sch".to_string()));
+        assert!(names.contains(&"layout board/layout.kicad_pro".to_string()));
+        assert!(names.contains(&"layout board/layout.kicad_pcb".to_string()));
+        assert!(names.contains(&"layout board/layout.kicad_sch".to_string()));
         assert!(names.contains(&MANIFEST_FILE_NAME.to_string()));
 
+        Ok(())
+    }
+    /// `${KIPRJMOD}/../lib.pretty` is how a KiCad project names a library one directory up, and on
+    /// Windows `KIPRJMOD` expands to a verbatim path the OS will not normalize, so the `..` has to be
+    /// collapsed before the path reaches the filesystem.
+    #[test]
+    fn verbatim_paths_collapse_relative_components() {
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\C:\project\..\shared.pretty"),
+            r"\\?\C:\shared.pretty"
+        );
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\C:\a\b\..\.\c"),
+            r"\\?\C:\a\c"
+        );
+        // Nothing to collapse, and non-verbatim paths Windows normalizes itself, are left alone —
+        // including POSIX paths, where the whole operation must be a no-op.
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\C:\project\lib.pretty"),
+            r"\\?\C:\project\lib.pretty"
+        );
+        assert_eq!(
+            collapse_verbatim_relative_components(r"C:\project\..\lib.pretty"),
+            r"C:\project\..\lib.pretty"
+        );
+        assert_eq!(
+            collapse_verbatim_relative_components("/tmp/project/../lib.pretty"),
+            "/tmp/project/../lib.pretty"
+        );
+        // A `..` with only the volume root left clamps instead of escaping it.
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\C:\..\..\lib.pretty"),
+            r"\\?\C:\lib.pretty"
+        );
+        // A UNC share root is three components, not one; popping into it would name nothing.
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\UNC\server\share\project\..\lib.pretty"),
+            r"\\?\UNC\server\share\lib.pretty"
+        );
+        assert_eq!(
+            collapse_verbatim_relative_components(r"\\?\UNC\server\share\..\..\..\lib.pretty"),
+            r"\\?\UNC\server\share\lib.pretty"
+        );
+    }
+
+    /// The collapse has to happen after a relative reference is joined onto its base directory: the
+    /// reference carries no verbatim prefix itself, and on Windows the canonicalized base is what
+    /// contributes one. Resolving a real file through a `..` is what pins that ordering — on Windows
+    /// this fails outright if the collapse is applied to the expanded string alone.
+    #[test]
+    fn a_relative_reference_resolves_through_a_parent_directory() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        let sheets = project.join("sheets");
+        let common = project.join("common");
+        fs::create_dir_all(&sheets)?;
+        fs::create_dir_all(&common)?;
+        let target = common.join("power.kicad_sch");
+        fs::write(&target, "(kicad_sch)")?;
+        let project = project.canonicalize()?;
+
+        let resolver = build_kicad_variable_resolver(&project, &Value::Null);
+        let resolved = resolve_reference_path(
+            &project,
+            &project.join("sheets").canonicalize()?,
+            "../common/power.kicad_sch",
+            &resolver,
+        )?;
+
+        assert_eq!(resolved, target.canonicalize()?);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_footprint_libraries_outside_project() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        let library = dir.path().join("External.pretty");
+        fs::create_dir(&project)?;
+        fs::create_dir(&library)?;
+        fs::write(library.join("Thing.kicad_mod"), "(footprint \"Thing\")")?;
+        let project = project.canonicalize()?;
+
+        let resolver = build_kicad_variable_resolver(&project, &Value::Null);
+        let error = resolve_footprint_library_uri(
+            &project,
+            &project,
+            "${KIPRJMOD}/../External.pretty",
+            "Thing",
+            &resolver,
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("outside project directory"));
+        Ok(())
+    }
+
+    /// Writes a one-entry footprint library table plus the `.pretty` library it names, and returns
+    /// the table path and the resolved footprint file.
+    fn write_footprint_library(
+        dir: &Path,
+        table_name: &str,
+        nickname: &str,
+        marker: &str,
+    ) -> Result<(PathBuf, PathBuf)> {
+        write_footprint_library_entry(dir, table_name, nickname, marker, false)
+    }
+
+    fn write_footprint_library_entry(
+        dir: &Path,
+        table_name: &str,
+        nickname: &str,
+        marker: &str,
+        disabled: bool,
+    ) -> Result<(PathBuf, PathBuf)> {
+        let library = dir.join(format!("{nickname}.pretty"));
+        fs::create_dir_all(&library)?;
+        let footprint = library.join("Thing.kicad_mod");
+        fs::write(
+            &footprint,
+            format!("(footprint \"Thing\" (descr \"{marker}\"))"),
+        )?;
+        let table = dir.join(table_name);
+        let disabled_flag = if disabled { " (disabled)" } else { "" };
+        // A backslash opens an escape sequence inside an s-expression string, so an unescaped Windows
+        // path silently loses its separators when the table is parsed back. KiCad escapes them when it
+        // writes the table; the helper has to as well, or these tests exercise a corrupted URI.
+        let uri = library.display().to_string().replace('\\', r"\\");
+        fs::write(
+            &table,
+            format!(
+                "(fp_lib_table (version 7) (lib (name \"{nickname}\") (type \"KiCad\") (uri \"{uri}\") (options \"\") (descr \"\"){disabled_flag}))"
+            ),
+        )?;
+        Ok((table, footprint.canonicalize()?))
+    }
+
+    fn library_tables(
+        footprints: BTreeMap<String, String>,
+        global_table_paths: &[PathBuf],
+    ) -> ProjectLibraryTables {
+        ProjectLibraryTables {
+            existing_tables: Vec::new(),
+            symbols: BTreeMap::new(),
+            footprints,
+            global_footprints: global_footprint_table_from_paths(global_table_paths),
+        }
+    }
+
+    fn footprint_assets(identifier: &str) -> SchematicAssets {
+        SchematicAssets {
+            footprint_ids: BTreeSet::from([identifier.to_string()]),
+            ..SchematicAssets::default()
+        }
+    }
+
+    /// A project table that registers nothing is the normal case for a design whose libraries are
+    /// registered globally in KiCad, so the global table has to be consulted too.
+    #[test]
+    fn global_footprint_table_resolves_libraries_absent_from_the_project_table() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        let config = dir.path().join("kicad-config");
+        fs::create_dir_all(&project)?;
+        fs::create_dir_all(&config)?;
+        let project = project.canonicalize()?;
+        let (global_table, global_footprint) =
+            write_footprint_library(&config, FP_LIB_TABLE_FILE, "vendor", "global")?;
+
+        let resolver = build_kicad_variable_resolver(&project, &Value::Null);
+        let tables = library_tables(BTreeMap::new(), &[global_table]);
+        let mut abs_files = BTreeSet::new();
+        let (resolved, project_footprint_ids) = resolve_project_library_assets(
+            &project,
+            &resolver,
+            &tables,
+            &footprint_assets("vendor:Thing"),
+            &mut abs_files,
+        );
+
+        assert_eq!(resolved.get("vendor:Thing"), Some(&global_footprint));
+        assert!(project_footprint_ids.is_empty());
+        // The file is outside the project, so it is not staged or archived with the sources; the
+        // geometry reaches the output by being copied into the generated component package.
+        assert!(abs_files.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn project_footprint_table_wins_over_the_global_table() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        let config = dir.path().join("kicad-config");
+        fs::create_dir_all(&project)?;
+        fs::create_dir_all(&config)?;
+        let project = project.canonicalize()?;
+        let (_, project_footprint) =
+            write_footprint_library(&project, FP_LIB_TABLE_FILE, "vendor", "project")?;
+        let (global_table, global_footprint) =
+            write_footprint_library(&config, FP_LIB_TABLE_FILE, "vendor", "global")?;
+
+        let resolver = build_kicad_variable_resolver(&project, &Value::Null);
+        let tables = library_tables(
+            parse_library_table(&project.join(FP_LIB_TABLE_FILE), "fp_lib_table")?,
+            &[global_table],
+        );
+        let mut abs_files = BTreeSet::new();
+        let (resolved, project_footprint_ids) = resolve_project_library_assets(
+            &project,
+            &resolver,
+            &tables,
+            &footprint_assets("vendor:Thing"),
+            &mut abs_files,
+        );
+
+        assert_eq!(resolved.get("vendor:Thing"), Some(&project_footprint));
+        assert!(project_footprint_ids.contains("vendor:Thing"));
+        assert_ne!(resolved.get("vendor:Thing"), Some(&global_footprint));
+        assert!(abs_files.contains(&project_footprint));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_project_footprint_still_claims_the_identifier() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project)?;
+        let project = project.canonicalize()?;
+        write_footprint_library(&project, FP_LIB_TABLE_FILE, "vendor", "project")?;
+
+        let resolver = build_kicad_variable_resolver(&project, &Value::Null);
+        let tables = library_tables(
+            parse_library_table(&project.join(FP_LIB_TABLE_FILE), "fp_lib_table")?,
+            &[],
+        );
+        let mut abs_files = BTreeSet::new();
+        let (resolved, project_footprint_ids) = resolve_project_library_assets(
+            &project,
+            &resolver,
+            &tables,
+            &footprint_assets("vendor:Missing"),
+            &mut abs_files,
+        );
+
+        assert!(!resolved.contains_key("vendor:Missing"));
+        assert!(project_footprint_ids.contains("vendor:Missing"));
+        assert!(abs_files.is_empty());
+        Ok(())
+    }
+
+    /// KiCad ignores a disabled project-table row and continues to the global table for that
+    /// nickname. Import must do the same: keeping the disabled URI would bind the wrong library
+    /// or leave the footprint unresolved when only the global entry is usable.
+    #[test]
+    fn disabled_project_footprint_entry_falls_through_to_the_global_table() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        let config = dir.path().join("kicad-config");
+        fs::create_dir_all(&project)?;
+        fs::create_dir_all(&config)?;
+        let project = project.canonicalize()?;
+        let (_, project_footprint) =
+            write_footprint_library_entry(&project, FP_LIB_TABLE_FILE, "vendor", "project", true)?;
+        let (global_table, global_footprint) =
+            write_footprint_library(&config, FP_LIB_TABLE_FILE, "vendor", "global")?;
+
+        let project_entries =
+            parse_library_table(&project.join(FP_LIB_TABLE_FILE), "fp_lib_table")?;
+        assert!(
+            project_entries.is_empty(),
+            "disabled project rows must not claim the nickname"
+        );
+
+        let resolver = build_kicad_variable_resolver(&project, &Value::Null);
+        let tables = library_tables(project_entries, &[global_table]);
+        let mut abs_files = BTreeSet::new();
+        let (resolved, project_footprint_ids) = resolve_project_library_assets(
+            &project,
+            &resolver,
+            &tables,
+            &footprint_assets("vendor:Thing"),
+            &mut abs_files,
+        );
+
+        assert_eq!(resolved.get("vendor:Thing"), Some(&global_footprint));
+        assert!(project_footprint_ids.is_empty());
+        assert_ne!(resolved.get("vendor:Thing"), Some(&project_footprint));
+        assert!(abs_files.is_empty());
         Ok(())
     }
 
@@ -1296,10 +2038,11 @@ mod tests {
             dir.path().join("demo.kicad_pcb"),
             r#"(kicad_pcb (footprint "X" (model "${ANT3DMDL}/m.step")))"#,
         )?;
+        fs::write(dir.path().join("demo.kicad_dru"), "(version 1)")?;
 
         let project = discover_and_validate(&dir.path().join("demo.kicad_pro"))?;
         let zip_path = dir.path().join("out.zip");
-        write_portable_zip(&project, &zip_path)?;
+        write_portable_zip(&project, &project.project_dir, &zip_path)?;
 
         let file = fs::File::open(&zip_path)?;
         let mut zip = ZipArchive::new(file)?;
@@ -1309,6 +2052,7 @@ mod tests {
         names.sort();
 
         assert!(names.contains(&"models/ANT3DMDL/m.step".to_string()));
+        assert!(names.contains(&"demo/demo.kicad_dru".to_string()));
         Ok(())
     }
 }
