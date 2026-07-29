@@ -219,7 +219,6 @@ fn mock_exchange<'a>(server: &'a MockServer, status: u16) -> Mock<'a> {
             }));
         if status == 200 {
             then.status(200).json_body(json!({
-                "repositoryId": "617882ea-14f6-40b4-bf52-cc1d3c7f67d4",
                 "provider": "diodehub",
                 "credential": {
                     "scheme": "Bearer",

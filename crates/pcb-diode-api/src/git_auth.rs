@@ -4,7 +4,6 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use uuid::Uuid;
 
 use crate::WorkspaceContext;
 
@@ -36,7 +35,6 @@ struct GitCredentialExchangeRequest<'a> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GitCredentialExchangeResponse {
-    repository_id: String,
     #[serde(rename = "provider")]
     _provider: GitProvider,
     credential: GitCredential,
@@ -162,14 +160,11 @@ fn exchange_credential(
         .json()
         .context("Failed to parse Git credential exchange response")?;
     let GitCredentialExchangeResponse {
-        repository_id,
         _provider: _,
         credential,
         expires_at,
     } = response;
     let GitCredential { _scheme: _, token } = credential;
-    Uuid::parse_str(&repository_id)
-        .context("Git credential exchange returned an invalid repository ID")?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("System clock is before the Unix epoch")?
