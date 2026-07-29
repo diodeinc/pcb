@@ -33,6 +33,9 @@ Mcu(
     FLASH = FLASH,
     LED = LED_CTRL,
     AIN = VBAT_SENSE,
+    # The design insists: this LED lives on PA8 (hard lock — build error if
+    # PA8 is missing or taken). The locked pin also leaves the swap classes.
+    pin_locks = {"LED": "PA8"},
 )
 
 Capacitor(name = "C1", value = "100nF", package = "0402", P1 = VDD, P2 = GND)
