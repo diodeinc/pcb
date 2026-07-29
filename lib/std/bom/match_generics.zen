@@ -762,76 +762,78 @@ HOUSE_ZENERS_BY_PKG = {
     ],
 }
 
-# House TVS diode catalog by package (8/20µs pulse ratings per IEC 61000-4-5)
+# House TVS diode catalog by package.
+# Clamp voltage and peak pulse power use the same datasheet pulse conditions.
+# Peak pulse power is populated only when the manufacturer publishes that rating.
 HOUSE_TVS_BY_PKG = {
     ("Unidirectional", "DO-219AB"): [
-        # Vishay VTVS/SMF series
-        vishay_tvs("3.3V", "8.9V", "1000W", "VTVS3V3GSMF-HM3", "85891/vtvs3v3asmf.pdf"),
-        vishay_tvs("5V", "9.2V", "1000W", "SMF5V0A-E3", "85881/smf5v0atosmf58a.pdf"),
-        vishay_tvs("20V", "32.4V", "1000W", "SMF20A-E3", "85881/smf5v0atosmf58a.pdf"),
-        vishay_tvs("24V", "38.9V", "1000W", "SMF24A-E3", "85881/smf5v0atosmf58a.pdf"),
-        # Littelfuse SMF/SZSMF series
-        tvs("5V", "9.2V", "1000W", "SZSMF5.0AT1G", "Littelfuse Inc."),
-        tvs("20V", "32.4V", "1000W", "SMF20A", "Littelfuse Inc."),
-        tvs("20V", "32.4V", "1000W", "SZSMF20AT1G", "Littelfuse Inc."),
+        # Vishay VTVS/SMF series, 10/1000 µs
+        vishay_tvs("3.3V", "8.9V", "400W", "VTVS3V3GSMF-HM3", "85891/vtvs3v3asmf.pdf"),
+        vishay_tvs("5V", "9.2V", "200W", "SMF5V0A-E3", "85881/smf5v0atosmf58a.pdf"),
+        vishay_tvs("20V", "32.4V", "200W", "SMF20A-E3", "85881/smf5v0atosmf58a.pdf"),
+        vishay_tvs("24V", "38.9V", "200W", "SMF24A-E3", "85881/smf5v0atosmf58a.pdf"),
+        # Littelfuse SMF/SZSMF series, 10/1000 µs
+        tvs("5V", "9.2V", "200W", "SZSMF5.0AT1G", "Littelfuse Inc."),
+        tvs("20V", "32.4V", "200W", "SMF20A", "Littelfuse Inc."),
+        tvs("20V", "32.4V", "200W", "SZSMF20AT1G", "Littelfuse Inc."),
     ],
     ("Unidirectional", "DO-214AC"): [
-        # Vishay SMAJ A series
-        vishay_tvs("5V", "9.2V", "2000W", "SMAJ5.0A-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("12V", "19.9V", "2000W", "SMAJ12A-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("20V", "32.4V", "2000W", "SMAJ20A-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("24V", "38.9V", "2000W", "SMAJ24A-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("33V", "53.3V", "2000W", "SMAJ33A-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("60V", "96.8V", "2000W", "SMAJ60A-E3", "88390/smaj50a.pdf"),
+        # Vishay SMAJ A series, 10/1000 µs
+        vishay_tvs("5V", "9.2V", "400W", "SMAJ5.0A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("12V", "19.9V", "400W", "SMAJ12A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("20V", "32.4V", "400W", "SMAJ20A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("24V", "38.9V", "400W", "SMAJ24A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("33V", "53.3V", "400W", "SMAJ33A-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("60V", "96.8V", "400W", "SMAJ60A-E3", "88390/smaj50a.pdf"),
     ],
     ("Unidirectional", "DO-214AA"): [
-        # Vishay SMBJ A series
-        vishay_tvs("5V", "9.2V", "3000W", "SMBJ5.0A-E3", "88392/smbj.pdf"),
-        vishay_tvs("12V", "19.9V", "3000W", "SMBJ12A-E3", "88392/smbj.pdf"),
-        vishay_tvs("20V", "32.4V", "3000W", "SMBJ20A-E3", "88392/smbj.pdf"),
-        vishay_tvs("24V", "38.9V", "3000W", "SMBJ24A-E3", "88392/smbj.pdf"),
-        vishay_tvs("28V", "45.5V", "3000W", "SMBJ28A-E3", "88392/smbj.pdf"),
-        vishay_tvs("33V", "53.3V", "3000W", "SMBJ33A-E3", "88392/smbj.pdf"),
-        vishay_tvs("48V", "77.4V", "3000W", "SMBJ48A-E3", "88392/smbj.pdf"),
-        vishay_tvs("78V", "126V", "3000W", "SMBJ78A-E3", "88392/smbj.pdf"),
+        # Vishay SMBJ A series, 10/1000 µs
+        vishay_tvs("5V", "9.2V", "600W", "SMBJ5.0A-E3", "88392/smbj.pdf"),
+        vishay_tvs("12V", "19.9V", "600W", "SMBJ12A-E3", "88392/smbj.pdf"),
+        vishay_tvs("20V", "32.4V", "600W", "SMBJ20A-E3", "88392/smbj.pdf"),
+        vishay_tvs("24V", "38.9V", "600W", "SMBJ24A-E3", "88392/smbj.pdf"),
+        vishay_tvs("28V", "45.5V", "600W", "SMBJ28A-E3", "88392/smbj.pdf"),
+        vishay_tvs("33V", "53.3V", "600W", "SMBJ33A-E3", "88392/smbj.pdf"),
+        vishay_tvs("48V", "77.4V", "600W", "SMBJ48A-E3", "88392/smbj.pdf"),
+        vishay_tvs("78V", "126V", "600W", "SMBJ78A-E3", "88392/smbj.pdf"),
     ],
     ("Unidirectional", "DO-214AB"): [
-        # Vishay SMCJ A series
-        vishay_tvs("5V", "9.2V", "6000W", "SMCJ5.0A-E3", "88394/smcj.pdf"),
-        vishay_tvs("12V", "19.9V", "6000W", "SMCJ12A-E3", "88394/smcj.pdf"),
-        vishay_tvs("20V", "32.4V", "6000W", "SMCJ20A-E3", "88394/smcj.pdf"),
-        vishay_tvs("24V", "38.9V", "6000W", "SMCJ24A-E3", "88394/smcj.pdf"),
-        vishay_tvs("33V", "53.3V", "6000W", "SMCJ33A-E3", "88394/smcj.pdf"),
-        vishay_tvs("48V", "77.4V", "6000W", "SMCJ48A-E3", "88394/smcj.pdf"),
-        vishay_tvs("58V", "93.6V", "6000W", "SMCJ58A-E3", "88394/smcj.pdf"),
-        vishay_tvs("60V", "96.8V", "6000W", "SMCJ60A-E3", "88394/smcj.pdf"),
-        vishay_tvs("85V", "137V", "6000W", "SMCJ85A-E3", "88394/smcj.pdf"),
+        # Vishay SMCJ A series, 10/1000 µs
+        vishay_tvs("5V", "9.2V", "1500W", "SMCJ5.0A-E3", "88394/smcj.pdf"),
+        vishay_tvs("12V", "19.9V", "1500W", "SMCJ12A-E3", "88394/smcj.pdf"),
+        vishay_tvs("20V", "32.4V", "1500W", "SMCJ20A-E3", "88394/smcj.pdf"),
+        vishay_tvs("24V", "38.9V", "1500W", "SMCJ24A-E3", "88394/smcj.pdf"),
+        vishay_tvs("33V", "53.3V", "1500W", "SMCJ33A-E3", "88394/smcj.pdf"),
+        vishay_tvs("48V", "77.4V", "1500W", "SMCJ48A-E3", "88394/smcj.pdf"),
+        vishay_tvs("58V", "93.6V", "1500W", "SMCJ58A-E3", "88394/smcj.pdf"),
+        vishay_tvs("60V", "96.8V", "1500W", "SMCJ60A-E3", "88394/smcj.pdf"),
+        vishay_tvs("85V", "137V", "1500W", "SMCJ85A-E3", "88394/smcj.pdf"),
     ],
     ("Bidirectional", "DO-214AC"): [
-        # Vishay SMAJ CA series
-        vishay_tvs("5V", "9.2V", "2000W", "SMAJ5.0CA-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("12V", "19.9V", "2000W", "SMAJ12CA-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("15V", "24.4V", "2000W", "SMAJ15CA-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("24V", "38.9V", "2000W", "SMAJ24CA-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("33V", "53.3V", "2000W", "SMAJ33CA-E3", "88390/smaj50a.pdf"),
-        vishay_tvs("60V", "96.8V", "2000W", "SMAJ60CA-E3", "88390/smaj50a.pdf"),
+        # Vishay SMAJ CA series, 10/1000 µs
+        vishay_tvs("5V", "9.2V", "400W", "SMAJ5.0CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("12V", "19.9V", "400W", "SMAJ12CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("15V", "24.4V", "400W", "SMAJ15CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("24V", "38.9V", "400W", "SMAJ24CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("33V", "53.3V", "400W", "SMAJ33CA-E3", "88390/smaj50a.pdf"),
+        vishay_tvs("60V", "96.8V", "400W", "SMAJ60CA-E3", "88390/smaj50a.pdf"),
     ],
     ("Bidirectional", "DO-214AA"): [
-        # Vishay SMBJ CA series
-        vishay_tvs("5V", "9.2V", "3000W", "SMBJ5.0CA-E3", "88392/smbj.pdf"),
-        vishay_tvs("12V", "19.9V", "3000W", "SMBJ12CA-E3", "88392/smbj.pdf"),
-        vishay_tvs("24V", "38.9V", "3000W", "SMBJ24CA-E3", "88392/smbj.pdf"),
-        vishay_tvs("33V", "53.3V", "3000W", "SMBJ33CA-E3", "88392/smbj.pdf"),
-        vishay_tvs("40V", "64.5V", "3000W", "SMBJ40CA-E3", "88392/smbj.pdf"),
+        # Vishay SMBJ CA series, 10/1000 µs
+        vishay_tvs("5V", "9.2V", "600W", "SMBJ5.0CA-E3", "88392/smbj.pdf"),
+        vishay_tvs("12V", "19.9V", "600W", "SMBJ12CA-E3", "88392/smbj.pdf"),
+        vishay_tvs("24V", "38.9V", "600W", "SMBJ24CA-E3", "88392/smbj.pdf"),
+        vishay_tvs("33V", "53.3V", "600W", "SMBJ33CA-E3", "88392/smbj.pdf"),
+        vishay_tvs("40V", "64.5V", "600W", "SMBJ40CA-E3", "88392/smbj.pdf"),
     ],
     ("Bidirectional", "DO-214AB"): [
-        # Vishay SMCJ CA series
-        vishay_tvs("5V", "9.2V", "6000W", "SMCJ5.0CA-E3", "88394/smcj.pdf"),
-        vishay_tvs("12V", "19.9V", "6000W", "SMCJ12CA-E3", "88394/smcj.pdf"),
-        vishay_tvs("24V", "38.9V", "6000W", "SMCJ24CA-E3", "88394/smcj.pdf"),
-        vishay_tvs("33V", "53.3V", "6000W", "SMCJ33CA-E3", "88394/smcj.pdf"),
-        vishay_tvs("48V", "77.4V", "6000W", "SMCJ48CA-E3", "88394/smcj.pdf"),
-        vishay_tvs("60V", "96.8V", "6000W", "SMCJ60CA-E3", "88394/smcj.pdf"),
+        # Vishay SMCJ CA series, 10/1000 µs
+        vishay_tvs("5V", "9.2V", "1500W", "SMCJ5.0CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("12V", "19.9V", "1500W", "SMCJ12CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("24V", "38.9V", "1500W", "SMCJ24CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("33V", "53.3V", "1500W", "SMCJ33CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("48V", "77.4V", "1500W", "SMCJ48CA-E3", "88394/smcj.pdf"),
+        vishay_tvs("60V", "96.8V", "1500W", "SMCJ60CA-E3", "88394/smcj.pdf"),
     ],
     ("Unidirectional", "SOD-882"): [
         tvs(
@@ -877,6 +879,7 @@ HOUSE_TVS_BY_PKG = {
             "SP3530-01ETG",
             "Littelfuse Inc.",
             "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2345/SP3530_Series.pdf",
+            capacitance="0.3pF",
         ),
         tvs(
             "3.3V",
@@ -968,6 +971,7 @@ HOUSE_TVS_BY_PKG = {
             "SP3021-01ETG",
             "Littelfuse Inc.",
             "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp3021_datasheet.pdf?assetguid=02714df5-d4f5-4e09-baec-2bc99a517824",
+            capacitance="0.5pF",
         ),
         tvs(
             "5V",
@@ -1003,11 +1007,12 @@ HOUSE_TVS_BY_PKG = {
             "SP3022-01ETG",
             "Littelfuse Inc.",
             "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sp3022-datasheet?assetguid=a27ecccd-9fa4-4223-9a25-f0bb33be4303",
+            capacitance="0.35pF",
         ),
         tvs(
             "5.3V",
             "13V",
-            "20W",
+            None,
             "SP3022-01ETG-NM",
             "Littelfuse Inc.",
             "https://www.littelfuse.com/assetdocs/littelfuse-tvs-diode-array-sp3022-01etg-nm-datasheet?assetguid=60969493-fae9-418a-91ac-bc92d273bb80",
@@ -1020,6 +1025,7 @@ HOUSE_TVS_BY_PKG = {
             "SP1005-01ETG",
             "Littelfuse Inc.",
             "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1005_datasheet.pdf?assetguid=52a245c3-fc07-42d4-9891-4cdd6cceab3f",
+            capacitance="30pF",
         ),
         tvs(
             "6V",
@@ -1028,6 +1034,7 @@ HOUSE_TVS_BY_PKG = {
             "SP1007-01ETG",
             "Littelfuse Inc.",
             "https://www.littelfuse.com/assetdocs/littelfuse_tvs_diode_array_sp1007_datasheet.pdf?assetguid=fcbdfc8e-b10b-4d90-ad90-b7da1dfffcb8",
+            capacitance="5pF",
         ),
         tvs(
             "7V",
@@ -1036,6 +1043,7 @@ HOUSE_TVS_BY_PKG = {
             "SP3522-01ETG",
             "Littelfuse Inc.",
             "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2292/SP3522_Series.pdf",
+            capacitance="0.15pF",
         ),
         tvs(
             "18V",
@@ -1426,10 +1434,11 @@ def assign_house_tvs(c, house_tvs_by_pkg):
             if not p["capacitance"].within(required_capacitance):
                 continue
 
-        matches.append(p)
+        matches.append((p["clamping_voltage"].max, p))
 
     if matches:
-        set_from_matches(c, matches)
+        sorted_matches = sorted(matches, key=lambda x: x[0])
+        set_from_matches(c, [p for _, p in sorted_matches])
         c.matcher = "assign_house_tvs"
         return
 

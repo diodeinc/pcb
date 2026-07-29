@@ -102,10 +102,10 @@ _BOM_MATCH_CASES = [
 ]
 
 _MIN_POWER_CASES = [
-    ("Unidirectional", "DO-214AC", "24V", "38.9V", "600W"),
+    ("Unidirectional", "DO-214AC", "24V", "38.9V", "400W"),
     ("Unidirectional", "DO-214AA", "24V", "38.9V", "600W"),
-    ("Unidirectional", "DO-214AB", "24V", "38.9V", "600W"),
-    ("Bidirectional", "DO-214AC", "24V", "38.9V", "600W"),
+    ("Unidirectional", "DO-214AB", "24V", "38.9V", "1500W"),
+    ("Bidirectional", "DO-214AC", "24V", "38.9V", "400W"),
 ]
 
 _SOD882_BOM_MATCH_CASES = [
@@ -114,7 +114,7 @@ _SOD882_BOM_MATCH_CASES = [
     ("Unidirectional", "5V", "12V", "30pF", None),
     ("Unidirectional", "5V", "10V", "0.5pF", None),
     ("Unidirectional", "5V", "10V", "120pF", None),
-    ("Unidirectional", "7V", "11.8V", None, None),
+    ("Unidirectional", "7V", "11.8V", "0.3pF", None),
     ("Unidirectional", "3.3V", "10V", "78pF", "95W"),
     ("Unidirectional", "5V", "10V", "63pF", "80W"),
     ("Unidirectional", "5V", "12V", "130pF", "192W"),
@@ -124,14 +124,14 @@ _SOD882_BOM_MATCH_CASES = [
     ("Bidirectional", "1V", "8.5V", "0.85pF", None),
     ("Bidirectional", "3.3V", "9V", "8pF", None),
     ("Bidirectional", "3.3V", "8.5V", "35pF", "180W"),
-    ("Bidirectional", "5V", "14.7V", None, None),
+    ("Bidirectional", "5V", "14.7V", "0.5pF", None),
     ("Bidirectional", "5V", "11V", "26pF", None),
     ("Bidirectional", "5V", "10V", "7pF", None),
-    ("Bidirectional", "5.3V", "12V", None, "20W"),
+    ("Bidirectional", "5.3V", "12V", "0.35pF", "20W"),
     ("Bidirectional", "5.3V", "13V", "0.35pF", None),
-    ("Bidirectional", "6V", "15.6V", None, None),
-    ("Bidirectional", "6V", "9.2V", None, None),
-    ("Bidirectional", "7V", "14.5V", None, None),
+    ("Bidirectional", "6V", "15.6V", "30pF", None),
+    ("Bidirectional", "6V", "9.2V", "5pF", None),
+    ("Bidirectional", "7V", "14.5V", "0.15pF", None),
     ("Bidirectional", "18V", "38V", "0.3pF", None),
     ("Bidirectional", "28V", "48V", "0.3pF", None),
     ("Bidirectional", "5.5V", "16V", "18pF", "56W"),
@@ -221,6 +221,17 @@ for direction, package, standoff, clamp in _HOUSE_PARTS:
         A=a,
         K=k,
     )
+
+# A clamping-voltage range expresses the acceptable catalog range. Its upper
+# bound must also be used by the component's voltage validation.
+Tvs(
+    name="D_TVS_CLAMP_RANGE",
+    package="DO-214AC",
+    reverse_standoff_voltage="33V",
+    reverse_clamping_voltage="0V to 60V",
+    A=gnd,
+    K=_power_net("D_TVS_CLAMP_RANGE", "33V"),
+)
 
 
 for i, (direction, package, standoff) in enumerate(_BOM_MATCH_CASES):
