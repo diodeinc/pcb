@@ -41,11 +41,11 @@ fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
     if path.exists() && !path.is_dir() {
         anyhow::bail!("Output directory is not a directory: {}", path.display());
     }
-    let workspace_root = if path.exists() {
-        fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-    } else {
-        canonicalize_missing_path(path)?
-    };
+    if !path.exists() {
+        fs::create_dir_all(path)
+            .with_context(|| format!("Failed to create output directory: {}", path.display()))?;
+    }
+    let workspace_root = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
     let pcb_toml = workspace_root.join("pcb.toml");
     if pcb_toml.exists() {
@@ -65,25 +65,16 @@ fn ensure_board_repo_root(path: &Path) -> Result<PathBuf> {
         return Ok(workspace_root);
     }
 
-    let mut entries = if workspace_root.exists() {
-        Some(
-            fs::read_dir(&workspace_root)
-                .with_context(|| {
-                    format!(
-                        "Failed to read output directory: {}",
-                        workspace_root.display()
-                    )
-                })?
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_name() != OsStr::new(".DS_Store")),
-        )
-    } else {
-        None
-    };
-    if entries
-        .as_mut()
-        .is_some_and(|entries| entries.next().is_some())
-    {
+    let mut entries = fs::read_dir(&workspace_root)
+        .with_context(|| {
+            format!(
+                "Failed to read output directory: {}",
+                workspace_root.display()
+            )
+        })?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name() != OsStr::new(".DS_Store"));
+    if entries.next().is_some() {
         anyhow::bail!(
             "Output directory is not an empty board repository (missing pcb.toml): {}",
             workspace_root.display()
@@ -97,31 +88,4 @@ fn read_pcb_toml(pcb_toml: &Path) -> Result<pcb_zen_core::config::PcbToml> {
     let file_provider = pcb_zen_core::DefaultFileProvider::new();
     pcb_zen_core::config::PcbToml::from_file(&file_provider, pcb_toml)
         .with_context(|| format!("Failed to parse {}", pcb_toml.display()))
-}
-
-fn canonicalize_missing_path(path: &Path) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .context("Failed to resolve current directory")?
-            .join(path)
-    };
-    let mut ancestor = absolute.as_path();
-    let mut suffix = Vec::new();
-    while !ancestor.exists() {
-        let name = ancestor
-            .file_name()
-            .context("Output path has no existing ancestor")?;
-        suffix.push(name.to_os_string());
-        ancestor = ancestor
-            .parent()
-            .context("Output path has no existing ancestor")?;
-    }
-    let mut resolved = fs::canonicalize(ancestor)
-        .with_context(|| format!("Failed to resolve output parent {}", ancestor.display()))?;
-    for name in suffix.into_iter().rev() {
-        resolved.push(name);
-    }
-    Ok(resolved)
 }
