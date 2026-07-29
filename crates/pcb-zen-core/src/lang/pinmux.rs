@@ -1050,9 +1050,25 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
         #[starlark(require = named, default = NoneOr::None)] r#where: NoneOr<Value<'v>>,
         #[starlark(require = named, default = NoneOr::None)] direction: NoneOr<String>,
         #[starlark(require = named, default = false)] if_connected: bool,
+        #[starlark(require = named, default = NoneOr::None)] bind: NoneOr<Value<'v>>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> anyhow::Result<Value<'v>> {
         let heap = eval.heap();
+        // bind= carries the connected value on the request itself (the
+        // dict-of-roles pattern). An at() wrapper contributes its pin
+        // constraint here and the inner value flows on.
+        let (bind_val, bind_pins, bind_soft) = match bind {
+            NoneOr::Other(v) => {
+                if let Some(w) = v.downcast_ref::<PinAt<'v>>() {
+                    (Some(w.inner.to_value()), Some(w.pins.clone()), w.soft)
+                } else if let Some(w) = v.downcast_ref::<FrozenPinAt>() {
+                    (Some(w.inner.to_value()), Some(w.pins.clone()), w.soft)
+                } else {
+                    (Some(v), None, false)
+                }
+            }
+            NoneOr::None => (None, None, false),
+        };
         let info = iface_info(iface).ok_or_else(|| {
             anyhow::anyhow!(
                 "pin_request `{name}`: expected an interface type, got `{}`",
@@ -1081,8 +1097,13 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
             NoneOr::None => info.fields.clone(),
         };
         let uses_alloc: Vec<Value> = uses_vals.iter().map(|s| heap.alloc(s.as_str())).collect();
-        let prefer_alloc: Vec<Value> = prefer
-            .items
+        // An at()-derived constraint applies unless the request already sets
+        // prefer/lock explicitly.
+        let (prefer_items, lock) = match (&bind_pins, prefer.items.is_empty()) {
+            (Some(pins), true) => (pins.clone(), !bind_soft),
+            _ => (prefer.items.clone(), lock),
+        };
+        let prefer_alloc: Vec<Value> = prefer_items
             .iter()
             .map(|s| heap.alloc(s.as_str()))
             .collect();
@@ -1115,6 +1136,7 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
                 },
             ),
             (heap.alloc("if_connected"), Value::new_bool(if_connected)),
+            (heap.alloc("bind"), bind_val.unwrap_or_else(Value::new_none)),
         ];
         Ok(heap.alloc(AllocDict(pairs)))
     }
@@ -1462,7 +1484,16 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
         })?;
         let mut out: Vec<(Value, Value)> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
-        for (req_name, iface_val) in ifaces.iter() {
+        for (req_name, raw_val) in ifaces.iter() {
+            // Accept at()-wrapped values: the constraint was consumed at solve
+            // time, only the inner net matters here.
+            let iface_val = &if let Some(w) = raw_val.downcast_ref::<PinAt<'v>>() {
+                w.inner.to_value()
+            } else if let Some(w) = raw_val.downcast_ref::<FrozenPinAt>() {
+                w.inner.to_value()
+            } else {
+                *raw_val
+            };
             let Some(entry) = dict_get(&ad, heap, req_name) else {
                 continue;
             };

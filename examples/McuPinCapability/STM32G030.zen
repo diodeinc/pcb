@@ -94,13 +94,12 @@ GPIO_POOL = pool(
 
 PERIPHS = [USART1, USART2, SPI1, I2C1, SWD_PORT] + ADC_CH + GPIO_POOL
 
-# --- Capability slots: connect only what the design uses ----------------------
-# Slots are named after the HARDWARE capability they expose (a generic GPIO,
-# an ADC input), never after an application role: this module cannot know the
-# design will hang a LED on IO0 — and "LED" must not become a capability.
-# The caller constrains pins on the connection itself when it needs to:
-#   Mcu(IO0 = at(led_net, "PA8"))            # hard: build error if impossible
-#   Mcu(IO0 = at(led_net, "PA8", soft = True))  # preference with fallback
+# --- What the design asks for --------------------------------------------------
+# Singular hardware ports keep a named io() slot (SWD, DEBUG, FLASH...).
+# Pooled capabilities (GPIOs, ADC inputs) are demanded through dicts: the
+# DESIGN names each role ("LED", "VBAT"...) and there are as many entries as
+# it needs — no arbitrary IO0/IO1 slots. Pin constraints ride the value:
+#   Mcu(gpio = {"LED": at(led_net, "PA8")})
 
 VDD = io(Power)
 VSS = io(Ground)
@@ -110,29 +109,21 @@ SWD = io(Swd)
 DEBUG = io(Uart, optional = True)
 FLASH = io(Spi, optional = True)
 SENSOR = io(I2c, optional = True)
-IO0 = io(Net, optional = True)
-IO1 = io(Net, optional = True)
-AIN0 = io(Net, optional = True)
+gpio = config(dict, default = {})  # role name -> Net (or at(net, pin))
+adc = config(dict, default = {})   # role name -> Net
 
 res = pin_solve(PERIPHS, [
     pin_request("SWD", Swd, instance = "SWD"),
     pin_request("DEBUG", Uart, if_connected = True),
     pin_request("FLASH", Spi, if_connected = True),
     pin_request("SENSOR", I2c, if_connected = True),
-    pin_request("IO0", GpioPin, if_connected = True),
-    pin_request("IO1", GpioPin, if_connected = True),
-    pin_request("AIN0", AdcIn, if_connected = True),
-])
+] + [pin_request(n, GpioPin, bind = gpio[n]) for n in gpio]
+  + [pin_request(n, AdcIn, bind = adc[n]) for n in adc])
 
-m = pin_map(res["assignment"], {
-    "SWD": SWD,
-    "DEBUG": DEBUG,
-    "FLASH": FLASH,
-    "SENSOR": SENSOR,
-    "IO0": IO0,
-    "IO1": IO1,
-    "AIN0": AIN0,
-})
+named = {"SWD": SWD, "DEBUG": DEBUG, "FLASH": FLASH, "SENSOR": SENSOR}
+named.update(gpio)
+named.update(adc)
+m = pin_map(res["assignment"], named)
 
 # Every candidate pin no request claimed is intentionally open — the solver
 # knows the full mux-pin set from the capability tables, no separate list.

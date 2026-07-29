@@ -31,12 +31,12 @@ Mcu(
     SWD = SWD,
     DEBUG = DEBUG,
     FLASH = FLASH,
-    # The LED is a design role, not a capability: it rides a generic GPIO
-    # slot. The design insists on PA8, on the connection itself — a hard
-    # constraint (build error if PA8 is missing or taken; the pin also
-    # leaves the swap classes). Drop at() to let the solver choose.
-    IO0 = at(LED_CTRL, "PA8"),
-    AIN0 = VBAT_SENSE,
+    # Pooled capabilities: the design names its roles, as many as it needs.
+    # "LED" is a design label, not a capability — the capability is a GPIO.
+    # at() pins the role to PA8 (hard: build error if missing or taken; the
+    # pin also leaves the swap classes). Drop at() to let the solver choose.
+    gpio = {"LED": at(LED_CTRL, "PA8")},
+    adc = {"VBAT": VBAT_SENSE},
 )
 
 Capacitor(name = "C1", value = "100nF", package = "0402", P1 = VDD, P2 = GND)

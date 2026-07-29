@@ -717,3 +717,62 @@ Mcu(name = "M1", IO0 = at(Net("LED"), "PA13", soft = True))
         "soft must fall back, got {pin:?}"
     );
 }
+
+const MCU_ROLES: &str = r#"
+load("./ifaces.zen", "Gpio", "AdcIn")
+load("./stm32.zen", "PERIPHS")
+
+gpio = config(dict, default = {})
+adc = config(dict, default = {})
+
+res = pin_solve(
+    PERIPHS,
+    [pin_request(n, Gpio, bind = gpio[n]) for n in gpio]
+    + [pin_request(n, AdcIn, bind = adc[n]) for n in adc],
+)
+named = {}
+named.update(gpio)
+named.update(adc)
+m = pin_map(res["assignment"], named)
+
+a = res["assignment"]
+builtin.add_property("led_pin", a["LED"]["signals"]["PIN"]["pin"] if "LED" in a else "none")
+builtin.add_property("vbat_pin", a["VBAT"]["signals"]["IN"]["pin"] if "VBAT" in a else "none")
+builtin.add_property("map_size", str(len(m)))
+"#;
+
+#[test]
+fn dict_of_roles_demands() {
+    // Pooled capabilities are demanded through a dict: the design names the
+    // roles ("LED", "VBAT"), in whatever number it needs — no pre-declared
+    // numbered slots. at() constraints ride the dict values.
+    let result = eval_zen(vec![
+        ("/ifaces.zen".to_string(), IFACES.to_string()),
+        ("/stm32.zen".to_string(), STM32.to_string()),
+        ("/mcu_roles.zen".to_string(), MCU_ROLES.to_string()),
+        (
+            "/test.zen".to_string(),
+            r#"
+Mcu = Module("/mcu_roles.zen")
+Mcu(name = "M1", gpio = {"LED": at(Net("LED"), "PA10")}, adc = {"VBAT": Net("VBAT")})
+"#
+            .to_string(),
+        ),
+    ]);
+    assert_ok(&result);
+    let tree = result.output.as_ref().unwrap().module_tree();
+    let child = tree
+        .values()
+        .find(|m| m.properties().contains_key("led_pin"))
+        .expect("child module with role properties not found");
+    let get = |key: &str| {
+        child
+            .properties()
+            .get(key)
+            .and_then(|v| v.to_value().unpack_str().map(|s| s.to_owned()))
+            .unwrap_or_default()
+    };
+    assert_eq!(get("led_pin"), "PA10", "at() constraint through the dict");
+    assert_eq!(get("vbat_pin"), "PA0", "ADC role served");
+    assert_eq!(get("map_size"), "2", "pin_map must cover both roles");
+}
