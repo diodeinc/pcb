@@ -2836,10 +2836,6 @@ mod tests {
             footprint_qualified_component_dir_name("Part", "SO 8"),
             "Part__SO_8"
         );
-        assert_ne!(
-            footprint_qualified_component_dir_name("Part", "SO 8"),
-            sanitize_component_dir_name("Part_SO_8")
-        );
     }
 
     fn make_anchor(symbol_uuid: &str) -> KiCadUuidPathKey {

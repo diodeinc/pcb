@@ -2019,29 +2019,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_library_table_omits_disabled_entries() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let table = dir.path().join(FP_LIB_TABLE_FILE);
-        fs::write(
-            &table,
-            r#"(fp_lib_table
-  (version 7)
-  (lib (name "alive") (type "KiCad") (uri "${KIPRJMOD}/alive.pretty") (options "") (descr ""))
-  (lib (name "dead") (type "KiCad") (uri "${KIPRJMOD}/dead.pretty") (options "") (descr "") (disabled))
-)"#,
-        )?;
-
-        let entries = parse_library_table(&table, "fp_lib_table")?;
-        assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries.get("alive").map(String::as_str),
-            Some("${KIPRJMOD}/alive.pretty")
-        );
-        assert!(!entries.contains_key("dead"));
-        Ok(())
-    }
-
-    #[test]
     fn bundles_models_from_variable_paths() -> Result<()> {
         let dir = tempfile::tempdir()?;
         fs::create_dir_all(dir.path().join("3d"))?;

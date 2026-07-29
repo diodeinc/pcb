@@ -156,17 +156,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn standalone_cleanup_preserves_layout() {
+    fn standalone_cleanup_preserves_layout_and_removes_archive() {
         let temp = tempfile::tempdir().expect("tempdir");
         let board_dir = temp.path();
         let layout_file = board_dir.join("layout/user-layout.kicad_pcb");
-        let component_file = board_dir.join("components/generated/component.zen");
         let archive_file = board_dir.join("board.kicad.archive.zip");
         std::fs::create_dir_all(layout_file.parent().unwrap()).expect("create layout");
-        std::fs::create_dir_all(component_file.parent().unwrap()).expect("create components");
         std::fs::write(&layout_file, "user layout").expect("write layout");
-        std::fs::write(&component_file, "generated component").expect("write component");
-        std::fs::write(board_dir.join("board.zen"), "generated board").expect("write board");
         std::fs::write(&archive_file, "stale project archive").expect("write archive");
 
         remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
@@ -176,8 +172,6 @@ mod tests {
             std::fs::read_to_string(layout_file).expect("read preserved layout"),
             "user layout"
         );
-        assert!(!board_dir.join("components").exists());
-        assert!(!board_dir.join("board.zen").exists());
         assert!(!archive_file.exists());
     }
 

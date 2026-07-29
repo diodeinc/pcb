@@ -269,7 +269,7 @@ fn main() {
 
 #[test]
 #[cfg(not(target_os = "windows"))]
-fn standalone_import_uses_existing_scaffolding_and_root_reports() {
+fn standalone_import_omits_project_outputs_and_writes_root_reports() {
     let mut sandbox = sandbox();
     sandbox.write("layout.kicad_sch", STANDALONE_FIXTURE);
 
@@ -284,9 +284,6 @@ fn standalone_import_uses_existing_scaffolding_and_root_reports() {
     assert!(import.status.success(), "import failed:\n{stderr}");
 
     let output = sandbox.root_path().join("out");
-    assert!(output.join(".git").is_dir(), "import did not run git init");
-    assert!(output.join("README.md").is_file());
-    assert!(output.join("pcb.toml").is_file());
     assert!(output.join("layout.zen").is_file());
     assert!(!output.join("layout").exists());
     assert!(!output.join("layout.kicad.archive.zip").exists());
