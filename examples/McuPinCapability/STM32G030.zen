@@ -134,11 +134,10 @@ m = pin_map(res["assignment"], {
     "AIN0": AIN0,
 })
 
-# Unclaimed mux pins are intentionally open.
-_MUX_PINS = ["PA0", "PA1", "PA2", "PA3", "PA4", "PA5", "PA6", "PA7", "PA8",
-             "PA9", "PA10", "PA11", "PA12", "PA13", "PA14", "PB6", "PB7"]
+# Every candidate pin no request claimed is intentionally open — the solver
+# knows the full mux-pin set from the capability tables, no separate list.
 pins = {"VDD": VDD, "VSS": VSS, "NRST": NRST}
-pins.update({p: NotConnected() for p in _MUX_PINS if p not in m})
+pins.update({p: NotConnected() for p in res["free_pins"]})
 pins.update(m)
 
 Component(

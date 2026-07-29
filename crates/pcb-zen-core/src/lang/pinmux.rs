@@ -1420,12 +1420,27 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
             heap.alloc(serde_json::to_string_pretty(&swap_json).unwrap_or_default()),
         );
 
+        // Candidate pins no served request claimed: the component wires them
+        // as intentionally open (or reuses them), without re-listing them.
+        let mut free_pins: Vec<String> = periphs
+            .iter()
+            .flat_map(|p| p.signals.iter())
+            .flat_map(|(_, cands)| cands.iter())
+            .map(|c| c.name.clone())
+            .filter(|n| !used_pins.contains(n))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        free_pins.sort();
+        let free_vals: Vec<Value> = free_pins.iter().map(|n| heap.alloc(n.as_str())).collect();
+
         let pairs: Vec<(Value, Value)> = vec![
             (
                 heap.alloc("assignment"),
                 json_to_value(heap, &assignment_json),
             ),
             (heap.alloc("swap_classes"), json_to_value(heap, &swap_json)),
+            (heap.alloc("free_pins"), heap.alloc(free_vals)),
         ];
         Ok(heap.alloc(AllocDict(pairs)))
     }

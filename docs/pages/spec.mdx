@@ -391,7 +391,11 @@ must never become capability interfaces. And **component modules expose
 generic slots** (`IO0 = io(Net, optional = True)` requesting `Gpio`), because
 a reusable component cannot know what the design will hang on them.
 
-`pin_solve` returns `{"assignment": ..., "swap_classes": ...}` and stores both
+`pin_solve` returns `{"assignment": ..., "swap_classes": ..., "free_pins": [...]}`
+— `free_pins` lists every candidate pin no served request claimed, so a
+component wires its unused mux pins (`{p: NotConnected() for p in
+res["free_pins"]}`) without maintaining a separate pin list. It stores the
+first two
 as the module properties `pin_assignment` and `swap_classes` (JSON), which
 flow through the netlist into schematic fields: the chosen assignment
 (including per-pin realization `data`, sufficient for firmware pin-init generation) and the

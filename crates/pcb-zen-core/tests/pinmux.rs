@@ -197,6 +197,8 @@ check(a["DEBUG"]["instance"] == "USART2", "DEBUG got " + a["DEBUG"]["instance"])
 check(a["SC"]["instance"] == "USART1", "SC got " + a["SC"]["instance"])
 check(a["SC"]["signals"]["TX"]["pin"] == "PA9", "SC TX pin")
 check(a["SC"]["signals"]["TX"]["af"] == 1, "SC TX af")
+check("PB3" in res["free_pins"], "unclaimed candidate must be free")
+check(not ("PA9" in res["free_pins"]), "claimed pin must not be free")
 "#,
     );
     assert_ok(&result);
