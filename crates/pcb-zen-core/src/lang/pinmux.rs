@@ -3,13 +3,15 @@
 //! Declares what a multi-function component's pins *can do* and solves the
 //! assignment at elaboration:
 //!
-//! - `pin(name, af=, cost=, input_only=, strap=)` — one candidate physical pin.
+//! - `pin(name, data=, cost=, input_only=, strap=)` — one candidate physical pin.
 //! - `peripheral(name, provides=[Iface...], signals={...}, rebind=, attrs=, unless=)`
 //!   — a resource cluster (an MCU USART, one comparator of a dual package...).
 //! - `pool(name, provides=[Iface], pins=[...])` — sugar for N single-signal
 //!   interchangeable units (GPIO pools).
-//! - `pin_request(name, Iface, uses=, instance=, prefer=, lock=, where=, direction=)`
-//!   — a demand for a capability; the interface type *is* the request.
+//! - `pin_request(name, Iface, uses=, instance=, prefer=, lock=, where=,
+//!   direction=, if_connected=, bind=)` — a demand for a capability; the
+//!   interface type *is* the request. `bind=` carries the connected value
+//!   (dict-of-roles pattern); `at()` wrappers contribute pin constraints.
 //! - `pin_solve(peripherals, requests, config=, previous=)` — deterministic
 //!   joint instance x pin matching. Exclusivity at both tiers (an instance
 //!   serves at most one request; a pin carries at most one function) is

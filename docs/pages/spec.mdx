@@ -348,7 +348,7 @@ result = pin_solve(
   `"firmware"` (a constant to regenerate), `"fixed"` (never movable).
 - **`pool(name, provides=, pins=, rebind=)`** — sugar for N interchangeable
   single-signal units (GPIO pools).
-- **`pin_request(name, Iface, uses=, instance=, prefer=, lock=, where=, direction=, if_connected=)`**
+- **`pin_request(name, Iface, uses=, instance=, prefer=, lock=, where=, direction=, if_connected=, bind=)`**
   — a demand: the interface type *is* the request. Only `uses=` signals
   consume pins (default: all of the interface's signals). `where=` is a
   predicate over the peripheral's `attrs` (`lambda a: a["baud_max"] >= "1MHz"`
@@ -372,9 +372,10 @@ result = pin_solve(
   Absolute values are arbitrary; only the relative order is contractual.
 - **`at(value, pins, soft=)`** — constrain which physical pin(s) a
   connection may use, on the connection itself:
-  `Mcu(IO0 = at(led_net, "PA8"))`. The wrapper is transparent — `io()`
-  unwraps it at binding time, the inner net flows as if passed directly, and
-  the constraint reaches the module's `pin_solve` keyed by the input name.
+  `Mcu(gpio = {"LED": at(led_net, "PA8")})` or `Mcu(DEBUG = at(uart, ["PB6", "PB7"]))`.
+  The wrapper is transparent — `io()` (or `pin_request(bind=)`) unwraps it,
+  the inner value flows as if passed directly, and the constraint reaches
+  `pin_solve`.
   Hard by default (unsatisfiable → build error, and the pin leaves the swap
   classes); `soft = True` is a preference the solver may fall back from.
 - **`pin_map(assignment, ifaces)`** — turn `pin_solve`'s `assignment` into a
