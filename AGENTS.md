@@ -38,26 +38,12 @@ Never run `cargo insta accept` without explicit user approval.
 - In `.zen` files, remember Zener is Starlark-based, not Python: do not use f-strings.
 - Language behavior may come from the pinned `diodeinc/starlark-rust` fork in `Cargo.toml`; check that fork when local code does not explain Starlark behavior.
 
-## Change Scope and Pipeline Integrity
-
-- Keep pull requests within the explicitly agreed scope. Do not combine unrelated CLI behavior, scaffolding, or repository setup changes.
-- Treat established reports, generated artifacts, and output paths as compatibility surfaces. Preserve them unless their removal is explicitly in scope.
-- Reuse shared helpers at existing crate boundaries instead of duplicating domain logic.
-- When a pipeline validates and extracts user input, capture one source snapshot and use it throughout the pipeline. Do not independently reload input between stages.
-
 ## Documentation Rules
 
 - For user-visible changes, add one succinct `CHANGELOG.md` entry under `Unreleased` per logical change.
 - If you change Zener syntax, built-ins, core types, imports/modules, or type rules, update `docs/pages/spec.mdx`.
 - If you change workspace manifests, dependency resolution, or package behavior, update the relevant docs in `docs/pages/`, especially `docs/pages/packages.mdx`.
 - If you change stdlib APIs or examples, prefer a focused docs/example update over broad documentation churn.
-
-## Cross-Platform Tests
-
-- Treat line-ending differences as test-harness concerns when fixture text semantics are unchanged; compare normalized text or structured values instead of raw text.
-- Prefer portable Rust helpers over shell or batch wrappers when a test must intercept an external executable.
-- Canonicalize temporary executable paths before passing them to configuration that expands paths.
-- When local Windows execution is unavailable, verify platform-specific test setup in Windows CI. Distinguish test-harness failures from product behavior.
 
 ## Verification
 
