@@ -247,7 +247,7 @@ fn main() {
         "failed to compile kicad-cli wrapper:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    wrapper
+    wrapper.canonicalize().unwrap_or(wrapper)
 }
 
 #[test]
