@@ -16,25 +16,36 @@
         "aarch64-darwin"
       ];
       forAllSystems = lib.genAttrs systems;
-      workspaceCargo = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+      workspaceCargo = lib.importTOML ./Cargo.toml;
+      pcbCargo = lib.importTOML ./crates/pcb/Cargo.toml;
+      pcbcCargo = lib.importTOML ./crates/pcbc/Cargo.toml;
+      versionFor =
+        cargo:
+        let
+          version = cargo.package.version;
+        in
+        if builtins.isAttrs version && (version.workspace or false) then
+          workspaceCargo.workspace.package.version
+        else
+          version;
       pkgsFor =
         system:
         import nixpkgs {
           inherit system;
-          config.problems.handlers =
-            lib.optionalAttrs (lib.hasSuffix "-darwin" system)
-              {
-                kicad-base.broken = "warn";
-              };
         };
 
-      packageFor =
+      packagesFor =
         system:
         let
           pkgs = pkgsFor system;
           craneLib = crane.mkLib pkgs;
 
-          src = lib.fileset.toSource {
+          cargoSrc = lib.fileset.toSource {
+            root = ./.;
+            fileset = craneLib.fileset.commonCargoSources ./.;
+          };
+
+          pcbcSrc = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               (craneLib.fileset.commonCargoSources ./.)
@@ -49,71 +60,89 @@
             ];
           };
 
-          commonArgs = {
+          pcbArgs = {
             pname = "pcb";
-            version = workspaceCargo.workspace.package.version;
-            inherit src;
+            version = versionFor pcbCargo;
+            src = cargoSrc;
             strictDeps = true;
             doCheck = false;
-            cargoExtraArgs = "-p pcb -p pcbc";
+            cargoExtraArgs = "-p pcb";
+          };
 
-            nativeBuildInputs = with pkgs; [
-              makeWrapper
-              pkg-config
+          pcbcArgs = {
+            pname = "pcbc";
+            version = versionFor pcbcCargo;
+            src = pcbcSrc;
+            strictDeps = true;
+            doCheck = false;
+            cargoExtraArgs = "-p pcbc";
+            nativeBuildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              pkgs.makeWrapper
             ];
-
-            buildInputs = with pkgs; [
-              openssl
-              python312
-              python312Packages.kicad
+            buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              pkgs.python312
+              pkgs.python312Packages.kicad
             ];
           };
 
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-        in
-        craneLib.buildPackage (
-          commonArgs
-          // {
-            inherit cargoArtifacts;
+          pcbCargoArtifacts = craneLib.buildDepsOnly pcbArgs;
+          pcbcCargoArtifacts = craneLib.buildDepsOnly pcbcArgs;
 
-            postInstall = ''
-              mkdir -p "$out/lib"
-              cp -R ${src}/lib/std "$out/lib/std"
-              chmod -R u+w "$out/lib/std"
-            '';
+          pcb = craneLib.buildPackage (
+            pcbArgs
+            // {
+              cargoArtifacts = pcbCargoArtifacts;
 
-            postFixup = ''
-              for binary in pcb pcbc; do
-                wrapProgram "$out/bin/$binary" \
+              meta = with lib; {
+                description = pcbCargo.package.description;
+                homepage = "https://github.com/diodeinc/pcb";
+                license = licenses.mit;
+                mainProgram = "pcb";
+                platforms = platforms.unix;
+              };
+            }
+          );
+
+          pcbc = craneLib.buildPackage (
+            pcbcArgs
+            // {
+              cargoArtifacts = pcbcCargoArtifacts;
+
+              postInstall = ''
+                mkdir -p "$out/lib"
+                cp -R ${pcbcSrc}/lib/std "$out/lib/std"
+                chmod -R u+w "$out/lib/std"
+              '';
+
+              postFixup = lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+                wrapProgram "$out/bin/pcbc" \
                   --set KICAD_PYTHON_SITE_PACKAGES "${pkgs.python312Packages.kicad}/${pkgs.python312.sitePackages}" \
                   --set KICAD_PYTHON_INTERPRETER "${pkgs.python312}/bin/python"
-              done
-            '';
+              '';
 
-            meta = with lib; {
-              description = "CLI for circuit board design";
-              homepage = "https://github.com/diodeinc/pcb";
-              license = licenses.mit;
-              mainProgram = "pcb";
-              platforms = platforms.unix;
-            };
-          }
-        );
+              meta = with lib; {
+                description = pcbcCargo.package.description;
+                homepage = "https://github.com/diodeinc/pcb";
+                license = licenses.mit;
+                mainProgram = "pcbc";
+                platforms = platforms.unix;
+              };
+            }
+          );
+        in
+        {
+          inherit pcb pcbc;
+        };
     in
     {
       packages = forAllSystems (
         system:
         let
-          pcb = packageFor system;
-          pcbc = pcb // {
-            meta = pcb.meta // {
-              mainProgram = "pcbc";
-            };
-          };
+          packages = packagesFor system;
         in
         {
-          default = pcb;
-          inherit pcb pcbc;
+          default = packages.pcb;
+          inherit (packages) pcb pcbc;
         }
       );
 
@@ -121,9 +150,26 @@
         system:
         let
           pkgs = pkgsFor system;
+          pcb = self.packages.${system}.pcb;
           pcbc = self.packages.${system}.pcbc;
         in
         {
+          pcb-package = pkgs.runCommand "pcb-package" { } ''
+            export HOME="$TMPDIR/home"
+            test -x "${pcb}/bin/pcb"
+            test ! -e "${pcb}/bin/pcbc"
+            "${pcb}/bin/pcb" toolchain show --offline | grep -Fqx "shim: ${pcb.version}"
+            touch "$out"
+          '';
+
+          pcbc-package = pkgs.runCommand "pcbc-package" { } ''
+            test -x "${pcbc}/bin/pcbc"
+            test ! -e "${pcbc}/bin/pcb"
+            test -f "${pcbc}/lib/std/pcb.toml"
+            test "$("${pcbc}/bin/pcbc" --version)" = "pcbc ${pcbc.version}"
+            touch "$out"
+          '';
+
           pcbc-stdlib-installed = pkgs.runCommand "pcbc-stdlib-installed" { } ''
             test -f "${pcbc}/lib/std/pcb.toml"
             touch "$out"
