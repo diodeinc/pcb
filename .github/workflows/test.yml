@@ -92,8 +92,16 @@ jobs:
           rm -rf /Applications/KiCad 2>/dev/null || true
           brew install --cask kicad
 
-      - name: Install KiCad (Windows)
+      - name: Cache KiCad (Windows)
         if: matrix.config.name == 'Windows'
+        id: cache-kicad-windows
+        uses: actions/cache@v5
+        with:
+          path: C:\Program Files\KiCad\10.0
+          key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
+
+      - name: Install KiCad (Windows)
+        if: matrix.config.name == 'Windows' && steps.cache-kicad-windows.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $release = Invoke-RestMethod `
@@ -110,6 +118,11 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP $asset.name
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer
           Start-Process -FilePath $installer -ArgumentList '/S', '/allusers' -Wait
+
+      - name: Verify KiCad (Windows)
+        if: matrix.config.name == 'Windows'
+        shell: pwsh
+        run: '& "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" --version'
 
       - name: Install Rust (Windows)
         if: runner.os == 'Windows'
