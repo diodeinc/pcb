@@ -17,6 +17,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Corrected house TVS ratings and clamping-voltage range matching.
 - `pcb import --force` preserves user-created layout output when re-importing a standalone schematic and removes stale project archives.
 - `pcb import` atomically replaces generated KiCad symbol and footprint files instead of following file symlinks.
+- Standalone KiCad imports keep enabled project footprint libraries authoritative when a referenced footprint is missing.
+- KiCad imports preserve the footprint separator used to disambiguate generated component names.
 
 ## [0.4.14] - 2026-07-28
 

@@ -74,7 +74,8 @@ Import resolves each referenced footprint in this order:
 3. the bundled KiCad standard-library subset;
 4. the cached `kicad-footprints` package matching the schematic's KiCad major version.
 
-An enabled project table entry wins when a project and global table use the same library nickname.
+An enabled project table entry wins when a project and global table use the same library nickname,
+including when the project library does not contain the referenced footprint.
 A disabled project entry falls through to the global table, matching KiCad behavior.
 Import copies project, global, and cached footprint geometry into the generated component package.
 Bundled standard-library footprints remain library references.

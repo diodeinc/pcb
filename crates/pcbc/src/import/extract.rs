@@ -655,20 +655,25 @@ fn resolve_standalone_footprints(
                 // stdlib source when available, then the version-matched KiCad cache.
                 // `copy_to_component` says whether the geometry must be copied into the generated
                 // package; the stdlib is a library reference the built board already resolves.
-                let lookup = selection
+                let project_lookup = selection
                     .portable
                     .resolved_project_footprints
                     .get(fpid)
-                    .map(|path| (path.clone(), true))
-                    .or_else(|| {
-                        stdlib_footprints
-                            .as_deref()
-                            .and_then(|root| resolve_footprint_in_root(root, fpid))
-                            .map(|path| (path, false))
-                    })
-                    .or_else(|| {
-                        resolve_footprint_from_roots(&cached_roots, fpid).map(|path| (path, true))
-                    });
+                    .map(|path| (path.clone(), true));
+                let lookup = if project_lookup.is_some()
+                    || selection.portable.project_footprint_ids.contains(fpid)
+                {
+                    project_lookup
+                } else {
+                    stdlib_footprints
+                        .as_deref()
+                        .and_then(|root| resolve_footprint_in_root(root, fpid))
+                        .map(|path| (path, false))
+                        .or_else(|| {
+                            resolve_footprint_from_roots(&cached_roots, fpid)
+                                .map(|path| (path, true))
+                        })
+                };
                 let Some((path, copy_to_component)) = lookup else {
                     resolved_by_fpid.insert(fpid.to_string(), None);
                     unresolved
@@ -1469,6 +1474,7 @@ mod tests {
                 schematic_files_rel: vec![PathBuf::from("root.kicad_sch")],
                 files_to_bundle_rel: vec![PathBuf::from("root.kicad_sch")],
                 resolved_project_footprints,
+                project_footprint_ids: BTreeSet::new(),
                 extra_files_to_bundle: Vec::new(),
                 manifest_json: "{}".to_string(),
             },
@@ -1569,6 +1575,38 @@ mod tests {
             ImportFootprintGeometry::LibraryFile(text) if text == footprint_text
         ));
         assert_eq!(resolved.pads.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn unresolved_project_footprint_does_not_fall_through_to_stdlib() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut selection = standalone_selection(dir.path(), BTreeMap::new());
+        let fpid = "Resistor_SMD:R_0402_1005Metric";
+        selection
+            .portable
+            .project_footprint_ids
+            .insert(fpid.to_string());
+        let anchor = KiCadUuidPathKey {
+            sheetpath_tstamps: "/".to_string(),
+            symbol_uuid: "r1".to_string(),
+        };
+        let mut components = BTreeMap::from([(anchor.clone(), component("R1", Some(fpid), "r1"))]);
+
+        resolve_standalone_footprints(&selection, dir.path(), &mut components)?;
+
+        let footprint = components[&anchor].layout.as_ref().unwrap();
+        assert!(matches!(
+            footprint.footprint_geometry,
+            ImportFootprintGeometry::Unresolved
+        ));
+        assert_eq!(
+            footprint
+                .unresolved_footprint
+                .as_ref()
+                .and_then(|entry| entry.source_id.as_deref()),
+            Some(fpid)
+        );
         Ok(())
     }
 

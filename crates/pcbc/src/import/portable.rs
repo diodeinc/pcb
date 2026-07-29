@@ -197,7 +197,7 @@ fn resolve_project_library_assets(
     tables: &ProjectLibraryTables,
     assets: &SchematicAssets,
     abs_files: &mut BTreeSet<PathBuf>,
-) -> BTreeMap<String, PathBuf> {
+) -> (BTreeMap<String, PathBuf>, BTreeSet<String>) {
     for identifier in &assets.symbol_ids {
         let Some((library_nickname, _)) = parse_library_identifier(identifier) else {
             continue;
@@ -211,6 +211,7 @@ fn resolve_project_library_assets(
     }
 
     let mut footprints = BTreeMap::new();
+    let mut project_footprint_ids = BTreeSet::new();
     for identifier in &assets.footprint_ids {
         let Some((library_nickname, entry_name)) = parse_library_identifier(identifier) else {
             continue;
@@ -219,6 +220,7 @@ fn resolve_project_library_assets(
         // An enabled project-table entry wins on a nickname conflict, matching KiCad. Disabled
         // project rows are omitted by `parse_library_table`, so lookup falls through to global.
         if let Some(uri) = tables.footprints.get(&library_nickname) {
+            project_footprint_ids.insert(identifier.clone());
             if let Ok(path) = resolve_footprint_library_uri(
                 project_dir,
                 project_dir,
@@ -250,7 +252,7 @@ fn resolve_project_library_assets(
             footprints.insert(identifier.clone(), path);
         }
     }
-    footprints
+    (footprints, project_footprint_ids)
 }
 
 fn bundle_models(
@@ -393,7 +395,7 @@ fn discover_project_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadPr
         .model_refs
         .extend(pcb_discovery.model_refs);
 
-    let resolved_project_footprints = resolve_project_library_assets(
+    let (resolved_project_footprints, project_footprint_ids) = resolve_project_library_assets(
         project_dir,
         &variable_resolver,
         &library_tables,
@@ -444,6 +446,7 @@ fn discover_project_and_validate(kicad_pro_abs: &Path) -> Result<PortableKicadPr
         schematic_files_rel,
         files_to_bundle_rel,
         resolved_project_footprints,
+        project_footprint_ids,
         extra_files_to_bundle,
         manifest_json,
     })
@@ -483,7 +486,7 @@ fn discover_schematic_and_validate(kicad_sch_abs: &Path) -> Result<PortableKicad
 
     let mut abs_files = schematic_assets.files.clone();
     abs_files.extend(library_tables.existing_tables.iter().cloned());
-    let resolved_project_footprints = resolve_project_library_assets(
+    let (resolved_project_footprints, project_footprint_ids) = resolve_project_library_assets(
         project_dir,
         &variable_resolver,
         &library_tables,
@@ -530,6 +533,7 @@ fn discover_schematic_and_validate(kicad_sch_abs: &Path) -> Result<PortableKicad
         schematic_files_rel,
         files_to_bundle_rel,
         resolved_project_footprints,
+        project_footprint_ids,
         extra_files_to_bundle,
         manifest_json,
     })
@@ -1895,7 +1899,7 @@ mod tests {
         let resolver = build_kicad_variable_resolver(&project, &Value::Null);
         let tables = library_tables(BTreeMap::new(), &[global_table]);
         let mut abs_files = BTreeSet::new();
-        let resolved = resolve_project_library_assets(
+        let (resolved, project_footprint_ids) = resolve_project_library_assets(
             &project,
             &resolver,
             &tables,
@@ -1904,6 +1908,7 @@ mod tests {
         );
 
         assert_eq!(resolved.get("vendor:Thing"), Some(&global_footprint));
+        assert!(project_footprint_ids.is_empty());
         // The file is outside the project, so it is not staged or archived with the sources; the
         // geometry reaches the output by being copied into the generated component package.
         assert!(abs_files.is_empty());
@@ -1929,7 +1934,7 @@ mod tests {
             &[global_table],
         );
         let mut abs_files = BTreeSet::new();
-        let resolved = resolve_project_library_assets(
+        let (resolved, project_footprint_ids) = resolve_project_library_assets(
             &project,
             &resolver,
             &tables,
@@ -1938,8 +1943,37 @@ mod tests {
         );
 
         assert_eq!(resolved.get("vendor:Thing"), Some(&project_footprint));
+        assert!(project_footprint_ids.contains("vendor:Thing"));
         assert_ne!(resolved.get("vendor:Thing"), Some(&global_footprint));
         assert!(abs_files.contains(&project_footprint));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_project_footprint_still_claims_the_identifier() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project)?;
+        let project = project.canonicalize()?;
+        write_footprint_library(&project, FP_LIB_TABLE_FILE, "vendor", "project")?;
+
+        let resolver = build_kicad_variable_resolver(&project, &Value::Null);
+        let tables = library_tables(
+            parse_library_table(&project.join(FP_LIB_TABLE_FILE), "fp_lib_table")?,
+            &[],
+        );
+        let mut abs_files = BTreeSet::new();
+        let (resolved, project_footprint_ids) = resolve_project_library_assets(
+            &project,
+            &resolver,
+            &tables,
+            &footprint_assets("vendor:Missing"),
+            &mut abs_files,
+        );
+
+        assert!(!resolved.contains_key("vendor:Missing"));
+        assert!(project_footprint_ids.contains("vendor:Missing"));
+        assert!(abs_files.is_empty());
         Ok(())
     }
 
@@ -1969,7 +2003,7 @@ mod tests {
         let resolver = build_kicad_variable_resolver(&project, &Value::Null);
         let tables = library_tables(project_entries, &[global_table]);
         let mut abs_files = BTreeSet::new();
-        let resolved = resolve_project_library_assets(
+        let (resolved, project_footprint_ids) = resolve_project_library_assets(
             &project,
             &resolver,
             &tables,
@@ -1978,6 +2012,7 @@ mod tests {
         );
 
         assert_eq!(resolved.get("vendor:Thing"), Some(&global_footprint));
+        assert!(project_footprint_ids.is_empty());
         assert_ne!(resolved.get("vendor:Thing"), Some(&project_footprint));
         assert!(abs_files.is_empty());
         Ok(())

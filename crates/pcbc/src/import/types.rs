@@ -133,6 +133,8 @@ pub(super) struct PortableKicadProject {
     pub(super) files_to_bundle_rel: Vec<PathBuf>,
     /// KiCad footprint ID -> project-local `.kicad_mod` path.
     pub(super) resolved_project_footprints: BTreeMap<String, PathBuf>,
+    /// Footprint IDs claimed by an enabled project library entry, resolved or not.
+    pub(super) project_footprint_ids: BTreeSet<String>,
     pub(super) extra_files_to_bundle: Vec<PortableExtraFile>,
     pub(super) manifest_json: String,
 }

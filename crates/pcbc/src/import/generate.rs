@@ -2137,7 +2137,20 @@ fn derive_part_name(part_key: &ImportPartKey, component: &ImportComponentData) -
 /// The result must remain a valid sanitized component name, because it becomes the directory name,
 /// the generated `.zen` filename, and the `Component(name=...)` value.
 fn footprint_qualified_component_dir_name(base: &str, footprint_name: &str) -> String {
-    sanitize_component_dir_name(&format!("{base}__{footprint_name}"))
+    let mut base = base.to_string();
+    let mut footprint_name = sanitize_component_dir_name(footprint_name);
+    let mut excess = base
+        .len()
+        .saturating_add(2)
+        .saturating_add(footprint_name.len())
+        .saturating_sub(100);
+    if excess > 0 {
+        let remove_from_base = excess.min(base.len().saturating_sub(1));
+        base.truncate(base.len() - remove_from_base);
+        excess -= remove_from_base;
+        footprint_name.truncate(footprint_name.len() - excess);
+    }
+    format!("{base}__{footprint_name}")
 }
 
 pub(super) fn sanitize_component_dir_name(raw: &str) -> String {
@@ -2814,6 +2827,18 @@ mod tests {
                 .unwrap()
                 .file_type()
                 .is_symlink()
+        );
+    }
+
+    #[test]
+    fn footprint_qualifier_preserves_its_separator() {
+        assert_eq!(
+            footprint_qualified_component_dir_name("Part", "SO 8"),
+            "Part__SO_8"
+        );
+        assert_ne!(
+            footprint_qualified_component_dir_name("Part", "SO 8"),
+            sanitize_component_dir_name("Part_SO_8")
         );
     }
 
