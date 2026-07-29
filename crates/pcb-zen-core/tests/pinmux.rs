@@ -642,3 +642,4 @@ check(m["PB0"] == LED, "PB0 must carry the LED net")
     );
     assert_ok(&result);
 }
+

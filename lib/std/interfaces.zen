@@ -693,12 +693,15 @@ Uart = interface(
     RX=Net(),
 )
 
+# A USART is capability-wise a superset of a UART: any provider of Usart
+# also satisfies a Uart request (see the pin-capability model in the spec).
 Usart = interface(
     TX=Net(),
     RX=Net(),
     CK=Net(),
     RTS=Net(),
     CTS=Net(),
+    implies=[Uart],
 )
 
 

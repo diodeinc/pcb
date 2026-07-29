@@ -1,0 +1,146 @@
+"""
+Type: Microcontroller (pin-capability model demo)
+Description: STM32G030-style MCU in TSSOP-20 showing the peripheral
+capability model end to end: `peripheral()`/`pool()` tables, optional `io()`
+capability slots, `pin_solve()` at elaboration and `pin_map()` feeding
+`Component(pins=...)`.
+
+The caller connects only the capabilities it uses; the solver assigns
+peripheral instances and pins (AF matrix included), enforces exclusivity, and
+records `pin_assignment` / `swap_classes` as module properties.
+
+NOTE: the pinout and AF numbers below are ILLUSTRATIVE — verify against the
+STM32G030 datasheet before using this module for a real board.
+"""
+
+load("@stdlib/interfaces.zen", "Uart", "Usart", "Spi", "I2c", "Swd")
+
+# Single-signal capabilities not (yet) in the stdlib vocabulary.
+AdcIn = interface(IN = Net())
+GpioPin = interface(PIN = Net())
+
+# --- Capability tables (datasheet facts) --------------------------------------
+
+USART1 = peripheral(
+    "USART1",
+    provides = [Usart],  # implies Uart (stdlib): serves plain-UART requests too
+    rebind = "firmware",
+    signals = {
+        "TX": [pin("PA9", data = {"af": 1}), pin("PB6", data = {"af": 0})],
+        "RX": [pin("PA10", data = {"af": 1}), pin("PB7", data = {"af": 0})],
+        "CK": [pin("PA8", data = {"af": 1})],
+        "RTS": [pin("PA12", data = {"af": 1})],
+        "CTS": [pin("PA11", data = {"af": 1})],
+    },
+    attrs = {"baud_max": "8MHz"},
+)
+
+USART2 = peripheral(
+    "USART2",
+    provides = [Usart],
+    rebind = "firmware",
+    signals = {
+        "TX": [pin("PA2", data = {"af": 1})],
+        "RX": [pin("PA3", data = {"af": 1})],
+        "CK": [pin("PA4", data = {"af": 1})],
+        "RTS": [pin("PA1", data = {"af": 1})],
+        "CTS": [pin("PA0", data = {"af": 1})],
+    },
+    attrs = {"baud_max": "4MHz"},
+)
+
+SPI1 = peripheral(
+    "SPI1",
+    provides = [Spi],
+    rebind = "firmware",
+    signals = {
+        "CS": [pin("PA4", data = {"af": 0})],
+        "CLK": [pin("PA5", data = {"af": 0})],
+        "MISO": [pin("PA6", data = {"af": 0})],
+        "MOSI": [pin("PA7", data = {"af": 0})],
+    },
+)
+
+I2C1 = peripheral(
+    "I2C1",
+    provides = [I2c],
+    rebind = "firmware",
+    signals = {
+        "SDA": [pin("PB7", data = {"af": 6})],
+        "SCL": [pin("PB6", data = {"af": 6})],
+    },
+)
+
+SWD_PORT = peripheral(
+    "SWD",
+    provides = [Swd],
+    rebind = "fixed",
+    signals = {"SWDIO": [pin("PA13")], "SWCLK": [pin("PA14")]},
+)
+
+ADC_CH = [
+    peripheral("ADC1_IN%d" % i, provides = [AdcIn], rebind = "fixed",
+               signals = {"IN": [pin("PA%d" % i)]})
+    for i in range(4)
+]
+
+# PA13/PA14 stay out of the pool: this module keeps the debug port alive.
+GPIO_POOL = pool(
+    "GPIO",
+    provides = [GpioPin],
+    pins = ["PA0", "PA1", "PA2", "PA3", "PA4", "PA5", "PA6", "PA7",
+            "PA8", "PA9", "PA10", "PA11", "PA12", "PB6", "PB7"],
+)
+
+PERIPHS = [USART1, USART2, SPI1, I2C1, SWD_PORT] + ADC_CH + GPIO_POOL
+
+# --- Capability slots: connect only what the design uses ----------------------
+
+VDD = io(Power)
+VSS = io(Ground)
+NRST = io(Net, optional = True)
+
+SWD = io(Swd)
+DEBUG = io(Uart, optional = True)
+FLASH = io(Spi, optional = True)
+SENSOR = io(I2c, optional = True)
+LED = io(Net, optional = True)
+BTN = io(Net, optional = True)
+AIN = io(Net, optional = True)
+
+res = pin_solve(PERIPHS, [
+    pin_request("SWD", Swd, instance = "SWD"),
+    pin_request("DEBUG", Uart, if_connected = True),
+    pin_request("FLASH", Spi, if_connected = True),
+    pin_request("SENSOR", I2c, if_connected = True),
+    pin_request("LED", GpioPin, if_connected = True, direction = "output"),
+    pin_request("BTN", GpioPin, if_connected = True),
+    pin_request("AIN", AdcIn, if_connected = True),
+])
+
+m = pin_map(res["assignment"], {
+    "SWD": SWD,
+    "DEBUG": DEBUG,
+    "FLASH": FLASH,
+    "SENSOR": SENSOR,
+    "LED": LED,
+    "BTN": BTN,
+    "AIN": AIN,
+})
+
+# Unclaimed mux pins are intentionally open.
+_MUX_PINS = ["PA0", "PA1", "PA2", "PA3", "PA4", "PA5", "PA6", "PA7", "PA8",
+             "PA9", "PA10", "PA11", "PA12", "PA13", "PA14", "PB6", "PB7"]
+pins = {"VDD": VDD, "VSS": VSS, "NRST": NRST}
+pins.update({p: NotConnected() for p in _MUX_PINS if p not in m})
+pins.update(m)
+
+Component(
+    name = "MCU",
+    symbol = Symbol(library = "./STM32G030.kicad_sym"),
+    footprint = "Package_SO:TSSOP-20_4.4x6.5mm_P0.65mm",
+    prefix = "U",
+    mpn = "STM32G030F6P6",
+    manufacturer = "STMicroelectronics",
+    pins = pins,
+)
