@@ -126,12 +126,10 @@ fn remove_generated_output(
         board_dir.join("components"),
         board_dir.join(".kicad.import.extraction.json"),
         board_dir.join(".kicad.validation.diagnostics.json"),
+        board_dir.join(format!("{board_name}.kicad.archive.zip")),
     ];
     if source_kind == ImportSourceKind::Project {
-        paths.extend([
-            board_dir.join("layout"),
-            board_dir.join(format!("{board_name}.kicad.archive.zip")),
-        ]);
+        paths.push(board_dir.join("layout"));
     }
 
     for path in paths {
@@ -163,11 +161,13 @@ mod tests {
         let board_dir = temp.path();
         let layout_file = board_dir.join("layout/user-layout.kicad_pcb");
         let component_file = board_dir.join("components/generated/component.zen");
+        let archive_file = board_dir.join("board.kicad.archive.zip");
         std::fs::create_dir_all(layout_file.parent().unwrap()).expect("create layout");
         std::fs::create_dir_all(component_file.parent().unwrap()).expect("create components");
         std::fs::write(&layout_file, "user layout").expect("write layout");
         std::fs::write(&component_file, "generated component").expect("write component");
         std::fs::write(board_dir.join("board.zen"), "generated board").expect("write board");
+        std::fs::write(&archive_file, "stale project archive").expect("write archive");
 
         remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
             .expect("clean standalone output");
@@ -178,6 +178,7 @@ mod tests {
         );
         assert!(!board_dir.join("components").exists());
         assert!(!board_dir.join("board.zen").exists());
+        assert!(!archive_file.exists());
     }
 
     #[cfg(unix)]
