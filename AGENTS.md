@@ -52,6 +52,13 @@ Never run `cargo insta accept` without explicit user approval.
 - If you change workspace manifests, dependency resolution, or package behavior, update the relevant docs in `docs/pages/`, especially `docs/pages/packages.mdx`.
 - If you change stdlib APIs or examples, prefer a focused docs/example update over broad documentation churn.
 
+## Cross-Platform Tests
+
+- Treat line-ending differences as test-harness concerns when fixture text semantics are unchanged; compare normalized text or structured values instead of raw text.
+- Prefer portable Rust helpers over shell or batch wrappers when a test must intercept an external executable.
+- Canonicalize temporary executable paths before passing them to configuration that expands paths.
+- When local Windows execution is unavailable, verify platform-specific test setup in Windows CI. Distinguish test-harness failures from product behavior.
+
 ## Verification
 
 - Run the narrowest relevant check first: usually `cargo test -p <crate>`, a focused `cargo run -p pcbc -- ...` command, or the layout-lens pytest command above.
