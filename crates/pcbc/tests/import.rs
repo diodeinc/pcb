@@ -213,6 +213,14 @@ fn write_kicad_cli_wrapper(root: &std::path::Path) -> std::path::PathBuf {
         r#"use std::{env, fs, process::Command};
 
 fn main() {
+    let args = env::args_os().skip(1).collect::<Vec<_>>();
+    if args
+        .first()
+        .is_some_and(|arg| arg == std::ffi::OsStr::new("--version"))
+    {
+        return;
+    }
+
     for (source, destination) in [
         ("PCB_TEST_MUTATED_SCHEMATIC", "PCB_TEST_ORIGINAL_SCHEMATIC"),
         ("PCB_TEST_MUTATED_PROJECT", "PCB_TEST_ORIGINAL_PROJECT"),
@@ -222,7 +230,7 @@ fn main() {
     }
 
     let status = Command::new(env::var_os("PCB_TEST_REAL_KICAD_CLI").unwrap())
-        .args(env::args_os().skip(1))
+        .args(args)
         .status()
         .unwrap();
     std::process::exit(status.code().unwrap_or(1));
