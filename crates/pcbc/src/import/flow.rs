@@ -151,47 +151,6 @@ fn remove_generated_output(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn standalone_cleanup_preserves_layout_and_removes_archive() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let board_dir = temp.path();
-        let layout_file = board_dir.join("layout/user-layout.kicad_pcb");
-        let archive_file = board_dir.join("board.kicad.archive.zip");
-        std::fs::create_dir_all(layout_file.parent().unwrap()).expect("create layout");
-        std::fs::write(&layout_file, "user layout").expect("write layout");
-        std::fs::write(&archive_file, "stale project archive").expect("write archive");
-
-        remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
-            .expect("clean standalone output");
-
-        assert_eq!(
-            std::fs::read_to_string(layout_file).expect("read preserved layout"),
-            "user layout"
-        );
-        assert!(!archive_file.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cleanup_removes_dangling_generated_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let temp = tempfile::tempdir().expect("tempdir");
-        let board_dir = temp.path();
-        let board_zen = board_dir.join("board.zen");
-        symlink(board_dir.join("missing-target"), &board_zen).expect("create dangling symlink");
-
-        remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
-            .expect("clean standalone output");
-
-        assert!(std::fs::symlink_metadata(board_zen).is_err());
-    }
-}
-
 struct Validated {
     ctx: ImportContext,
     selection: ImportSelection,
@@ -354,5 +313,46 @@ impl Materialized {
             ir,
             board,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_cleanup_preserves_layout_and_removes_archive() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let board_dir = temp.path();
+        let layout_file = board_dir.join("layout/user-layout.kicad_pcb");
+        let archive_file = board_dir.join("board.kicad.archive.zip");
+        std::fs::create_dir_all(layout_file.parent().unwrap()).expect("create layout");
+        std::fs::write(&layout_file, "user layout").expect("write layout");
+        std::fs::write(&archive_file, "stale project archive").expect("write archive");
+
+        remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
+            .expect("clean standalone output");
+
+        assert_eq!(
+            std::fs::read_to_string(layout_file).expect("read preserved layout"),
+            "user layout"
+        );
+        assert!(!archive_file.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_removes_dangling_generated_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let board_dir = temp.path();
+        let board_zen = board_dir.join("board.zen");
+        symlink(board_dir.join("missing-target"), &board_zen).expect("create dangling symlink");
+
+        remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
+            .expect("clean standalone output");
+
+        assert!(std::fs::symlink_metadata(board_zen).is_err());
     }
 }
