@@ -8,6 +8,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb import` accepts a standalone `.kicad_sch` as well as a `.kicad_pro`.
+- `pcb import` preserves each KiCad physical pin as a distinct Zener signal and validates the generated net partitions against the source schematic.
+- `pcb import` resolves standalone schematic footprints from project, global, bundled, and cached KiCad libraries.
+
 ### Changed
 
 - Git authentication now leaves repository authorization to DiodeHub.
@@ -15,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Corrected house TVS ratings and clamping-voltage range matching.
+- `pcb import` ignores KiCad `(disabled)` rows in `fp-lib-table` / `sym-lib-table`, so a disabled project nickname falls through to the global table the way KiCad does.
 - `pcb import --force` preserves user-created layout output when re-importing a standalone schematic and removes stale project archives.
 - `pcb import` atomically replaces generated KiCad symbol and footprint files instead of following file symlinks.
 - Standalone KiCad imports keep enabled project footprint libraries authoritative when a referenced footprint is missing.
@@ -26,13 +33,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added `pcb auth git configure` and `pcb auth git unconfigure` to manage host-specific global Git credential configuration for DiodeHub.
 - PCB now authenticates its own DiodeHub Git operations without requiring global Git configuration.
-- `pcb import` accepts a standalone `.kicad_sch` as well as a `.kicad_pro`.
-- `pcb import` preserves each KiCad physical pin as a distinct Zener signal and validates the generated net partitions against the source schematic.
-- `pcb import` resolves standalone schematic footprints from project, global, bundled, and cached KiCad libraries.
-
-### Fixed
-
-- `pcb import` ignores KiCad `(disabled)` rows in `fp-lib-table` / `sym-lib-table`, so a disabled project nickname falls through to the global table the way KiCad does.
 
 ### Changed
 
