@@ -18,8 +18,6 @@ const DIODEHUB_CREDENTIAL_HELPER_CONFIG: &str = "credential.https://code.diode.c
 const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
     "credential.https://code.diode.computer.useHttpPath";
 const DIODEHUB_HOST: &str = "code.diode.computer";
-const DIODEHUB_SSH_URL_PREFIX: &str = "ssh://git@code.diode.computer:23231/";
-const DIODEHUB_URL_REWRITE_CONFIG: &str = "url.https://code.diode.computer/.insteadOf";
 const GIT_CONFIG_NOT_FOUND: i32 = 5;
 
 #[derive(Debug, Clone)]
@@ -51,7 +49,7 @@ fn git_network(repo_root: &Path) -> anyhow::Result<Command> {
 
 fn git_global_network() -> anyhow::Result<Command> {
     let mut cmd = git_global();
-    add_diodehub_auth_config(&mut cmd, &credential_cache_socket()?)?;
+    add_diodehub_https_auth_config(&mut cmd, &credential_cache_socket()?)?;
     Ok(cmd)
 }
 
@@ -99,7 +97,7 @@ fn add_git_config(cmd: &mut Command, key: &str, value: &str) {
     cmd.arg("-c").arg(format!("{key}={value}"));
 }
 
-fn add_diodehub_auth_config(cmd: &mut Command, cache_socket: &Path) -> anyhow::Result<()> {
+fn add_diodehub_https_auth_config(cmd: &mut Command, cache_socket: &Path) -> anyhow::Result<()> {
     let cache_helper = credential_cache_helper(cache_socket)?;
     add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, "");
     add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, &cache_helper);
@@ -109,14 +107,6 @@ fn add_diodehub_auth_config(cmd: &mut Command, cache_socket: &Path) -> anyhow::R
         DIODEHUB_CREDENTIAL_HELPER,
     );
     add_git_config(cmd, DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG, "true");
-    for ssh_prefix in [
-        "code.diode.computer:",
-        "git@code.diode.computer:",
-        "ssh://git@code.diode.computer/",
-        DIODEHUB_SSH_URL_PREFIX,
-    ] {
-        add_git_config(cmd, DIODEHUB_URL_REWRITE_CONFIG, ssh_prefix);
-    }
     Ok(())
 }
 
@@ -1067,7 +1057,7 @@ mod tests {
         assert_success(&run_with_input(store, cached_credential));
 
         let mut fill = git_global();
-        add_diodehub_auth_config(&mut fill, &cache_socket).unwrap();
+        add_diodehub_https_auth_config(&mut fill, &cache_socket).unwrap();
         fill.args(["credential", "fill"]);
         isolate_git_config(&mut fill, &git_config);
         let output = run_with_input(
@@ -1088,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn process_local_auth_rewrites_diodehub_ssh_without_changing_the_remote() {
+    fn process_local_https_auth_preserves_remote_transport() {
         let tempdir = tempfile::tempdir().unwrap();
         let repo = tempdir.path().join("repo");
         fs::create_dir(&repo).unwrap();
@@ -1099,14 +1089,19 @@ mod tests {
             ("bare", "code.diode.computer:diode/registry.git"),
             ("scp", "git@code.diode.computer:diode/registry.git"),
             (
+                "ssh-default-port",
+                "ssh://git@code.diode.computer/diode/registry.git",
+            ),
+            (
                 "ssh",
                 "ssh://git@code.diode.computer:23231/diode/registry.git",
             ),
+            ("https", "https://code.diode.computer/diode/registry.git"),
         ] {
             run_in(&repo, &["remote", "add", remote, stored_url]).unwrap();
 
             let mut command = git_global();
-            add_diodehub_auth_config(
+            add_diodehub_https_auth_config(
                 &mut command,
                 &tempdir.path().join("git-credential-cache/socket"),
             )
@@ -1119,10 +1114,7 @@ mod tests {
             let output = command.output().unwrap();
             assert_success(&output);
 
-            assert_eq!(
-                String::from_utf8(output.stdout).unwrap().trim(),
-                "https://code.diode.computer/diode/registry.git"
-            );
+            assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), stored_url);
             assert_eq!(
                 run_output(&repo, &["config", "--get", &format!("remote.{remote}.url")]).unwrap(),
                 stored_url

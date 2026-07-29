@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Corrected house TVS ratings and clamping-voltage range matching.
+- Preserved explicit SSH remotes in PCB-owned Git operations.
 
 ## [0.4.14] - 2026-07-28
 
