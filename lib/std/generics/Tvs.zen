@@ -16,10 +16,13 @@ USB_5V_STANDOFF_VOLTAGE = Voltage("5 to 6V")
 
 package = config(Package, default=Package("DO-219AB"))
 direction = config(Direction, default=Direction("Unidirectional"), help="Unidirectional or Bidirectional")
-# 8/20 μs waveform acc. IEC 61000-4-5
 reverse_standoff_voltage = config(Voltage, default=USB_5V_STANDOFF_VOLTAGE, help="Maximum steady-state reverse voltage")
-reverse_clamping_voltage = config(Voltage, optional=True, help="Clamping voltage at peak pulse current")
-peak_pulse_power = config(Watts, optional=True, help="Peak pulse power rating (8/20μs)")
+reverse_clamping_voltage = config(
+    Voltage,
+    optional=True,
+    help="Acceptable datasheet clamping voltage; use a range to specify an upper bound",
+)
+peak_pulse_power = config(Watts, optional=True, help="Minimum peak pulse power rating")
 capacitance = config(Capacitance, optional=True, help="Diode capacitance C_d at V_R=0V, f=1 MHz")
 mpn = config(str, optional=True, help="Manufacturer Part Number")
 manufacturer = config(str, optional=True, help="Manufacturer")
@@ -31,7 +34,7 @@ else:
     A = io(Net)
     K = io(Net)
 
-if reverse_clamping_voltage and reverse_clamping_voltage.min < reverse_standoff_voltage.max:
+if reverse_clamping_voltage and reverse_clamping_voltage.max < reverse_standoff_voltage.max:
     error(
         "reverse clamping voltage ("
         + str(reverse_clamping_voltage)
@@ -42,7 +45,7 @@ if reverse_clamping_voltage and reverse_clamping_voltage.min < reverse_standoff_
 
 if K.voltage and A.voltage:
     net_v_diff = K.voltage.diff(A.voltage)
-    if reverse_clamping_voltage and net_v_diff.max > reverse_clamping_voltage.min:
+    if reverse_clamping_voltage and net_v_diff.max > reverse_clamping_voltage.max:
         error(
             "Power net voltage Δ ("
             + str(net_v_diff)

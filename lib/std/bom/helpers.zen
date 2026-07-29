@@ -571,7 +571,9 @@ def tvs(
     Args:
         standoff_voltage: Reverse standoff voltage (e.g., "5V" or "5V to 6V")
         clamping_voltage: Clamping voltage @ Ipp (e.g., "9.2V" or "9V to 12V")
-        peak_pulse_power: Peak pulse power (e.g., "200W" or "200W to 400W") or None
+        peak_pulse_power: Manufacturer-published peak pulse power
+            (e.g., "200W" or "200W to 400W") or None. Do not derive this
+            rating from peak current and a clamping-voltage test point.
         mpn: Manufacturer part number
         manufacturer: Manufacturer name
         capacitance: Diode capacitance (e.g., "0.5pF") or None
