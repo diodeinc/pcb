@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Split the Nix flake's `pcb` shim and `pcbc` compiler into independent package outputs.
+
 ## [0.4.15] - 2026-07-29
 
 ### Added
