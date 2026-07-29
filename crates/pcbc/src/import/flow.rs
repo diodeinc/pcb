@@ -98,7 +98,11 @@ fn prepare_output(
     }
 
     if args.force {
-        remove_generated_output(board_repo, &selection.board_name)?;
+        remove_generated_output(
+            board_repo,
+            &selection.board_name,
+            selection.portable.source_kind,
+        )?;
     }
 
     if !existing_board_repo {
@@ -111,25 +115,86 @@ fn prepare_output(
     Ok(())
 }
 
-fn remove_generated_output(board_dir: &Path, board_name: &str) -> Result<()> {
-    for path in [
+fn remove_generated_output(
+    board_dir: &Path,
+    board_name: &str,
+    source_kind: ImportSourceKind,
+) -> Result<()> {
+    let mut paths = vec![
         board_dir.join(format!("{board_name}.zen")),
         board_dir.join("modules"),
         board_dir.join("components"),
-        board_dir.join("layout"),
         board_dir.join(".kicad.import.extraction.json"),
         board_dir.join(".kicad.validation.diagnostics.json"),
-        board_dir.join(format!("{board_name}.kicad.archive.zip")),
-    ] {
-        if path.is_dir() {
-            std::fs::remove_dir_all(&path)
-                .with_context(|| format!("Failed to remove {}", path.display()))?;
-        } else if path.exists() {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("Failed to remove {}", path.display()))?;
+    ];
+    if source_kind == ImportSourceKind::Project {
+        paths.extend([
+            board_dir.join("layout"),
+            board_dir.join(format!("{board_name}.kicad.archive.zip")),
+        ]);
+    }
+
+    for path in paths {
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                std::fs::remove_dir_all(&path)
+                    .with_context(|| format!("Failed to remove {}", path.display()))?;
+            }
+            Ok(_) => {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("Failed to remove {}", path.display()))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("Failed to inspect {}", path.display()));
+            }
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_cleanup_preserves_layout() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let board_dir = temp.path();
+        let layout_file = board_dir.join("layout/user-layout.kicad_pcb");
+        let component_file = board_dir.join("components/generated/component.zen");
+        std::fs::create_dir_all(layout_file.parent().unwrap()).expect("create layout");
+        std::fs::create_dir_all(component_file.parent().unwrap()).expect("create components");
+        std::fs::write(&layout_file, "user layout").expect("write layout");
+        std::fs::write(&component_file, "generated component").expect("write component");
+        std::fs::write(board_dir.join("board.zen"), "generated board").expect("write board");
+
+        remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
+            .expect("clean standalone output");
+
+        assert_eq!(
+            std::fs::read_to_string(layout_file).expect("read preserved layout"),
+            "user layout"
+        );
+        assert!(!board_dir.join("components").exists());
+        assert!(!board_dir.join("board.zen").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_removes_dangling_generated_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let board_dir = temp.path();
+        let board_zen = board_dir.join("board.zen");
+        symlink(board_dir.join("missing-target"), &board_zen).expect("create dangling symlink");
+
+        remove_generated_output(board_dir, "board", ImportSourceKind::Schematic)
+            .expect("clean standalone output");
+
+        assert!(std::fs::symlink_metadata(board_zen).is_err());
+    }
 }
 
 struct Validated {

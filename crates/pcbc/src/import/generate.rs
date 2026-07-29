@@ -20,6 +20,7 @@ use pcb_sexpr::{PatchSet, Span, board as sexpr_board};
 use pcb_zen_core::lang::stackup as zen_stackup;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -46,7 +47,21 @@ fn ensure_parent(path: &Path) -> Result<()> {
 
 fn write_file(path: &Path, content: &[u8]) -> Result<()> {
     ensure_parent(path)?;
-    fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))
+    let parent = path
+        .parent()
+        .context("Expected generated file path to have a parent directory")?;
+    let mut temp = tempfile::Builder::new()
+        .prefix(".pcb.import.")
+        .tempfile_in(parent)
+        .with_context(|| format!("Failed to create temp file in {}", parent.display()))?;
+    temp.write_all(content)
+        .with_context(|| format!("Failed to write temp file for {}", path.display()))?;
+    temp.flush()
+        .with_context(|| format!("Failed to flush temp file for {}", path.display()))?;
+    temp.persist(path)
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!(error))
+        .with_context(|| format!("Failed to persist {}", path.display()))
 }
 
 fn write_zen(path: &Path, content: &str) -> Result<()> {
@@ -2778,6 +2793,29 @@ mod tests {
     use super::schematic_types::{ImportSchematicPositionComment, ImportSchematicTargetKind};
     use super::*;
     use std::path::PathBuf;
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_file_replaces_symlink_without_writing_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let target = temp.path().join("user-file");
+        let generated = temp.path().join("generated.kicad_sym");
+        fs::write(&target, "user content").expect("write user file");
+        symlink(&target, &generated).expect("create generated-file symlink");
+
+        write_file(&generated, b"generated content").expect("write generated file");
+
+        assert_eq!(fs::read_to_string(target).unwrap(), "user content");
+        assert_eq!(fs::read_to_string(&generated).unwrap(), "generated content");
+        assert!(
+            !fs::symlink_metadata(generated)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
 
     fn make_anchor(symbol_uuid: &str) -> KiCadUuidPathKey {
         KiCadUuidPathKey {

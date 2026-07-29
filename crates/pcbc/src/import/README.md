@@ -30,7 +30,8 @@ Import resolves the generated Zener workspace offline during final validation.
 Import keeps the existing repository-creation and overwrite behavior.
 A new output directory is initialized with the same Git repository, README, manifest, and standard-library setup used by the existing project importer.
 Import refuses an existing board repository unless the caller supplies `--force`.
-`--force` removes generated board, module, component, layout, archive, and report files before regeneration.
+`--force` removes generated board, module, component, and report files before regeneration.
+For project imports, it also replaces the generated layout and archive outputs.
 
 For a board named `<board>`, a standalone schematic import produces:
 
