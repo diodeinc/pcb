@@ -15,7 +15,7 @@ permissions:
 jobs:
   build_perf:
     name: pcb build performance
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -49,39 +49,55 @@ jobs:
           wget -q https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine_1.20.0_amd64.deb
           sudo dpkg -i hyperfine_1.20.0_amd64.deb
 
+      - name: Prepare benchmark revisions
+        run: |
+          merge_base="$(git merge-base HEAD "${{ github.event.pull_request.base.sha }}")"
+          echo "BASE_DIR=$RUNNER_TEMP/pcb-base" >> "$GITHUB_ENV"
+          echo "BASE_TOOLCHAIN=$RUNNER_TEMP/pcb-base-toolchain" >> "$GITHUB_ENV"
+          echo "BASE_DATA=$RUNNER_TEMP/pcb-base-data" >> "$GITHUB_ENV"
+          echo "HEAD_TOOLCHAIN=$RUNNER_TEMP/pcb-head-toolchain" >> "$GITHUB_ENV"
+          echo "HEAD_DATA=$RUNNER_TEMP/pcb-head-data" >> "$GITHUB_ENV"
+          git worktree add --detach "$RUNNER_TEMP/pcb-base" "$merge_base"
+
+      - name: Build base pcbc
+        run: |
+          cargo build --release -p pcbc \
+            --manifest-path "$BASE_DIR/Cargo.toml" \
+            --target-dir "$GITHUB_WORKSPACE/target"
+          mkdir -p "$BASE_TOOLCHAIN/lib"
+          install -m 755 target/release/pcbc "$BASE_TOOLCHAIN/pcbc"
+          cp -R "$BASE_DIR/lib/std" "$BASE_TOOLCHAIN/lib/std"
+
+      - name: Build head pcbc
+        run: |
+          cargo clean --release --workspace \
+            --target-dir "$GITHUB_WORKSPACE/target"
+          cargo build --release -p pcbc \
+            --target-dir "$GITHUB_WORKSPACE/target"
+          mkdir -p "$HEAD_TOOLCHAIN/lib"
+          install -m 755 target/release/pcbc "$HEAD_TOOLCHAIN/pcbc"
+          cp -R lib/std "$HEAD_TOOLCHAIN/lib/std"
+
       - name: Run performance benchmarks
         run: |
           mkdir -p perf
-          merge_base="$(git merge-base HEAD "${{ github.event.pull_request.base.sha }}")"
-          base_dir="$RUNNER_TEMP/pcb-base"
-          base_bin="$RUNNER_TEMP/pcb-base-bin"
-          base_data="$RUNNER_TEMP/pcb-base-data"
-          base_shim="$base_bin/pcb"
-          head_bin="$RUNNER_TEMP/pcb-head-bin"
-          head_data="$RUNNER_TEMP/pcb-head-data"
-          head_shim="$head_bin/pcb"
           workspaces="Demeter DM0001 DM0002 DM0003 Feign Renfield Seward Nano unoQ"
 
           bench() {
             suffix="$1"
-            shim="$2"
+            pcbc="$2"
             data_home="$3"
             for workspace in $workspaces; do
               XDG_DATA_HOME="$data_home" python3 bin/pcb-build-perf \
-                --pcb "$shim" \
-                --pcb-arg +local \
+                --pcbc "$pcbc" \
                 --workspace "workspaces/$workspace" \
                 --suppress bom \
                 --output "perf/$workspace-$suffix.json"
             done
           }
 
-          git worktree add --detach "$base_dir" "$merge_base"
-          XDG_DATA_HOME="$base_data" PCB_INSTALL_DIR="$base_bin" "$base_dir/install.sh" --local
-
-          XDG_DATA_HOME="$head_data" PCB_INSTALL_DIR="$head_bin" ./install.sh --local
-          bench base "$base_shim" "$base_data"
-          bench head "$head_shim" "$head_data"
+          bench base "$BASE_TOOLCHAIN/pcbc" "$BASE_DATA"
+          bench head "$HEAD_TOOLCHAIN/pcbc" "$HEAD_DATA"
 
       - name: Create PR comment body
         id: perf_comment
