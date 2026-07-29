@@ -70,6 +70,8 @@ jobs:
 
       - name: Build head pcbc
         run: |
+          cargo clean --release --workspace \
+            --target-dir "$GITHUB_WORKSPACE/target"
           cargo build --release -p pcbc \
             --target-dir "$GITHUB_WORKSPACE/target"
           mkdir -p "$HEAD_TOOLCHAIN/lib"
