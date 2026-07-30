@@ -1,5 +1,5 @@
 use ipc2581::edit::Doc;
-use pcb_ir::dialects::ipc::root_step;
+use pcb_ir::dialects::ipc::{View, root_step};
 
 use super::*;
 
@@ -66,6 +66,104 @@ fn assembly_panel_xml_at(min_x: f64, min_y: f64, width_mm: f64, height_mm: f64) 
   </Ecad>
 </IPC-2581>"#
     )
+}
+
+fn assembly_panel_with_non_manufacturing_data() -> String {
+    assembly_panel_xml(100.0, 80.0)
+        .replace(
+            r#"    <LayerRef name="TOP"/>"#,
+            r#"    <LayerRef name="TOP"/>
+    <LayerRef name="DRILL"/>
+    <LayerRef name="ROUTE"/>
+    <LayerRef name="SCORE"/>
+    <LayerRef name="PASTE"/>
+    <LayerRef name="COURTYARD"/>
+    <BomRef name="assembly_bom"/>
+    <AvlRef name="assembly_avl"/>"#,
+        )
+        .replace(
+            r#"  <Ecad name="assembly">"#,
+            r#"  <Bom name="assembly_bom"/>
+  <Ecad name="assembly">"#,
+        )
+        .replace(
+            r#"      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>"#,
+            r#"      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE">
+        <Span fromLayer="TOP" toLayer="TOP"/>
+      </Layer>
+      <Layer name="ROUTE" layerFunction="ROUTE" side="ALL" polarity="POSITIVE">
+        <Span fromLayer="TOP" toLayer="TOP"/>
+      </Layer>
+      <Layer name="SCORE" layerFunction="SCORE" side="ALL" polarity="POSITIVE"/>
+      <Layer name="PASTE" layerFunction="SOLDERPASTE" side="TOP" polarity="POSITIVE"/>
+      <Layer name="COURTYARD" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>"#,
+        )
+        .replace(
+            r#"        <LayerFeature layerRef="TOP">"#,
+            r#"        <Package name="package" type="ELECTRICAL">
+          <Outline>
+            <Polygon><PolyBegin x="0" y="0"/></Polygon>
+            <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+          </Outline>
+        </Package>
+        <Component refDes="U1" packageRef="package" part="part" layerRef="TOP" mountType="SMT">
+          <Location x="1" y="1"/>
+        </Component>
+        <LogicalNet name="N1"/>
+        <LayerFeature layerRef="TOP">"#,
+        )
+        .replace(
+            r#"        </LayerFeature>
+      </Step>"#,
+            r#"        </LayerFeature>
+        <LayerFeature layerRef="DRILL">
+          <Set>
+            <Hole name="V1" diameter="0.3" platingStatus="VIA" plusTol="0" minusTol="0" x="10" y="10"/>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="ROUTE">
+          <Set>
+            <SlotCavity name="S1" platingStatus="PLATED" plusTol="0" minusTol="0">
+              <Location x="20" y="20"/>
+              <Oval width="1.7" height="0.6"/>
+            </SlotCavity>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="SCORE">
+          <Set>
+            <Features>
+              <Line startX="0" startY="5" endX="10" endY="5">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="PASTE">
+          <Set>
+            <Features>
+              <Line startX="0" startY="1" endX="10" endY="1">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="COURTYARD">
+          <Set>
+            <Features>
+              <Line startX="0" startY="2" endX="10" endY="2">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>"#,
+        )
+        .replace(
+            r#"</IPC-2581>"#,
+            r#"  <Avl name="assembly_avl"/>
+</IPC-2581>"#,
+        )
 }
 
 #[test]
@@ -175,6 +273,48 @@ fn creates_supported_standard_fabrication_panel_sizes() {
         assert!((root.bbox.width() - dimensions.width_mm()).abs() < 1e-9);
         assert!((root.bbox.height() - dimensions.height_mm()).abs() < 1e-9);
     }
+}
+
+#[test]
+fn strips_non_manufacturing_data_and_preserves_manufacturing_exports() {
+    let generated = create_fab_panel_xml(&[assembly_panel_with_non_manufacturing_data()], &[0])
+        .expect("fabrication panel should be generated");
+
+    for removed in [
+        "<BomRef",
+        "<AvlRef",
+        "<Bom ",
+        "<Avl ",
+        "<Package",
+        "<Component",
+        "<LogicalNet",
+        "name=\"fab_0_PASTE\"",
+        "name=\"fab_0_COURTYARD\"",
+    ] {
+        assert!(!generated.contains(removed), "{removed} was not removed");
+    }
+    assert!(generated.contains(r#"<FunctionMode mode="FABRICATION" sectionKey="SURO"/>"#));
+    assert!(generated.contains(r#"<Layer name="TOP""#));
+    assert!(generated.contains(r#"<Layer name="fab_0_DRILL""#));
+    assert!(generated.contains(r#"<Layer name="fab_0_ROUTE" layerFunction="ROUT""#));
+    assert!(generated.contains(r#"<Layer name="fab_0_SCORE" layerFunction="V_CUT""#));
+    assert!(generated.contains(r#"<LayerFeature layerRef="TOP">"#));
+    assert!(generated.contains(r#"<LayerFeature layerRef="fab_0_DRILL">"#));
+    assert!(generated.contains(r#"<LayerFeature layerRef="fab_0_ROUTE">"#));
+    assert!(generated.contains(r#"<LayerFeature layerRef="fab_0_SCORE">"#));
+
+    Ipc2581::validate(&generated).expect("fabrication panel should validate against IPC-2581C");
+    let parsed = Ipc2581::parse(&generated).expect("fabrication panel should parse");
+    let package = crate::manufacturing::build_manufacturing_package(&parsed, View::ArrayFlattened)
+        .expect("fabrication panel should export manufacturing files");
+    assert!(package.files.iter().any(|file| file.filename == "F_Cu.gtl"));
+    assert!(package.files.iter().any(|file| file.filename == "PTH.drl"));
+    assert!(
+        package
+            .files
+            .iter()
+            .any(|file| file.filename == "V_Cut.gbr")
+    );
 }
 
 #[test]

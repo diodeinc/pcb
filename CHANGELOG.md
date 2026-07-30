@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- IPC-2581 fabrication views and panels now omit non-manufacturing data.
 - Split the Nix flake's `pcb` shim and `pcbc` compiler into independent package outputs.
 
 ## [0.4.15] - 2026-07-29

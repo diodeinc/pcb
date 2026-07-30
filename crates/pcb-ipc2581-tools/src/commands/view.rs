@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ipc2581::edit::{self, Doc};
-use ipc2581::{Mode, XmlWriter};
+use ipc2581::{Ipc2581, Mode, XmlWriter};
 
 use crate::ViewMode;
 use crate::utils::file as file_utils;
@@ -82,6 +82,12 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
 
     // Reformat XML with proper indentation
     filtered_xml = crate::utils::format::reformat_xml(&filtered_xml)?;
+    if matches!(mode, ViewMode::Fabrication) {
+        Ipc2581::validate(&filtered_xml)
+            .context("fabrication view failed IPC-2581C schema validation")?;
+        Ipc2581::parse(&filtered_xml)
+            .context("fabrication view was not accepted by the IPC-2581 parser")?;
+    }
 
     file_utils::save_ipc_file(output, &filtered_xml)?;
 
@@ -90,6 +96,10 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
 }
 
 fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
+    if matches!(mode, ViewMode::Fabrication) {
+        return super::fabrication::strip_non_manufacturing(xml);
+    }
+
     let excluded = excluded_sections(mode.as_ipc_mode());
     let doc = Doc::parse(xml)?;
     let mut edits = Vec::new();

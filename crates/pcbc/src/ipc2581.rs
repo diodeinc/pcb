@@ -65,7 +65,7 @@ enum Commands {
         #[command(subcommand)]
         command: FabPanelCommands,
     },
-    /// Export a filtered view of an IPC-2581 file for a specific mode
+    /// Export a filtered IPC-2581 function-mode view. Fabrication mode strips non-manufacturing data.
     View {
         /// Input IPC-2581 XML file
         #[arg(value_hint = clap::ValueHint::FilePath)]
