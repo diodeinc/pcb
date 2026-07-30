@@ -17,17 +17,52 @@ mod xml;
 
 use packing::{MAX_ITEM_COUNT, Size, pack};
 
-const FAB_PANEL_WIDTH_MM: f64 = 18.0 * 25.4;
-const FAB_PANEL_HEIGHT_MM: f64 = 24.0 * 25.4;
 const EDGE_RAIL_MM: f64 = 5.0;
 const PANEL_GAP_MM: f64 = 5.0;
 const MICROMETERS_PER_MM: f64 = 1_000.0;
 
-const USABLE_FAB_PANEL: Size = Size {
-    width: 447_200,
-    height: 599_600,
-};
 const PANEL_GAP_UM: u32 = 5_000;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FabPanelDimensions {
+    width_mm: f64,
+    height_mm: f64,
+}
+
+impl FabPanelDimensions {
+    pub const INCHES_12_X_18: Self = Self::from_inches(12.0, 18.0);
+    pub const INCHES_16_X_18: Self = Self::from_inches(16.0, 18.0);
+    pub const INCHES_18_X_24: Self = Self::from_inches(18.0, 24.0);
+    pub const INCHES_21_X_24: Self = Self::from_inches(21.0, 24.0);
+
+    pub const fn width_mm(self) -> f64 {
+        self.width_mm
+    }
+
+    pub const fn height_mm(self) -> f64 {
+        self.height_mm
+    }
+
+    const fn from_inches(width: f64, height: f64) -> Self {
+        Self {
+            width_mm: width * 25.4,
+            height_mm: height * 25.4,
+        }
+    }
+
+    fn usable_size(self) -> Result<Size> {
+        Ok(Size {
+            width: dimension_um(self.width_mm - 2.0 * EDGE_RAIL_MM)?,
+            height: dimension_um(self.height_mm - 2.0 * EDGE_RAIL_MM)?,
+        })
+    }
+}
+
+impl Default for FabPanelDimensions {
+    fn default() -> Self {
+        Self::INCHES_18_X_24
+    }
+}
 
 #[derive(Debug)]
 struct SourcePanel {
@@ -101,7 +136,7 @@ struct SurfaceFinishSignature {
     products: Vec<(String, Option<String>)>,
 }
 
-pub fn execute(inputs: &[PathBuf], output: &Path) -> Result<()> {
+pub fn execute(inputs: &[PathBuf], output: &Path, dimensions: FabPanelDimensions) -> Result<()> {
     if inputs.is_empty() {
         bail!("at least one assembly panel IPC-2581 file is required");
     }
@@ -129,7 +164,7 @@ pub fn execute(inputs: &[PathBuf], output: &Path) -> Result<()> {
         occurrences.push(source_index);
     }
 
-    let generated = create_fab_panel_xml(&source_xml, &occurrences)?;
+    let generated = create_fab_panel_xml_with_dimensions(&source_xml, &occurrences, dimensions)?;
     if output.as_os_str() == "-" {
         io::stdout().lock().write_all(generated.as_bytes())?;
         eprintln!("✓ Created IPC-2581 fabrication panel on stdout");
@@ -143,7 +178,16 @@ pub fn execute(inputs: &[PathBuf], output: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<String> {
+    create_fab_panel_xml_with_dimensions(source_xml, occurrences, FabPanelDimensions::default())
+}
+
+fn create_fab_panel_xml_with_dimensions(
+    source_xml: &[String],
+    occurrences: &[usize],
+    dimensions: FabPanelDimensions,
+) -> Result<String> {
     if occurrences.is_empty() {
         bail!("at least one assembly panel is required");
     }
@@ -194,9 +238,15 @@ fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let placements = pack(&items, USABLE_FAB_PANEL, PANEL_GAP_UM)?;
+    let placements = pack(&items, dimensions.usable_size()?, PANEL_GAP_UM)?;
 
-    xml::write_fab_panel_xml(&sources, occurrences, &placements, &shared_stackup_layers)
+    xml::write_fab_panel_xml(
+        &sources,
+        occurrences,
+        &placements,
+        &shared_stackup_layers,
+        dimensions,
+    )
 }
 
 fn prepare_source_panel(

@@ -5,7 +5,7 @@ use ipc2581::edit::{self, Doc, Edit, Node};
 use ipc2581::types::Units;
 use ipc2581::{Ipc2581, XmlWriter};
 
-use super::{EDGE_RAIL_MM, FAB_PANEL_HEIGHT_MM, FAB_PANEL_WIDTH_MM, PANEL_GAP_MM, SourcePanel};
+use super::{EDGE_RAIL_MM, FabPanelDimensions, PANEL_GAP_MM, SourcePanel};
 use crate::commands::fab_panel::packing::Placement;
 
 const FAB_STEP_NAME: &str = "fab_panel";
@@ -181,6 +181,7 @@ pub(super) fn write_fab_panel_xml(
     occurrences: &[usize],
     placements: &[Placement],
     shared_stackup_layers: &HashSet<String>,
+    dimensions: FabPanelDimensions,
 ) -> Result<String> {
     let docs = sources
         .iter()
@@ -215,8 +216,8 @@ pub(super) fn write_fab_panel_xml(
         &docs,
         occurrences,
         placements,
-        first.units,
         shared_stackup_layers,
+        dimensions,
     )?;
     if has_avl {
         write_avl(&mut writer, &docs)?;
@@ -414,9 +415,13 @@ fn write_ecad(
     docs: &[Doc<'_>],
     occurrences: &[usize],
     placements: &[Placement],
-    units: Units,
     shared_stackup_layers: &HashSet<String>,
+    dimensions: FabPanelDimensions,
 ) -> Result<()> {
+    let units = sources
+        .first()
+        .context("at least one assembly panel source is required")?
+        .units;
     writer.start_element("Ecad", &[("name", FAB_STEP_NAME)]);
     writer.start_element("CadHeader", &[("units", units_attr(units))]);
     for doc in docs {
@@ -453,7 +458,7 @@ fn write_ecad(
             writer.raw(doc.source(step));
         }
     }
-    write_fab_step(writer, sources, occurrences, placements, units)?;
+    write_fab_step(writer, sources, occurrences, placements, units, dimensions)?;
     writer.end_element("CadData");
     writer.end_element("Ecad");
     Ok(())
@@ -465,6 +470,7 @@ fn write_fab_step(
     occurrences: &[usize],
     placements: &[Placement],
     units: Units,
+    dimensions: FabPanelDimensions,
 ) -> Result<()> {
     writer.start_element("Step", &[("name", FAB_STEP_NAME), ("type", "PALLET")]);
     write_metadata(writer, "diode.fab_panel.schema_version", "INTEGER", "1");
@@ -472,13 +478,13 @@ fn write_fab_step(
         writer,
         "diode.fab_panel.width_mm",
         "DOUBLE",
-        &ipc2581::write::fmt_num(FAB_PANEL_WIDTH_MM),
+        &ipc2581::write::fmt_num(dimensions.width_mm()),
     );
     write_metadata(
         writer,
         "diode.fab_panel.height_mm",
         "DOUBLE",
-        &ipc2581::write::fmt_num(FAB_PANEL_HEIGHT_MM),
+        &ipc2581::write::fmt_num(dimensions.height_mm()),
     );
     write_metadata(
         writer,
@@ -503,15 +509,21 @@ fn write_fab_step(
     writer.start_element("Profile", &[]);
     writer.start_element("Polygon", &[]);
     ipc2581::write::location(writer, "PolyBegin", 0.0, 0.0, units);
-    ipc2581::write::location(writer, "PolyStepSegment", FAB_PANEL_WIDTH_MM, 0.0, units);
+    ipc2581::write::location(writer, "PolyStepSegment", dimensions.width_mm(), 0.0, units);
     ipc2581::write::location(
         writer,
         "PolyStepSegment",
-        FAB_PANEL_WIDTH_MM,
-        FAB_PANEL_HEIGHT_MM,
+        dimensions.width_mm(),
+        dimensions.height_mm(),
         units,
     );
-    ipc2581::write::location(writer, "PolyStepSegment", 0.0, FAB_PANEL_HEIGHT_MM, units);
+    ipc2581::write::location(
+        writer,
+        "PolyStepSegment",
+        0.0,
+        dimensions.height_mm(),
+        units,
+    );
     writer.end_element("Polygon");
     writer.end_element("Profile");
 

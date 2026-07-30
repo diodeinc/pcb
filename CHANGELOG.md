@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added common fabrication panel sizes to `pcb ipc2581 fab-panel create`.
+
 ### Changed
 
 - Split the Nix flake's `pcb` shim and `pcbc` compiler into independent package outputs.
