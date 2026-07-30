@@ -1,0 +1,400 @@
+# Board-array copper-balancing region
+
+Status: implementation proposal plus a development harness. This does not add
+copper or expose a user-facing CLI contract.
+
+## Geometry contract
+
+All geometry is a filled planar point set in panel coordinates, measured in
+millimeters:
+
+- `P`: the filled outer profile of the root array/panel.
+- `B`: the union of the filled outer profiles of every final board instance.
+  Board-profile cutouts are deliberately ignored here, so the whole board
+  footprint remains protected.
+- `M`: physical material removal already derived for fabrication: root-profile
+  cutouts, board cutouts, and generated V-score route reliefs.
+- `G`: the geometric footprint of every painted physical `ArraySupport`
+  feature on every source layer. Filled paths use their native fill rule.
+  Stroked paths use their native width, cap, and join. Feature polarity does
+  not change the fact that its footprint is protected. V-cut layers use
+  process-spec references to retain score operations while excluding
+  same-layer documentation such as arrows and labels.
+- `O = B ∪ M ∪ G`: every obstacle.
+- `r = 0.5 mm`: the nominal required clearance.
+- `e`: a conservative numerical error budget for polygonization and offsets.
+
+The result is:
+
+```text
+construction_clearance = r + e
+panel_keep_in           = P ⊖ disk(construction_clearance)
+obstacle_clearance      = O ⊕ disk(construction_clearance)
+safe                    = panel_keep_in \ obstacle_clearance
+```
+
+This is deliberately expressed as two offsets and one Boolean difference. It
+does not contain geometric recognition rules for tooling holes, fiducials,
+V-scores, annotations, or individual shapes.
+
+The independent safety certificate is:
+
+```text
+C = safe ⊕ disk(r)
+
+C \ P = ∅
+C ∩ O = ∅
+```
+
+The certificate uses the nominal 0.5 mm, not the construction clearance. Its
+two violation regions are retained as first-class debug output.
+
+## Development harness
+
+The harness is
+`examples/board_array_balancing_region.rs`. Run it with:
+
+```bash
+cargo run -p pcb-ipc2581-tools \
+  --example board_array_balancing_region -- \
+  path/to/array.xml \
+  --output /tmp/balancing-region/case-name
+```
+
+Useful options:
+
+```text
+--clearance-mm <mm>                 nominal requirement; default 0.5
+--numerical-guard-mm <mm>           construction guard; default 0.025
+--check-area-tolerance-mm2 <mm²>    validation threshold; default 0.0001
+--require-a-series-auto             reject manual and minimum-fallback arrays
+```
+
+The current 0.025 mm guard is explicit and provisional. It is
+`2 * STROKE_OUTLINE_MM + FLATTEN_MM` from the present `pcb-ir` polygonization
+pipeline. A zero-guard Icarus run made the Boolean result look correct but the
+independent certificate exposed many tiny offset-approximation slivers. Keeping
+the guard separate makes that numerical decision visible in JSON and in the
+viewer.
+
+The auto A5 ControlHub case exposed a topology defect in the original
+boundary-stroke offset implementation. Signed winding cancellation created
+five microscopic holes inside the dilated obstacle region near connected
+V-score/relief geometry. The nominal certificate then expanded those false
+safe islands into 2.159 mm² of obstacle overlap. Increasing the guard through
+0.150 mm could not fix a topological error.
+
+`ContourSet` now uses `i_overlay`'s topology-aware outline offset directly.
+Outer contours and holes are offset according to their role, the result is
+regularized, and `ContourSet::union` performs an explicit Boolean union rather
+than relying on concatenated winding. The A5 certificate now has zero obstacle
+overlap.
+
+Each run overwrites a deterministic artifact set:
+
+| Artifact | Contents |
+|---|---|
+| `index.html` | Toggleable overlay, metrics, check status, and links |
+| `overview.svg` | Portable combined overlay |
+| `00-panel-outer.svg` | Raw root-panel region `P` |
+| `10-board-footprints.svg` | Final board-instance region `B` |
+| `20-material-removal.svg` | Fabrication material removal `M` |
+| `30-support-features.svg` | Cross-layer support footprint `G` |
+| `40-raw-obstacles.svg` | Union `O` |
+| `50-panel-keep-in.svg` | Eroded panel |
+| `60-obstacle-clearance.svg` | Dilated obstacles |
+| `70-safe-region.svg` | Final safe region |
+| `80-clearance-certificate.svg` | `safe` dilated by nominal clearance |
+| `90-validation-violations.svg` | Certificate leaks and overlaps |
+| `support-layers/*.svg` | Non-empty support footprints by source layer |
+| `regions.json` | Every ring, bounding box, included/excluded count, and check |
+
+`regions.json` is intentionally geometry-bearing rather than only a summary.
+When a Boolean result looks wrong, the exact input and output rings can be
+loaded into a small reproducer without parsing the original IPC again.
+Artifacts are written before validation is reported; incomplete path coverage
+or a failed certificate then makes the process exit nonzero.
+
+## Baseline suite
+
+The primary suite should contain only arrays generated by the A-series auto
+panelizer:
+
+1. Auto Icarus A7, 1 by 2: ordinary rigid board with real board-cell margins.
+2. MicFlex A7, 2 by 2: highly concave 196-segment flex outline and asymmetric
+   free space.
+3. Blackstar A6, 1 by 1: dense near-circular 481-segment boundary.
+4. ControlHub A5, 1 by 1: larger coordinate span and the offset-topology
+   regression case.
+
+For the local survey artifacts:
+
+```bash
+SURVEY_ROOT=/tmp/pcb-board-survey.oKwNKA
+BALANCE_OUT=/tmp/board-array-balancing
+mkdir -p "$BALANCE_OUT"
+
+cargo run -q -p pcbc -- ipc board-array create --auto \
+  "$SURVEY_ROOT/ipc/icarus_ir0001.xml" \
+  --output "$BALANCE_OUT/icarus-auto.xml"
+
+cargo run -q -p pcb-ipc2581-tools \
+  --example board_array_balancing_region -- \
+  "$BALANCE_OUT/icarus-auto.xml" \
+  --output "$BALANCE_OUT/icarus-auto" \
+  --require-a-series-auto
+
+cargo run -q -p pcb-ipc2581-tools \
+  --example board_array_balancing_region -- \
+  "$SURVEY_ROOT/arrays/micflex__auto.xml" \
+  --output "$BALANCE_OUT/micflex" \
+  --require-a-series-auto
+
+cargo run -q -p pcb-ipc2581-tools \
+  --example board_array_balancing_region -- \
+  "$SURVEY_ROOT/arrays/blackstar_mic__auto.xml" \
+  --output "$BALANCE_OUT/blackstar-a6" \
+  --require-a-series-auto
+
+cargo run -q -p pcb-ipc2581-tools \
+  --example board_array_balancing_region -- \
+  "$SURVEY_ROOT/arrays/impulse_controlhub__auto.xml" \
+  --output "$BALANCE_OUT/controlhub-a5" \
+  --require-a-series-auto
+```
+
+Then broaden the topology set:
+
+- Amoeba A7: complex curved boundary and generated reliefs.
+- Forced-sheet A7/A6/A5 cases for one identical source board, separating
+  topology changes from sheet-size and coordinate-span changes.
+- A nested high-mix fabrication panel: nested panel transforms, rotation, and
+  namespaced layers.
+- A synthetic no-free-space fixture: verifies that an empty safe region is a
+  valid result.
+
+Current A-series results all have complete support-path coverage:
+
+| Case | Sheet | Boards | Safe area | Safe fraction | Certificate |
+|---|---|---:|---:|---:|---|
+| Auto Icarus | A7 | 2 | 4951.798 mm² | 63.8% | pass |
+| MicFlex | A7 | 4 | 5012.865 mm² | 64.6% | pass |
+| Blackstar | A6 | 1 | 9588.610 mm² | 61.7% | pass |
+| ControlHub | A5 | 1 | 15168.215 mm² | 48.8% | pass |
+
+These values are useful as investigation baselines, not long-lived golden
+numbers until the offset backend and error budget are finalized.
+
+## Fast iteration loop
+
+1. Change one geometry or semantic stage.
+2. Run the focused geometry tests:
+
+   ```bash
+   cargo test -p pcb-ir geom::region
+   ```
+
+3. Regenerate auto Icarus A7, MicFlex A7, Blackstar A6, and ControlHub A5 into
+   the same output directories. Always pass `--require-a-series-auto`.
+4. Check the command summary for:
+
+   - complete painted-path coverage;
+   - zero unpainted support paths;
+   - a passing nominal-clearance certificate.
+
+5. Open `index.html` and inspect in this order:
+
+   - board footprints cover every board but no intermediate panel-cell
+     boundary;
+   - material removal includes cutouts and relief pockets;
+   - support features include score, drill, copper, and mask geometry present
+     on the rails;
+   - V-cut support contains physical score lines but no callout arrows or text;
+   - obstacle clearance is round and continuous at corners;
+   - the green safe region is confined to true non-board support material;
+   - violation layers are empty.
+
+6. Compare `regions.json` before and after. Area, ring count, vertex count, and
+   per-layer contributions usually locate an unintended change faster than an
+   image diff.
+7. Keep A5 as a required passing geometry regression gate: any nonzero
+   certificate overlap is a regression. Then run the complex, nested, and
+   empty cases.
+
+This loop keeps visual review diagnostic rather than authoritative: the viewer
+and automated checks are both projections of the same serialized
+`ContourSet`s.
+
+## Production architecture
+
+### 1. Keep the geometry kernel in `pcb-ir::geom`
+
+The generic operations belong in `pcb-ir`, independent of IPC:
+
+- construct a footprint from painted paths;
+- union, intersection, and difference of `ContourSet`s;
+- disk dilation and erosion;
+- compute and retain certificate violation regions.
+
+`ContourSet` provides `from_painted_paths` and
+`ContourSet::disk_erode`. Dilation and erosion use `i_overlay`'s
+topology-aware outline offset over canonical rings. Its sign-aware builders
+offset outer contours and holes in opposite directions, after which the result
+is regularized through the existing Boolean kernel. Round-join segmentation is
+derived from `STROKE_OUTLINE_MM`, giving the arc approximation an explicit
+sagitta bound. Union is an actual `OverlayRule::Union`, so overlap cannot
+cancel filled material through winding arithmetic.
+
+The construction guard and nominal-clearance certificate remain separate.
+That makes approximation error conservative and testable: construct with
+`r + e`, but certify against `r`. Further manufacturing hardening can choose a
+panel-local fixed scale and conservative integer rounding, while retaining the
+same `ContourSet` API and Boolean kernel.
+
+### 2. IPC semantic collector
+
+`pcb_ir::dialects::ipc::balancing_region` consumes existing IR views and
+produces four semantic input regions without classifying individual IPC shape
+kinds:
+
+```rust
+pub struct BoardArrayBalancingInput {
+    pub panel_outer: ContourSet,
+    pub board_footprints: ContourSet,
+    pub material_removal: ContourSet,
+    pub support_features: ContourSet,
+}
+
+pub struct BalancingRegionOptions {
+    pub clearance_mm: f64,
+    pub numerical_guard_mm: f64,
+}
+
+pub struct BoardArrayBalancingResult {
+    pub safe_region: ContourSet,
+    pub certificate: ClearanceCertificate,
+    pub intermediates: BoardArrayBalancingIntermediates,
+}
+```
+
+The collector:
+
+- obtains `panel_outer` from the root panel profile;
+- obtains `board_footprints` from occurrences whose existing role is
+  `BoardInstance`;
+- accepts the existing `BoardArrayFabricationProfile.material_removal`;
+- unions painted paths from every `ArraySupport` layer;
+- on V-cut layers, includes only features whose referenced process
+  specification contains a `V_Cut` item.
+
+That is the entire IPC policy. The V-cut distinction is semantic metadata, not
+shape or coordinate recognition: generated score operations carry the process
+specification while callouts do not. A new tooling feature or fiducial shape
+is automatically covered because extraction yields another painted path. A
+path with no paint has no defined footprint; the production collector fails
+closed instead of guessing from `FeatureKind`. A separate inspection collector
+retains incomplete coverage for the debug harness, which still exits nonzero
+after writing its artifacts.
+
+### 3. Keep orchestration in `pcb-ipc2581-tools`
+
+The development harness now only:
+
+1. parse the document;
+2. call `extract_layout`;
+3. derive the existing fabrication profile and V-score reliefs;
+4. enumerate every IPC source layer with `View::ArraySupport`;
+5. feed those IR documents to the collector;
+6. serialize the returned safe region and debug bundle.
+
+SVG/HTML/JSON rendering stays here. `pcb-ir` should not know about files,
+browser viewers, Clap, or the source IPC parser.
+
+### 4. Preserve debug data as a stable internal schema
+
+The versioned internal debug schema retains:
+
+- nominal clearance, error budget, and construction clearance;
+- source-layer feature/path counts and unsupported-path diagnostics;
+- all four semantic inputs;
+- both offset results;
+- final safe region;
+- certificate footprint and violation regions;
+- geometry-kernel tolerance/scale metadata.
+
+Production calls can consume only `safe_region`; tests and diagnostics retain
+the full bundle. The renderer does not recompute intermediate regions.
+
+The reusable library boundary, fail-closed collector, certificate, tests, and
+debug-harness adapter are implemented. Wiring this API into board-array
+creation or a copper-balancing command, and emitting the safe geometry into an
+IPC/manufacturing artifact, are intentionally left out.
+
+## Validation plan
+
+### Geometry unit tests
+
+Use analytic shapes with known behavior:
+
+- rectangle erosion and dilation;
+- a region with a hole, proving erosion expands the hole;
+- concave polygons and narrow necks that split or disappear;
+- disconnected islands;
+- nested rings under even-odd and non-zero fill rules;
+- native round, square, and butt-cap strokes;
+- arcs and full circles;
+- zero/negative radius identity behavior;
+- empty input and an entirely eroded result.
+
+### Metamorphic/property tests
+
+For generated valid regions:
+
+- increasing clearance cannot increase `safe`;
+- adding obstacles cannot increase `safe`;
+- rigid translation, rotation, and mirroring commute with the result;
+- `safe ⊆ panel_keep_in`;
+- `safe ∩ obstacle_clearance = ∅`;
+- `(safe ⊕ disk(r)) \ P = ∅`;
+- `(safe ⊕ disk(r)) ∩ O = ∅`.
+
+The last two are the acceptance certificate. Retain violation geometry on
+failure; a Boolean alone is not enough to debug a numerical case.
+
+### IPC integration fixtures
+
+Check in small, purpose-built IPC fixtures for deterministic tests:
+
+- direct board repeat with zero gap;
+- board-cell nesting whose intermediate profile must not block balancing;
+- tooling holes and fiducials on different layers;
+- clear-polarity support geometry;
+- routed cutout plus V-score relief;
+- rotated/mirrored nested panel;
+- missing or unpainted geometry, which must fail closed.
+
+Use the survey corpus as an opt-in developer suite because those files are
+large and external. Record summaries from the corpus, but keep correctness
+assertions on compact checked-in fixtures.
+
+### Performance and determinism
+
+Record elapsed time, input/output ring counts, and peak ring count per stage.
+Require deterministic ring serialization for identical inputs. Batch path
+footprints and perform one regularized union per layer, then one cross-layer
+union; do not repeatedly offset individual features.
+
+## Completion criteria
+
+The safe-region implementation is ready for a copper-balancing consumer when:
+
+- every source layer is successfully projected through `ArraySupport`;
+- every support feature has a defined painted footprint or produces a
+  fail-closed diagnostic;
+- the fixed-grid/offset error budget is explicit and tested;
+- the nominal 0.5 mm certificate passes on the A7, A6, and A5 auto-panel
+  baselines, all compact fixtures, and the wider survey topology suite;
+- auto Icarus, MicFlex, Blackstar, ControlHub, complex, nested, and
+  empty-region visual reviews are clean;
+- the result is deterministic and fast enough to regenerate during ordinary
+  board-array iteration.

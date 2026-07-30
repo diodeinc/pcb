@@ -7,6 +7,7 @@
 //! [`analysis`] derives board/panel views from the layout graph.
 
 pub mod analysis;
+pub mod balancing_region;
 pub mod document;
 pub mod feature;
 pub mod layout;
@@ -21,6 +22,14 @@ pub use analysis::{
     board_instance_count, board_step_count, layout_child_repeats, layout_instances_by_kind,
     layout_repeat_instances, layout_steps_by_kind, panel_bbox, panel_step_count,
     profile_occurrences_for, root_panel_step, root_step, simple_board_array_layout,
+};
+pub use balancing_region::{
+    BalancingRegionError, BalancingRegionOptions, BoardArrayBalancingCollection,
+    BoardArrayBalancingInput, BoardArrayBalancingIntermediates, BoardArrayBalancingResult,
+    BoardArraySupportDocument, BoardArraySupportLayerGeometry, BoardArraySupportLayerPolicy,
+    ClearanceCertificate, DEFAULT_BALANCING_CLEARANCE_MM, DEFAULT_BALANCING_NUMERICAL_GUARD_MM,
+    board_array_balancing_region, collect_board_array_balancing_input,
+    inspect_board_array_balancing_input,
 };
 pub use document::{Document, Layer};
 pub use feature::{

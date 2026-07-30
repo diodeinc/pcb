@@ -183,7 +183,7 @@ pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
     for feature in doc
         .features
         .iter()
-        .filter(|feature| feature.is_vcut() && feature_has_vcut_spec(doc, feature))
+        .filter(|feature| is_vcut_operation_feature(doc, feature))
     {
         for path in feature.paths.slice(&doc.arena.paths) {
             if path.paint.kind() != PaintKind::Stroke {
@@ -201,6 +201,19 @@ pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
         }
     }
     lines
+}
+
+/// Whether a feature represents the physical V-cut operation.
+///
+/// V-cut layers may also contain same-layer documentation such as callout
+/// arrows and stroke-font labels. Those features inherit V-cut layer intent,
+/// but only operation geometry references a specification containing a
+/// `V_Cut` process item.
+pub fn is_vcut_operation_feature<Symbol: PartialEq, LayerFunction>(
+    doc: &Document<Symbol, LayerFunction>,
+    feature: &crate::dialects::ipc::Feature<Symbol>,
+) -> bool {
+    feature.is_vcut() && feature_has_vcut_spec(doc, feature)
 }
 
 fn feature_has_vcut_spec<Symbol: PartialEq, LayerFunction>(

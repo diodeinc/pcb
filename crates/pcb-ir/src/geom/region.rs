@@ -10,13 +10,14 @@ use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::simplify::SimplifyShape;
 use i_overlay::float::single::SingleFloatOverlay;
+use i_overlay::mesh::outline::offset::OutlineOffset;
+use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
 use crate::geom::bbox::BBox;
-use crate::geom::path::{
-    ContourBuf, PathCmd, StrokeToFillStyle, contours_to_kurbo, stroke_to_fill,
-};
+use crate::geom::path::{ContourBuf, PathCmd, contours_to_kurbo, stroke_to_fill};
 use crate::geom::point::Point;
-use crate::geom::style::{FillRule, LineCap, LineJoin, Polarity};
+use crate::geom::store::{Path, PathArena};
+use crate::geom::style::{FillRule, Paint, Polarity};
 use crate::geom::tol;
 
 /// A closed polygon boundary, flattened to line segments.
@@ -169,6 +170,33 @@ impl ContourSet {
         Self::new(rings, FillRule::NonZero, tolerance)
     }
 
+    /// Build the union of the geometric images painted by a set of paths.
+    ///
+    /// Filled paths are interpreted under their own fill rule and stroked
+    /// paths are expanded with their native width, cap, and join. Unpainted
+    /// paths are ignored. Object/feature polarity is deliberately outside
+    /// this operation: this constructs geometric footprints, not a composed
+    /// positive/negative layer image.
+    pub fn from_painted_paths<'a>(
+        arena: &PathArena,
+        paths: impl IntoIterator<Item = &'a Path>,
+        tolerance: f64,
+    ) -> Self {
+        let mut rings = Vec::new();
+        for path in paths {
+            let contours = arena.path_contours(path);
+            let path_rings = match path.paint {
+                Paint::Fill { rule } => simplify_rings(rings_from_contours(&contours), rule),
+                Paint::Stroke(stroke) => stroke_to_fill(&contours, stroke.into())
+                    .map(|outline| simplify_rings(rings_from_contours(&outline), FillRule::NonZero))
+                    .unwrap_or_default(),
+                Paint::None => Vec::new(),
+            };
+            rings.extend(path_rings);
+        }
+        Self::new(rings, FillRule::NonZero, tolerance)
+    }
+
     pub fn rectangle(bbox: BBox, tolerance: f64) -> Self {
         if bbox.is_empty() {
             return Self::empty(tolerance);
@@ -193,9 +221,21 @@ impl ContourSet {
 
     /// Regularized union: `self ∪ other`.
     pub fn union(&self, other: &Self) -> Self {
-        let mut rings = self.rings.clone();
-        rings.extend(other.rings.iter().cloned());
-        Self::new(rings, FillRule::NonZero, self.tolerance)
+        if self.is_empty() {
+            return other.clone();
+        }
+        if other.is_empty() {
+            return self.clone();
+        }
+        Self::new(
+            flatten_shapes(self.rings.overlay(
+                &other.rings,
+                OverlayRule::Union,
+                OverlayFillRule::NonZero,
+            )),
+            FillRule::NonZero,
+            self.tolerance,
+        )
     }
 
     pub fn union_assign(&mut self, other: &Self) {
@@ -282,22 +322,29 @@ impl ContourSet {
     }
 
     /// Minkowski sum with a disk: `self ⊕ D_radius`. This is the standard
-    /// "buffer out" operation used for manufacturability checks, computed as
-    /// a round-join parallel offset of the region boundary.
+    /// "buffer out" operation used for manufacturability checks. The
+    /// topology-aware offset expands outer contours, contracts holes, and
+    /// regularizes all resulting contours together.
     pub fn disk_dilate(&self, radius: f64) -> Self {
         if self.is_empty() || radius <= 0.0 {
             return self.clone();
         }
 
-        let mut dilated = self.rings.clone();
-        let boundary = rings_to_contours(self.rings.clone());
-        if let Some(stroke) = stroke_to_fill(
-            &boundary,
-            StrokeToFillStyle::new(2.0 * radius, LineCap::Round, LineJoin::Round),
-        ) {
-            dilated.extend(rings_from_contours(&stroke));
+        self.disk_offset(radius)
+    }
+
+    /// Minkowski erosion by a disk: `self ⊖ D_radius`.
+    ///
+    /// This removes the radius-wide interior band swept by every boundary
+    /// ring. It therefore contracts outer boundaries, expands holes, removes
+    /// necks narrower than twice the radius, and may split or erase connected
+    /// components.
+    pub fn disk_erode(&self, radius: f64) -> Self {
+        if self.is_empty() || radius <= 0.0 {
+            return self.clone();
         }
-        Self::new(dilated, FillRule::NonZero, self.tolerance)
+
+        self.disk_offset(-radius)
     }
 
     pub fn to_contours(&self) -> Vec<ContourBuf> {
@@ -327,6 +374,20 @@ impl ContourSet {
             .filter(|ring| ring.len() >= 3)
             .map(|ring| crate::geom::arcfit::ring_to_contour_with_arcs(&ring, tol::FLATTEN_MM))
             .collect()
+    }
+
+    fn disk_offset(&self, offset: f64) -> Self {
+        let radius = offset.abs();
+        let max_sagitta = tol::STROKE_OUTLINE_MM.min(radius);
+        // i_overlay rounds each join into floor(sweep / join_angle)
+        // segments. Use half the central angle allowed by the sagitta budget
+        // so that flooring cannot make the emitted segments too coarse.
+        let join_angle = (1.0 - max_sagitta / radius)
+            .acos()
+            .clamp(0.01 * std::f64::consts::PI, 0.25 * std::f64::consts::PI);
+        let style = OutlineStyle::new(offset).line_join(OutlineLineJoin::Round(join_angle));
+        let shapes = self.rings.outline_as::<i64>(&style);
+        Self::new(flatten_shapes(shapes), FillRule::NonZero, self.tolerance)
     }
 }
 
@@ -576,6 +637,196 @@ mod tests {
             region.area()
         );
         assert!(!round_trip.contains_point(Point::new(5.0, 5.0)));
+    }
+
+    #[test]
+    fn erodes_outer_boundaries_and_expands_holes() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let hole = ContourSet::rectangle(rect(4.0, 4.0, 6.0, 6.0), tol::REGION_MM);
+
+        let eroded = outer.difference(&hole).disk_erode(0.5);
+
+        assert!((eroded.bbox.min.x - 0.5).abs() <= 1e-9);
+        assert!((eroded.bbox.min.y - 0.5).abs() <= 1e-9);
+        assert!((eroded.bbox.max.x - 9.5).abs() <= 1e-9);
+        assert!((eroded.bbox.max.y - 9.5).abs() <= 1e-9);
+        let area = eroded.area();
+        assert!(
+            (area - 72.214601837).abs() <= 2e-2,
+            "unexpected eroded area {area}"
+        );
+    }
+
+    #[test]
+    fn erosion_can_remove_an_entire_region() {
+        let region = ContourSet::rectangle(rect(0.0, 0.0, 0.5, 0.5), tol::REGION_MM);
+
+        let eroded = region.disk_erode(0.5);
+
+        assert!(eroded.is_empty());
+    }
+
+    #[test]
+    fn dilation_shrinks_but_preserves_a_large_hole() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let hole = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), tol::REGION_MM);
+
+        let dilated = outer.difference(&hole).disk_dilate(0.5);
+        let expected_hole = ContourSet::rectangle(rect(3.5, 3.5, 6.5, 6.5), tol::REGION_MM);
+
+        assert!(dilated.intersection(&expected_hole).is_empty());
+        let area = dilated.area();
+        assert!(
+            (area - 111.785398163).abs() <= 2e-2,
+            "unexpected dilated area {area}"
+        );
+    }
+
+    #[test]
+    fn union_contains_both_regions_when_a_hole_overlaps_filled_material() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let hole = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), tol::REGION_MM);
+        let frame = outer.difference(&hole);
+        let plug = ContourSet::rectangle(rect(4.0, 4.0, 6.0, 6.0), tol::REGION_MM);
+
+        let union = frame.union(&plug);
+
+        assert!(frame.difference(&union).is_empty());
+        assert!(plug.difference(&union).is_empty());
+        assert!((union.area() - 88.0).abs() <= 1e-6);
+    }
+
+    /// Reduced chain of narrow complement pockets from the ControlHub A5
+    /// rounded-board/V-score corner. A positive offset must contain every
+    /// source point even when all of these holes collapse.
+    #[test]
+    fn dilation_is_monotone_for_a5_corner_hole_chain() {
+        let outer =
+            ContourSet::rectangle(rect(22.8473, 110.5175, 27.8973, 115.5675), tol::REGION_MM);
+        let holes = ContourSet::from_filled_contours(
+            &[
+                contour_from_vertices(&[
+                    [22.947299957275405, 111.0119310617447],
+                    [22.947299957275405, 111.0245145559311],
+                    [22.95425641536714, 111.06290817260744],
+                ]),
+                contour_from_vertices(&[
+                    [23.024561643600478, 111.42717397212984],
+                    [23.034708142280593, 111.47974538803102],
+                    [23.044173359870925, 111.51395440101625],
+                ]),
+                contour_from_vertices(&[
+                    [23.121961593627944, 111.79509580135347],
+                    [23.14569699764253, 111.88088023662569],
+                    [23.17426168918611, 111.95898854732515],
+                ]),
+                contour_from_vertices(&[
+                    [23.255928039550795, 112.18230032920839],
+                    [23.288409471511855, 112.27111899852754],
+                    [23.340039849281325, 112.38374710083009],
+                ]),
+                contour_from_vertices(&[
+                    [23.42500483989717, 112.56909239292146],
+                    [23.46326601505281, 112.65255665779115],
+                    [23.54809403419496, 112.80427730083467],
+                ]),
+                contour_from_vertices(&[
+                    [23.626791238784804, 112.94503259658815],
+                    [23.66619455814363, 113.01550805568696],
+                    [23.791095137596145, 113.20204389095308],
+                ]),
+                contour_from_vertices(&[
+                    [23.864429831504836, 113.31156766414644],
+                    [23.89930665493013, 113.36365520954134],
+                    [24.080685615539565, 113.59284710884096],
+                ]),
+                contour_from_vertices(&[
+                    [24.131775259971633, 113.65740430355073],
+                    [24.158974766731276, 113.69177389144899],
+                    [24.444096326828017, 113.99821996688844],
+                    [24.75268936157228, 114.28101646900178],
+                    [25.08276188373567, 114.53819620609285],
+                    [25.115122795104995, 114.55951189994813],
+                    [24.76722896099092, 114.29204106330873],
+                    [24.431027054786696, 113.98377299308778],
+                ]),
+                contour_from_vertices(&[
+                    [25.20675671100618, 114.61986958980562],
+                    [25.432661533355727, 114.76866948604585],
+                    [25.4813165664673, 114.795392036438],
+                ]),
+                contour_from_vertices(&[
+                    [25.624097824096694, 114.87381088733675],
+                    [25.797136902809157, 114.96884799003602],
+                    [25.857525467872634, 114.99598038196565],
+                ]),
+                contour_from_vertices(&[
+                    [26.056700825691237, 115.08546924591066],
+                    [26.179885625839248, 115.1408157348633],
+                    [26.24467504024507, 115.16395568847658],
+                ]),
+                contour_from_vertices(&[
+                    [26.486665248870864, 115.25038421154024],
+                    [26.5711922645569, 115.2805736064911],
+                    [26.634812474250808, 115.29765975475313],
+                ]),
+                contour_from_vertices(&[
+                    [26.93655109405519, 115.37869584560396],
+                    [26.973154783248916, 115.38852632045747],
+                    [27.011330246925368, 115.39559543132783],
+                ]),
+                contour_from_vertices(&[
+                    [27.390587329864516, 115.46582400798799],
+                    [27.396905422210708, 115.46750009059907],
+                    [27.402869582176223, 115.46750009059907],
+                ]),
+            ],
+            tol::REGION_MM,
+        );
+        let source = outer.difference(&holes);
+
+        let dilated = source.disk_dilate(0.525);
+        let removed_source = source.difference(&dilated);
+
+        assert!(
+            removed_source.is_empty(),
+            "dilation removed {:.9} mm² from its source",
+            removed_source.area()
+        );
+    }
+
+    #[test]
+    fn painted_path_region_unions_fills_and_native_strokes() {
+        let mut arena = PathArena::default();
+        let filled = arena.push_path(
+            Paint::Fill {
+                rule: FillRule::EvenOdd,
+            },
+            [rectangle_contour(0.0, 0.0, 1.0, 1.0)],
+        );
+        let stroked = arena.push_path(
+            Paint::Stroke(crate::geom::StrokeStyle::round(1.0)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(2.0, 0.5)),
+                PathCmd::line_to(Point::new(4.0, 0.5)),
+            ])],
+        );
+        let unpainted = arena.push_path(Paint::None, [rectangle_contour(10.0, 10.0, 20.0, 20.0)]);
+
+        let region = ContourSet::from_painted_paths(
+            &arena,
+            [filled, stroked, unpainted]
+                .iter()
+                .map(|&index| arena.path(index)),
+            tol::REGION_MM,
+        );
+
+        assert!((region.bbox.min.x - 0.0).abs() <= 1e-9);
+        assert!((region.bbox.min.y - 0.0).abs() <= 1e-9);
+        assert!((region.bbox.max.x - 4.5).abs() <= 1e-9);
+        assert!((region.bbox.max.y - 1.0).abs() <= 1e-9);
+        assert!(region.area() > 3.5);
+        assert!(region.area() < 4.0);
     }
 
     fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> BBox {

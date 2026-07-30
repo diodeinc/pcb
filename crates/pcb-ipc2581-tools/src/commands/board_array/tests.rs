@@ -1,10 +1,13 @@
 use super::balance::generate_board_array_copper_balance;
 use super::*;
 use crate::accessors::IpcAccessor;
+use crate::ipc2581::types::LayerFunction;
 use crate::manufacturing::build_manufacturing_package;
 use pcb_ir::dialects::ipc::{
-    FeatureBucket, FeatureDomain, FeatureIntent, FeatureKind, FeatureOperation, FeatureRole,
-    FeatureSpan, FiducialKind, LayoutStepKind, PlatingKind, View,
+    BalancingRegionOptions, BoardArraySupportDocument, BoardArraySupportLayerPolicy, FeatureBucket,
+    FeatureDomain, FeatureIntent, FeatureKind, FeatureOperation, FeatureRole, FeatureSpan,
+    FiducialKind, LayoutStepKind, PlatingKind, View, board_array_balancing_region,
+    collect_board_array_balancing_input,
 };
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceRequest,
@@ -133,6 +136,61 @@ fn creates_rounded_panel_step_from_board_bbox() {
             .all(|feature| feature.intent.domain == FeatureDomain::VCut)
     );
     assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
+}
+
+#[test]
+fn generated_board_array_has_a_certified_safe_balancing_region() {
+    let xml = create_auto_board_array_xml(board_fixture_mm()).unwrap();
+    let ipc = Ipc2581::parse(&xml).unwrap();
+    let layout = geometry::extract_layout(&ipc).unwrap();
+    let score_lines = geometry::board_array_vscore_lines(&ipc).unwrap();
+    let fabrication_profile =
+        geometry::board_array_fabrication_profile(&ipc, &layout, &score_lines).unwrap();
+    let ecad = ipc.ecad().unwrap();
+    let support_documents = ecad
+        .cad_data
+        .layers
+        .iter()
+        .map(|layer| {
+            let name = ipc.resolve(layer.name);
+            let document =
+                geometry::extract_layer_for_view(&ipc, name, View::ArraySupport).unwrap();
+            let policy = if layer.layer_function == LayerFunction::VCut {
+                BoardArraySupportLayerPolicy::VCutOperationsOnly
+            } else {
+                BoardArraySupportLayerPolicy::AllPaintedFeatures
+            };
+            (document, policy)
+        })
+        .collect::<Vec<_>>();
+
+    let collection = collect_board_array_balancing_input(
+        &layout,
+        &fabrication_profile,
+        support_documents
+            .iter()
+            .map(|(document, policy)| BoardArraySupportDocument::new(document, *policy)),
+    )
+    .unwrap();
+    let result =
+        board_array_balancing_region(&collection.input, BalancingRegionOptions::default()).unwrap();
+
+    assert!(collection.board_instance_count > 0);
+    assert!(
+        collection
+            .support_layers
+            .iter()
+            .all(|layer| layer.unpainted_path_count == 0)
+    );
+    assert!(
+        collection
+            .support_layers
+            .iter()
+            .any(|layer| layer.excluded_documentation_path_count > 0),
+        "V-cut callout geometry should be excluded from balancing obstacles"
+    );
+    assert!(!result.safe_region.is_empty());
+    assert!(result.certificate.passes(1e-4));
 }
 
 #[test]
