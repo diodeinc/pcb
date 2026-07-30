@@ -8,6 +8,7 @@ mod arc;
 pub mod arcfit;
 mod bbox;
 pub mod bridge;
+pub mod copper_balance;
 pub mod dfm;
 pub mod path;
 mod point;
