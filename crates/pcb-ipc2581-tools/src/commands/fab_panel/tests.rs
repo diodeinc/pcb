@@ -1,5 +1,6 @@
 use ipc2581::edit::Doc;
 use pcb_ir::dialects::ipc::{View, root_step};
+use pcb_ir::geom::BBox;
 
 use super::*;
 
@@ -13,6 +14,11 @@ fn assembly_panel_xml(width_mm: f64, height_mm: f64) -> String {
 fn assembly_panel_xml_at(min_x: f64, min_y: f64, width_mm: f64, height_mm: f64) -> String {
     let max_x = min_x + width_mm;
     let max_y = min_y + height_mm;
+    let radius = 3.0;
+    let left_center = min_x + radius;
+    let right_center = max_x - radius;
+    let bottom_center = min_y + radius;
+    let top_center = max_y - radius;
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -46,10 +52,15 @@ fn assembly_panel_xml_at(min_x: f64, min_y: f64, width_mm: f64, height_mm: f64) 
         <Datum x="0" y="0"/>
         <Profile>
           <Polygon>
-            <PolyBegin x="{min_x}" y="{min_y}"/>
-            <PolyStepSegment x="{max_x}" y="{min_y}"/>
-            <PolyStepSegment x="{max_x}" y="{max_y}"/>
-            <PolyStepSegment x="{min_x}" y="{max_y}"/>
+            <PolyBegin x="{min_x}" y="{bottom_center}"/>
+            <PolyStepSegment x="{min_x}" y="{top_center}"/>
+            <PolyStepCurve x="{left_center}" y="{max_y}" centerX="{left_center}" centerY="{top_center}" clockwise="true"/>
+            <PolyStepSegment x="{right_center}" y="{max_y}"/>
+            <PolyStepCurve x="{max_x}" y="{top_center}" centerX="{right_center}" centerY="{top_center}" clockwise="true"/>
+            <PolyStepSegment x="{max_x}" y="{bottom_center}"/>
+            <PolyStepCurve x="{right_center}" y="{min_y}" centerX="{right_center}" centerY="{bottom_center}" clockwise="true"/>
+            <PolyStepSegment x="{left_center}" y="{min_y}"/>
+            <PolyStepCurve x="{min_x}" y="{bottom_center}" centerX="{left_center}" centerY="{bottom_center}" clockwise="true"/>
           </Polygon>
         </Profile>
         <LayerFeature layerRef="TOP">
@@ -164,6 +175,75 @@ fn assembly_panel_with_non_manufacturing_data() -> String {
             r#"  <Avl name="assembly_avl"/>
 </IPC-2581>"#,
         )
+}
+
+#[test]
+fn routes_each_assembly_panel_in_the_fab_profile() {
+    let sources = vec![
+        assembly_panel_xml_at(10.0, 20.0, 100.0, 80.0),
+        assembly_panel_xml_at(-15.0, 7.0, 120.0, 90.0),
+    ];
+    let generated = create_fab_panel_xml(&sources, &[0, 0, 1]).unwrap();
+
+    Ipc2581::validate(&generated).unwrap();
+    let parsed = Ipc2581::parse(&generated).unwrap();
+    let layout = geometry::extract_layout(&parsed).unwrap();
+    let profile = geometry::board_array_fabrication_profile(&parsed, &layout, &[]).unwrap();
+    let placed_panels = layout
+        .layout
+        .instances
+        .iter()
+        .filter(|instance| {
+            instance.parent_instance.is_none()
+                && layout.layout.steps[instance.child_step as usize].kind == LayoutStepKind::Panel
+        })
+        .map(|instance| instance.bbox)
+        .collect::<Vec<_>>();
+
+    assert_eq!(profile.array_outlines.len(), 1);
+    assert_eq!(placed_panels.len(), 3);
+    assert_eq!(profile.material_removal.len(), 2 * placed_panels.len());
+    for panel_bbox in placed_panels {
+        assert!(has_contour_bbox(&profile.material_removal, panel_bbox, 0.0));
+        assert!(has_contour_bbox(&profile.material_removal, panel_bbox, 1.0));
+    }
+
+    let package =
+        crate::manufacturing::build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
+    let profile = package
+        .files
+        .iter()
+        .find(|file| file.filename == "Fab_Panel_Profile.gm1")
+        .unwrap();
+    assert!(profile.contents.contains("%TF.FileFunction,Profile,NP*%"));
+    assert!(profile.contents.contains("%TF.Part,Array*%"));
+    assert!(profile.contents.contains("%TA.AperFunction,Profile*%"));
+    assert!(profile.contents.contains("%ADD10C,0.05*%"));
+    assert!(!profile.contents.contains("%ADD11C,1*%"));
+    assert!(
+        package
+            .files
+            .iter()
+            .all(|file| file.filename != "Board_Array_Profile.gm1")
+    );
+    assert!(
+        package
+            .files
+            .iter()
+            .filter(|file| file.filename.ends_with(".drl"))
+            .all(|file| !file.contents.contains("M15"))
+    );
+    gerberx2::GerberX2::parse(&profile.contents).unwrap();
+}
+
+fn has_contour_bbox(contours: &[pcb_ir::geom::ContourBuf], bbox: BBox, expansion: f64) -> bool {
+    const EPSILON: f64 = 0.02;
+    contours.iter().any(|contour| {
+        (contour.bbox.min.x - (bbox.min.x - expansion)).abs() < EPSILON
+            && (contour.bbox.min.y - (bbox.min.y - expansion)).abs() < EPSILON
+            && (contour.bbox.max.x - (bbox.max.x + expansion)).abs() < EPSILON
+            && (contour.bbox.max.y - (bbox.max.y + expansion)).abs() < EPSILON
+    })
 }
 
 #[test]

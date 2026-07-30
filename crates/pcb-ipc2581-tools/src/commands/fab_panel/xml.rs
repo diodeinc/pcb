@@ -7,8 +7,8 @@ use ipc2581::{Ipc2581, XmlWriter};
 
 use super::{EDGE_RAIL_MM, FabPanelDimensions, PANEL_GAP_MM, SourcePanel};
 use crate::commands::fab_panel::packing::Placement;
+use crate::steps::FAB_PANEL_STEP_NAME;
 
-const FAB_STEP_NAME: &str = "fab_panel";
 const FAB_ROLE_ID: &str = "fab_panel_role";
 const FAB_ENTERPRISE_ID: &str = "fab_panel_enterprise";
 const FAB_PERSON_NAME: &str = "pcb";
@@ -227,7 +227,7 @@ fn write_content(
 ) -> Result<()> {
     writer.start_element("Content", &[("roleRef", FAB_ROLE_ID)]);
     writer.empty_element("FunctionMode", &[("mode", "FABRICATION")]);
-    writer.empty_element("StepRef", &[("name", FAB_STEP_NAME)]);
+    writer.empty_element("StepRef", &[("name", FAB_PANEL_STEP_NAME)]);
 
     for (doc_index, doc) in docs.iter().enumerate() {
         let cad_data = cad_data(doc)?;
@@ -370,7 +370,7 @@ fn write_ecad(
         .first()
         .context("at least one assembly panel source is required")?
         .units;
-    writer.start_element("Ecad", &[("name", FAB_STEP_NAME)]);
+    writer.start_element("Ecad", &[("name", FAB_PANEL_STEP_NAME)]);
     writer.start_element("CadHeader", &[("units", units_attr(units))]);
     for doc in docs {
         let cad_header = cad_header(doc)?;
@@ -420,7 +420,7 @@ fn write_fab_step(
     units: Units,
     dimensions: FabPanelDimensions,
 ) -> Result<()> {
-    writer.start_element("Step", &[("name", FAB_STEP_NAME), ("type", "PALLET")]);
+    writer.start_element("Step", &[("name", FAB_PANEL_STEP_NAME), ("type", "PALLET")]);
     write_metadata(writer, "diode.fab_panel.schema_version", "INTEGER", "1");
     write_metadata(
         writer,

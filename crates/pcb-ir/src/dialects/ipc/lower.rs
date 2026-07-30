@@ -204,6 +204,12 @@ fn tol_epsilon() -> f64 {
 #[derive(Debug, Clone, Default)]
 pub struct FabricationProfileOptions {
     pub relief_features: BoardArrayReliefFeatures,
+    /// Route the direct child panel instances out of the root panel.
+    ///
+    /// The generated material-removal band uses the same default cutter as
+    /// V-score reliefs. Its inner edge follows the child panel profile, so the
+    /// finished child panel retains its nominal dimensions.
+    pub route_direct_panel_instances: bool,
     /// Collect per-boundary construction geometry in the returned debug data.
     pub debug: bool,
 }
@@ -245,7 +251,8 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
         ));
     }
 
-    let input = collect_board_array_fabrication_profile_input(doc);
+    let input =
+        collect_board_array_fabrication_profile_input(doc, options.route_direct_panel_instances);
     compose_board_array_fabrication_profile(input, score_lines, options)
 }
 
@@ -255,10 +262,12 @@ struct BoardArrayFabricationProfileInput {
     source_material_removal: Vec<Vec<ContourBuf>>,
     board_boundaries: Vec<ContourBuf>,
     board_cutouts: Vec<ContourBuf>,
+    direct_panel_boundaries: Vec<ContourBuf>,
 }
 
 fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
+    route_direct_panel_instances: bool,
 ) -> BoardArrayFabricationProfileInput {
     let mut input = BoardArrayFabricationProfileInput::default();
 
@@ -290,6 +299,19 @@ fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
         );
     }
 
+    if route_direct_panel_instances {
+        for occurrence in profile_occurrences_for(doc, ProfileSet::LayoutBoundaries)
+            .into_iter()
+            .filter(|occurrence| {
+                occurrence.role == ProfileOccurrenceRole::PanelInstance && occurrence.depth == 1
+            })
+        {
+            input.direct_panel_boundaries.extend(
+                doc.transformed_path_contours(occurrence.profile.outer_path, occurrence.transform),
+            );
+        }
+    }
+
     input
 }
 
@@ -309,6 +331,11 @@ fn compose_board_array_fabrication_profile(
             relief::DEFAULT_RELIEF_TOLERANCE_MM,
         ));
     }
+
+    material_removal.union_assign(&panel_separation_material_removal(
+        &input.direct_panel_boundaries,
+        relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
+    ));
 
     let mut relief_debug = relief::VScoreReliefDebug::default();
     if !score_lines.is_empty() && !input.board_boundaries.is_empty() {
@@ -340,6 +367,20 @@ fn compose_board_array_fabrication_profile(
         },
         relief_debug,
     ))
+}
+
+fn panel_separation_material_removal(
+    panel_boundaries: &[ContourBuf],
+    tool_diameter_mm: f64,
+) -> ContourSet {
+    let finished_panels =
+        ContourSet::from_filled_contours(panel_boundaries, relief::DEFAULT_RELIEF_TOLERANCE_MM);
+    // The cutter centerline is one tool radius outside the finished profile.
+    // Sweeping the cutter adds the second radius, so the physical removal band
+    // is (B dilated by the full tool diameter) minus B.
+    finished_panels
+        .disk_dilate(tool_diameter_mm)
+        .difference(&finished_panels)
 }
 
 fn transformed_profile_cutout_contours<Symbol, LayerFunction>(
@@ -380,6 +421,29 @@ mod tests {
             .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
         assert_eq!(bbox.min, Point::new(0.0, 0.0));
         assert_eq!(bbox.max, Point::new(4.0, 2.0));
+    }
+
+    #[test]
+    fn panel_separation_preserves_the_finished_profile_and_accounts_for_the_cutter() {
+        let finished = rectangle_contour(10.0, 20.0, 110.0, 100.0);
+        let removal = panel_separation_material_removal(
+            std::slice::from_ref(&finished),
+            relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
+        );
+
+        let contours = removal.to_contours();
+        assert_eq!(contours.len(), 2);
+        let bbox = contours
+            .iter()
+            .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
+        assert_eq!(bbox.min, Point::new(9.0, 19.0));
+        assert_eq!(bbox.max, Point::new(111.0, 101.0));
+
+        let finished_region = ContourSet::from_filled_contours(
+            std::slice::from_ref(&finished),
+            relief::DEFAULT_RELIEF_TOLERANCE_MM,
+        );
+        assert!(removal.intersection(&finished_region).area().abs() < 1e-6);
     }
 
     fn rectangle_contour(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ContourBuf {

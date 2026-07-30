@@ -475,6 +475,7 @@ fn board_array_profile_gerber_file(
     relief_debug_dir: Option<&Path>,
 ) -> Result<Option<GerberX2File>> {
     let doc = geometry::extract_layout(ipc)?;
+    let is_fab_panel = geometry::is_generated_fab_panel(ipc, &doc);
     let score_lines = geometry::board_array_vscore_lines(ipc)?;
     let profile = if let Some(debug_dir) = relief_debug_dir {
         let (profile, relief_debug) =
@@ -490,7 +491,11 @@ fn board_array_profile_gerber_file(
 
     let mut artwork = GerberArtwork::new();
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
-        name: "Board Array Profile".to_string(),
+        name: if is_fab_panel {
+            "Fab Panel Profile".to_string()
+        } else {
+            "Board Array Profile".to_string()
+        },
         role: LayerRole::Profile,
         side: IrSide::None,
         objects: Span::EMPTY,
@@ -509,7 +514,11 @@ fn board_array_profile_gerber_file(
     let layer = lower_artwork_layer(&artwork)?;
     let contents = write_layer(&layer)?;
     Ok(Some(GerberX2File {
-        filename: "Board_Array_Profile.gm1".to_string(),
+        filename: if is_fab_panel {
+            "Fab_Panel_Profile.gm1".to_string()
+        } else {
+            "Board_Array_Profile.gm1".to_string()
+        },
         layer,
         contents,
     }))

@@ -11,6 +11,7 @@ use pcb_ir::dialects::ipc::{
         DEFAULT_RELIEF_TOLERANCE_MM, DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM, VScoreLine,
         vscore_lines_for,
     },
+    root_step,
 };
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
 
@@ -54,14 +55,22 @@ pub fn board_array_fabrication_profile_with_debug(
     pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
 )> {
     let relief_features = board_array_relief_features(ipc, score_lines)?;
+    let route_direct_panel_instances = is_generated_fab_panel(ipc, layout);
     Ok(pcb_ir::dialects::ipc::board_array_fabrication_profile(
         layout,
         score_lines,
         pcb_ir::dialects::ipc::FabricationProfileOptions {
             relief_features,
+            route_direct_panel_instances,
             debug: true,
         },
     )?)
+}
+
+pub(crate) fn is_generated_fab_panel(ipc: &Ipc2581, layout: &GeometryDocument) -> bool {
+    root_step(layout).is_some_and(|(_, step)| {
+        ipc.resolve(step.source_step_ref) == crate::steps::FAB_PANEL_STEP_NAME
+    })
 }
 
 fn board_array_relief_features(

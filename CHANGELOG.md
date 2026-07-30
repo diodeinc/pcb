@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added common fabrication panel sizes to `pcb ipc2581 fab-panel create`.
+- Fabrication-panel profile Gerbers now include tool-compensated routing geometry around every assembly panel.
 
 ### Changed
 
