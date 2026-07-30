@@ -220,6 +220,67 @@ impl ContourSet {
         )
     }
 
+    /// Connected components, each retaining its own hole rings.
+    pub fn connected_components(&self) -> Vec<Self> {
+        simplify_shapes(self.rings.clone(), FillRule::NonZero)
+            .into_iter()
+            .map(|shape| Self::new(shape, FillRule::NonZero, self.tolerance))
+            .collect()
+    }
+
+    /// Whether the regularized region contains the point, including its boundary.
+    pub fn contains_point(&self, point: Point) -> bool {
+        if self.is_empty()
+            || point.x < self.bbox.min.x
+            || point.x > self.bbox.max.x
+            || point.y < self.bbox.min.y
+            || point.y > self.bbox.max.y
+        {
+            return false;
+        }
+
+        let epsilon = self.tolerance.max(tol::EPSILON_MM);
+        if self
+            .rings
+            .iter()
+            .any(|ring| ring_boundary_distance(ring, point) <= epsilon)
+        {
+            return true;
+        }
+
+        self.rings.iter().fold(false, |inside, ring| {
+            inside ^ ring_contains_point(ring, point)
+        })
+    }
+
+    /// Whether a closed disk is fully contained in the regularized region.
+    ///
+    /// The boundary check is exact for the flattened representation used by
+    /// `ContourSet` boolean operations.
+    pub fn contains_disk(&self, center: Point, radius: f64) -> bool {
+        if !radius.is_finite() || radius < 0.0 || !center.is_finite() {
+            return false;
+        }
+        if !self.contains_point(center) {
+            return false;
+        }
+        if radius == 0.0 {
+            return true;
+        }
+        if center.x - radius < self.bbox.min.x
+            || center.x + radius > self.bbox.max.x
+            || center.y - radius < self.bbox.min.y
+            || center.y + radius > self.bbox.max.y
+        {
+            return false;
+        }
+
+        let epsilon = self.tolerance.max(tol::EPSILON_MM);
+        self.rings
+            .iter()
+            .all(|ring| ring_boundary_distance(ring, center) + epsilon >= radius)
+    }
+
     /// Minkowski sum with a disk: `self ⊕ D_radius`. This is the standard
     /// "buffer out" operation used for manufacturability checks, computed as
     /// a round-join parallel offset of the region boundary.
@@ -251,6 +312,20 @@ impl ContourSet {
         self.rings
             .iter()
             .map(|ring| crate::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM))
+            .collect()
+    }
+
+    /// Convert each connected component to one positive contour.
+    ///
+    /// Hole rings are connected to their outer ring with zero-width bridges,
+    /// allowing formats without compound-polygon holes to carry the same
+    /// local positive geometry without layer-wide clear features.
+    pub fn to_bridged_contours_with_arcs(&self) -> Vec<ContourBuf> {
+        simplify_shapes(self.rings.clone(), FillRule::NonZero)
+            .into_iter()
+            .map(crate::geom::bridge::bridge_shape)
+            .filter(|ring| ring.len() >= 3)
+            .map(|ring| crate::geom::arcfit::ring_to_contour_with_arcs(&ring, tol::FLATTEN_MM))
             .collect()
     }
 }
@@ -361,9 +436,54 @@ fn ring_to_contour(ring: Ring) -> Option<ContourBuf> {
     Some(ContourBuf::from_parts(bbox, cmds))
 }
 
+fn ring_contains_point(ring: &Ring, point: Point) -> bool {
+    if ring.len() < 3 {
+        return false;
+    }
+
+    let mut inside = false;
+    for index in 0..ring.len() {
+        let [x0, y0] = ring[index];
+        let [x1, y1] = ring[(index + 1) % ring.len()];
+        if (y0 > point.y) != (y1 > point.y) {
+            let crossing_x = x0 + (point.y - y0) * (x1 - x0) / (y1 - y0);
+            if point.x < crossing_x {
+                inside = !inside;
+            }
+        }
+    }
+    inside
+}
+
+fn ring_boundary_distance(ring: &Ring, point: Point) -> f64 {
+    if ring.is_empty() {
+        return f64::INFINITY;
+    }
+
+    (0..ring.len())
+        .map(|index| {
+            let [x0, y0] = ring[index];
+            let [x1, y1] = ring[(index + 1) % ring.len()];
+            point_segment_distance(point, Point::new(x0, y0), Point::new(x1, y1))
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+fn point_segment_distance(point: Point, start: Point, end: Point) -> f64 {
+    let segment = end - start;
+    let length_squared = segment.x * segment.x + segment.y * segment.y;
+    if length_squared == 0.0 {
+        return point.distance_to(start);
+    }
+    let offset = point - start;
+    let t = ((offset.x * segment.x + offset.y * segment.y) / length_squared).clamp(0.0, 1.0);
+    point.distance_to(start + segment * t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geom::shapes;
 
     #[test]
     fn contour_set_composes_region_operations() {
@@ -412,6 +532,50 @@ mod tests {
         let ring = outer.difference(&inner);
 
         assert!((ring.area() - 12.0).abs() <= 1e-6);
+    }
+
+    #[test]
+    fn containment_observes_boundaries_and_holes() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let hole = ContourSet::rectangle(rect(4.0, 4.0, 6.0, 6.0), tol::REGION_MM);
+        let region = outer.difference(&hole);
+
+        assert!(region.contains_point(Point::new(2.0, 2.0)));
+        assert!(region.contains_point(Point::new(0.0, 5.0)));
+        assert!(!region.contains_point(Point::new(5.0, 5.0)));
+        assert!(region.contains_disk(Point::new(2.0, 2.0), 2.0));
+        assert!(!region.contains_disk(Point::new(2.0, 2.0), 2.01));
+        assert!(!region.contains_disk(Point::new(3.5, 5.0), 0.6));
+    }
+
+    #[test]
+    fn bridged_contour_preserves_local_holes_without_clear_polarity() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let circle = shapes::circle(2.0).unwrap();
+        let circle = crate::geom::path::transform_cmds(
+            circle.cmds,
+            crate::geom::Affine2::translation(Point::new(5.0, 5.0)),
+        );
+        let hole = ContourSet::from_filled_contours(&[circle], tol::REGION_MM);
+        let region = outer.difference(&hole);
+
+        let contours = region.to_bridged_contours_with_arcs();
+        let round_trip = ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM);
+
+        assert_eq!(contours.len(), 1);
+        assert!(
+            contours[0]
+                .cmds
+                .iter()
+                .any(|cmd| cmd.op == crate::geom::PathOp::ArcTo)
+        );
+        assert!(
+            (round_trip.area() - region.area()).abs() <= 0.01,
+            "bridged area {}, source area {}",
+            round_trip.area(),
+            region.area()
+        );
+        assert!(!round_trip.contains_point(Point::new(5.0, 5.0)));
     }
 
     fn rect(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> BBox {

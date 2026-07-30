@@ -1,3 +1,4 @@
+use super::balance::generate_board_array_copper_balance;
 use super::*;
 use crate::accessors::IpcAccessor;
 use crate::manufacturing::build_manufacturing_package;
@@ -5,7 +6,10 @@ use pcb_ir::dialects::ipc::{
     FeatureBucket, FeatureDomain, FeatureIntent, FeatureKind, FeatureOperation, FeatureRole,
     FeatureSpan, FiducialKind, LayoutStepKind, PlatingKind, View,
 };
-use pcb_ir::geom::Point;
+use pcb_ir::geom::copper_balance::{
+    DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceRequest,
+};
+use pcb_ir::geom::{BBox, ContourSet, FillRule, Point, tol};
 
 #[test]
 fn parses_board_margin_css_shorthand() {
@@ -653,6 +657,103 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     assert!(drill.contents.contains("X20.0Y20.0"));
     assert!(!top.contents.contains("%TA.AperFunction,Other,Drill*%"));
     assert!(!mask.contents.contains("%TA.AperFunction,Other,Drill*%"));
+}
+
+#[test]
+fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
+    let input = board_fixture_with_top_line_mm();
+    let ipc = Ipc2581::parse(input).unwrap();
+    let options = BoardArrayCreateOptions {
+        columns: 6,
+        rows: 6,
+        board_margin_mm: board_margin(5.0, 5.0),
+        edge_rail_mm: BoardMarginMm::all(5.0),
+    };
+    let mut spec = build_board_array_spec(
+        &ipc,
+        &options,
+        BoardArrayValidationMode::Manual,
+        BoardArrayPanelizationMetadata {
+            mode: BoardArrayPanelizationMode::Manual,
+            sheet: None,
+            sheet_target_mm: None,
+        },
+    )
+    .unwrap();
+    let safe_region = ContourSet::rectangle(
+        BBox::new(Point::new(0.0, 10.0), Point::new(5.0, 90.0)),
+        tol::REGION_MM,
+    );
+
+    let (balance, features) = generate_board_array_copper_balance(
+        DenseCopperBalanceProfile::V1,
+        DenseCopperBalanceRequest {
+            safe_region: &safe_region,
+            retained_area_mm2: safe_region.area(),
+            existing_copper_area_mm2: 0.0,
+            target_density: 0.70,
+            lattice_origin: Point::new(50.0, 50.0),
+        },
+    )
+    .unwrap();
+    spec.generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
+        "TOP",
+        Polarity::Positive,
+        features,
+    );
+    assert!(matches!(
+        balance.solution.mode,
+        DenseCopperBalanceMode::Perforated { .. }
+    ));
+
+    let xml = write_board_array_xml(input, &spec).unwrap();
+    assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
+
+    let parsed = Ipc2581::parse(&xml).unwrap();
+    let array_polygons = array_step(&parsed)
+        .layer_features
+        .iter()
+        .filter(|feature| parsed.resolve(feature.layer_ref) == "TOP")
+        .flat_map(|feature| &feature.sets)
+        .flat_map(|set| set.polygons())
+        .count();
+    assert!(array_polygons > 0);
+
+    let top = geometry::extract_layer_for_view(&parsed, "TOP", View::ArrayFlattened).unwrap();
+    let contours = top
+        .features
+        .iter()
+        .filter(|feature| {
+            feature.source_step_kind == LayoutStepKind::Panel
+                && feature.kind == FeatureKind::Polygon
+        })
+        .flat_map(|feature| {
+            feature
+                .paths
+                .slice(&top.arena.paths)
+                .iter()
+                .flat_map(|path| top.arena.path_contours(path))
+        })
+        .collect::<Vec<_>>();
+    let round_trip = ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM);
+
+    assert!(!round_trip.is_empty());
+    assert!(
+        (round_trip.area() - balance.copper.area()).abs() <= 0.10,
+        "IPC area {}, source area {}",
+        round_trip.area(),
+        balance.copper.area()
+    );
+
+    let package = build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
+    let top_gerber = package
+        .files
+        .iter()
+        .find(|file| file.filename == "F_Cu.gtl")
+        .unwrap();
+    assert!(top_gerber.contents.contains("G36*"));
+    assert!(top_gerber.contents.contains("G37*"));
 }
 
 #[test]

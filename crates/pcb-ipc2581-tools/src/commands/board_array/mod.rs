@@ -1076,6 +1076,7 @@ fn reserve_unique_name(used_names: &mut HashSet<String>, base: &str) -> String {
     name
 }
 
+pub mod balance;
 mod tooling;
 mod vcut;
 mod xml;

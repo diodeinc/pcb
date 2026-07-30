@@ -312,6 +312,11 @@ pub(super) fn write_set_features(
                 write::line(writer, units, line)?;
                 writer.end_element("Features");
             }
+            SetFeature::Polygon(polygon) => {
+                writer.start_element("Features", &[]);
+                write::polygon(writer, units, polygon);
+                writer.end_element("Features");
+            }
             SetFeature::Fiducial(fiducial) => {
                 write::fiducial(writer, units, fiducial)?;
             }
