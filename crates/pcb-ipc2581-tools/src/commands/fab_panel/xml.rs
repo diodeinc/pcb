@@ -9,7 +9,6 @@ use super::{EDGE_RAIL_MM, FabPanelDimensions, PANEL_GAP_MM, SourcePanel};
 use crate::commands::fab_panel::packing::Placement;
 
 const FAB_STEP_NAME: &str = "fab_panel";
-const FAB_AVL_NAME: &str = "fab_panel_avl";
 const FAB_ROLE_ID: &str = "fab_panel_role";
 const FAB_ENTERPRISE_ID: &str = "fab_panel_enterprise";
 const FAB_PERSON_NAME: &str = "pcb";
@@ -190,13 +189,6 @@ pub(super) fn write_fab_panel_xml(
     let first = sources
         .first()
         .context("at least one assembly panel source is required")?;
-    let has_avl = docs.iter().any(|doc| {
-        doc.root()
-            .ok()
-            .and_then(|root| doc.child(root, "Avl"))
-            .is_some()
-    });
-
     let mut writer = XmlWriter::new();
     writer.write_declaration();
     writer.start_element(
@@ -206,10 +198,9 @@ pub(super) fn write_fab_panel_xml(
             ("xmlns", "http://webstds.ipc.org/2581"),
         ],
     );
-    write_content(&mut writer, &docs, has_avl, shared_stackup_layers)?;
-    write_logistic_header(&mut writer, &docs)?;
+    write_content(&mut writer, &docs, shared_stackup_layers)?;
+    write_logistic_header(&mut writer);
     write_history_record(&mut writer);
-    write_boms(&mut writer, &docs)?;
     write_ecad(
         &mut writer,
         sources,
@@ -219,12 +210,12 @@ pub(super) fn write_fab_panel_xml(
         shared_stackup_layers,
         dimensions,
     )?;
-    if has_avl {
-        write_avl(&mut writer, &docs)?;
-    }
     writer.end_element("IPC-2581");
 
-    let xml = crate::utils::format::reformat_xml(&writer.into_string())?;
+    let xml = super::super::fabrication::strip_non_manufacturing(&writer.into_string())?;
+    let xml = crate::utils::format::reformat_xml(&xml)?;
+    Ipc2581::validate(&xml)
+        .context("Generated IPC-2581 fabrication panel XML failed schema validation")?;
     Ipc2581::parse(&xml).context("Generated IPC-2581 fabrication panel XML did not parse")?;
     Ok(xml)
 }
@@ -232,7 +223,6 @@ pub(super) fn write_fab_panel_xml(
 fn write_content(
     writer: &mut XmlWriter,
     docs: &[Doc<'_>],
-    has_avl: bool,
     shared_stackup_layers: &HashSet<String>,
 ) -> Result<()> {
     writer.start_element("Content", &[("roleRef", FAB_ROLE_ID)]);
@@ -251,17 +241,6 @@ fn write_content(
             writer.empty_element("LayerRef", &[("name", name)]);
         }
     }
-    for doc in docs {
-        let root = doc.root()?;
-        for bom in children_named(doc, root, "Bom") {
-            let name = doc.attr(bom, "name").context("IPC-2581 Bom has no name")?;
-            writer.empty_element("BomRef", &[("name", name)]);
-        }
-    }
-    if has_avl {
-        writer.empty_element("AvlRef", &[("name", FAB_AVL_NAME)]);
-    }
-
     for dictionary in [
         "DictionaryColor",
         "DictionaryLineDesc",
@@ -321,10 +300,9 @@ fn write_merged_container(
     Ok(())
 }
 
-fn write_logistic_header(writer: &mut XmlWriter, docs: &[Doc<'_>]) -> Result<()> {
+fn write_logistic_header(writer: &mut XmlWriter) {
     writer.start_element("LogisticHeader", &[]);
     writer.empty_element("Role", &[("id", FAB_ROLE_ID), ("roleFunction", "DESIGNER")]);
-    write_logistic_children(writer, docs, "Role")?;
 
     writer.empty_element(
         "Enterprise",
@@ -334,7 +312,6 @@ fn write_logistic_header(writer: &mut XmlWriter, docs: &[Doc<'_>]) -> Result<()>
             ("code", "DIODE"),
         ],
     );
-    write_logistic_children(writer, docs, "Enterprise")?;
 
     writer.empty_element(
         "Person",
@@ -344,26 +321,7 @@ fn write_logistic_header(writer: &mut XmlWriter, docs: &[Doc<'_>]) -> Result<()>
             ("roleRef", FAB_ROLE_ID),
         ],
     );
-    write_logistic_children(writer, docs, "Person")?;
     writer.end_element("LogisticHeader");
-    Ok(())
-}
-
-fn write_logistic_children(
-    writer: &mut XmlWriter,
-    docs: &[Doc<'_>],
-    child_name: &str,
-) -> Result<()> {
-    for doc in docs {
-        let root = doc.root()?;
-        let Some(logistic) = doc.child(root, "LogisticHeader") else {
-            continue;
-        };
-        for child in children_named(doc, logistic, child_name) {
-            writer.raw(doc.source(child));
-        }
-    }
-    Ok(())
 }
 
 fn write_history_record(writer: &mut XmlWriter) {
@@ -397,16 +355,6 @@ fn write_history_record(writer: &mut XmlWriter) {
     writer.end_element("SoftwarePackage");
     writer.end_element("FileRevision");
     writer.end_element("HistoryRecord");
-}
-
-fn write_boms(writer: &mut XmlWriter, docs: &[Doc<'_>]) -> Result<()> {
-    for doc in docs {
-        let root = doc.root()?;
-        for bom in children_named(doc, root, "Bom") {
-            writer.raw(doc.source(bom));
-        }
-    }
-    Ok(())
 }
 
 fn write_ecad(
@@ -571,26 +519,6 @@ fn write_metadata(writer: &mut XmlWriter, name: &str, property_type: &str, value
         "NonstandardAttribute",
         &[("name", name), ("type", property_type), ("value", value)],
     );
-}
-
-fn write_avl(writer: &mut XmlWriter, docs: &[Doc<'_>]) -> Result<()> {
-    writer.start_element("Avl", &[("name", FAB_AVL_NAME)]);
-    let mut wrote_header = false;
-    for doc in docs {
-        let root = doc.root()?;
-        let Some(avl) = doc.child(root, "Avl") else {
-            continue;
-        };
-        if !wrote_header && let Some(header) = doc.child(avl, "AvlHeader") {
-            writer.raw(doc.source(header));
-            wrote_header = true;
-        }
-        for item in children_named(doc, avl, "AvlItem") {
-            writer.raw(doc.source(item));
-        }
-    }
-    writer.end_element("Avl");
-    Ok(())
 }
 
 fn cad_header<'a>(doc: &'a Doc<'a>) -> Result<Node> {
