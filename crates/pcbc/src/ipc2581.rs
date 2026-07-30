@@ -60,7 +60,7 @@ enum Commands {
         #[command(subcommand)]
         command: BoardArrayCommands,
     },
-    /// Tile assembly panels into a fixed 18 by 24 inch fabrication panel
+    /// Tile assembly panels into a fabrication panel
     FabPanel {
         #[command(subcommand)]
         command: FabPanelCommands,
@@ -231,10 +231,36 @@ enum FabPanelCommands {
             value_hint = clap::ValueHint::FilePath
         )]
         inputs: Vec<PathBuf>,
+        /// Fabrication panel size in inches. Defaults to 18x24.
+        #[arg(long, value_enum, value_name = "SIZE")]
+        panel_size: Option<FabPanelSize>,
         /// Output IPC-2581 XML file, or '-' for stdout
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
     },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum FabPanelSize {
+    #[value(name = "12x18")]
+    Inches12x18,
+    #[value(name = "16x18")]
+    Inches16x18,
+    #[value(name = "18x24")]
+    Inches18x24,
+    #[value(name = "21x24")]
+    Inches21x24,
+}
+
+impl FabPanelSize {
+    fn dimensions(self) -> commands::fab_panel::FabPanelDimensions {
+        match self {
+            Self::Inches12x18 => commands::fab_panel::FabPanelDimensions::INCHES_12_X_18,
+            Self::Inches16x18 => commands::fab_panel::FabPanelDimensions::INCHES_16_X_18,
+            Self::Inches18x24 => commands::fab_panel::FabPanelDimensions::INCHES_18_X_24,
+            Self::Inches21x24 => commands::fab_panel::FabPanelDimensions::INCHES_21_X_24,
+        }
+    }
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
@@ -353,8 +379,13 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             }
         },
         Commands::FabPanel { command } => match command {
-            FabPanelCommands::Create { inputs, output } => {
-                commands::fab_panel::execute(&inputs, &output)
+            FabPanelCommands::Create {
+                inputs,
+                panel_size,
+                output,
+            } => {
+                let dimensions = panel_size.map(FabPanelSize::dimensions).unwrap_or_default();
+                commands::fab_panel::execute(&inputs, &output, dimensions)
             }
         },
         Commands::View {

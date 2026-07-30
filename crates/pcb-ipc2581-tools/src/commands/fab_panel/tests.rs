@@ -3,6 +3,9 @@ use pcb_ir::dialects::ipc::root_step;
 
 use super::*;
 
+const FAB_PANEL_WIDTH_MM: f64 = FabPanelDimensions::INCHES_18_X_24.width_mm();
+const FAB_PANEL_HEIGHT_MM: f64 = FabPanelDimensions::INCHES_18_X_24.height_mm();
+
 fn assembly_panel_xml(width_mm: f64, height_mm: f64) -> String {
     assembly_panel_xml_at(0.0, 0.0, width_mm, height_mm)
 }
@@ -151,6 +154,27 @@ fn repeating_an_input_reuses_its_definitions_and_adds_placements() {
     assert_eq!(imported_steps, 1);
     assert_eq!(imported_layers, 1);
     assert_eq!(placements, 3);
+}
+
+#[test]
+fn creates_supported_standard_fabrication_panel_sizes() {
+    let sources = vec![assembly_panel_xml(100.0, 80.0)];
+
+    for dimensions in [
+        FabPanelDimensions::INCHES_12_X_18,
+        FabPanelDimensions::INCHES_16_X_18,
+        FabPanelDimensions::INCHES_18_X_24,
+        FabPanelDimensions::INCHES_21_X_24,
+    ] {
+        let generated = create_fab_panel_xml_with_dimensions(&sources, &[0], dimensions).unwrap();
+        Ipc2581::validate(&generated).unwrap();
+        let parsed = Ipc2581::parse(&generated).unwrap();
+        let layout = geometry::extract_layout(&parsed).unwrap();
+        let (_, root) = root_step(&layout).unwrap();
+
+        assert!((root.bbox.width() - dimensions.width_mm()).abs() < 1e-9);
+        assert!((root.bbox.height() - dimensions.height_mm()).abs() < 1e-9);
+    }
 }
 
 #[test]
