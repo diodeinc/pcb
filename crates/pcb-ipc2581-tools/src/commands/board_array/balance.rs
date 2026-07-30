@@ -111,5 +111,15 @@ mod tests {
                 .iter()
                 .all(|feature| matches!(feature, SetFeature::Polygon(_)))
         );
+        assert!(
+            features
+                .iter()
+                .filter_map(|feature| match feature {
+                    SetFeature::Polygon(polygon) => Some(polygon),
+                    _ => None,
+                })
+                .flat_map(|polygon| &polygon.steps)
+                .any(|step| matches!(step, PolyStep::Curve(_)))
+        );
     }
 }
