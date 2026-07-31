@@ -347,6 +347,162 @@ impl ContourSet {
         self.disk_offset(-radius)
     }
 
+    /// Morphological opening by a disk: `(self ⊖ D_radius) ⊕ D_radius`.
+    ///
+    /// Equivalently, this is the union of every radius-sized disk contained in
+    /// the source region. It is therefore a subset of the source that removes
+    /// tips and islands too small to accommodate the disk while rounding the
+    /// surviving outward corners.
+    pub fn disk_open(&self, radius: f64) -> Self {
+        if self.is_empty() || radius <= 0.0 {
+            return self.clone();
+        }
+
+        // Round-offset tessellation approximates the mathematical disks. Clip
+        // the regrown result to the source so the operation retains its
+        // defining anti-extensive property at polygon tolerance.
+        self.disk_erode(radius)
+            .disk_dilate(radius)
+            .intersection(self)
+    }
+
+    /// Morphological closing by a disk: `(self ⊕ D_radius) ⊖ D_radius`.
+    ///
+    /// Equivalently, the complement of the result is the union of every
+    /// radius-sized disk contained in the source complement. Closing therefore
+    /// fills void tips and gaps too small to accommodate the disk while
+    /// rounding the surviving inward corners.
+    pub fn disk_close(&self, radius: f64) -> Self {
+        if self.is_empty() || radius <= 0.0 {
+            return self.clone();
+        }
+
+        // Round-offset tessellation approximates the mathematical disks. Union
+        // the contracted result with the source so the operation retains its
+        // defining extensive property at polygon tolerance.
+        self.disk_dilate(radius).disk_erode(radius).union(self)
+    }
+
+    /// Diagnose distinct components whose Euclidean separation is less than
+    /// the disk diameter `2 * radius`.
+    ///
+    /// For connected components `C_i`, returns
+    /// `⋃_{i<j} (((C_i ⊕ D_r) ∩ (C_j ⊕ D_r)) \ self)` for pairs with
+    /// `distance(C_i, C_j) < 2r`. Subtracting `self` localizes the diagnostic
+    /// to the intervening void. Bounding-box pruning and segment distance avoid
+    /// constructing dilations for non-conflicting pairs.
+    pub fn disk_inter_component_gap_violations(&self, radius: f64) -> Self {
+        if self.is_empty() || radius <= 0.0 {
+            return Self::empty(self.tolerance);
+        }
+
+        let components = self.connected_components();
+        let mut violations = Self::empty(self.tolerance);
+        for (index, left) in components.iter().enumerate() {
+            for right in &components[index + 1..] {
+                if !regions_within_distance(left, right, 2.0 * radius) {
+                    continue;
+                }
+                let overlap = left
+                    .disk_dilate(radius)
+                    .intersection(&right.disk_dilate(radius))
+                    .difference(self);
+                violations = violations.union(&overlap);
+            }
+        }
+        violations
+    }
+
+    /// Retain a maximum-area subset of connected components with pairwise
+    /// Euclidean separation at least `2 * radius`.
+    ///
+    /// Components form a graph with edge `(i, j)` when
+    /// `distance(C_i, C_j) < 2r`, equivalently when their radius-`r` dilations
+    /// overlap. With component area as vertex weight, the retained components
+    /// are an exact maximum-weight independent set:
+    ///
+    /// ```text
+    /// maximize  Σ area(C_i) x_i
+    /// subject to x_i + x_j ≤ 1  for every conflict edge (i, j)
+    ///            x_i ∈ {0, 1}
+    /// ```
+    ///
+    /// Disconnected conflict clusters are solved independently. Equal-area
+    /// optima prefer the deterministic component order: descending area, then
+    /// bounding-box coordinates. The return value is `(kept, removed)`.
+    pub fn disk_separate_components(&self, radius: f64) -> (Self, Self) {
+        if self.is_empty() || radius <= 0.0 {
+            return (self.clone(), Self::empty(self.tolerance));
+        }
+
+        let mut candidates = self
+            .connected_components()
+            .into_iter()
+            .map(|component| (component.area(), component))
+            .collect::<Vec<_>>();
+        candidates.sort_by(|(left_area, left), (right_area, right)| {
+            right_area
+                .total_cmp(left_area)
+                .then_with(|| left.bbox.min.x.total_cmp(&right.bbox.min.x))
+                .then_with(|| left.bbox.min.y.total_cmp(&right.bbox.min.y))
+                .then_with(|| left.bbox.max.x.total_cmp(&right.bbox.max.x))
+                .then_with(|| left.bbox.max.y.total_cmp(&right.bbox.max.y))
+        });
+
+        let mut conflicts = vec![Vec::new(); candidates.len()];
+        for left in 0..candidates.len() {
+            for right in left + 1..candidates.len() {
+                if regions_within_distance(&candidates[left].1, &candidates[right].1, 2.0 * radius)
+                {
+                    conflicts[left].push(right);
+                    conflicts[right].push(left);
+                }
+            }
+        }
+
+        if conflicts.iter().all(Vec::is_empty) {
+            return (self.clone(), Self::empty(self.tolerance));
+        }
+
+        let weights = candidates.iter().map(|(area, _)| *area).collect::<Vec<_>>();
+        let mut visited = vec![false; candidates.len()];
+        let mut kept_indices = Vec::new();
+        for start in 0..candidates.len() {
+            if visited[start] {
+                continue;
+            }
+            let mut cluster = Vec::new();
+            let mut pending = vec![start];
+            visited[start] = true;
+            while let Some(vertex) = pending.pop() {
+                cluster.push(vertex);
+                for &neighbor in &conflicts[vertex] {
+                    if !visited[neighbor] {
+                        visited[neighbor] = true;
+                        pending.push(neighbor);
+                    }
+                }
+            }
+            cluster.sort_unstable();
+            kept_indices.extend(maximum_weight_independent_set(
+                &cluster, &conflicts, &weights,
+            ));
+        }
+
+        if kept_indices.len() == candidates.len() {
+            return (self.clone(), Self::empty(self.tolerance));
+        }
+        kept_indices.sort_unstable();
+        let kept = kept_indices
+            .into_iter()
+            .fold(Self::empty(self.tolerance), |region, index| {
+                region.union(&candidates[index].1)
+            })
+            .intersection(self);
+        let removed = self.difference(&kept);
+        (kept, removed)
+    }
+
     pub fn to_contours(&self) -> Vec<ContourBuf> {
         rings_to_contours(self.rings.clone())
     }
@@ -541,6 +697,144 @@ fn point_segment_distance(point: Point, start: Point, end: Point) -> f64 {
     point.distance_to(start + segment * t)
 }
 
+fn maximum_weight_independent_set(
+    cluster: &[usize],
+    conflicts: &[Vec<usize>],
+    weights: &[f64],
+) -> Vec<usize> {
+    let mut greedy = Vec::new();
+    for &vertex in cluster {
+        if greedy
+            .iter()
+            .all(|kept| conflicts[vertex].binary_search(kept).is_err())
+        {
+            greedy.push(vertex);
+        }
+    }
+    let best_weight = greedy.iter().map(|&vertex| weights[vertex]).sum();
+    let mut search = MaximumWeightIndependentSetSearch {
+        conflicts,
+        weights,
+        best: greedy,
+        best_weight,
+    };
+    search.visit(cluster.to_vec(), &mut Vec::new(), 0.0);
+    search.best
+}
+
+struct MaximumWeightIndependentSetSearch<'a> {
+    conflicts: &'a [Vec<usize>],
+    weights: &'a [f64],
+    best: Vec<usize>,
+    best_weight: f64,
+}
+
+impl MaximumWeightIndependentSetSearch<'_> {
+    fn visit(&mut self, remaining: Vec<usize>, selected: &mut Vec<usize>, selected_weight: f64) {
+        let upper_bound = selected_weight
+            + remaining
+                .iter()
+                .map(|&vertex| self.weights[vertex])
+                .sum::<f64>();
+        if upper_bound.total_cmp(&self.best_weight).is_lt() {
+            return;
+        }
+        if remaining.is_empty() {
+            let mut candidate = selected.clone();
+            candidate.sort_unstable();
+            if selected_weight.total_cmp(&self.best_weight).is_gt()
+                || (selected_weight.total_cmp(&self.best_weight).is_eq() && candidate < self.best)
+            {
+                self.best = candidate;
+                self.best_weight = selected_weight;
+            }
+            return;
+        }
+
+        let pivot = *remaining
+            .iter()
+            .max_by(|&&left, &&right| {
+                let left_degree = remaining
+                    .iter()
+                    .filter(|&&other| self.conflicts[left].binary_search(&other).is_ok())
+                    .count();
+                let right_degree = remaining
+                    .iter()
+                    .filter(|&&other| self.conflicts[right].binary_search(&other).is_ok())
+                    .count();
+                left_degree
+                    .cmp(&right_degree)
+                    .then_with(|| self.weights[left].total_cmp(&self.weights[right]))
+                    .then_with(|| right.cmp(&left))
+            })
+            .expect("non-empty remaining vertex set");
+
+        let include_remaining = remaining
+            .iter()
+            .copied()
+            .filter(|&vertex| {
+                vertex != pivot && self.conflicts[pivot].binary_search(&vertex).is_err()
+            })
+            .collect();
+        selected.push(pivot);
+        self.visit(
+            include_remaining,
+            selected,
+            selected_weight + self.weights[pivot],
+        );
+        selected.pop();
+
+        let exclude_remaining = remaining
+            .into_iter()
+            .filter(|&vertex| vertex != pivot)
+            .collect();
+        self.visit(exclude_remaining, selected, selected_weight);
+    }
+}
+
+fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64) -> bool {
+    if !left.bbox.expand(distance).intersects(right.bbox) {
+        return false;
+    }
+    let threshold = distance + left.tolerance.max(right.tolerance);
+    for left_ring in &left.rings {
+        for left_index in 0..left_ring.len() {
+            let [left_start_x, left_start_y] = left_ring[left_index];
+            let [left_end_x, left_end_y] = left_ring[(left_index + 1) % left_ring.len()];
+            let left_start = Point::new(left_start_x, left_start_y);
+            let left_end = Point::new(left_end_x, left_end_y);
+            let left_bbox = segment_bbox(left_start, left_end).expand(threshold);
+            for right_ring in &right.rings {
+                for right_index in 0..right_ring.len() {
+                    let [right_start_x, right_start_y] = right_ring[right_index];
+                    let [right_end_x, right_end_y] =
+                        right_ring[(right_index + 1) % right_ring.len()];
+                    let right_start = Point::new(right_start_x, right_start_y);
+                    let right_end = Point::new(right_end_x, right_end_y);
+                    if !left_bbox.intersects(segment_bbox(right_start, right_end)) {
+                        continue;
+                    }
+                    let separation = point_segment_distance(left_start, right_start, right_end)
+                        .min(point_segment_distance(left_end, right_start, right_end))
+                        .min(point_segment_distance(right_start, left_start, left_end))
+                        .min(point_segment_distance(right_end, left_start, left_end));
+                    if separation <= threshold {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn segment_bbox(start: Point, end: Point) -> BBox {
+    BBox::new(
+        Point::new(start.x.min(end.x), start.y.min(end.y)),
+        Point::new(start.x.max(end.x), start.y.max(end.y)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,6 +958,182 @@ mod tests {
         let eroded = region.disk_erode(0.5);
 
         assert!(eroded.is_empty());
+    }
+
+    #[test]
+    fn disk_opening_rounds_corners_and_stays_inside_source() {
+        let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+
+        let opened = region.disk_open(0.5);
+
+        assert!(opened.difference(&region).is_empty());
+        assert!((opened.bbox.min.x - 0.0).abs() <= 1e-9);
+        assert!((opened.bbox.min.y - 0.0).abs() <= 1e-9);
+        assert!((opened.bbox.max.x - 10.0).abs() <= 1e-9);
+        assert!((opened.bbox.max.y - 10.0).abs() <= 1e-9);
+        assert!((opened.area() - (99.0 + std::f64::consts::PI / 4.0)).abs() <= 2e-2);
+        assert!(
+            opened
+                .to_contours_with_arcs()
+                .iter()
+                .flat_map(|contour| &contour.cmds)
+                .any(|cmd| cmd.op == crate::geom::PathOp::ArcTo)
+        );
+    }
+
+    #[test]
+    fn disk_opening_removes_sub_diameter_slivers_and_small_islands() {
+        let body = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let sliver = ContourSet::rectangle(rect(12.0, 0.0, 20.0, 0.8), tol::REGION_MM);
+        let island = ContourSet::rectangle(rect(22.0, 0.0, 22.8, 0.8), tol::REGION_MM);
+        let region = body.union(&sliver).union(&island);
+
+        let opened = region.disk_open(0.5);
+
+        assert_eq!(opened.connected_components().len(), 1);
+        assert!(opened.intersection(&body).area() > 99.0);
+        assert!(opened.intersection(&sliver).is_empty());
+        assert!(opened.intersection(&island).is_empty());
+    }
+
+    #[test]
+    fn disk_opening_is_idempotent_within_offset_tolerance() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let notch = ContourSet::rectangle(rect(4.0, 8.0, 6.0, 10.0), tol::REGION_MM);
+        let region = outer.difference(&notch);
+
+        let once = region.disk_open(0.5);
+        let twice = once.disk_open(0.5);
+        let symmetric_difference = once.difference(&twice).union(&twice.difference(&once));
+
+        assert!(
+            symmetric_difference.area() <= 2e-2,
+            "opening changed by {:.9} mm² on repetition",
+            symmetric_difference.area()
+        );
+    }
+
+    #[test]
+    fn disk_closing_fills_sub_diameter_gaps_and_stays_outside_source() {
+        let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
+        let right = ContourSet::rectangle(rect(4.8, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let region = left.union(&right);
+
+        let closed = region.disk_close(0.5);
+        let middle = ContourSet::rectangle(rect(4.0, 1.0, 4.8, 9.0), tol::REGION_MM);
+
+        assert!(region.difference(&closed).is_empty());
+        assert!(closed.intersection(&middle).area() > 6.3);
+    }
+
+    #[test]
+    fn disk_closing_preserves_wide_gaps() {
+        let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
+        let right = ContourSet::rectangle(rect(5.2, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let region = left.union(&right);
+
+        let closed = region.disk_close(0.5);
+        let middle = ContourSet::rectangle(rect(4.0, 1.0, 5.2, 9.0), tol::REGION_MM);
+
+        assert!(closed.intersection(&middle).is_empty());
+    }
+
+    #[test]
+    fn disk_gap_violations_only_report_close_distinct_components() {
+        let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
+        let close = ContourSet::rectangle(rect(4.8, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let wide = ContourSet::rectangle(rect(5.2, 0.0, 10.0, 10.0), tol::REGION_MM);
+
+        let close_violations = left.union(&close).disk_inter_component_gap_violations(0.5);
+        let wide_violations = left.union(&wide).disk_inter_component_gap_violations(0.5);
+
+        assert!(close_violations.area() > 1.5);
+        assert!(wide_violations.is_empty());
+        assert!(left.disk_inter_component_gap_violations(0.5).is_empty());
+    }
+
+    #[test]
+    fn disk_component_separation_discards_smaller_conflicting_islands() {
+        let large = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let small = ContourSet::rectangle(rect(10.8, 4.0, 11.6, 4.8), tol::REGION_MM);
+        let distant = ContourSet::rectangle(rect(14.0, 0.0, 20.0, 10.0), tol::REGION_MM);
+        let region = large.union(&small).union(&distant);
+
+        let (separated, removed) = region.disk_separate_components(0.5);
+
+        assert_eq!(separated.connected_components().len(), 2);
+        assert_eq!(removed.connected_components().len(), 1);
+        assert!(separated.difference(&region).is_empty());
+        assert!((removed.area() - small.area()).abs() <= 1e-6);
+        assert!(
+            separated
+                .disk_inter_component_gap_violations(0.5)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn disk_component_separation_maximizes_total_retained_area() {
+        let large = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
+        let right = ContourSet::rectangle(rect(4.8, 0.0, 7.8, 3.0), tol::REGION_MM);
+        let upper = ContourSet::rectangle(rect(0.0, 4.8, 3.0, 7.8), tol::REGION_MM);
+        let region = large.union(&right).union(&upper);
+
+        let (separated, removed) = region.disk_separate_components(0.5);
+
+        assert!((separated.area() - right.area() - upper.area()).abs() <= 1e-6);
+        assert!((removed.area() - large.area()).abs() <= 1e-6);
+        assert!(separated.intersection(&large).is_empty());
+        assert!(
+            separated
+                .disk_inter_component_gap_violations(0.5)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn exact_component_selection_matches_exhaustive_search() {
+        const VERTICES: usize = 5;
+        let cluster = (0..VERTICES).collect::<Vec<_>>();
+        let weights = [1.0, 2.0, 4.0, 8.0, 16.0];
+        let possible_edges = (0..VERTICES)
+            .flat_map(|left| (left + 1..VERTICES).map(move |right| (left, right)))
+            .collect::<Vec<_>>();
+
+        for graph_mask in 0..1_usize << possible_edges.len() {
+            let mut conflicts = vec![Vec::new(); VERTICES];
+            for (edge_index, &(left, right)) in possible_edges.iter().enumerate() {
+                if graph_mask & (1 << edge_index) != 0 {
+                    conflicts[left].push(right);
+                    conflicts[right].push(left);
+                }
+            }
+
+            let selected = maximum_weight_independent_set(&cluster, &conflicts, &weights);
+            let actual_weight = selected.iter().map(|&vertex| weights[vertex]).sum::<f64>();
+            let mut expected_weight: f64 = 0.0;
+            for selection_mask in 0..1_usize << VERTICES {
+                let independent = possible_edges.iter().all(|&(left, right)| {
+                    selection_mask & (1 << left) == 0
+                        || selection_mask & (1 << right) == 0
+                        || conflicts[left].binary_search(&right).is_err()
+                });
+                if independent {
+                    let weight = (0..VERTICES)
+                        .filter(|&vertex| selection_mask & (1 << vertex) != 0)
+                        .map(|vertex| weights[vertex])
+                        .sum::<f64>();
+                    expected_weight = expected_weight.max(weight);
+                }
+            }
+            assert_eq!(actual_weight, expected_weight, "graph mask {graph_mask}");
+        }
+
+        assert_eq!(
+            maximum_weight_independent_set(&[0, 1], &[vec![1], vec![0]], &[1.0, 1.0]),
+            vec![0],
+            "equal-weight optima should prefer the stable component order"
+        );
     }
 
     #[test]

@@ -142,7 +142,13 @@ fn creates_rounded_panel_step_from_board_bbox() {
 
 #[test]
 fn generated_board_array_has_a_certified_safe_balancing_region() {
-    let xml = create_auto_board_array_xml(board_fixture_mm()).unwrap();
+    let input = board_fixture_mm();
+    let source = Ipc2581::parse(input).unwrap();
+    let (options, validation_mode, panelization) = auto_board_array_options(&source, None).unwrap();
+    let spec = build_board_array_spec(&source, &options, validation_mode, panelization).unwrap();
+    // Safe-region discovery runs on the completed but not-yet-balanced array;
+    // otherwise the generated balance copper becomes its own obstacle.
+    let xml = write_board_array_xml(input, &spec).unwrap();
     let ipc = Ipc2581::parse(&xml).unwrap();
     let layout = geometry::extract_layout(&ipc).unwrap();
     let score_lines = geometry::board_array_vscore_lines(&ipc).unwrap();

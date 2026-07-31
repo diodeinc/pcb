@@ -1,7 +1,7 @@
 # Board-array copper-balancing region
 
-Status: implementation proposal plus a development harness. This does not add
-copper or expose a user-facing CLI contract.
+Status: reusable safe-region implementation plus a development harness. This
+does not add copper or expose a user-facing CLI contract.
 
 ## Geometry contract
 
@@ -22,32 +22,86 @@ millimeters:
   same-layer documentation such as arrows and labels.
 - `O = B ∪ M ∪ G`: every obstacle.
 - `r = 0.5 mm`: the nominal required clearance.
+- `q = 1.0 mm`: the minimum-feature radius used to regularize the result.
+- `v = 1.0 mm`: the minimum-gap radius that must fit between safe regions.
 - `e`: a conservative numerical error budget for polygonization and offsets.
 
 The result is:
 
 ```text
 construction_clearance = r + e
-panel_keep_in           = P ⊖ disk(construction_clearance)
+construction_gap       = max(r, v) + e
+panel_clearance_keep_in = P ⊖ disk(construction_clearance)
+panel_keep_in           = P ⊖ disk(construction_gap)
 obstacle_clearance      = O ⊕ disk(construction_clearance)
-safe                    = panel_keep_in \ obstacle_clearance
+obstacle_gap_envelope   = O ⊕ disk(construction_gap)
+maximal_safe            = panel_keep_in \ obstacle_gap_envelope
+regularization_core     = maximal_safe ⊖ disk(q)
+opened_safe             = (regularization_core ⊕ disk(q)) ∩ maximal_safe
+
+H = graph whose vertices are the connected components of opened_safe,
+    with an edge (i, j) exactly when distance(component_i, component_j) < 2v
+
+x*                      = arg max Σ area(component_i) x_i
+                          subject to x_i + x_j ≤ 1 for every edge (i, j) in H
+                          and x_i ∈ {0, 1}
+safe                    = union of component_i for which x*_i = 1
+removed_by_opening      = maximal_safe \ opened_safe
+removed_for_gap         = opened_safe \ safe
 ```
 
-This is deliberately expressed as two offsets and one Boolean difference. It
-does not contain geometric recognition rules for tooling holes, fiducials,
-V-scores, annotations, or individual shapes.
+The last two offsets are a morphological opening by a disk. They round convex
+tips, break necks narrower than the disk diameter, and remove components unable
+to contain the disk without geometric recognition rules or topology heuristics.
+The intersection makes the opening explicitly anti-extensive despite
+polygon-offset approximation: regularization can only remove clearance-safe
+material, never add material outside `maximal_safe`.
+
+The gap envelope is the dual construction. The outside of the panel and the
+obstacle union are treated as one hard forbidden phase: the panel is eroded
+and the obstacles are dilated by the same construction gap. This prevents
+diagonal shortcuts where an obstacle envelope meets a panel edge. For a
+line-like obstacle, the default creates a 2.05 mm corridor instead of the
+1.05 mm corridor produced by clearance alone.
+
+Opening removes copper slivers, but it cannot choose which side of a narrow
+gap should survive. That is a topology choice rather than another local
+offset. The component graph makes the choice explicit and order-independent:
+retain the conflict-free subset with maximum total area. Each connected
+conflict cluster is solved exactly by branch-and-bound; disconnected clusters
+are independent, and equal-area optima use the stable area/bounding-box order.
+Exact segment distance with bounding-box pruning finds graph edges without
+retaining every component dilation in memory. On a detected conflict only, the
+harness constructs the overlapping dilations as debug geometry.
+
+The final optimized union is not a monotone set-valued function of clearance,
+feature radius, gap radius, or obstacle additions. Those changes shrink the
+pre-selection geometry, but can split components or change the maximum-area
+independent set. Equal-area coordinate tie breaks likewise mean rotations and
+reflections preserve the objective value and certificate, not necessarily the
+chosen union. Correctness is defined by the certificate, not by nesting outputs
+from different parameter values.
 
 The independent safety certificate is:
 
 ```text
 C = safe ⊕ disk(r)
 
+safe \ maximal_safe = ∅
 C \ P = ∅
 C ∩ O = ∅
+safe \ open(safe, q) = ∅
+for every pair of distinct components i, j:
+    (component_i ⊕ disk(v)) ∩ (component_j ⊕ disk(v)) = ∅
 ```
 
 The certificate uses the nominal 0.5 mm, not the construction clearance. Its
-two violation regions are retained as first-class debug output.
+feature and pairwise-gap checks use the nominal radii. Numerical offset-only
+fragments are removed with an opening by `e`; geometric violations survive
+that filter and are retained as first-class debug output. The broader
+`close(safe, v) \ safe` is also emitted as a non-gating diagnostic: it finds
+concave notches within one component as well as gaps between components, so it
+is deliberately not the minimum-intercomponent-gap contract.
 
 ## Development harness
 
@@ -65,6 +119,8 @@ Useful options:
 
 ```text
 --clearance-mm <mm>                 nominal requirement; default 0.5
+--minimum-feature-radius-mm <mm>    disk-opening radius; default 1.0
+--minimum-gap-radius-mm <mm>        void disk radius; default 1.0
 --numerical-guard-mm <mm>           construction guard; default 0.025
 --check-area-tolerance-mm2 <mm²>    validation threshold; default 0.0001
 --require-a-series-auto             reject manual and minimum-fallback arrays
@@ -101,11 +157,21 @@ Each run overwrites a deterministic artifact set:
 | `20-material-removal.svg` | Fabrication material removal `M` |
 | `30-support-features.svg` | Cross-layer support footprint `G` |
 | `40-raw-obstacles.svg` | Union `O` |
-| `50-panel-keep-in.svg` | Eroded panel |
+| `50-panel-clearance-keep-in.svg` | Panel eroded by the construction clearance |
+| `55-panel-gap-keep-in.svg` | Panel eroded by the construction gap radius |
 | `60-obstacle-clearance.svg` | Dilated obstacles |
-| `70-safe-region.svg` | Final safe region |
-| `80-clearance-certificate.svg` | `safe` dilated by nominal clearance |
-| `90-validation-violations.svg` | Certificate leaks and overlaps |
+| `65-obstacle-gap-envelope.svg` | Obstacles dilated to the minimum-gap radius |
+| `70-maximal-safe-region.svg` | Maximal clearance-safe set before regularization |
+| `75-regularization-core.svg` | Centers where the minimum-feature disk fits |
+| `78-opened-safe-region.svg` | Result after minimum-feature opening |
+| `80-removed-by-opening.svg` | Material removed by the disk opening |
+| `85-removed-by-gap-separation.svg` | Whole components removed to enforce pairwise gaps |
+| `88-removed-by-regularization.svg` | All material removed by both stages |
+| `90-safe-region.svg` | Final regularized safe region |
+| `100-clearance-certificate.svg` | `safe` dilated by nominal clearance |
+| `105-minimum-gap-violations.svg` | Overlap between nominal dilations of distinct components |
+| `106-void-closing-additions.svg` | Non-gating broad closing diagnostic, including internal notches |
+| `110-validation-violations.svg` | Subset, clearance, feature, and gap violations |
 | `support-layers/*.svg` | Non-empty support footprints by source layer |
 | `regions.json` | Every ring, bounding box, included/excluded count, and check |
 
@@ -177,13 +243,18 @@ Current A-series results all have complete support-path coverage:
 
 | Case | Sheet | Boards | Safe area | Safe fraction | Certificate |
 |---|---|---:|---:|---:|---|
-| Auto Icarus | A7 | 2 | 4951.798 mm² | 63.8% | pass |
-| MicFlex | A7 | 4 | 5012.865 mm² | 64.6% | pass |
-| Blackstar | A6 | 1 | 9588.610 mm² | 61.7% | pass |
-| ControlHub | A5 | 1 | 15168.215 mm² | 48.8% | pass |
+| Auto Icarus | A7 | 2 | 4877.093 mm² | 62.8% | pass |
+| MicFlex | A7 | 4 | 4897.722 mm² | 63.1% | pass |
+| Blackstar | A6 | 1 | 9538.244 mm² | 61.4% | pass |
+| ControlHub | A5 | 1 | 15111.933 mm² | 48.6% | pass |
 
-These values are useful as investigation baselines, not long-lived golden
-numbers until the offset backend and error budget are finalized.
+Across the 20-array auto-panelizer corpus, both regularization stages retained
+90.18% to 99.88% of the maximal safe area and discarded 276 gap-conflicting
+components. Every final component passed a second independent 1.0 mm erosion;
+the smallest component was 60.441 mm² and the smallest component bounding-box
+span was 6.284 mm. Every subset, nominal-clearance, minimum-feature, and
+pairwise-gap certificate passed. These values are useful as investigation
+baselines, not long-lived golden numbers.
 
 ## Fast iteration loop
 
@@ -194,8 +265,17 @@ numbers until the offset backend and error budget are finalized.
    cargo test -p pcb-ir geom::region
    ```
 
-3. Regenerate auto Icarus A7, MicFlex A7, Blackstar A6, and ControlHub A5 into
-   the same output directories. Always pass `--require-a-series-auto`.
+3. Build the harness once in release mode, then regenerate auto Icarus A7,
+   MicFlex A7, Blackstar A6, and ControlHub A5 into the same output
+   directories. Always pass `--require-a-series-auto` and put a bounded timeout
+   around each corpus case:
+
+   ```bash
+   cargo build --release -p pcb-ipc2581-tools \
+     --example board_array_balancing_region
+   gtimeout 20s target/release/examples/board_array_balancing_region \
+     path/to/array.xml --output path/to/report --require-a-series-auto
+   ```
 4. Check the command summary for:
 
    - complete painted-path coverage;
@@ -211,8 +291,10 @@ numbers until the offset backend and error budget are finalized.
      on the rails;
    - V-cut support contains physical score lines but no callout arrows or text;
    - obstacle clearance is round and continuous at corners;
+   - the minimum-gap envelope creates visibly usable void corridors;
    - the green safe region is confined to true non-board support material;
-   - violation layers are empty.
+   - pink discarded components explain every minimum-gap topology choice;
+   - minimum-feature and minimum-gap violation layers are empty.
 
 6. Compare `regions.json` before and after. Area, ring count, vertex count, and
    per-layer contributions usually locate an unintended change faster than an
@@ -233,17 +315,20 @@ The generic operations belong in `pcb-ir`, independent of IPC:
 
 - construct a footprint from painted paths;
 - union, intersection, and difference of `ContourSet`s;
-- disk dilation and erosion;
+- disk dilation, erosion, opening, and closing;
 - compute and retain certificate violation regions.
 
 `ContourSet` provides `from_painted_paths` and
-`ContourSet::disk_erode`. Dilation and erosion use `i_overlay`'s
-topology-aware outline offset over canonical rings. Its sign-aware builders
-offset outer contours and holes in opposite directions, after which the result
-is regularized through the existing Boolean kernel. Round-join segmentation is
-derived from `STROKE_OUTLINE_MM`, giving the arc approximation an explicit
-sagitta bound. Union is an actual `OverlayRule::Union`, so overlap cannot
-cancel filled material through winding arithmetic.
+`ContourSet::disk_open` and `ContourSet::disk_close`. Dilation and erosion use
+`i_overlay`'s topology-aware outline offset over canonical rings. Its
+sign-aware builders offset outer contours and holes in opposite directions,
+after which the result is regularized through the existing Boolean kernel.
+Round-join segmentation is derived from `STROKE_OUTLINE_MM`, giving the arc
+approximation an explicit sagitta bound. Union is an actual
+`OverlayRule::Union`, so overlap cannot cancel filled material through winding
+arithmetic. Opening clips its dilation back to the source and closing unions
+its erosion with the source, preserving their subset and superset guarantees
+at polygon tolerance.
 
 The construction guard and nominal-clearance certificate remain separate.
 That makes approximation error conservative and testable: construct with
@@ -267,6 +352,8 @@ pub struct BoardArrayBalancingInput {
 
 pub struct BalancingRegionOptions {
     pub clearance_mm: f64,
+    pub minimum_feature_radius_mm: f64,
+    pub minimum_gap_radius_mm: f64,
     pub numerical_guard_mm: f64,
 }
 
@@ -314,21 +401,23 @@ browser viewers, Clap, or the source IPC parser.
 
 The versioned internal debug schema retains:
 
-- nominal clearance, error budget, and construction clearance;
+- nominal clearance, feature radius, gap radius, error budget, and both
+  construction radii;
 - source-layer feature/path counts and unsupported-path diagnostics;
 - all four semantic inputs;
-- both offset results;
+- the clearance and minimum-gap obstacle envelopes;
+- maximal safe region, opening core, and material removed by regularization;
 - final safe region;
-- certificate footprint and violation regions;
+- certificate footprint plus clearance, minimum-feature, and minimum-gap
+  violation regions;
 - geometry-kernel tolerance/scale metadata.
 
 Production calls can consume only `safe_region`; tests and diagnostics retain
 the full bundle. The renderer does not recompute intermediate regions.
 
 The reusable library boundary, fail-closed collector, certificate, tests, and
-debug-harness adapter are implemented. Wiring this API into board-array
-creation or a copper-balancing command, and emitting the safe geometry into an
-IPC/manufacturing artifact, are intentionally left out.
+debug-harness adapter are implemented. Automatic board-array creation consumes
+the certified region before balance copper is emitted.
 
 ## Validation plan
 
@@ -350,16 +439,25 @@ Use analytic shapes with known behavior:
 
 For generated valid regions:
 
-- increasing clearance cannot increase `safe`;
-- adding obstacles cannot increase `safe`;
-- rigid translation, rotation, and mirroring commute with the result;
+- increasing construction clearance or adding obstacles cannot enlarge
+  `maximal_safe`;
+- increasing the feature-disk radius cannot enlarge `opened_safe` for a fixed
+  `maximal_safe`;
+- rigid translation commutes with the result;
 - `safe ⊆ panel_keep_in`;
+- `safe ⊆ maximal_safe`;
 - `safe ∩ obstacle_clearance = ∅`;
+- `safe ∩ obstacle_gap_envelope = ∅`;
+- `safe \ open(safe, q) = ∅`;
+- radius-`v` dilations of every pair of distinct `safe` components are
+  disjoint;
 - `(safe ⊕ disk(r)) \ P = ∅`;
 - `(safe ⊕ disk(r)) ∩ O = ∅`.
 
-The last two are the acceptance certificate. Retain violation geometry on
-failure; a Boolean alone is not enough to debug a numerical case.
+These required checks form the acceptance certificate. Broader disk-closing
+additions remain diagnostic-only because they also include notches within one
+component. Retain violation geometry on failure; a Boolean alone is not enough
+to debug a numerical case.
 
 ### IPC integration fixtures
 
@@ -394,6 +492,8 @@ The safe-region implementation is ready for a copper-balancing consumer when:
 - the fixed-grid/offset error budget is explicit and tested;
 - the nominal 0.5 mm certificate passes on the A7, A6, and A5 auto-panel
   baselines, all compact fixtures, and the wider survey topology suite;
+- the 2 mm minimum-feature and minimum-gap certificates pass on the same
+  corpus;
 - auto Icarus, MicFlex, Blackstar, ControlHub, complex, nested, and
   empty-region visual reviews are clean;
 - the result is deterministic and fast enough to regenerate during ordinary
