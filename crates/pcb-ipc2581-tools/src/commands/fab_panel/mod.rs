@@ -56,22 +56,19 @@ impl FabPanelSpec {
     /// The rectangular packing domain after reserving fabrication process
     /// margins. The physical panel profile remains the full stock size.
     fn usable_bbox(self) -> Result<BBox> {
-        let minimum = pcb_ir::dialects::ipc::relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM;
         for (side, value) in [
             ("top", self.edge_margin_mm.top),
             ("right", self.edge_margin_mm.right),
             ("bottom", self.edge_margin_mm.bottom),
             ("left", self.edge_margin_mm.left),
         ] {
-            if !value.is_finite() || value < minimum {
-                bail!(
-                    "fabrication panel {side} edge margin must be at least {minimum} mm; got {value} mm"
-                );
+            if !value.is_finite() || value < 0.0 {
+                bail!("fabrication panel {side} edge margin must be non-negative; got {value} mm");
             }
         }
-        if !self.panel_gap_mm.is_finite() || self.panel_gap_mm < minimum {
+        if !self.panel_gap_mm.is_finite() || self.panel_gap_mm < 0.0 {
             bail!(
-                "fabrication panel gap must be at least {minimum} mm; got {} mm",
+                "fabrication panel gap must be non-negative; got {} mm",
                 self.panel_gap_mm
             );
         }
@@ -279,11 +276,7 @@ fn create_fab_panel_xml_with_spec(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let placements = pack(
-        &items,
-        spec.usable_size()?,
-        dimension_um(spec.panel_gap_mm)?,
-    )?;
+    let placements = pack(&items, spec.usable_size()?, spacing_um(spec.panel_gap_mm)?)?;
 
     xml::write_fab_panel_xml(
         &sources,
@@ -559,6 +552,14 @@ fn dimension_um(value_mm: f64) -> Result<u32> {
     let value = (value_mm * MICROMETERS_PER_MM).ceil();
     if !value.is_finite() || value <= 0.0 || value > f64::from(u32::MAX) {
         bail!("assembly panel dimension {value_mm} mm is outside the supported range");
+    }
+    Ok(value as u32)
+}
+
+fn spacing_um(value_mm: f64) -> Result<u32> {
+    let value = (value_mm * MICROMETERS_PER_MM).ceil();
+    if !value.is_finite() || value < 0.0 || value > f64::from(u32::MAX) {
+        bail!("fabrication panel spacing {value_mm} mm is outside the supported range");
     }
     Ok(value as u32)
 }

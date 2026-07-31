@@ -11,7 +11,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added common fabrication panel sizes to `pcb ipc2581 fab-panel create`.
-- Fabrication-panel profile Gerbers now include tool-compensated routing geometry around every assembly panel.
 - Added reusable IPC board-array copper-balancing safe-region computation and clearance certification to `pcb-ir`.
 
 ### Changed
@@ -24,6 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fab panels now reserve configurable process margins.
+- Split fab-panel outlines and cutouts into separate Gerbers.
 
 ## [0.4.15] - 2026-07-29
 

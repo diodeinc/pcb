@@ -52,6 +52,7 @@ impl<Symbol> LayoutGraph<Symbol> {
 pub struct LayoutStep<Symbol> {
     pub source_step_ref: Symbol,
     pub kind: LayoutStepKind,
+    pub purpose: LayoutPurpose,
     pub datum: Point,
     /// Spans `doc.profiles`.
     pub profiles: Span,
@@ -66,6 +67,14 @@ pub enum LayoutStepKind {
     Tooling,
     Ic,
     Unknown,
+}
+
+/// Manufacturing purpose of a layout step after source interpretation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LayoutPurpose {
+    #[default]
+    Product,
+    FabricationPanel,
 }
 
 /// Compact placement edge from a parent step or parent instance to a child step.

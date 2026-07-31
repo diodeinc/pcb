@@ -563,6 +563,19 @@ fn created_board_array_profile_gerber_derives_vscore_reliefs() {
     assert!(!xml.contains("<SlotCavity"));
 
     let ipc = Ipc2581::parse(&xml).unwrap();
+    let layout = geometry::extract_layout(&ipc).unwrap();
+    let fabrication_profile = geometry::board_array_fabrication_profile(
+        &ipc,
+        &layout,
+        &geometry::board_array_vscore_lines(&ipc).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        fabrication_profile.purpose,
+        pcb_ir::dialects::ipc::LayoutPurpose::Product
+    );
+    assert!(fabrication_profile.assembly_panel_outlines.is_empty());
+
     let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
     let vcut = package
         .files

@@ -18,8 +18,8 @@ use pcb_ir::dialects::artwork::{
     PaintStage,
 };
 use pcb_ir::dialects::ipc::{
-    BoardArrayFabricationProfile, Feature, FeatureBucket, FeatureDomain, FeatureOperation,
-    FeatureRole, FiducialKind, PlatingKind, ProfileSet, View, profile_occurrences_for, relief,
+    Feature, FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind,
+    LayoutPurpose, PlatingKind, ProfileSet, View, profile_occurrences_for, relief,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
@@ -116,11 +116,10 @@ pub fn build_gerber_x2_files_with_options(
         });
     }
     if view == View::ArrayFlattened {
-        if let Some(file) =
-            board_array_profile_gerber_file(ipc, options.relief_debug_dir.as_deref())?
-        {
-            files.push(file);
-        }
+        files.extend(board_array_profile_gerber_files(
+            ipc,
+            options.relief_debug_dir.as_deref(),
+        )?);
     } else if !has_profile_plan && let Some(file) = synthetic_profile_gerber_file(ipc, view)? {
         files.push(file);
     }
@@ -470,12 +469,11 @@ fn synthetic_profile_gerber_file(ipc: &Ipc2581, view: View) -> Result<Option<Ger
     }))
 }
 
-fn board_array_profile_gerber_file(
+fn board_array_profile_gerber_files(
     ipc: &Ipc2581,
     relief_debug_dir: Option<&Path>,
-) -> Result<Option<GerberX2File>> {
+) -> Result<Vec<GerberX2File>> {
     let doc = geometry::extract_layout(ipc)?;
-    let is_fab_panel = geometry::is_generated_fab_panel(ipc, &doc);
     let score_lines = geometry::board_array_vscore_lines(ipc)?;
     let profile = if let Some(debug_dir) = relief_debug_dir {
         let (profile, relief_debug) =
@@ -485,17 +483,48 @@ fn board_array_profile_gerber_file(
     } else {
         geometry::board_array_fabrication_profile(ipc, &doc, &score_lines)?
     };
-    if profile.array_outlines.is_empty() && profile.material_removal.is_empty() {
-        return Ok(None);
+    if profile.purpose == LayoutPurpose::Product {
+        let mut contour_groups = profile.array_outlines;
+        contour_groups.push(profile.material_removal);
+        return Ok(profile_gerber_file(
+            "Board Array Profile",
+            "Board_Array_Profile.gm1",
+            contour_groups,
+        )?
+        .into_iter()
+        .collect());
     }
 
+    Ok([
+        profile_gerber_file(
+            "Fab Panel Outline",
+            "Fab_Panel_Outline.gm1",
+            profile.array_outlines,
+        )?,
+        profile_gerber_file(
+            "Assembly Panel Outlines",
+            "Assembly_Panel_Outlines.gm1",
+            profile.assembly_panel_outlines,
+        )?,
+        profile_gerber_file(
+            "Board Cutouts",
+            "Board_Cutouts.gm1",
+            vec![profile.material_removal],
+        )?,
+    ]
+    .into_iter()
+    .flatten()
+    .collect())
+}
+
+fn profile_gerber_file(
+    layer_name: &str,
+    filename: &str,
+    contour_groups: Vec<Vec<ContourBuf>>,
+) -> Result<Option<GerberX2File>> {
     let mut artwork = GerberArtwork::new();
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
-        name: if is_fab_panel {
-            "Fab Panel Profile".to_string()
-        } else {
-            "Board Array Profile".to_string()
-        },
+        name: layer_name.to_string(),
         role: LayerRole::Profile,
         side: IrSide::None,
         objects: Span::EMPTY,
@@ -506,7 +535,12 @@ fn board_array_profile_gerber_file(
         ),
     });
     let style = ProfileGerberStyle::default();
-    append_board_array_profile(&mut artwork, artwork_layer, &profile, style);
+    for contours in contour_groups
+        .into_iter()
+        .filter(|contours| !contours.is_empty())
+    {
+        append_profile_payloads(&mut artwork, artwork_layer, contours, style);
+    }
     if artwork.layers[artwork_layer as usize].objects.is_empty() {
         return Ok(None);
     }
@@ -514,11 +548,7 @@ fn board_array_profile_gerber_file(
     let layer = lower_artwork_layer(&artwork)?;
     let contents = write_layer(&layer)?;
     Ok(Some(GerberX2File {
-        filename: if is_fab_panel {
-            "Fab_Panel_Profile.gm1".to_string()
-        } else {
-            "Board_Array_Profile.gm1".to_string()
-        },
+        filename: filename.to_string(),
         layer,
         contents,
     }))
@@ -818,20 +848,6 @@ fn append_profile_occurrences(
             occurrence.transform,
             style,
         );
-    }
-}
-
-fn append_board_array_profile(
-    artwork: &mut GerberArtwork,
-    layer: u32,
-    profile: &BoardArrayFabricationProfile,
-    style: ProfileGerberStyle,
-) {
-    for outline in &profile.array_outlines {
-        append_profile_payloads(artwork, layer, outline.clone(), style);
-    }
-    if !profile.material_removal.is_empty() {
-        append_profile_payloads(artwork, layer, profile.material_removal.clone(), style);
     }
 }
 
