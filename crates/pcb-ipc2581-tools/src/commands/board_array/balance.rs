@@ -29,15 +29,14 @@ use pcb_ir::geom::{Affine2, ContourBuf, ContourSet, FillRule, PathOp, Point, tol
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 
-/// Whole-panel copper density requested for every copper layer.
-pub const AUTOMATIC_BOARD_ARRAY_TARGET_DENSITY: f64 = 0.50;
-
 const CERTIFICATE_AREA_TOLERANCE_MM2: f64 = 1e-4;
 
 /// One copper layer's automatic balancing plan and generated IPC features.
 #[derive(Debug, Clone)]
 pub struct AutomaticBoardArrayLayerBalance {
     pub layer_name: String,
+    /// Copper density measured inside the repeated board footprints.
+    pub board_target_density: f64,
     pub existing_copper: ContourSet,
     pub safe_region: ContourSet,
     pub result: DenseCopperBalanceResult,
@@ -51,11 +50,14 @@ pub struct AutomaticBoardArrayCopperBalance {
     pub board_footprints: ContourSet,
     pub common_safe_region: ContourSet,
     pub retained_area_mm2: f64,
-    pub target_density: f64,
     pub layers: Vec<AutomaticBoardArrayLayerBalance>,
 }
 
 /// Plan best-effort copper balancing for every copper layer in a board array.
+///
+/// Each layer targets the copper density measured inside the repeated board
+/// footprints, extending the board's own density into controllable panel
+/// material instead of imposing one universal density across the stackup.
 ///
 /// `ipc` must describe the completed, not-yet-balanced array so that generated
 /// rails, V-scores, tooling holes, and fiducials participate in safe-region
@@ -114,6 +116,7 @@ pub fn generate_automatic_board_array_copper_balance(
     let board_footprints = collection.input.board_footprints;
     let common_safe_region = balancing_region.safe_region;
     let retained_area_mm2 = panel_outer.area();
+    let board_area_mm2 = board_footprints.area();
     let lattice_origin = panel_outer.bbox.min;
     let mut layers = Vec::new();
 
@@ -125,6 +128,9 @@ pub fn generate_automatic_board_array_copper_balance(
     {
         let layer_name = ipc.resolve(layer.name).to_string();
         let existing_copper = composed_copper_image(ipc, &layer_name)?.intersection(&panel_outer);
+        let board_target_density = (existing_copper.intersection(&board_footprints).area()
+            / board_area_mm2)
+            .clamp(0.0, 1.0);
         // This is normally redundant because panel-root copper features are
         // already support obstacles, but makes the solver's disjoint-input
         // contract explicit and robust to sub-tolerance extraction overlap.
@@ -135,7 +141,7 @@ pub fn generate_automatic_board_array_copper_balance(
                 safe_region: &safe_region,
                 retained_area_mm2,
                 existing_copper_area_mm2: existing_copper.area(),
-                target_density: AUTOMATIC_BOARD_ARRAY_TARGET_DENSITY,
+                target_density: board_target_density,
                 lattice_origin,
             },
         )
@@ -144,6 +150,7 @@ pub fn generate_automatic_board_array_copper_balance(
         })?;
         layers.push(AutomaticBoardArrayLayerBalance {
             layer_name,
+            board_target_density,
             existing_copper,
             safe_region,
             result,
@@ -156,7 +163,6 @@ pub fn generate_automatic_board_array_copper_balance(
         board_footprints,
         common_safe_region,
         retained_area_mm2,
-        target_density: AUTOMATIC_BOARD_ARRAY_TARGET_DENSITY,
         layers,
     })
 }
