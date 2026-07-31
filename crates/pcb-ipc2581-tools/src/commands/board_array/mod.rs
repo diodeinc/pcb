@@ -191,59 +191,15 @@ enum BoardArrayValidationMode {
     AutoMinimumPanel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BoardMarginMm {
-    pub top: f64,
-    pub right: f64,
-    pub bottom: f64,
-    pub left: f64,
-}
+pub type BoardMarginMm = super::EdgeInsetsMm;
 
 impl BoardMarginMm {
-    pub fn all(value: f64) -> Self {
-        Self {
-            top: value,
-            right: value,
-            bottom: value,
-            left: value,
-        }
-    }
-
-    pub fn from_css_shorthand(values: &[f64]) -> Result<Self> {
-        Self::from_css_shorthand_named("board margin", values)
-    }
-
-    pub fn from_css_shorthand_named(name: &'static str, values: &[f64]) -> Result<Self> {
-        match values {
-            [all] => Ok(Self::all(*all)),
-            [vertical, horizontal] => Ok(Self {
-                top: *vertical,
-                right: *horizontal,
-                bottom: *vertical,
-                left: *horizontal,
-            }),
-            [top, horizontal, bottom] => Ok(Self {
-                top: *top,
-                right: *horizontal,
-                bottom: *bottom,
-                left: *horizontal,
-            }),
-            [top, right, bottom, left] => Ok(Self {
-                top: *top,
-                right: *right,
-                bottom: *bottom,
-                left: *left,
-            }),
-            _ => bail!("{name} expects 1 to 4 values"),
-        }
-    }
-
     fn horizontal_gap(self) -> f64 {
-        self.left + self.right
+        self.horizontal_sum()
     }
 
     fn vertical_gap(self) -> f64 {
-        self.top + self.bottom
+        self.vertical_sum()
     }
 
     fn board_margin_sides(self) -> [(&'static str, f64); 4] {

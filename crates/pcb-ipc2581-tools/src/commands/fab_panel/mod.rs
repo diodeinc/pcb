@@ -7,8 +7,9 @@ use ipc2581::Ipc2581;
 use ipc2581::edit::{Doc, Node};
 use ipc2581::types::{Spec, Units};
 use pcb_ir::dialects::ipc::{LayoutStepKind, root_step};
-use pcb_ir::geom::BBox;
+use pcb_ir::geom::{BBox, Point};
 
+use super::EdgeInsetsMm;
 use crate::geometry;
 use crate::utils::file as file_utils;
 
@@ -17,19 +18,19 @@ mod xml;
 
 use packing::{MAX_ITEM_COUNT, Size, pack};
 
-const EDGE_RAIL_MM: f64 = 5.0;
-const PANEL_GAP_MM: f64 = 5.0;
+const DEFAULT_EDGE_MARGIN_MM: EdgeInsetsMm = EdgeInsetsMm::new(50.8, 25.4, 50.8, 25.4);
+const DEFAULT_PANEL_GAP_MM: f64 = 5.0;
 const MICROMETERS_PER_MM: f64 = 1_000.0;
 
-const PANEL_GAP_UM: u32 = 5_000;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FabPanelDimensions {
+pub struct FabPanelSpec {
     width_mm: f64,
     height_mm: f64,
+    pub edge_margin_mm: EdgeInsetsMm,
+    pub panel_gap_mm: f64,
 }
 
-impl FabPanelDimensions {
+impl FabPanelSpec {
     pub const INCHES_12_X_18: Self = Self::from_inches(12.0, 18.0);
     pub const INCHES_16_X_18: Self = Self::from_inches(16.0, 18.0);
     pub const INCHES_18_X_24: Self = Self::from_inches(18.0, 24.0);
@@ -47,18 +48,58 @@ impl FabPanelDimensions {
         Self {
             width_mm: width * 25.4,
             height_mm: height * 25.4,
+            edge_margin_mm: DEFAULT_EDGE_MARGIN_MM,
+            panel_gap_mm: DEFAULT_PANEL_GAP_MM,
         }
     }
 
+    /// The rectangular packing domain after reserving fabrication process
+    /// margins. The physical panel profile remains the full stock size.
+    fn usable_bbox(self) -> Result<BBox> {
+        let minimum = pcb_ir::dialects::ipc::relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM;
+        for (side, value) in [
+            ("top", self.edge_margin_mm.top),
+            ("right", self.edge_margin_mm.right),
+            ("bottom", self.edge_margin_mm.bottom),
+            ("left", self.edge_margin_mm.left),
+        ] {
+            if !value.is_finite() || value < minimum {
+                bail!(
+                    "fabrication panel {side} edge margin must be at least {minimum} mm; got {value} mm"
+                );
+            }
+        }
+        if !self.panel_gap_mm.is_finite() || self.panel_gap_mm < minimum {
+            bail!(
+                "fabrication panel gap must be at least {minimum} mm; got {} mm",
+                self.panel_gap_mm
+            );
+        }
+
+        let max_x = self.width_mm - self.edge_margin_mm.right;
+        let max_y = self.height_mm - self.edge_margin_mm.top;
+        if max_x <= self.edge_margin_mm.left {
+            bail!("fabrication panel edge margins leave no usable width");
+        }
+        if max_y <= self.edge_margin_mm.bottom {
+            bail!("fabrication panel edge margins leave no usable height");
+        }
+        Ok(BBox::new(
+            Point::new(self.edge_margin_mm.left, self.edge_margin_mm.bottom),
+            Point::new(max_x, max_y),
+        ))
+    }
+
     fn usable_size(self) -> Result<Size> {
+        let usable = self.usable_bbox()?;
         Ok(Size {
-            width: dimension_um(self.width_mm - 2.0 * EDGE_RAIL_MM)?,
-            height: dimension_um(self.height_mm - 2.0 * EDGE_RAIL_MM)?,
+            width: dimension_um(usable.width())?,
+            height: dimension_um(usable.height())?,
         })
     }
 }
 
-impl Default for FabPanelDimensions {
+impl Default for FabPanelSpec {
     fn default() -> Self {
         Self::INCHES_18_X_24
     }
@@ -136,7 +177,7 @@ struct SurfaceFinishSignature {
     products: Vec<(String, Option<String>)>,
 }
 
-pub fn execute(inputs: &[PathBuf], output: &Path, dimensions: FabPanelDimensions) -> Result<()> {
+pub fn execute(inputs: &[PathBuf], output: &Path, spec: FabPanelSpec) -> Result<()> {
     if inputs.is_empty() {
         bail!("at least one assembly panel IPC-2581 file is required");
     }
@@ -164,7 +205,7 @@ pub fn execute(inputs: &[PathBuf], output: &Path, dimensions: FabPanelDimensions
         occurrences.push(source_index);
     }
 
-    let generated = create_fab_panel_xml_with_dimensions(&source_xml, &occurrences, dimensions)?;
+    let generated = create_fab_panel_xml_with_spec(&source_xml, &occurrences, spec)?;
     if output.as_os_str() == "-" {
         io::stdout().lock().write_all(generated.as_bytes())?;
         eprintln!("✓ Created IPC-2581 fabrication panel on stdout");
@@ -180,13 +221,13 @@ pub fn execute(inputs: &[PathBuf], output: &Path, dimensions: FabPanelDimensions
 
 #[cfg(test)]
 fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<String> {
-    create_fab_panel_xml_with_dimensions(source_xml, occurrences, FabPanelDimensions::default())
+    create_fab_panel_xml_with_spec(source_xml, occurrences, FabPanelSpec::default())
 }
 
-fn create_fab_panel_xml_with_dimensions(
+fn create_fab_panel_xml_with_spec(
     source_xml: &[String],
     occurrences: &[usize],
-    dimensions: FabPanelDimensions,
+    spec: FabPanelSpec,
 ) -> Result<String> {
     if occurrences.is_empty() {
         bail!("at least one assembly panel is required");
@@ -238,14 +279,18 @@ fn create_fab_panel_xml_with_dimensions(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let placements = pack(&items, dimensions.usable_size()?, PANEL_GAP_UM)?;
+    let placements = pack(
+        &items,
+        spec.usable_size()?,
+        dimension_um(spec.panel_gap_mm)?,
+    )?;
 
     xml::write_fab_panel_xml(
         &sources,
         occurrences,
         &placements,
         &shared_stackup_layers,
-        dimensions,
+        spec,
     )
 }
 

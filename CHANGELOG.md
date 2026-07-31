@@ -21,6 +21,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Board-array balancing regions now enforce 2 mm minimum copper and gap widths with disk morphology, removing sharp corners, slivers, and narrow void corridors.
 - Split the Nix flake's `pcb` shim and `pcbc` compiler into independent package outputs.
 
+### Fixed
+
+- Fab panels now reserve configurable process margins.
+
 ## [0.4.15] - 2026-07-29
 
 ### Added

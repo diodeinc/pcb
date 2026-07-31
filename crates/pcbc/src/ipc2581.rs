@@ -221,7 +221,7 @@ enum BoardArrayCommands {
 
 #[derive(Subcommand)]
 enum FabPanelCommands {
-    /// Create a fabrication panel with 5 mm edge rails and 5 mm panel gaps
+    /// Create a fabrication panel with reserved process margins
     Create {
         /// Assembly panel IPC-2581 files. Repeat a path to request multiple copies.
         #[arg(
@@ -234,6 +234,12 @@ enum FabPanelCommands {
         /// Fabrication panel size in inches. Defaults to 18x24.
         #[arg(long, value_enum, value_name = "SIZE")]
         panel_size: Option<FabPanelSize>,
+        /// Edge margin in millimeters. Defaults to 50.8 vertical and 25.4 horizontal. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
+        #[arg(long, num_args = 1..=4, value_name = "MARGIN")]
+        edge_margin: Vec<f64>,
+        /// Gap between assembly panels in millimeters. Defaults to 5.
+        #[arg(long, value_name = "GAP")]
+        panel_gap: Option<f64>,
         /// Output IPC-2581 XML file, or '-' for stdout
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
@@ -253,12 +259,12 @@ enum FabPanelSize {
 }
 
 impl FabPanelSize {
-    fn dimensions(self) -> commands::fab_panel::FabPanelDimensions {
+    fn spec(self) -> commands::fab_panel::FabPanelSpec {
         match self {
-            Self::Inches12x18 => commands::fab_panel::FabPanelDimensions::INCHES_12_X_18,
-            Self::Inches16x18 => commands::fab_panel::FabPanelDimensions::INCHES_16_X_18,
-            Self::Inches18x24 => commands::fab_panel::FabPanelDimensions::INCHES_18_X_24,
-            Self::Inches21x24 => commands::fab_panel::FabPanelDimensions::INCHES_21_X_24,
+            Self::Inches12x18 => commands::fab_panel::FabPanelSpec::INCHES_12_X_18,
+            Self::Inches16x18 => commands::fab_panel::FabPanelSpec::INCHES_16_X_18,
+            Self::Inches18x24 => commands::fab_panel::FabPanelSpec::INCHES_18_X_24,
+            Self::Inches21x24 => commands::fab_panel::FabPanelSpec::INCHES_21_X_24,
         }
     }
 }
@@ -382,10 +388,21 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             FabPanelCommands::Create {
                 inputs,
                 panel_size,
+                edge_margin,
+                panel_gap,
                 output,
             } => {
-                let dimensions = panel_size.map(FabPanelSize::dimensions).unwrap_or_default();
-                commands::fab_panel::execute(&inputs, &output, dimensions)
+                let mut spec = panel_size.map(FabPanelSize::spec).unwrap_or_default();
+                if !edge_margin.is_empty() {
+                    spec.edge_margin_mm = commands::EdgeInsetsMm::from_css_shorthand_named(
+                        "edge margin",
+                        &edge_margin,
+                    )?;
+                }
+                if let Some(panel_gap) = panel_gap {
+                    spec.panel_gap_mm = panel_gap;
+                }
+                commands::fab_panel::execute(&inputs, &output, spec)
             }
         },
         Commands::View {

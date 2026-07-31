@@ -4,8 +4,8 @@ use pcb_ir::geom::BBox;
 
 use super::*;
 
-const FAB_PANEL_WIDTH_MM: f64 = FabPanelDimensions::INCHES_18_X_24.width_mm();
-const FAB_PANEL_HEIGHT_MM: f64 = FabPanelDimensions::INCHES_18_X_24.height_mm();
+const FAB_PANEL_WIDTH_MM: f64 = FabPanelSpec::INCHES_18_X_24.width_mm();
+const FAB_PANEL_HEIGHT_MM: f64 = FabPanelSpec::INCHES_18_X_24.height_mm();
 
 fn assembly_panel_xml(width_mm: f64, height_mm: f64) -> String {
     assembly_panel_xml_at(0.0, 0.0, width_mm, height_mm)
@@ -293,17 +293,17 @@ fn shares_the_first_stackup_across_sources_and_builds_full_fab_profile() {
         .collect::<Vec<_>>();
     assert_eq!(instances.len(), 2);
     for instance in &instances {
-        assert!(instance.bbox.min.x >= EDGE_RAIL_MM - 1e-9);
-        assert!(instance.bbox.min.y >= EDGE_RAIL_MM - 1e-9);
-        assert!(instance.bbox.max.x <= FAB_PANEL_WIDTH_MM - EDGE_RAIL_MM + 1e-9);
-        assert!(instance.bbox.max.y <= FAB_PANEL_HEIGHT_MM - EDGE_RAIL_MM + 1e-9);
+        assert!(instance.bbox.min.x >= DEFAULT_EDGE_MARGIN_MM.left - 1e-9);
+        assert!(instance.bbox.min.y >= DEFAULT_EDGE_MARGIN_MM.bottom - 1e-9);
+        assert!(instance.bbox.max.x <= FAB_PANEL_WIDTH_MM - DEFAULT_EDGE_MARGIN_MM.right + 1e-9);
+        assert!(instance.bbox.max.y <= FAB_PANEL_HEIGHT_MM - DEFAULT_EDGE_MARGIN_MM.top + 1e-9);
     }
     let first = instances[0].bbox;
     let second = instances[1].bbox;
-    let separated = first.max.x + PANEL_GAP_MM <= second.min.x + 1e-9
-        || second.max.x + PANEL_GAP_MM <= first.min.x + 1e-9
-        || first.max.y + PANEL_GAP_MM <= second.min.y + 1e-9
-        || second.max.y + PANEL_GAP_MM <= first.min.y + 1e-9;
+    let separated = first.max.x + DEFAULT_PANEL_GAP_MM <= second.min.x + 1e-9
+        || second.max.x + DEFAULT_PANEL_GAP_MM <= first.min.x + 1e-9
+        || first.max.y + DEFAULT_PANEL_GAP_MM <= second.min.y + 1e-9
+        || second.max.y + DEFAULT_PANEL_GAP_MM <= first.min.y + 1e-9;
     assert!(separated);
 }
 
@@ -338,21 +338,114 @@ fn repeating_an_input_reuses_its_definitions_and_adds_placements() {
 fn creates_supported_standard_fabrication_panel_sizes() {
     let sources = vec![assembly_panel_xml(100.0, 80.0)];
 
-    for dimensions in [
-        FabPanelDimensions::INCHES_12_X_18,
-        FabPanelDimensions::INCHES_16_X_18,
-        FabPanelDimensions::INCHES_18_X_24,
-        FabPanelDimensions::INCHES_21_X_24,
+    for (spec, usable_width, usable_height) in [
+        (FabPanelSpec::INCHES_12_X_18, 254.0, 355.6),
+        (FabPanelSpec::INCHES_16_X_18, 355.6, 355.6),
+        (FabPanelSpec::INCHES_18_X_24, 406.4, 508.0),
+        (FabPanelSpec::INCHES_21_X_24, 482.6, 508.0),
     ] {
-        let generated = create_fab_panel_xml_with_dimensions(&sources, &[0], dimensions).unwrap();
+        let generated = create_fab_panel_xml_with_spec(&sources, &[0], spec).unwrap();
         Ipc2581::validate(&generated).unwrap();
         let parsed = Ipc2581::parse(&generated).unwrap();
         let layout = geometry::extract_layout(&parsed).unwrap();
         let (_, root) = root_step(&layout).unwrap();
+        let usable = spec.usable_bbox().unwrap();
 
-        assert!((root.bbox.width() - dimensions.width_mm()).abs() < 1e-9);
-        assert!((root.bbox.height() - dimensions.height_mm()).abs() < 1e-9);
+        assert!((root.bbox.width() - spec.width_mm()).abs() < 1e-9);
+        assert!((root.bbox.height() - spec.height_mm()).abs() < 1e-9);
+        assert!((usable.width() - usable_width).abs() < 1e-9);
+        assert!((usable.height() - usable_height).abs() < 1e-9);
     }
+}
+
+#[test]
+fn writes_default_process_margin_and_usable_area_metadata() {
+    let generated = create_fab_panel_xml(&[assembly_panel_xml(100.0, 80.0)], &[0]).unwrap();
+
+    for metadata in [
+        r#"<NonstandardAttribute name="diode.fab_panel.schema_version" type="INTEGER" value="2"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.usable_width_mm" type="DOUBLE" value="406.4"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.usable_height_mm" type="DOUBLE" value="508"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_top_mm" type="DOUBLE" value="50.8"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_right_mm" type="DOUBLE" value="25.4"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_bottom_mm" type="DOUBLE" value="50.8"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_left_mm" type="DOUBLE" value="25.4"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.gap_mm" type="DOUBLE" value="5"/>"#,
+    ] {
+        assert!(generated.contains(metadata), "missing {metadata}");
+    }
+    assert!(!generated.contains("diode.fab_panel.edge_rail_mm"));
+}
+
+#[test]
+fn applies_asymmetric_process_margin_and_gap_overrides() {
+    let spec = FabPanelSpec {
+        edge_margin_mm: EdgeInsetsMm::new(30.0, 20.0, 10.0, 40.0),
+        panel_gap_mm: 7.0,
+        ..FabPanelSpec::INCHES_12_X_18
+    };
+    let generated =
+        create_fab_panel_xml_with_spec(&[assembly_panel_xml(100.0, 80.0)], &[0], spec).unwrap();
+    let parsed = Ipc2581::parse(&generated).unwrap();
+    let layout = geometry::extract_layout(&parsed).unwrap();
+    let instance = layout
+        .layout
+        .instances
+        .iter()
+        .find(|instance| instance.parent_instance.is_none())
+        .unwrap();
+    let usable = spec.usable_bbox().unwrap();
+
+    assert!(instance.bbox.min.x >= usable.min.x - 1e-9);
+    assert!(instance.bbox.min.y >= usable.min.y - 1e-9);
+    assert!(instance.bbox.max.x <= usable.max.x + 1e-9);
+    assert!(instance.bbox.max.y <= usable.max.y + 1e-9);
+    assert!((instance.bbox.center().x - usable.center().x).abs() < 0.001);
+    assert!((instance.bbox.center().y - usable.center().y).abs() < 0.001);
+    assert!(generated.contains(
+        r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_top_mm" type="DOUBLE" value="30"/>"#
+    ));
+    assert!(generated.contains(
+        r#"<NonstandardAttribute name="diode.fab_panel.gap_mm" type="DOUBLE" value="7"/>"#
+    ));
+}
+
+#[test]
+fn rejects_unsafe_or_empty_fabrication_panel_domains() {
+    let sources = [assembly_panel_xml(100.0, 80.0)];
+
+    let too_small_margin = FabPanelSpec {
+        edge_margin_mm: EdgeInsetsMm::new(50.8, 25.4, 50.8, 0.5),
+        ..FabPanelSpec::INCHES_18_X_24
+    };
+    let error = create_fab_panel_xml_with_spec(&sources, &[0], too_small_margin).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("left edge margin must be at least 1 mm")
+    );
+
+    let too_small_gap = FabPanelSpec {
+        panel_gap_mm: 0.5,
+        ..FabPanelSpec::INCHES_18_X_24
+    };
+    let error = create_fab_panel_xml_with_spec(&sources, &[0], too_small_gap).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("fabrication panel gap must be at least 1 mm")
+    );
+
+    let no_usable_width = FabPanelSpec {
+        edge_margin_mm: EdgeInsetsMm::new(50.8, 250.0, 50.8, 250.0),
+        ..FabPanelSpec::INCHES_18_X_24
+    };
+    let error = create_fab_panel_xml_with_spec(&sources, &[0], no_usable_width).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("edge margins leave no usable width")
+    );
 }
 
 #[test]
@@ -451,10 +544,10 @@ fn rotates_and_translates_a_nonzero_source_profile() {
 
     assert!((instance.bbox.width() - 400.0).abs() < 1e-9);
     assert!((instance.bbox.height() - 500.0).abs() < 1e-9);
-    assert!(instance.bbox.min.x >= EDGE_RAIL_MM - 1e-9);
-    assert!(instance.bbox.min.y >= EDGE_RAIL_MM - 1e-9);
-    assert!(instance.bbox.max.x <= FAB_PANEL_WIDTH_MM - EDGE_RAIL_MM + 1e-9);
-    assert!(instance.bbox.max.y <= FAB_PANEL_HEIGHT_MM - EDGE_RAIL_MM + 1e-9);
+    assert!(instance.bbox.min.x >= DEFAULT_EDGE_MARGIN_MM.left - 1e-9);
+    assert!(instance.bbox.min.y >= DEFAULT_EDGE_MARGIN_MM.bottom - 1e-9);
+    assert!(instance.bbox.max.x <= FAB_PANEL_WIDTH_MM - DEFAULT_EDGE_MARGIN_MM.right + 1e-9);
+    assert!(instance.bbox.max.y <= FAB_PANEL_HEIGHT_MM - DEFAULT_EDGE_MARGIN_MM.top + 1e-9);
 }
 
 #[test]
