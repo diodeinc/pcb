@@ -544,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multiple_features_inside_features() {
+    fn preserves_multiple_features_inside_features() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
@@ -558,11 +558,14 @@ mod tests {
         <LayerFeature layerRef="F.Cu">
           <Set>
             <Features>
-              <Line startX="0" startY="0" endX="1" endY="0"/>
+              <Xform rotation="90"/>
+              <Location x="10" y="20"/>
               <UserSpecial>
-                <RectCenter height="1"/>
+                <Line startX="0" startY="0" endX="1" endY="0">
+                  <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+                </Line>
               </UserSpecial>
-              <Line startX="0" startY="1" endX="1" endY="1"/>
+              <UserPrimitiveRef id="URECT_408"/>
             </Features>
           </Set>
         </LayerFeature>
@@ -571,8 +574,20 @@ mod tests {
   </Ecad>
 </IPC-2581>"#;
 
-        let error = Ipc2581::parse(xml).expect_err("multiple Features children must be rejected");
-        assert!(error.to_string().contains("exactly one Feature"));
+        let doc = Ipc2581::parse(xml).expect("parse multi-feature Features block");
+        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+
+        assert_eq!(set.features.len(), 2);
+        let ecad::SetFeature::UserPrimitive(user_primitive) = &set.features[0] else {
+            panic!("expected inline user primitive first");
+        };
+        assert_eq!((user_primitive.x, user_primitive.y), (10.0, 20.0));
+
+        let ecad::SetFeature::UserPrimitiveRef(primitive_ref) = &set.features[1] else {
+            panic!("expected user primitive reference second");
+        };
+        assert_eq!(doc.resolve(primitive_ref.id), "URECT_408");
+        assert_eq!((primitive_ref.x, primitive_ref.y), (10.0, 20.0));
     }
 
     #[test]

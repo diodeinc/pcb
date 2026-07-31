@@ -24,6 +24,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fab panels now reserve configurable process margins.
+- IPC-2581 parsing now preserves multiple feature children emitted in one `Features` block.
 - Split fab-panel outlines and cutouts into separate Gerbers.
 
 ## [0.4.15] - 2026-07-29

@@ -2231,19 +2231,16 @@ impl<'a> Parser<'a> {
         let mut offset = Point { x: 0.0, y: 0.0 };
         let mut xform_seen = false;
         let mut location_seen = false;
-        let mut feature = None;
+        // IPC-2581C specifies one Feature child, but KiCad emits multiple
+        // substitution-group children in a single Features container. Accept
+        // that de facto shape without relaxing the container's child ordering.
+        let mut features = Vec::new();
 
         for child in self.element_children(features_node) {
             let child_name = self.name(&child);
-            if is_features_feature_name(child_name) && feature.is_some() {
-                return Err(Ipc2581Error::InvalidStructure(
-                    "Features allows exactly one Feature child".to_string(),
-                ));
-            }
-
             match child_name {
                 "Xform" => {
-                    if xform_seen || location_seen || feature.is_some() {
+                    if xform_seen || location_seen || !features.is_empty() {
                         return Err(Ipc2581Error::InvalidStructure(
                             "Xform must be the first child of Features".to_string(),
                         ));
@@ -2251,7 +2248,7 @@ impl<'a> Parser<'a> {
                     xform_seen = true;
                 }
                 "Location" => {
-                    if feature.is_some() {
+                    if !features.is_empty() {
                         return Err(Ipc2581Error::InvalidStructure(
                             "Location must precede the Feature in Features".to_string(),
                         ));
@@ -2267,30 +2264,30 @@ impl<'a> Parser<'a> {
                 }
                 "Polygon" => {
                     let polygon = self.parse_polygon(&child, units)?;
-                    feature = Some(ecad::SetFeature::Polygon(Self::translate_polygon(
+                    features.push(ecad::SetFeature::Polygon(Self::translate_polygon(
                         polygon, offset,
                     )));
                 }
                 "Polyline" => {
-                    feature = Some(ecad::SetFeature::Polyline(
+                    features.push(ecad::SetFeature::Polyline(
                         self.parse_feature_polyline(&child, units, offset.x, offset.y)?,
                     ));
                 }
                 "Line" => {
-                    feature = Some(ecad::SetFeature::Line(
+                    features.push(ecad::SetFeature::Line(
                         self.parse_line(&child, units, offset.x, offset.y)?,
                     ));
                 }
                 "Arc" => {
-                    feature = Some(ecad::SetFeature::Arc(
+                    features.push(ecad::SetFeature::Arc(
                         self.parse_feature_arc(&child, units, offset.x, offset.y)?,
                     ));
                 }
                 "Contour" => {
-                    feature = Some(self.parse_contour_feature(&child, units, offset)?);
+                    features.push(self.parse_contour_feature(&child, units, offset)?);
                 }
                 "UserSpecial" => {
-                    feature = Some(ecad::SetFeature::UserPrimitive(
+                    features.push(ecad::SetFeature::UserPrimitive(
                         ecad::FeatureUserPrimitive {
                             primitive: self.parse_user_special(&child, units)?,
                             x: offset.x,
@@ -2299,7 +2296,7 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 "StandardPrimitiveRef" => {
-                    feature = Some(ecad::SetFeature::StandardPrimitiveRef(
+                    features.push(ecad::SetFeature::StandardPrimitiveRef(
                         ecad::FeaturePrimitiveRef {
                             id: self.required_attr(&child, "id", "StandardPrimitiveRef")?,
                             x: offset.x,
@@ -2308,7 +2305,7 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 "UserPrimitiveRef" => {
-                    feature = Some(ecad::SetFeature::UserPrimitiveRef(
+                    features.push(ecad::SetFeature::UserPrimitiveRef(
                         ecad::FeaturePrimitiveRef {
                             id: self.required_attr(&child, "id", "UserPrimitiveRef")?,
                             x: offset.x,
@@ -2324,9 +2321,11 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(vec![feature.ok_or(Ipc2581Error::MissingElement(
-            "Feature in Features",
-        ))?])
+        if features.is_empty() {
+            return Err(Ipc2581Error::MissingElement("Feature in Features"));
+        }
+
+        Ok(features)
     }
 
     fn parse_contour_feature(
@@ -3354,20 +3353,6 @@ fn is_standard_primitive_name(name: &str) -> bool {
             | "RectRound"
             | "Thermal"
             | "Triangle"
-    )
-}
-
-fn is_features_feature_name(name: &str) -> bool {
-    matches!(
-        name,
-        "Polygon"
-            | "Polyline"
-            | "Line"
-            | "Arc"
-            | "Contour"
-            | "UserSpecial"
-            | "StandardPrimitiveRef"
-            | "UserPrimitiveRef"
     )
 }
 
