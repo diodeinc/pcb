@@ -301,6 +301,11 @@ impl std::error::Error for BalancingRegionError {}
 /// This makes the unavoidable topology choice order-independent and preserves
 /// the greatest possible area without recognizing board features or encoding
 /// special cases.
+///
+/// The optimized final union is not necessarily nested when options or
+/// obstacles change: shrinking or splitting the opened components can change
+/// which independent set is optimal. Callers should rely on the returned
+/// certificate, not cross-parameter set monotonicity.
 pub fn board_array_balancing_region(
     input: &BoardArrayBalancingInput,
     options: BalancingRegionOptions,
@@ -597,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn increasing_clearance_cannot_increase_safe_region() {
+    fn larger_clearance_shrinks_maximal_region_for_simple_fixture() {
         let input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let smaller = board_array_balancing_region(
             &input,
@@ -620,17 +625,23 @@ mod tests {
         )
         .unwrap();
 
-        let larger_outside_smaller = larger.safe_region.difference(&smaller.safe_region);
+        let larger_outside_smaller = larger
+            .intermediates
+            .maximal_safe_region
+            .difference(&smaller.intermediates.maximal_safe_region);
         assert!(
             larger_outside_smaller.is_empty(),
-            "larger opening added {:.9} mm²",
+            "larger clearance added {:.9} mm² to the maximal region",
             larger_outside_smaller.area()
         );
-        assert!(larger.safe_region.area() < smaller.safe_region.area());
+        assert!(
+            larger.intermediates.maximal_safe_region.area()
+                < smaller.intermediates.maximal_safe_region.area()
+        );
     }
 
     #[test]
-    fn increasing_minimum_feature_radius_cannot_increase_safe_region() {
+    fn larger_feature_disk_shrinks_opened_region_for_simple_fixture() {
         let input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let smaller = board_array_balancing_region(
             &input,
@@ -653,13 +664,19 @@ mod tests {
         )
         .unwrap();
 
-        let larger_outside_smaller = larger.safe_region.difference(&smaller.safe_region);
+        let larger_outside_smaller = larger
+            .intermediates
+            .opened_safe_region
+            .difference(&smaller.intermediates.opened_safe_region);
         assert!(
             larger_outside_smaller.is_empty(),
-            "larger opening added {:.9} mm²",
+            "larger feature disk added {:.9} mm² to the opened region",
             larger_outside_smaller.area()
         );
-        assert!(larger.safe_region.area() < smaller.safe_region.area());
+        assert!(
+            larger.intermediates.opened_safe_region.area()
+                < smaller.intermediates.opened_safe_region.area()
+        );
     }
 
     #[test]
@@ -692,9 +709,15 @@ mod tests {
         .unwrap();
 
         assert!(
-            wide.safe_region.difference(&narrow.safe_region).is_empty(),
-            "wider gap envelope added {:.9} mm²",
-            wide.safe_region.difference(&narrow.safe_region).area()
+            wide.intermediates
+                .maximal_safe_region
+                .difference(&narrow.intermediates.maximal_safe_region)
+                .is_empty(),
+            "wider gap envelope added {:.9} mm² to the maximal region",
+            wide.intermediates
+                .maximal_safe_region
+                .difference(&narrow.intermediates.maximal_safe_region)
+                .area()
         );
         assert!(wide.certificate.minimum_gap_violations.is_empty());
 
@@ -712,7 +735,7 @@ mod tests {
     }
 
     #[test]
-    fn adding_an_obstacle_cannot_increase_safe_region() {
+    fn adding_an_obstacle_shrinks_maximal_region_for_simple_fixture() {
         let baseline_input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let added_obstacle = ContourSet::rectangle(bbox(10.0, 1.0, 11.0, 9.0), tol::REGION_MM);
         let blocked_input = balancing_input(0.0, added_obstacle);
@@ -723,11 +746,15 @@ mod tests {
 
         assert!(
             blocked
-                .safe_region
-                .difference(&baseline.safe_region)
+                .intermediates
+                .maximal_safe_region
+                .difference(&baseline.intermediates.maximal_safe_region)
                 .is_empty()
         );
-        assert!(blocked.safe_region.area() < baseline.safe_region.area());
+        assert!(
+            blocked.intermediates.maximal_safe_region.area()
+                < baseline.intermediates.maximal_safe_region.area()
+        );
     }
 
     #[test]

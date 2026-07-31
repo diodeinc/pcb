@@ -74,6 +74,14 @@ Exact segment distance with bounding-box pruning finds graph edges without
 retaining every component dilation in memory. On a detected conflict only, the
 harness constructs the overlapping dilations as debug geometry.
 
+The final optimized union is not a monotone set-valued function of clearance,
+feature radius, gap radius, or obstacle additions. Those changes shrink the
+pre-selection geometry, but can split components or change the maximum-area
+independent set. Equal-area coordinate tie breaks likewise mean rotations and
+reflections preserve the objective value and certificate, not necessarily the
+chosen union. Correctness is defined by the certificate, not by nesting outputs
+from different parameter values.
+
 The independent safety certificate is:
 
 ```text
@@ -408,9 +416,8 @@ Production calls can consume only `safe_region`; tests and diagnostics retain
 the full bundle. The renderer does not recompute intermediate regions.
 
 The reusable library boundary, fail-closed collector, certificate, tests, and
-debug-harness adapter are implemented. Wiring this API into board-array
-creation or a copper-balancing command, and emitting the safe geometry into an
-IPC/manufacturing artifact, are intentionally left out.
+debug-harness adapter are implemented. Automatic board-array creation consumes
+the certified region before balance copper is emitted.
 
 ## Validation plan
 
@@ -432,23 +439,25 @@ Use analytic shapes with known behavior:
 
 For generated valid regions:
 
-- increasing clearance cannot increase `safe`;
-- increasing minimum-feature radius cannot increase `safe`;
-- increasing minimum-gap radius cannot increase `safe`;
-- adding obstacles cannot increase `safe`;
-- rigid translation, rotation, and mirroring commute with the result;
+- increasing construction clearance or adding obstacles cannot enlarge
+  `maximal_safe`;
+- increasing the feature-disk radius cannot enlarge `opened_safe` for a fixed
+  `maximal_safe`;
+- rigid translation commutes with the result;
 - `safe ⊆ panel_keep_in`;
 - `safe ⊆ maximal_safe`;
 - `safe ∩ obstacle_clearance = ∅`;
 - `safe ∩ obstacle_gap_envelope = ∅`;
-- every connected component of `safe` survives erosion by the minimum-feature
-  radius;
-- disk closing by the minimum-gap radius adds no geometric material;
+- `safe \ open(safe, q) = ∅`;
+- radius-`v` dilations of every pair of distinct `safe` components are
+  disjoint;
 - `(safe ⊕ disk(r)) \ P = ∅`;
 - `(safe ⊕ disk(r)) ∩ O = ∅`.
 
-The last two are the acceptance certificate. Retain violation geometry on
-failure; a Boolean alone is not enough to debug a numerical case.
+These required checks form the acceptance certificate. Broader disk-closing
+additions remain diagnostic-only because they also include notches within one
+component. Retain violation geometry on failure; a Boolean alone is not enough
+to debug a numerical case.
 
 ### IPC integration fixtures
 
