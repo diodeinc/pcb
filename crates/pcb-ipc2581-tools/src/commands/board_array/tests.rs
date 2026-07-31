@@ -1,6 +1,5 @@
 use super::balance::{
-    AUTOMATIC_BOARD_ARRAY_TARGET_DENSITY, generate_automatic_board_array_copper_balance,
-    generate_board_array_copper_balance,
+    generate_automatic_board_array_copper_balance, generate_board_array_copper_balance,
 };
 use super::*;
 use crate::accessors::IpcAccessor;
@@ -198,29 +197,62 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
 
 #[test]
 fn board_array_creation_automatically_balances_every_copper_layer() {
-    let input = board_fixture_with_top_line_mm();
-    let ipc = Ipc2581::parse(input).unwrap();
+    let input = board_fixture_with_top_line_mm()
+        .replace(
+            r#"<LayerRef name="TOP"/>"#,
+            r#"<LayerRef name="TOP"/>
+<LayerRef name="BOTTOM"/>"#,
+        )
+        .replace(
+            r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
+            r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>"#,
+        )
+        .replace(r#"lineWidth="0.2""#, r#"lineWidth="4""#);
+    let ipc = Ipc2581::parse(&input).unwrap();
     let (options, validation_mode, panelization) = auto_board_array_options(&ipc, None).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
-    let provisional_xml = write_board_array_xml(input, &spec).unwrap();
+    let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
 
-    assert_eq!(balance.target_density, AUTOMATIC_BOARD_ARRAY_TARGET_DENSITY);
     assert!(balance.retained_area_mm2 > 0.0);
     assert!(!balance.common_safe_region.is_empty());
-    assert_eq!(balance.layers.len(), 1);
-    assert_eq!(balance.layers[0].layer_name, "TOP");
-    assert!(
-        balance.layers[0].result.solution.residual_error
-            <= (balance.layers[0].result.solution.initial_density
-                - AUTOMATIC_BOARD_ARRAY_TARGET_DENSITY)
-                .abs()
-                + 1e-9
-    );
-    assert!(!balance.layers[0].features.is_empty());
+    assert_eq!(balance.layers.len(), 2);
+    let top = balance
+        .layers
+        .iter()
+        .find(|layer| layer.layer_name == "TOP")
+        .unwrap();
+    let bottom = balance
+        .layers
+        .iter()
+        .find(|layer| layer.layer_name == "BOTTOM")
+        .unwrap();
+    assert!(top.board_target_density > 0.0);
+    assert_eq!(bottom.board_target_density, 0.0);
+    assert!(!top.features.is_empty());
+    assert!(bottom.features.is_empty());
 
-    let xml = create_auto_board_array_xml(input).unwrap();
+    for layer in &balance.layers {
+        let expected_target = layer
+            .existing_copper
+            .intersection(&balance.board_footprints)
+            .area()
+            / balance.board_footprints.area();
+        assert!((layer.board_target_density - expected_target).abs() <= 1e-9);
+        assert_eq!(
+            layer.result.solution.target_density,
+            layer.board_target_density
+        );
+        assert!(
+            layer.result.solution.residual_error
+                <= (layer.result.solution.initial_density - layer.board_target_density).abs()
+                    + 1e-9
+        );
+    }
+
+    let xml = create_auto_board_array_xml(&input).unwrap();
     assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
     assert!(xml.matches("<Contour>").count() > 0);
 }

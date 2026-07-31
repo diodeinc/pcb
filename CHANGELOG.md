@@ -16,7 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Board-array creation now automatically adds best-effort copper balancing on every copper layer.
+- Board-array creation now automatically adds best-effort copper balancing that matches each layer's placed-board copper density.
 - IPC-2581 fabrication views and panels now omit non-manufacturing data.
 - Split the Nix flake's `pcb` shim and `pcbc` compiler into independent package outputs.
 
