@@ -5,7 +5,7 @@ use ipc2581::edit::{self, Doc, Edit, Node};
 use ipc2581::types::Units;
 use ipc2581::{Ipc2581, XmlWriter};
 
-use super::{EDGE_RAIL_MM, FabPanelDimensions, PANEL_GAP_MM, SourcePanel};
+use super::{FabPanelSpec, SourcePanel};
 use crate::commands::fab_panel::packing::Placement;
 use crate::steps::FAB_PANEL_STEP_NAME;
 
@@ -180,7 +180,7 @@ pub(super) fn write_fab_panel_xml(
     occurrences: &[usize],
     placements: &[Placement],
     shared_stackup_layers: &HashSet<String>,
-    dimensions: FabPanelDimensions,
+    spec: FabPanelSpec,
 ) -> Result<String> {
     let docs = sources
         .iter()
@@ -208,7 +208,7 @@ pub(super) fn write_fab_panel_xml(
         occurrences,
         placements,
         shared_stackup_layers,
-        dimensions,
+        spec,
     )?;
     writer.end_element("IPC-2581");
 
@@ -364,7 +364,7 @@ fn write_ecad(
     occurrences: &[usize],
     placements: &[Placement],
     shared_stackup_layers: &HashSet<String>,
-    dimensions: FabPanelDimensions,
+    spec: FabPanelSpec,
 ) -> Result<()> {
     let units = sources
         .first()
@@ -406,7 +406,7 @@ fn write_ecad(
             writer.raw(doc.source(step));
         }
     }
-    write_fab_step(writer, sources, occurrences, placements, units, dimensions)?;
+    write_fab_step(writer, sources, occurrences, placements, units, spec)?;
     writer.end_element("CadData");
     writer.end_element("Ecad");
     Ok(())
@@ -418,33 +418,60 @@ fn write_fab_step(
     occurrences: &[usize],
     placements: &[Placement],
     units: Units,
-    dimensions: FabPanelDimensions,
+    spec: FabPanelSpec,
 ) -> Result<()> {
+    let usable = spec.usable_bbox()?;
     writer.start_element("Step", &[("name", FAB_PANEL_STEP_NAME), ("type", "PALLET")]);
-    write_metadata(writer, "diode.fab_panel.schema_version", "INTEGER", "1");
+    write_metadata(writer, "diode.fab_panel.schema_version", "INTEGER", "2");
     write_metadata(
         writer,
         "diode.fab_panel.width_mm",
         "DOUBLE",
-        &ipc2581::write::fmt_num(dimensions.width_mm()),
+        &ipc2581::write::fmt_num(spec.width_mm()),
     );
     write_metadata(
         writer,
         "diode.fab_panel.height_mm",
         "DOUBLE",
-        &ipc2581::write::fmt_num(dimensions.height_mm()),
+        &ipc2581::write::fmt_num(spec.height_mm()),
     );
     write_metadata(
         writer,
-        "diode.fab_panel.edge_rail_mm",
+        "diode.fab_panel.usable_width_mm",
         "DOUBLE",
-        &ipc2581::write::fmt_num(EDGE_RAIL_MM),
+        &ipc2581::write::fmt_num(usable.width()),
     );
+    write_metadata(
+        writer,
+        "diode.fab_panel.usable_height_mm",
+        "DOUBLE",
+        &ipc2581::write::fmt_num(usable.height()),
+    );
+    for (name, value) in [
+        (
+            "diode.fab_panel.edge_margin_top_mm",
+            spec.edge_margin_mm.top,
+        ),
+        (
+            "diode.fab_panel.edge_margin_right_mm",
+            spec.edge_margin_mm.right,
+        ),
+        (
+            "diode.fab_panel.edge_margin_bottom_mm",
+            spec.edge_margin_mm.bottom,
+        ),
+        (
+            "diode.fab_panel.edge_margin_left_mm",
+            spec.edge_margin_mm.left,
+        ),
+    ] {
+        write_metadata(writer, name, "DOUBLE", &ipc2581::write::fmt_num(value));
+    }
     write_metadata(
         writer,
         "diode.fab_panel.gap_mm",
         "DOUBLE",
-        &ipc2581::write::fmt_num(PANEL_GAP_MM),
+        &ipc2581::write::fmt_num(spec.panel_gap_mm),
     );
     write_metadata(
         writer,
@@ -457,29 +484,23 @@ fn write_fab_step(
     writer.start_element("Profile", &[]);
     writer.start_element("Polygon", &[]);
     ipc2581::write::location(writer, "PolyBegin", 0.0, 0.0, units);
-    ipc2581::write::location(writer, "PolyStepSegment", dimensions.width_mm(), 0.0, units);
+    ipc2581::write::location(writer, "PolyStepSegment", spec.width_mm(), 0.0, units);
     ipc2581::write::location(
         writer,
         "PolyStepSegment",
-        dimensions.width_mm(),
-        dimensions.height_mm(),
+        spec.width_mm(),
+        spec.height_mm(),
         units,
     );
-    ipc2581::write::location(
-        writer,
-        "PolyStepSegment",
-        0.0,
-        dimensions.height_mm(),
-        units,
-    );
+    ipc2581::write::location(writer, "PolyStepSegment", 0.0, spec.height_mm(), units);
     writer.end_element("Polygon");
     writer.end_element("Profile");
 
     for placement in placements {
         let source_index = occurrences[placement.item_index];
         let source = &sources[source_index];
-        let target_x_mm = EDGE_RAIL_MM + f64::from(placement.x) / 1_000.0;
-        let target_y_mm = EDGE_RAIL_MM + f64::from(placement.y) / 1_000.0;
+        let target_x_mm = usable.min.x + f64::from(placement.x) / 1_000.0;
+        let target_y_mm = usable.min.y + f64::from(placement.y) / 1_000.0;
         let (x_mm, y_mm, angle) = if placement.rotated {
             (
                 target_x_mm + source.bbox.max.y,
