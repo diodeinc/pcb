@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-07-31
+
 ### Added
 
 - Added common fabrication panel sizes to `pcb ipc2581 fab-panel create`.
@@ -1415,7 +1417,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.15...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.16...HEAD
+[0.4.16]: https://github.com/diodeinc/pcb/compare/v0.4.15...v0.4.16
 [0.4.15]: https://github.com/diodeinc/pcb/compare/v0.4.14...v0.4.15
 [0.4.14]: https://github.com/diodeinc/pcb/compare/v0.4.13...v0.4.14
 [0.4.13]: https://github.com/diodeinc/pcb/compare/v0.4.12...v0.4.13
