@@ -11,13 +11,16 @@ use crate::utils::file as file_utils;
 #[serde(deny_unknown_fields)]
 struct Selection {
     path: String,
+    refdes: Option<String>,
     manufacturer: String,
     mpn: String,
 }
 
+#[derive(Debug)]
 struct ResolvedSelection<'a> {
     selection: &'a Selection,
     oem_design_number: String,
+    used_refdes_fallback: bool,
 }
 
 type AlternativesMap = HashMap<String, HashMap<VmpnKey, ipc2581::types::AvlVmpn>>;
@@ -112,6 +115,14 @@ fn load_selections(path: &Path) -> Result<Vec<Selection>> {
                 anyhow::bail!("Selection {name} must not have leading or trailing whitespace");
             }
         }
+        if let Some(refdes) = &selection.refdes {
+            if refdes.is_empty() {
+                anyhow::bail!("Selection refdes must not be empty");
+            }
+            if refdes.trim() != refdes {
+                anyhow::bail!("Selection refdes must not have leading or trailing whitespace");
+            }
+        }
 
         if !paths.insert(selection.path.as_str()) {
             anyhow::bail!("Duplicate selection path: {}", selection.path);
@@ -130,7 +141,7 @@ fn resolve_selections<'a>(
     let resolved = selections
         .iter()
         .map(|selection| {
-            let matches: Vec<_> = bom
+            let path_matches: Vec<_> = bom
                 .items
                 .iter()
                 .filter(|item| {
@@ -147,12 +158,40 @@ fn resolve_selections<'a>(
                 })
                 .collect();
 
-            match matches.as_slice() {
+            match path_matches.as_slice() {
                 [item] => Ok(ResolvedSelection {
                     selection,
                     oem_design_number: ipc.resolve(item.oem_design_number_ref).to_string(),
+                    used_refdes_fallback: false,
                 }),
-                [] => anyhow::bail!("Selection path not found: {}", selection.path),
+                [] => {
+                    let Some(refdes) = selection.refdes.as_deref() else {
+                        anyhow::bail!("Selection path not found: {}", selection.path);
+                    };
+                    let refdes_matches: Vec<_> = bom
+                        .items
+                        .iter()
+                        .filter(|item| {
+                            item.ref_des_list
+                                .iter()
+                                .any(|item_refdes| ipc.resolve(item_refdes.name) == refdes)
+                        })
+                        .collect();
+
+                    match refdes_matches.as_slice() {
+                        [item] => Ok(ResolvedSelection {
+                            selection,
+                            oem_design_number: ipc.resolve(item.oem_design_number_ref).to_string(),
+                            used_refdes_fallback: true,
+                        }),
+                        [] => anyhow::bail!(
+                            "Selection path not found and fallback RefDes not found: {} ({})",
+                            selection.path,
+                            refdes
+                        ),
+                        _ => anyhow::bail!("Selection fallback RefDes is ambiguous: {refdes}"),
+                    }
+                }
                 _ => anyhow::bail!("Selection path is ambiguous: {}", selection.path),
             }
         })
@@ -516,6 +555,17 @@ pub fn execute_selections(file: &Path, selections_file: &Path, output: &Path) ->
     }
 
     let resolved = resolve_selections(&ipc, &selections)?;
+    let fallback_count = resolved
+        .iter()
+        .filter(|selection| selection.used_refdes_fallback)
+        .count();
+    if fallback_count > 0 {
+        eprintln!(
+            "Warning: resolved {} BOM selection{} by RefDes because Path was unavailable",
+            fallback_count,
+            if fallback_count == 1 { "" } else { "s" }
+        );
+    }
 
     let mut interner = ipc2581::Interner::new();
     let mut enterprise_registry = EnterpriseRegistry::from_ipc(&ipc);
@@ -673,6 +723,42 @@ fn avl_section_edit(doc: &ipc2581::edit::Doc, new_avl_xml: String) -> Result<ipc
 mod tests {
     use super::*;
 
+    fn parse_selection_test_ipc(extra_item: &str) -> ipc2581::Ipc2581 {
+        ipc2581::Ipc2581::parse(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+  </Content>
+  <Bom name="TestBOM">
+    <BomHeader assembly="Test Design" revision="1.0"/>
+    <BomItem OEMDesignNumberRef="PATH_PART" quantity="1" category="ELECTRICAL">
+      <RefDes name="R1" packageRef="R0402" populate="true" layerRef="F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="pcb" textualCharacteristicName="Path" textualCharacteristicValue="Power.R1"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="GROUPED_PART" quantity="2" category="ELECTRICAL">
+      <RefDes name="C1" packageRef="C0201" populate="true" layerRef="F.Cu"/>
+      <RefDes name="C2" packageRef="C0201" populate="true" layerRef="B.Cu"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    {extra_item}
+  </Bom>
+</IPC-2581>"#
+        ))
+        .unwrap()
+    }
+
+    fn selection(path: &str, refdes: Option<&str>) -> Selection {
+        Selection {
+            path: path.to_string(),
+            refdes: refdes.map(str::to_string),
+            manufacturer: "Example Manufacturer".to_string(),
+            mpn: "EXAMPLE-MPN".to_string(),
+        }
+    }
+
     fn patch_avl(original: &str, new_avl: &str) -> String {
         let doc = ipc2581::edit::Doc::parse(original).unwrap();
         let edit = avl_section_edit(&doc, new_avl.to_string()).unwrap();
@@ -714,5 +800,45 @@ mod tests {
         assert!(result.contains("OEMDesignNumber=\"NEW\""));
         assert!(!result.contains("OEMDesignNumber=\"OLD\""));
         assert!(result.contains("<Bom/>"));
+    }
+
+    #[test]
+    fn selection_path_remains_authoritative() {
+        let ipc = parse_selection_test_ipc("");
+        let selections = [selection("Power.R1", Some("C1"))];
+
+        let resolved = resolve_selections(&ipc, &selections).unwrap();
+
+        assert_eq!(resolved[0].oem_design_number, "PATH_PART");
+        assert!(!resolved[0].used_refdes_fallback);
+    }
+
+    #[test]
+    fn selection_falls_back_to_refdes_for_grouped_bom_item() {
+        let ipc = parse_selection_test_ipc("");
+        let selections = [selection("kicad::C2", Some("C2"))];
+
+        let resolved = resolve_selections(&ipc, &selections).unwrap();
+
+        assert_eq!(resolved[0].oem_design_number, "GROUPED_PART");
+        assert!(resolved[0].used_refdes_fallback);
+    }
+
+    #[test]
+    fn selection_rejects_ambiguous_refdes_fallback() {
+        let ipc = parse_selection_test_ipc(
+            r#"<BomItem OEMDesignNumberRef="OTHER_PART" quantity="1" category="ELECTRICAL">
+      <RefDes name="C2" packageRef="C0201" populate="true" layerRef="F.Cu"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>"#,
+        );
+        let selections = [selection("kicad::C2", Some("C2"))];
+
+        let error = resolve_selections(&ipc, &selections).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Selection fallback RefDes is ambiguous: C2"
+        );
     }
 }
