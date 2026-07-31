@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- IPC-2581 BOM selections now fall back to an explicit reference designator when the stable Path is unavailable.
+
 ## [0.4.16] - 2026-07-31
 
 ### Added
