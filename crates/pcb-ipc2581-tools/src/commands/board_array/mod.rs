@@ -459,7 +459,7 @@ fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Resul
             sheet_target_mm: None,
         },
     )?;
-    write_board_array_xml(xml, &spec)
+    write_balanced_board_array_xml(xml, spec)
 }
 
 #[cfg(test)]
@@ -474,7 +474,7 @@ fn create_auto_board_array_xml_with_sheet(
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet)?;
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization)?;
-    write_board_array_xml(xml, &spec)
+    write_balanced_board_array_xml(xml, spec)
 }
 
 fn auto_board_array_options(
@@ -599,6 +599,27 @@ fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
 
     Ipc2581::parse(&xml).context("Generated IPC-2581 board array XML did not parse")?;
     Ok(xml)
+}
+
+fn write_balanced_board_array_xml(xml: &str, mut spec: BoardArraySpec) -> Result<String> {
+    let provisional_xml = write_board_array_xml(xml, &spec)?;
+    let provisional = Ipc2581::parse(&provisional_xml)
+        .context("Failed to parse provisional IPC-2581 board array")?;
+    let balance = balance::generate_automatic_board_array_copper_balance(&provisional)?;
+
+    for layer in balance.layers {
+        if layer.features.is_empty() {
+            continue;
+        }
+        spec.generated_geometry.add_layer_feature(
+            GeneratedFeatureScope::Array,
+            layer.layer_name,
+            Polarity::Positive,
+            layer.features,
+        );
+    }
+
+    write_board_array_xml(xml, &spec)
 }
 
 #[derive(Debug, Clone, Copy)]

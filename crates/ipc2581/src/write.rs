@@ -9,7 +9,7 @@ use uppsala::XmlWriter;
 
 use crate::types::ecad::{Fiducial, FiducialKind, FiducialShape, Hole, Line, PlatingStatus};
 use crate::types::primitives::{
-    LineEnd, LineProperty, PolyStep, PolyStepCurve, Polygon, StandardPrimitive,
+    Contour, LineEnd, LineProperty, PolyStep, PolyStepCurve, Polygon, StandardPrimitive,
 };
 use crate::types::{Polarity, Side, Units};
 use crate::{Ipc2581Error, Result};
@@ -203,7 +203,21 @@ pub fn profile(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
 }
 
 pub fn polygon(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
-    writer.start_element("Polygon", &[]);
+    polygon_element(writer, "Polygon", units, polygon);
+}
+
+/// Write a schema-native filled contour with optional cutout polygons.
+pub fn contour(writer: &mut XmlWriter, units: Units, contour: &Contour) {
+    writer.start_element("Contour", &[]);
+    polygon(writer, units, &contour.polygon);
+    for cutout in &contour.cutouts {
+        polygon_element(writer, "Cutout", units, cutout);
+    }
+    writer.end_element("Contour");
+}
+
+fn polygon_element(writer: &mut XmlWriter, name: &str, units: Units, polygon: &Polygon) {
+    writer.start_element(name, &[]);
     location(writer, "PolyBegin", polygon.begin.x, polygon.begin.y, units);
     for step in &polygon.steps {
         match step {
@@ -219,7 +233,7 @@ pub fn polygon(writer: &mut XmlWriter, units: Units, polygon: &Polygon) {
             PolyStep::Curve(curve) => poly_step_curve(writer, units, curve),
         }
     }
-    writer.end_element("Polygon");
+    writer.end_element(name);
 }
 
 pub fn poly_step_curve(writer: &mut XmlWriter, units: Units, curve: &PolyStepCurve) {
@@ -253,6 +267,42 @@ mod tests {
         assert_eq!(
             writer.into_string(),
             r#"<Hole name="tooling_0" type="CIRCLE" diameter="2" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="1.5" y="-0.25"/>"#
+        );
+    }
+
+    #[test]
+    fn contour_writes_polygon_and_cutout() {
+        let contour = Contour {
+            polygon: Polygon {
+                begin: crate::types::Point { x: 0.0, y: 0.0 },
+                steps: vec![
+                    PolyStep::Segment(crate::types::PolyStepSegment {
+                        point: crate::types::Point { x: 2.0, y: 0.0 },
+                    }),
+                    PolyStep::Segment(crate::types::PolyStepSegment {
+                        point: crate::types::Point { x: 0.0, y: 0.0 },
+                    }),
+                ],
+            },
+            cutouts: vec![Polygon {
+                begin: crate::types::Point { x: 0.5, y: 0.0 },
+                steps: vec![
+                    PolyStep::Segment(crate::types::PolyStepSegment {
+                        point: crate::types::Point { x: 1.0, y: 0.0 },
+                    }),
+                    PolyStep::Segment(crate::types::PolyStepSegment {
+                        point: crate::types::Point { x: 0.5, y: 0.0 },
+                    }),
+                ],
+            }],
+        };
+        let mut writer = XmlWriter::new();
+
+        self::contour(&mut writer, Units::Millimeter, &contour);
+
+        assert_eq!(
+            writer.into_string(),
+            "<Contour><Polygon><PolyBegin x=\"0\" y=\"0\"/><PolyStepSegment x=\"2\" y=\"0\"/><PolyStepSegment x=\"0\" y=\"0\"/></Polygon><Cutout><PolyBegin x=\"0.5\" y=\"0\"/><PolyStepSegment x=\"1\" y=\"0\"/><PolyStepSegment x=\"0.5\" y=\"0\"/></Cutout></Contour>"
         );
     }
 

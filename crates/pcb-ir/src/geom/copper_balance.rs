@@ -40,21 +40,22 @@ impl DenseCopperBalanceProfile {
         min_centers_per_component: 4,
     };
 
-    pub fn row_pitch_mm(self) -> f64 {
-        self.pitch_mm * 3.0_f64.sqrt() / 2.0
+    pub fn lattice_column_pitch_mm(self) -> f64 {
+        self.pitch_mm * SQRT_3 / 2.0
     }
 
     pub fn center_boundary_clearance_mm(self) -> f64 {
         self.max_void_radius_mm + self.boundary_web_mm
     }
 
-    /// Minimum vertex-to-vertex web along the triangular lattice axes.
+    /// Minimum flat-to-flat web between nearest-neighbor hexagonal voids.
     ///
-    /// The underlying regular hexagon has vertices at 0°, 60°, and their
-    /// opposites, so its circumradius lies directly on every nearest-neighbor
-    /// axis. The rounded corners stay inside that conservative envelope.
+    /// The center lattice is rotated 30° from the hexagon vertices, putting
+    /// every nearest neighbor normal to a parallel pair of flats. A regular
+    /// hexagon's flat-to-flat dimension is `√3 R`; rounding only shortens the
+    /// corners and leaves those flats unchanged.
     pub fn nearest_neighbor_web_mm(self) -> f64 {
-        self.pitch_mm - 2.0 * self.max_void_radius_mm
+        self.pitch_mm - SQRT_3 * self.max_void_radius_mm
     }
 
     pub fn validate(self) -> Result<(), DenseCopperBalanceError> {
@@ -160,6 +161,8 @@ pub struct DenseCopperBalanceRequest<'a> {
 pub struct DenseCopperBalanceResult {
     pub solution: DenseCopperBalanceSolution,
     pub copper: ContourSet,
+    /// Safe-region components large enough to carry the fixed lattice.
+    pub usable: ContourSet,
     /// Fixed lattice centers eligible at the profile's maximum void radius.
     pub lattice_centers: Vec<Point>,
     pub usable_area_mm2: f64,
@@ -255,7 +258,7 @@ pub fn generate_dense_copper_balance(
     let mut eligible_component_count = 0;
 
     for component in request.safe_region.connected_components() {
-        let centers = triangular_lattice_centers(&component, request.lattice_origin, profile);
+        let centers = hex_aligned_lattice_centers(&component, request.lattice_origin, profile);
         if centers.len() < profile.min_centers_per_component {
             continue;
         }
@@ -300,17 +303,20 @@ pub fn generate_dense_copper_balance(
         return Ok(DenseCopperBalanceResult {
             solution,
             copper: ContourSet::empty(request.safe_region.tolerance),
+            usable,
             lattice_centers,
-            usable_area_mm2: usable.area(),
+            usable_area_mm2: areas.usable_area_mm2,
             eligible_component_count,
         });
     }
 
+    let usable_area_mm2 = usable.area();
     Ok(DenseCopperBalanceResult {
         solution,
         copper,
+        usable,
         lattice_centers,
-        usable_area_mm2: usable.area(),
+        usable_area_mm2,
         eligible_component_count,
     })
 }
@@ -449,7 +455,7 @@ fn validate_request(
     )
 }
 
-fn triangular_lattice_centers(
+fn hex_aligned_lattice_centers(
     region: &ContourSet,
     origin: Point,
     profile: DenseCopperBalanceProfile,
@@ -458,26 +464,28 @@ fn triangular_lattice_centers(
         return Vec::new();
     }
 
-    let row_pitch = profile.row_pitch_mm();
+    // Hexagon vertices are at 0°, 60°, ...; nearest-neighbor center vectors
+    // are at 30°, 90°, ... so parallel flats face each other.
+    let column_pitch = profile.lattice_column_pitch_mm();
     let keep_in_radius = profile.center_boundary_clearance_mm();
-    let first_row = ((region.bbox.min.y - origin.y) / row_pitch).floor() as i64 - 1;
-    let last_row = ((region.bbox.max.y - origin.y) / row_pitch).ceil() as i64 + 1;
+    let first_column = ((region.bbox.min.x - origin.x) / column_pitch).floor() as i64 - 1;
+    let last_column = ((region.bbox.max.x - origin.x) / column_pitch).ceil() as i64 + 1;
     let mut centers = Vec::new();
 
-    for row in first_row..=last_row {
-        let y = origin.y + row as f64 * row_pitch;
-        let row_offset = if row.rem_euclid(2) == 0 {
+    for column in first_column..=last_column {
+        let x = origin.x + column as f64 * column_pitch;
+        let column_offset = if column.rem_euclid(2) == 0 {
             0.0
         } else {
             profile.pitch_mm / 2.0
         };
-        let row_origin_x = origin.x + row_offset;
-        let first_column =
-            ((region.bbox.min.x - row_origin_x) / profile.pitch_mm).floor() as i64 - 1;
-        let last_column = ((region.bbox.max.x - row_origin_x) / profile.pitch_mm).ceil() as i64 + 1;
+        let column_origin_y = origin.y + column_offset;
+        let first_row =
+            ((region.bbox.min.y - column_origin_y) / profile.pitch_mm).floor() as i64 - 1;
+        let last_row = ((region.bbox.max.y - column_origin_y) / profile.pitch_mm).ceil() as i64 + 1;
 
-        for column in first_column..=last_column {
-            let center = Point::new(row_origin_x + column as f64 * profile.pitch_mm, y);
+        for row in first_row..=last_row {
+            let center = Point::new(x, column_origin_y + row as f64 * profile.pitch_mm);
             if region.contains_disk(center, keep_in_radius) {
                 centers.push(center);
             }
@@ -488,7 +496,7 @@ fn triangular_lattice_centers(
 }
 
 fn hexagon_set(centers: &[Point], radius: f64, tolerance: f64) -> ContourSet {
-    let Some(hexagon) = rounded_hexagon(radius) else {
+    let Some(hexagon) = rounded_hexagonal_void(radius) else {
         return ContourSet::empty(tolerance);
     };
     let contours = centers
@@ -498,7 +506,8 @@ fn hexagon_set(centers: &[Point], radius: f64, tolerance: f64) -> ContourSet {
     ContourSet::from_filled_contours(&contours, tolerance)
 }
 
-fn rounded_hexagon(radius: f64) -> Option<ContourBuf> {
+/// One slightly rounded, flat-top regular hexagonal void centered at zero.
+pub fn rounded_hexagonal_void(radius: f64) -> Option<ContourBuf> {
     if !radius.is_finite() || radius <= 0.0 {
         return None;
     }
@@ -632,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn geometry_uses_one_fixed_triangular_lattice_and_matches_area() {
+    fn geometry_uses_one_fixed_hex_aligned_lattice_and_matches_area() {
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
             tol::REGION_MM,
@@ -667,9 +676,21 @@ mod tests {
         }
         for (index, left) in result.lattice_centers.iter().enumerate() {
             for right in &result.lattice_centers[index + 1..] {
-                assert!(left.distance_to(*right) + 1e-9 >= DenseCopperBalanceProfile::V1.pitch_mm);
+                let distance = left.distance_to(*right);
+                assert!(distance + 1e-9 >= DenseCopperBalanceProfile::V1.pitch_mm);
+                if (distance - DenseCopperBalanceProfile::V1.pitch_mm).abs() <= 1e-9 {
+                    let angle_degrees = (right.y - left.y)
+                        .atan2(right.x - left.x)
+                        .to_degrees()
+                        .rem_euclid(60.0);
+                    assert!((angle_degrees - 30.0).abs() <= 1e-9);
+                }
             }
         }
+        assert!(
+            (DenseCopperBalanceProfile::V1.nearest_neighbor_web_mm() - (2.30 - SQRT_3)).abs()
+                <= 1e-12
+        );
     }
 
     #[test]
@@ -699,7 +720,7 @@ mod tests {
     #[test]
     fn rounded_hexagon_uses_six_scaled_corner_arcs_and_tracks_analytic_area() {
         let radius = 0.8;
-        let hexagon = rounded_hexagon(radius).unwrap();
+        let hexagon = rounded_hexagonal_void(radius).unwrap();
         let arcs = hexagon
             .cmds
             .iter()
