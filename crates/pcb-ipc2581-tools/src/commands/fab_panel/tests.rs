@@ -79,6 +79,47 @@ fn assembly_panel_xml_at(min_x: f64, min_y: f64, width_mm: f64, height_mm: f64) 
     )
 }
 
+fn assembly_panel_with_profile_cutouts_xml(width_mm: f64, height_mm: f64) -> String {
+    assembly_panel_xml(width_mm, height_mm)
+        .replace(
+            r#"      <Step name="panel" type="PALLET">"#,
+            r#"      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="10" y="10"/>
+            <PolyStepSegment x="30" y="10"/>
+            <PolyStepSegment x="30" y="30"/>
+            <PolyStepSegment x="10" y="30"/>
+            <PolyStepSegment x="10" y="10"/>
+          </Polygon>
+          <Cutout>
+            <PolyBegin x="19" y="19"/>
+            <PolyStepSegment x="21" y="19"/>
+            <PolyStepSegment x="21" y="21"/>
+            <PolyStepSegment x="19" y="21"/>
+            <PolyStepSegment x="19" y="19"/>
+          </Cutout>
+        </Profile>
+      </Step>
+      <Step name="panel" type="PALLET">"#,
+        )
+        .replace(
+            r#"        </Profile>
+        <LayerFeature layerRef="TOP">"#,
+            r#"          <Cutout>
+            <PolyBegin x="39" y="39"/>
+            <PolyStepSegment x="41" y="39"/>
+            <PolyStepSegment x="41" y="41"/>
+            <PolyStepSegment x="39" y="41"/>
+            <PolyStepSegment x="39" y="39"/>
+          </Cutout>
+        </Profile>
+        <StepRepeat stepRef="board" x="0" y="0" nx="1" ny="1" dx="0" dy="0" angle="0" mirror="false"/>
+        <LayerFeature layerRef="TOP">"#,
+        )
+}
+
 fn assembly_panel_with_non_manufacturing_data() -> String {
     assembly_panel_xml(100.0, 80.0)
         .replace(
@@ -178,9 +219,9 @@ fn assembly_panel_with_non_manufacturing_data() -> String {
 }
 
 #[test]
-fn routes_each_assembly_panel_in_the_fab_profile() {
+fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
     let sources = vec![
-        assembly_panel_xml_at(10.0, 20.0, 100.0, 80.0),
+        assembly_panel_with_profile_cutouts_xml(100.0, 80.0),
         assembly_panel_xml_at(-15.0, 7.0, 120.0, 90.0),
     ];
     let generated = create_fab_panel_xml(&sources, &[0, 0, 1]).unwrap();
@@ -200,26 +241,85 @@ fn routes_each_assembly_panel_in_the_fab_profile() {
         .map(|instance| instance.bbox)
         .collect::<Vec<_>>();
 
+    assert_eq!(
+        profile.purpose,
+        pcb_ir::dialects::ipc::LayoutPurpose::FabricationPanel
+    );
     assert_eq!(profile.array_outlines.len(), 1);
     assert_eq!(placed_panels.len(), 3);
-    assert_eq!(profile.material_removal.len(), 2 * placed_panels.len());
+    assert_eq!(profile.assembly_panel_outlines.len(), placed_panels.len());
+    assert_eq!(
+        profile.material_removal.len(),
+        4,
+        "both board and assembly-panel profile cutouts must survive two placements"
+    );
+    let assembly_panel_outlines = profile
+        .assembly_panel_outlines
+        .iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
     for panel_bbox in placed_panels {
-        assert!(has_contour_bbox(&profile.material_removal, panel_bbox, 0.0));
-        assert!(has_contour_bbox(&profile.material_removal, panel_bbox, 1.0));
+        assert!(has_contour_bbox(&assembly_panel_outlines, panel_bbox, 0.0));
+        assert!(!has_contour_bbox(&assembly_panel_outlines, panel_bbox, 1.0));
+        assert!(!has_contour_bbox(
+            &profile.material_removal,
+            panel_bbox,
+            0.0
+        ));
+        assert!(!has_contour_bbox(
+            &profile.material_removal,
+            panel_bbox,
+            1.0
+        ));
     }
 
+    let profile_stroke_radius = 0.025;
+    let expected_fab_bbox =
+        contour_bbox(profile.array_outlines.iter().flatten()).expand(profile_stroke_radius);
+    let expected_assembly_bbox = contour_bbox(profile.assembly_panel_outlines.iter().flatten())
+        .expand(profile_stroke_radius);
+    let expected_cutout_bbox =
+        contour_bbox(profile.material_removal.iter()).expand(profile_stroke_radius);
     let package =
         crate::manufacturing::build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
-    let profile = package
-        .files
-        .iter()
-        .find(|file| file.filename == "Fab_Panel_Profile.gm1")
-        .unwrap();
-    assert!(profile.contents.contains("%TF.FileFunction,Profile,NP*%"));
-    assert!(profile.contents.contains("%TF.Part,Array*%"));
-    assert!(profile.contents.contains("%TA.AperFunction,Profile*%"));
-    assert!(profile.contents.contains("%ADD10C,0.05*%"));
-    assert!(!profile.contents.contains("%ADD11C,1*%"));
+    for (filename, expected_bbox) in [
+        ("Fab_Panel_Outline.gm1", expected_fab_bbox),
+        ("Assembly_Panel_Outlines.gm1", expected_assembly_bbox),
+        ("Board_Cutouts.gm1", expected_cutout_bbox),
+    ] {
+        let file = package
+            .files
+            .iter()
+            .find(|file| file.filename == filename)
+            .unwrap_or_else(|| panic!("missing {filename}"));
+        assert!(file.contents.contains("%TF.FileFunction,Profile,NP*%"));
+        assert!(file.contents.contains("%TF.Part,Array*%"));
+        assert!(file.contents.contains("%TA.AperFunction,Profile*%"));
+        assert!(file.contents.contains("%ADD10C,0.05*%"));
+        assert!(!file.contents.contains("C,1*%"));
+        let parsed_gerber = gerberx2::GerberX2::parse(&file.contents).unwrap();
+        let artwork = gerberx2::geometry::extract_document(&parsed_gerber);
+        assert_bbox_close(artwork.layers[0].bbox, expected_bbox);
+        let crate::manufacturing::ManufacturingFileKind::GerberX2(layer) = &file.kind else {
+            panic!("{filename} is not a Gerber layer");
+        };
+        assert!(!layer.objects.is_empty());
+    }
+    assert_eq!(
+        package
+            .files
+            .iter()
+            .filter(|file| file.contents.contains("%TF.FileFunction,Profile,NP*%"))
+            .count(),
+        3
+    );
+    assert!(
+        package
+            .files
+            .iter()
+            .all(|file| file.filename != "Fab_Panel_Profile.gm1")
+    );
     assert!(
         package
             .files
@@ -233,7 +333,20 @@ fn routes_each_assembly_panel_in_the_fab_profile() {
             .filter(|file| file.filename.ends_with(".drl"))
             .all(|file| !file.contents.contains("M15"))
     );
-    gerberx2::GerberX2::parse(&profile.contents).unwrap();
+}
+
+fn contour_bbox<'a>(contours: impl IntoIterator<Item = &'a pcb_ir::geom::ContourBuf>) -> BBox {
+    contours
+        .into_iter()
+        .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox))
+}
+
+fn assert_bbox_close(actual: BBox, expected: BBox) {
+    const EPSILON: f64 = 0.002;
+    assert!((actual.min.x - expected.min.x).abs() < EPSILON);
+    assert!((actual.min.y - expected.min.y).abs() < EPSILON);
+    assert!((actual.max.x - expected.max.x).abs() < EPSILON);
+    assert!((actual.max.y - expected.max.y).abs() < EPSILON);
 }
 
 fn has_contour_bbox(contours: &[pcb_ir::geom::ContourBuf], bbox: BBox, expansion: f64) -> bool {
@@ -411,29 +524,36 @@ fn applies_asymmetric_process_margin_and_gap_overrides() {
 }
 
 #[test]
-fn rejects_unsafe_or_empty_fabrication_panel_domains() {
+fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
     let sources = [assembly_panel_xml(100.0, 80.0)];
 
-    let too_small_margin = FabPanelSpec {
+    let subtool_spacing = FabPanelSpec {
         edge_margin_mm: EdgeInsetsMm::new(50.8, 25.4, 50.8, 0.5),
-        ..FabPanelSpec::INCHES_18_X_24
-    };
-    let error = create_fab_panel_xml_with_spec(&sources, &[0], too_small_margin).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("left edge margin must be at least 1 mm")
-    );
-
-    let too_small_gap = FabPanelSpec {
         panel_gap_mm: 0.5,
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel_xml_with_spec(&sources, &[0], too_small_gap).unwrap_err();
+    create_fab_panel_xml_with_spec(&sources, &[0], subtool_spacing).unwrap();
+
+    let negative_margin = FabPanelSpec {
+        edge_margin_mm: EdgeInsetsMm::new(50.8, 25.4, 50.8, -0.5),
+        ..FabPanelSpec::INCHES_18_X_24
+    };
+    let error = create_fab_panel_xml_with_spec(&sources, &[0], negative_margin).unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("fabrication panel gap must be at least 1 mm")
+            .contains("left edge margin must be non-negative")
+    );
+
+    let negative_gap = FabPanelSpec {
+        panel_gap_mm: -0.5,
+        ..FabPanelSpec::INCHES_18_X_24
+    };
+    let error = create_fab_panel_xml_with_spec(&sources, &[0], negative_gap).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("fabrication panel gap must be non-negative")
     );
 
     let no_usable_width = FabPanelSpec {

@@ -517,6 +517,11 @@ pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
         .context("IPC-2581 ECAD section has no Step")?;
     let mut doc = GeometryDocument::new();
     append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?;
+    if ipc.resolve(step.name) == crate::steps::FAB_PANEL_STEP_NAME
+        && let Some(root_step) = doc.layout.root_step
+    {
+        doc.layout.steps[root_step as usize].purpose = LayoutPurpose::FabricationPanel;
+    }
     populate_ipc_specs(&mut doc, ipc);
     pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
@@ -1160,6 +1165,7 @@ fn push_or_update_layout_step(
     doc.layout.steps.push(LayoutStep {
         source_step_ref: step.name,
         kind: layout_step_kind(step),
+        purpose: LayoutPurpose::Product,
         datum: step
             .datum
             .map(|datum| Point::new(datum.x, datum.y))

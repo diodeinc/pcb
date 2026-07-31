@@ -7,7 +7,7 @@ use crate::dialects::ipc::analysis::{
 use crate::dialects::ipc::feature::{
     Feature, FeatureBucket, FeatureKind, FeatureOperation, FeatureSpan, PlatingKind,
 };
-use crate::dialects::ipc::layout::{LayoutStepKind, StepProfile};
+use crate::dialects::ipc::layout::{LayoutPurpose, LayoutStepKind, StepProfile};
 use crate::dialects::ipc::{Document, relief};
 use crate::dialects::{LayerRole, Side};
 use crate::dialects::{artwork, nc};
@@ -204,26 +204,27 @@ fn tol_epsilon() -> f64 {
 #[derive(Debug, Clone, Default)]
 pub struct FabricationProfileOptions {
     pub relief_features: BoardArrayReliefFeatures,
-    /// Route the direct child panel instances out of the root panel.
-    ///
-    /// The generated material-removal band uses the same default cutter as
-    /// V-score reliefs. Its inner edge follows the child panel profile, so the
-    /// finished child panel retains its nominal dimensions.
-    pub route_direct_panel_instances: bool,
     /// Collect per-boundary construction geometry in the returned debug data.
     pub debug: bool,
 }
 
+/// Semantic profile geometry derived from the IPC layout hierarchy.
+///
+/// The three fields remain separate in IR: the root boundary, direct child
+/// panel boundaries, and material-removal regions have different fabrication
+/// meanings even though a plain board-array export may place them in one file.
 #[derive(Debug, Clone, Default)]
 pub struct BoardArrayFabricationProfile {
-    /// Exterior profile contours for the generated board array.
+    pub purpose: LayoutPurpose,
+    /// Nominal exterior profile contours of the root panel.
     pub array_outlines: Vec<Vec<ContourBuf>>,
+    /// Nominal profile contours of direct child assembly panels.
+    pub assembly_panel_outlines: Vec<Vec<ContourBuf>>,
     /// Closed material-removal contours inside the array profile.
     ///
-    /// This is the regularized union of source profile cutouts, repeated board
-    /// cutouts, and V-score relief regions. Keeping it as one unioned planar
-    /// region means overlapping cutouts/reliefs collapse before downstream
-    /// Gerber/SVG/profile export sees them.
+    /// This is the regularized union of root, assembly-panel, and board profile
+    /// cutouts plus V-score relief regions. Keeping it as one planar region
+    /// makes overlaps collapse before downstream artwork or Gerber lowering.
     pub material_removal: Vec<ContourBuf>,
 }
 
@@ -244,32 +245,35 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
     score_lines: &[relief::VScoreLine],
     options: FabricationProfileOptions,
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
-    if root_panel_step(doc).is_none() {
+    let Some((_, root_panel)) = root_panel_step(doc) else {
         return Ok((
             BoardArrayFabricationProfile::default(),
             relief::VScoreReliefDebug::default(),
         ));
-    }
+    };
 
-    let input =
-        collect_board_array_fabrication_profile_input(doc, options.route_direct_panel_instances);
+    let input = collect_board_array_fabrication_profile_input(doc, root_panel.purpose);
     compose_board_array_fabrication_profile(input, score_lines, options)
 }
 
 #[derive(Debug, Clone, Default)]
 struct BoardArrayFabricationProfileInput {
+    purpose: LayoutPurpose,
     array_outlines: Vec<Vec<ContourBuf>>,
     source_material_removal: Vec<Vec<ContourBuf>>,
     board_boundaries: Vec<ContourBuf>,
     board_cutouts: Vec<ContourBuf>,
-    direct_panel_boundaries: Vec<ContourBuf>,
+    assembly_panel_outlines: Vec<Vec<ContourBuf>>,
 }
 
 fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
-    route_direct_panel_instances: bool,
+    purpose: LayoutPurpose,
 ) -> BoardArrayFabricationProfileInput {
-    let mut input = BoardArrayFabricationProfileInput::default();
+    let mut input = BoardArrayFabricationProfileInput {
+        purpose,
+        ..BoardArrayFabricationProfileInput::default()
+    };
 
     for occurrence in profile_occurrences_for(doc, ProfileSet::RootOnly) {
         input.array_outlines.push(
@@ -299,16 +303,23 @@ fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
         );
     }
 
-    if route_direct_panel_instances {
+    if purpose == LayoutPurpose::FabricationPanel {
         for occurrence in profile_occurrences_for(doc, ProfileSet::LayoutBoundaries)
             .into_iter()
             .filter(|occurrence| {
                 occurrence.role == ProfileOccurrenceRole::PanelInstance && occurrence.depth == 1
             })
         {
-            input.direct_panel_boundaries.extend(
+            input.assembly_panel_outlines.push(
                 doc.transformed_path_contours(occurrence.profile.outer_path, occurrence.transform),
             );
+            input
+                .source_material_removal
+                .extend(transformed_profile_cutout_contours(
+                    doc,
+                    occurrence.profile,
+                    occurrence.transform,
+                ));
         }
     }
 
@@ -331,11 +342,6 @@ fn compose_board_array_fabrication_profile(
             relief::DEFAULT_RELIEF_TOLERANCE_MM,
         ));
     }
-
-    material_removal.union_assign(&panel_separation_material_removal(
-        &input.direct_panel_boundaries,
-        relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
-    ));
 
     let mut relief_debug = relief::VScoreReliefDebug::default();
     if !score_lines.is_empty() && !input.board_boundaries.is_empty() {
@@ -362,25 +368,13 @@ fn compose_board_array_fabrication_profile(
 
     Ok((
         BoardArrayFabricationProfile {
+            purpose: input.purpose,
             array_outlines: input.array_outlines,
+            assembly_panel_outlines: input.assembly_panel_outlines,
             material_removal: material_removal.to_contours_with_arcs(),
         },
         relief_debug,
     ))
-}
-
-fn panel_separation_material_removal(
-    panel_boundaries: &[ContourBuf],
-    tool_diameter_mm: f64,
-) -> ContourSet {
-    let finished_panels =
-        ContourSet::from_filled_contours(panel_boundaries, relief::DEFAULT_RELIEF_TOLERANCE_MM);
-    // The cutter centerline is one tool radius outside the finished profile.
-    // Sweeping the cutter adds the second radius, so the physical removal band
-    // is (B dilated by the full tool diameter) minus B.
-    finished_panels
-        .disk_dilate(tool_diameter_mm)
-        .difference(&finished_panels)
 }
 
 fn transformed_profile_cutout_contours<Symbol, LayerFunction>(
@@ -424,26 +418,24 @@ mod tests {
     }
 
     #[test]
-    fn panel_separation_preserves_the_finished_profile_and_accounts_for_the_cutter() {
+    fn assembly_panel_outlines_remain_nominal_and_are_not_material_removal() {
         let finished = rectangle_contour(10.0, 20.0, 110.0, 100.0);
-        let removal = panel_separation_material_removal(
-            std::slice::from_ref(&finished),
-            relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
-        );
+        let input = BoardArrayFabricationProfileInput {
+            purpose: LayoutPurpose::FabricationPanel,
+            assembly_panel_outlines: vec![vec![finished]],
+            ..BoardArrayFabricationProfileInput::default()
+        };
+        let (profile, _) =
+            compose_board_array_fabrication_profile(input, &[], Default::default()).unwrap();
 
-        let contours = removal.to_contours();
-        assert_eq!(contours.len(), 2);
-        let bbox = contours
+        assert_eq!(profile.purpose, LayoutPurpose::FabricationPanel);
+        assert!(profile.material_removal.is_empty());
+        assert_eq!(profile.assembly_panel_outlines.len(), 1);
+        let bbox = profile.assembly_panel_outlines[0]
             .iter()
             .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox));
-        assert_eq!(bbox.min, Point::new(9.0, 19.0));
-        assert_eq!(bbox.max, Point::new(111.0, 101.0));
-
-        let finished_region = ContourSet::from_filled_contours(
-            std::slice::from_ref(&finished),
-            relief::DEFAULT_RELIEF_TOLERANCE_MM,
-        );
-        assert!(removal.intersection(&finished_region).area().abs() < 1e-6);
+        assert_eq!(bbox.min, Point::new(10.0, 20.0));
+        assert_eq!(bbox.max, Point::new(110.0, 100.0));
     }
 
     fn rectangle_contour(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> ContourBuf {

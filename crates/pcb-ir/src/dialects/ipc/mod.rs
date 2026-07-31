@@ -39,8 +39,8 @@ pub use feature::{
     PlatingKind, SourceRef,
 };
 pub use layout::{
-    LayoutGraph, LayoutInstance, LayoutMargins, LayoutRepeat, LayoutStep, LayoutStepKind,
-    StepProfile, StepProfileCutout,
+    LayoutGraph, LayoutInstance, LayoutMargins, LayoutPurpose, LayoutRepeat, LayoutStep,
+    LayoutStepKind, StepProfile, StepProfileCutout,
 };
 pub use lower::{
     BoardArrayFabricationProfile, BoardArrayReliefFeatures, FabricationProfileOptions,

@@ -551,8 +551,9 @@ fn validate_options(options: BalancingRegionOptions) -> Result<(), BalancingRegi
 mod tests {
     use super::*;
     use crate::dialects::ipc::{
-        Feature, FeatureDomain, FeatureKind, FeatureRole, FeatureSet, LayoutInstance, LayoutStep,
-        LayoutStepKind, Spec, SpecItem, SpecItemKind, SpecRef, StepProfile,
+        Feature, FeatureDomain, FeatureKind, FeatureRole, FeatureSet, LayoutInstance,
+        LayoutPurpose, LayoutStep, LayoutStepKind, Spec, SpecItem, SpecItemKind, SpecRef,
+        StepProfile,
     };
     use crate::geom::{
         Affine2, BBox, ContourBuf, LineCap, Paint, PathCmd, Point, Polarity, Span, StrokeStyle,
@@ -1030,6 +1031,7 @@ mod tests {
         layout.layout.steps.push(LayoutStep {
             source_step_ref: 1,
             kind: LayoutStepKind::Panel,
+            purpose: LayoutPurpose::Product,
             datum: Point::default(),
             profiles: Span::single(0),
             bbox: bbox(0.0, 0.0, 20.0, 10.0),
@@ -1037,6 +1039,7 @@ mod tests {
         layout.layout.steps.push(LayoutStep {
             source_step_ref: 2,
             kind: LayoutStepKind::Board,
+            purpose: LayoutPurpose::Product,
             datum: Point::default(),
             profiles: Span::single(1),
             bbox: bbox(0.0, 0.0, 4.0, 3.0),
@@ -1058,7 +1061,9 @@ mod tests {
         });
 
         let profile = BoardArrayFabricationProfile {
+            purpose: Default::default(),
             array_outlines: vec![vec![rectangle_contour(0.0, 0.0, 20.0, 10.0)]],
+            assembly_panel_outlines: Vec::new(),
             material_removal: vec![rectangle_contour(18.0, 4.0, 19.0, 5.0)],
         };
         (layout, profile)
