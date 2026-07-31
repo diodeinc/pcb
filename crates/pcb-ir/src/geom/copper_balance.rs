@@ -8,9 +8,15 @@
 use std::f64::consts::PI;
 
 use crate::geom::path::transform_cmds;
-use crate::geom::{Affine2, ContourSet, Point, shapes};
+use crate::geom::{Affine2, ContourBuf, ContourSet, PathCmd, Point};
 
 const NUMERIC_EPSILON: f64 = 1e-9;
+const SQRT_3: f64 = 1.732_050_807_568_877_2;
+const HEXAGON_CORNER_RADIUS_RATIO: f64 = 0.15;
+// A sharp regular hexagon has area 3√3 R² / 2. Rounding each 120° corner
+// inward by fillet radius kR removes (2√3 - π)k²R² across all six corners.
+const ROUNDED_HEXAGON_AREA_FACTOR: f64 = 3.0 * SQRT_3 / 2.0
+    - (2.0 * SQRT_3 - PI) * HEXAGON_CORNER_RADIUS_RATIO * HEXAGON_CORNER_RADIUS_RATIO;
 
 /// Fixed geometry constraints for a dense perforated copper plane.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -34,16 +40,22 @@ impl DenseCopperBalanceProfile {
         min_centers_per_component: 4,
     };
 
-    pub fn row_pitch_mm(self) -> f64 {
-        self.pitch_mm * 3.0_f64.sqrt() / 2.0
+    pub fn lattice_column_pitch_mm(self) -> f64 {
+        self.pitch_mm * SQRT_3 / 2.0
     }
 
     pub fn center_boundary_clearance_mm(self) -> f64 {
         self.max_void_radius_mm + self.boundary_web_mm
     }
 
+    /// Minimum flat-to-flat web between nearest-neighbor hexagonal voids.
+    ///
+    /// The center lattice is rotated 30° from the hexagon vertices, putting
+    /// every nearest neighbor normal to a parallel pair of flats. A regular
+    /// hexagon's flat-to-flat dimension is `√3 R`; rounding only shortens the
+    /// corners and leaves those flats unchanged.
     pub fn nearest_neighbor_web_mm(self) -> f64 {
-        self.pitch_mm - 2.0 * self.max_void_radius_mm
+        self.pitch_mm - SQRT_3 * self.max_void_radius_mm
     }
 
     pub fn validate(self) -> Result<(), DenseCopperBalanceError> {
@@ -91,11 +103,17 @@ impl Default for DenseCopperBalanceProfile {
 ///
 /// `usable_area_mm2` must not overlap `existing_copper_area_mm2`; callers
 /// should remove existing/protected copper while constructing the safe region.
+/// The density target and retained-area denominator cover the whole board
+/// array. Existing copper and non-usable empty area are fixed; only the usable
+/// balancing area can be changed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DenseCopperBalanceAreas {
+    /// Entire retained board-array area used as the density denominator.
     pub retained_area_mm2: f64,
+    /// Fixed copper anywhere in that retained area on the layer being balanced.
     pub existing_copper_area_mm2: f64,
     pub target_density: f64,
+    /// Safe, initially empty subset where generated copper may be added.
     pub usable_area_mm2: f64,
     pub void_count: usize,
 }
@@ -105,7 +123,12 @@ pub struct DenseCopperBalanceAreas {
 pub enum DenseCopperBalanceMode {
     None,
     Solid,
-    Perforated { void_radius_mm: f64 },
+    /// A solid fill perforated by slightly rounded regular flat-top hexagons.
+    ///
+    /// `void_radius_mm` is each hexagon's circumradius.
+    Perforated {
+        void_radius_mm: f64,
+    },
 }
 
 /// Result of projecting the requested copper area onto the manufacturable set.
@@ -123,8 +146,11 @@ pub struct DenseCopperBalanceSolution {
 /// Geometry inputs once a safe region is available.
 #[derive(Debug, Clone, Copy)]
 pub struct DenseCopperBalanceRequest<'a> {
+    /// Safe, initially empty subset of the retained board-array area.
     pub safe_region: &'a ContourSet,
+    /// Entire retained board-array area used as the density denominator.
     pub retained_area_mm2: f64,
+    /// Fixed copper anywhere in that retained area on this layer.
     pub existing_copper_area_mm2: f64,
     pub target_density: f64,
     pub lattice_origin: Point,
@@ -135,6 +161,8 @@ pub struct DenseCopperBalanceRequest<'a> {
 pub struct DenseCopperBalanceResult {
     pub solution: DenseCopperBalanceSolution,
     pub copper: ContourSet,
+    /// Safe-region components large enough to carry the fixed lattice.
+    pub usable: ContourSet,
     /// Fixed lattice centers eligible at the profile's maximum void radius.
     pub lattice_centers: Vec<Point>,
     pub usable_area_mm2: f64,
@@ -189,13 +217,13 @@ pub fn solve_dense_copper_balance(
     );
 
     if areas.void_count > 0 && areas.usable_area_mm2 > 0.0 {
-        let circle_factor = areas.void_count as f64 * PI;
-        let low =
-            (areas.usable_area_mm2 - circle_factor * profile.max_void_radius_mm.powi(2)).max(0.0);
-        let high = (areas.usable_area_mm2 - circle_factor * profile.min_void_radius_mm.powi(2))
+        let void_area_factor = areas.void_count as f64 * ROUNDED_HEXAGON_AREA_FACTOR;
+        let low = (areas.usable_area_mm2 - void_area_factor * profile.max_void_radius_mm.powi(2))
+            .max(0.0);
+        let high = (areas.usable_area_mm2 - void_area_factor * profile.min_void_radius_mm.powi(2))
             .min(areas.usable_area_mm2);
         let projected = desired_added_area.clamp(low, high);
-        let radius = ((areas.usable_area_mm2 - projected) / circle_factor)
+        let radius = ((areas.usable_area_mm2 - projected) / void_area_factor)
             .max(0.0)
             .sqrt()
             .clamp(profile.min_void_radius_mm, profile.max_void_radius_mm);
@@ -230,7 +258,7 @@ pub fn generate_dense_copper_balance(
     let mut eligible_component_count = 0;
 
     for component in request.safe_region.connected_components() {
-        let centers = triangular_lattice_centers(&component, request.lattice_origin, profile);
+        let centers = hex_aligned_lattice_centers(&component, request.lattice_origin, profile);
         if centers.len() < profile.min_centers_per_component {
             continue;
         }
@@ -252,7 +280,7 @@ pub fn generate_dense_copper_balance(
         DenseCopperBalanceMode::None => ContourSet::empty(request.safe_region.tolerance),
         DenseCopperBalanceMode::Solid => usable.clone(),
         DenseCopperBalanceMode::Perforated { void_radius_mm } => {
-            let voids = circle_set(
+            let voids = hexagon_set(
                 &lattice_centers,
                 void_radius_mm,
                 request.safe_region.tolerance,
@@ -266,8 +294,8 @@ pub fn generate_dense_copper_balance(
         / request.retained_area_mm2;
     solution.residual_error = (solution.achieved_density - request.target_density).abs();
 
-    // Boolean flattening approximates circles. Preserve the mathematical
-    // never-worsen contract even at a projection midpoint.
+    // Preserve the mathematical never-worsen contract across geometric
+    // regularization and numeric precision.
     if solution.residual_error
         > (solution.initial_density - request.target_density).abs() + NUMERIC_EPSILON
     {
@@ -275,17 +303,20 @@ pub fn generate_dense_copper_balance(
         return Ok(DenseCopperBalanceResult {
             solution,
             copper: ContourSet::empty(request.safe_region.tolerance),
+            usable,
             lattice_centers,
-            usable_area_mm2: usable.area(),
+            usable_area_mm2: areas.usable_area_mm2,
             eligible_component_count,
         });
     }
 
+    let usable_area_mm2 = usable.area();
     Ok(DenseCopperBalanceResult {
         solution,
         copper,
+        usable,
         lattice_centers,
-        usable_area_mm2: usable.area(),
+        usable_area_mm2,
         eligible_component_count,
     })
 }
@@ -388,7 +419,8 @@ fn validate_areas(
             "existing copper and usable regions must be disjoint within retained area".to_string(),
         ));
     }
-    let maximum_void_area = areas.void_count as f64 * PI * profile.max_void_radius_mm.powi(2);
+    let maximum_void_area =
+        areas.void_count as f64 * ROUNDED_HEXAGON_AREA_FACTOR * profile.max_void_radius_mm.powi(2);
     if maximum_void_area > areas.usable_area_mm2 + NUMERIC_EPSILON {
         return Err(DenseCopperBalanceError::InvalidInput(
             "maximum-radius voids exceed the usable region area".to_string(),
@@ -423,7 +455,7 @@ fn validate_request(
     )
 }
 
-fn triangular_lattice_centers(
+fn hex_aligned_lattice_centers(
     region: &ContourSet,
     origin: Point,
     profile: DenseCopperBalanceProfile,
@@ -432,26 +464,28 @@ fn triangular_lattice_centers(
         return Vec::new();
     }
 
-    let row_pitch = profile.row_pitch_mm();
+    // Hexagon vertices are at 0°, 60°, ...; nearest-neighbor center vectors
+    // are at 30°, 90°, ... so parallel flats face each other.
+    let column_pitch = profile.lattice_column_pitch_mm();
     let keep_in_radius = profile.center_boundary_clearance_mm();
-    let first_row = ((region.bbox.min.y - origin.y) / row_pitch).floor() as i64 - 1;
-    let last_row = ((region.bbox.max.y - origin.y) / row_pitch).ceil() as i64 + 1;
+    let first_column = ((region.bbox.min.x - origin.x) / column_pitch).floor() as i64 - 1;
+    let last_column = ((region.bbox.max.x - origin.x) / column_pitch).ceil() as i64 + 1;
     let mut centers = Vec::new();
 
-    for row in first_row..=last_row {
-        let y = origin.y + row as f64 * row_pitch;
-        let row_offset = if row.rem_euclid(2) == 0 {
+    for column in first_column..=last_column {
+        let x = origin.x + column as f64 * column_pitch;
+        let column_offset = if column.rem_euclid(2) == 0 {
             0.0
         } else {
             profile.pitch_mm / 2.0
         };
-        let row_origin_x = origin.x + row_offset;
-        let first_column =
-            ((region.bbox.min.x - row_origin_x) / profile.pitch_mm).floor() as i64 - 1;
-        let last_column = ((region.bbox.max.x - row_origin_x) / profile.pitch_mm).ceil() as i64 + 1;
+        let column_origin_y = origin.y + column_offset;
+        let first_row =
+            ((region.bbox.min.y - column_origin_y) / profile.pitch_mm).floor() as i64 - 1;
+        let last_row = ((region.bbox.max.y - column_origin_y) / profile.pitch_mm).ceil() as i64 + 1;
 
-        for column in first_column..=last_column {
-            let center = Point::new(row_origin_x + column as f64 * profile.pitch_mm, y);
+        for row in first_row..=last_row {
+            let center = Point::new(x, column_origin_y + row as f64 * profile.pitch_mm);
             if region.contains_disk(center, keep_in_radius) {
                 centers.push(center);
             }
@@ -461,21 +495,61 @@ fn triangular_lattice_centers(
     centers
 }
 
-fn circle_set(centers: &[Point], radius: f64, tolerance: f64) -> ContourSet {
-    let Some(circle) = shapes::circle(2.0 * radius) else {
+fn hexagon_set(centers: &[Point], radius: f64, tolerance: f64) -> ContourSet {
+    let Some(hexagon) = rounded_hexagonal_void(radius) else {
         return ContourSet::empty(tolerance);
     };
     let contours = centers
         .iter()
-        .map(|center| transform_cmds(circle.cmds.iter().copied(), Affine2::translation(*center)))
+        .map(|center| transform_cmds(hexagon.cmds.iter().copied(), Affine2::translation(*center)))
         .collect::<Vec<_>>();
     ContourSet::from_filled_contours(&contours, tolerance)
+}
+
+/// One slightly rounded, flat-top regular hexagonal void centered at zero.
+pub fn rounded_hexagonal_void(radius: f64) -> Option<ContourBuf> {
+    if !radius.is_finite() || radius <= 0.0 {
+        return None;
+    }
+
+    let corner_radius = radius * HEXAGON_CORNER_RADIUS_RATIO;
+    let tangent_distance = corner_radius / SQRT_3;
+    let center_inset = 2.0 * corner_radius / SQRT_3;
+    let vertices = (0..6)
+        .map(|index| {
+            let angle = index as f64 * PI / 3.0;
+            Point::new(radius * angle.cos(), radius * angle.sin())
+        })
+        .collect::<Vec<_>>();
+
+    let corner = |index: usize| {
+        let previous = vertices[(index + 5) % 6];
+        let vertex = vertices[index];
+        let next = vertices[(index + 1) % 6];
+        let incoming = vertex + (previous - vertex) * (tangent_distance / radius);
+        let outgoing = vertex + (next - vertex) * (tangent_distance / radius);
+        let center = vertex * ((radius - center_inset) / radius);
+        (incoming, outgoing, center)
+    };
+
+    let (first_incoming, _, _) = corner(0);
+    let mut commands = Vec::with_capacity(14);
+    commands.push(PathCmd::move_to(first_incoming));
+    for index in 0..6 {
+        let (incoming, outgoing, center) = corner(index);
+        if index > 0 {
+            commands.push(PathCmd::line_to(incoming));
+        }
+        commands.push(PathCmd::arc_to(outgoing, center, false));
+    }
+    commands.push(PathCmd::close());
+    Some(ContourBuf::new(commands))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::{BBox, Point, tol};
+    use crate::geom::{BBox, PathOp, Point, tol};
 
     fn areas(target_density: f64) -> DenseCopperBalanceAreas {
         DenseCopperBalanceAreas {
@@ -488,14 +562,14 @@ mod tests {
     }
 
     #[test]
-    fn solves_continuous_void_radius_exactly() {
+    fn solves_continuous_hexagon_circumradius_exactly() {
         let solution =
             solve_dense_copper_balance(DenseCopperBalanceProfile::V1, areas(0.60)).unwrap();
 
         let DenseCopperBalanceMode::Perforated { void_radius_mm } = solution.mode else {
             panic!("expected perforated balance");
         };
-        let expected_radius = (400.0 / (200.0 * PI)).sqrt();
+        let expected_radius = (400.0 / (200.0 * ROUNDED_HEXAGON_AREA_FACTOR)).sqrt();
         assert!((void_radius_mm - expected_radius).abs() <= 1e-12);
         assert!((solution.generated_area_mm2 - 600.0).abs() <= 1e-9);
         assert!((solution.achieved_density - 0.60).abs() <= 1e-12);
@@ -515,7 +589,7 @@ mod tests {
                 void_radius_mm: 1.0
             }
         );
-        assert!(bounded.residual_error < 0.10);
+        assert!(bounded.residual_error < 0.30);
     }
 
     #[test]
@@ -547,7 +621,27 @@ mod tests {
     }
 
     #[test]
-    fn geometry_uses_one_fixed_triangular_lattice_and_matches_area() {
+    fn target_is_global_while_only_usable_area_is_controllable() {
+        let solution = solve_dense_copper_balance(
+            DenseCopperBalanceProfile::V1,
+            DenseCopperBalanceAreas {
+                retained_area_mm2: 1_000.0,
+                existing_copper_area_mm2: 200.0,
+                target_density: 0.90,
+                usable_area_mm2: 300.0,
+                void_count: 50,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(solution.mode, DenseCopperBalanceMode::Solid);
+        assert_eq!(solution.generated_area_mm2, 300.0);
+        assert_eq!(solution.achieved_density, 0.50);
+        assert_eq!(solution.residual_error, 0.40);
+    }
+
+    #[test]
+    fn geometry_uses_one_fixed_hex_aligned_lattice_and_matches_area() {
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
             tol::REGION_MM,
@@ -572,6 +666,7 @@ mod tests {
         assert!(result.lattice_centers.len() >= 4);
         assert!((result.solution.achieved_density - 0.75).abs() <= 2e-3);
         assert!(result.solution.residual_error < (result.solution.initial_density - 0.75).abs());
+        assert_eq!(result.copper.rings.len(), result.lattice_centers.len() + 1);
 
         for center in &result.lattice_centers {
             assert!(safe_region.contains_disk(
@@ -581,9 +676,21 @@ mod tests {
         }
         for (index, left) in result.lattice_centers.iter().enumerate() {
             for right in &result.lattice_centers[index + 1..] {
-                assert!(left.distance_to(*right) + 1e-9 >= DenseCopperBalanceProfile::V1.pitch_mm);
+                let distance = left.distance_to(*right);
+                assert!(distance + 1e-9 >= DenseCopperBalanceProfile::V1.pitch_mm);
+                if (distance - DenseCopperBalanceProfile::V1.pitch_mm).abs() <= 1e-9 {
+                    let angle_degrees = (right.y - left.y)
+                        .atan2(right.x - left.x)
+                        .to_degrees()
+                        .rem_euclid(60.0);
+                    assert!((angle_degrees - 30.0).abs() <= 1e-9);
+                }
             }
         }
+        assert!(
+            (DenseCopperBalanceProfile::V1.nearest_neighbor_web_mm() - (2.30 - SQRT_3)).abs()
+                <= 1e-12
+        );
     }
 
     #[test]
@@ -608,5 +715,31 @@ mod tests {
         assert!(result.copper.is_empty());
         assert!(result.lattice_centers.is_empty());
         assert_eq!(result.eligible_component_count, 0);
+    }
+
+    #[test]
+    fn rounded_hexagon_uses_six_scaled_corner_arcs_and_tracks_analytic_area() {
+        let radius = 0.8;
+        let hexagon = rounded_hexagonal_void(radius).unwrap();
+        let arcs = hexagon
+            .cmds
+            .iter()
+            .filter(|command| command.op == PathOp::ArcTo)
+            .collect::<Vec<_>>();
+        assert_eq!(arcs.len(), 6);
+        for arc in arcs {
+            assert!(
+                (arc.p0.distance_to(arc.p1) - radius * HEXAGON_CORNER_RADIUS_RATIO).abs() <= 1e-12
+            );
+        }
+
+        let region = ContourSet::from_filled_contours(&[hexagon], tol::REGION_MM);
+        let expected_area = ROUNDED_HEXAGON_AREA_FACTOR * radius.powi(2);
+        assert!(
+            (region.area() - expected_area).abs() <= expected_area * 2e-3,
+            "geometric area {}, analytic area {}",
+            region.area(),
+            expected_area
+        );
     }
 }

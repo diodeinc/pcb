@@ -1,4 +1,7 @@
-use super::balance::generate_board_array_copper_balance;
+use super::balance::{
+    AUTOMATIC_BOARD_ARRAY_TARGET_DENSITY, generate_automatic_board_array_copper_balance,
+    generate_board_array_copper_balance,
+};
 use super::*;
 use crate::accessors::IpcAccessor;
 use crate::ipc2581::types::LayerFunction;
@@ -12,7 +15,7 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceRequest,
 };
-use pcb_ir::geom::{BBox, ContourSet, FillRule, Point, tol};
+use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 
 #[test]
 fn parses_board_margin_css_shorthand() {
@@ -194,6 +197,35 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
 }
 
 #[test]
+fn board_array_creation_automatically_balances_every_copper_layer() {
+    let input = board_fixture_with_top_line_mm();
+    let ipc = Ipc2581::parse(input).unwrap();
+    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, None).unwrap();
+    let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
+    let provisional_xml = write_board_array_xml(input, &spec).unwrap();
+    let provisional = Ipc2581::parse(&provisional_xml).unwrap();
+    let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
+
+    assert_eq!(balance.target_density, AUTOMATIC_BOARD_ARRAY_TARGET_DENSITY);
+    assert!(balance.retained_area_mm2 > 0.0);
+    assert!(!balance.common_safe_region.is_empty());
+    assert_eq!(balance.layers.len(), 1);
+    assert_eq!(balance.layers[0].layer_name, "TOP");
+    assert!(
+        balance.layers[0].result.solution.residual_error
+            <= (balance.layers[0].result.solution.initial_density
+                - AUTOMATIC_BOARD_ARRAY_TARGET_DENSITY)
+                .abs()
+                + 1e-9
+    );
+    assert!(!balance.layers[0].features.is_empty());
+
+    let xml = create_auto_board_array_xml(input).unwrap();
+    assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
+    assert!(xml.matches("<Contour>").count() > 0);
+}
+
+#[test]
 fn board_array_creation_adds_history_record() {
     let xml = create_board_array_xml(
         board_fixture_mm(),
@@ -231,7 +263,7 @@ fn generated_board_array_xml_validates_with_existing_history_and_callouts() {
     assert!(xml.matches("<Line ").count() > 1);
     assert_eq!(
         xml.matches("<Features>").count(),
-        xml.matches("<Line ").count()
+        xml.matches("<Line ").count() + xml.matches("<Contour>").count()
     );
 
     crate::ipc2581::validate(&xml).expect("generated board array XML should validate");
@@ -769,32 +801,20 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
     assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
 
     let parsed = Ipc2581::parse(&xml).unwrap();
-    let array_polygons = array_step(&parsed)
-        .layer_features
-        .iter()
-        .filter(|feature| parsed.resolve(feature.layer_ref) == "TOP")
-        .flat_map(|feature| &feature.sets)
-        .flat_map(|set| set.polygons())
-        .count();
-    assert!(array_polygons > 0);
+    assert!(xml.matches("<Contour>").count() > 0);
 
     let top = geometry::extract_layer_for_view(&parsed, "TOP", View::ArrayFlattened).unwrap();
-    let contours = top
+    let paths = top
         .features
         .iter()
         .filter(|feature| {
             feature.source_step_kind == LayoutStepKind::Panel
-                && feature.kind == FeatureKind::Polygon
+                && feature.kind == FeatureKind::Primitive
         })
-        .flat_map(|feature| {
-            feature
-                .paths
-                .slice(&top.arena.paths)
-                .iter()
-                .flat_map(|path| top.arena.path_contours(path))
-        })
+        .flat_map(|feature| feature.paths.slice(&top.arena.paths))
         .collect::<Vec<_>>();
-    let round_trip = ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM);
+    let round_trip =
+        ContourSet::from_painted_paths(&top.arena, paths.iter().copied(), tol::REGION_MM);
 
     assert!(!round_trip.is_empty());
     assert!(

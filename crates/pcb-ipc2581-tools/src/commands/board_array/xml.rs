@@ -7,6 +7,8 @@
 use super::*;
 use ipc2581::XmlWriter;
 use ipc2581::edit::{Doc, Edit};
+use ipc2581::types::ecad::FeatureUserPrimitive;
+use ipc2581::types::primitives::{UserPrimitive, UserShapeType};
 use ipc2581::write;
 use ipc2581::write::{fmt_num, fmt_units};
 
@@ -314,8 +316,13 @@ pub(super) fn write_set_features(
             }
             SetFeature::Polygon(polygon) => {
                 writer.start_element("Features", &[]);
+                writer.start_element("Contour", &[]);
                 write::polygon(writer, units, polygon);
+                writer.end_element("Contour");
                 writer.end_element("Features");
+            }
+            SetFeature::UserPrimitive(feature) => {
+                write_generated_user_primitive(writer, units, feature)?;
             }
             SetFeature::Fiducial(fiducial) => {
                 write::fiducial(writer, units, fiducial)?;
@@ -326,6 +333,31 @@ pub(super) fn write_set_features(
             _ => bail!("generated board array layer feature has unsupported feature kind"),
         }
     }
+    Ok(())
+}
+
+fn write_generated_user_primitive(
+    writer: &mut XmlWriter,
+    units: Units,
+    feature: &FeatureUserPrimitive,
+) -> Result<()> {
+    let UserPrimitive::UserSpecial(user_special) = &feature.primitive;
+    let [shape] = user_special.shapes.as_slice() else {
+        bail!("generated board array user primitive must contain exactly one shape");
+    };
+    let UserShapeType::Contour(contour) = &shape.shape else {
+        bail!("generated board array user primitive must be a contour");
+    };
+    if shape.line_desc.is_some() || shape.line_desc_ref.is_some() || shape.fill_desc.is_some() {
+        bail!("generated board array contour cannot carry explicit style descriptors");
+    }
+
+    writer.start_element("Features", &[]);
+    if feature.x != 0.0 || feature.y != 0.0 {
+        write::location(writer, "Location", feature.x, feature.y, units);
+    }
+    write::contour(writer, units, contour);
+    writer.end_element("Features");
     Ok(())
 }
 
