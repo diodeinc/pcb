@@ -32,11 +32,11 @@ pub struct DenseCopperBalanceProfile {
 impl DenseCopperBalanceProfile {
     /// Conservative first-party defaults for conventional rigid boards.
     pub const V1: Self = Self {
-        pitch_mm: 2.30,
-        min_void_radius_mm: 0.25,
-        max_void_radius_mm: 1.00,
-        min_copper_web_mm: 0.30,
-        boundary_web_mm: 0.30,
+        pitch_mm: 1.50,
+        min_void_radius_mm: 0.20,
+        max_void_radius_mm: 0.65,
+        min_copper_web_mm: 0.20,
+        boundary_web_mm: 0.20,
         min_centers_per_component: 4,
     };
 
@@ -564,15 +564,15 @@ mod tests {
     #[test]
     fn solves_continuous_hexagon_circumradius_exactly() {
         let solution =
-            solve_dense_copper_balance(DenseCopperBalanceProfile::V1, areas(0.60)).unwrap();
+            solve_dense_copper_balance(DenseCopperBalanceProfile::V1, areas(0.85)).unwrap();
 
         let DenseCopperBalanceMode::Perforated { void_radius_mm } = solution.mode else {
             panic!("expected perforated balance");
         };
-        let expected_radius = (400.0 / (200.0 * ROUNDED_HEXAGON_AREA_FACTOR)).sqrt();
+        let expected_radius = (150.0 / (200.0 * ROUNDED_HEXAGON_AREA_FACTOR)).sqrt();
         assert!((void_radius_mm - expected_radius).abs() <= 1e-12);
-        assert!((solution.generated_area_mm2 - 600.0).abs() <= 1e-9);
-        assert!((solution.achieved_density - 0.60).abs() <= 1e-12);
+        assert!((solution.generated_area_mm2 - 850.0).abs() <= 1e-9);
+        assert!((solution.achieved_density - 0.85).abs() <= 1e-12);
         assert!(solution.residual_error <= 1e-12);
     }
 
@@ -582,14 +582,14 @@ mod tests {
         assert_eq!(none.mode, DenseCopperBalanceMode::None);
 
         let bounded =
-            solve_dense_copper_balance(DenseCopperBalanceProfile::V1, areas(0.30)).unwrap();
+            solve_dense_copper_balance(DenseCopperBalanceProfile::V1, areas(0.70)).unwrap();
         assert_eq!(
             bounded.mode,
             DenseCopperBalanceMode::Perforated {
-                void_radius_mm: 1.0
+                void_radius_mm: 0.65
             }
         );
-        assert!(bounded.residual_error < 0.30);
+        assert!(bounded.residual_error < 0.70);
     }
 
     #[test]
@@ -618,6 +618,54 @@ mod tests {
 
         assert_eq!(solution.mode, DenseCopperBalanceMode::None);
         assert_eq!(solution.initial_density, solution.achieved_density);
+    }
+
+    #[test]
+    fn analytic_projection_never_worsens_a_dense_target_sweep() {
+        for existing_copper_area_mm2 in [0.0, 100.0, 400.0, 800.0] {
+            for usable_area_mm2 in [0.0, 100.0, 1_000.0 - existing_copper_area_mm2] {
+                let void_count = if usable_area_mm2 >= 100.0 { 20 } else { 0 };
+                for target_step in 0..=100 {
+                    let target_density = target_step as f64 / 100.0;
+                    let solution = solve_dense_copper_balance(
+                        DenseCopperBalanceProfile::V1,
+                        DenseCopperBalanceAreas {
+                            retained_area_mm2: 1_000.0,
+                            existing_copper_area_mm2,
+                            target_density,
+                            usable_area_mm2,
+                            void_count,
+                        },
+                    )
+                    .unwrap();
+
+                    let initial_error = (solution.initial_density - target_density).abs();
+                    assert!(solution.residual_error <= initial_error + NUMERIC_EPSILON);
+                    assert!(
+                        (-NUMERIC_EPSILON..=usable_area_mm2 + NUMERIC_EPSILON)
+                            .contains(&solution.generated_area_mm2)
+                    );
+                    match solution.mode {
+                        DenseCopperBalanceMode::None => {
+                            assert!(solution.generated_area_mm2.abs() <= NUMERIC_EPSILON);
+                        }
+                        DenseCopperBalanceMode::Solid => {
+                            assert!(
+                                (solution.generated_area_mm2 - usable_area_mm2).abs()
+                                    <= NUMERIC_EPSILON
+                            );
+                        }
+                        DenseCopperBalanceMode::Perforated { void_radius_mm } => {
+                            assert!(
+                                (DenseCopperBalanceProfile::V1.min_void_radius_mm
+                                    ..=DenseCopperBalanceProfile::V1.max_void_radius_mm)
+                                    .contains(&void_radius_mm)
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -661,7 +709,7 @@ mod tests {
         let DenseCopperBalanceMode::Perforated { void_radius_mm } = result.solution.mode else {
             panic!("expected perforated balance");
         };
-        assert!((0.25..=1.0).contains(&void_radius_mm));
+        assert!((0.20..=0.65).contains(&void_radius_mm));
         assert_eq!(result.eligible_component_count, 1);
         assert!(result.lattice_centers.len() >= 4);
         assert!((result.solution.achieved_density - 0.75).abs() <= 2e-3);
@@ -688,9 +736,12 @@ mod tests {
             }
         }
         assert!(
-            (DenseCopperBalanceProfile::V1.nearest_neighbor_web_mm() - (2.30 - SQRT_3)).abs()
+            (DenseCopperBalanceProfile::V1.nearest_neighbor_web_mm() - (1.50 - SQRT_3 * 0.65))
+                .abs()
                 <= 1e-12
         );
+        assert_eq!(DenseCopperBalanceProfile::V1.min_copper_web_mm, 0.20);
+        assert_eq!(DenseCopperBalanceProfile::V1.boundary_web_mm, 0.20);
     }
 
     #[test]

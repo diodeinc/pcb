@@ -258,7 +258,24 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
         );
     }
 
-    let xml = create_auto_board_array_xml(&input).unwrap();
+    let creation = create_auto_board_array(&input, None).unwrap();
+    assert_eq!(creation.copper_balance.layers.len(), 2);
+    for report in &creation.copper_balance.layers {
+        assert!(
+            (report.existing_copper_area_mm2
+                + report.usable_area_mm2
+                + report.fixed_empty_area_mm2
+                - creation.copper_balance.retained_area_mm2)
+                .abs()
+                <= 1e-6
+        );
+        assert!(
+            report.residual_error <= (report.initial_density - report.target_density).abs() + 1e-9
+        );
+    }
+    assert!(serde_json::to_value(&creation.copper_balance).unwrap()["layers"].is_array());
+
+    let xml = creation.xml;
     assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
     assert!(xml.matches("<Contour>").count() > 0);
 }

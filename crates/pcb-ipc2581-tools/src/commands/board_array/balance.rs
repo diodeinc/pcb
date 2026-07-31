@@ -25,6 +25,7 @@ use pcb_ir::geom::copper_balance::{
 use pcb_ir::geom::path::transform_cmds;
 use pcb_ir::geom::region::simplify_shapes;
 use pcb_ir::geom::{Affine2, ContourBuf, ContourSet, FillRule, PathOp, Point, tol};
+use serde::Serialize;
 
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
@@ -51,6 +52,96 @@ pub struct AutomaticBoardArrayCopperBalance {
     pub common_safe_region: ContourSet,
     pub retained_area_mm2: f64,
     pub layers: Vec<AutomaticBoardArrayLayerBalance>,
+}
+
+/// Compact, serializable accounting for one layer's automatic balance.
+#[derive(Debug, Clone, Serialize)]
+pub struct AutomaticBoardArrayLayerBalanceReport {
+    pub layer_name: String,
+    pub mode: AutomaticBoardArrayCopperBalanceMode,
+    pub void_radius_mm: Option<f64>,
+    pub target_density: f64,
+    pub initial_density: f64,
+    pub achieved_density: f64,
+    pub residual_error: f64,
+    pub existing_copper_area_mm2: f64,
+    pub desired_added_area_mm2: f64,
+    pub generated_area_mm2: f64,
+    pub safe_area_mm2: f64,
+    pub usable_area_mm2: f64,
+    pub fixed_empty_area_mm2: f64,
+    pub lattice_center_count: usize,
+    pub eligible_component_count: usize,
+}
+
+/// Topology selected for one layer's automatic balance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomaticBoardArrayCopperBalanceMode {
+    None,
+    Solid,
+    Perforated,
+}
+
+/// Compact, serializable accounting for a completed automatic balance plan.
+#[derive(Debug, Clone, Serialize)]
+pub struct AutomaticBoardArrayCopperBalanceReport {
+    pub retained_area_mm2: f64,
+    pub board_footprint_area_mm2: f64,
+    pub common_safe_area_mm2: f64,
+    pub layers: Vec<AutomaticBoardArrayLayerBalanceReport>,
+}
+
+impl AutomaticBoardArrayCopperBalance {
+    /// Discard heavy geometry while retaining enough data to audit the result.
+    pub fn report(&self) -> AutomaticBoardArrayCopperBalanceReport {
+        AutomaticBoardArrayCopperBalanceReport {
+            retained_area_mm2: self.retained_area_mm2,
+            board_footprint_area_mm2: self.board_footprints.area(),
+            common_safe_area_mm2: self.common_safe_region.area(),
+            layers: self
+                .layers
+                .iter()
+                .map(|layer| {
+                    let solution = layer.result.solution;
+                    let existing_copper_area_mm2 = layer.existing_copper.area();
+                    let fixed_empty_area_mm2 = (self.retained_area_mm2
+                        - existing_copper_area_mm2
+                        - layer.result.usable_area_mm2)
+                        .max(0.0);
+                    let (mode, void_radius_mm) = match solution.mode {
+                        DenseCopperBalanceMode::None => {
+                            (AutomaticBoardArrayCopperBalanceMode::None, None)
+                        }
+                        DenseCopperBalanceMode::Solid => {
+                            (AutomaticBoardArrayCopperBalanceMode::Solid, None)
+                        }
+                        DenseCopperBalanceMode::Perforated { void_radius_mm } => (
+                            AutomaticBoardArrayCopperBalanceMode::Perforated,
+                            Some(void_radius_mm),
+                        ),
+                    };
+                    AutomaticBoardArrayLayerBalanceReport {
+                        layer_name: layer.layer_name.clone(),
+                        mode,
+                        void_radius_mm,
+                        target_density: solution.target_density,
+                        initial_density: solution.initial_density,
+                        achieved_density: solution.achieved_density,
+                        residual_error: solution.residual_error,
+                        existing_copper_area_mm2,
+                        desired_added_area_mm2: solution.desired_added_area_mm2,
+                        generated_area_mm2: solution.generated_area_mm2,
+                        safe_area_mm2: layer.safe_region.area(),
+                        usable_area_mm2: layer.result.usable_area_mm2,
+                        fixed_empty_area_mm2,
+                        lattice_center_count: layer.result.lattice_centers.len(),
+                        eligible_component_count: layer.result.eligible_component_count,
+                    }
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Plan best-effort copper balancing for every copper layer in a board array.
