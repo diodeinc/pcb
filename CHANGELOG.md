@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.17] - 2026-07-31
+
 ### Fixed
 
 - IPC-2581 BOM selections now fall back to an explicit reference designator when the stable Path is unavailable.
@@ -1421,7 +1423,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.16...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.17...HEAD
+[0.4.17]: https://github.com/diodeinc/pcb/compare/v0.4.16...v0.4.17
 [0.4.16]: https://github.com/diodeinc/pcb/compare/v0.4.15...v0.4.16
 [0.4.15]: https://github.com/diodeinc/pcb/compare/v0.4.14...v0.4.15
 [0.4.14]: https://github.com/diodeinc/pcb/compare/v0.4.13...v0.4.14
