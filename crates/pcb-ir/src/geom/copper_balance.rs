@@ -32,7 +32,7 @@ pub struct DenseCopperBalanceProfile {
 impl DenseCopperBalanceProfile {
     /// Conservative first-party defaults for conventional rigid boards.
     pub const V1: Self = Self {
-        pitch_mm: 1.50,
+        pitch_mm: 1.35,
         min_void_radius_mm: 0.20,
         max_void_radius_mm: 0.65,
         min_copper_web_mm: 0.20,
@@ -736,7 +736,7 @@ mod tests {
             }
         }
         assert!(
-            (DenseCopperBalanceProfile::V1.nearest_neighbor_web_mm() - (1.50 - SQRT_3 * 0.65))
+            (DenseCopperBalanceProfile::V1.nearest_neighbor_web_mm() - (1.35 - SQRT_3 * 0.65))
                 .abs()
                 <= 1e-12
         );
