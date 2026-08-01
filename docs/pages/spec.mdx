@@ -310,7 +310,12 @@ declare `attrs = {"baud_max": "8MHz"}` — and only that: an undeclared key
 (`baudMax`, `max_baudrate`...) or a value of the wrong dimension (`"3.3V"`
 for a `Frequency`) is an elaboration error naming the declared vocabulary.
 Attribute names, like capability names, are declared once — in the
-interface — not reinvented per component.
+interface — not reinvented per component. The stdlib declares a consistent
+rate vocabulary: `clk_max` on clocked buses (`Spi`, `I2c`, `Sdio`, `Jtag`,
+memory buses...), `baud_max` on asynchronous serial (`Uart`, `Rs232`,
+`Rs422`), `bitrate_max` on encoded serial links (`Can`, `Usb2`/`Usb3`,
+`Pcie`, `Ethernet`, display/camera lanes...), plus `freq_max` on `OscPair`
+and `gbw` on `Opamp`.
 
 ## Pin capabilities and assignment
 

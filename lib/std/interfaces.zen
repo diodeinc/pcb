@@ -34,11 +34,13 @@ DiffPair = interface(
 Can = interface(
     CAN_H=Net(),
     CAN_L=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 CanTtl = interface(
     TX=Net(),
     RX=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 Csi = interface(
@@ -47,6 +49,7 @@ Csi = interface(
     D1=DiffPair(impedance=Impedance(100)),
     D2=DiffPair(impedance=Impedance(100)),
     D3=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Dvp8 = interface(
@@ -62,6 +65,7 @@ Dvp8 = interface(
     D5=Net(),
     D6=Net(),
     D7=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Dvp10 = interface(
@@ -79,6 +83,7 @@ Dvp10 = interface(
     D7=Net(),
     D8=Net(),
     D9=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Dvp12 = interface(
@@ -98,6 +103,7 @@ Dvp12 = interface(
     D9=Net(),
     D10=Net(),
     D11=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Dvp16 = interface(
@@ -121,6 +127,7 @@ Dvp16 = interface(
     D13=Net(),
     D14=Net(),
     D15=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 
@@ -131,6 +138,7 @@ DisplayPort = interface(
     ML2=DiffPair(impedance=Impedance(100)),
     ML3=DiffPair(impedance=Impedance(100)),
     HPD=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 Dsi = interface(
@@ -139,6 +147,7 @@ Dsi = interface(
     D1=DiffPair(impedance=Impedance(100)),
     D2=DiffPair(impedance=Impedance(100)),
     D3=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Edp = interface(
@@ -147,6 +156,7 @@ Edp = interface(
     TX1=DiffPair(impedance=Impedance(100)),
     TX2=DiffPair(impedance=Impedance(100)),
     TX3=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Emmc = interface(
@@ -162,11 +172,13 @@ Emmc = interface(
     DAT7=Net(impedance=Impedance(50)),
     DS=Net(impedance=Impedance(50)),
     RST_N=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Ethernet = interface(
     TX=DiffPair(impedance=Impedance(100)),
     RX=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Ethernet_Phy = interface(
@@ -192,11 +204,13 @@ Hdmi = interface(
     SCL=Net(),
     SDA=Net(),
     HPD=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 I2c = interface(
     SDA=Net(),
     SCL=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 I2s = interface(
@@ -204,6 +218,7 @@ I2s = interface(
     LRCLK=Net(),
     SDATA=Net(),
     MCLK=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 I2sBidirectional = interface(
@@ -212,11 +227,13 @@ I2sBidirectional = interface(
     SDATA_IN=Net(),
     SDATA_OUT=Net(),
     MCLK=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 I3c = interface(
     SDA=Net(),
     SCL=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Jtag = interface(
@@ -225,6 +242,7 @@ Jtag = interface(
     TCK=Net(),
     TMS=Net(),
     TRST=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Lcd = interface(
@@ -256,6 +274,7 @@ Lcd = interface(
     B5=Net(),
     B6=Net(),
     B7=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Lvds = interface(
@@ -263,11 +282,13 @@ Lvds = interface(
     DATA0=DiffPair(impedance=Impedance(100)),
     DATA1=DiffPair(impedance=Impedance(100)),
     DATA2=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Mdio = interface(
     MDC=Net(),
     MDIO=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Mdi = interface(
@@ -275,6 +296,7 @@ Mdi = interface(
     B=DiffPair(impedance=Impedance(100)),
     C=DiffPair(impedance=Impedance(100)),
     D=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Mii = interface(
@@ -293,6 +315,7 @@ Mii = interface(
     RX_ER=Net(),
     COL=Net(),
     CRS=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 Mipi = interface(
@@ -301,21 +324,25 @@ Mipi = interface(
     DATA1=DiffPair(impedance=Impedance(100)),
     DATA2=DiffPair(impedance=Impedance(100)),
     DATA3=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 OneWire = interface(
     DQ=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 Opamp = interface(
     IN_P=Net(),
     IN_N=Net(),
     OUT=Net(),
+    attrs={"gbw": Frequency},
 )
 
 OscPair = interface(
     XIN=Net(),
     XOUT=Net(),
+    attrs={"freq_max": Frequency},
 )
 
 Pcie = interface(
@@ -324,6 +351,7 @@ Pcie = interface(
     REFCLK=DiffPair(impedance=Impedance(85)),
     PERST=Net(),
     WAKE=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 PcieGen3x1Lane = interface(
@@ -333,6 +361,7 @@ PcieGen3x1Lane = interface(
     RESET_N=Net(),
     WAKE_N=Net(),
     CLK_REQ_N=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 PcieGen3x2Lane = interface(
@@ -344,6 +373,7 @@ PcieGen3x2Lane = interface(
     RESET_N=Net(),
     WAKE_N=Net(),
     CLK_REQ_N=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 PcieGen4x1Lane = interface(
@@ -353,6 +383,7 @@ PcieGen4x1Lane = interface(
     RESET_N=Net(),
     WAKE_N=Net(),
     CLK_REQ_N=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 PcieGen4x2Lane = interface(
@@ -364,6 +395,7 @@ PcieGen4x2Lane = interface(
     RESET_N=Net(),
     WAKE_N=Net(),
     CLK_REQ_N=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 PcieGen4x4Lane = interface(
@@ -379,6 +411,7 @@ PcieGen4x4Lane = interface(
     RESET_N=Net(),
     WAKE_N=Net(),
     CLK_REQ_N=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 PcieGen4x8Lane = interface(
@@ -402,6 +435,7 @@ PcieGen4x8Lane = interface(
     RESET_N=Net(),
     WAKE_N=Net(),
     CLK_REQ_N=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 PcieGen4x16Lane = interface(
@@ -441,6 +475,7 @@ PcieGen4x16Lane = interface(
     RESET_N=Net(),
     WAKE_N=Net(),
     CLK_REQ_N=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 QLink = interface(
@@ -450,6 +485,7 @@ QLink = interface(
     L2=DiffPair(impedance=Impedance(100)),
     L3=DiffPair(impedance=Impedance(100)),
     L4=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Qspi = interface(
@@ -459,6 +495,7 @@ Qspi = interface(
     IO1=Net(impedance=Impedance(50)),
     IO2=Net(impedance=Impedance(50)),
     IO3=Net(impedance=Impedance(50)),
+    attrs={"clk_max": Frequency},
 )
 
 Rgmii = interface(
@@ -474,6 +511,7 @@ Rgmii = interface(
     RXD3=Net(impedance=Impedance(50)),
     RX_CTL=Net(impedance=Impedance(50)),
     RXC=Net(impedance=Impedance(50)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Rmii = interface(
@@ -485,6 +523,7 @@ Rmii = interface(
     CRS_DV=Net(),
     RX_ER=Net(),
     REF_CLK=Net(),
+    attrs={"bitrate_max": Frequency},
 )
 
 Rs232 = interface(
@@ -496,6 +535,7 @@ Rs232 = interface(
     DSR=Net("DSR"),
     DCD=Net("DCD"),
     RI=Net("RI"),
+    attrs={"baud_max": Frequency},
 )
 
 Rs422 = interface(
@@ -503,6 +543,7 @@ Rs422 = interface(
     RX=DiffPair(impedance=Impedance(100)),
     RTS=DiffPair(impedance=Impedance(100)),
     CTS=DiffPair(impedance=Impedance(100)),
+    attrs={"baud_max": Frequency},
 )
 
 Rs485 = Rs422
@@ -510,6 +551,7 @@ Rs485 = Rs422
 Sata = interface(
     TX=DiffPair(impedance=Impedance(100)),
     RX=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Sdio = interface(
@@ -519,6 +561,7 @@ Sdio = interface(
     DAT1=Net(impedance=Impedance(50)),
     DAT2=Net(impedance=Impedance(50)),
     DAT3=Net(impedance=Impedance(50)),
+    attrs={"clk_max": Frequency},
 )
 
 Sdmmc = interface(
@@ -532,6 +575,7 @@ Sdmmc = interface(
     DAT5=Net(impedance=Impedance(50)),
     DAT6=Net(impedance=Impedance(50)),
     DAT7=Net(impedance=Impedance(50)),
+    attrs={"clk_max": Frequency},
 )
 
 Lpddr4Channel = interface(
@@ -565,6 +609,7 @@ Lpddr4Channel = interface(
     DQS0=DiffPair(impedance=Impedance(80)),
     DQS1=DiffPair(impedance=Impedance(80)),
     ODT_CA=Net(impedance=Impedance(40)),
+    attrs={"clk_max": Frequency},
 )
 
 Sdram16 = interface(
@@ -607,6 +652,7 @@ Sdram16 = interface(
     WE_N=Net(),
     DQM0=Net(),
     DQM1=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Sdram32 = interface(
@@ -667,6 +713,7 @@ Sdram32 = interface(
     DQM1=Net(),
     DQM2=Net(),
     DQM3=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 SmBus = I2c
@@ -676,16 +723,19 @@ Spi = interface(
     MISO=Net(),
     MOSI=Net(),
     CLK=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Spmi = interface(
     CLK=Net(impedance=Impedance(50)),
     DATA=Net(impedance=Impedance(50)),
+    attrs={"clk_max": Frequency},
 )
 
 Swd = interface(
     SWDIO=Net(),
     SWCLK=Net(),
+    attrs={"clk_max": Frequency},
 )
 
 Uart = interface(
@@ -734,16 +784,19 @@ Ufs = interface(
     L0_TX=DiffPair(impedance=Impedance(100)),
     L1_RX=DiffPair(impedance=Impedance(100)),
     L1_TX=DiffPair(impedance=Impedance(100)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Usb2 = interface(
     D=DiffPair(impedance=Impedance(90)),
+    attrs={"bitrate_max": Frequency},
 )
 
 Usb3 = interface(
     D=DiffPair(impedance=Impedance(90)),
     SSTX=DiffPair(impedance=Impedance(90)),
     SSRX=DiffPair(impedance=Impedance(90)),
+    attrs={"bitrate_max": Frequency},
 )
 
 UsbTypeC = interface(

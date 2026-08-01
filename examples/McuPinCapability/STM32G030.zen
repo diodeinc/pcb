@@ -59,6 +59,7 @@ SPI1 = peripheral(
         "MISO": [pin("PA6", data = {"af": 0})],
         "MOSI": [pin("PA7", data = {"af": 0})],
     },
+    attrs = {"clk_max": "24MHz"},
 )
 
 I2C1 = peripheral(
@@ -69,6 +70,7 @@ I2C1 = peripheral(
         "SDA": [pin("PB7", data = {"af": 6})],
         "SCL": [pin("PB6", data = {"af": 6})],
     },
+    attrs = {"clk_max": "400kHz"},
 )
 
 SWD_PORT = peripheral(
