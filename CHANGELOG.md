@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - The `pcb` installer and self-updater now manage a cross-platform `diode://` launcher for opening sandbox layouts directly in KiCad.
 
+### Fixed
+
+- Linux `pcb-launcher --install` now treats desktop-database and MIME registration tool failures as best-effort so a partial desktop environment no longer aborts `pcb` install.
+
 ## [0.4.17] - 2026-07-31
 
 ### Fixed

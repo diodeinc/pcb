@@ -217,8 +217,7 @@ mod platform {
 
     fn run_optional(command: &mut Command, description: &str) -> Result<()> {
         match command.status() {
-            Ok(status) if status.success() => Ok(()),
-            Ok(status) => bail!("failed to {description}: {status}"),
+            Ok(_) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error).with_context(|| format!("failed to {description}")),
         }
