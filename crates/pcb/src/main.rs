@@ -1708,20 +1708,34 @@ fn self_update() -> Result<()> {
     let current_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
     let mut failures = Vec::new();
     let mut shim_status = format!("pcb shim {current_version}: current");
-    if std::env::var_os(SELF_UPDATE_REEXEC_ENV).is_none() {
-        match fetch_latest_release() {
-            Ok(latest) if latest.version > current_version => {
+    let latest_release = match fetch_latest_release() {
+        Ok(latest) => {
+            if std::env::var_os(SELF_UPDATE_REEXEC_ENV).is_none()
+                && latest.version > current_version
+            {
                 let version = latest.version.clone();
                 let shim = install_shim_update(&latest)?;
                 reexec_self_update(&shim, &current_version, &version)?;
             }
-            Ok(_) => {}
-            Err(err) => {
-                shim_status = format!("pcb shim {current_version}: update check failed");
-                failures.push(format!("failed to check latest pcb shim release: {err}"));
-            }
+            Some(latest)
         }
-    }
+        Err(err) => {
+            shim_status = format!("pcb shim {current_version}: update check failed");
+            failures.push(format!("failed to check latest pcb shim release: {err}"));
+            None
+        }
+    };
+
+    let launcher_status = match latest_release.as_ref() {
+        Some(latest) => match install_shim_launcher(latest) {
+            Ok(()) => "pcb launcher: current".to_string(),
+            Err(err) => {
+                failures.push(format!("failed to update the pcb launcher: {err}"));
+                "pcb launcher: update failed".to_string()
+            }
+        },
+        None => "pcb launcher: update skipped".to_string(),
+    };
 
     let mut requests = BTreeSet::new();
     let stable_result: Result<Vec<(Version, Version, PathBuf)>> = (|| {
@@ -1795,6 +1809,7 @@ fn self_update() -> Result<()> {
     };
 
     println!("{shim_status}");
+    println!("{launcher_status}");
     println!(
         "stable toolchains: {}",
         if stable_result.is_ok() {
@@ -1884,6 +1899,75 @@ fn install_shim_update(latest: &LatestRelease) -> Result<PathBuf> {
     copy_executable_permissions(&binary, &binary)?;
     self_replace::self_replace(binary)?;
     Ok(installed_shim)
+}
+
+fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
+    ensure_supported_target()?;
+
+    let installed_shim =
+        std::env::current_exe().context("failed to locate current pcb shim executable")?;
+    let install_dir = installed_shim
+        .parent()
+        .context("current pcb shim has no parent directory")?;
+    let installed_launcher = install_dir.join(executable_name("pcb-launcher"));
+    let client = http_client(ARCHIVE_TIMEOUT)?;
+    let mut download = None;
+    for target in download_target_triples().iter().copied() {
+        let binary_name = binary_artifact_name_for("pcb-launcher", target);
+        let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
+        if let Some(bytes) = download_optional_artifact(&client, &binary_url)? {
+            download = Some((binary_url, bytes));
+            break;
+        }
+    }
+    let Some((binary_url, bytes)) = download else {
+        anyhow::bail!(
+            "no pcb launcher binary found for {} on {}",
+            latest.tag,
+            target_triple()
+        );
+    };
+    verify_checksum(&binary_url, &bytes)?;
+
+    let temporary_launcher = install_dir.join(format!(".pcb-launcher-{}.tmp", std::process::id()));
+    fs::write(&temporary_launcher, bytes).with_context(|| {
+        format!(
+            "failed to stage pcb launcher at {}",
+            temporary_launcher.display()
+        )
+    })?;
+    copy_executable_permissions(&temporary_launcher, &temporary_launcher)?;
+
+    #[cfg(windows)]
+    if installed_launcher.exists() {
+        fs::remove_file(&installed_launcher).with_context(|| {
+            format!(
+                "failed to replace existing pcb launcher {}",
+                installed_launcher.display()
+            )
+        })?;
+    }
+    fs::rename(&temporary_launcher, &installed_launcher).with_context(|| {
+        format!(
+            "failed to install pcb launcher at {}",
+            installed_launcher.display()
+        )
+    })?;
+
+    let status = Command::new(&installed_launcher)
+        .arg("--install")
+        .status()
+        .with_context(|| {
+            format!(
+                "failed to run pcb launcher registration at {}",
+                installed_launcher.display()
+            )
+        })?;
+    anyhow::ensure!(
+        status.success(),
+        "pcb launcher registration failed with {status}"
+    );
+    Ok(())
 }
 
 fn reexec_self_update(shim: &Path, from: &Version, to: &Version) -> Result<()> {
