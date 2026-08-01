@@ -17,7 +17,9 @@ Led = Module("@stdlib/generics/Led.zen")
 VDD = Power("VDD_3V3", voltage = "3.3V")
 GND = Ground("GND")
 
-DEBUG = Uart("DEBUG")
+# Declaring the logic level on the bus nets is what arms the MCU's
+# logic-level check: a 5V UART here fails the build against VDD=3.3V.
+DEBUG = Uart("DEBUG", TX = Net("DEBUG_TX", voltage = "3.3V"), RX = Net("DEBUG_RX", voltage = "3.3V"))
 FLASH = Spi("FLASH")
 SWD = Swd("SWD")
 LED_CTRL = Net("LED_CTRL")

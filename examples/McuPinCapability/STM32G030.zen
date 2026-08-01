@@ -14,6 +14,8 @@ STM32G030 datasheet before using this module for a real board.
 """
 
 load("@stdlib/interfaces.zen", "Uart", "Usart", "Spi", "I2c", "Swd")
+load("@stdlib/checks.zen", "voltage_within")
+load("@stdlib/units.zen", "Voltage")
 
 # Single-signal capabilities not (yet) in the stdlib vocabulary.
 AdcIn = interface(IN = Net())
@@ -126,6 +128,21 @@ named = {"SWD": SWD, "DEBUG": DEBUG, "FLASH": FLASH, "SENSOR": SENSOR}
 named.update(gpio)
 named.update(adc)
 m = pin_map(res["assignment"], named)
+
+# Logic-level contract: every signal this MCU drives or reads lives between
+# 0V and VDD — computed from the caller's ACTUAL rail, never hardcoded (the
+# same die is a 1.8V part on a 1.8V rail). Nets with no declared voltage are
+# skipped (stdlib guard): declaring levels is how a design opts into the
+# check, and how a 5V net gets rejected at build time.
+def _enforce_logic_levels():
+    v = VDD.voltage
+    if v == None:
+        return
+    lvl = voltage_within(Voltage(min = 0.0, max = v.max), name = "logic_level")
+    for net in m.values():
+        lvl(net)
+
+_enforce_logic_levels()
 
 # Every candidate pin no request claimed is intentionally open — the solver
 # knows the full mux-pin set from the capability tables, no separate list.
