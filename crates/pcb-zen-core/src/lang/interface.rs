@@ -515,6 +515,10 @@ pub struct InterfaceFactoryGen<V: InterfaceCell> {
     /// Interface types this one implies (capability closure): a peripheral
     /// providing this interface also satisfies requests for any implied one.
     implies: Vec<V>,
+    /// Declared attribute vocabulary for capability providers: attribute
+    /// name -> physical value type (e.g. {"baud_max": Frequency}). Providers
+    /// may only declare attrs listed here, with matching dimensions.
+    attr_spec: SmallMap<String, V>,
     param_spec: ParametersSpec<FrozenValue>,
 }
 
@@ -532,6 +536,7 @@ impl Freeze for InterfaceFactory<'_> {
             fields: self.fields.freeze(freezer)?,
             post_init_fn: self.post_init_fn.freeze(freezer)?,
             implies: self.implies.freeze(freezer)?,
+            attr_spec: self.attr_spec.freeze(freezer)?,
             param_spec: self.param_spec,
         })
     }
@@ -771,12 +776,35 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
         let mut fields = SmallMap::new();
         let mut post_init_fn = None;
         let mut implies: Vec<Value<'v>> = Vec::new();
+        let mut attr_spec: SmallMap<String, Value<'v>> = SmallMap::new();
 
         // Process field specifications and validate reserved names
         for (name, v) in &kwargs {
             if name == "__post_init__" {
                 // Handle __post_init__ as direct function assignment
                 post_init_fn = Some(v.to_value());
+            } else if name == "attrs" {
+                let d =
+                    starlark::values::dict::DictRef::from_value(v.to_value()).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "interface(attrs=...) must be a dict of attribute name -> physical type"
+                        )
+                    })?;
+                for (k, ty) in d.iter() {
+                    let key = k.unpack_str().ok_or_else(|| {
+                        anyhow::anyhow!("interface(attrs=...) keys must be strings")
+                    })?;
+                    if ty
+                        .downcast_ref::<pcb_sch::physical::PhysicalValueType>()
+                        .is_none()
+                    {
+                        return Err(anyhow::anyhow!(
+                            "interface(attrs=...): `{key}` must map to a physical value type                              (Voltage, Frequency, ...), got `{}`",
+                            ty.get_type()
+                        ));
+                    }
+                    attr_spec.insert(key.to_owned(), ty);
+                }
             } else if name == "implies" {
                 let list =
                     starlark::values::list::ListRef::from_value(v.to_value()).ok_or_else(|| {
@@ -841,6 +869,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
             fields,
             post_init_fn,
             implies,
+            attr_spec,
             param_spec,
         });
 
@@ -916,6 +945,12 @@ impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
     #[inline]
     pub fn implies(&self) -> &[V] {
         &self.implies
+    }
+
+    /// Declared capability-attribute vocabulary (see `interface(attrs=...)`).
+    #[inline]
+    pub fn attr_spec(&self) -> &SmallMap<String, V> {
+        &self.attr_spec
     }
 
     /// Globally unique nominal identity of this interface type.

@@ -63,6 +63,8 @@ struct IfaceInfo<'v> {
     name: String,
     fields: Vec<String>,
     implies: Vec<Value<'v>>,
+    /// Declared capability-attribute vocabulary: name -> physical type value.
+    attr_specs: Vec<(String, Value<'v>)>,
 }
 
 fn iface_info<'v>(v: Value<'v>) -> Option<IfaceInfo<'v>> {
@@ -72,6 +74,11 @@ fn iface_info<'v>(v: Value<'v>) -> Option<IfaceInfo<'v>> {
             name: f.type_name().unwrap_or_else(|| v.to_string()),
             fields: f.fields().iter().map(|(k, _)| k.clone()).collect(),
             implies: f.implies().iter().map(|x| x.to_value()).collect(),
+            attr_specs: f
+                .attr_spec()
+                .iter()
+                .map(|(k, t)| (k.clone(), t.to_value()))
+                .collect(),
         });
     }
     if let Some(f) = v.downcast_ref::<FrozenInterfaceFactory>() {
@@ -80,6 +87,11 @@ fn iface_info<'v>(v: Value<'v>) -> Option<IfaceInfo<'v>> {
             name: f.type_name().unwrap_or_else(|| v.to_string()),
             fields: f.fields().iter().map(|(k, _)| k.clone()).collect(),
             implies: f.implies().iter().map(|x| x.to_value()).collect(),
+            attr_specs: f
+                .attr_spec()
+                .iter()
+                .map(|(k, t)| (k.clone(), t.to_value()))
+                .collect(),
         });
     }
     None
@@ -783,18 +795,60 @@ fn make_peripheral_dict<'v>(
         }
     }
 
-    // Parse string attrs into physical values at declaration (same parser as
-    // everywhere else); non-physical strings stay as strings.
+    // Attrs are validated against the vocabulary DECLARED by the provided
+    // interfaces (closure included): an unknown key or a value of the wrong
+    // dimension is a declaration error — every provider of Uart spells
+    // "baud_max" the same way, with a Frequency.
+    let mut declared: Vec<(String, pcb_sch::physical::PhysicalUnitDims, String)> = Vec::new();
+    for p in provides {
+        for info in iface_closure(*p)? {
+            for (aname, ty) in &info.attr_specs {
+                if let Some(t) = ty.downcast_ref::<pcb_sch::physical::PhysicalValueType>()
+                    && !declared.iter().any(|(n, _, _)| n == aname)
+                {
+                    declared.push((aname.clone(), t.dims(), info.name.clone()));
+                }
+            }
+        }
+    }
     let mut attr_pairs: Vec<(Value, Value)> = Vec::new();
     for (k, v) in attrs.iter() {
-        let parsed = match v.unpack_str() {
-            Some(s) => match PhysicalValue::from_str(s) {
-                Ok(pv) => heap.alloc(pv),
-                Err(_) => *v,
-            },
-            None => *v,
+        let Some((_, dims, owner)) = declared.iter().find(|(n, _, _)| n == k) else {
+            let known = if declared.is_empty() {
+                "the provided interfaces declare no attrs".to_owned()
+            } else {
+                format!(
+                    "declared: {}",
+                    declared
+                        .iter()
+                        .map(|(n, _, o)| format!("`{n}` ({o})"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            return Err(anyhow::anyhow!(
+                "peripheral `{name}`: attr `{k}` is not declared by any provided interface — {known}"
+            ));
         };
-        attr_pairs.push((heap.alloc(k.as_str()), parsed));
+        let parsed: PhysicalValue = match v.unpack_str() {
+            Some(txt) => PhysicalValue::from_str(txt).map_err(|e| {
+                anyhow::anyhow!("peripheral `{name}`: attr `{k}`: cannot parse `{txt}`: {e}")
+            })?,
+            None => PhysicalValue::try_from(*v).map_err(|_| {
+                anyhow::anyhow!(
+                    "peripheral `{name}`: attr `{k}` must be a physical value, got `{}`",
+                    v.get_type()
+                )
+            })?,
+        };
+        if parsed.unit != *dims {
+            return Err(anyhow::anyhow!(
+                "peripheral `{name}`: attr `{k}` (declared on {owner}) expects {}, got {}",
+                dims.quantity(),
+                parsed.unit.quantity()
+            ));
+        }
+        attr_pairs.push((heap.alloc(k.as_str()), heap.alloc(parsed)));
     }
 
     let signal_pairs: Vec<(Value, Value)> = signals

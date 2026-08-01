@@ -15,7 +15,8 @@ use pcb_zen_core::WithDiagnostics;
 use pcb_zen_core::lang::eval::EvalOutput;
 
 const IFACES: &str = r#"
-Uart = interface(TX = Net, RX = Net)
+Frequency = 1 / builtin.Time
+Uart = interface(TX = Net, RX = Net, attrs = {"baud_max": Frequency})
 Usart = interface(TX = Net, RX = Net, CK = Net, implies = [Uart])
 UartFlow = interface(TX = Net, RX = Net, RTS = Net, CTS = Net, implies = [Uart])
 I2c = interface(SDA = Net, SCL = Net)
@@ -775,4 +776,43 @@ Mcu(name = "M1", gpio = {"LED": at(Net("LED"), "PA10")}, adc = {"VBAT": Net("VBA
     assert_eq!(get("led_pin"), "PA10", "at() constraint through the dict");
     assert_eq!(get("vbat_pin"), "PA0", "ADC role served");
     assert_eq!(get("map_size"), "2", "pin_map must cover both roles");
+}
+
+#[test]
+fn attr_vocabulary_is_enforced() {
+    // A typoed attr key is a declaration error naming the declared vocabulary.
+    let result = eval_with_fixtures(
+        r#"
+load("./ifaces.zen", "Uart")
+
+peripheral("U9", provides = [Uart], rebind = "firmware",
+    signals = {"TX": [pin("P1")], "RX": [pin("P2")]},
+    attrs = {"baudMax": "8MHz"})
+"#,
+    );
+    assert_fails_with(&result, "not declared by any provided interface");
+
+    // A declared key with the wrong dimension is rejected too.
+    let result = eval_with_fixtures(
+        r#"
+load("./ifaces.zen", "Uart")
+
+peripheral("U9", provides = [Uart], rebind = "firmware",
+    signals = {"TX": [pin("P1")], "RX": [pin("P2")]},
+    attrs = {"baud_max": "3.3V"})
+"#,
+    );
+    assert_fails_with(&result, "expects");
+
+    // Attrs on an interface that declares none are rejected outright.
+    let result = eval_with_fixtures(
+        r#"
+load("./ifaces.zen", "Spi")
+
+peripheral("S9", provides = [Spi], rebind = "firmware",
+    signals = {"SCK": [pin("P1")], "MISO": [pin("P2")], "MOSI": [pin("P3")]},
+    attrs = {"clk_max": "10MHz"})
+"#,
+    );
+    assert_fails_with(&result, "declare no attrs");
 }

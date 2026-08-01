@@ -2033,6 +2033,11 @@ impl PhysicalValueType {
         }
     }
 
+    /// Dimensions this type accepts (e.g. Frequency's 1/s).
+    pub fn dims(&self) -> PhysicalUnitDims {
+        self.unit
+    }
+
     fn type_instance_id(&self) -> TypeInstanceId {
         static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
         get_type_instance_id(self.unit, &CACHE)
