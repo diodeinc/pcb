@@ -39,7 +39,11 @@ $tmp = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) 
 try {
     $binary = Join-Path $tmp "pcb.exe"
     $sum = Join-Path $tmp "pcb.exe.sha256"
+    $launcherArtifact = "pcb-launcher-x86_64-pc-windows-msvc.exe"
+    $launcherBinary = Join-Path $tmp "pcb-launcher.exe"
+    $launcherSum = Join-Path $tmp "pcb-launcher.exe.sha256"
     Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact.sha256" -OutFile $sum
+    Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact.sha256" -OutFile $launcherSum
     $zstd = Get-Command zstd -ErrorAction SilentlyContinue
     $downloadedCompressed = $false
     if ($zstd) {
@@ -58,18 +62,48 @@ try {
         Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact" -OutFile $binary
     }
 
+    $launcherDownloadedCompressed = $false
+    if ($zstd) {
+        $launcherCompressedPath = Join-Path $tmp "pcb-launcher.exe.zst"
+        try {
+            Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact.zst" -OutFile $launcherCompressedPath
+            $launcherDownloadedCompressed = $true
+        } catch {
+            $launcherDownloadedCompressed = $false
+        }
+    }
+    if ($launcherDownloadedCompressed) {
+        & $zstd.Source -q -d -f $launcherCompressedPath -o $launcherBinary
+    } else {
+        Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact" -OutFile $launcherBinary
+    }
+
     $expected = ((Get-Content $sum -Raw) -split "\s+")[0].ToLowerInvariant()
     $actual = (Get-FileHash -Algorithm SHA256 $binary).Hash.ToLowerInvariant()
     if ($actual -ne $expected) {
         throw "checksum mismatch"
     }
+    $launcherExpected = ((Get-Content $launcherSum -Raw) -split "\s+")[0].ToLowerInvariant()
+    $launcherActual = (Get-FileHash -Algorithm SHA256 $launcherBinary).Hash.ToLowerInvariant()
+    if ($launcherActual -ne $launcherExpected) {
+        throw "pcb-launcher checksum mismatch"
+    }
 
     New-Item -ItemType Directory -Force $installDir | Out-Null
-    Move-Item -Force $binary (Join-Path $installDir "pcb.exe")
+    $installedPcb = Join-Path $installDir "pcb.exe"
+    $installedLauncher = Join-Path $installDir "pcb-launcher.exe"
+    Move-Item -Force $binary $installedPcb
+    Move-Item -Force $launcherBinary $installedLauncher
+
+    & $installedLauncher --install
+    if ($LASTEXITCODE -ne 0) {
+        throw "failed to register the Diode URL launcher"
+    }
 
     Add-InstallDirToPath $installDir
 
-    Write-Host "Installed pcb to $(Join-Path $installDir "pcb.exe")"
+    Write-Host "Installed pcb to $installedPcb"
+    Write-Host "Installed Diode URL launcher to $installedLauncher"
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
