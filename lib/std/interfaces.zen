@@ -40,7 +40,7 @@ Can = interface(
 CanTtl = interface(
     TX=Net(),
     RX=Net(),
-    attrs={"bitrate_max": Frequency},
+    attrs={"bitrate_max": Frequency, "vio": Voltage},
 )
 
 Csi = interface(
@@ -65,7 +65,7 @@ Dvp8 = interface(
     D5=Net(),
     D6=Net(),
     D7=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Dvp10 = interface(
@@ -83,7 +83,7 @@ Dvp10 = interface(
     D7=Net(),
     D8=Net(),
     D9=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Dvp12 = interface(
@@ -103,7 +103,7 @@ Dvp12 = interface(
     D9=Net(),
     D10=Net(),
     D11=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Dvp16 = interface(
@@ -127,7 +127,7 @@ Dvp16 = interface(
     D13=Net(),
     D14=Net(),
     D15=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 
@@ -172,7 +172,7 @@ Emmc = interface(
     DAT7=Net(impedance=Impedance(50)),
     DS=Net(impedance=Impedance(50)),
     RST_N=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Ethernet = interface(
@@ -210,7 +210,7 @@ Hdmi = interface(
 I2c = interface(
     SDA=Net(),
     SCL=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 I2s = interface(
@@ -218,7 +218,7 @@ I2s = interface(
     LRCLK=Net(),
     SDATA=Net(),
     MCLK=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 I2sBidirectional = interface(
@@ -227,13 +227,13 @@ I2sBidirectional = interface(
     SDATA_IN=Net(),
     SDATA_OUT=Net(),
     MCLK=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 I3c = interface(
     SDA=Net(),
     SCL=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Jtag = interface(
@@ -242,7 +242,7 @@ Jtag = interface(
     TCK=Net(),
     TMS=Net(),
     TRST=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Lcd = interface(
@@ -274,7 +274,7 @@ Lcd = interface(
     B5=Net(),
     B6=Net(),
     B7=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Lvds = interface(
@@ -288,7 +288,7 @@ Lvds = interface(
 Mdio = interface(
     MDC=Net(),
     MDIO=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Mdi = interface(
@@ -329,7 +329,7 @@ Mipi = interface(
 
 OneWire = interface(
     DQ=Net(),
-    attrs={"bitrate_max": Frequency},
+    attrs={"bitrate_max": Frequency, "vio": Voltage},
 )
 
 Opamp = interface(
@@ -495,7 +495,7 @@ Qspi = interface(
     IO1=Net(impedance=Impedance(50)),
     IO2=Net(impedance=Impedance(50)),
     IO3=Net(impedance=Impedance(50)),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Rgmii = interface(
@@ -561,7 +561,7 @@ Sdio = interface(
     DAT1=Net(impedance=Impedance(50)),
     DAT2=Net(impedance=Impedance(50)),
     DAT3=Net(impedance=Impedance(50)),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Sdmmc = interface(
@@ -575,7 +575,7 @@ Sdmmc = interface(
     DAT5=Net(impedance=Impedance(50)),
     DAT6=Net(impedance=Impedance(50)),
     DAT7=Net(impedance=Impedance(50)),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Lpddr4Channel = interface(
@@ -609,7 +609,7 @@ Lpddr4Channel = interface(
     DQS0=DiffPair(impedance=Impedance(80)),
     DQS1=DiffPair(impedance=Impedance(80)),
     ODT_CA=Net(impedance=Impedance(40)),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Sdram16 = interface(
@@ -652,7 +652,7 @@ Sdram16 = interface(
     WE_N=Net(),
     DQM0=Net(),
     DQM1=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Sdram32 = interface(
@@ -713,7 +713,7 @@ Sdram32 = interface(
     DQM1=Net(),
     DQM2=Net(),
     DQM3=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 SmBus = I2c
@@ -723,19 +723,19 @@ Spi = interface(
     MISO=Net(),
     MOSI=Net(),
     CLK=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Spmi = interface(
     CLK=Net(impedance=Impedance(50)),
     DATA=Net(impedance=Impedance(50)),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Swd = interface(
     SWDIO=Net(),
     SWCLK=Net(),
-    attrs={"clk_max": Frequency},
+    attrs={"clk_max": Frequency, "vio": Voltage},
 )
 
 Uart = interface(
@@ -743,7 +743,7 @@ Uart = interface(
     RX=Net(),
     # Capability-attribute vocabulary for providers (pin-capability model):
     # every Uart-class peripheral spells these the same way.
-    attrs={"baud_max": Frequency},
+    attrs={"baud_max": Frequency, "vio": Voltage},
 )
 
 # A USART is capability-wise a superset of a UART: any provider of Usart

@@ -19,7 +19,7 @@ Frequency = 1 / builtin.Time
 Uart = interface(TX = Net, RX = Net, attrs = {"baud_max": Frequency})
 Usart = interface(TX = Net, RX = Net, CK = Net, implies = [Uart])
 UartFlow = interface(TX = Net, RX = Net, RTS = Net, CTS = Net, implies = [Uart])
-I2c = interface(SDA = Net, SCL = Net)
+I2c = interface(SDA = Net, SCL = Net, attrs = {"clk_max": Frequency, "vio": Voltage})
 Spi = interface(SCK = Net, MISO = Net, MOSI = Net)
 Gpio = interface(PIN = Net)
 AdcIn = interface(IN = Net)
@@ -815,4 +815,40 @@ peripheral("S9", provides = [Spi], rebind = "firmware",
 "#,
     );
     assert_fails_with(&result, "declare no attrs");
+}
+
+#[test]
+fn vio_attr_selects_fixed_level_provider() {
+    // Fixed-level blocks declare vio; where= picks the compatible one and
+    // a wrong dimension is still rejected.
+    let result = eval_with_fixtures(
+        r#"
+load("./ifaces.zen", "I2c")
+
+B3V3 = peripheral("B3V3", provides = [I2c], rebind = "fixed",
+    signals = {"SDA": [pin("P1")], "SCL": [pin("P2")]},
+    attrs = {"vio": "3.3V"})
+B5V = peripheral("B5V", provides = [I2c], rebind = "fixed",
+    signals = {"SDA": [pin("P3")], "SCL": [pin("P4")]},
+    attrs = {"vio": "5V"})
+
+def lv(a):
+    return a["vio"] <= "3.3V"
+
+res = pin_solve([B3V3, B5V], [pin_request("BUS", I2c, where = lv)])
+check(res["assignment"]["BUS"]["instance"] == "B3V3", "3V3 provider expected")
+"#,
+    );
+    assert_ok(&result);
+
+    let result = eval_with_fixtures(
+        r#"
+load("./ifaces.zen", "I2c")
+
+peripheral("B9", provides = [I2c], rebind = "fixed",
+    signals = {"SDA": [pin("P1")], "SCL": [pin("P2")]},
+    attrs = {"vio": "400kHz"})
+"#,
+    );
+    assert_fails_with(&result, "expects");
 }

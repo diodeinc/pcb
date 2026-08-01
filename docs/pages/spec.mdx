@@ -315,7 +315,12 @@ rate vocabulary: `clk_max` on clocked buses (`Spi`, `I2c`, `Sdio`, `Jtag`,
 memory buses...), `baud_max` on asynchronous serial (`Uart`, `Rs232`,
 `Rs422`), `bitrate_max` on encoded serial links (`Can`, `Usb2`/`Usb3`,
 `Pcie`, `Ethernet`, display/camera lanes...), plus `freq_max` on `OscPair`
-and `gbw` on `Opamp`.
+and `gbw` on `Opamp`. Single-ended logic buses also declare `vio` (Voltage) —
+for blocks whose logic level is **fixed** (level shifters, fixed-rail
+transceivers, memory standards). A VDD-dependent block (an MCU UART runs at
+whatever VDD is) must NOT declare `vio`: the per-design truth is the
+**voltage on the nets**, and net/io voltage contracts — not capability
+attrs — are what reject a 3.3V-to-5V connection between components.
 
 ## Pin capabilities and assignment
 
