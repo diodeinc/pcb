@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- The `pcb` installer and self-updater now manage a cross-platform `diode://` launcher for opening sandbox layouts directly in KiCad.
+
 ### Changed
 
 - Board-array balancing now certifies per-layer regions and reduces density and stack imbalance with variable voids.
