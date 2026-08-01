@@ -298,6 +298,20 @@ LpUart = interface(TX = Net, RX = Net, implies = [Uart])
 `implies` forms a DAG (an interface may imply several others), and matching is
 nominal: two structurally identical interfaces remain distinct capabilities.
 
+An interface may also declare the **attribute vocabulary** its capability
+providers use, as attribute name -> physical value type:
+
+```python
+Uart = interface(TX = Net, RX = Net, attrs = {"baud_max": Frequency})
+```
+
+A `peripheral()` providing `Uart` (directly or through `implies`) may then
+declare `attrs = {"baud_max": "8MHz"}` — and only that: an undeclared key
+(`baudMax`, `max_baudrate`...) or a value of the wrong dimension (`"3.3V"`
+for a `Frequency`) is an elaboration error naming the declared vocabulary.
+Attribute names, like capability names, are declared once — in the
+interface — not reinvented per component.
+
 ## Pin capabilities and assignment
 
 Multi-function components (MCUs, multi-unit analog/logic parts) can declare
@@ -352,7 +366,9 @@ result = pin_solve(
   — a demand: the interface type *is* the request. Only `uses=` signals
   consume pins (default: all of the interface's signals). `where=` is a
   predicate over the peripheral's `attrs` (`lambda a: a["baud_max"] >= "1MHz"`
-  works — unit strings coerce in physical-value comparisons). `instance=`,
+  works — unit strings coerce in physical-value comparisons). Attr keys and
+  dimensions are reliable: they are validated against the vocabulary the
+  provided interfaces declare (see `interface(attrs=...)` above). `instance=`,
   `prefer=`, `lock=` are caller-side overrides. With `if_connected = True`
   the request is served only when the caller actually connected the module
   input of the same name — pair it with `io(Iface, optional = True)` to
