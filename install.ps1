@@ -95,8 +95,9 @@ try {
     Move-Item -Force $binary $installedPcb
     Move-Item -Force $launcherBinary $installedLauncher
 
-    & $installedLauncher --install
-    if ($LASTEXITCODE -ne 0) {
+    # pcb-launcher is a Windows GUI-subsystem binary, so `&` would not wait.
+    $launcherInstall = Start-Process -FilePath $installedLauncher -ArgumentList "--install" -Wait -PassThru
+    if ($launcherInstall.ExitCode -ne 0) {
         throw "failed to register the Diode URL launcher"
     }
 
