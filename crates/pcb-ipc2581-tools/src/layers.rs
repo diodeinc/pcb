@@ -1,7 +1,11 @@
 //! Shared IPC-2581 layer-function classification.
 
-use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::LayerRole;
+use ipc2581::{
+    Symbol,
+    types::{Ecad, LayerFunction, Side as IpcSide},
+};
+use pcb_ir::dialects::ipc::BoardArrayCopperLayer;
+use pcb_ir::dialects::{LayerRole, Side};
 
 /// True for layer functions that carry copper imagery.
 pub fn is_copper(function: LayerFunction) -> bool {
@@ -14,6 +18,25 @@ pub fn is_copper(function: LayerFunction) -> bool {
             | LayerFunction::Signal
             | LayerFunction::Mixed
     )
+}
+
+/// Canonical copper-layer identities and sides for per-layer geometry work.
+pub fn copper_layers(ecad: &Ecad) -> Vec<BoardArrayCopperLayer<Symbol>> {
+    ecad.cad_data
+        .layers
+        .iter()
+        .filter(|layer| is_copper(layer.layer_function))
+        .map(|layer| BoardArrayCopperLayer::new(layer.name, ir_side(layer.side)))
+        .collect()
+}
+
+fn ir_side(side: Option<IpcSide>) -> Side {
+    match side {
+        Some(IpcSide::Top) => Side::Top,
+        Some(IpcSide::Bottom) => Side::Bottom,
+        Some(IpcSide::Internal) => Side::Inner,
+        _ => Side::None,
+    }
 }
 
 /// Map a layer function to its pcb-ir rendering role.

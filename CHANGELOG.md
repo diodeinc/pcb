@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Board-array balancing now uses independent 1 mm filled-region and void-gap regularization, trimming narrow gaps locally instead of discarding whole regions.
 - Board-array copper balancing now varies rounded-hex void sizes to reduce local density and through-stack imbalance while preserving each layer's total copper target.
+- Board-array balancing now derives and certifies safe regions independently for each copper layer.
 
 ## [0.4.17] - 2026-07-31
 

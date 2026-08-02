@@ -16,10 +16,12 @@ All geometry is a filled planar point set in panel coordinates, in millimeters:
   protected because copper balancing must not enter a board footprint.
 - `M`: fabrication material removal, including profile cutouts, board cutouts,
   and generated V-score reliefs.
-- `G`: union of painted physical geometry on every `ArraySupport` layer.
-  V-cut layers include features tied to a `V_Cut` process and exclude callout
-  arrows and labels.
-- `O = B ∪ M ∪ G`: obstacle union.
+- `G_l`: painted `ArraySupport` geometry whose IR feature span reaches copper
+  layer `l`. Exact copper spans stay on that layer; surface-side spans map to
+  the adjacent outer copper; through-stack or unresolved physical spans affect
+  every copper layer. V-cut layers include only features tied to a `V_Cut`
+  process, excluding callout arrows and labels.
+- `O_l = B ∪ M ∪ G_l`: obstacle union for copper layer `l`.
 - `r = 0.5`: required feature and panel-edge clearance.
 - `q = 0.5`: filled-region rolling-disk radius.
 - `v = 0.5`: void-gap rolling-disk radius.
@@ -29,14 +31,14 @@ Clearance and filled-region regularization are direct morphology:
 
 ```text
 c = r + e
-F = (P ⊖ disk(c)) \ (O ⊕ disk(c))
-A = open(F, disk(q))
+F_l = (P ⊖ disk(c)) \ (O_l ⊕ disk(c))
+A_l = open(F_l, disk(q))
 ```
 
-`F` is the clearance-safe set. Treating the panel exterior and all obstacles as
-one forbidden phase covers corners and diagonal approaches without rules for
-individual feature types. `A` is the union of all radius-`q` disks contained in
-`F`. It rounds outward corners and removes tips, necks, slivers, or components
+`F_l` is the layer's clearance-safe set. Treating the panel exterior and all
+obstacles as one forbidden phase covers corners and diagonal approaches without
+rules for individual feature types. `A_l` is the union of all radius-`q` disks contained in
+`F_l`. It rounds outward corners and removes tips, necks, slivers, or components
 that cannot contain that disk. There is no component-area threshold. With the
 defaults, both surviving filled regions and empty gaps use a 1 mm nominal
 scale, while clearance remains an independent 0.5 mm distance.
@@ -50,9 +52,9 @@ at an isolated concave corner.
 Gap regularization is a monotone local trim:
 
 ```text
-N₀   = G_(v + e)(A)
+N₀   = G_(v + e)(A_l)
 Γ₀   = source-boundary generalized Voronoi axis inside N₀
-S₀   = open(A \ (Γ₀ ⊕ disk(v + e)), disk(q))
+S₀   = open(A_l \ (Γ₀ ⊕ disk(v + e)), disk(q))
 
 Rₖ   = G_v(Sₖ)
 Vₖ   = open(Rₖ, disk(e))
@@ -74,11 +76,11 @@ The independent nominal certificate is:
 ```text
 C = safe ⊕ disk(r)
 
-safe \ F = ∅
+safe \ F_l = ∅
 safe \ open(safe, disk(q)) = ∅, after numerical denoising
 G_v(safe) = ∅
 C \ P = ∅
-C ∩ O = ∅
+C ∩ O_l = ∅
 ```
 
 Construction uses the guard; certification uses the nominal requirements.
@@ -105,11 +107,12 @@ pub struct BalancingRegionOptions {
 }
 ```
 
-The collector uses existing IR roles and painted paths. It does not recognize
-tooling holes, fiducials, score lines, or other features from their shape. A new
-physical support feature is covered automatically when it appears as painted
-`ArraySupport` geometry. An included path without paint has no physical
-envelope, so production collection fails closed instead of guessing.
+The collector uses existing IR feature spans, sides, and painted paths. It does
+not recognize tooling holes, fiducials, score lines, or other features from
+their shape. Support geometry is stored once in copper-reach buckets; a target
+layer's `support_features` union is derived on demand. An included path without
+paint has no physical envelope, so production collection fails closed instead
+of guessing.
 
 Generic Boolean operations, disk morphology, gap classification, Voronoi-axis
 construction, and certificates remain in `pcb-ir::geom`. File parsing and
@@ -137,6 +140,7 @@ Options:
 --gap-radius-mm <mm>                 void-gap disk radius; default 0.5
 --numerical-guard-mm <mm>            construction guard; default 0.025
 --check-area-tolerance-mm2 <mm²>     certificate threshold; default 0.0001
+--copper-layer <name>                layer to inspect; default first copper layer
 --require-a-series-auto              reject non-A-series auto arrays
 ```
 
@@ -148,8 +152,8 @@ Each run overwrites a deterministic artifact set:
 | `00-panel-outer.svg` | Raw panel region `P` |
 | `10-board-footprints.svg` | Board-instance region `B` |
 | `20-material-removal.svg` | Fabrication removal `M` |
-| `30-support-features.svg` | Cross-layer support footprint `G` |
-| `40-raw-obstacles.svg` | Obstacle union `O` |
+| `30-support-features.svg` | Selected layer's support footprint `G_l` |
+| `40-raw-obstacles.svg` | Selected layer's obstacle union `O_l` |
 | `50-panel-keep-in.svg` | Panel eroded by construction clearance |
 | `60-obstacle-keep-out.svg` | Obstacles dilated by construction clearance |
 | `70-clearance-safe-region.svg` | Clearance-safe set `F` |
