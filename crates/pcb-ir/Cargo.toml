@@ -12,6 +12,7 @@ categories = ["graphics", "rendering", "hardware-support"]
 
 [dependencies]
 base64 = { workspace = true }
+boostvoronoi = { workspace = true }
 i_overlay = { workspace = true }
 kurbo = { workspace = true }
 resvg = { workspace = true }

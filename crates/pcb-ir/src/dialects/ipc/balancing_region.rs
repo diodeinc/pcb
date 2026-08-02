@@ -5,24 +5,28 @@
 //! the already-extracted `ArraySupport` layer documents. The resulting input
 //! is then handled entirely as regularized [`ContourSet`] geometry.
 //!
-//! For panel material `P`, obstacle union `O`, construction gap radius `g`,
-//! minimum-feature radius `q`, and minimum-gap radius `v`, the construction is:
+//! For panel material `P`, obstacle union `O`, construction clearance `c`,
+//! filled-region radius `q`, and void-gap radius `v`, the construction is:
 //!
 //! ```text
-//! M = (P ⊖ disk(g)) \ (O ⊕ disk(g))
-//! A = ((M ⊖ disk(q)) ⊕ disk(q)) ∩ M
+//! F = (P ⊖ disk(c)) \ (O ⊕ disk(c))
+//! A = open(F, disk(q))
 //! ```
 //!
-//! `M` is the clearance-safe set. Treating the outside of `P` and `O` as one
-//! forbidden phase prevents narrow diagonal gaps where an obstacle meets the
-//! panel edge. `A` is a disk opening: the union of all radius-`q` disks that
-//! fit in `M`, which removes copper slivers and rounds outward corners.
+//! `F` is the clearance-safe set: the complement of the clearance-dilated
+//! forbidden phase formed by the panel exterior and every physical obstacle.
+//! `A` is a disk opening, the union of all radius-`q` disks that fit in `F`;
+//! it removes copper slivers and rounds outward corners without inflating the
+//! safety clearance to the regularization scale.
 //!
-//! Finally, the connected components of `A` form a proximity graph with an
-//! edge when `distance(C_i, C_j) < 2v`. The exact maximum-area independent set
-//! is retained. Thus distinct output components are separated by at least `2v`
-//! while preserving the greatest possible area from the opened components,
-//! without feature-specific rules or traversal-order policy.
+//! Let `G_v(X)` retain the components of `close(X, disk(v)) \ X` that touch two
+//! nonincident, opposing boundary branches. This excludes the normal rounded
+//! bite at a single concave corner. Removing a radius-`v` tube around the
+//! medial axis of `G_v(A)`, then disk-opening, trims both sides of every narrow
+//! void locally. Any certified residual is swept by the same radius until
+//! `G_v(S)` is empty. Thus filled features admit a disk of radius `q`, while
+//! intervening void gaps admit a disk of radius `v`, without component ranking
+//! or feature-specific rules.
 
 use std::fmt;
 
@@ -35,11 +39,11 @@ use crate::geom::{ContourSet, FillRule, Paint, tol};
 /// Default Euclidean clearance from every protected feature.
 pub const DEFAULT_BALANCING_CLEARANCE_MM: f64 = 0.5;
 
-/// Default rolling-disk radius; surviving copper can accommodate this disk.
-pub const DEFAULT_BALANCING_MINIMUM_FEATURE_RADIUS_MM: f64 = 1.0;
+/// Default rolling-disk radius for filled balancing regions.
+pub const DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM: f64 = 0.5;
 
-/// Half the default minimum Euclidean gap between distinct safe components.
-pub const DEFAULT_BALANCING_MINIMUM_GAP_RADIUS_MM: f64 = 1.0;
+/// Half the default minimum width of a two-sided void gap.
+pub const DEFAULT_BALANCING_GAP_RADIUS_MM: f64 = 0.5;
 
 /// Conservative allowance for curve flattening and round-offset construction.
 pub const DEFAULT_BALANCING_NUMERICAL_GUARD_MM: f64 =
@@ -63,11 +67,12 @@ pub struct BoardArrayBalancingInput {
 pub struct BalancingRegionOptions {
     /// Required Euclidean clearance from the panel boundary and all obstacles.
     pub clearance_mm: f64,
-    /// Radius `q` of the disk opening. The opened result is the union of all
-    /// radius-`q` disks contained in the pre-regularized safe set.
-    pub minimum_feature_radius_mm: f64,
-    /// Gap radius `v`; distinct final components must be at least `2v` apart.
-    pub minimum_gap_radius_mm: f64,
+    /// Radius of the filled-feature opening. Surviving regions admit disks of
+    /// this radius.
+    pub regularization_radius_mm: f64,
+    /// Radius of the rolling-disk test for two-sided void gaps. The minimum
+    /// nominal gap width is twice this radius.
+    pub gap_radius_mm: f64,
     /// Additional conservative allowance for numerical approximation.
     pub numerical_guard_mm: f64,
 }
@@ -76,8 +81,8 @@ impl Default for BalancingRegionOptions {
     fn default() -> Self {
         Self {
             clearance_mm: DEFAULT_BALANCING_CLEARANCE_MM,
-            minimum_feature_radius_mm: DEFAULT_BALANCING_MINIMUM_FEATURE_RADIUS_MM,
-            minimum_gap_radius_mm: DEFAULT_BALANCING_MINIMUM_GAP_RADIUS_MM,
+            regularization_radius_mm: DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM,
+            gap_radius_mm: DEFAULT_BALANCING_GAP_RADIUS_MM,
             numerical_guard_mm: DEFAULT_BALANCING_NUMERICAL_GUARD_MM,
         }
     }
@@ -88,14 +93,6 @@ impl BalancingRegionOptions {
     pub fn construction_clearance_mm(self) -> f64 {
         self.clearance_mm + self.numerical_guard_mm
     }
-
-    /// `max(clearance_mm, minimum_gap_radius_mm) + numerical_guard_mm`.
-    ///
-    /// Applying the same radius as a panel erosion and obstacle dilation makes
-    /// the entire forbidden phase obey one construction-gap rule.
-    pub fn construction_gap_radius_mm(self) -> f64 {
-        self.clearance_mm.max(self.minimum_gap_radius_mm) + self.numerical_guard_mm
-    }
 }
 
 /// Set-theoretic intermediates retained for diagnostics and validation.
@@ -104,24 +101,22 @@ pub struct BoardArrayBalancingIntermediates {
     /// `board_footprints ∪ material_removal ∪ support_features`.
     pub raw_obstacles: ContourSet,
     /// `panel_outer ⊖ disk(construction_clearance)`.
-    pub panel_clearance_keep_in: ContourSet,
-    /// `panel_outer ⊖ disk(construction_gap_radius)`.
     pub panel_keep_in: ContourSet,
     /// `raw_obstacles ⊕ disk(construction_clearance)`.
-    pub obstacle_clearance: ContourSet,
-    /// `raw_obstacles ⊕ disk(construction_gap_radius)`.
-    pub obstacle_gap_envelope: ContourSet,
-    /// `panel_keep_in \ obstacle_gap_envelope`.
-    pub maximal_safe_region: ContourSet,
-    /// `maximal_safe_region ⊖ disk(minimum_feature_radius)`.
-    pub regularization_core: ContourSet,
-    /// Disk opening of `maximal_safe_region`, before component separation.
-    pub opened_safe_region: ContourSet,
-    /// Material removed from the maximal set by the disk opening alone.
+    pub obstacle_keep_out: ContourSet,
+    /// `panel_keep_in \ obstacle_keep_out`.
+    pub clearance_safe_region: ContourSet,
+    /// Disk opening of `clearance_safe_region`, before void-gap regularization.
+    pub opened_candidates: ContourSet,
+    /// Material removed from the clearance-safe set by the disk opening alone.
     pub removed_by_opening: ContourSet,
-    /// Whole components excluded by the maximum-area independent set.
-    pub removed_by_gap_separation: ContourSet,
-    /// Total material removed by opening and component separation.
+    /// Two-sided complement phase rejected by the rolling-disk gap test.
+    pub narrow_voids: ContourSet,
+    /// Initial medial-axis tube plus any directly swept certificate residuals.
+    pub gap_separator_keep_out: ContourSet,
+    /// Material locally trimmed to widen two-sided void gaps.
+    pub removed_by_gap_regularization: ContourSet,
+    /// Total material removed by filled-feature and void-gap regularization.
     pub removed_by_regularization: ContourSet,
 }
 
@@ -130,26 +125,15 @@ pub struct BoardArrayBalancingIntermediates {
 pub struct ClearanceCertificate {
     /// Safe region dilated by the nominal requested clearance.
     pub swept_safe_region: ContourSet,
-    /// Regularized safe material outside the maximal pre-regularization set.
-    pub safe_outside_maximal_region: ContourSet,
-    /// Internal consistency violation: safe material outside `panel_keep_in`.
-    pub safe_outside_keep_in: ContourSet,
-    /// Internal consistency violation: safe material inside cleared obstacles.
-    pub safe_inside_obstacle_clearance: ContourSet,
-    /// Internal consistency violation: safe material inside the minimum-gap
-    /// obstacle envelope.
-    pub safe_inside_obstacle_gap_envelope: ContourSet,
-    /// `safe_region \ open(safe_region, q)`, after numerical denoising.
-    pub minimum_feature_violations: ContourSet,
-    /// `((C_i ⊕ disk(v)) ∩ (C_j ⊕ disk(v))) \ safe_region`, unioned over
-    /// distinct components. Non-empty geometry proves `distance(C_i, C_j) <
-    /// 2v` within polygon tolerance.
-    pub minimum_gap_violations: ContourSet,
-    /// Broader diagnostic geometry that disk closing would fill. This includes
-    /// narrow notches in a single component as well as inter-component gaps,
-    /// so it is retained for inspection but is not an inter-component
-    /// separation failure.
-    pub void_closing_additions: ContourSet,
+    /// Regularized safe material outside the clearance-safe set.
+    pub safe_outside_clearance_region: ContourSet,
+    /// `safe_region \ open(safe_region, region_radius)`, after denoising.
+    pub regularization_violations: ContourSet,
+    /// Two-sided components of
+    /// `close(safe_region, disk(gap_radius)) \ safe_region`. Non-empty geometry
+    /// proves a void gap narrower than twice the gap radius, including within
+    /// one connected filled component.
+    pub gap_violations: ContourSet,
     /// Nominal-clearance sweep outside the raw panel.
     pub outside_panel: ContourSet,
     /// Nominal-clearance sweep intersecting raw obstacles.
@@ -159,20 +143,13 @@ pub struct ClearanceCertificate {
 impl ClearanceCertificate {
     /// Whether all required subset, clearance, rolling-disk, and pairwise-gap
     /// violations are below the supplied area tolerance.
-    ///
-    /// [`Self::void_closing_additions`] is intentionally diagnostic-only:
-    /// closing also fills concave notches within a single component, whereas
-    /// the enforced gap contract concerns distinct components.
     pub fn passes(&self, area_tolerance_mm2: f64) -> bool {
         area_tolerance_mm2.is_finite()
             && area_tolerance_mm2 >= 0.0
             && [
-                &self.safe_outside_maximal_region,
-                &self.safe_outside_keep_in,
-                &self.safe_inside_obstacle_clearance,
-                &self.safe_inside_obstacle_gap_envelope,
-                &self.minimum_feature_violations,
-                &self.minimum_gap_violations,
+                &self.safe_outside_clearance_region,
+                &self.regularization_violations,
+                &self.gap_violations,
                 &self.outside_panel,
                 &self.obstacle_overlap,
             ]
@@ -184,8 +161,8 @@ impl ClearanceCertificate {
 /// Safe region plus all data required to inspect and certify it.
 #[derive(Debug, Clone)]
 pub struct BoardArrayBalancingResult {
-    /// Final subset whose local copper scale is at least the rolling-disk scale
-    /// and whose distinct components are separated by the requested gap.
+    /// Final subset whose filled features and two-sided void gaps satisfy their
+    /// independently requested rolling-disk radii.
     pub safe_region: ContourSet,
     pub intermediates: BoardArrayBalancingIntermediates,
     pub certificate: ClearanceCertificate,
@@ -240,12 +217,13 @@ pub struct BoardArrayBalancingCollection {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BalancingRegionError {
     InvalidClearance(f64),
-    InvalidMinimumFeatureRadius(f64),
-    InvalidMinimumGapRadius(f64),
+    InvalidRegularizationRadius(f64),
+    InvalidGapRadius(f64),
     InvalidNumericalGuard(f64),
     EmptyPanelOutline,
     EmptyBoardFootprints,
     UnpaintedSupportPaths(usize),
+    GapRegularization(String),
 }
 
 impl fmt::Display for BalancingRegionError {
@@ -255,13 +233,13 @@ impl fmt::Display for BalancingRegionError {
                 f,
                 "balancing-region clearance must be finite and positive; got {value}"
             ),
-            Self::InvalidMinimumFeatureRadius(value) => write!(
+            Self::InvalidRegularizationRadius(value) => write!(
                 f,
-                "balancing-region minimum feature radius must be finite and positive; got {value}"
+                "balancing-region regularization radius must be finite and positive; got {value}"
             ),
-            Self::InvalidMinimumGapRadius(value) => write!(
+            Self::InvalidGapRadius(value) => write!(
                 f,
-                "balancing-region minimum gap radius must be finite and positive; got {value}"
+                "balancing-region gap radius must be finite and positive; got {value}"
             ),
             Self::InvalidNumericalGuard(value) => write!(
                 f,
@@ -277,35 +255,35 @@ impl fmt::Display for BalancingRegionError {
                 f,
                 "board array has {count} support paths without a physical painted footprint"
             ),
+            Self::GapRegularization(message) => {
+                write!(f, "could not regularize balancing-region gaps: {message}")
+            }
         }
     }
 }
 
 impl std::error::Error for BalancingRegionError {}
 
-/// Compute a clearance-safe, minimum-feature, minimum-gap copper region.
+/// Compute a clearance-safe, radius-regularized copper region.
 ///
 /// Let `P` be [`BoardArrayBalancingInput::panel_outer`], `O` the union of the
-/// three obstacle inputs, `g` [`BalancingRegionOptions::construction_gap_radius_mm`],
-/// `q` [`BalancingRegionOptions::minimum_feature_radius_mm`], and `v`
-/// [`BalancingRegionOptions::minimum_gap_radius_mm`]. The geometric stages are:
+/// three obstacle inputs, `c`
+/// [`BalancingRegionOptions::construction_clearance_mm`], `q`
+/// [`BalancingRegionOptions::regularization_radius_mm`], and `v`
+/// [`BalancingRegionOptions::gap_radius_mm`]. The geometric stages are:
 ///
 /// ```text
-/// maximal = (P ⊖ disk(g)) \ (O ⊕ disk(g))
-/// opened  = ((maximal ⊖ disk(q)) ⊕ disk(q)) ∩ maximal
+/// clearance_safe = (P ⊖ disk(c)) \ (O ⊕ disk(c))
+/// candidates     = open(clearance_safe, disk(q))
 /// ```
 ///
-/// For each connected component `C_i` of `opened`, choose `x_i ∈ {0, 1}` to
-/// maximize `Σ area(C_i) x_i`, subject to `x_i + x_j ≤ 1` whenever
-/// `distance(C_i, C_j) < 2v`. Independent conflict clusters are solved exactly.
-/// This makes the unavoidable topology choice order-independent and preserves
-/// the greatest possible area without recognizing board features or encoding
-/// special cases.
-///
-/// The optimized final union is not necessarily nested when options or
-/// obstacles change: shrinking or splitting the opened components can change
-/// which independent set is optimal. Callers should rely on the returned
-/// certificate, not cross-parameter set monotonicity.
+/// The first pass removes a radius-`v + guard` tube around the portion of the
+/// candidates' boundary medial axis inside the two-sided subset of
+/// `close(candidates, disk(v + guard)) \ candidates`. If the nominal closing
+/// certificate finds a nontrivial two-sided residual after that cut, monotone
+/// set iteration sweeps that residual directly until the certificate is empty.
+/// It widens inter-component gaps, hairpins, notches, and internal voids
+/// locally without widening one-sided edge clearance.
 pub fn board_array_balancing_region(
     input: &BoardArrayBalancingInput,
     options: BalancingRegionOptions,
@@ -323,42 +301,37 @@ pub fn board_array_balancing_region(
         .union(&input.material_removal)
         .union(&input.support_features);
     let construction_clearance_mm = options.construction_clearance_mm();
-    let construction_gap_radius_mm = options.construction_gap_radius_mm();
-    let panel_clearance_keep_in = input.panel_outer.disk_erode(construction_clearance_mm);
-    let panel_keep_in = input.panel_outer.disk_erode(construction_gap_radius_mm);
-    let obstacle_clearance = raw_obstacles.disk_dilate(construction_clearance_mm);
-    let obstacle_gap_envelope = raw_obstacles.disk_dilate(construction_gap_radius_mm);
-    let maximal_safe_region = panel_keep_in.difference(&obstacle_gap_envelope);
-    let regularization_core = maximal_safe_region.disk_erode(options.minimum_feature_radius_mm);
-    let opened_safe_region = regularization_core
-        .disk_dilate(options.minimum_feature_radius_mm)
-        .intersection(&maximal_safe_region);
-    let removed_by_opening = maximal_safe_region.difference(&opened_safe_region);
-    let (safe_region, removed_by_gap_separation) =
-        opened_safe_region.disk_separate_components(options.minimum_gap_radius_mm);
-    let removed_by_regularization = maximal_safe_region.difference(&safe_region);
+    let panel_keep_in = input.panel_outer.disk_erode(construction_clearance_mm);
+    let obstacle_keep_out = raw_obstacles.disk_dilate(construction_clearance_mm);
+    let clearance_safe_region = panel_keep_in.difference(&obstacle_keep_out);
+    let opened_candidates = clearance_safe_region.disk_open(options.regularization_radius_mm);
+    let removed_by_opening = clearance_safe_region.difference(&opened_candidates);
+    let gap_regularization = opened_candidates
+        .disk_regularize_gaps(
+            options.gap_radius_mm,
+            options.regularization_radius_mm,
+            options.numerical_guard_mm,
+        )
+        .map_err(|error| BalancingRegionError::GapRegularization(error.to_string()))?;
+    let safe_region = gap_regularization.kept;
+    let narrow_voids = gap_regularization.narrow_voids;
+    let gap_separator_keep_out = gap_regularization.separator_keep_out;
+    let removed_by_gap_regularization = gap_regularization.removed;
+    let removed_by_regularization = clearance_safe_region.difference(&safe_region);
 
     // Certify against the nominal requirement, independently of the
     // construction guard used above.
     let swept_safe_region = safe_region.disk_dilate(options.clearance_mm);
-    let minimum_feature_violations = safe_region
-        .difference(&safe_region.disk_open(options.minimum_feature_radius_mm))
+    let regularization_violations = safe_region
+        .difference(&safe_region.disk_open(options.regularization_radius_mm))
         .disk_open(options.numerical_guard_mm);
-    let minimum_gap_violations = safe_region
-        .disk_inter_component_gap_violations(options.minimum_gap_radius_mm)
-        .disk_open(options.numerical_guard_mm);
-    let void_closing_additions = safe_region
-        .disk_close(options.minimum_gap_radius_mm)
-        .difference(&safe_region)
+    let gap_violations = safe_region
+        .disk_gap_violations(options.gap_radius_mm)
         .disk_open(options.numerical_guard_mm);
     let certificate = ClearanceCertificate {
-        safe_outside_maximal_region: safe_region.difference(&maximal_safe_region),
-        safe_outside_keep_in: safe_region.difference(&panel_keep_in),
-        safe_inside_obstacle_clearance: safe_region.intersection(&obstacle_clearance),
-        safe_inside_obstacle_gap_envelope: safe_region.intersection(&obstacle_gap_envelope),
-        minimum_feature_violations,
-        minimum_gap_violations,
-        void_closing_additions,
+        safe_outside_clearance_region: safe_region.difference(&clearance_safe_region),
+        regularization_violations,
+        gap_violations,
         outside_panel: swept_safe_region.difference(&input.panel_outer),
         obstacle_overlap: swept_safe_region.intersection(&raw_obstacles),
         swept_safe_region,
@@ -368,15 +341,14 @@ pub fn board_array_balancing_region(
         safe_region,
         intermediates: BoardArrayBalancingIntermediates {
             raw_obstacles,
-            panel_clearance_keep_in,
             panel_keep_in,
-            obstacle_clearance,
-            obstacle_gap_envelope,
-            maximal_safe_region,
-            regularization_core,
-            opened_safe_region,
+            obstacle_keep_out,
+            clearance_safe_region,
+            opened_candidates,
             removed_by_opening,
-            removed_by_gap_separation,
+            narrow_voids,
+            gap_separator_keep_out,
+            removed_by_gap_regularization,
             removed_by_regularization,
         },
         certificate,
@@ -529,14 +501,14 @@ fn validate_options(options: BalancingRegionOptions) -> Result<(), BalancingRegi
     if !options.clearance_mm.is_finite() || options.clearance_mm <= 0.0 {
         return Err(BalancingRegionError::InvalidClearance(options.clearance_mm));
     }
-    if !options.minimum_feature_radius_mm.is_finite() || options.minimum_feature_radius_mm <= 0.0 {
-        return Err(BalancingRegionError::InvalidMinimumFeatureRadius(
-            options.minimum_feature_radius_mm,
+    if !options.regularization_radius_mm.is_finite() || options.regularization_radius_mm <= 0.0 {
+        return Err(BalancingRegionError::InvalidRegularizationRadius(
+            options.regularization_radius_mm,
         ));
     }
-    if !options.minimum_gap_radius_mm.is_finite() || options.minimum_gap_radius_mm <= 0.0 {
-        return Err(BalancingRegionError::InvalidMinimumGapRadius(
-            options.minimum_gap_radius_mm,
+    if !options.gap_radius_mm.is_finite() || options.gap_radius_mm <= 0.0 {
+        return Err(BalancingRegionError::InvalidGapRadius(
+            options.gap_radius_mm,
         ));
     }
     if !options.numerical_guard_mm.is_finite() || options.numerical_guard_mm < 0.0 {
@@ -571,20 +543,17 @@ mod tests {
         assert!(!result.safe_region.is_empty());
         assert!(
             result.certificate.passes(1e-4),
-            "outside maximal {:.9}, outside keep-in {:.9}, inside obstacle clearance {:.9}, inside gap envelope {:.9}, feature violations {:.9}, gap violations {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
-            result.certificate.safe_outside_maximal_region.area(),
-            result.certificate.safe_outside_keep_in.area(),
-            result.certificate.safe_inside_obstacle_clearance.area(),
-            result.certificate.safe_inside_obstacle_gap_envelope.area(),
-            result.certificate.minimum_feature_violations.area(),
-            result.certificate.minimum_gap_violations.area(),
+            "outside clearance-safe {:.9}, filled-feature violations {:.9}, void-gap violations {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
+            result.certificate.safe_outside_clearance_region.area(),
+            result.certificate.regularization_violations.area(),
+            result.certificate.gap_violations.area(),
             result.certificate.outside_panel.area(),
             result.certificate.obstacle_overlap.area(),
         );
         assert!(
             result
                 .safe_region
-                .difference(&result.intermediates.maximal_safe_region)
+                .difference(&result.intermediates.clearance_safe_region)
                 .is_empty()
         );
         assert!(result.intermediates.removed_by_regularization.area() > 0.0);
@@ -597,20 +566,20 @@ mod tests {
         assert!(
             result
                 .safe_region
-                .intersection(&result.intermediates.obstacle_clearance)
+                .intersection(&result.intermediates.obstacle_keep_out)
                 .is_empty()
         );
     }
 
     #[test]
-    fn larger_clearance_shrinks_maximal_region_for_simple_fixture() {
+    fn larger_clearance_shrinks_clearance_safe_region_for_simple_fixture() {
         let input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let smaller = board_array_balancing_region(
             &input,
             BalancingRegionOptions {
                 clearance_mm: 0.25,
-                minimum_feature_radius_mm: 0.5,
-                minimum_gap_radius_mm: 0.5,
+                regularization_radius_mm: 0.5,
+                gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.0,
             },
         )
@@ -619,8 +588,8 @@ mod tests {
             &input,
             BalancingRegionOptions {
                 clearance_mm: 1.0,
-                minimum_feature_radius_mm: 0.5,
-                minimum_gap_radius_mm: 0.5,
+                regularization_radius_mm: 0.5,
+                gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.0,
             },
         )
@@ -628,28 +597,28 @@ mod tests {
 
         let larger_outside_smaller = larger
             .intermediates
-            .maximal_safe_region
-            .difference(&smaller.intermediates.maximal_safe_region);
+            .clearance_safe_region
+            .difference(&smaller.intermediates.clearance_safe_region);
         assert!(
             larger_outside_smaller.is_empty(),
             "larger clearance added {:.9} mm² to the maximal region",
             larger_outside_smaller.area()
         );
         assert!(
-            larger.intermediates.maximal_safe_region.area()
-                < smaller.intermediates.maximal_safe_region.area()
+            larger.intermediates.clearance_safe_region.area()
+                < smaller.intermediates.clearance_safe_region.area()
         );
     }
 
     #[test]
-    fn larger_feature_disk_shrinks_opened_region_for_simple_fixture() {
+    fn larger_regularization_disk_shrinks_opened_region_for_simple_fixture() {
         let input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let smaller = board_array_balancing_region(
             &input,
             BalancingRegionOptions {
                 clearance_mm: 0.5,
-                minimum_feature_radius_mm: 0.25,
-                minimum_gap_radius_mm: 0.5,
+                regularization_radius_mm: 0.25,
+                gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.0,
             },
         )
@@ -658,8 +627,8 @@ mod tests {
             &input,
             BalancingRegionOptions {
                 clearance_mm: 0.5,
-                minimum_feature_radius_mm: 1.0,
-                minimum_gap_radius_mm: 0.5,
+                regularization_radius_mm: 1.0,
+                gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.0,
             },
         )
@@ -667,76 +636,60 @@ mod tests {
 
         let larger_outside_smaller = larger
             .intermediates
-            .opened_safe_region
-            .difference(&smaller.intermediates.opened_safe_region);
+            .opened_candidates
+            .difference(&smaller.intermediates.opened_candidates);
         assert!(
             larger_outside_smaller.is_empty(),
             "larger feature disk added {:.9} mm² to the opened region",
             larger_outside_smaller.area()
         );
         assert!(
-            larger.intermediates.opened_safe_region.area()
-                < smaller.intermediates.opened_safe_region.area()
+            larger.intermediates.opened_candidates.area()
+                < smaller.intermediates.opened_candidates.area()
         );
     }
 
     #[test]
-    fn minimum_gap_radius_widens_corridors_around_line_obstacles() {
+    fn regularization_does_not_inflate_obstacle_clearance() {
         let input = BoardArrayBalancingInput {
             panel_outer: ContourSet::rectangle(bbox(0.0, 0.0, 30.0, 20.0), tol::REGION_MM),
             board_footprints: ContourSet::rectangle(bbox(2.0, 2.0, 4.0, 4.0), tol::REGION_MM),
             material_removal: ContourSet::empty(tol::REGION_MM),
             support_features: ContourSet::rectangle(bbox(14.95, 0.0, 15.05, 20.0), tol::REGION_MM),
         };
-        let narrow = board_array_balancing_region(
+        let result = board_array_balancing_region(
             &input,
             BalancingRegionOptions {
                 clearance_mm: 0.5,
-                minimum_feature_radius_mm: 0.5,
-                minimum_gap_radius_mm: 0.5,
-                numerical_guard_mm: 0.025,
-            },
-        )
-        .unwrap();
-        let wide = board_array_balancing_region(
-            &input,
-            BalancingRegionOptions {
-                clearance_mm: 0.5,
-                minimum_feature_radius_mm: 0.5,
-                minimum_gap_radius_mm: 1.0,
+                regularization_radius_mm: 1.0,
+                gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.025,
             },
         )
         .unwrap();
 
-        assert!(
-            wide.intermediates
-                .maximal_safe_region
-                .difference(&narrow.intermediates.maximal_safe_region)
-                .is_empty(),
-            "wider gap envelope added {:.9} mm² to the maximal region",
-            wide.intermediates
-                .maximal_safe_region
-                .difference(&narrow.intermediates.maximal_safe_region)
-                .area()
-        );
-        assert!(wide.certificate.minimum_gap_violations.is_empty());
-
-        let mut components = wide.safe_region.connected_components();
+        let mut components = result
+            .intermediates
+            .clearance_safe_region
+            .connected_components();
         components.sort_by(|left, right| left.bbox.min.x.total_cmp(&right.bbox.min.x));
-        assert_eq!(
-            components.len(),
-            2,
-            "rings {}, bbox {:?}",
-            wide.safe_region.rings.len(),
-            wide.safe_region.bbox
-        );
+        assert_eq!(components.len(), 2);
         let gap = components[1].bbox.min.x - components[0].bbox.max.x;
-        assert!(gap >= 2.0, "expected a 2 mm gap, got {gap:.9} mm");
+        assert!(
+            (gap - 1.15).abs() <= 0.01,
+            "expected physical stroke plus two 0.525 mm clearances, got {gap:.9} mm"
+        );
+        assert_eq!(result.safe_region.connected_components().len(), 2);
+        assert!(
+            result.intermediates.removed_by_gap_regularization.area() <= 1e-4,
+            "unexpected gap trimming {:.9} mm²",
+            result.intermediates.removed_by_gap_regularization.area(),
+        );
+        assert!(result.certificate.gap_violations.is_empty());
     }
 
     #[test]
-    fn adding_an_obstacle_shrinks_maximal_region_for_simple_fixture() {
+    fn adding_an_obstacle_shrinks_clearance_safe_region_for_simple_fixture() {
         let baseline_input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let added_obstacle = ContourSet::rectangle(bbox(10.0, 1.0, 11.0, 9.0), tol::REGION_MM);
         let blocked_input = balancing_input(0.0, added_obstacle);
@@ -748,13 +701,13 @@ mod tests {
         assert!(
             blocked
                 .intermediates
-                .maximal_safe_region
-                .difference(&baseline.intermediates.maximal_safe_region)
+                .clearance_safe_region
+                .difference(&baseline.intermediates.clearance_safe_region)
                 .is_empty()
         );
         assert!(
-            blocked.intermediates.maximal_safe_region.area()
-                < baseline.intermediates.maximal_safe_region.area()
+            blocked.intermediates.clearance_safe_region.area()
+                < baseline.intermediates.clearance_safe_region.area()
         );
     }
 
@@ -775,15 +728,15 @@ mod tests {
         );
         assert!(
             original.certificate.passes(1e-4),
-            "original outside maximal {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
-            original.certificate.safe_outside_maximal_region.area(),
+            "original outside clearance-safe {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
+            original.certificate.safe_outside_clearance_region.area(),
             original.certificate.outside_panel.area(),
             original.certificate.obstacle_overlap.area(),
         );
         assert!(
             translated.certificate.passes(1e-4),
-            "translated outside maximal {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
-            translated.certificate.safe_outside_maximal_region.area(),
+            "translated outside clearance-safe {:.9}, outside panel {:.9}, obstacle overlap {:.9}",
+            translated.certificate.safe_outside_clearance_region.area(),
             translated.certificate.outside_panel.area(),
             translated.certificate.obstacle_overlap.area(),
         );
@@ -814,8 +767,8 @@ mod tests {
                 &input,
                 BalancingRegionOptions {
                     clearance_mm: 0.0,
-                    minimum_feature_radius_mm: 0.5,
-                    minimum_gap_radius_mm: 0.5,
+                    regularization_radius_mm: 0.5,
+                    gap_radius_mm: 0.5,
                     numerical_guard_mm: 0.0,
                 }
             )
@@ -827,34 +780,34 @@ mod tests {
                 &input,
                 BalancingRegionOptions {
                     clearance_mm: 0.5,
-                    minimum_feature_radius_mm: 0.0,
-                    minimum_gap_radius_mm: 0.5,
+                    regularization_radius_mm: 0.0,
+                    gap_radius_mm: 0.5,
                     numerical_guard_mm: 0.0,
                 }
             )
             .unwrap_err(),
-            BalancingRegionError::InvalidMinimumFeatureRadius(0.0)
+            BalancingRegionError::InvalidRegularizationRadius(0.0)
         );
         assert_eq!(
             board_array_balancing_region(
                 &input,
                 BalancingRegionOptions {
                     clearance_mm: 0.5,
-                    minimum_feature_radius_mm: 0.5,
-                    minimum_gap_radius_mm: 0.0,
+                    regularization_radius_mm: 1.0,
+                    gap_radius_mm: 0.0,
                     numerical_guard_mm: 0.0,
                 }
             )
             .unwrap_err(),
-            BalancingRegionError::InvalidMinimumGapRadius(0.0)
+            BalancingRegionError::InvalidGapRadius(0.0)
         );
         assert_eq!(
             board_array_balancing_region(
                 &input,
                 BalancingRegionOptions {
                     clearance_mm: 0.5,
-                    minimum_feature_radius_mm: 0.5,
-                    minimum_gap_radius_mm: 0.5,
+                    regularization_radius_mm: 0.5,
+                    gap_radius_mm: 0.5,
                     numerical_guard_mm: -0.1,
                 }
             )

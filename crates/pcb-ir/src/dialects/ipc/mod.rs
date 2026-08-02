@@ -27,10 +27,10 @@ pub use balancing_region::{
     BalancingRegionError, BalancingRegionOptions, BoardArrayBalancingCollection,
     BoardArrayBalancingInput, BoardArrayBalancingIntermediates, BoardArrayBalancingResult,
     BoardArraySupportDocument, BoardArraySupportLayerGeometry, BoardArraySupportLayerPolicy,
-    ClearanceCertificate, DEFAULT_BALANCING_CLEARANCE_MM,
-    DEFAULT_BALANCING_MINIMUM_FEATURE_RADIUS_MM, DEFAULT_BALANCING_MINIMUM_GAP_RADIUS_MM,
-    DEFAULT_BALANCING_NUMERICAL_GUARD_MM, board_array_balancing_region,
-    collect_board_array_balancing_input, inspect_board_array_balancing_input,
+    ClearanceCertificate, DEFAULT_BALANCING_CLEARANCE_MM, DEFAULT_BALANCING_GAP_RADIUS_MM,
+    DEFAULT_BALANCING_NUMERICAL_GUARD_MM, DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM,
+    board_array_balancing_region, collect_board_array_balancing_input,
+    inspect_board_array_balancing_input,
 };
 pub use document::{Document, Layer};
 pub use feature::{
