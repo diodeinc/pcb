@@ -520,7 +520,7 @@ impl ContourSet {
             if violations.is_empty() {
                 break;
             }
-            let pass_separator_keep_out = pass_narrow_voids.disk_dilate(tube_radius);
+            let pass_separator_keep_out = violations.disk_dilate(tube_radius);
             let next = kept
                 .difference(&pass_separator_keep_out)
                 .disk_open(filled_radius)

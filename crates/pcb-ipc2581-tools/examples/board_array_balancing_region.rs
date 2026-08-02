@@ -1004,12 +1004,6 @@ fn render_overview_svg(title: &str, regions: &Regions) -> String {
     );
     write_region(
         &mut svg,
-        "removed-by-regularization",
-        &regions.removed_by_regularization,
-        "fill='none' stroke='#c2410c' stroke-opacity='0.72'",
-    );
-    write_region(
-        &mut svg,
         "safe-region",
         &regions.safe_region,
         "fill='#4ade80' stroke='#15803d' fill-opacity='0.72'",
