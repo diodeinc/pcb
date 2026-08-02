@@ -5,6 +5,8 @@
 //! low-level adapter remains available for callers that already have explicit
 //! geometry and area inputs.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result, bail};
 use ipc2581::types::{
     LayerFunction,
@@ -20,7 +22,8 @@ use pcb_ir::dialects::ipc::{
 };
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceRequest,
-    DenseCopperBalanceResult, generate_dense_copper_balance, rounded_hexagonal_void,
+    DenseCopperBalanceResult, SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest,
+    generate_dense_copper_balance, generate_spatial_dense_copper_balance, rounded_hexagonal_void,
 };
 use pcb_ir::geom::path::transform_cmds;
 use pcb_ir::geom::region::simplify_shapes;
@@ -38,6 +41,7 @@ pub struct AutomaticBoardArrayLayerBalance {
     pub layer_name: String,
     /// Copper density measured inside the repeated board footprints.
     pub board_target_density: f64,
+    pub stack_weight_mm2: Option<f64>,
     pub existing_copper: ContourSet,
     pub safe_region: ContourSet,
     pub result: DenseCopperBalanceResult,
@@ -60,6 +64,9 @@ pub struct AutomaticBoardArrayLayerBalanceReport {
     pub layer_name: String,
     pub mode: AutomaticBoardArrayCopperBalanceMode,
     pub void_radius_mm: Option<f64>,
+    pub min_void_radius_mm: Option<f64>,
+    pub max_void_radius_mm: Option<f64>,
+    pub stack_weight_mm2: Option<f64>,
     pub target_density: f64,
     pub initial_density: f64,
     pub achieved_density: f64,
@@ -120,10 +127,17 @@ impl AutomaticBoardArrayCopperBalance {
                             Some(void_radius_mm),
                         ),
                     };
+                    let (min_void_radius_mm, max_void_radius_mm) = layer
+                        .result
+                        .full_void_radius_range_mm()
+                        .map_or((None, None), |(min, max)| (Some(min), Some(max)));
                     AutomaticBoardArrayLayerBalanceReport {
                         layer_name: layer.layer_name.clone(),
                         mode,
                         void_radius_mm,
+                        min_void_radius_mm,
+                        max_void_radius_mm,
+                        stack_weight_mm2: layer.stack_weight_mm2,
                         target_density: solution.target_density,
                         initial_density: solution.initial_density,
                         achieved_density: solution.achieved_density,
@@ -207,45 +221,71 @@ pub fn generate_automatic_board_array_copper_balance(
     let retained_area_mm2 = panel_outer.area();
     let board_area_mm2 = board_footprints.area();
     let lattice_origin = panel_outer.bbox.min;
-    let mut layers = Vec::new();
-
-    for layer in ecad
+    let stack_weights = physical_copper_stack_weights(ipc);
+    let prepared = ecad
         .cad_data
         .layers
         .iter()
         .filter(|layer| crate::layers::is_copper(layer.layer_function))
-    {
-        let layer_name = ipc.resolve(layer.name).to_string();
-        let existing_copper = composed_copper_image(ipc, &layer_name)?.intersection(&panel_outer);
-        let board_target_density = (existing_copper.intersection(&board_footprints).area()
-            / board_area_mm2)
-            .clamp(0.0, 1.0);
-        // This is normally redundant because panel-root copper features are
-        // already support obstacles, but makes the solver's disjoint-input
-        // contract explicit and robust to sub-tolerance extraction overlap.
-        let safe_region = common_safe_region.difference(&existing_copper);
-        let (result, features) = generate_board_array_copper_balance(
-            DenseCopperBalanceProfile::V1,
-            DenseCopperBalanceRequest {
-                safe_region: &safe_region,
-                retained_area_mm2,
-                existing_copper_area_mm2: existing_copper.area(),
-                target_density: board_target_density,
-                lattice_origin,
-            },
-        )
-        .with_context(|| {
-            format!("failed to generate copper balance geometry for layer '{layer_name}'")
-        })?;
-        layers.push(AutomaticBoardArrayLayerBalance {
-            layer_name,
-            board_target_density,
-            existing_copper,
-            safe_region,
-            result,
-            features,
-        });
-    }
+        .map(|layer| {
+            let layer_name = ipc.resolve(layer.name).to_string();
+            let existing_copper =
+                composed_copper_image(ipc, &layer_name)?.intersection(&panel_outer);
+            let board_target_density = (existing_copper.intersection(&board_footprints).area()
+                / board_area_mm2)
+                .clamp(0.0, 1.0);
+            let stack_weight_mm2 = stack_weights
+                .as_ref()
+                .and_then(|weights| weights.get(&layer_name).copied());
+            Ok(PreparedLayerBalance {
+                layer_name,
+                board_target_density,
+                stack_weight_mm2,
+                existing_copper,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let spatial_layers = prepared
+        .iter()
+        .map(|layer| SpatialCopperBalanceLayerRequest {
+            existing_copper: &layer.existing_copper,
+            existing_copper_area_mm2: layer.existing_copper.area(),
+            target_density: layer.board_target_density,
+            stack_weight_mm2: layer.stack_weight_mm2.unwrap_or(0.0),
+        })
+        .collect::<Vec<_>>();
+    let results = generate_spatial_dense_copper_balance(
+        DenseCopperBalanceProfile::V1,
+        SpatialCopperBalanceRequest {
+            panel_region: &panel_outer,
+            safe_region: &common_safe_region,
+            retained_area_mm2,
+            lattice_origin,
+            layers: &spatial_layers,
+        },
+    )
+    .context("failed to generate spatial board-array copper balance")?;
+    let layers = prepared
+        .into_iter()
+        .zip(results)
+        .map(|(layer, result)| {
+            let features = match result.solution.mode {
+                DenseCopperBalanceMode::None => Vec::new(),
+                DenseCopperBalanceMode::Solid | DenseCopperBalanceMode::Perforated { .. } => {
+                    ipc_contour_features(&result)?
+                }
+            };
+            Ok(AutomaticBoardArrayLayerBalance {
+                layer_name: layer.layer_name,
+                board_target_density: layer.board_target_density,
+                stack_weight_mm2: layer.stack_weight_mm2,
+                existing_copper: layer.existing_copper,
+                safe_region: common_safe_region.clone(),
+                result,
+                features,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(AutomaticBoardArrayCopperBalance {
         panel_outer,
@@ -254,6 +294,13 @@ pub fn generate_automatic_board_array_copper_balance(
         retained_area_mm2,
         layers,
     })
+}
+
+struct PreparedLayerBalance {
+    layer_name: String,
+    board_target_density: f64,
+    stack_weight_mm2: Option<f64>,
+    existing_copper: ContourSet,
 }
 
 /// Solve and convert one layer's explicit safe region to positive IPC contours.
@@ -287,6 +334,52 @@ fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourSet> 
     ))
 }
 
+fn physical_copper_stack_weights(ipc: &Ipc2581) -> Option<HashMap<String, f64>> {
+    let ecad = ipc.ecad()?;
+    let stackup = ecad.cad_data.stackups.first()?;
+    let mut layers = stackup.layers.iter().collect::<Vec<_>>();
+    if layers.iter().all(|layer| layer.layer_number.is_some()) {
+        layers.sort_by_key(|layer| layer.layer_number);
+    }
+
+    let mut cursor_mm = 0.0;
+    let mut copper = Vec::new();
+    for stack_layer in layers {
+        let thickness_mm = stack_layer.thickness?;
+        if !thickness_mm.is_finite() || thickness_mm < 0.0 {
+            return None;
+        }
+        let center_mm = cursor_mm + thickness_mm / 2.0;
+        let name = ipc.resolve(stack_layer.layer_ref);
+        if ecad.cad_data.layers.iter().any(|layer| {
+            ipc.resolve(layer.name) == name && crate::layers::is_copper(layer.layer_function)
+        }) {
+            if thickness_mm <= 0.0 {
+                return None;
+            }
+            copper.push((name.to_string(), center_mm, thickness_mm));
+        }
+        cursor_mm += thickness_mm;
+    }
+
+    let expected = ecad
+        .cad_data
+        .layers
+        .iter()
+        .filter(|layer| crate::layers::is_copper(layer.layer_function))
+        .count();
+    if copper.len() != expected || cursor_mm <= 0.0 {
+        return None;
+    }
+    let midplane_mm = cursor_mm / 2.0;
+    Some(
+        copper
+            .into_iter()
+            .map(|(name, center_mm, thickness_mm)| (name, (midplane_mm - center_mm) * thickness_mm))
+            .collect(),
+    )
+}
+
 struct IpcCopperComponent {
     region: ContourSet,
     outer: ContourBuf,
@@ -307,15 +400,18 @@ fn ipc_contour_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeat
         })
         .collect::<Vec<_>>();
 
-    if let DenseCopperBalanceMode::Perforated { void_radius_mm } = result.solution.mode {
-        let template = rounded_hexagonal_void(void_radius_mm)
-            .context("generated copper balance has an invalid rounded-hex void radius")?;
-        for center in &result.full_void_centers {
-            let component = containing_component(&mut components, *center)
+    if matches!(
+        result.solution.mode,
+        DenseCopperBalanceMode::Perforated { .. }
+    ) {
+        for void in &result.full_voids {
+            let template = rounded_hexagonal_void(void.radius_mm)
+                .context("generated copper balance has an invalid rounded-hex void radius")?;
+            let component = containing_component(&mut components, void.center)
                 .context("generated full copper void lies outside the usable region")?;
             component.cutouts.push(transform_cmds(
                 template.cmds.iter().copied(),
-                Affine2::translation(*center),
+                Affine2::translation(void.center),
             ));
         }
     }
@@ -462,7 +558,7 @@ mod tests {
             result.solution
         );
         assert!(result.solution.generated_area_mm2 > 0.0);
-        assert!(!result.full_void_centers.is_empty());
+        assert!(!result.full_voids.is_empty());
         assert!(!result.partial_voids.is_empty());
         assert!(
             features
@@ -498,5 +594,43 @@ mod tests {
                 .flat_map(|polygon| &polygon.steps)
                 .any(|step| matches!(step, PolyStep::Curve(_)))
         );
+    }
+
+    #[test]
+    fn derives_signed_stack_weights_from_physical_layer_centers() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="F.Cu"/>
+    <LayerRef name="B.Cu"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Cu" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="B.Cu" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Stackup name="Primary" overallThickness="1.6">
+        <StackupGroup name="Primary_Group">
+          <StackupLayer layerOrGroupRef="COATING_TOP" thickness="0" sequence="0"/>
+          <StackupLayer layerOrGroupRef="F.Cu" thickness="0.035" sequence="1"/>
+          <StackupLayer layerOrGroupRef="CORE" thickness="1.53" sequence="2"/>
+          <StackupLayer layerOrGroupRef="B.Cu" thickness="0.035" sequence="3"/>
+          <StackupLayer layerOrGroupRef="COATING_BOTTOM" thickness="0" sequence="4"/>
+        </StackupGroup>
+      </Stackup>
+      <Step name="board" type="BOARD"><Datum x="0" y="0"/></Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let weights = physical_copper_stack_weights(&ipc).unwrap();
+
+        assert!((weights["F.Cu"] + weights["B.Cu"]).abs() <= 1e-12);
+        assert!(weights["F.Cu"] > 0.0);
+        assert!(weights["B.Cu"] < 0.0);
     }
 }
