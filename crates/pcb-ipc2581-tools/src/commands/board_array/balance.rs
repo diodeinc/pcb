@@ -241,14 +241,6 @@ pub fn generate_automatic_board_array_copper_balance(
             }
             balancing_region.safe_region
         };
-        // Flattened copper partitions into board material and array support;
-        // their canonical obstacles must therefore cover every copper pixel.
-        let existing_overlap_mm2 = safe_region.intersection(&existing_copper).area();
-        if existing_overlap_mm2 > CERTIFICATE_AREA_TOLERANCE_MM2 {
-            bail!(
-                "safe balancing region for layer '{layer_name}' overlaps existing copper by {existing_overlap_mm2:.6} mm²"
-            );
-        }
         prepared.push(PreparedLayerBalance {
             layer: layer.name,
             board_target_density,
@@ -262,7 +254,6 @@ pub fn generate_automatic_board_array_copper_balance(
         .map(|layer| SpatialCopperBalanceLayerRequest {
             safe_region: &layer.safe_region,
             existing_copper: &layer.existing_copper,
-            existing_copper_area_mm2: layer.existing_copper.area(),
             target_density: layer.board_target_density,
             stack_weight_mm2: layer.stack_weight_mm2.unwrap_or(0.0),
         })
@@ -271,7 +262,6 @@ pub fn generate_automatic_board_array_copper_balance(
         DenseCopperBalanceProfile::V1,
         SpatialCopperBalanceRequest {
             panel_region: &panel_outer,
-            retained_area_mm2,
             lattice_origin,
             layers: &spatial_layers,
         },

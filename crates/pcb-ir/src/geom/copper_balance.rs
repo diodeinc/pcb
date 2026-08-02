@@ -145,8 +145,8 @@ pub struct DenseCopperBalanceRequest<'a> {
 pub struct SpatialCopperBalanceLayerRequest<'a> {
     /// Safe, initially empty region available on this copper layer.
     pub safe_region: &'a ContourSet,
+    /// Fixed copper within `SpatialCopperBalanceRequest::panel_region`.
     pub existing_copper: &'a ContourSet,
-    pub existing_copper_area_mm2: f64,
     pub target_density: f64,
     /// Signed first-moment weight `z * thickness` from the physical stackup.
     pub stack_weight_mm2: f64,
@@ -155,8 +155,8 @@ pub struct SpatialCopperBalanceLayerRequest<'a> {
 /// Geometry shared by all layers in a joint spatial copper-balance solve.
 #[derive(Debug, Clone, Copy)]
 pub struct SpatialCopperBalanceRequest<'a> {
+    /// Canonical retained panel geometry and density denominator.
     pub panel_region: &'a ContourSet,
-    pub retained_area_mm2: f64,
     pub lattice_origin: Point,
     pub layers: &'a [SpatialCopperBalanceLayerRequest<'a>],
 }
@@ -302,15 +302,23 @@ fn generate_dense_copper_balance_with_lattice(
 
 /// Jointly distribute each layer's already-selected copper area in space.
 ///
-/// The solver uses squared void radius as its variable. It minimizes local
-/// density error plus the signed through-stack first moment, then projects
-/// every layer back onto its original total void area and radius bounds.
+/// The solver uses squared void radius as its variable. Each layer scatters
+/// only its admitted variables onto one panel lattice; normalized convolution
+/// maps all layers to one evaluation field. Projected gradient then minimizes
+/// local density error plus signed through-stack error while preserving each
+/// layer's selected void area and radius bounds.
+///
+/// For a perforated layer, `rho = H(c + s - p - beta P x)`: `c` and `s` are
+/// fixed-copper and safe-region indicators, `p` is the clipped edge-void
+/// indicator, `P` scatters local squared radii `x`, and `H` is the shared
+/// normalized Gaussian convolution.
 pub fn generate_spatial_dense_copper_balance(
     profile: DenseCopperBalanceProfile,
     request: SpatialCopperBalanceRequest<'_>,
 ) -> Result<Vec<DenseCopperBalanceResult>, DenseCopperBalanceError> {
     profile.validate()?;
     validate_spatial_request(request)?;
+    let retained_area_mm2 = request.panel_region.area();
 
     let voidable = request
         .layers
@@ -331,8 +339,8 @@ pub fn generate_spatial_dense_copper_balance(
                 profile,
                 DenseCopperBalanceRequest {
                     safe_region: layer.safe_region,
-                    retained_area_mm2: request.retained_area_mm2,
-                    existing_copper_area_mm2: layer.existing_copper_area_mm2,
+                    retained_area_mm2,
+                    existing_copper_area_mm2: layer.existing_copper.area(),
                     target_density: layer.target_density,
                     lattice_origin: request.lattice_origin,
                 },
@@ -343,29 +351,17 @@ pub fn generate_spatial_dense_copper_balance(
         })
         .collect::<Vec<_>>();
 
-    // All layers share one lattice coordinate system, but each owns only the
-    // sites admitted by its safe region. The union supplies common evaluation
-    // coordinates for spatial and through-stack error without intersecting the
-    // layer-safe regions or duplicating their geometry.
-    let mut centers = lattices
-        .iter()
-        .flat_map(|lattice| lattice.full_centers.iter().copied())
-        .collect::<Vec<_>>();
-    centers.sort_by(|left, right| {
-        left.x
-            .total_cmp(&right.x)
-            .then_with(|| left.y.total_cmp(&right.y))
-    });
-    centers.dedup_by(|left, right| left.x == right.x && left.y == right.y);
-    if centers.is_empty() {
-        return Ok(uniform);
-    }
-    let center_indices = centers
+    let panel_samples =
+        hex_aligned_lattice_centers(request.panel_region.bbox, request.lattice_origin, profile)
+            .into_iter()
+            .filter(|point| request.panel_region.contains_point(*point))
+            .collect::<Vec<_>>();
+    let sample_indices = panel_samples
         .iter()
         .enumerate()
-        .map(|(index, center)| {
+        .map(|(index, point)| {
             (
-                lattice_index(*center, request.lattice_origin, profile),
+                lattice_index(*point, request.lattice_origin, profile),
                 index,
             )
         })
@@ -377,29 +373,26 @@ pub fn generate_spatial_dense_copper_balance(
                 .full_centers
                 .iter()
                 .map(|center| {
-                    center_indices[&lattice_index(*center, request.lattice_origin, profile)]
+                    sample_indices[&lattice_index(*center, request.lattice_origin, profile)]
                 })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let local_site_for_global = active_sites
-        .iter()
-        .map(|active| {
-            let mut local = vec![None; centers.len()];
-            for (local_index, global_index) in active.iter().copied().enumerate() {
-                local[global_index] = Some(local_index);
-            }
-            local
-        })
-        .collect::<Vec<_>>();
+    if active_sites.iter().all(Vec::is_empty) {
+        return Ok(uniform);
+    }
 
-    let panel_samples =
-        hex_aligned_lattice_centers(request.panel_region.bbox, request.lattice_origin, profile)
-            .into_iter()
-            .filter(|point| request.panel_region.contains_point(*point))
-            .collect::<Vec<_>>();
-    let density_kernel =
-        LatticeDensityKernel::new(&panel_samples, &centers, request.lattice_origin, profile);
+    // The objective lives on one coarse subset of the panel lattice. Every
+    // layer scatters only its own void variables onto the full lattice, then
+    // the same normalized convolution maps those fields to the common sites.
+    let evaluation_points =
+        density_evaluation_points(&panel_samples, request.lattice_origin, profile);
+    let density_kernel = LatticeDensityKernel::new(
+        &panel_samples,
+        &evaluation_points,
+        request.lattice_origin,
+        profile,
+    );
     let fixed_density = request
         .layers
         .iter()
@@ -411,6 +404,12 @@ pub fn generate_spatial_dense_copper_balance(
         .layers
         .iter()
         .map(|layer| density_kernel.smooth(&scanline_indicator(&panel_samples, layer.safe_region)))
+        .collect::<Vec<_>>();
+    let partial_void_density = uniform
+        .iter()
+        .map(|result| {
+            density_kernel.smooth(&scanline_indicator(&panel_samples, &result.partial_voids))
+        })
         .collect::<Vec<_>>();
 
     let lower = active_sites
@@ -453,7 +452,7 @@ pub fn generate_spatial_dense_copper_balance(
     let cell_area_mm2 = SQRT_3 * profile.pitch_mm.powi(2) / 2.0;
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
     let normalized_stack_weights = normalized_stack_weights(request.layers);
-    let step = 0.5 / void_fraction_per_radius_squared;
+    let step = 0.25 / void_fraction_per_radius_squared.powi(2);
 
     for _ in 0..SPATIAL_SOLVE_ITERATIONS {
         let error = request
@@ -461,33 +460,43 @@ pub fn generate_spatial_dense_copper_balance(
             .iter()
             .enumerate()
             .map(|(layer_index, layer)| {
-                centers
+                let void_density = match uniform[layer_index].solution.mode {
+                    DenseCopperBalanceMode::Perforated { .. } => {
+                        let mut void_fraction = vec![0.0; panel_samples.len()];
+                        for (sample_index, radius_squared) in active_sites[layer_index]
+                            .iter()
+                            .zip(&squared_radii[layer_index])
+                        {
+                            void_fraction[*sample_index] =
+                                void_fraction_per_radius_squared * radius_squared;
+                        }
+                        density_kernel.smooth(&void_fraction)
+                    }
+                    DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => {
+                        vec![0.0; evaluation_points.len()]
+                    }
+                };
+                fixed_density[layer_index]
                     .iter()
                     .enumerate()
-                    .map(|(site_index, _)| {
+                    .map(|(site_index, fixed)| {
                         let generated_density = match uniform[layer_index].solution.mode {
                             DenseCopperBalanceMode::None => 0.0,
                             DenseCopperBalanceMode::Solid => {
                                 available_density[layer_index][site_index]
                             }
-                            DenseCopperBalanceMode::Perforated { void_radius_mm } => {
-                                // A non-local evaluation site has no variable;
-                                // use the layer's uniform projected background.
-                                let radius_squared = local_site_for_global[layer_index][site_index]
-                                    .map(|local_index| squared_radii[layer_index][local_index])
-                                    .unwrap_or(void_radius_mm.powi(2));
+                            DenseCopperBalanceMode::Perforated { .. } => {
                                 available_density[layer_index][site_index]
-                                    * (1.0 - void_fraction_per_radius_squared * radius_squared)
-                                        .clamp(0.0, 1.0)
+                                    - partial_void_density[layer_index][site_index]
+                                    - void_density[site_index]
                             }
                         };
-                        fixed_density[layer_index][site_index] + generated_density
-                            - layer.target_density
+                        fixed + generated_density - layer.target_density
                     })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        let stack_error = (0..centers.len())
+        let stack_error = (0..evaluation_points.len())
             .map(|site_index| {
                 normalized_stack_weights
                     .iter()
@@ -501,16 +510,20 @@ pub fn generate_spatial_dense_copper_balance(
             if squared_radii[layer_index].is_empty() {
                 continue;
             }
+            let residual = error[layer_index]
+                .iter()
+                .zip(&stack_error)
+                .map(|(local, stack)| local + normalized_stack_weights[layer_index] * stack)
+                .collect::<Vec<_>>();
+            let influence = density_kernel.smooth_adjoint(&residual);
             let proposed = squared_radii[layer_index]
                 .iter()
                 .enumerate()
                 .map(|(local_index, radius_squared)| {
-                    let site_index = active_sites[layer_index][local_index];
                     radius_squared
                         + step
-                            * available_density[layer_index][site_index]
-                            * (error[layer_index][site_index]
-                                + normalized_stack_weights[layer_index] * stack_error[site_index])
+                            * void_fraction_per_radius_squared
+                            * influence[active_sites[layer_index][local_index]]
                 })
                 .collect::<Vec<_>>();
             squared_radii[layer_index] = project_box_sum(
@@ -534,7 +547,7 @@ pub fn generate_spatial_dense_copper_balance(
                 &squared_radii[layer_index],
                 baseline,
                 request.layers[layer_index],
-                request.retained_area_mm2,
+                retained_area_mm2,
             )
         })
         .collect())
@@ -548,16 +561,44 @@ fn validate_spatial_request(
             "panel region must be non-empty and have valid bounds".to_string(),
         ));
     }
+    let retained_area_mm2 = request.panel_region.area();
     for layer in request.layers {
         if !layer.stack_weight_mm2.is_finite() {
             return Err(DenseCopperBalanceError::InvalidInput(
                 "stack weights must be finite".to_string(),
             ));
         }
+        if !layer
+            .safe_region
+            .difference(request.panel_region)
+            .is_empty()
+        {
+            return Err(DenseCopperBalanceError::InvalidInput(
+                "safe region must be contained by the panel region".to_string(),
+            ));
+        }
+        if !layer
+            .existing_copper
+            .difference(request.panel_region)
+            .is_empty()
+        {
+            return Err(DenseCopperBalanceError::InvalidInput(
+                "existing copper must be contained by the panel region".to_string(),
+            ));
+        }
+        if !layer
+            .safe_region
+            .intersection(layer.existing_copper)
+            .is_empty()
+        {
+            return Err(DenseCopperBalanceError::InvalidInput(
+                "existing copper and safe region must be disjoint".to_string(),
+            ));
+        }
         validate_request(DenseCopperBalanceRequest {
             safe_region: layer.safe_region,
-            retained_area_mm2: request.retained_area_mm2,
-            existing_copper_area_mm2: layer.existing_copper_area_mm2,
+            retained_area_mm2,
+            existing_copper_area_mm2: layer.existing_copper.area(),
             target_density: layer.target_density,
             lattice_origin: request.lattice_origin,
         })?;
@@ -582,10 +623,12 @@ fn normalized_stack_weights(layers: &[SpatialCopperBalanceLayerRequest<'_>]) -> 
         .collect()
 }
 
+/// Sparse row-normalized convolution from panel-lattice samples to a shared
+/// evaluation field. `smooth_adjoint` is the exact transpose of `smooth`, so
+/// projected gradient follows the same density model used by the objective.
 struct LatticeDensityKernel {
-    samples: HashMap<(i64, i64), usize>,
-    evaluation_sites: Vec<(i64, i64)>,
-    offsets: [Vec<(i64, i64, f64)>; 2],
+    sample_count: usize,
+    rows: Vec<Vec<(usize, f64)>>,
 }
 
 impl LatticeDensityKernel {
@@ -596,15 +639,15 @@ impl LatticeDensityKernel {
         profile: DenseCopperBalanceProfile,
     ) -> Self {
         let index = |point| lattice_index(point, origin, profile);
-        let samples = samples
+        let sample_indices = samples
             .iter()
             .enumerate()
             .map(|(sample_index, point)| (index(*point), sample_index))
-            .collect();
+            .collect::<HashMap<_, _>>();
         let evaluation_sites = evaluation_points
             .iter()
             .map(|point| index(*point))
-            .collect();
+            .collect::<Vec<_>>();
         let support_mm = DENSITY_KERNEL_TRUNCATION * profile.density_sigma_mm;
         let inverse_two_sigma_squared = 0.5 / profile.density_sigma_mm.powi(2);
         let column_span = (support_mm / profile.lattice_column_pitch_mm()).ceil() as i64;
@@ -627,37 +670,80 @@ impl LatticeDensityKernel {
                         })
                     })
                 })
-                .collect()
+                .collect::<Vec<(i64, i64, f64)>>()
         });
+        let rows = evaluation_sites
+            .iter()
+            .map(|&(column, row)| {
+                let mut neighbors = offsets[column.rem_euclid(2) as usize]
+                    .iter()
+                    .filter_map(|&(column_offset, row_offset, weight)| {
+                        let sample_index =
+                            sample_indices.get(&(column + column_offset, row + row_offset))?;
+                        Some((*sample_index, weight))
+                    })
+                    .collect::<Vec<_>>();
+                let weight_sum = neighbors.iter().map(|(_, weight)| weight).sum::<f64>();
+                if weight_sum > 0.0 {
+                    for (_, weight) in &mut neighbors {
+                        *weight /= weight_sum;
+                    }
+                }
+                neighbors
+            })
+            .collect();
         Self {
-            samples,
-            evaluation_sites,
-            offsets,
+            sample_count: samples.len(),
+            rows,
         }
     }
 
     fn smooth(&self, values: &[f64]) -> Vec<f64> {
-        self.evaluation_sites
+        debug_assert_eq!(values.len(), self.sample_count);
+        self.rows
             .iter()
-            .map(|&(column, row)| {
-                let (weighted_sum, weight_sum) = self.offsets[column.rem_euclid(2) as usize]
-                    .iter()
-                    .filter_map(|&(column_offset, row_offset, weight)| {
-                        let sample_index = self
-                            .samples
-                            .get(&(column + column_offset, row + row_offset))?;
-                        Some((weight * values[*sample_index], weight))
-                    })
-                    .fold((0.0, 0.0), |(sum, weights), (value, weight)| {
-                        (sum + value, weights + weight)
-                    });
-                if weight_sum > 0.0 {
-                    weighted_sum / weight_sum
-                } else {
-                    0.0
-                }
+            .map(|row| {
+                row.iter()
+                    .map(|(sample_index, weight)| weight * values[*sample_index])
+                    .sum()
             })
             .collect()
+    }
+
+    fn smooth_adjoint(&self, values: &[f64]) -> Vec<f64> {
+        debug_assert_eq!(values.len(), self.rows.len());
+        let mut result = vec![0.0; self.sample_count];
+        for (value, row) in values.iter().zip(&self.rows) {
+            for (sample_index, weight) in row {
+                result[*sample_index] += weight * value;
+            }
+        }
+        result
+    }
+}
+
+/// Sample the 5 mm-scale objective on a deterministic subset of the 1.35 mm
+/// fabrication lattice. Geometry and output stay on the full lattice.
+fn density_evaluation_points(
+    samples: &[Point],
+    origin: Point,
+    profile: DenseCopperBalanceProfile,
+) -> Vec<Point> {
+    let stride = (profile.density_sigma_mm / profile.pitch_mm)
+        .round()
+        .max(1.0) as i64;
+    let evaluation = samples
+        .iter()
+        .copied()
+        .filter(|point| {
+            let (column, row) = lattice_index(*point, origin, profile);
+            column.rem_euclid(stride) == 0 && row.rem_euclid(stride) == 0
+        })
+        .collect::<Vec<_>>();
+    if evaluation.is_empty() {
+        samples.to_vec()
+    } else {
+        evaluation
     }
 }
 
@@ -1006,8 +1092,7 @@ fn spatial_result_from_squared_radii(
     let partial_voids = baseline.partial_voids;
     let void_area_mm2 = full_void_area_mm2 + partial_voids.area();
     let generated_area_mm2 = (baseline.usable.area() - void_area_mm2).max(0.0);
-    let achieved_density =
-        (layer.existing_copper_area_mm2 + generated_area_mm2) / retained_area_mm2;
+    let achieved_density = (layer.existing_copper.area() + generated_area_mm2) / retained_area_mm2;
     let equivalent_radius_mm =
         (squared_radii.iter().sum::<f64>() / squared_radii.len() as f64).sqrt();
     let solution = DenseCopperBalanceSolution {
@@ -1413,7 +1498,6 @@ mod tests {
             DenseCopperBalanceProfile::V1,
             SpatialCopperBalanceRequest {
                 panel_region: &panel,
-                retained_area_mm2: panel.area(),
                 lattice_origin: Point::ZERO,
                 layers: &[],
             },
@@ -1421,6 +1505,126 @@ mod tests {
         .unwrap();
 
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn density_kernel_adjoint_matches_the_forward_operator() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
+            tol::REGION_MM,
+        );
+        let samples = hex_aligned_lattice_centers(panel.bbox, Point::ZERO, profile)
+            .into_iter()
+            .filter(|point| panel.contains_point(*point))
+            .collect::<Vec<_>>();
+        let evaluation = density_evaluation_points(&samples, Point::ZERO, profile);
+        let kernel = LatticeDensityKernel::new(&samples, &evaluation, Point::ZERO, profile);
+        let source = (0..samples.len())
+            .map(|index| ((index * 17 % 29) as f64 - 14.0) / 29.0)
+            .collect::<Vec<_>>();
+        let residual = (0..evaluation.len())
+            .map(|index| ((index * 11 % 23) as f64 - 11.0) / 23.0)
+            .collect::<Vec<_>>();
+
+        let forward_inner_product = kernel
+            .smooth(&source)
+            .iter()
+            .zip(&residual)
+            .map(|(left, right)| left * right)
+            .sum::<f64>();
+        let adjoint_inner_product = source
+            .iter()
+            .zip(kernel.smooth_adjoint(&residual))
+            .map(|(left, right)| left * right)
+            .sum::<f64>();
+
+        assert!((forward_inner_product - adjoint_inner_product).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn spatial_solver_rejects_existing_copper_in_the_safe_region() {
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
+            tol::REGION_MM,
+        );
+        let safe = ContourSet::rectangle(
+            BBox::new(Point::new(10.0, 0.0), Point::new(20.0, 12.0)),
+            tol::REGION_MM,
+        );
+        let existing = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(11.0, 12.0)),
+            tol::REGION_MM,
+        );
+        let layers = [SpatialCopperBalanceLayerRequest {
+            safe_region: &safe,
+            existing_copper: &existing,
+            target_density: 0.5,
+            stack_weight_mm2: 0.0,
+        }];
+
+        let error = generate_spatial_dense_copper_balance(
+            DenseCopperBalanceProfile::V1,
+            SpatialCopperBalanceRequest {
+                panel_region: &panel,
+                lattice_origin: Point::ZERO,
+                layers: &layers,
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            DenseCopperBalanceError::InvalidInput(
+                "existing copper and safe region must be disjoint".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn spatial_solver_rejects_geometry_outside_the_panel() {
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
+            tol::REGION_MM,
+        );
+        let inside = ContourSet::rectangle(
+            BBox::new(Point::new(10.0, 0.0), Point::new(20.0, 12.0)),
+            tol::REGION_MM,
+        );
+        let outside = ContourSet::rectangle(
+            BBox::new(Point::new(-1.0, 0.0), Point::new(5.0, 12.0)),
+            tol::REGION_MM,
+        );
+        let empty = ContourSet::empty(tol::REGION_MM);
+        let solve = |safe_region, existing_copper| {
+            let layers = [SpatialCopperBalanceLayerRequest {
+                safe_region,
+                existing_copper,
+                target_density: 0.5,
+                stack_weight_mm2: 0.0,
+            }];
+            generate_spatial_dense_copper_balance(
+                DenseCopperBalanceProfile::V1,
+                SpatialCopperBalanceRequest {
+                    panel_region: &panel,
+                    lattice_origin: Point::ZERO,
+                    layers: &layers,
+                },
+            )
+        };
+
+        assert_eq!(
+            solve(&outside, &empty).unwrap_err(),
+            DenseCopperBalanceError::InvalidInput(
+                "safe region must be contained by the panel region".to_string()
+            )
+        );
+        assert_eq!(
+            solve(&inside, &outside).unwrap_err(),
+            DenseCopperBalanceError::InvalidInput(
+                "existing copper must be contained by the panel region".to_string()
+            )
+        );
     }
 
     #[test]
@@ -1439,7 +1643,6 @@ mod tests {
         let layer = SpatialCopperBalanceLayerRequest {
             safe_region: &panel,
             existing_copper: &existing,
-            existing_copper_area_mm2: 0.0,
             target_density,
             stack_weight_mm2: 0.0,
         };
@@ -1458,7 +1661,6 @@ mod tests {
             profile,
             SpatialCopperBalanceRequest {
                 panel_region: &panel,
-                retained_area_mm2: panel.area(),
                 lattice_origin: Point::ZERO,
                 layers: &[layer],
             },
@@ -1480,7 +1682,7 @@ mod tests {
     }
 
     #[test]
-    fn spatial_solver_keeps_constant_fields_uniform() {
+    fn spatial_solver_preserves_area_and_radius_bounds_for_constant_inputs() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(24.0, 16.0)),
             tol::REGION_MM,
@@ -1489,7 +1691,6 @@ mod tests {
         let layers = [SpatialCopperBalanceLayerRequest {
             safe_region: &panel,
             existing_copper: &existing,
-            existing_copper_area_mm2: 0.0,
             target_density: 0.5,
             stack_weight_mm2: 0.0,
         }];
@@ -1497,7 +1698,6 @@ mod tests {
             DenseCopperBalanceProfile::V1,
             SpatialCopperBalanceRequest {
                 panel_region: &panel,
-                retained_area_mm2: panel.area(),
                 lattice_origin: Point::ZERO,
                 layers: &layers,
             },
@@ -1507,7 +1707,8 @@ mod tests {
         .unwrap();
 
         let (min, max) = result.full_void_radius_range_mm().unwrap();
-        assert!(max - min <= 1e-9);
+        assert!(min + NUMERIC_EPSILON >= DenseCopperBalanceProfile::V1.min_void_radius_mm);
+        assert!(max <= DenseCopperBalanceProfile::V1.max_void_radius_mm + NUMERIC_EPSILON);
         assert!((result.solution.achieved_density - 0.5).abs() <= 5e-3);
     }
 
@@ -1530,14 +1731,12 @@ mod tests {
             SpatialCopperBalanceLayerRequest {
                 safe_region: &left,
                 existing_copper: &existing,
-                existing_copper_area_mm2: 0.0,
                 target_density: 0.25,
                 stack_weight_mm2: 1.0,
             },
             SpatialCopperBalanceLayerRequest {
                 safe_region: &right,
                 existing_copper: &existing,
-                existing_copper_area_mm2: 0.0,
                 target_density: 0.25,
                 stack_weight_mm2: -1.0,
             },
@@ -1547,7 +1746,6 @@ mod tests {
             DenseCopperBalanceProfile::V1,
             SpatialCopperBalanceRequest {
                 panel_region: &panel,
-                retained_area_mm2: panel.area(),
                 lattice_origin: Point::ZERO,
                 layers: &layers,
             },
@@ -1590,7 +1788,6 @@ mod tests {
         let layer = SpatialCopperBalanceLayerRequest {
             safe_region: &safe,
             existing_copper: &existing,
-            existing_copper_area_mm2: existing.area(),
             target_density: 0.75,
             stack_weight_mm2: 0.0,
         };
@@ -1609,7 +1806,6 @@ mod tests {
             DenseCopperBalanceProfile::V1,
             SpatialCopperBalanceRequest {
                 panel_region: &panel,
-                retained_area_mm2: panel.area(),
                 lattice_origin: Point::ZERO,
                 layers: &[layer],
             },
@@ -1657,20 +1853,17 @@ mod tests {
                 DenseCopperBalanceProfile::V1,
                 SpatialCopperBalanceRequest {
                     panel_region: &panel,
-                    retained_area_mm2: panel.area(),
                     lattice_origin: Point::ZERO,
                     layers: &[
                         SpatialCopperBalanceLayerRequest {
                             safe_region: &safe,
                             existing_copper: &top_copper,
-                            existing_copper_area_mm2: top_copper.area(),
                             target_density: 0.75,
                             stack_weight_mm2,
                         },
                         SpatialCopperBalanceLayerRequest {
                             safe_region: &safe,
                             existing_copper: &bottom_copper,
-                            existing_copper_area_mm2: bottom_copper.area(),
                             target_density: 0.50,
                             stack_weight_mm2: -stack_weight_mm2,
                         },
