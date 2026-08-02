@@ -70,8 +70,7 @@ pub struct AutomaticBoardArrayLayerBalanceReport {
     pub safe_area_mm2: f64,
     pub usable_area_mm2: f64,
     pub fixed_empty_area_mm2: f64,
-    pub lattice_center_count: usize,
-    pub eligible_component_count: usize,
+    pub void_count: usize,
 }
 
 /// Topology selected for one layer's automatic balance.
@@ -105,10 +104,10 @@ impl AutomaticBoardArrayCopperBalance {
                 .map(|layer| {
                     let solution = layer.result.solution;
                     let existing_copper_area_mm2 = layer.existing_copper.area();
-                    let fixed_empty_area_mm2 = (self.retained_area_mm2
-                        - existing_copper_area_mm2
-                        - layer.result.usable_area_mm2)
-                        .max(0.0);
+                    let usable_area_mm2 = layer.result.usable.area();
+                    let fixed_empty_area_mm2 =
+                        (self.retained_area_mm2 - existing_copper_area_mm2 - usable_area_mm2)
+                            .max(0.0);
                     let (mode, void_radius_mm) = match solution.mode {
                         DenseCopperBalanceMode::None => {
                             (AutomaticBoardArrayCopperBalanceMode::None, None)
@@ -133,10 +132,9 @@ impl AutomaticBoardArrayCopperBalance {
                         desired_added_area_mm2: solution.desired_added_area_mm2,
                         generated_area_mm2: solution.generated_area_mm2,
                         safe_area_mm2: layer.safe_region.area(),
-                        usable_area_mm2: layer.result.usable_area_mm2,
+                        usable_area_mm2,
                         fixed_empty_area_mm2,
-                        lattice_center_count: layer.result.lattice_centers.len(),
-                        eligible_component_count: layer.result.eligible_component_count,
+                        void_count: layer.result.void_count(),
                     }
                 })
                 .collect(),
@@ -266,11 +264,9 @@ pub fn generate_board_array_copper_balance(
     let result = generate_dense_copper_balance(profile, request)?;
     let features = match result.solution.mode {
         DenseCopperBalanceMode::None => Vec::new(),
-        DenseCopperBalanceMode::Solid => ipc_contour_features(&result.usable, None)?,
-        DenseCopperBalanceMode::Perforated { void_radius_mm } => ipc_contour_features(
-            &result.usable,
-            Some((&result.lattice_centers, void_radius_mm)),
-        )?,
+        DenseCopperBalanceMode::Solid | DenseCopperBalanceMode::Perforated { .. } => {
+            ipc_contour_features(&result)?
+        }
     };
     Ok((result, features))
 }
@@ -291,64 +287,99 @@ fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourSet> 
     ))
 }
 
-fn ipc_contour_features(
-    region: &ContourSet,
-    perforation: Option<(&[Point], f64)>,
-) -> Result<Vec<SetFeature>> {
-    let void_template = perforation
-        .map(|(_, radius)| {
-            rounded_hexagonal_void(radius)
-                .context("generated copper balance has an invalid rounded-hex void radius")
-        })
-        .transpose()?;
+struct IpcCopperComponent {
+    region: ContourSet,
+    outer: ContourBuf,
+    cutouts: Vec<ContourBuf>,
+}
 
-    simplify_shapes(region.rings.clone(), FillRule::NonZero)
+fn ipc_contour_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeature>> {
+    let mut components = simplify_shapes(result.usable.rings.clone(), FillRule::NonZero)
         .into_iter()
-        .map(|shape| {
-            let component = ContourSet::new(shape.clone(), FillRule::NonZero, region.tolerance);
-            let mut contours = shape
+        .map(|shape| IpcCopperComponent {
+            region: ContourSet::new(shape.clone(), FillRule::NonZero, result.usable.tolerance),
+            outer: pcb_ir::geom::arcfit::ring_to_contour_with_arcs(&shape[0], tol::FLATTEN_MM),
+            cutouts: shape
                 .iter()
-                .map(|ring| pcb_ir::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM));
-            let polygon = ipc_polygon_from_contour(
-                &contours
-                    .next()
-                    .context("generated copper contour has no outer boundary")?,
-            )?;
-            let cutouts = contours
-                .map(|contour| ipc_polygon_from_contour(&contour))
-                .chain(
-                    perforation
-                        .into_iter()
-                        .flat_map(|(centers, _)| centers)
-                        .filter(|center| component.contains_point(**center))
-                        .map(|center| {
-                            let contour = transform_cmds(
-                                void_template
-                                    .as_ref()
-                                    .expect("perforation has a void template")
-                                    .cmds
-                                    .iter()
-                                    .copied(),
-                                Affine2::translation(*center),
-                            );
-                            ipc_polygon_from_contour(&contour)
-                        }),
-                )
-                .collect::<Result<Vec<_>>>()?;
-            Ok(SetFeature::UserPrimitive(FeatureUserPrimitive {
-                primitive: UserPrimitive::UserSpecial(UserSpecial {
-                    shapes: vec![UserShape {
-                        shape: UserShapeType::Contour(IpcContour { polygon, cutouts }),
-                        line_desc: None,
-                        line_desc_ref: None,
-                        fill_desc: None,
-                    }],
-                }),
-                x: 0.0,
-                y: 0.0,
-            }))
+                .skip(1)
+                .map(|ring| pcb_ir::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM))
+                .collect(),
         })
+        .collect::<Vec<_>>();
+
+    if let DenseCopperBalanceMode::Perforated { void_radius_mm } = result.solution.mode {
+        let template = rounded_hexagonal_void(void_radius_mm)
+            .context("generated copper balance has an invalid rounded-hex void radius")?;
+        for center in &result.full_void_centers {
+            let component = containing_component(&mut components, *center)
+                .context("generated full copper void lies outside the usable region")?;
+            component.cutouts.push(transform_cmds(
+                template.cmds.iter().copied(),
+                Affine2::translation(*center),
+            ));
+        }
+    }
+
+    let mut islands = Vec::new();
+    for shape in simplify_shapes(result.partial_voids.rings.clone(), FillRule::NonZero) {
+        let &[x, y] = shape
+            .first()
+            .and_then(|ring| ring.first())
+            .context("generated partial copper void has no outer boundary")?;
+        let component = containing_component(&mut components, Point::new(x, y))
+            .context("generated partial copper void lies outside the usable region")?;
+        component
+            .cutouts
+            .push(pcb_ir::geom::arcfit::ring_to_contour_with_arcs(
+                &shape[0],
+                tol::FLATTEN_MM,
+            ));
+        islands.extend(
+            shape
+                .iter()
+                .skip(1)
+                .map(|ring| pcb_ir::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM)),
+        );
+    }
+
+    components
+        .into_iter()
+        .map(|component| ipc_contour_feature(&component.outer, &component.cutouts))
+        .chain(
+            islands
+                .iter()
+                .map(|island| ipc_contour_feature(island, &[])),
+        )
         .collect()
+}
+
+fn containing_component(
+    components: &mut [IpcCopperComponent],
+    point: Point,
+) -> Option<&mut IpcCopperComponent> {
+    components
+        .iter_mut()
+        .find(|component| component.region.contains_point(point))
+}
+
+fn ipc_contour_feature(outer: &ContourBuf, cutout_contours: &[ContourBuf]) -> Result<SetFeature> {
+    let polygon = ipc_polygon_from_contour(outer)?;
+    let cutouts = cutout_contours
+        .iter()
+        .map(ipc_polygon_from_contour)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(SetFeature::UserPrimitive(FeatureUserPrimitive {
+        primitive: UserPrimitive::UserSpecial(UserSpecial {
+            shapes: vec![UserShape {
+                shape: UserShapeType::Contour(IpcContour { polygon, cutouts }),
+                line_desc: None,
+                line_desc_ref: None,
+                fill_desc: None,
+            }],
+        }),
+        x: 0.0,
+        y: 0.0,
+    }))
 }
 
 fn ipc_polygon_from_contour(contour: &ContourBuf) -> Result<Polygon> {
@@ -430,25 +461,37 @@ mod tests {
             "{:?}",
             result.solution
         );
-        assert!(!result.copper.is_empty());
+        assert!(result.solution.generated_area_mm2 > 0.0);
+        assert!(!result.full_void_centers.is_empty());
+        assert!(!result.partial_voids.is_empty());
         assert!(
             features
                 .iter()
                 .all(|feature| matches!(feature, SetFeature::UserPrimitive(_)))
         );
-        assert!(
-            features
+        let contours = features
+            .iter()
+            .filter_map(|feature| match feature {
+                SetFeature::UserPrimitive(feature) => {
+                    let UserPrimitive::UserSpecial(user_special) = &feature.primitive;
+                    let UserShapeType::Contour(contour) = &user_special.shapes[0].shape else {
+                        return None;
+                    };
+                    Some(contour)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            contours
                 .iter()
-                .filter_map(|feature| match feature {
-                    SetFeature::UserPrimitive(feature) => {
-                        let UserPrimitive::UserSpecial(user_special) = &feature.primitive;
-                        let UserShapeType::Contour(contour) = &user_special.shapes[0].shape else {
-                            return None;
-                        };
-                        Some(contour)
-                    }
-                    _ => None,
-                })
+                .map(|contour| contour.cutouts.len())
+                .sum::<usize>(),
+            result.void_count()
+        );
+        assert!(
+            contours
+                .iter()
                 .flat_map(|contour| {
                     std::iter::once(&contour.polygon).chain(contour.cutouts.iter())
                 })
