@@ -35,6 +35,9 @@ The requested generated area is:
 A*_l = d_l A_P - area(C_l)
 ```
 
+`S_l` is certified independently from board geometry, through-stack
+operations, and panel features whose existing IR span reaches layer `l`.
+
 The solver first projects `A*_l` onto the area attainable by no fill, solid
 fill, or a perforated fill. Perforated copper uses a common 1.35 mm
 triangular lattice of slightly rounded hexagonal voids. Void radii stay between
@@ -122,17 +125,17 @@ the physical stack weight when it is available.
 
 For every full interior void, use squared radius `x_li = r_li^2` as the solver
 variable. This is the natural coordinate because the rounded hexagons are
-self-similar. Let `s_i` be the smoothed safe-region indicator at the site. If
+self-similar. Let `s_li` be the smoothed safe-region indicator at the site. If
 `a_h` is the rounded-hex area factor and `A_cell` is lattice-cell area, the
 local generated-copper model is affine:
 
 ```text
-g_li = s_i (1 - a_h x_li / A_cell)
+g_li = s_li (1 - a_h x_li / A_cell)
 rho_li = rho_fixed_li + g_li
 ```
 
 The field varies only over the 5 mm kernel scale, so this uses the local radius
-as constant within that kernel. `s_i` prevents fixed copper near a safe-region
+as constant within that kernel. `s_li` prevents fixed copper near a safe-region
 boundary and generated copper from both claiming the same neighborhood area.
 
 Choose every layer's field together by minimizing the dimensionless convex
@@ -172,13 +175,14 @@ A_void(r) = [3 sqrt(3) / 2 - (2 sqrt(3) - pi) k^2] r^2
 ```
 
 The full-cell area equality is therefore exact in squared-radius space. Edge
-sites use the projected common radius, intersect the rounded hexagon with the
+sites use the layer's projected radius, intersect the rounded hexagon with the
 boundary-web region, and retain the existing fragment qualification that
 rejects clipped voids unable to contain the minimum disk.
 
-All layers use the same lattice origin and sites. Per-site radii may differ by
-layer. The existing maximum radius continues to guarantee the inter-void web
-for every neighboring radius pair.
+All layers use the same lattice coordinate system. Each layer owns only the
+sites admitted by `S_l`; the union of those sites supplies common coordinates
+for local-density and stack-error evaluation. The existing maximum radius
+continues to guarantee the inter-void web for every neighboring radius pair.
 
 ## Implementation boundaries
 
@@ -203,7 +207,8 @@ Initial verification should cover:
 - equal mirrored layers cancel in `E_stack`;
 - conductor thickness and mid-plane distance scale the metric correctly;
 - translation and reflection preserve objective values; and
-- clipped edge voids preserve the existing web and minimum-fragment rules.
+- clipped edge voids preserve the existing web and minimum-fragment rules; and
+- distinct layer-safe regions never contribute sites to the wrong layer.
 
 Fabrication-panel layout and balancing, electroplating simulation, laminate
 material stiffness, and changes inside a board footprint are out of scope.

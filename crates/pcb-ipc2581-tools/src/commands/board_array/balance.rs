@@ -43,7 +43,6 @@ pub struct AutomaticBoardArrayLayerBalance {
     pub board_target_density: f64,
     pub stack_weight_mm2: Option<f64>,
     pub existing_copper: ContourSet,
-    pub safe_region: ContourSet,
     pub result: DenseCopperBalanceResult,
     pub features: Vec<SetFeature>,
 }
@@ -53,7 +52,6 @@ pub struct AutomaticBoardArrayLayerBalance {
 pub struct AutomaticBoardArrayCopperBalance {
     pub panel_outer: ContourSet,
     pub board_footprints: ContourSet,
-    pub common_safe_region: ContourSet,
     pub retained_area_mm2: f64,
     pub layers: Vec<AutomaticBoardArrayLayerBalance>,
 }
@@ -94,7 +92,6 @@ pub enum AutomaticBoardArrayCopperBalanceMode {
 pub struct AutomaticBoardArrayCopperBalanceReport {
     pub retained_area_mm2: f64,
     pub board_footprint_area_mm2: f64,
-    pub common_safe_area_mm2: f64,
     pub layers: Vec<AutomaticBoardArrayLayerBalanceReport>,
 }
 
@@ -104,7 +101,6 @@ impl AutomaticBoardArrayCopperBalance {
         AutomaticBoardArrayCopperBalanceReport {
             retained_area_mm2: self.retained_area_mm2,
             board_footprint_area_mm2: self.board_footprints.area(),
-            common_safe_area_mm2: self.common_safe_region.area(),
             layers: self
                 .layers
                 .iter()
@@ -145,7 +141,7 @@ impl AutomaticBoardArrayCopperBalance {
                         existing_copper_area_mm2,
                         desired_added_area_mm2: solution.desired_added_area_mm2,
                         generated_area_mm2: solution.generated_area_mm2,
-                        safe_area_mm2: layer.safe_region.area(),
+                        safe_area_mm2: layer.result.usable.area(),
                         usable_area_mm2,
                         fixed_empty_area_mm2,
                         void_count: layer.result.void_count(),
@@ -175,6 +171,7 @@ pub fn generate_automatic_board_array_copper_balance(
     let fabrication_profile = geometry::board_array_fabrication_profile(ipc, &layout, &score_lines)
         .context("failed to derive board-array fabrication profile for copper balancing")?;
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let copper_layers = crate::layers::copper_layers(ecad);
     let support_documents = ecad
         .cad_data
         .layers
@@ -200,24 +197,14 @@ pub fn generate_automatic_board_array_copper_balance(
     let collection = collect_board_array_balancing_input(
         &layout,
         &fabrication_profile,
+        &copper_layers,
         support_documents
             .iter()
             .map(|(document, policy)| BoardArraySupportDocument::new(document, *policy)),
     )
     .context("failed to collect board-array balancing obstacles")?;
-    let balancing_region =
-        board_array_balancing_region(&collection.input, BalancingRegionOptions::default())
-            .context("failed to compute board-array balancing region")?;
-    if !balancing_region
-        .certificate
-        .passes(CERTIFICATE_AREA_TOLERANCE_MM2)
-    {
-        bail!("computed board-array balancing region failed clearance certification");
-    }
-
-    let panel_outer = collection.input.panel_outer;
-    let board_footprints = collection.input.board_footprints;
-    let common_safe_region = balancing_region.safe_region;
+    let panel_outer = collection.panel_outer.clone();
+    let board_footprints = collection.board_footprints.clone();
     let retained_area_mm2 = panel_outer.area();
     let board_area_mm2 = board_footprints.area();
     let lattice_origin = panel_outer.bbox.min;
@@ -237,22 +224,36 @@ pub fn generate_automatic_board_array_copper_balance(
             let stack_weight_mm2 = stack_weights
                 .as_ref()
                 .and_then(|weights| weights.get(&layer_name).copied());
+            let balancing_input = collection.input_for_layer(layer.name);
+            let balancing_region =
+                board_array_balancing_region(&balancing_input, BalancingRegionOptions::default())
+                    .with_context(|| {
+                        format!(
+                            "failed to compute board-array balancing region for layer '{layer_name}'"
+                        )
+                    })?;
+            if !balancing_region
+                .certificate
+                .passes(CERTIFICATE_AREA_TOLERANCE_MM2)
+            {
+                bail!(
+                    "computed board-array balancing region for layer '{layer_name}' failed clearance certification"
+                );
+            }
+            let safe_region = balancing_region.safe_region;
             Ok(PreparedLayerBalance {
                 layer_name,
                 board_target_density,
                 stack_weight_mm2,
                 existing_copper,
+                safe_region,
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let existing_copper_union = prepared.iter().fold(
-        ContourSet::empty(common_safe_region.tolerance),
-        |existing, layer| existing.union(&layer.existing_copper),
-    );
-    let common_safe_region = common_safe_region.difference(&existing_copper_union);
     let spatial_layers = prepared
         .iter()
         .map(|layer| SpatialCopperBalanceLayerRequest {
+            safe_region: &layer.safe_region,
             existing_copper: &layer.existing_copper,
             existing_copper_area_mm2: layer.existing_copper.area(),
             target_density: layer.board_target_density,
@@ -263,7 +264,6 @@ pub fn generate_automatic_board_array_copper_balance(
         DenseCopperBalanceProfile::V1,
         SpatialCopperBalanceRequest {
             panel_region: &panel_outer,
-            safe_region: &common_safe_region,
             retained_area_mm2,
             lattice_origin,
             layers: &spatial_layers,
@@ -285,7 +285,6 @@ pub fn generate_automatic_board_array_copper_balance(
                 board_target_density: layer.board_target_density,
                 stack_weight_mm2: layer.stack_weight_mm2,
                 existing_copper: layer.existing_copper,
-                safe_region: common_safe_region.clone(),
                 result,
                 features,
             })
@@ -295,7 +294,6 @@ pub fn generate_automatic_board_array_copper_balance(
     Ok(AutomaticBoardArrayCopperBalance {
         panel_outer,
         board_footprints,
-        common_safe_region,
         retained_area_mm2,
         layers,
     })
@@ -306,6 +304,7 @@ struct PreparedLayerBalance {
     board_target_density: f64,
     stack_weight_mm2: Option<f64>,
     existing_copper: ContourSet,
+    safe_region: ContourSet,
 }
 
 /// Solve and convert one layer's explicit safe region to positive IPC contours.

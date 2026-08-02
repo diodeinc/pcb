@@ -26,6 +26,7 @@ pub use analysis::{
 pub use balancing_region::{
     BalancingRegionError, BalancingRegionOptions, BoardArrayBalancingCollection,
     BoardArrayBalancingInput, BoardArrayBalancingIntermediates, BoardArrayBalancingResult,
+    BoardArrayCopperLayer, BoardArrayCopperReach, BoardArrayScopedObstacle,
     BoardArraySupportDocument, BoardArraySupportLayerGeometry, BoardArraySupportLayerPolicy,
     ClearanceCertificate, DEFAULT_BALANCING_CLEARANCE_MM, DEFAULT_BALANCING_GAP_RADIUS_MM,
     DEFAULT_BALANCING_NUMERICAL_GUARD_MM, DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM,

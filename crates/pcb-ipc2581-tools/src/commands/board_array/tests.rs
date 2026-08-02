@@ -171,17 +171,19 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
             (document, policy)
         })
         .collect::<Vec<_>>();
+    let copper_layers = crate::layers::copper_layers(ecad);
 
     let collection = collect_board_array_balancing_input(
         &layout,
         &fabrication_profile,
+        &copper_layers,
         support_documents
             .iter()
             .map(|(document, policy)| BoardArraySupportDocument::new(document, *policy)),
     )
     .unwrap();
-    let result =
-        board_array_balancing_region(&collection.input, BalancingRegionOptions::default()).unwrap();
+    let input = collection.input_for_layer(copper_layers[0].name);
+    let result = board_array_balancing_region(&input, BalancingRegionOptions::default()).unwrap();
 
     assert!(collection.board_instance_count > 0);
     assert!(
@@ -223,8 +225,13 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
     let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
 
     assert!(balance.retained_area_mm2 > 0.0);
-    assert!(!balance.common_safe_region.is_empty());
     assert_eq!(balance.layers.len(), 2);
+    assert!(
+        balance
+            .layers
+            .iter()
+            .all(|layer| !layer.result.usable.is_empty())
+    );
     let top = balance
         .layers
         .iter()
@@ -243,7 +250,8 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
     for layer in &balance.layers {
         assert!(
             layer
-                .safe_region
+                .result
+                .usable
                 .intersection(&layer.existing_copper)
                 .is_empty()
         );
@@ -295,6 +303,44 @@ fn board_array_creation_accepts_no_source_copper_layers() {
     let creation = create_auto_board_array(&input, None).unwrap();
 
     assert!(creation.copper_balance.layers.is_empty());
+}
+
+#[test]
+fn automatic_balancing_regions_scope_panel_fiducials_to_top_copper() {
+    let input = large_board_fixture_mm()
+        .replace(
+            r#"<LayerRef name="TOP"/>"#,
+            r#"<LayerRef name="TOP"/>
+<LayerRef name="BOTTOM"/>"#,
+        )
+        .replace(
+            r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
+            r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>"#,
+        );
+    let ipc = Ipc2581::parse(&input).unwrap();
+    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, None).unwrap();
+    let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
+    let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
+    let provisional = Ipc2581::parse(&provisional_xml).unwrap();
+    let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
+    let top = balance
+        .layers
+        .iter()
+        .find(|layer| layer.layer_name == "TOP")
+        .unwrap();
+    let bottom = balance
+        .layers
+        .iter()
+        .find(|layer| layer.layer_name == "BOTTOM")
+        .unwrap();
+
+    assert!(
+        bottom.result.usable.area() > top.result.usable.area(),
+        "top-only fiducials and mask openings should reserve only top-copper area: top {:.6} mm², bottom {:.6} mm²",
+        top.result.usable.area(),
+        bottom.result.usable.area(),
+    );
 }
 
 #[test]
