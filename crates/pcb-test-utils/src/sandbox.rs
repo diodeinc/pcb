@@ -643,6 +643,9 @@ impl Sandbox {
         if let Ok(path) = std::env::var("PATH") {
             env_map.insert("PATH".into(), path);
         }
+        if let Ok(java_home) = std::env::var("JAVA_HOME") {
+            env_map.insert("JAVA_HOME".into(), java_home);
+        }
         env_map.insert(
             "GIT_CONFIG_GLOBAL".into(),
             self.gitconfig.to_string_lossy().into_owned(),
@@ -672,10 +675,14 @@ impl Sandbox {
         // Block network access for sandboxed commands:
         // - Git: only allow `file://` (fixtures are rewritten to local file URLs).
         // - HTTP(S): route via a dead proxy to avoid accidental egress.
+        // Loopback is exempted: tests that spawn a local server (e.g. a
+        // FreeRouting API-server subprocess) need to reach it over
+        // 127.0.0.1/localhost, which can never resolve to a real external
+        // service, so it doesn't weaken the "no accidental egress" guarantee.
         env_map.insert("GIT_ALLOW_PROTOCOL".into(), "file".into());
         env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
         env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());
-        env_map.insert("NO_PROXY".into(), "".into());
+        env_map.insert("NO_PROXY".into(), "127.0.0.1,localhost".into());
 
         if self.trace {
             env_map.insert("GIT_TRACE".into(), "1".into());

@@ -17,41 +17,67 @@ use tempfile::NamedTempFile;
 
 use crate::file_walker;
 
+/// Which router backend `pcb route` should use.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[value(rename_all = "kebab-case")]
+pub enum RouteEngine {
+    /// DeepPCB cloud auto-routing service (default).
+    #[default]
+    Deeppcb,
+    /// Local, offline routing via a FreeRouting JAR.
+    Freerouting,
+}
+
 #[derive(Args, Debug, Clone)]
-#[command(about = "Auto-route PCB using DeepPCB cloud service")]
+#[command(about = "Auto-route a PCB")]
 pub struct RouteArgs {
     /// Path to .zen file
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     pub file: PathBuf,
 
-    /// Routing timeout in minutes (default: 20, max: 60)
-    #[arg(long, short = 't', default_value = "20")]
-    pub timeout: u32,
+    /// Routing engine to use
+    #[arg(long, value_enum, default_value_t = RouteEngine::Deeppcb)]
+    pub engine: RouteEngine,
 
     /// Don't open KiCad after routing
     #[arg(long)]
     pub no_open: bool,
 
-    /// Override project ID (default: derived from .zen file name)
+    /// [deeppcb] Routing timeout in minutes (default: 20, max: 60)
+    #[arg(long, short = 't', default_value = "20")]
+    pub timeout: u32,
+
+    /// [deeppcb] Override project ID (default: derived from .zen file name)
     #[arg(long)]
     pub project_id: Option<String>,
+
+    /// [freerouting] Path to freerouting.jar (default: search FREEROUTING_JAR env or $PATH)
+    #[arg(long)]
+    pub fr_jar: Option<PathBuf>,
+
+    /// [freerouting] FreeRouting timeout in seconds (default: 300)
+    #[arg(long, default_value = "300")]
+    pub fr_timeout: u64,
 }
 
 pub fn execute(args: RouteArgs) -> Result<()> {
     file_walker::require_zen_file(&args.file)?;
 
-    // Validate timeout
-    if args.timeout > 60 {
-        anyhow::bail!("Timeout cannot exceed 60 minutes");
+    match args.engine {
+        RouteEngine::Deeppcb => execute_deeppcb(args),
+        RouteEngine::Freerouting => {
+            let (board_path, project_path) = resolve_board(&args.file)?;
+            let board_name = board_path.file_stem().unwrap().to_string_lossy().to_string();
+            crate::freerouting::execute(&args, &board_path, &project_path, &board_name)
+        }
     }
+}
 
-    // Resolve dependencies
-    let resolution_result = crate::resolve::resolve(Some(&args.file), false)?;
+/// Evaluate the .zen file, find its `.kicad_pcb` + `.kicad_pro`, and
+/// validate that the board exists.
+fn resolve_board(zen_path: &Path) -> Result<(PathBuf, PathBuf)> {
+    let resolution_result = crate::resolve::resolve(Some(zen_path), false)?;
 
-    let zen_path = &args.file;
-    let board_name = zen_path.file_stem().unwrap().to_string_lossy();
-
-    // Evaluate the .zen file to find the layout path
     let (output, diagnostics) =
         pcb_zen::run(zen_path, resolution_result, Default::default()).unpack();
 
@@ -64,12 +90,10 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     let layout_dir = utils::resolve_layout_dir(&schematic)?
         .context("No layout path defined in schematic. Add layout=\"path\" to your module.")?;
 
-    // Discover KiCad project + board paths
     let kicad_files = utils::require_kicad_files(&layout_dir)?;
     let board_path = kicad_files.kicad_pcb();
     let project_path = kicad_files.kicad_pro;
 
-    // Validate files exist
     if !board_path.exists() {
         anyhow::bail!(
             "No layout found at {}\n\nRun {} first to generate the board.",
@@ -77,6 +101,20 @@ pub fn execute(args: RouteArgs) -> Result<()> {
             "pcb layout".yellow()
         );
     }
+
+    Ok((board_path, project_path))
+}
+
+fn execute_deeppcb(args: RouteArgs) -> Result<()> {
+    // Validate timeout
+    if args.timeout > 60 {
+        anyhow::bail!("Timeout cannot exceed 60 minutes");
+    }
+
+    let zen_path = &args.file;
+    let board_name = zen_path.file_stem().unwrap().to_string_lossy();
+
+    let (board_path, project_path) = resolve_board(zen_path)?;
 
     if !project_path.exists() {
         anyhow::bail!(
@@ -274,9 +312,15 @@ fn download_and_apply_ses(
     // Write to temp file
     let mut temp_file = NamedTempFile::new()?;
     temp_file.write_all(&ses_bytes)?;
-    let ses_path = temp_file.path();
 
     // Import SES into KiCad board
+    import_ses(board_path, temp_file.path())
+}
+
+/// Import a Specctra SES session file into the board via `pcbnew`, filling
+/// zones and saving the result. Shared by both the DeepPCB and FreeRouting
+/// engines.
+pub(crate) fn import_ses(board_path: &Path, ses_path: &Path) -> Result<()> {
     let script = r#"
 import pcbnew
 import sys
@@ -301,7 +345,7 @@ pcbnew.SaveBoard(brd_filename, brd)
     Ok(())
 }
 
-fn format_duration(duration: Duration) -> String {
+pub(crate) fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs();
     let mins = total_secs / 60;
     let secs = total_secs % 60;

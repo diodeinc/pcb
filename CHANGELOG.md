@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `pcb route --engine freerouting` runs FreeRouting v2.2.4 headlessly on the local machine via its local REST API, with JAR auto-download and SHA-256 verification. Routes a private copy of the board in a temp directory and only publishes the result once it's validated; requires Java 21+ on `$PATH`. Ctrl+C requests a graceful cancel and imports whatever was routed so far. DeepPCB cloud routing (`--engine deeppcb`) remains the default.
 - Added AEC-Q200-qualified Vishay D/CRCW e3 parts as 0402 generic resistor matches through 10 MΩ.
 
 ### Changed

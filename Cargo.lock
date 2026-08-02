@@ -5041,6 +5041,7 @@ name = "pcbc"
 version = "0.4.20"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "clap",
  "colored",
@@ -5050,6 +5051,7 @@ dependencies = [
  "env_logger",
  "gerberx2",
  "glam",
+ "hex",
  "httpmock",
  "ignore",
  "inquire",
@@ -5084,6 +5086,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "similar 3.1.1",
  "starlark",
  "starlark_syntax",
