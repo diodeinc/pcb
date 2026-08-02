@@ -1,29 +1,11 @@
-//! Peripheral capability model: pin functions, instance allocation, swap classes.
+//! Peripheral capability model: `pin`/`peripheral`/`pool`/`pin_request`/
+//! `pin_solve` builtins plus the `at()` connection wrapper.
 //!
-//! Declares what a multi-function component's pins *can do* and solves the
-//! assignment at elaboration:
-//!
-//! - `pin(name, data=, cost=, input_only=, strap=)` — one candidate physical pin.
-//! - `peripheral(name, provides=[Iface...], signals={...}, rebind=, attrs=, unless=)`
-//!   — a resource cluster (an MCU USART, one comparator of a dual package...).
-//! - `pool(name, provides=[Iface], pins=[...])` — sugar for N single-signal
-//!   interchangeable units (GPIO pools).
-//! - `pin_request(name, Iface, uses=, instance=, prefer=, lock=, where=,
-//!   direction=, if_connected=, bind=)` — a demand for a capability; the
-//!   interface type *is* the request. `bind=` carries the connected value
-//!   (dict-of-roles pattern); `at()` wrappers contribute pin constraints.
-//! - `pin_solve(peripherals, requests, config=, previous=)` — deterministic
-//!   joint instance x pin matching. Exclusivity at both tiers (an instance
-//!   serves at most one request; a pin carries at most one function) is
-//!   structural: violations are infeasible, not lint.
-//!
-//! Capability matching is nominal over `interface()` identities, closed over
-//! `interface(implies=[...])`: a peripheral providing `Usart` satisfies a
-//! `Uart` request when `Usart` implies `Uart` — never the reverse.
-//!
-//! The solved assignment and the residual routing freedom are stored as the
-//! module properties `pin_assignment` and `swap_classes` (JSON), which flow
-//! through the netlist into schematic/board fields.
+//! Components declare what their pins *can do*; `pin_solve` performs the
+//! joint instance x pin assignment at elaboration, with exclusivity at both
+//! tiers structural (infeasible, not lint). Capability matching is nominal
+//! over `interface()` identities, closed over `interface(implies=[...])`.
+//! Results land in the `pin_assignment` / `swap_classes` module properties.
 
 use allocative::Allocative;
 use std::collections::{HashMap, HashSet};

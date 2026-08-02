@@ -799,7 +799,7 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
                         .is_none()
                     {
                         return Err(anyhow::anyhow!(
-                            "interface(attrs=...): `{key}` must map to a physical value type                              (Voltage, Frequency, ...), got `{}`",
+                            "interface(attrs=...): `{key}` must map to a physical value type (Voltage, Frequency, ...), got `{}`",
                             ty.get_type()
                         ));
                     }

@@ -741,13 +741,9 @@ Swd = interface(
 Uart = interface(
     TX=Net(),
     RX=Net(),
-    # Capability-attribute vocabulary for providers (pin-capability model):
-    # every Uart-class peripheral spells these the same way.
     attrs={"baud_max": Frequency, "vio": Voltage},
 )
 
-# A USART is capability-wise a superset of a UART: any provider of Usart
-# also satisfies a Uart request (see the pin-capability model in the spec).
 Usart = interface(
     TX=Net(),
     RX=Net(),

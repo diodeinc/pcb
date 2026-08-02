@@ -1,12 +1,7 @@
-//! Integration tests for the peripheral capability model
-//! (`pin`/`peripheral`/`pool`/`pin_request`/`pin_solve` + `interface(implies=)`).
-//!
-//! Behavior assertions live in the `.zen` fixtures themselves via `check()`;
-//! the Rust side only asserts overall success/failure, diagnostics, and the
-//! emitted module properties. Fixtures model a small STM32G030 subset (AF
-//! matrix), an ESP32-C3 subset (GPIO matrix + IOMUX + strapping), and a dual
-//! comparator (gate swap). Pin/AF pairs are illustrative fixtures, not
-//! datasheet-verified data.
+//! Integration tests for the peripheral capability model. Behavior assertions
+//! live in the `.zen` fixtures via `check()`; the Rust side asserts overall
+//! success/failure, diagnostics, and emitted module properties. Pin/AF pairs
+//! are illustrative, not datasheet-verified.
 
 mod common;
 
@@ -184,9 +179,6 @@ fn assert_fails_with(result: &WithDiagnostics<EvalOutput>, needle: &str) {
 
 #[test]
 fn downgrade_and_poorest_instance() {
-    // A plain Uart request must not steal USART1 from the Usart request
-    // (implies closure + poorest-instance preference), and af= must be
-    // carried into the assignment for firmware codegen.
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -203,7 +195,6 @@ check(not ("PA9" in res["free_pins"]), "claimed pin must not be free")
 "#,
     );
     assert_ok(&result);
-    // The solved assignment must be persisted as module properties.
     let props = result.output.as_ref().unwrap().sch_module.properties();
     assert!(
         props.contains_key("pin_assignment"),
@@ -217,7 +208,6 @@ check(not ("PA9" in res["free_pins"]), "claimed pin must not be free")
 
 #[test]
 fn upgrade_is_impossible() {
-    // Two Usart requests, one capable instance: instance capacity forbids it.
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -231,8 +221,6 @@ pin_solve(PERIPHS, [pin_request("SC1", Usart), pin_request("SC2", Usart)])
 
 #[test]
 fn instance_exclusive_even_on_disjoint_pins() {
-    // Three Uart requests for two instances: pin availability alone would
-    // allow it (USART1 has two full pin sets), instance capacity must not.
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -250,7 +238,6 @@ pin_solve(PERIPHS, [
 
 #[test]
 fn intra_instance_pin_mixing() {
-    // PA10 locked as GPIO: USART1 must mix TX=PA9 with RX=PB7.
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -271,8 +258,6 @@ check(a["COM"]["signals"]["RX"]["pin"] == "PB7", "COM RX " + a["COM"]["signals"]
 
 #[test]
 fn joint_contention_is_infeasible() {
-    // USART1 forced onto its alternate pins (PA9/PA10 taken) collides with
-    // I2C1 on PB6/PB7 — the joint matching must detect it, not route around it.
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -291,7 +276,6 @@ pin_solve(PERIPHS, [
 
 #[test]
 fn where_predicate_on_unit_attrs() {
-    // Physical-value attributes with plain unit-string comparison.
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -309,8 +293,6 @@ check(res["assignment"]["FAST"]["instance"] == "USART1", "FAST got " + res["assi
 
 #[test]
 fn where_predicate_starves() {
-    // Once USART1 is taken by the Usart request, no instance satisfies the
-    // where= floor: infeasible, not silently degraded.
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -330,8 +312,6 @@ pin_solve(PERIPHS, [
 
 #[test]
 fn gpio_vs_peripheral_exclusivity() {
-    // PA5 claimed as GPIO: SPI1 falls back to PB3 for SCK. Locking PB3 too
-    // makes SPI infeasible (pin-tier exclusivity).
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -384,7 +364,6 @@ check(r3["assignment"]["MES"]["signals"] == r1["assignment"]["MES"]["signals"], 
 
 #[test]
 fn declaration_cannot_overstate() {
-    // Claiming UartFlow without RTS/CTS candidates is a declaration error.
     let result = eval_with_fixtures(
         r#"
 load("./ifaces.zen", "UartFlow")
@@ -420,7 +399,6 @@ check(len(a["GPS"]["alternates"]["TX"]) > 0, "matrix alternates missing")
 
 #[test]
 fn esp32_conditional_capability() {
-    // ADC2 is unusable while wifi is active.
     let result = eval_with_fixtures(
         r#"
 load("./esp32c3.zen", "PERIPHS")
@@ -522,9 +500,6 @@ pin_solve(PERIPHS, [pin_request("C" + str(i), Comparator) for i in range(3)])
 
 #[test]
 fn unconnected_signals_leave_pins_free() {
-    // A TX-only debug UART claims the USART1 instance but not its RX pin:
-    // PA10 stays available as GPIO (the RX *signal* is gone with the instance,
-    // the *pin* is not).
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -583,8 +558,6 @@ builtin.add_property("sc_served", str("SC" in res["assignment"]))
 
 #[test]
 fn if_connected_serves_only_connected_slots() {
-    // The MCU module pre-declares one optional io() slot per capability; the
-    // caller connects only DEBUG. The solver must serve DEBUG and drop SC.
     let result = eval_zen(vec![
         ("/ifaces.zen".to_string(), IFACES.to_string()),
         ("/stm32.zen".to_string(), STM32.to_string()),
@@ -622,8 +595,6 @@ Mcu(name = "MCU1", DEBUG = Uart("DBG"))
 
 #[test]
 fn pin_map_builds_component_pins() {
-    // pin_map turns the assignment into {physical pin -> net}, pulling nets
-    // from interface fields (or a bare Net for single-signal requests).
     let result = eval_with_fixtures(
         r#"
 load("./stm32.zen", "PERIPHS")
@@ -677,8 +648,6 @@ fn io0_pin(result: &WithDiagnostics<EvalOutput>) -> String {
 
 #[test]
 fn at_constrains_pin_on_the_connection() {
-    // The caller pins the capability at the connection site; the wrapper is
-    // transparent for the net binding and hard for the solver.
     let result = eval_mcu_at(
         r#"
 Mcu = Module("/mcu_at.zen")
@@ -691,9 +660,7 @@ Mcu(name = "M1", IO0 = at(Net("LED"), "PA10"))
 
 #[test]
 fn at_hard_constraint_fails_loudly() {
-    // PA13 is not in this fixture's GPIO pool: a hard at() must fail the
-    // build (zero candidates survive the lock filter), never silently
-    // fall back.
+    // PA13 is deliberately absent from the fixture's GPIO pool.
     let result = eval_mcu_at(
         r#"
 Mcu = Module("/mcu_at.zen")
@@ -744,9 +711,6 @@ builtin.add_property("map_size", str(len(m)))
 
 #[test]
 fn dict_of_roles_demands() {
-    // Pooled capabilities are demanded through a dict: the design names the
-    // roles ("LED", "VBAT"), in whatever number it needs — no pre-declared
-    // numbered slots. at() constraints ride the dict values.
     let result = eval_zen(vec![
         ("/ifaces.zen".to_string(), IFACES.to_string()),
         ("/stm32.zen".to_string(), STM32.to_string()),
@@ -780,7 +744,6 @@ Mcu(name = "M1", gpio = {"LED": at(Net("LED"), "PA10")}, adc = {"VBAT": Net("VBA
 
 #[test]
 fn attr_vocabulary_is_enforced() {
-    // A typoed attr key is a declaration error naming the declared vocabulary.
     let result = eval_with_fixtures(
         r#"
 load("./ifaces.zen", "Uart")
@@ -792,7 +755,6 @@ peripheral("U9", provides = [Uart], rebind = "firmware",
     );
     assert_fails_with(&result, "not declared by any provided interface");
 
-    // A declared key with the wrong dimension is rejected too.
     let result = eval_with_fixtures(
         r#"
 load("./ifaces.zen", "Uart")
@@ -804,7 +766,6 @@ peripheral("U9", provides = [Uart], rebind = "firmware",
     );
     assert_fails_with(&result, "expects");
 
-    // Attrs on an interface that declares none are rejected outright.
     let result = eval_with_fixtures(
         r#"
 load("./ifaces.zen", "Spi")
@@ -819,8 +780,6 @@ peripheral("S9", provides = [Spi], rebind = "firmware",
 
 #[test]
 fn vio_attr_selects_fixed_level_provider() {
-    // Fixed-level blocks declare vio; where= picks the compatible one and
-    // a wrong dimension is still rejected.
     let result = eval_with_fixtures(
         r#"
 load("./ifaces.zen", "I2c")
