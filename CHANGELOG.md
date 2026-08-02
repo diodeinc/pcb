@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Board-array balancing now uses independent 1 mm filled-region and void-gap regularization, trimming narrow gaps locally instead of discarding whole regions.
+
 ## [0.4.17] - 2026-07-31
 
 ### Fixed

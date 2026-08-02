@@ -18,15 +18,14 @@ use pcb_ipc2581_tools::utils::file::load_ipc_file;
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, BoardArrayBalancingCollection, BoardArrayBalancingInput,
     BoardArrayBalancingResult, BoardArraySupportDocument, BoardArraySupportLayerGeometry,
-    BoardArraySupportLayerPolicy, DEFAULT_BALANCING_CLEARANCE_MM,
-    DEFAULT_BALANCING_MINIMUM_FEATURE_RADIUS_MM, DEFAULT_BALANCING_MINIMUM_GAP_RADIUS_MM,
-    DEFAULT_BALANCING_NUMERICAL_GUARD_MM, View, board_array_balancing_region,
-    inspect_board_array_balancing_input, root_panel_step,
+    BoardArraySupportLayerPolicy, DEFAULT_BALANCING_CLEARANCE_MM, DEFAULT_BALANCING_GAP_RADIUS_MM,
+    DEFAULT_BALANCING_NUMERICAL_GUARD_MM, DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM, View,
+    board_array_balancing_region, inspect_board_array_balancing_input, root_panel_step,
 };
 use pcb_ir::geom::{BBox, ContourSet};
 use serde::Serialize;
 
-const SCHEMA: &str = "pcb-ir.board-array-balancing-debug.v3";
+const SCHEMA: &str = "pcb-ir.board-array-balancing-debug.v7";
 const DEFAULT_CHECK_AREA_TOLERANCE_MM2: f64 = 1e-4;
 const SVG_PADDING_MM: f64 = 2.0;
 const SVG_STROKE_MM: f64 = 0.12;
@@ -49,13 +48,13 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_BALANCING_CLEARANCE_MM)]
     clearance_mm: f64,
 
-    /// Radius used to round tips and remove safe regions too small to contain the disk.
-    #[arg(long, default_value_t = DEFAULT_BALANCING_MINIMUM_FEATURE_RADIUS_MM)]
-    minimum_feature_radius_mm: f64,
+    /// Disk radius used to round filled-region corners and reject small regions or slivers.
+    #[arg(long, default_value_t = DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM)]
+    regularization_radius_mm: f64,
 
-    /// Radius that must fit in every gap between balancing regions.
-    #[arg(long, default_value_t = DEFAULT_BALANCING_MINIMUM_GAP_RADIUS_MM)]
-    minimum_gap_radius_mm: f64,
+    /// Rolling-disk radius for two-sided void gaps; minimum gap is twice this.
+    #[arg(long, default_value_t = DEFAULT_BALANCING_GAP_RADIUS_MM)]
+    gap_radius_mm: f64,
 
     /// Extra construction clearance reserved for polygonization/offset error.
     #[arg(long, default_value_t = DEFAULT_BALANCING_NUMERICAL_GUARD_MM)]
@@ -98,26 +97,21 @@ struct Regions {
     material_removal: ContourSet,
     support_features: ContourSet,
     raw_obstacles: ContourSet,
-    panel_clearance_keep_in: ContourSet,
     panel_keep_in: ContourSet,
-    obstacle_clearance: ContourSet,
-    obstacle_gap_envelope: ContourSet,
-    maximal_safe_region: ContourSet,
-    regularization_core: ContourSet,
-    opened_safe_region: ContourSet,
+    obstacle_keep_out: ContourSet,
+    clearance_safe_region: ContourSet,
+    opened_candidates: ContourSet,
     removed_by_opening: ContourSet,
-    removed_by_gap_separation: ContourSet,
+    narrow_voids: ContourSet,
+    gap_separator_keep_out: ContourSet,
+    removed_by_gap_regularization: ContourSet,
     removed_by_regularization: ContourSet,
     safe_region: ContourSet,
     undersized_final_components: ContourSet,
     clearance_certificate: ContourSet,
-    safe_outside_maximal_region: ContourSet,
-    safe_outside_keep_in: ContourSet,
-    safe_inside_obstacle_clearance: ContourSet,
-    safe_inside_obstacle_gap_envelope: ContourSet,
-    minimum_feature_violations: ContourSet,
-    minimum_gap_violations: ContourSet,
-    void_closing_additions: ContourSet,
+    safe_outside_clearance_region: ContourSet,
+    regularization_violations: ContourSet,
+    gap_violations: ContourSet,
     certificate_outside_panel: ContourSet,
     certificate_obstacle_overlap: ContourSet,
 }
@@ -129,11 +123,10 @@ struct DebugArtifact {
     passed: bool,
     input: String,
     nominal_clearance_mm: f64,
-    minimum_feature_radius_mm: f64,
-    minimum_gap_radius_mm: f64,
+    regularization_radius_mm: f64,
+    gap_radius_mm: f64,
     numerical_guard_mm: f64,
     construction_clearance_mm: f64,
-    construction_gap_radius_mm: f64,
     check_area_tolerance_mm2: f64,
     panelization: PanelizationJson,
     counts: CountsJson,
@@ -197,13 +190,9 @@ struct CoverageJson {
 #[serde(rename_all = "camelCase")]
 struct ChecksJson {
     passed: bool,
-    safe_outside_maximal_region_area_mm2: f64,
-    safe_outside_keep_in_area_mm2: f64,
-    safe_inside_obstacle_clearance_area_mm2: f64,
-    safe_inside_obstacle_gap_envelope_area_mm2: f64,
-    minimum_feature_violation_area_mm2: f64,
-    minimum_gap_violation_area_mm2: f64,
-    void_closing_addition_area_mm2: f64,
+    safe_outside_clearance_region_area_mm2: f64,
+    regularization_violation_area_mm2: f64,
+    gap_violation_area_mm2: f64,
     certificate_outside_panel_area_mm2: f64,
     certificate_obstacle_overlap_area_mm2: f64,
 }
@@ -211,17 +200,17 @@ struct ChecksJson {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RegularizationJson {
-    maximal_safe_area_mm2: f64,
+    clearance_safe_area_mm2: f64,
     final_safe_area_mm2: f64,
     removed_area_mm2: f64,
     removed_by_opening_area_mm2: f64,
-    removed_by_gap_separation_area_mm2: f64,
+    narrow_void_area_mm2: f64,
+    gap_separator_keep_out_area_mm2: f64,
+    removed_by_gap_regularization_area_mm2: f64,
     retained_fraction: f64,
-    maximal_component_count: usize,
-    core_component_count: usize,
+    clearance_safe_component_count: usize,
     opened_component_count: usize,
     final_component_count: usize,
-    discarded_for_gap_component_count: usize,
     smallest_final_component_area_mm2: Option<f64>,
     minimum_final_component_bbox_span_mm: Option<f64>,
     undersized_final_component_count: usize,
@@ -249,26 +238,21 @@ struct RegionsJson {
     material_removal: RegionJson,
     support_features: RegionJson,
     raw_obstacles: RegionJson,
-    panel_clearance_keep_in: RegionJson,
     panel_keep_in: RegionJson,
-    obstacle_clearance: RegionJson,
-    obstacle_gap_envelope: RegionJson,
-    maximal_safe_region: RegionJson,
-    regularization_core: RegionJson,
-    opened_safe_region: RegionJson,
+    obstacle_keep_out: RegionJson,
+    clearance_safe_region: RegionJson,
+    opened_candidates: RegionJson,
     removed_by_opening: RegionJson,
-    removed_by_gap_separation: RegionJson,
+    narrow_voids: RegionJson,
+    gap_separator_keep_out: RegionJson,
+    removed_by_gap_regularization: RegionJson,
     removed_by_regularization: RegionJson,
     safe_region: RegionJson,
     undersized_final_components: RegionJson,
     clearance_certificate: RegionJson,
-    safe_outside_maximal_region: RegionJson,
-    safe_outside_keep_in: RegionJson,
-    safe_inside_obstacle_clearance: RegionJson,
-    safe_inside_obstacle_gap_envelope: RegionJson,
-    minimum_feature_violations: RegionJson,
-    minimum_gap_violations: RegionJson,
-    void_closing_additions: RegionJson,
+    safe_outside_clearance_region: RegionJson,
+    regularization_violations: RegionJson,
+    gap_violations: RegionJson,
     certificate_outside_panel: RegionJson,
     certificate_obstacle_overlap: RegionJson,
 }
@@ -318,11 +302,11 @@ fn main() -> Result<()> {
     if !args.clearance_mm.is_finite() || args.clearance_mm <= 0.0 {
         bail!("--clearance-mm must be a finite positive number");
     }
-    if !args.minimum_feature_radius_mm.is_finite() || args.minimum_feature_radius_mm <= 0.0 {
-        bail!("--minimum-feature-radius-mm must be a finite positive number");
+    if !args.regularization_radius_mm.is_finite() || args.regularization_radius_mm <= 0.0 {
+        bail!("--regularization-radius-mm must be a finite positive number");
     }
-    if !args.minimum_gap_radius_mm.is_finite() || args.minimum_gap_radius_mm <= 0.0 {
-        bail!("--minimum-gap-radius-mm must be a finite positive number");
+    if !args.gap_radius_mm.is_finite() || args.gap_radius_mm <= 0.0 {
+        bail!("--gap-radius-mm must be a finite positive number");
     }
     if !args.numerical_guard_mm.is_finite() || args.numerical_guard_mm < 0.0 {
         bail!("--numerical-guard-mm must be a finite non-negative number");
@@ -369,15 +353,13 @@ fn main() -> Result<()> {
         &collection.input,
         BalancingRegionOptions {
             clearance_mm: args.clearance_mm,
-            minimum_feature_radius_mm: args.minimum_feature_radius_mm,
-            minimum_gap_radius_mm: args.minimum_gap_radius_mm,
+            regularization_radius_mm: args.regularization_radius_mm,
+            gap_radius_mm: args.gap_radius_mm,
             numerical_guard_mm: args.numerical_guard_mm,
         },
     )
     .context("failed to compute board-array balancing region")?;
     let construction_clearance_mm = args.clearance_mm + args.numerical_guard_mm;
-    let construction_gap_radius_mm =
-        args.clearance_mm.max(args.minimum_gap_radius_mm) + args.numerical_guard_mm;
     let certificate_passed = result.certificate.passes(args.check_area_tolerance_mm2);
     let BoardArrayBalancingCollection {
         input:
@@ -405,7 +387,7 @@ fn main() -> Result<()> {
         .iter()
         .filter(|component| {
             component
-                .disk_erode(args.minimum_feature_radius_mm)
+                .disk_erode(args.regularization_radius_mm)
                 .is_empty()
         })
         .cloned()
@@ -419,47 +401,35 @@ fn main() -> Result<()> {
         material_removal,
         support_features,
         raw_obstacles: intermediates.raw_obstacles,
-        panel_clearance_keep_in: intermediates.panel_clearance_keep_in,
         panel_keep_in: intermediates.panel_keep_in,
-        obstacle_clearance: intermediates.obstacle_clearance,
-        obstacle_gap_envelope: intermediates.obstacle_gap_envelope,
-        maximal_safe_region: intermediates.maximal_safe_region,
-        regularization_core: intermediates.regularization_core,
-        opened_safe_region: intermediates.opened_safe_region,
+        obstacle_keep_out: intermediates.obstacle_keep_out,
+        clearance_safe_region: intermediates.clearance_safe_region,
+        opened_candidates: intermediates.opened_candidates,
         removed_by_opening: intermediates.removed_by_opening,
-        removed_by_gap_separation: intermediates.removed_by_gap_separation,
+        narrow_voids: intermediates.narrow_voids,
+        gap_separator_keep_out: intermediates.gap_separator_keep_out,
+        removed_by_gap_regularization: intermediates.removed_by_gap_regularization,
         removed_by_regularization: intermediates.removed_by_regularization,
         safe_region,
         undersized_final_components,
         clearance_certificate: certificate.swept_safe_region,
-        safe_outside_maximal_region: certificate.safe_outside_maximal_region,
-        safe_outside_keep_in: certificate.safe_outside_keep_in,
-        safe_inside_obstacle_clearance: certificate.safe_inside_obstacle_clearance,
-        safe_inside_obstacle_gap_envelope: certificate.safe_inside_obstacle_gap_envelope,
-        minimum_feature_violations: certificate.minimum_feature_violations,
-        minimum_gap_violations: certificate.minimum_gap_violations,
-        void_closing_additions: certificate.void_closing_additions,
+        safe_outside_clearance_region: certificate.safe_outside_clearance_region,
+        regularization_violations: certificate.regularization_violations,
+        gap_violations: certificate.gap_violations,
         certificate_outside_panel: certificate.outside_panel,
         certificate_obstacle_overlap: certificate.obstacle_overlap,
     };
 
     let checks = ChecksJson {
         passed: certificate_passed,
-        safe_outside_maximal_region_area_mm2: regions.safe_outside_maximal_region.area(),
-        safe_outside_keep_in_area_mm2: regions.safe_outside_keep_in.area(),
-        safe_inside_obstacle_clearance_area_mm2: regions.safe_inside_obstacle_clearance.area(),
-        safe_inside_obstacle_gap_envelope_area_mm2: regions
-            .safe_inside_obstacle_gap_envelope
-            .area(),
-        minimum_feature_violation_area_mm2: regions.minimum_feature_violations.area(),
-        minimum_gap_violation_area_mm2: regions.minimum_gap_violations.area(),
-        void_closing_addition_area_mm2: regions.void_closing_additions.area(),
+        safe_outside_clearance_region_area_mm2: regions.safe_outside_clearance_region.area(),
+        regularization_violation_area_mm2: regions.regularization_violations.area(),
+        gap_violation_area_mm2: regions.gap_violations.area(),
         certificate_outside_panel_area_mm2: regions.certificate_outside_panel.area(),
         certificate_obstacle_overlap_area_mm2: regions.certificate_obstacle_overlap.area(),
     };
-    let maximal_component_areas = component_areas(&regions.maximal_safe_region);
-    let core_component_areas = component_areas(&regions.regularization_core);
-    let opened_component_areas = component_areas(&regions.opened_safe_region);
+    let clearance_safe_component_areas = component_areas(&regions.clearance_safe_region);
+    let opened_component_areas = component_areas(&regions.opened_candidates);
     let final_component_areas = final_components
         .iter()
         .map(ContourSet::area)
@@ -468,26 +438,24 @@ fn main() -> Result<()> {
         .iter()
         .map(|component| component.bbox.width().min(component.bbox.height()))
         .reduce(f64::min);
-    let maximal_safe_area_mm2 = regions.maximal_safe_region.area();
+    let clearance_safe_area_mm2 = regions.clearance_safe_region.area();
     let final_safe_area_mm2 = regions.safe_region.area();
     let regularization = RegularizationJson {
-        maximal_safe_area_mm2,
+        clearance_safe_area_mm2,
         final_safe_area_mm2,
         removed_area_mm2: regions.removed_by_regularization.area(),
         removed_by_opening_area_mm2: regions.removed_by_opening.area(),
-        removed_by_gap_separation_area_mm2: regions.removed_by_gap_separation.area(),
-        retained_fraction: if maximal_safe_area_mm2 > 0.0 {
-            final_safe_area_mm2 / maximal_safe_area_mm2
+        narrow_void_area_mm2: regions.narrow_voids.area(),
+        gap_separator_keep_out_area_mm2: regions.gap_separator_keep_out.area(),
+        removed_by_gap_regularization_area_mm2: regions.removed_by_gap_regularization.area(),
+        retained_fraction: if clearance_safe_area_mm2 > 0.0 {
+            final_safe_area_mm2 / clearance_safe_area_mm2
         } else {
             1.0
         },
-        maximal_component_count: maximal_component_areas.len(),
-        core_component_count: core_component_areas.len(),
+        clearance_safe_component_count: clearance_safe_component_areas.len(),
         opened_component_count: opened_component_areas.len(),
         final_component_count: final_component_areas.len(),
-        discarded_for_gap_component_count: opened_component_areas
-            .len()
-            .saturating_sub(final_component_areas.len()),
         smallest_final_component_area_mm2: final_component_areas.into_iter().reduce(f64::min),
         minimum_final_component_bbox_span_mm,
         undersized_final_component_count: regions
@@ -508,11 +476,10 @@ fn main() -> Result<()> {
         passed,
         input: input.display().to_string(),
         nominal_clearance_mm: args.clearance_mm,
-        minimum_feature_radius_mm: args.minimum_feature_radius_mm,
-        minimum_gap_radius_mm: args.minimum_gap_radius_mm,
+        regularization_radius_mm: args.regularization_radius_mm,
+        gap_radius_mm: args.gap_radius_mm,
         numerical_guard_mm: args.numerical_guard_mm,
         construction_clearance_mm,
-        construction_gap_radius_mm,
         check_area_tolerance_mm2: args.check_area_tolerance_mm2,
         panelization,
         counts: CountsJson {
@@ -562,30 +529,21 @@ fn main() -> Result<()> {
             material_removal: RegionJson::from(&regions.material_removal),
             support_features: RegionJson::from(&regions.support_features),
             raw_obstacles: RegionJson::from(&regions.raw_obstacles),
-            panel_clearance_keep_in: RegionJson::from(&regions.panel_clearance_keep_in),
             panel_keep_in: RegionJson::from(&regions.panel_keep_in),
-            obstacle_clearance: RegionJson::from(&regions.obstacle_clearance),
-            obstacle_gap_envelope: RegionJson::from(&regions.obstacle_gap_envelope),
-            maximal_safe_region: RegionJson::from(&regions.maximal_safe_region),
-            regularization_core: RegionJson::from(&regions.regularization_core),
-            opened_safe_region: RegionJson::from(&regions.opened_safe_region),
+            obstacle_keep_out: RegionJson::from(&regions.obstacle_keep_out),
+            clearance_safe_region: RegionJson::from(&regions.clearance_safe_region),
+            opened_candidates: RegionJson::from(&regions.opened_candidates),
             removed_by_opening: RegionJson::from(&regions.removed_by_opening),
-            removed_by_gap_separation: RegionJson::from(&regions.removed_by_gap_separation),
+            narrow_voids: RegionJson::from(&regions.narrow_voids),
+            gap_separator_keep_out: RegionJson::from(&regions.gap_separator_keep_out),
+            removed_by_gap_regularization: RegionJson::from(&regions.removed_by_gap_regularization),
             removed_by_regularization: RegionJson::from(&regions.removed_by_regularization),
             safe_region: RegionJson::from(&regions.safe_region),
             undersized_final_components: RegionJson::from(&regions.undersized_final_components),
             clearance_certificate: RegionJson::from(&regions.clearance_certificate),
-            safe_outside_maximal_region: RegionJson::from(&regions.safe_outside_maximal_region),
-            safe_outside_keep_in: RegionJson::from(&regions.safe_outside_keep_in),
-            safe_inside_obstacle_clearance: RegionJson::from(
-                &regions.safe_inside_obstacle_clearance,
-            ),
-            safe_inside_obstacle_gap_envelope: RegionJson::from(
-                &regions.safe_inside_obstacle_gap_envelope,
-            ),
-            minimum_feature_violations: RegionJson::from(&regions.minimum_feature_violations),
-            minimum_gap_violations: RegionJson::from(&regions.minimum_gap_violations),
-            void_closing_additions: RegionJson::from(&regions.void_closing_additions),
+            safe_outside_clearance_region: RegionJson::from(&regions.safe_outside_clearance_region),
+            regularization_violations: RegionJson::from(&regions.regularization_violations),
+            gap_violations: RegionJson::from(&regions.gap_violations),
             certificate_outside_panel: RegionJson::from(&regions.certificate_outside_panel),
             certificate_obstacle_overlap: RegionJson::from(&regions.certificate_obstacle_overlap),
         },
@@ -601,15 +559,15 @@ fn main() -> Result<()> {
         regions.panel_outer.area()
     );
     println!(
-        "regularization: {:.3} mm radius retained {:.3} / {:.3} mm² ({:.1}%, {} -> {} opened -> {} final components, {} gap-conflicting components discarded, {} undersized)",
-        artifact.minimum_feature_radius_mm,
+        "regularization: {:.3} mm region radius, {:.3} mm gap radius retained {:.3} / {:.3} mm² ({:.1}%, {} clearance-safe -> {} opened -> {} final components, {} undersized)",
+        artifact.regularization_radius_mm,
+        artifact.gap_radius_mm,
         artifact.regularization.final_safe_area_mm2,
-        artifact.regularization.maximal_safe_area_mm2,
+        artifact.regularization.clearance_safe_area_mm2,
         100.0 * artifact.regularization.retained_fraction,
-        artifact.regularization.maximal_component_count,
+        artifact.regularization.clearance_safe_component_count,
         artifact.regularization.opened_component_count,
         artifact.regularization.final_component_count,
-        artifact.regularization.discarded_for_gap_component_count,
         artifact.regularization.undersized_final_component_count,
     );
     println!(
@@ -622,17 +580,17 @@ fn main() -> Result<()> {
         artifact.coverage.unpainted_support_paths
     );
     println!(
-        "certificate: {} (outside panel {:.6} mm², obstacle overlap {:.6} mm², feature violations {:.6} mm², inter-component gap violations {:.6} mm²; broader closing diagnostic {:.6} mm²)",
+        "certificate: {} (outside clearance-safe region {:.6} mm², regularization violations {:.6} mm², void-gap violations {:.6} mm², outside panel {:.6} mm², obstacle overlap {:.6} mm²)",
         if artifact.checks.passed {
             "PASS"
         } else {
             "FAIL"
         },
+        artifact.checks.safe_outside_clearance_region_area_mm2,
+        artifact.checks.regularization_violation_area_mm2,
+        artifact.checks.gap_violation_area_mm2,
         artifact.checks.certificate_outside_panel_area_mm2,
         artifact.checks.certificate_obstacle_overlap_area_mm2,
-        artifact.checks.minimum_feature_violation_area_mm2,
-        artifact.checks.minimum_gap_violation_area_mm2,
-        artifact.checks.void_closing_addition_area_mm2,
     );
 
     if !artifact.passed {
@@ -710,14 +668,14 @@ fn write_artifacts(
         .with_context(|| format!("failed to create output directory {}", output.display()))?;
 
     let title = format!(
-        "{} — {:.3} mm clearance, {:.3} mm feature radius, {:.3} mm gap radius (+{:.3} mm geometry guard)",
+        "{} — {:.3} mm clearance, {:.3} mm region radius, {:.3} mm gap radius (+{:.3} mm geometry guard)",
         input
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("board array"),
         artifact.nominal_clearance_mm,
-        artifact.minimum_feature_radius_mm,
-        artifact.minimum_gap_radius_mm,
+        artifact.regularization_radius_mm,
+        artifact.gap_radius_mm,
         artifact.numerical_guard_mm
     );
     let overview = render_overview_svg(&title, regions);
@@ -760,51 +718,30 @@ fn write_artifacts(
             stroke: "#b91c1c",
         },
         Stage {
-            filename: "50-panel-clearance-keep-in.svg",
+            filename: "50-panel-keep-in.svg",
             title: "50 — panel outer region eroded by construction clearance",
-            region: &regions.panel_clearance_keep_in,
+            region: &regions.panel_keep_in,
             fill: "#67e8f9",
             stroke: "#0e7490",
         },
         Stage {
-            filename: "55-panel-gap-keep-in.svg",
-            title: "55 — panel outer region eroded by construction minimum-gap radius",
-            region: &regions.panel_keep_in,
-            fill: "#a5b4fc",
-            stroke: "#4338ca",
-        },
-        Stage {
-            filename: "60-obstacle-clearance.svg",
+            filename: "60-obstacle-keep-out.svg",
             title: "60 — raw obstacles dilated by construction clearance",
-            region: &regions.obstacle_clearance,
+            region: &regions.obstacle_keep_out,
             fill: "#fca5a5",
             stroke: "#dc2626",
         },
         Stage {
-            filename: "65-obstacle-gap-envelope.svg",
-            title: "65 — raw obstacles dilated by construction minimum-gap radius",
-            region: &regions.obstacle_gap_envelope,
-            fill: "#f9a8d4",
-            stroke: "#be185d",
-        },
-        Stage {
-            filename: "70-maximal-safe-region.svg",
-            title: "70 — maximal clearance-safe region before regularization",
-            region: &regions.maximal_safe_region,
+            filename: "70-clearance-safe-region.svg",
+            title: "70 — clearance-safe region before regularization",
+            region: &regions.clearance_safe_region,
             fill: "#fde68a",
             stroke: "#b45309",
         },
         Stage {
-            filename: "75-regularization-core.svg",
-            title: "75 — centers where the minimum-feature disk fits",
-            region: &regions.regularization_core,
-            fill: "#67e8f9",
-            stroke: "#0e7490",
-        },
-        Stage {
-            filename: "78-opened-safe-region.svg",
-            title: "78 — minimum-feature disk opening before gap separation",
-            region: &regions.opened_safe_region,
+            filename: "75-opened-candidates.svg",
+            title: "75 — disk opening before void-gap regularization",
+            region: &regions.opened_candidates,
             fill: "#86efac",
             stroke: "#16a34a",
         },
@@ -816,18 +753,25 @@ fn write_artifacts(
             stroke: "#c2410c",
         },
         Stage {
-            filename: "85-removed-by-gap-separation.svg",
-            title: "85 — components excluded by maximum-area gap selection",
-            region: &regions.removed_by_gap_separation,
-            fill: "#f472b6",
-            stroke: "#be185d",
+            filename: "82-narrow-voids.svg",
+            title: "82 — two-sided voids rejected by the rolling-disk test",
+            region: &regions.narrow_voids,
+            fill: "#22d3ee",
+            stroke: "#0e7490",
         },
         Stage {
-            filename: "88-removed-by-regularization.svg",
-            title: "88 — all geometry removed by opening and gap separation",
-            region: &regions.removed_by_regularization,
-            fill: "#fb923c",
-            stroke: "#c2410c",
+            filename: "83-gap-separator-keep-out.svg",
+            title: "83 — medial-axis keep-out tubes through narrow voids",
+            region: &regions.gap_separator_keep_out,
+            fill: "#c084fc",
+            stroke: "#7e22ce",
+        },
+        Stage {
+            filename: "85-removed-by-gap-regularization.svg",
+            title: "85 — material trimmed to widen narrow void gaps",
+            region: &regions.removed_by_gap_regularization,
+            fill: "#f472b6",
+            stroke: "#be185d",
         },
         Stage {
             filename: "90-safe-region.svg",
@@ -844,18 +788,11 @@ fn write_artifacts(
             stroke: "#1d4ed8",
         },
         Stage {
-            filename: "105-minimum-gap-violations.svg",
-            title: "105 — gaps where minimum-gap component dilations overlap",
-            region: &regions.minimum_gap_violations,
+            filename: "105-gap-violations.svg",
+            title: "105 — two-sided void gaps narrower than the disk diameter",
+            region: &regions.gap_violations,
             fill: "#c026d3",
             stroke: "#701a75",
-        },
-        Stage {
-            filename: "106-void-closing-additions.svg",
-            title: "106 — broader void notches filled by disk closing (diagnostic)",
-            region: &regions.void_closing_additions,
-            fill: "#818cf8",
-            stroke: "#3730a3",
         },
     ];
     for stage in &stages {
@@ -951,10 +888,10 @@ fn render_validation_svg(title: &str, regions: &Regions) -> String {
     let bbox = regions
         .panel_outer
         .bbox
-        .union(regions.safe_outside_maximal_region.bbox)
+        .union(regions.safe_outside_clearance_region.bbox)
         .union(regions.undersized_final_components.bbox)
-        .union(regions.minimum_feature_violations.bbox)
-        .union(regions.minimum_gap_violations.bbox)
+        .union(regions.regularization_violations.bbox)
+        .union(regions.gap_violations.bbox)
         .union(regions.certificate_outside_panel.bbox)
         .union(regions.certificate_obstacle_overlap.bbox);
     let mut svg = svg_start(title, bbox);
@@ -966,8 +903,8 @@ fn render_validation_svg(title: &str, regions: &Regions) -> String {
     );
     write_region(
         &mut svg,
-        "safe-outside-maximal-region",
-        &regions.safe_outside_maximal_region,
+        "safe-outside-clearance-region",
+        &regions.safe_outside_clearance_region,
         "fill='#e11d48' stroke='#881337' fill-opacity='0.9'",
     );
     write_region(
@@ -978,14 +915,14 @@ fn render_validation_svg(title: &str, regions: &Regions) -> String {
     );
     write_region(
         &mut svg,
-        "minimum-feature-violations",
-        &regions.minimum_feature_violations,
+        "regularization-violations",
+        &regions.regularization_violations,
         "fill='#7c3aed' stroke='#4c1d95' fill-opacity='0.9'",
     );
     write_region(
         &mut svg,
-        "minimum-gap-violations",
-        &regions.minimum_gap_violations,
+        "gap-violations",
+        &regions.gap_violations,
         "fill='#c026d3' stroke='#701a75' fill-opacity='0.9'",
     );
     write_region(
@@ -1019,44 +956,26 @@ fn render_overview_svg(title: &str, regions: &Regions) -> String {
     );
     write_region(
         &mut svg,
-        "obstacle-clearance",
-        &regions.obstacle_clearance,
+        "obstacle-keep-out",
+        &regions.obstacle_keep_out,
         "fill='#fecaca' stroke='#ef4444' fill-opacity='0.62'",
-    );
-    write_region(
-        &mut svg,
-        "obstacle-gap-envelope",
-        &regions.obstacle_gap_envelope,
-        "fill='#f9a8d4' stroke='#be185d' fill-opacity='0.42'",
-    );
-    write_region(
-        &mut svg,
-        "panel-clearance-keep-in",
-        &regions.panel_clearance_keep_in,
-        "fill='none' stroke='#0891b2' stroke-dasharray='0.6 0.5'",
     );
     write_region(
         &mut svg,
         "panel-keep-in",
         &regions.panel_keep_in,
-        "fill='none' stroke='#4338ca' stroke-dasharray='0.6 0.5'",
+        "fill='none' stroke='#0891b2' stroke-dasharray='0.6 0.5'",
     );
     write_region(
         &mut svg,
-        "maximal-safe-region",
-        &regions.maximal_safe_region,
+        "clearance-safe-region",
+        &regions.clearance_safe_region,
         "fill='#fde68a' stroke='#b45309' fill-opacity='0.24'",
     );
     write_region(
         &mut svg,
-        "regularization-core",
-        &regions.regularization_core,
-        "fill='none' stroke='#0891b2' stroke-dasharray='0.3 0.3' stroke-opacity='0.7'",
-    );
-    write_region(
-        &mut svg,
-        "opened-safe-region",
-        &regions.opened_safe_region,
+        "opened-candidates",
+        &regions.opened_candidates,
         "fill='#86efac' stroke='#16a34a' fill-opacity='0.24'",
     );
     write_region(
@@ -1067,15 +986,21 @@ fn render_overview_svg(title: &str, regions: &Regions) -> String {
     );
     write_region(
         &mut svg,
-        "removed-by-gap-separation",
-        &regions.removed_by_gap_separation,
-        "fill='#f472b6' stroke='#be185d' fill-opacity='0.88'",
+        "narrow-voids",
+        &regions.narrow_voids,
+        "fill='#22d3ee' stroke='#0e7490' fill-opacity='0.42'",
     );
     write_region(
         &mut svg,
-        "removed-by-regularization",
-        &regions.removed_by_regularization,
-        "fill='none' stroke='#c2410c' stroke-opacity='0.72'",
+        "gap-separator-keep-out",
+        &regions.gap_separator_keep_out,
+        "fill='#c084fc' stroke='#7e22ce' fill-opacity='0.24'",
+    );
+    write_region(
+        &mut svg,
+        "removed-by-gap-regularization",
+        &regions.removed_by_gap_regularization,
+        "fill='#f472b6' stroke='#be185d' fill-opacity='0.88'",
     );
     write_region(
         &mut svg,
@@ -1115,26 +1040,20 @@ fn render_overview_svg(title: &str, regions: &Regions) -> String {
     );
     write_region(
         &mut svg,
-        "minimum-feature-violations",
-        &regions.minimum_feature_violations,
+        "regularization-violations",
+        &regions.regularization_violations,
         "fill='#7c3aed' stroke='#4c1d95' fill-opacity='0.95'",
     );
     write_region(
         &mut svg,
-        "minimum-gap-violations",
-        &regions.minimum_gap_violations,
+        "gap-violations",
+        &regions.gap_violations,
         "fill='#c026d3' stroke='#701a75' fill-opacity='0.95'",
     );
     write_region(
         &mut svg,
-        "void-closing-additions",
-        &regions.void_closing_additions,
-        "fill='#818cf8' stroke='#3730a3' fill-opacity='0.9'",
-    );
-    write_region(
-        &mut svg,
-        "safe-outside-maximal-region",
-        &regions.safe_outside_maximal_region,
+        "safe-outside-clearance-region",
+        &regions.safe_outside_clearance_region,
         "fill='#e11d48' stroke='#881337' fill-opacity='0.95'",
     );
     write_region(
@@ -1301,49 +1220,45 @@ fn render_index_html(
       <fieldset>
         <legend>Geometry</legend>
         <label><input type="checkbox" data-layer="panel-outer"{panel_outer}><span class="swatch" style="background:#e2e8f0"></span>panel outer</label>
-        <label><input type="checkbox" data-layer="panel-clearance-keep-in"{panel_clearance_keep_in}><span class="swatch" style="background:#22d3ee"></span>clearance keep-in</label>
-        <label><input type="checkbox" data-layer="panel-keep-in"{panel_keep_in}><span class="swatch" style="background:#a5b4fc"></span>minimum-gap keep-in</label>
-        <label><input type="checkbox" data-layer="obstacle-clearance"{obstacle_clearance}><span class="swatch" style="background:#fecaca"></span>obstacle clearance</label>
-        <label><input type="checkbox" data-layer="obstacle-gap-envelope"{obstacle_gap_envelope}><span class="swatch" style="background:#f9a8d4"></span>minimum-gap envelope</label>
-        <label><input type="checkbox" data-layer="maximal-safe-region"{maximal_safe_region}><span class="swatch" style="background:#fde68a"></span>maximal safe region</label>
-        <label><input type="checkbox" data-layer="regularization-core"{regularization_core}><span class="swatch" style="background:#22d3ee"></span>regularization core</label>
-        <label><input type="checkbox" data-layer="opened-safe-region"{opened_safe_region}><span class="swatch" style="background:#86efac"></span>opened region before gap separation</label>
+        <label><input type="checkbox" data-layer="panel-keep-in"{panel_keep_in}><span class="swatch" style="background:#22d3ee"></span>clearance keep-in</label>
+        <label><input type="checkbox" data-layer="obstacle-keep-out"{obstacle_keep_out}><span class="swatch" style="background:#fecaca"></span>clearance keep-out</label>
+        <label><input type="checkbox" data-layer="clearance-safe-region"{clearance_safe_region}><span class="swatch" style="background:#fde68a"></span>clearance-safe region</label>
+        <label><input type="checkbox" data-layer="opened-candidates"{opened_candidates}><span class="swatch" style="background:#86efac"></span>disk-opened candidates</label>
         <label><input type="checkbox" data-layer="removed-by-opening"{removed_by_opening}><span class="swatch" style="background:#fb923c"></span>discarded by opening</label>
-        <label><input type="checkbox" data-layer="removed-by-gap-separation"{removed_by_gap_separation}><span class="swatch" style="background:#f472b6"></span>discarded for minimum gap</label>
-        <label><input type="checkbox" data-layer="removed-by-regularization"{removed_by_regularization}><span class="swatch" style="background:#c2410c"></span>all discarded geometry</label>
+        <label><input type="checkbox" data-layer="narrow-voids"{narrow_voids}><span class="swatch" style="background:#22d3ee"></span>narrow two-sided voids</label>
+        <label><input type="checkbox" data-layer="gap-separator-keep-out"{gap_separator_keep_out}><span class="swatch" style="background:#c084fc"></span>gap separator keep-out</label>
+        <label><input type="checkbox" data-layer="removed-by-gap-regularization"{removed_by_gap_regularization}><span class="swatch" style="background:#f472b6"></span>trimmed to widen gaps</label>
         <label><input type="checkbox" data-layer="safe-region"{safe_region}><span class="swatch" style="background:#4ade80"></span>regularized safe region</label>
         <label><input type="checkbox" data-layer="board-footprints"{board_footprints}><span class="swatch" style="background:#fb7185"></span>board footprints</label>
         <label><input type="checkbox" data-layer="material-removal"{material_removal}><span class="swatch" style="background:#fb923c"></span>material removal</label>
         <label><input type="checkbox" data-layer="support-features"{support_features}><span class="swatch" style="background:#a78bfa"></span>support features</label>
         <label><input type="checkbox" data-layer="clearance-certificate"{certificate}><span class="swatch" style="background:#60a5fa"></span>clearance certificate</label>
         <label><input type="checkbox" data-layer="undersized-final-components"{violations}><span class="swatch" style="background:#db2777"></span>undersized-final violation</label>
-        <label><input type="checkbox" data-layer="minimum-feature-violations"{violations}><span class="swatch" style="background:#7c3aed"></span>minimum-feature violation</label>
-        <label><input type="checkbox" data-layer="minimum-gap-violations"{violations}><span class="swatch" style="background:#c026d3"></span>minimum-gap violation</label>
-        <label><input type="checkbox" data-layer="void-closing-additions"{diagnostics}><span class="swatch" style="background:#818cf8"></span>all closing additions (diagnostic)</label>
-        <label><input type="checkbox" data-layer="safe-outside-maximal-region"{violations}><span class="swatch" style="background:#e11d48"></span>outside-maximal violation</label>
+        <label><input type="checkbox" data-layer="regularization-violations"{violations}><span class="swatch" style="background:#7c3aed"></span>regularization violation</label>
+        <label><input type="checkbox" data-layer="gap-violations"{violations}><span class="swatch" style="background:#c026d3"></span>void-gap violation</label>
+        <label><input type="checkbox" data-layer="safe-outside-clearance-region"{violations}><span class="swatch" style="background:#e11d48"></span>outside-clearance violation</label>
         <label><input type="checkbox" data-layer="certificate-outside-panel"{violations}><span class="swatch" style="background:#dc2626"></span>outside-panel violation</label>
         <label><input type="checkbox" data-layer="certificate-obstacle-overlap"{violations}><span class="swatch" style="background:#f59e0b"></span>obstacle-overlap violation</label>
       </fieldset>
       <dl>
         <dt>Panel area</dt><dd>{panel_area:.3} mm²</dd>
         <dt>Obstacle area</dt><dd>{obstacle_area:.3} mm²</dd>
-        <dt>Maximal safe area</dt><dd>{maximal_safe_area:.3} mm²</dd>
+        <dt>Clearance-safe area</dt><dd>{clearance_safe_area:.3} mm²</dd>
         <dt>Regularized safe area</dt><dd>{safe_area:.3} mm²</dd>
         <dt>Removed area</dt><dd>{removed_area:.3} mm²</dd>
         <dt>Removed by opening</dt><dd>{removed_by_opening_area:.3} mm²</dd>
-        <dt>Removed for gap</dt><dd>{removed_for_gap_area:.3} mm²</dd>
+        <dt>Narrow voids</dt><dd>{narrow_void_area:.3} mm²</dd>
+        <dt>Gap keep-out</dt><dd>{gap_separator_keep_out_area:.3} mm²</dd>
+        <dt>Trimmed to widen gaps</dt><dd>{removed_by_gap_regularization_area:.3} mm²</dd>
         <dt>Retained</dt><dd>{retained_fraction:.1}%</dd>
         <dt>Safe fraction</dt><dd>{safe_fraction:.1}%</dd>
         <dt>Nominal clearance</dt><dd>{nominal_clearance:.3} mm</dd>
-        <dt>Minimum-feature radius</dt><dd>{minimum_feature_radius:.3} mm</dd>
-        <dt>Minimum-gap radius</dt><dd>{minimum_gap_radius:.3} mm</dd>
-        <dt>Construction gap radius</dt><dd>{construction_gap_radius:.3} mm</dd>
+        <dt>Filled-region radius</dt><dd>{regularization_radius:.3} mm</dd>
+        <dt>Void-gap radius</dt><dd>{gap_radius:.3} mm ({gap_width:.3} mm nominal gap)</dd>
         <dt>Geometry guard</dt><dd>{geometry_guard:.3} mm</dd>
-        <dt>Feature violation area</dt><dd>{feature_violation_area:.6} mm²</dd>
-        <dt>Gap violation area</dt><dd>{gap_violation_area:.6} mm²</dd>
-        <dt>All closing additions</dt><dd>{void_closing_addition_area:.6} mm²</dd>
-        <dt>Components</dt><dd>{maximal_components} → {opened_components} → {final_components}</dd>
-        <dt>Gap-conflicting discarded</dt><dd>{gap_discarded_components}</dd>
+        <dt>Regularization violations</dt><dd>{regularization_violation_area:.6} mm²</dd>
+        <dt>Void-gap violations</dt><dd>{gap_violation_area:.6} mm²</dd>
+        <dt>Components</dt><dd>{clearance_safe_components} → {opened_components} → {final_components}</dd>
         <dt>Smallest component</dt><dd>{smallest_component}</dd>
         <dt>Minimum component span</dt><dd>{minimum_component_span}</dd>
         <dt>Undersized components</dt><dd>{undersized_components}</dd>
@@ -1381,44 +1296,43 @@ fn render_index_html(
 "#,
         title = escape_html(title),
         panel_outer = checked(true),
-        panel_clearance_keep_in = checked(false),
         panel_keep_in = checked(true),
-        obstacle_clearance = checked(false),
-        obstacle_gap_envelope = checked(true),
-        maximal_safe_region = checked(false),
-        regularization_core = checked(false),
-        opened_safe_region = checked(false),
+        obstacle_keep_out = checked(false),
+        clearance_safe_region = checked(false),
+        opened_candidates = checked(false),
         removed_by_opening = checked(false),
-        removed_by_gap_separation = checked(true),
-        removed_by_regularization = checked(false),
+        narrow_voids = checked(false),
+        gap_separator_keep_out = checked(false),
+        removed_by_gap_regularization = checked(true),
         safe_region = checked(true),
         board_footprints = checked(true),
         material_removal = checked(true),
         support_features = checked(true),
         certificate = checked(false),
         violations = checked(true),
-        diagnostics = checked(false),
         panel_area = regions.panel_outer.area(),
         obstacle_area = regions.raw_obstacles.area(),
-        maximal_safe_area = artifact.regularization.maximal_safe_area_mm2,
+        clearance_safe_area = artifact.regularization.clearance_safe_area_mm2,
         safe_area = regions.safe_region.area(),
         removed_area = artifact.regularization.removed_area_mm2,
         removed_by_opening_area = artifact.regularization.removed_by_opening_area_mm2,
-        removed_for_gap_area = artifact.regularization.removed_by_gap_separation_area_mm2,
+        narrow_void_area = artifact.regularization.narrow_void_area_mm2,
+        gap_separator_keep_out_area = artifact.regularization.gap_separator_keep_out_area_mm2,
+        removed_by_gap_regularization_area = artifact
+            .regularization
+            .removed_by_gap_regularization_area_mm2,
         retained_fraction = 100.0 * artifact.regularization.retained_fraction,
         safe_fraction = 100.0 * regions.safe_region.area() / regions.panel_outer.area(),
         nominal_clearance = artifact.nominal_clearance_mm,
-        minimum_feature_radius = artifact.minimum_feature_radius_mm,
-        minimum_gap_radius = artifact.minimum_gap_radius_mm,
-        construction_gap_radius = artifact.construction_gap_radius_mm,
+        regularization_radius = artifact.regularization_radius_mm,
+        gap_radius = artifact.gap_radius_mm,
+        gap_width = 2.0 * artifact.gap_radius_mm,
         geometry_guard = artifact.numerical_guard_mm,
-        feature_violation_area = artifact.checks.minimum_feature_violation_area_mm2,
-        gap_violation_area = artifact.checks.minimum_gap_violation_area_mm2,
-        void_closing_addition_area = artifact.checks.void_closing_addition_area_mm2,
-        maximal_components = artifact.regularization.maximal_component_count,
+        regularization_violation_area = artifact.checks.regularization_violation_area_mm2,
+        gap_violation_area = artifact.checks.gap_violation_area_mm2,
+        clearance_safe_components = artifact.regularization.clearance_safe_component_count,
         opened_components = artifact.regularization.opened_component_count,
         final_components = artifact.regularization.final_component_count,
-        gap_discarded_components = artifact.regularization.discarded_for_gap_component_count,
         smallest_component = artifact
             .regularization
             .smallest_final_component_area_mm2

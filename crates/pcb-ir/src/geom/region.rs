@@ -6,6 +6,14 @@
 //! dilation over filled point sets, shared by every dialect so IPC, Gerber,
 //! SVG, and comparison all use the same geometry semantics.
 
+use std::fmt;
+
+use boostvoronoi::prelude::{
+    Builder as VoronoiBuilder, CellIndex as VoronoiCellIndex, Diagram as VoronoiDiagram,
+    EdgeIndex as VoronoiEdgeIndex, Line as VoronoiLine, Point as VoronoiPoint, SourceCategory,
+    VoronoiVisualUtils,
+};
+use boostvoronoi::utils::visual_utils::SimpleAffine;
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::simplify::SimplifyShape;
@@ -128,6 +136,31 @@ pub struct ContourSet {
     pub rings: Vec<Ring>,
     pub tolerance: f64,
 }
+
+/// Result of enforcing a minimum width for every two-sided void gap.
+#[derive(Debug, Clone)]
+pub struct DiskGapRegularization {
+    /// Input material retained after local gap trimming and disk opening.
+    pub kept: ContourSet,
+    /// Two-sided components of `close(source, disk(radius)) \ source`.
+    pub narrow_voids: ContourSet,
+    /// Initial medial-axis tube plus any directly swept certificate residuals.
+    pub separator_keep_out: ContourSet,
+    /// `source \ kept`.
+    pub removed: ContourSet,
+}
+
+/// Failure to construct a narrow void's medial axis for gap regularization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GapRegularizationError(String);
+
+impl fmt::Display for GapRegularizationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for GapRegularizationError {}
 
 impl ContourSet {
     pub fn new(rings: Vec<Ring>, fill_rule: FillRule, tolerance: f64) -> Self {
@@ -413,94 +446,129 @@ impl ContourSet {
         violations
     }
 
-    /// Retain a maximum-area subset of connected components with pairwise
-    /// Euclidean separation at least `2 * radius`.
+    /// Enforce a diameter-`2 * gap_radius` minimum for every two-sided void gap.
     ///
-    /// Components form a graph with edge `(i, j)` when
-    /// `distance(C_i, C_j) < 2r`, equivalently when their radius-`r` dilations
-    /// overlap. With component area as vertex weight, the retained components
-    /// are an exact maximum-weight independent set:
+    /// First isolate the narrow complement phase `N`, then take its medial axis
+    /// `Γ_N` from the source boundary's primary generalized Voronoi branches:
     ///
     /// ```text
-    /// maximize  Σ area(C_i) x_i
-    /// subject to x_i + x_j ≤ 1  for every conflict edge (i, j)
-    ///            x_i ∈ {0, 1}
+    /// N₀     = G_(gap_radius + guard)(self)
+    /// S₀     = open(self \ (Γ_N₀ ⊕ disk(gap_radius + guard)), disk(filled_radius))
+    /// Rₖ     = G_gap_radius(Sₖ)
+    /// Vₖ     = open(Rₖ, disk(guard))
+    /// Wₖ     = Vₖ if Vₖ is nonempty, otherwise Rₖ
+    /// Sₖ₊₁   = open(Sₖ \ (Wₖ ⊕ disk(gap_radius + guard)), disk(filled_radius))
     /// ```
     ///
-    /// Disconnected conflict clusters are solved independently. Equal-area
-    /// optima prefer the deterministic component order: descending area, then
-    /// bounding-box coordinates. The return value is `(kept, removed)`.
-    pub fn disk_separate_components(&self, radius: f64) -> (Self, Self) {
-        if self.is_empty() || radius <= 0.0 {
-            return (self.clone(), Self::empty(self.tolerance));
-        }
-
-        let mut candidates = self
-            .connected_components()
-            .into_iter()
-            .map(|component| (component.area(), component))
-            .collect::<Vec<_>>();
-        candidates.sort_by(|(left_area, left), (right_area, right)| {
-            right_area
-                .total_cmp(left_area)
-                .then_with(|| left.bbox.min.x.total_cmp(&right.bbox.min.x))
-                .then_with(|| left.bbox.min.y.total_cmp(&right.bbox.min.y))
-                .then_with(|| left.bbox.max.x.total_cmp(&right.bbox.max.x))
-                .then_with(|| left.bbox.max.y.total_cmp(&right.bbox.max.y))
-        });
-
-        let mut conflicts = vec![Vec::new(); candidates.len()];
-        for left in 0..candidates.len() {
-            for right in left + 1..candidates.len() {
-                if regions_within_distance(&candidates[left].1, &candidates[right].1, 2.0 * radius)
-                {
-                    conflicts[left].push(right);
-                    conflicts[right].push(left);
-                }
-            }
-        }
-
-        if conflicts.iter().all(Vec::is_empty) {
-            return (self.clone(), Self::empty(self.tolerance));
-        }
-
-        let weights = candidates.iter().map(|(area, _)| *area).collect::<Vec<_>>();
-        let mut visited = vec![false; candidates.len()];
-        let mut kept_indices = Vec::new();
-        for start in 0..candidates.len() {
-            if visited[start] {
-                continue;
-            }
-            let mut cluster = Vec::new();
-            let mut pending = vec![start];
-            visited[start] = true;
-            while let Some(vertex) = pending.pop() {
-                cluster.push(vertex);
-                for &neighbor in &conflicts[vertex] {
-                    if !visited[neighbor] {
-                        visited[neighbor] = true;
-                        pending.push(neighbor);
-                    }
-                }
-            }
-            cluster.sort_unstable();
-            kept_indices.extend(maximum_weight_independent_set(
-                &cluster, &conflicts, &weights,
+    /// `G_r(X)` is the two-sided part of `close(X, disk(r)) \ X`, and `Γ_N₀` is
+    /// the source-boundary medial axis inside the initial narrow void
+    /// phase. It gives the least local first cut. Meaningful residuals are
+    /// denoised before sweeping; a residual too thin for that filter is swept
+    /// raw rather than mistaken for a passing certificate. Boolean-generated
+    /// boundaries never require another Voronoi diagram. Iteration stops only
+    /// when `Rₖ` is empty. The sequence is monotone decreasing: every pass only
+    /// trims the source. This covers distinct components, hairpins, notches,
+    /// and internal voids without treating one-sided edge clearance as a gap.
+    pub fn disk_regularize_gaps(
+        &self,
+        gap_radius: f64,
+        filled_radius: f64,
+        guard: f64,
+    ) -> Result<DiskGapRegularization, GapRegularizationError> {
+        if !gap_radius.is_finite()
+            || gap_radius <= 0.0
+            || !filled_radius.is_finite()
+            || filled_radius <= 0.0
+        {
+            return Err(GapRegularizationError(
+                "gap and filled-region radii must be finite and positive".to_string(),
             ));
         }
-
-        if kept_indices.len() == candidates.len() {
-            return (self.clone(), Self::empty(self.tolerance));
+        if !guard.is_finite() || guard < 0.0 {
+            return Err(GapRegularizationError(
+                "gap-regularization guard must be finite and non-negative".to_string(),
+            ));
         }
-        kept_indices.sort_unstable();
-        let kept = kept_indices
-            .into_iter()
-            .fold(Self::empty(self.tolerance), |region, index| {
-                region.union(&candidates[index].1)
-            })
+        if self.is_empty() {
+            return Ok(DiskGapRegularization {
+                kept: self.clone(),
+                narrow_voids: Self::empty(self.tolerance),
+                separator_keep_out: Self::empty(self.tolerance),
+                removed: Self::empty(self.tolerance),
+            });
+        }
+
+        let tube_radius = gap_radius + guard;
+        let initial_narrow_voids = self.disk_gap_violations(tube_radius);
+        if initial_narrow_voids.is_empty() {
+            return Ok(DiskGapRegularization {
+                kept: self.clone(),
+                narrow_voids: Self::empty(self.tolerance),
+                separator_keep_out: Self::empty(self.tolerance),
+                removed: Self::empty(self.tolerance),
+            });
+        }
+        let initial_keep_out =
+            narrow_void_medial_axis_keep_out(self, &initial_narrow_voids, tube_radius)?;
+        let mut kept = self
+            .difference(&initial_keep_out)
+            .disk_open(filled_radius)
             .intersection(self);
+        let mut narrow_voids = initial_narrow_voids;
+        let mut separator_keep_out = initial_keep_out;
+        let denoise_radius = guard.max(self.tolerance);
+        loop {
+            let pass_narrow_voids = kept.disk_gap_violations(gap_radius);
+            if pass_narrow_voids.is_empty() {
+                break;
+            }
+            let denoised = pass_narrow_voids.disk_open(denoise_radius);
+            let sweep = if denoised.is_empty() {
+                &pass_narrow_voids
+            } else {
+                &denoised
+            };
+            let pass_separator_keep_out = sweep.disk_dilate(tube_radius);
+            let next = kept
+                .difference(&pass_separator_keep_out)
+                .disk_open(filled_radius)
+                .intersection(&kept);
+            narrow_voids = narrow_voids.union(&pass_narrow_voids);
+            separator_keep_out = separator_keep_out.union(&pass_separator_keep_out);
+
+            if kept.difference(&next).area() <= self.tolerance * self.tolerance {
+                return Err(GapRegularizationError(format!(
+                    "gap regularization stalled with {:.9} mm² of void-gap violations",
+                    pass_narrow_voids.area()
+                )));
+            }
+            kept = next;
+        }
         let removed = self.difference(&kept);
-        (kept, removed)
+        Ok(DiskGapRegularization {
+            kept,
+            narrow_voids,
+            separator_keep_out,
+            removed,
+        })
+    }
+
+    /// Unfilled material that violates the two-sided void-gap radius.
+    ///
+    /// The raw closing residual `close(self, disk(radius)) \ self` also contains
+    /// the rounded bite at an isolated concave corner. A residual component is
+    /// a gap only when it contacts nonincident source-boundary segments with
+    /// opposing tangents. An empty result proves no two facing boundary
+    /// branches fail the rolling-disk test.
+    pub fn disk_gap_violations(&self, radius: f64) -> Self {
+        if self.is_empty() || radius <= 0.0 {
+            return Self::empty(self.tolerance);
+        }
+        if !radius.is_finite() {
+            return Self::empty(self.tolerance);
+        }
+        let closing_residual = self.disk_close(radius).difference(self);
+        two_sided_gap_residual(self, &closing_residual)
     }
 
     pub fn to_contours(&self) -> Vec<ContourBuf> {
@@ -697,99 +765,451 @@ fn point_segment_distance(point: Point, start: Point, end: Point) -> f64 {
     point.distance_to(start + segment * t)
 }
 
-fn maximum_weight_independent_set(
-    cluster: &[usize],
-    conflicts: &[Vec<usize>],
-    weights: &[f64],
-) -> Vec<usize> {
-    let mut greedy = Vec::new();
-    for &vertex in cluster {
-        if greedy
-            .iter()
-            .all(|kept| conflicts[vertex].binary_search(kept).is_err())
-        {
-            greedy.push(vertex);
-        }
-    }
-    let best_weight = greedy.iter().map(|&vertex| weights[vertex]).sum();
-    let mut search = MaximumWeightIndependentSetSearch {
-        conflicts,
-        weights,
-        best: greedy,
-        best_weight,
-    };
-    search.visit(cluster.to_vec(), &mut Vec::new(), 0.0);
-    search.best
+const VORONOI_COORDINATES_PER_MM: f64 = 100_000.0;
+
+#[derive(Debug, Clone, Copy)]
+struct BoundarySegment {
+    ring: usize,
+    index: usize,
+    ring_len: usize,
 }
 
-struct MaximumWeightIndependentSetSearch<'a> {
-    conflicts: &'a [Vec<usize>],
-    weights: &'a [f64],
-    best: Vec<usize>,
-    best_weight: f64,
+#[derive(Debug, Clone, Copy)]
+struct OrientedBoundarySegment {
+    topology: BoundarySegment,
+    start: Point,
+    end: Point,
+    bbox: BBox,
 }
 
-impl MaximumWeightIndependentSetSearch<'_> {
-    fn visit(&mut self, remaining: Vec<usize>, selected: &mut Vec<usize>, selected_weight: f64) {
-        let upper_bound = selected_weight
-            + remaining
+fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> ContourSet {
+    let source_segments = source
+        .rings
+        .iter()
+        .enumerate()
+        .flat_map(|(ring_id, ring)| {
+            (0..ring.len()).filter_map(move |index| {
+                let [start_x, start_y] = ring[index];
+                let [end_x, end_y] = ring[(index + 1) % ring.len()];
+                let start = Point::new(start_x, start_y);
+                let end = Point::new(end_x, end_y);
+                (start.distance_to(end) > source.tolerance).then_some(OrientedBoundarySegment {
+                    topology: BoundarySegment {
+                        ring: ring_id,
+                        index,
+                        ring_len: ring.len(),
+                    },
+                    start,
+                    end,
+                    bbox: segment_bbox(start, end),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let contact_tolerance = source.tolerance.max(residual.tolerance);
+
+    let rings = residual
+        .connected_components()
+        .into_iter()
+        .filter(|component| {
+            let contacts = source_segments
                 .iter()
-                .map(|&vertex| self.weights[vertex])
-                .sum::<f64>();
-        if upper_bound.total_cmp(&self.best_weight).is_lt() {
-            return;
-        }
-        if remaining.is_empty() {
-            let mut candidate = selected.clone();
-            candidate.sort_unstable();
-            if selected_weight.total_cmp(&self.best_weight).is_gt()
-                || (selected_weight.total_cmp(&self.best_weight).is_eq() && candidate < self.best)
-            {
-                self.best = candidate;
-                self.best_weight = selected_weight;
-            }
-            return;
-        }
-
-        let pivot = *remaining
-            .iter()
-            .max_by(|&&left, &&right| {
-                let left_degree = remaining
-                    .iter()
-                    .filter(|&&other| self.conflicts[left].binary_search(&other).is_ok())
-                    .count();
-                let right_degree = remaining
-                    .iter()
-                    .filter(|&&other| self.conflicts[right].binary_search(&other).is_ok())
-                    .count();
-                left_degree
-                    .cmp(&right_degree)
-                    .then_with(|| self.weights[left].total_cmp(&self.weights[right]))
-                    .then_with(|| right.cmp(&left))
+                .filter(|segment| {
+                    segment
+                        .bbox
+                        .expand(contact_tolerance)
+                        .intersects(component.bbox)
+                        && region_boundary_within_distance(
+                            component,
+                            segment.start,
+                            segment.end,
+                            contact_tolerance,
+                        )
+                })
+                .collect::<Vec<_>>();
+            contacts.iter().enumerate().any(|(index, left)| {
+                contacts[index + 1..].iter().any(|right| {
+                    let separation =
+                        segment_separation(left.start, left.end, right.start, right.end);
+                    !boundary_segments_are_incident(left.topology, right.topology)
+                        && boundary_tangents_oppose(left, right)
+                        && separation > contact_tolerance
+                })
             })
-            .expect("non-empty remaining vertex set");
+        })
+        .flat_map(|component| component.rings)
+        .collect();
+    ContourSet::new(rings, FillRule::NonZero, residual.tolerance)
+}
 
-        let include_remaining = remaining
-            .iter()
-            .copied()
-            .filter(|&vertex| {
-                vertex != pivot && self.conflicts[pivot].binary_search(&vertex).is_err()
-            })
-            .collect();
-        selected.push(pivot);
-        self.visit(
-            include_remaining,
-            selected,
-            selected_weight + self.weights[pivot],
-        );
-        selected.pop();
+fn region_boundary_within_distance(
+    region: &ContourSet,
+    start: Point,
+    end: Point,
+    distance: f64,
+) -> bool {
+    let expanded = segment_bbox(start, end).expand(distance);
+    region.rings.iter().any(|ring| {
+        (0..ring.len()).any(|index| {
+            let [other_start_x, other_start_y] = ring[index];
+            let [other_end_x, other_end_y] = ring[(index + 1) % ring.len()];
+            let other_start = Point::new(other_start_x, other_start_y);
+            let other_end = Point::new(other_end_x, other_end_y);
+            expanded.intersects(segment_bbox(other_start, other_end))
+                && segment_separation(start, end, other_start, other_end) <= distance
+        })
+    })
+}
 
-        let exclude_remaining = remaining
-            .into_iter()
-            .filter(|&vertex| vertex != pivot)
-            .collect();
-        self.visit(exclude_remaining, selected, selected_weight);
+fn segment_separation(
+    left_start: Point,
+    left_end: Point,
+    right_start: Point,
+    right_end: Point,
+) -> f64 {
+    point_segment_distance(left_start, right_start, right_end)
+        .min(point_segment_distance(left_end, right_start, right_end))
+        .min(point_segment_distance(right_start, left_start, left_end))
+        .min(point_segment_distance(right_end, left_start, left_end))
+}
+
+fn boundary_tangents_oppose(
+    left: &OrientedBoundarySegment,
+    right: &OrientedBoundarySegment,
+) -> bool {
+    let left_tangent = left.end - left.start;
+    let right_tangent = right.end - right.start;
+    left_tangent.x * right_tangent.x + left_tangent.y * right_tangent.y < 0.0
+}
+
+fn narrow_void_medial_axis_keep_out(
+    source: &ContourSet,
+    narrow_voids: &ContourSet,
+    radius: f64,
+) -> Result<ContourSet, GapRegularizationError> {
+    if narrow_voids.is_empty() {
+        return Ok(ContourSet::empty(source.tolerance));
     }
+    let origin = Point::new(source.bbox.min.x, source.bbox.min.y);
+    let mut segments = Vec::<VoronoiLine<i32>>::new();
+    let mut boundary_segments = Vec::new();
+    for (ring_id, ring) in source.rings.iter().enumerate() {
+        for index in 0..ring.len() {
+            let [start_x, start_y] = ring[index];
+            let [end_x, end_y] = ring[(index + 1) % ring.len()];
+            if (end_x - start_x).hypot(end_y - start_y) <= source.tolerance {
+                continue;
+            }
+            let start = quantize_voronoi_point(ring[index], origin)?;
+            let end = quantize_voronoi_point(ring[(index + 1) % ring.len()], origin)?;
+            if start == end {
+                continue;
+            }
+            segments.push(VoronoiLine::new(start, end));
+            boundary_segments.push(BoundarySegment {
+                ring: ring_id,
+                index,
+                ring_len: ring.len(),
+            });
+        }
+    }
+
+    let diagram = VoronoiBuilder::<i32>::default()
+        .with_segments(segments.iter())
+        .and_then(VoronoiBuilder::build)
+        .map_err(|error| {
+            GapRegularizationError(format!(
+                "could not construct boundary Voronoi diagram: {error}"
+            ))
+        })?;
+    let mut contours = Vec::new();
+    for edge in diagram.edges() {
+        let twin = edge.twin().map_err(gap_regularization_error)?;
+        if edge.id() > twin || !edge.is_primary() {
+            continue;
+        }
+        let left = diagram
+            .cell(edge.cell().map_err(gap_regularization_error)?)
+            .map_err(gap_regularization_error)?;
+        let right = diagram
+            .cell(
+                diagram
+                    .edge(twin)
+                    .and_then(|edge| edge.cell())
+                    .map_err(gap_regularization_error)?,
+            )
+            .map_err(gap_regularization_error)?;
+        let left_boundary = boundary_segments
+            .get(left.source_index().usize())
+            .ok_or_else(|| {
+                GapRegularizationError(
+                    "Voronoi cell references an unknown boundary segment".to_string(),
+                )
+            })?;
+        let right_boundary = boundary_segments
+            .get(right.source_index().usize())
+            .ok_or_else(|| {
+                GapRegularizationError(
+                    "Voronoi cell references an unknown boundary segment".to_string(),
+                )
+            })?;
+        if boundary_segments_are_incident(*left_boundary, *right_boundary) {
+            continue;
+        }
+        let samples = voronoi_edge_samples(&diagram, edge.id(), &segments, source, radius)?;
+        let mut commands = Vec::with_capacity(samples.len());
+        for sample in samples {
+            let point = Point::new(
+                sample[0] / VORONOI_COORDINATES_PER_MM + origin.x,
+                sample[1] / VORONOI_COORDINATES_PER_MM + origin.y,
+            );
+            if commands
+                .last()
+                .and_then(|command: &PathCmd| command.end_point())
+                .is_some_and(|previous| previous.distance_to(point) <= tol::EPSILON_MM)
+            {
+                continue;
+            }
+            commands.push(if commands.is_empty() {
+                PathCmd::move_to(point)
+            } else {
+                PathCmd::line_to(point)
+            });
+        }
+        if commands.len() >= 2 {
+            contours.push(ContourBuf::new(commands));
+        }
+    }
+
+    if contours.is_empty() {
+        return Ok(ContourSet::empty(source.tolerance));
+    }
+    // A narrow filled stroke makes the one-dimensional axis available to the
+    // existing set algebra. Intersecting with a slightly eroded narrow-void
+    // phase removes the finite stroke's boundary fringe and the exterior axis.
+    let axis_stroke_radius = tol::REGION_MM;
+    let mut arena = PathArena::default();
+    let path = arena.push_path(
+        Paint::Stroke(crate::geom::StrokeStyle::round(2.0 * axis_stroke_radius)),
+        contours,
+    );
+    let medial_axis = ContourSet::from_painted_paths(
+        &arena,
+        std::iter::once(&arena.paths[path as usize]),
+        source.tolerance,
+    );
+    let interior_axis =
+        medial_axis.intersection(&narrow_voids.disk_erode(2.0 * axis_stroke_radius));
+    let keep_out = interior_axis.disk_dilate(radius);
+    Ok(keep_out.intersection(&source.disk_dilate(radius)))
+}
+
+fn boundary_segments_are_incident(left: BoundarySegment, right: BoundarySegment) -> bool {
+    if left.ring != right.ring || left.ring_len != right.ring_len {
+        return false;
+    }
+    let distance = left.index.abs_diff(right.index);
+    distance.min(left.ring_len - distance) <= 1
+}
+
+fn quantize_voronoi_point(
+    [x, y]: [f64; 2],
+    origin: Point,
+) -> Result<VoronoiPoint<i32>, GapRegularizationError> {
+    fn coordinate(value: f64, origin: f64) -> Result<i32, GapRegularizationError> {
+        let scaled = ((value - origin) * VORONOI_COORDINATES_PER_MM).round();
+        if !scaled.is_finite() || scaled < i32::MIN as f64 || scaled > i32::MAX as f64 {
+            return Err(GapRegularizationError(
+                "component geometry exceeds the Voronoi coordinate range".to_string(),
+            ));
+        }
+        Ok(scaled as i32)
+    }
+
+    Ok(VoronoiPoint::new(
+        coordinate(x, origin.x)?,
+        coordinate(y, origin.y)?,
+    ))
+}
+
+fn gap_regularization_error(error: boostvoronoi::BvError) -> GapRegularizationError {
+    GapRegularizationError(format!("invalid boundary Voronoi diagram: {error}"))
+}
+
+fn voronoi_edge_samples(
+    diagram: &VoronoiDiagram,
+    edge_id: VoronoiEdgeIndex,
+    segments: &[VoronoiLine<i32>],
+    region: &ContourSet,
+    radius: f64,
+) -> Result<Vec<[f64; 2]>, GapRegularizationError> {
+    let edge = diagram.edge(edge_id).map_err(gap_regularization_error)?;
+    let affine = SimpleAffine::default();
+    let mut samples = if let (Some(start), Some(end)) = (
+        edge.vertex0(),
+        diagram
+            .edge_get_vertex1(edge_id)
+            .map_err(gap_regularization_error)?,
+    ) {
+        let start = diagram.vertex(start).map_err(gap_regularization_error)?;
+        let end = diagram.vertex(end).map_err(gap_regularization_error)?;
+        vec![
+            affine.transform(start.x(), start.y()),
+            affine.transform(end.x(), end.y()),
+        ]
+    } else {
+        clip_infinite_voronoi_edge(diagram, edge_id, segments, region, radius)?
+    };
+
+    if edge.is_curved() {
+        let cell = edge.cell().map_err(gap_regularization_error)?;
+        let twin_cell = diagram
+            .edge(edge.twin().map_err(gap_regularization_error)?)
+            .and_then(|edge| edge.cell())
+            .map_err(gap_regularization_error)?;
+        let (point_cell, segment_cell) = if diagram
+            .cell(cell)
+            .map_err(gap_regularization_error)?
+            .contains_point()
+        {
+            (cell, twin_cell)
+        } else {
+            (twin_cell, cell)
+        };
+        let point = voronoi_cell_point(diagram, point_cell, segments)?;
+        let segment = voronoi_cell_segment(diagram, segment_cell, segments)?;
+        VoronoiVisualUtils::discretize(
+            &point,
+            segment,
+            tol::FLATTEN_MM * VORONOI_COORDINATES_PER_MM,
+            &affine,
+            &mut samples,
+        );
+    }
+    Ok(samples)
+}
+
+fn clip_infinite_voronoi_edge(
+    diagram: &VoronoiDiagram,
+    edge_id: VoronoiEdgeIndex,
+    segments: &[VoronoiLine<i32>],
+    region: &ContourSet,
+    radius: f64,
+) -> Result<Vec<[f64; 2]>, GapRegularizationError> {
+    let edge = diagram.edge(edge_id).map_err(gap_regularization_error)?;
+    let cell = edge.cell().map_err(gap_regularization_error)?;
+    let twin_cell = diagram
+        .edge(edge.twin().map_err(gap_regularization_error)?)
+        .and_then(|edge| edge.cell())
+        .map_err(gap_regularization_error)?;
+    let left = diagram.cell(cell).map_err(gap_regularization_error)?;
+    let right = diagram.cell(twin_cell).map_err(gap_regularization_error)?;
+    let (origin, direction) = if left.contains_point() && right.contains_point() {
+        let left = voronoi_cell_point(diagram, cell, segments)?;
+        let right = voronoi_cell_point(diagram, twin_cell, segments)?;
+        (
+            [
+                (left.x as f64 + right.x as f64) * 0.5,
+                (left.y as f64 + right.y as f64) * 0.5,
+            ],
+            [
+                left.y as f64 - right.y as f64,
+                right.x as f64 - left.x as f64,
+            ],
+        )
+    } else {
+        let (point_cell, segment_cell) = if left.contains_segment() {
+            (twin_cell, cell)
+        } else {
+            (cell, twin_cell)
+        };
+        let point = voronoi_cell_point(diagram, point_cell, segments)?;
+        let segment = voronoi_cell_segment(diagram, segment_cell, segments)?;
+        let origin = [point.x as f64, point.y as f64];
+        let dx = segment.end.x - segment.start.x;
+        let dy = segment.end.y - segment.start.y;
+        let direction = if ([segment.start.x as f64, segment.start.y as f64] == origin)
+            ^ left.contains_point()
+        {
+            [dy as f64, -dx as f64]
+        } else {
+            [-dy as f64, dx as f64]
+        };
+        (origin, direction)
+    };
+    let reach =
+        (region.bbox.width().max(region.bbox.height()) + 4.0 * radius) * VORONOI_COORDINATES_PER_MM;
+    let direction_scale = direction[0].abs().max(direction[1].abs());
+    if direction_scale == 0.0 {
+        return Err(GapRegularizationError(
+            "infinite Voronoi edge has no direction".to_string(),
+        ));
+    }
+    let coefficient = reach / direction_scale;
+    let affine = SimpleAffine::default();
+    let start = edge
+        .vertex0()
+        .map(|vertex| {
+            diagram
+                .vertex(vertex)
+                .map(|vertex| affine.transform(vertex.x(), vertex.y()))
+        })
+        .transpose()
+        .map_err(gap_regularization_error)?
+        .unwrap_or([
+            origin[0] - direction[0] * coefficient,
+            origin[1] - direction[1] * coefficient,
+        ]);
+    let end = diagram
+        .edge_get_vertex1(edge_id)
+        .map_err(gap_regularization_error)?
+        .map(|vertex| {
+            diagram
+                .vertex(vertex)
+                .map(|vertex| affine.transform(vertex.x(), vertex.y()))
+        })
+        .transpose()
+        .map_err(gap_regularization_error)?
+        .unwrap_or([
+            origin[0] + direction[0] * coefficient,
+            origin[1] + direction[1] * coefficient,
+        ]);
+    Ok(vec![start, end])
+}
+
+fn voronoi_cell_point(
+    diagram: &VoronoiDiagram,
+    cell: VoronoiCellIndex,
+    segments: &[VoronoiLine<i32>],
+) -> Result<VoronoiPoint<i32>, GapRegularizationError> {
+    let cell = diagram.cell(cell).map_err(gap_regularization_error)?;
+    let segment = segments.get(cell.source_index().usize()).ok_or_else(|| {
+        GapRegularizationError("Voronoi point references an unknown segment".to_string())
+    })?;
+    Ok(match cell.source_category() {
+        SourceCategory::SegmentStart => segment.start,
+        SourceCategory::Segment | SourceCategory::SegmentEnd => segment.end,
+        SourceCategory::SinglePoint => {
+            return Err(GapRegularizationError(
+                "unexpected standalone point in component Voronoi diagram".to_string(),
+            ));
+        }
+    })
+}
+
+fn voronoi_cell_segment<'a>(
+    diagram: &VoronoiDiagram,
+    cell: VoronoiCellIndex,
+    segments: &'a [VoronoiLine<i32>],
+) -> Result<&'a VoronoiLine<i32>, GapRegularizationError> {
+    let index = diagram
+        .cell(cell)
+        .map_err(gap_regularization_error)?
+        .source_index()
+        .usize();
+    segments.get(index).ok_or_else(|| {
+        GapRegularizationError("Voronoi cell references an unknown segment".to_string())
+    })
 }
 
 fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64) -> bool {
@@ -1039,100 +1459,132 @@ mod tests {
     }
 
     #[test]
-    fn disk_gap_violations_only_report_close_distinct_components() {
+    fn disk_gap_violations_report_close_distinct_components() {
         let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
         let close = ContourSet::rectangle(rect(4.8, 0.0, 10.0, 10.0), tol::REGION_MM);
         let wide = ContourSet::rectangle(rect(5.2, 0.0, 10.0, 10.0), tol::REGION_MM);
 
-        let close_violations = left.union(&close).disk_inter_component_gap_violations(0.5);
-        let wide_violations = left.union(&wide).disk_inter_component_gap_violations(0.5);
+        let close_violations = left.union(&close).disk_gap_violations(0.5);
+        let wide_violations = left.union(&wide).disk_gap_violations(0.5);
 
         assert!(close_violations.area() > 1.5);
         assert!(wide_violations.is_empty());
-        assert!(left.disk_inter_component_gap_violations(0.5).is_empty());
+        assert!(left.disk_gap_violations(0.5).is_empty());
     }
 
     #[test]
-    fn disk_component_separation_discards_smaller_conflicting_islands() {
-        let large = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
-        let small = ContourSet::rectangle(rect(10.8, 4.0, 11.6, 4.8), tol::REGION_MM);
-        let distant = ContourSet::rectangle(rect(14.0, 0.0, 20.0, 10.0), tol::REGION_MM);
-        let region = large.union(&small).union(&distant);
+    fn disk_gap_violations_exclude_isolated_void_corners() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let wide_hole = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), tol::REGION_MM);
+        let region = outer.difference(&wide_hole);
+        let raw_closing_residual = region.disk_close(0.5).difference(&region);
 
-        let (separated, removed) = region.disk_separate_components(0.5);
+        assert!(raw_closing_residual.area() > 0.1);
+        assert!(region.disk_gap_violations(0.5).is_empty());
+    }
 
-        assert_eq!(separated.connected_components().len(), 2);
-        assert_eq!(removed.connected_components().len(), 1);
-        assert!(separated.difference(&region).is_empty());
-        assert!((removed.area() - small.area()).abs() <= 1e-6);
+    #[test]
+    fn disk_gap_regularization_rejects_invalid_scales() {
+        let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+
+        assert!(region.disk_regularize_gaps(0.0, 0.5, 0.025).is_err());
+        assert!(region.disk_regularize_gaps(0.5, f64::NAN, 0.025).is_err());
+        assert!(region.disk_regularize_gaps(0.5, 0.5, -0.025).is_err());
+    }
+
+    #[test]
+    fn disk_gap_regularization_widens_a_gap_thinner_than_the_guard() {
+        let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
+        let right = ContourSet::rectangle(rect(4.01, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let region = left.union(&right);
+
+        let before = region.disk_gap_violations(0.5);
+        let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+
+        assert!(before.area() > 0.05);
+        assert!(before.disk_open(0.025).is_empty());
+        assert!(result.removed.area() > 0.0);
+        assert!(result.kept.disk_gap_violations(0.5).is_empty());
+    }
+
+    #[test]
+    fn disk_gap_regularization_trims_a_close_pair_locally() {
+        let left = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let right = ContourSet::rectangle(rect(10.8, 0.0, 20.8, 10.0), tol::REGION_MM);
+        let distant = ContourSet::rectangle(rect(24.0, 0.0, 30.0, 10.0), tol::REGION_MM);
+        let region = left.union(&right).union(&distant);
+
+        let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+
+        assert_eq!(result.kept.connected_components().len(), 3);
+        assert!(result.kept.difference(&region).is_empty());
         assert!(
-            separated
-                .disk_inter_component_gap_violations(0.5)
-                .is_empty()
+            result.removed.area() < 4.0,
+            "removed {:.9} mm²",
+            result.removed.area()
         );
+        assert!(result.removed.intersection(&distant).area() <= 0.25);
+        assert!(result.kept.disk_gap_violations(0.5).is_empty());
     }
 
     #[test]
-    fn disk_component_separation_maximizes_total_retained_area() {
-        let large = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
-        let right = ContourSet::rectangle(rect(4.8, 0.0, 7.8, 3.0), tol::REGION_MM);
-        let upper = ContourSet::rectangle(rect(0.0, 4.8, 3.0, 7.8), tol::REGION_MM);
-        let region = large.union(&right).union(&upper);
+    fn disk_gap_regularization_is_symmetric_at_a_three_way_conflict() {
+        let lower_left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
+        let lower_right = ContourSet::rectangle(rect(4.8, 0.0, 8.8, 4.0), tol::REGION_MM);
+        let upper = ContourSet::rectangle(rect(2.4, 4.8, 6.4, 8.8), tol::REGION_MM);
+        let region = lower_left.union(&lower_right).union(&upper);
 
-        let (separated, removed) = region.disk_separate_components(0.5);
+        let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
 
-        assert!((separated.area() - right.area() - upper.area()).abs() <= 1e-6);
-        assert!((removed.area() - large.area()).abs() <= 1e-6);
-        assert!(separated.intersection(&large).is_empty());
-        assert!(
-            separated
-                .disk_inter_component_gap_violations(0.5)
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn exact_component_selection_matches_exhaustive_search() {
-        const VERTICES: usize = 5;
-        let cluster = (0..VERTICES).collect::<Vec<_>>();
-        let weights = [1.0, 2.0, 4.0, 8.0, 16.0];
-        let possible_edges = (0..VERTICES)
-            .flat_map(|left| (left + 1..VERTICES).map(move |right| (left, right)))
-            .collect::<Vec<_>>();
-
-        for graph_mask in 0..1_usize << possible_edges.len() {
-            let mut conflicts = vec![Vec::new(); VERTICES];
-            for (edge_index, &(left, right)) in possible_edges.iter().enumerate() {
-                if graph_mask & (1 << edge_index) != 0 {
-                    conflicts[left].push(right);
-                    conflicts[right].push(left);
-                }
-            }
-
-            let selected = maximum_weight_independent_set(&cluster, &conflicts, &weights);
-            let actual_weight = selected.iter().map(|&vertex| weights[vertex]).sum::<f64>();
-            let mut expected_weight: f64 = 0.0;
-            for selection_mask in 0..1_usize << VERTICES {
-                let independent = possible_edges.iter().all(|&(left, right)| {
-                    selection_mask & (1 << left) == 0
-                        || selection_mask & (1 << right) == 0
-                        || conflicts[left].binary_search(&right).is_err()
-                });
-                if independent {
-                    let weight = (0..VERTICES)
-                        .filter(|&vertex| selection_mask & (1 << vertex) != 0)
-                        .map(|vertex| weights[vertex])
-                        .sum::<f64>();
-                    expected_weight = expected_weight.max(weight);
-                }
-            }
-            assert_eq!(actual_weight, expected_weight, "graph mask {graph_mask}");
+        assert_eq!(result.kept.connected_components().len(), 3);
+        for source in [&lower_left, &lower_right, &upper] {
+            assert!(result.kept.intersection(source).area() > 13.0);
         }
+        let violations = result.kept.disk_gap_violations(0.5);
+        assert!(
+            violations.is_empty(),
+            "remaining void-gap violation area {:.9} mm²",
+            violations.area(),
+        );
+    }
 
-        assert_eq!(
-            maximum_weight_independent_set(&[0, 1], &[vec![1], vec![0]], &[1.0, 1.0]),
-            vec![0],
-            "equal-weight optima should prefer the stable component order"
+    #[test]
+    fn disk_gap_regularization_widens_a_same_component_hairpin() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let narrow_notch = ContourSet::rectangle(rect(4.6, 3.0, 5.4, 10.0), tol::REGION_MM);
+        let hairpin = outer.difference(&narrow_notch);
+
+        let before = hairpin.disk_gap_violations(0.5);
+        let result = hairpin.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+        let after = result.kept.disk_gap_violations(0.5);
+
+        assert_eq!(hairpin.connected_components().len(), 1);
+        assert!(before.area() > 1.0);
+        assert!(result.removed.area() > 1.0);
+        assert!(
+            after.is_empty(),
+            "remaining hairpin gap {:.9} mm²",
+            after.area()
+        );
+    }
+
+    #[test]
+    fn disk_gap_regularization_widens_a_narrow_internal_void() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let narrow_hole = ContourSet::rectangle(rect(4.6, 3.0, 5.4, 7.0), tol::REGION_MM);
+        let region = outer.difference(&narrow_hole);
+
+        let before = region.disk_gap_violations(0.5);
+        let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+        let after = result.kept.disk_gap_violations(0.5);
+
+        assert!(before.area() > 3.0);
+        assert!(result.removed.area() > 1.0);
+        assert!(result.kept.contains_point(Point::new(2.0, 5.0)));
+        assert!(
+            after.is_empty(),
+            "remaining internal-void gap {:.9} mm²",
+            after.area(),
         );
     }
 
