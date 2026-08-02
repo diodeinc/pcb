@@ -903,7 +903,8 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
 
     assert!(!round_trip.is_empty());
     assert!(
-        (round_trip.area() - balance.solution.generated_area_mm2).abs() <= 0.10,
+        (round_trip.area() - balance.solution.generated_area_mm2).abs()
+            <= balance.solution.generated_area_mm2 * 5e-4,
         "IPC area {}, source area {}",
         round_trip.area(),
         balance.solution.generated_area_mm2

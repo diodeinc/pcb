@@ -753,9 +753,9 @@ fn project_perforated_geometry(
     while high_radius - low_radius > RADIUS_SOLVE_TOLERANCE_MM
         && best.error_mm2 > AREA_SOLVE_TOLERANCE_MM2
     {
-        // Interior hex area is approximately linear in r² after flattening.
-        // Interpolate there, with a midpoint fallback that keeps convergence
-        // bracketed when clipped edge area dominates.
+        // Interior hex area is linear in r². Interpolate there, with a
+        // midpoint fallback that keeps convergence bracketed when clipped
+        // edge area dominates.
         let low_squared = low_radius.powi(2);
         let high_squared = high_radius.powi(2);
         let fraction = (target_void_area_mm2 - low_area) / (high_area - low_area);
@@ -885,9 +885,8 @@ impl LatticeCandidates {
         self.full_centers.is_empty() && self.edge_candidates.is_empty()
     }
 
-    fn full_void_area(&self, radius: f64, tolerance: f64) -> f64 {
-        let template = hexagon_set_with_radii(&[(Point::ZERO, radius)], tolerance);
-        self.full_centers.len() as f64 * template.area()
+    fn full_void_area(&self, radius: f64) -> f64 {
+        self.full_centers.len() as f64 * ROUNDED_HEXAGON_AREA_FACTOR * radius.powi(2)
     }
 
     fn partial_voids(
@@ -910,8 +909,7 @@ impl LatticeCandidates {
         radius: f64,
         profile: DenseCopperBalanceProfile,
     ) -> f64 {
-        self.full_void_area(radius, voidable.tolerance)
-            + self.partial_voids(voidable, radius, profile).area()
+        self.full_void_area(radius) + self.partial_voids(voidable, radius, profile).area()
     }
 }
 
@@ -1350,6 +1348,62 @@ mod tests {
         .unwrap();
 
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn spatial_solver_preserves_minimum_radius_area() {
+        let profile = DenseCopperBalanceProfile::V1;
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(24.0, 16.0)),
+            tol::REGION_MM,
+        );
+        let voidable = panel.disk_erode(profile.boundary_web_mm);
+        let lattice = LatticeCandidates::new(&voidable, Point::ZERO, profile);
+        let target_density = (panel.area()
+            - lattice.void_area(&voidable, profile.min_void_radius_mm, profile))
+            / panel.area();
+        let existing = ContourSet::empty(tol::REGION_MM);
+        let layer = SpatialCopperBalanceLayerRequest {
+            existing_copper: &existing,
+            existing_copper_area_mm2: 0.0,
+            target_density,
+            stack_weight_mm2: 0.0,
+        };
+        let baseline = generate_dense_copper_balance(
+            profile,
+            DenseCopperBalanceRequest {
+                safe_region: &panel,
+                retained_area_mm2: panel.area(),
+                existing_copper_area_mm2: 0.0,
+                target_density,
+                lattice_origin: Point::ZERO,
+            },
+        )
+        .unwrap();
+        let result = generate_spatial_dense_copper_balance(
+            profile,
+            SpatialCopperBalanceRequest {
+                panel_region: &panel,
+                safe_region: &panel,
+                retained_area_mm2: panel.area(),
+                lattice_origin: Point::ZERO,
+                layers: &[layer],
+            },
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+
+        assert_eq!(
+            baseline.solution.mode,
+            DenseCopperBalanceMode::Perforated {
+                void_radius_mm: profile.min_void_radius_mm
+            }
+        );
+        assert!(
+            (result.solution.generated_area_mm2 - baseline.solution.generated_area_mm2).abs()
+                <= AREA_SOLVE_TOLERANCE_MM2
+        );
     }
 
     #[test]
