@@ -141,15 +141,15 @@ pub struct ClearanceCertificate {
 }
 
 impl ClearanceCertificate {
-    /// Whether all required subset, clearance, rolling-disk, and pairwise-gap
-    /// violations are below the supplied area tolerance.
+    /// Whether the two-sided gap set is empty and every other violation is
+    /// below the supplied area tolerance.
     pub fn passes(&self, area_tolerance_mm2: f64) -> bool {
         area_tolerance_mm2.is_finite()
             && area_tolerance_mm2 >= 0.0
+            && self.gap_violations.is_empty()
             && [
                 &self.safe_outside_clearance_region,
                 &self.regularization_violations,
-                &self.gap_violations,
                 &self.outside_panel,
                 &self.obstacle_overlap,
             ]
@@ -325,9 +325,7 @@ pub fn board_array_balancing_region(
     let regularization_violations = safe_region
         .difference(&safe_region.disk_open(options.regularization_radius_mm))
         .disk_open(options.numerical_guard_mm);
-    let gap_violations = safe_region
-        .disk_gap_violations(options.gap_radius_mm)
-        .disk_open(options.numerical_guard_mm);
+    let gap_violations = safe_region.disk_gap_violations(options.gap_radius_mm);
     let certificate = ClearanceCertificate {
         safe_outside_clearance_region: safe_region.difference(&clearance_safe_region),
         regularization_violations,
@@ -569,6 +567,21 @@ mod tests {
                 .intersection(&result.intermediates.obstacle_keep_out)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn certificate_never_tolerates_a_nonempty_gap_violation() {
+        let empty = ContourSet::empty(tol::REGION_MM);
+        let certificate = ClearanceCertificate {
+            swept_safe_region: empty.clone(),
+            safe_outside_clearance_region: empty.clone(),
+            regularization_violations: empty.clone(),
+            gap_violations: ContourSet::rectangle(bbox(0.0, 0.0, 0.01, 0.01), tol::REGION_MM),
+            outside_panel: empty.clone(),
+            obstacle_overlap: empty,
+        };
+
+        assert!(!certificate.passes(1.0));
     }
 
     #[test]

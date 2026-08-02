@@ -454,18 +454,21 @@ impl ContourSet {
     /// ```text
     /// N₀     = G_(gap_radius + guard)(self)
     /// S₀     = open(self \ (Γ_N₀ ⊕ disk(gap_radius + guard)), disk(filled_radius))
-    /// Vₖ     = open(G_gap_radius(Sₖ), disk(guard))
-    /// Sₖ₊₁   = open(Sₖ \ (Vₖ ⊕ disk(gap_radius + guard)), disk(filled_radius))
+    /// Rₖ     = G_gap_radius(Sₖ)
+    /// Vₖ     = open(Rₖ, disk(guard))
+    /// Wₖ     = Vₖ if Vₖ is nonempty, otherwise Rₖ
+    /// Sₖ₊₁   = open(Sₖ \ (Wₖ ⊕ disk(gap_radius + guard)), disk(filled_radius))
     /// ```
     ///
     /// `G_r(X)` is the two-sided part of `close(X, disk(r)) \ X`, and `Γ_N₀` is
     /// the source-boundary medial axis inside the initial narrow void
-    /// phase. It gives the least local first cut. Any residual `Vₖ` is swept
-    /// directly, so boolean-generated boundaries never require another Voronoi
-    /// diagram. Iteration stops when `Vₖ` is empty. The sequence is monotone
-    /// decreasing: every pass only trims the source. This covers distinct
-    /// components, hairpins, notches, and internal voids without treating
-    /// one-sided edge clearance as a gap.
+    /// phase. It gives the least local first cut. Meaningful residuals are
+    /// denoised before sweeping; a residual too thin for that filter is swept
+    /// raw rather than mistaken for a passing certificate. Boolean-generated
+    /// boundaries never require another Voronoi diagram. Iteration stops only
+    /// when `Rₖ` is empty. The sequence is monotone decreasing: every pass only
+    /// trims the source. This covers distinct components, hairpins, notches,
+    /// and internal voids without treating one-sided edge clearance as a gap.
     pub fn disk_regularize_gaps(
         &self,
         gap_radius: f64,
@@ -513,14 +516,19 @@ impl ContourSet {
             .intersection(self);
         let mut narrow_voids = initial_narrow_voids;
         let mut separator_keep_out = initial_keep_out;
-        let certificate_guard = guard.max(self.tolerance);
+        let denoise_radius = guard.max(self.tolerance);
         loop {
             let pass_narrow_voids = kept.disk_gap_violations(gap_radius);
-            let violations = pass_narrow_voids.disk_open(certificate_guard);
-            if violations.is_empty() {
+            if pass_narrow_voids.is_empty() {
                 break;
             }
-            let pass_separator_keep_out = violations.disk_dilate(tube_radius);
+            let denoised = pass_narrow_voids.disk_open(denoise_radius);
+            let sweep = if denoised.is_empty() {
+                &pass_narrow_voids
+            } else {
+                &denoised
+            };
+            let pass_separator_keep_out = sweep.disk_dilate(tube_radius);
             let next = kept
                 .difference(&pass_separator_keep_out)
                 .disk_open(filled_radius)
@@ -531,7 +539,7 @@ impl ContourSet {
             if kept.difference(&next).area() <= self.tolerance * self.tolerance {
                 return Err(GapRegularizationError(format!(
                     "gap regularization stalled with {:.9} mm² of void-gap violations",
-                    violations.area()
+                    pass_narrow_voids.area()
                 )));
             }
             kept = next;
@@ -771,6 +779,7 @@ struct OrientedBoundarySegment {
     topology: BoundarySegment,
     start: Point,
     end: Point,
+    bbox: BBox,
 }
 
 fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> ContourSet {
@@ -792,20 +801,22 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
                     },
                     start,
                     end,
+                    bbox: segment_bbox(start, end),
                 })
             })
         })
         .collect::<Vec<_>>();
     let contact_tolerance = source.tolerance.max(residual.tolerance);
 
-    residual
+    let rings = residual
         .connected_components()
         .into_iter()
         .filter(|component| {
             let contacts = source_segments
                 .iter()
                 .filter(|segment| {
-                    segment_bbox(segment.start, segment.end)
+                    segment
+                        .bbox
                         .expand(contact_tolerance)
                         .intersects(component.bbox)
                         && region_boundary_within_distance(
@@ -826,9 +837,9 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
                 })
             })
         })
-        .fold(ContourSet::empty(residual.tolerance), |gaps, component| {
-            gaps.union(&component)
-        })
+        .flat_map(|component| component.rings)
+        .collect();
+    ContourSet::new(rings, FillRule::NonZero, residual.tolerance)
 }
 
 fn region_boundary_within_distance(
@@ -1482,6 +1493,21 @@ mod tests {
     }
 
     #[test]
+    fn disk_gap_regularization_widens_a_gap_thinner_than_the_guard() {
+        let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
+        let right = ContourSet::rectangle(rect(4.01, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let region = left.union(&right);
+
+        let before = region.disk_gap_violations(0.5);
+        let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+
+        assert!(before.area() > 0.05);
+        assert!(before.disk_open(0.025).is_empty());
+        assert!(result.removed.area() > 0.0);
+        assert!(result.kept.disk_gap_violations(0.5).is_empty());
+    }
+
+    #[test]
     fn disk_gap_regularization_trims_a_close_pair_locally() {
         let left = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let right = ContourSet::rectangle(rect(10.8, 0.0, 20.8, 10.0), tol::REGION_MM);
@@ -1498,12 +1524,7 @@ mod tests {
             result.removed.area()
         );
         assert!(result.removed.intersection(&distant).area() <= 0.25);
-        let violations = result.kept.disk_gap_violations(0.5);
-        assert!(
-            violations.disk_open(0.025).area() <= 1e-4,
-            "remaining void-gap violation area {:.9} mm²",
-            violations.area()
-        );
+        assert!(result.kept.disk_gap_violations(0.5).is_empty());
     }
 
     #[test]
@@ -1520,12 +1541,10 @@ mod tests {
             assert!(result.kept.intersection(source).area() > 13.0);
         }
         let violations = result.kept.disk_gap_violations(0.5);
-        let denoised = violations.disk_open(0.025);
         assert!(
-            denoised.area() <= 1e-4,
-            "remaining void-gap violation area {:.9} mm²; denoised {:.9}",
+            violations.is_empty(),
+            "remaining void-gap violation area {:.9} mm²",
             violations.area(),
-            denoised.area(),
         );
     }
 
@@ -1543,9 +1562,9 @@ mod tests {
         assert!(before.area() > 1.0);
         assert!(result.removed.area() > 1.0);
         assert!(
-            after.disk_open(0.025).area() <= 1e-4,
-            "remaining hairpin-gap violation area {:.9} mm²",
-            after.area(),
+            after.is_empty(),
+            "remaining hairpin gap {:.9} mm²",
+            after.area()
         );
     }
 
@@ -1563,8 +1582,8 @@ mod tests {
         assert!(result.removed.area() > 1.0);
         assert!(result.kept.contains_point(Point::new(2.0, 5.0)));
         assert!(
-            after.disk_open(0.025).area() <= 1e-4,
-            "remaining internal-void violation area {:.9} mm²",
+            after.is_empty(),
+            "remaining internal-void gap {:.9} mm²",
             after.area(),
         );
     }

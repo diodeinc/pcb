@@ -51,16 +51,20 @@ N₀   = G_(v + e)(A)
 Γ₀   = source-boundary generalized Voronoi axis inside N₀
 S₀   = open(A \ (Γ₀ ⊕ disk(v + e)), disk(q))
 
-Vₖ   = open(G_v(Sₖ), disk(e))
-Sₖ₊₁ = open(Sₖ \ (Vₖ ⊕ disk(v + e)), disk(q))
+Rₖ   = G_v(Sₖ)
+Vₖ   = open(Rₖ, disk(e))
+Wₖ   = Vₖ if Vₖ is nonempty, otherwise Rₖ
+Sₖ₊₁ = open(Sₖ \ (Wₖ ⊕ disk(v + e)), disk(q))
 ```
 
 The Voronoi axis gives the least local first cut and treats competing sides
-symmetrically. Any meaningful certificate residual is swept directly, avoiding
-repeated Voronoi construction over Boolean-generated boundaries. Each pass only
-removes material, and the filled-region opening after every trim prevents new
-copper slivers. Iteration ends when `Vₖ` is empty or reports an error if a pass
-cannot make meaningful geometric progress.
+symmetrically. Meaningful residuals are denoised before sweeping. A residual too
+thin for that filter is swept raw rather than treated as safe. This avoids
+repeated Voronoi construction over Boolean-generated boundaries without letting
+an extremely tight real gap evade the proof. Each pass only removes material,
+and the filled-region opening after every trim prevents new copper slivers.
+Iteration ends when `Rₖ` is empty or reports an error if a pass cannot make
+meaningful geometric progress.
 
 The independent nominal certificate is:
 
@@ -69,7 +73,7 @@ C = safe ⊕ disk(r)
 
 safe \ F = ∅
 safe \ open(safe, disk(q)) = ∅, after numerical denoising
-G_v(safe) = ∅, after numerical denoising
+G_v(safe) = ∅
 C \ P = ∅
 C ∩ O = ∅
 ```
