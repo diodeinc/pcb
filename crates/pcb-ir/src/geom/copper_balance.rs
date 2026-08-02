@@ -469,11 +469,6 @@ pub fn generate_spatial_dense_copper_balance(
 fn validate_spatial_request(
     request: SpatialCopperBalanceRequest<'_>,
 ) -> Result<(), DenseCopperBalanceError> {
-    if request.layers.is_empty() {
-        return Err(DenseCopperBalanceError::InvalidInput(
-            "spatial copper balance requires at least one layer".to_string(),
-        ));
-    }
     if !request.panel_region.bbox.is_valid() || request.panel_region.is_empty() {
         return Err(DenseCopperBalanceError::InvalidInput(
             "panel region must be non-empty and have valid bounds".to_string(),
@@ -1334,6 +1329,27 @@ mod tests {
                 .any(|void| (void.bbox.max.y - voidable.bbox.max.y).abs() <= 2.0 * tol::FLATTEN_MM),
         ];
         assert!(touches_each_boundary.into_iter().all(|touches| touches));
+    }
+
+    #[test]
+    fn spatial_solver_accepts_no_layers() {
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(24.0, 16.0)),
+            tol::REGION_MM,
+        );
+        let result = generate_spatial_dense_copper_balance(
+            DenseCopperBalanceProfile::V1,
+            SpatialCopperBalanceRequest {
+                panel_region: &panel,
+                safe_region: &panel,
+                retained_area_mm2: panel.area(),
+                lattice_origin: Point::ZERO,
+                layers: &[],
+            },
+        )
+        .unwrap();
+
+        assert!(result.is_empty());
     }
 
     #[test]

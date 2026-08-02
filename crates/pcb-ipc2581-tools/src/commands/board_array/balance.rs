@@ -245,6 +245,11 @@ pub fn generate_automatic_board_array_copper_balance(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let existing_copper_union = prepared.iter().fold(
+        ContourSet::empty(common_safe_region.tolerance),
+        |existing, layer| existing.union(&layer.existing_copper),
+    );
+    let common_safe_region = common_safe_region.difference(&existing_copper_union);
     let spatial_layers = prepared
         .iter()
         .map(|layer| SpatialCopperBalanceLayerRequest {
