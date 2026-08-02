@@ -241,6 +241,12 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
     assert!(bottom.features.is_empty());
 
     for layer in &balance.layers {
+        assert!(
+            layer
+                .safe_region
+                .intersection(&layer.existing_copper)
+                .is_empty()
+        );
         let expected_target = layer
             .existing_copper
             .intersection(&balance.board_footprints)
@@ -278,6 +284,17 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
     let xml = creation.xml;
     assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
     assert!(xml.matches("<Contour>").count() > 0);
+}
+
+#[test]
+fn board_array_creation_accepts_no_source_copper_layers() {
+    let input = board_fixture_mm().replace(
+        r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
+        r#"<Layer name="TOP" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>"#,
+    );
+    let creation = create_auto_board_array(&input, None).unwrap();
+
+    assert!(creation.copper_balance.layers.is_empty());
 }
 
 #[test]
@@ -886,7 +903,8 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
 
     assert!(!round_trip.is_empty());
     assert!(
-        (round_trip.area() - balance.solution.generated_area_mm2).abs() <= 0.10,
+        (round_trip.area() - balance.solution.generated_area_mm2).abs()
+            <= balance.solution.generated_area_mm2 * 5e-4,
         "IPC area {}, source area {}",
         round_trip.area(),
         balance.solution.generated_area_mm2

@@ -20,6 +20,10 @@ alias provides the same commands.
 
 Run `pcb ipc2581 <command> --help` for arguments and output options.
 
+The mathematical and geometric strategy for automatically balancing board
+arrays is documented in
+[`docs/board-array-copper-balancing.md`](docs/board-array-copper-balancing.md).
+
 `edit bom` modifies the input file when `--output` is omitted. Specify an output
 path when the source document must remain unchanged.
 

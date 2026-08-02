@@ -4,6 +4,9 @@ Status: reusable `pcb-ir` computation plus a development harness. Board-array
 creation consumes the result before it emits balancing copper. The harness does
 not define a user-facing CLI contract.
 
+The balancing objective and generated copper geometry are documented in
+[`../docs/board-array-copper-balancing.md`](../docs/board-array-copper-balancing.md).
+
 ## Geometry contract
 
 All geometry is a filled planar point set in panel coordinates, in millimeters:
