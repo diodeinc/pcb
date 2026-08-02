@@ -296,6 +296,16 @@ impl<Symbol: Copy + PartialEq> BoardArrayBalancingCollection<Symbol> {
                 region.union(&source.region_for_layer(layer))
             })
     }
+
+    /// Whether two copper layers select the same canonical support-obstacle
+    /// buckets. The remaining balancing input is common to every layer, so an
+    /// equal scope produces the same safe region without comparing geometry.
+    pub fn has_same_support_scope(&self, left: Symbol, right: Symbol) -> bool {
+        self.support_layers
+            .iter()
+            .flat_map(|source| &source.obstacles)
+            .all(|obstacle| obstacle.reach.includes(&left) == obstacle.reach.includes(&right))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -986,15 +996,21 @@ mod tests {
             },
             [rectangle_contour(1.0, 1.0, 2.0, 2.0)],
         );
-        support.features.push(Feature {
-            paths: Span::single(path),
-            ..Feature::new(FeatureKind::Primitive, Polarity::Dark)
-        });
+        let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
+        feature.paths = Span::single(path);
+        feature.intent.span = FeatureSpan::Layer(100);
+        support.features.push(feature);
+
+        let copper_layers = [
+            BoardArrayCopperLayer::new(100, Side::Top),
+            BoardArrayCopperLayer::new(200, Side::Inner),
+            BoardArrayCopperLayer::new(300, Side::Inner),
+        ];
 
         let collection = collect_board_array_balancing_input(
             &layout,
             &profile,
-            &[BoardArrayCopperLayer::new(100, Side::Top)],
+            &copper_layers,
             [BoardArraySupportDocument::new(
                 &support,
                 BoardArraySupportLayerPolicy::AllPaintedFeatures,
@@ -1009,6 +1025,9 @@ mod tests {
         assert!((collection.board_footprints.area() - 12.0).abs() <= 1e-6);
         assert!((collection.material_removal.area() - 1.0).abs() <= 1e-6);
         assert!((collection.support_features_for_layer(100).area() - 1.0).abs() <= 1e-6);
+        assert!(collection.support_features_for_layer(200).is_empty());
+        assert!(!collection.has_same_support_scope(100, 200));
+        assert!(collection.has_same_support_scope(200, 300));
     }
 
     #[test]

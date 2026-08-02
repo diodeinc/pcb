@@ -31,7 +31,7 @@ use pcb_ir::geom::{Affine2, ContourBuf, ContourSet, FillRule, PathOp, Point, tol
 use serde::Serialize;
 
 use crate::geometry;
-use crate::ipc2581::Ipc2581;
+use crate::ipc2581::{Ipc2581, Symbol};
 
 const CERTIFICATE_AREA_TOLERANCE_MM2: f64 = 1e-4;
 
@@ -209,29 +209,28 @@ pub fn generate_automatic_board_array_copper_balance(
     let board_area_mm2 = board_footprints.area();
     let lattice_origin = panel_outer.bbox.min;
     let stack_weights = physical_copper_stack_weights(ipc);
-    let prepared = ecad
-        .cad_data
-        .layers
-        .iter()
-        .filter(|layer| crate::layers::is_copper(layer.layer_function))
-        .map(|layer| {
-            let layer_name = ipc.resolve(layer.name).to_string();
-            let existing_copper =
-                composed_copper_image(ipc, &layer_name)?.intersection(&panel_outer);
-            let board_target_density = (existing_copper.intersection(&board_footprints).area()
-                / board_area_mm2)
-                .clamp(0.0, 1.0);
-            let stack_weight_mm2 = stack_weights
-                .as_ref()
-                .and_then(|weights| weights.get(&layer_name).copied());
+    let mut prepared: Vec<PreparedLayerBalance> = Vec::with_capacity(copper_layers.len());
+    for layer in &copper_layers {
+        let layer_name = ipc.resolve(layer.name).to_string();
+        let existing_copper = composed_copper_image(ipc, &layer_name)?.intersection(&panel_outer);
+        let board_target_density = (existing_copper.intersection(&board_footprints).area()
+            / board_area_mm2)
+            .clamp(0.0, 1.0);
+        let stack_weight_mm2 = stack_weights
+            .as_ref()
+            .and_then(|weights| weights.get(&layer_name).copied());
+        let safe_region = if let Some(representative) = prepared
+            .iter()
+            .find(|candidate| collection.has_same_support_scope(candidate.layer, layer.name))
+        {
+            representative.safe_region.clone()
+        } else {
             let balancing_input = collection.input_for_layer(layer.name);
             let balancing_region =
-                board_array_balancing_region(&balancing_input, BalancingRegionOptions::default())
-                    .with_context(|| {
-                        format!(
-                            "failed to compute board-array balancing region for layer '{layer_name}'"
-                        )
-                    })?;
+                board_array_balancing_region(&balancing_input, BalancingRegionOptions::default());
+            let balancing_region = balancing_region.context(format!(
+                "failed to compute balancing region for layer '{layer_name}'"
+            ))?;
             if !balancing_region
                 .certificate
                 .passes(CERTIFICATE_AREA_TOLERANCE_MM2)
@@ -240,16 +239,16 @@ pub fn generate_automatic_board_array_copper_balance(
                     "computed board-array balancing region for layer '{layer_name}' failed clearance certification"
                 );
             }
-            let safe_region = balancing_region.safe_region;
-            Ok(PreparedLayerBalance {
-                layer_name,
-                board_target_density,
-                stack_weight_mm2,
-                existing_copper,
-                safe_region,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+            balancing_region.safe_region
+        };
+        prepared.push(PreparedLayerBalance {
+            layer: layer.name,
+            board_target_density,
+            stack_weight_mm2,
+            existing_copper,
+            safe_region,
+        });
+    }
     let spatial_layers = prepared
         .iter()
         .map(|layer| SpatialCopperBalanceLayerRequest {
@@ -281,7 +280,7 @@ pub fn generate_automatic_board_array_copper_balance(
                 }
             };
             Ok(AutomaticBoardArrayLayerBalance {
-                layer_name: layer.layer_name,
+                layer_name: ipc.resolve(layer.layer).to_string(),
                 board_target_density: layer.board_target_density,
                 stack_weight_mm2: layer.stack_weight_mm2,
                 existing_copper: layer.existing_copper,
@@ -300,7 +299,7 @@ pub fn generate_automatic_board_array_copper_balance(
 }
 
 struct PreparedLayerBalance {
-    layer_name: String,
+    layer: Symbol,
     board_target_density: f64,
     stack_weight_mm2: Option<f64>,
     existing_copper: ContourSet,
