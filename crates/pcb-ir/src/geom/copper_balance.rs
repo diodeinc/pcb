@@ -470,10 +470,12 @@ pub fn generate_spatial_dense_copper_balance(
                             DenseCopperBalanceMode::Solid => {
                                 available_density[layer_index][site_index]
                             }
-                            DenseCopperBalanceMode::Perforated { .. } => {
+                            DenseCopperBalanceMode::Perforated { void_radius_mm } => {
+                                // A non-local evaluation site has no variable;
+                                // use the layer's uniform projected background.
                                 let radius_squared = local_site_for_global[layer_index][site_index]
                                     .map(|local_index| squared_radii[layer_index][local_index])
-                                    .unwrap_or(0.0);
+                                    .unwrap_or(void_radius_mm.powi(2));
                                 available_density[layer_index][site_index]
                                     * (1.0 - void_fraction_per_radius_squared * radius_squared)
                                         .clamp(0.0, 1.0)
