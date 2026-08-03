@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.18] - 2026-08-03
+
 ### Changed
 
 - PCB search and new-board defaults now use the DiodeHub Registry identity.
@@ -1432,7 +1434,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.17...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.18...HEAD
+[0.4.18]: https://github.com/diodeinc/pcb/compare/v0.4.17...v0.4.18
 [0.4.17]: https://github.com/diodeinc/pcb/compare/v0.4.16...v0.4.17
 [0.4.16]: https://github.com/diodeinc/pcb/compare/v0.4.15...v0.4.16
 [0.4.15]: https://github.com/diodeinc/pcb/compare/v0.4.14...v0.4.15
