@@ -40,7 +40,12 @@ fn run_from_args() -> Option<Result<()>> {
         )));
     }
     if first == "--install" {
-        Some(install_protocol_handler())
+        let result = install_protocol_handler();
+        #[cfg(target_os = "windows")]
+        if let Err(error) = &result {
+            report_launch_error(error);
+        }
+        Some(result)
     } else {
         Some(launch_pcb(first.to_string_lossy().as_ref()))
     }
@@ -619,8 +624,14 @@ mod macos {
     }
 
     pub fn run() {
+        let mtm = MainThreadMarker::new().expect("pcb-launcher must run on the main thread");
+        let application = NSApplication::sharedApplication(mtm);
+        application.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);
+        let delegate = LauncherDelegate::new(mtm);
+        application.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+
         // LaunchServices may start the app bundle without delivering an open-URL
-        // event, so bound the lifetime of this background-only helper.
+        // event, so bound the lifetime after the application is ready to receive it.
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_secs(10));
             if !RECEIVED_URL.load(Ordering::Acquire) {
@@ -628,11 +639,6 @@ mod macos {
             }
         });
 
-        let mtm = MainThreadMarker::new().expect("pcb-launcher must run on the main thread");
-        let application = NSApplication::sharedApplication(mtm);
-        application.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);
-        let delegate = LauncherDelegate::new(mtm);
-        application.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         application.run();
     }
 }
