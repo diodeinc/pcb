@@ -54,8 +54,6 @@ const KICAD_VCUT_LABEL_GLYPHS: [&str; 5] = [
     "G]LFLWMYNZP[T[VZWYXWXF",
     "JZLFXF RR[RF",
 ];
-const TOP_COPPER_LAYER_BASE_NAME: &str = "F.Cu";
-const TOP_SOLDERMASK_LAYER_BASE_NAME: &str = "F.Mask";
 const TOOLING_HOLE_LAYER_BASE_NAME: &str = "Board_Array_Drill";
 const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
 const FIDUCIAL_COPPER_DIAMETER_MM: f64 = 1.0;
@@ -750,18 +748,17 @@ fn build_board_array_spec(
             array_width_mm: array_width,
             array_height_mm: array_height,
         },
-    );
+    )?;
     add_board_cell_fiducials(
         &mut generated_geometry,
         ipc,
         ecad,
-        &mut used_layer_names,
         BoardCellFiducialSpec {
             board_width_mm: board_width,
             board_height_mm: board_height,
             board_margin,
         },
-    );
+    )?;
     let board_outline_layer_names = board_outline_layer_names(ipc, ecad);
     let content_step_refs = content_step_refs(ipc, &array_name, &board_cell_name, &board_name);
     let content_layer_refs =
@@ -1002,42 +999,6 @@ fn board_outline_layer_names(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Vec<
         .collect()
 }
 
-fn ensure_top_copper_layer_name(
-    generated_geometry: &mut BoardArrayGeneratedGeometry,
-    ipc: &Ipc2581,
-    ecad: &ipc2581::types::Ecad,
-    used_layer_names: &mut HashSet<String>,
-) -> String {
-    top_copper_layer_name(ipc, ecad).unwrap_or_else(|| {
-        let layer_name = reserve_unique_name(used_layer_names, TOP_COPPER_LAYER_BASE_NAME);
-        generated_geometry.add_layer(GeneratedLayer::new(
-            layer_name.clone(),
-            LayerFunction::Signal,
-            Some(Side::Top),
-            Some(Polarity::Positive),
-        ));
-        layer_name
-    })
-}
-
-fn ensure_top_soldermask_layer_name(
-    generated_geometry: &mut BoardArrayGeneratedGeometry,
-    ipc: &Ipc2581,
-    ecad: &ipc2581::types::Ecad,
-    used_layer_names: &mut HashSet<String>,
-) -> String {
-    top_soldermask_layer_name(ipc, ecad).unwrap_or_else(|| {
-        let layer_name = reserve_unique_name(used_layer_names, TOP_SOLDERMASK_LAYER_BASE_NAME);
-        generated_geometry.add_layer(GeneratedLayer::new(
-            layer_name.clone(),
-            LayerFunction::Soldermask,
-            Some(Side::Top),
-            Some(Polarity::Positive),
-        ));
-        layer_name
-    })
-}
-
 fn ensure_tooling_hole_layer_name(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
     used_layer_names: &mut HashSet<String>,
@@ -1057,26 +1018,6 @@ fn ensure_tooling_hole_layer_name(
         Some(Polarity::Positive),
     ));
     layer_name
-}
-
-fn top_copper_layer_name(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Option<String> {
-    ecad.cad_data
-        .layers
-        .iter()
-        .find(|layer| {
-            layer.side == Some(Side::Top) && crate::layers::is_copper(layer.layer_function)
-        })
-        .map(|layer| ipc.resolve(layer.name).to_string())
-}
-
-fn top_soldermask_layer_name(ipc: &Ipc2581, ecad: &ipc2581::types::Ecad) -> Option<String> {
-    ecad.cad_data
-        .layers
-        .iter()
-        .find(|layer| {
-            layer.side == Some(Side::Top) && layer.layer_function == LayerFunction::Soldermask
-        })
-        .map(|layer| ipc.resolve(layer.name).to_string())
 }
 
 fn reserve_unique_name(used_names: &mut HashSet<String>, base: &str) -> String {

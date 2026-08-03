@@ -4,7 +4,7 @@ use super::balance::{
 use super::*;
 use crate::accessors::IpcAccessor;
 use crate::ipc2581::types::LayerFunction;
-use crate::manufacturing::build_manufacturing_package;
+use crate::manufacturing::{ManufacturingPackage, build_manufacturing_package};
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, BoardArraySupportDocument, BoardArraySupportLayerPolicy, FeatureBucket,
     FeatureDomain, FeatureIntent, FeatureKind, FeatureOperation, FeatureRole, FeatureSpan,
@@ -306,18 +306,8 @@ fn board_array_creation_accepts_no_source_copper_layers() {
 }
 
 #[test]
-fn automatic_balancing_regions_scope_panel_fiducials_to_top_copper() {
-    let input = large_board_fixture_mm()
-        .replace(
-            r#"<LayerRef name="TOP"/>"#,
-            r#"<LayerRef name="TOP"/>
-<LayerRef name="BOTTOM"/>"#,
-        )
-        .replace(
-            r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
-            r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>"#,
-        );
+fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_layers() {
+    let input = large_board_fixture_mm();
     let ipc = Ipc2581::parse(&input).unwrap();
     let (options, validation_mode, panelization) = auto_board_array_options(&ipc, None).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
@@ -336,8 +326,8 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_top_copper() {
         .unwrap();
 
     assert!(
-        bottom.result.usable.area() > top.result.usable.area(),
-        "top-only fiducials and mask openings should reserve only top-copper area: top {:.6} mm², bottom {:.6} mm²",
+        (bottom.result.usable.area() - top.result.usable.area()).abs() <= 1e-6,
+        "two-sided fiducials and mask openings should reserve equal surface-copper area: top {:.6} mm², bottom {:.6} mm²",
         top.result.usable.area(),
         bottom.result.usable.area(),
     );
@@ -982,26 +972,18 @@ fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
 
     let ipc = Ipc2581::parse(&xml).unwrap();
     let step = array_step(&ipc);
-    let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
-    let mask_fiducials = fiducials_on_layer(&ipc, step, "F.Mask");
     let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
     let corner_holes = holes_with_diameter(&tooling_holes, CORNER_TOOLING_HOLE_DIAMETER_MM);
     let rail_holes = holes_with_diameter(&tooling_holes, TOOLING_HOLE_DIAMETER_MM);
 
-    assert_eq!(top_fiducials.len(), 4);
-    assert_eq!(mask_fiducials.len(), 4);
+    assert_two_sided_fiducials(
+        &ipc,
+        step,
+        IpcFiducialKind::Global,
+        &[(29.0, 66.15), (41.0, 66.15), (33.0, 3.85), (37.0, 3.85)],
+    );
     assert_eq!(corner_holes.len(), 4);
     assert_eq!(rail_holes.len(), 4);
-    assert!(
-        top_fiducials
-            .iter()
-            .all(|fiducial| close(fiducial_diameter(fiducial), 1.0))
-    );
-    assert!(
-        mask_fiducials
-            .iter()
-            .all(|fiducial| close(fiducial_diameter(fiducial), 2.0))
-    );
     assert!(
         tooling_holes
             .iter()
@@ -1009,13 +991,67 @@ fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
     );
     assert_corner_holes(&corner_holes, 70.0, 70.0);
     assert_points_close(
-        fiducial_points(&top_fiducials),
-        vec![(29.0, 66.15), (41.0, 66.15), (33.0, 3.85), (37.0, 3.85)],
-    );
-    assert_points_close(
         hole_points(&rail_holes),
         vec![(23.5, 67.5), (46.5, 67.5), (27.5, 2.5), (42.5, 2.5)],
     );
+
+    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    assert_fiducial_gerbers(&package, "Global");
+}
+
+#[test]
+fn board_array_creation_rejects_missing_bottom_soldermask_for_fiducials() {
+    let input = board_fixture_with_mask_bbox_mm(40.0, 30.0).replace(
+        r#"  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
+"#,
+        "",
+    );
+    let error = create_board_array_xml(
+        &input,
+        &BoardArrayCreateOptions {
+            columns: 1,
+            rows: 1,
+            board_margin_mm: board_margin(5.0, 5.0),
+            edge_rail_mm: BoardMarginMm::all(20.0),
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}")
+            .contains("missing bottom solder-mask layer required for two-sided surface features"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn board_array_creation_uses_declared_surface_layers_regardless_of_name() {
+    let input = board_fixture_with_mask_bbox_mm(40.0, 30.0)
+        .replace(r#"name="TOP""#, r#"name="front-signal""#)
+        .replace(r#"name="F.Mask""#, r#"name="front-coating""#)
+        .replace(r#"name="BOTTOM""#, r#"name="rear-signal""#)
+        .replace(r#"name="B.Mask""#, r#"name="rear-coating""#);
+    let xml = create_board_array_xml(
+        &input,
+        &BoardArrayCreateOptions {
+            columns: 1,
+            rows: 1,
+            board_margin_mm: board_margin(5.0, 5.0),
+            edge_rail_mm: BoardMarginMm::all(20.0),
+        },
+    )
+    .unwrap();
+
+    let ipc = Ipc2581::parse(&xml).unwrap();
+    let step = array_step(&ipc);
+    for layer_name in [
+        "front-signal",
+        "front-coating",
+        "rear-signal",
+        "rear-coating",
+    ] {
+        assert_eq!(fiducials_on_layer(&ipc, step, layer_name).len(), 4);
+    }
 }
 
 #[test]
@@ -1159,29 +1195,11 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
 
     let ipc = Ipc2581::parse(&xml).unwrap();
     let cell = board_cell_step(&ipc);
-    let top_fiducials = fiducials_on_layer(&ipc, cell, "TOP");
-    let mask_fiducials = fiducials_on_layer(&ipc, cell, "F.Mask");
-
-    assert_eq!(top_fiducials.len(), 4);
-    assert_eq!(mask_fiducials.len(), 4);
-    assert!(
-        top_fiducials
-            .iter()
-            .all(|fiducial| fiducial.kind == IpcFiducialKind::Local)
-    );
-    assert!(
-        top_fiducials
-            .iter()
-            .all(|fiducial| close(fiducial_diameter(fiducial), 1.0))
-    );
-    assert!(
-        mask_fiducials
-            .iter()
-            .all(|fiducial| close(fiducial_diameter(fiducial), 2.0))
-    );
-    assert_points_close(
-        fiducial_points(&top_fiducials),
-        vec![(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
+    assert_two_sided_fiducials(
+        &ipc,
+        cell,
+        IpcFiducialKind::Local,
+        &[(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
     );
 
     let top = geometry::extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened).unwrap();
@@ -1194,15 +1212,7 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
     );
 
     let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
-    let top = package
-        .files
-        .iter()
-        .find(|file| file.filename == "F_Cu.gtl")
-        .unwrap();
-    assert!(
-        top.contents
-            .contains("%TA.AperFunction,FiducialPad,Local*%")
-    );
+    assert_fiducial_gerbers(&package, "Local");
 }
 
 #[test]
@@ -1645,6 +1655,45 @@ fn fiducials_on_layer<'a>(
         .collect()
 }
 
+fn assert_two_sided_fiducials(
+    ipc: &Ipc2581,
+    step: &ipc2581::types::ecad::Step,
+    kind: IpcFiducialKind,
+    expected_points: &[(f64, f64)],
+) {
+    for (layer_name, diameter_mm) in [
+        ("TOP", FIDUCIAL_COPPER_DIAMETER_MM),
+        ("F.Mask", FIDUCIAL_MASK_OPENING_DIAMETER_MM),
+        ("BOTTOM", FIDUCIAL_COPPER_DIAMETER_MM),
+        ("B.Mask", FIDUCIAL_MASK_OPENING_DIAMETER_MM),
+    ] {
+        let fiducials = fiducials_on_layer(ipc, step, layer_name);
+        assert_eq!(fiducials.len(), expected_points.len());
+        assert!(fiducials.iter().all(|fiducial| fiducial.kind == kind));
+        assert!(
+            fiducials
+                .iter()
+                .all(|fiducial| close(fiducial_diameter(fiducial), diameter_mm))
+        );
+        assert_points_close(fiducial_points(&fiducials), expected_points.to_vec());
+    }
+}
+
+fn assert_fiducial_gerbers(package: &ManufacturingPackage, kind: &str) {
+    let attribute = format!("%TA.AperFunction,FiducialPad,{kind}*%");
+    for filename in ["F_Cu.gtl", "F_Mask.gts", "B_Cu.gbl", "B_Mask.gbs"] {
+        let file = package
+            .files
+            .iter()
+            .find(|file| file.filename == filename)
+            .unwrap();
+        assert!(
+            file.contents.contains(&attribute),
+            "{filename} is missing {kind} fiducial metadata"
+        );
+    }
+}
+
 fn holes_on_layer<'a>(
     ipc: &'a Ipc2581,
     step: &'a ipc2581::types::ecad::Step,
@@ -1810,6 +1859,8 @@ fn board_fixture_with_mask_bbox_mm(width_mm: f64, height_mm: f64) -> String {
 <CadData>
   <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
   <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
   <Step name="board" type="BOARD">
     <Datum x="0" y="0"/>
     <Profile>
@@ -1997,6 +2048,9 @@ fn board_fixture_with_edge_cuts_layer_mm() -> &'static str {
 <CadHeader units="MILLIMETER"/>
 <CadData>
   <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
   <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>
   <Step name="board" type="BOARD">
     <Datum x="0" y="0"/>
@@ -2045,6 +2099,9 @@ fn board_fixture_inch() -> &'static str {
 <CadHeader units="INCH"/>
 <CadData>
   <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
   <Step name="board" type="BOARD">
     <Datum x="0" y="0"/>
     <Profile>
@@ -2074,6 +2131,9 @@ fn large_board_fixture_mm() -> &'static str {
 <CadHeader units="MILLIMETER"/>
 <CadData>
   <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
   <Step name="board" type="BOARD">
     <Datum x="0" y="0"/>
     <Profile>

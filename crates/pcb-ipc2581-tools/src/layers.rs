@@ -4,7 +4,10 @@ use ipc2581::{
     Symbol,
     types::{Ecad, LayerFunction, Side as IpcSide},
 };
-use pcb_ir::dialects::ipc::BoardArrayCopperLayer;
+use pcb_ir::dialects::ipc::{
+    BoardArrayCopperLayer, PhysicalLayer, SurfaceLayerError, TwoSidedSurfaceLayers,
+    resolve_two_sided_surface_layers,
+};
 use pcb_ir::dialects::{LayerRole, Side};
 
 /// True for layer functions that carry copper imagery.
@@ -28,6 +31,19 @@ pub fn copper_layers(ecad: &Ecad) -> Vec<BoardArrayCopperLayer<Symbol>> {
         .filter(|layer| is_copper(layer.layer_function))
         .map(|layer| BoardArrayCopperLayer::new(layer.name, ir_side(layer.side)))
         .collect()
+}
+
+/// Resolve existing outer copper and solder-mask layers for two-sided features.
+pub fn two_sided_surface_layers(
+    ecad: &Ecad,
+) -> Result<TwoSidedSurfaceLayers<Symbol>, SurfaceLayerError> {
+    resolve_two_sided_surface_layers(ecad.cad_data.layers.iter().map(|layer| {
+        PhysicalLayer::new(
+            layer.name,
+            layer_role(layer.layer_function),
+            ir_side(layer.side),
+        )
+    }))
 }
 
 fn ir_side(side: Option<IpcSide>) -> Side {
