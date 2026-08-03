@@ -156,20 +156,33 @@ download_binary() {
       echo "missing shasum or sha256sum" >&2
       exit 1
     fi
-    [ "$actual" = "$expected" ] || { echo "checksum mismatch for $artifact" >&2; return 1; }
+    [ "$actual" = "$expected" ] || { echo "checksum mismatch for $artifact" >&2; return 2; }
     downloaded="true"
     break
   done
   [ -n "$downloaded" ]
 }
 
-download_binary pcb || { echo "could not find pcb release artifact for $target" >&2; exit 1; }
+if download_binary pcb; then
+  :
+else
+  pcb_status="$?"
+  if [ "$pcb_status" -eq 1 ]; then
+    echo "could not find pcb release artifact for $target" >&2
+  fi
+  exit "$pcb_status"
+fi
 
 launcher_downloaded=""
 if download_binary pcb-launcher; then
   launcher_downloaded="true"
 else
-  echo "Warning: pcb-launcher is not available for $tag; skipping Diode URL launcher install" >&2
+  launcher_status="$?"
+  if [ "$launcher_status" -eq 1 ]; then
+    echo "Warning: pcb-launcher is not available for $tag; skipping Diode URL launcher install" >&2
+  else
+    exit "$launcher_status"
+  fi
 fi
 
 mkdir -p "$install_dir"
