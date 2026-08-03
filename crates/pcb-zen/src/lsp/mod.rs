@@ -519,18 +519,20 @@ impl LspEvalContext {
             DiagnosticRelatedInformation, DiagnosticSeverity, Location, Position, Range,
         };
 
-        let to_location = |path: &str, span: &starlark::codemap::ResolvedSpan| Location {
-            uri: Self::diagnostic_target_uri(path).expect("diagnostic path should be a valid URI"),
-            range: Range {
-                start: Position {
-                    line: span.begin.line as u32,
-                    character: span.begin.column as u32,
+        let to_location = |path: &str, span: &starlark::codemap::ResolvedSpan| {
+            Some(Location {
+                uri: Self::diagnostic_target_uri(path)?,
+                range: Range {
+                    start: Position {
+                        line: span.begin.line as u32,
+                        character: span.begin.column as u32,
+                    },
+                    end: Position {
+                        line: span.end.line as u32,
+                        character: span.end.column as u32,
+                    },
                 },
-                end: Position {
-                    line: span.end.line as u32,
-                    character: span.end.column as u32,
-                },
-            },
+            })
         };
 
         // Build relatedInformation from explicit related references and child diagnostics.
@@ -566,19 +568,20 @@ impl LspEvalContext {
 
         let mut current_opt: Option<&pcb_zen_core::Diagnostic> = Some(diag);
         while let Some(current) = current_opt {
-            for reference in &current.related {
-                related.push(DiagnosticRelatedInformation {
-                    location: to_location(&reference.path, &reference.span),
+            related.extend(current.related.iter().filter_map(|reference| {
+                Some(DiagnosticRelatedInformation {
+                    location: to_location(&reference.path, &reference.span)?,
                     message: reference.message.clone(),
-                });
-            }
+                })
+            }));
 
             if let Some(span) = &current.span
                 && !current.path.is_empty()
                 && !std::ptr::eq(current, diag)
+                && let Some(location) = to_location(&current.path, span)
             {
                 related.push(DiagnosticRelatedInformation {
-                    location: to_location(&current.path, span),
+                    location,
                     message: current.body.clone(),
                 });
             }
@@ -1518,10 +1521,14 @@ mod tests {
     use super::{LspContext, LspEvalContext, LspUrl};
     use lsp_server::Request;
     use lsp_server::RequestId;
+    use pcb_zen_core::DiagnosticReference;
     use serde_json::json;
+    use starlark::analysis::EvalSeverity;
+    use starlark::codemap::ResolvedSpan;
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
+    use std::path::Path;
 
     #[test]
     fn closing_document_removes_netlist_subscription_and_symbol_watches() {
@@ -1924,5 +1931,23 @@ pcb-version = "0.4"
         let url = LspEvalContext::diagnostic_target_uri("starlark:stdlib/foo.zen")
             .expect("URL should resolve");
         assert_eq!(url.scheme().map(|scheme| scheme.as_str()), Some("starlark"));
+    }
+
+    #[test]
+    fn diagnostic_conversion_skips_invalid_related_uri() {
+        let diagnostic = pcb_zen_core::Diagnostic::new(
+            "primary diagnostic",
+            EvalSeverity::Error,
+            Path::new("main.zen"),
+        )
+        .with_related(DiagnosticReference {
+            path: String::new(),
+            span: ResolvedSpan::default(),
+            message: "invalid related location".to_owned(),
+        });
+
+        let lsp_diagnostic = LspEvalContext::default().diagnostic_to_lsp(&diagnostic);
+
+        assert!(lsp_diagnostic.related_information.is_none());
     }
 }
