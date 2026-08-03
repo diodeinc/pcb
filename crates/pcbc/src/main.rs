@@ -161,6 +161,7 @@ enum Commands {
     Search(pcb_diode_api::SearchArgs),
 
     /// Auto-route a PCB (DeepPCB cloud or local FreeRouting)
+    #[command(hide = true)]
     Route(route::RouteArgs),
 
     /// Run SPICE simulations
