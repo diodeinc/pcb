@@ -292,12 +292,12 @@ mod tests {
     #[test]
     fn test_parse_load_spec_package_uri() {
         let spec = LoadSpec::parse(
-            "package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen",
+            "package://code.diode.computer/diode/registry/reference/TPS54331/TPS54331.zen",
         );
         assert_eq!(
             spec,
             Some(LoadSpec::PackageUri {
-                uri: "package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen"
+                uri: "package://code.diode.computer/diode/registry/reference/TPS54331/TPS54331.zen"
                     .to_string(),
             })
         );
@@ -384,7 +384,7 @@ mod tests {
             },
             LoadSpec::local_path("./relative/file.zen"),
             LoadSpec::PackageUri {
-                uri: "package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen"
+                uri: "package://code.diode.computer/diode/registry/reference/TPS54331/TPS54331.zen"
                     .to_string(),
             },
         ];

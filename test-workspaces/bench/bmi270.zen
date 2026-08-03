@@ -9,7 +9,7 @@ load(
     "name_contains",
 )
 
-BMI270 = Module("github.com/diodeinc/registry/reference/BMI270x/BMI270x.zen")
+BMI270 = Module("code.diode.computer/diode/registry/reference/BMI270x/BMI270x.zen")
 
 
 def print_info(module: Module, inputs):

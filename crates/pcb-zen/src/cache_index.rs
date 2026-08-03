@@ -439,53 +439,63 @@ mod tests {
         let conn = index.conn();
         conn.execute(
             "INSERT INTO remote_packages VALUES (?1, ?2, ?3)",
-            params!["github.com/diodeinc/registry", "components/LED", "0.1.0"],
+            params![
+                "code.diode.computer/diode/registry",
+                "components/LED",
+                "0.1.0"
+            ],
         )?;
         conn.execute(
             "INSERT INTO remote_packages VALUES (?1, ?2, ?3)",
             params![
-                "github.com/diodeinc/registry",
+                "code.diode.computer/diode/registry",
                 "components/JST/BM04B",
                 "0.2.0"
             ],
         )?;
         conn.execute(
             "INSERT INTO remote_packages VALUES (?1, ?2, ?3)",
-            params!["github.com/diodeinc/registry", "components/JST", "0.3.0"],
+            params![
+                "code.diode.computer/diode/registry",
+                "components/JST",
+                "0.3.0"
+            ],
         )?;
         drop(conn);
 
         let dep = index
-            .find_remote_package("github.com/diodeinc/registry/components/LED/LED.zen")?
+            .find_remote_package("code.diode.computer/diode/registry/components/LED/LED.zen")?
             .unwrap();
         assert_eq!(
             dep.module_path,
-            "github.com/diodeinc/registry/components/LED"
+            "code.diode.computer/diode/registry/components/LED"
         );
         assert_eq!(dep.version, "0.1.0");
 
         let dep = index
-            .find_remote_package("github.com/diodeinc/registry/components/JST/BM04B/x.zen")?
+            .find_remote_package("code.diode.computer/diode/registry/components/JST/BM04B/x.zen")?
             .unwrap();
         assert_eq!(
             dep.module_path,
-            "github.com/diodeinc/registry/components/JST/BM04B"
+            "code.diode.computer/diode/registry/components/JST/BM04B"
         );
         assert_eq!(dep.version, "0.2.0");
 
         let dep = index
-            .find_remote_package("github.com/diodeinc/registry/components/JST/OTHER/x.zen")?
+            .find_remote_package("code.diode.computer/diode/registry/components/JST/OTHER/x.zen")?
             .unwrap();
         assert_eq!(
             dep.module_path,
-            "github.com/diodeinc/registry/components/JST"
+            "code.diode.computer/diode/registry/components/JST"
         );
         assert_eq!(dep.version, "0.3.0");
 
         // Verify cache miss without triggering remote discovery/network.
         assert!(
             index
-                .find_remote_package_cached("github.com/diodeinc/registry/modules/foo/bar.zen")
+                .find_remote_package_cached(
+                    "code.diode.computer/diode/registry/modules/foo/bar.zen",
+                )
                 .is_none()
         );
 
