@@ -139,6 +139,7 @@ impl TestContext {
             .env("NO_PROXY", "127.0.0.1,localhost")
             .env("no_proxy", "127.0.0.1,localhost")
             .env("PATH", &self.path)
+            .env_remove("DIODE_API_AUTH")
             .env_remove("RUST_LOG");
     }
 }
@@ -208,15 +209,20 @@ fn assert_clean_success(output: &Output) {
     assert!(output.stderr.is_empty());
 }
 
-fn mock_exchange<'a>(server: &'a MockServer, status: u16) -> Mock<'a> {
+fn mock_exchange<'a>(server: &'a MockServer, status: u16, authorization: Option<&str>) -> Mock<'a> {
     server.mock(move |when, then| {
-        when.method(POST)
+        let when = when
+            .method(POST)
             .path("/api/git/credentials")
-            .header("authorization", format!("Bearer {USER_ACCESS_TOKEN}"))
             .json_body(json!({
                 "host": GIT_HOST,
                 "path": REPOSITORY_PATH,
             }));
+        if let Some(authorization) = authorization {
+            when.header("authorization", authorization);
+        } else {
+            when.header_missing("authorization");
+        }
         if status == 200 {
             then.status(200).json_body(json!({
                 "provider": "diodehub",
@@ -344,7 +350,7 @@ fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
 #[test]
 fn modern_git_fill_caches_the_bearer_credential_until_rejected() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200);
+    let exchange = mock_exchange(&server, 200, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
 
@@ -390,9 +396,38 @@ fn modern_git_fill_caches_the_bearer_credential_until_rejected() {
 }
 
 #[test]
+fn ambient_api_auth_without_auth_file_returns_bearer_credential_to_git() {
+    let server = MockServer::start();
+    let exchange = mock_exchange(&server, 200, None);
+    let context = TestContext::new(server.base_url());
+    fs::remove_dir_all(context.config_dir.join("auth")).expect("remove PCB auth directory");
+    assert!(!context.config_dir.join("auth").exists());
+    assert_clean_success(&context.run_config_command("configure"));
+
+    let fill = run_with_input(
+        {
+            let mut command = context.git_credential("fill");
+            command.env("DIODE_API_AUTH", "none");
+            command
+        },
+        &credential_request(),
+    );
+    assert_success(&fill);
+    assert!(fill.stderr.is_empty());
+
+    let credential = String::from_utf8(fill.stdout).unwrap();
+    assert!(credential.contains("authtype=Bearer"));
+    assert!(credential.contains(&format!("credential={REPOSITORY_TOKEN}")));
+    assert!(credential.contains(&format!(
+        "password_expiry_utc={REPOSITORY_TOKEN_EXPIRES_AT}"
+    )));
+    exchange.assert_calls(1);
+}
+
+#[test]
 fn modern_git_ignores_an_expired_cached_bearer_credential() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200);
+    let exchange = mock_exchange(&server, 200, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
     let expired_credential = format!(
@@ -422,7 +457,7 @@ fn modern_git_ignores_an_expired_cached_bearer_credential() {
 #[test]
 fn auth_logout_stops_the_git_credential_cache() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200);
+    let exchange = mock_exchange(&server, 200, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
 
@@ -447,7 +482,7 @@ fn auth_logout_stops_the_git_credential_cache() {
 #[test]
 fn modern_git_honors_quit_when_the_exchange_fails() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 403);
+    let exchange = mock_exchange(&server, 403, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
 

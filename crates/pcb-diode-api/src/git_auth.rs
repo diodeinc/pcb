@@ -135,9 +135,6 @@ fn exchange_credential(
     host: &str,
     path: &str,
 ) -> Result<MintedGitCredential> {
-    let api_token = ctx
-        .token()
-        .context("Failed to get a valid Diode API token")?;
     let url = format!("{}/api/git/credentials", ctx.api_base_url());
     let client = Client::builder()
         .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
@@ -145,10 +142,11 @@ fn exchange_credential(
         .build()
         .context("Failed to create Git credential HTTP client")?;
 
-    let response = client
+    let request = client
         .post(url)
-        .bearer_auth(api_token)
-        .json(&GitCredentialExchangeRequest { host, path })
+        .json(&GitCredentialExchangeRequest { host, path });
+
+    let response = crate::auth::apply_api_auth_with_context(ctx, request)?
         .send()
         .context("Failed to exchange Diode authentication for a Git credential")?;
 
