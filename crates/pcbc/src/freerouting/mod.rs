@@ -870,7 +870,11 @@ fn try_download_to_file(url: &str, part_path: &Path) -> Result<(), DownloadError
     match response.content_length() {
         Some(total) if total > 0 => {
             let bar = pcb_ui::ProgressBar::builder(total)
-                .message("Downloading FreeRouting JAR")
+                .message(format!("Downloading FreeRouting ({FREEROUTING_VERSION})"))
+                // indicatif's {bytes}/{total_bytes} auto-format human-
+                // readable sizes (e.g. "2.3 MiB") instead of the default
+                // template's raw {pos}/{len} byte counts.
+                .template("{msg}  |{bar:40.green/gray}| {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta})")
                 .start();
             let mut buf = [0u8; 65536];
             loop {
