@@ -338,11 +338,21 @@ pub struct WorkspaceConfig {
     pub exclude: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BomConfig {
     /// Require exact MPN matching when fetching availability from the BOM service.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default = "default_true")]
     pub strict: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for BomConfig {
+    fn default() -> Self {
+        Self { strict: true }
+    }
 }
 
 impl BomConfig {
@@ -854,6 +864,35 @@ strict = true
         let workspace = config.workspace.unwrap();
 
         assert!(workspace.bom.strict);
+    }
+
+    #[test]
+    fn test_workspace_bom_strict_defaults_to_true() {
+        let content = r#"
+[workspace]
+pcb-version = "0.4"
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        let workspace = config.workspace.unwrap();
+
+        assert!(workspace.bom.strict);
+    }
+
+    #[test]
+    fn test_parse_workspace_bom_strict_disabled() {
+        let content = r#"
+[workspace]
+pcb-version = "0.4"
+
+[workspace.bom]
+strict = false
+"#;
+
+        let config = PcbToml::parse(content).unwrap();
+        let workspace = config.workspace.unwrap();
+
+        assert!(!workspace.bom.strict);
     }
 
     #[test]
