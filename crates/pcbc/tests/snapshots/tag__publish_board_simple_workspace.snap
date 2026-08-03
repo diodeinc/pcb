@@ -1,6 +1,5 @@
 ---
 source: crates/pcbc/tests/tag.rs
-assertion_line: 97
 expression: sb.snapshot_dir(&staging_dir)
 ---
 === diagnostics.json
@@ -20,6 +19,9 @@ expression: sb.snapshot_dir(&staging_dir)
   },
   "release": {
     "board_name": "TB0001",
+    "bom": {
+      "strict": true
+    },
     "created_at": "<TIMESTAMP>",
     "git_version": "v0.1.0",
     "layout_path": "boards/Test/build/TB0001",

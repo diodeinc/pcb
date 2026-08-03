@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Strict (exact MPN) BOM matching is now the default for availability queries; opt out with `[workspace.bom] strict = false`.
+
 ## [0.4.19] - 2026-08-03
 
 ### Changed

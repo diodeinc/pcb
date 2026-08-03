@@ -19,6 +19,9 @@ expression: sb.snapshot_dir(&staging_dir)
   },
   "release": {
     "board_name": "TB0002",
+    "bom": {
+      "strict": true
+    },
     "created_at": "<TIMESTAMP>",
     "git_version": "<GIT_HASH>",
     "schema_version": "1",
