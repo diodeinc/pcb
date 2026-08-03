@@ -1937,6 +1937,7 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
     let installed_launcher = install_dir.join(executable_name("pcb-launcher"));
     let client = http_client(ARCHIVE_TIMEOUT)?;
     let mut download = None;
+    let mut launcher_is_current = false;
     for target in download_target_triples().iter().copied() {
         let binary_name = binary_artifact_name_for("pcb-launcher", target);
         let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
@@ -1953,7 +1954,8 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
             && installed_launcher.is_file()
             && sha256_file(&installed_launcher)? == expected_sha256
         {
-            return Ok(());
+            launcher_is_current = true;
+            break;
         }
 
         if let Some(bytes) = download_optional_artifact(&client, &binary_url)? {
@@ -1969,90 +1971,93 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
             break;
         }
     }
-    let Some(bytes) = download else {
+    if !launcher_is_current && download.is_none() {
         anyhow::bail!(
             "no pcb launcher binary found for {} on {}",
             latest.tag,
             target_triple()
         );
-    };
+    }
 
-    let temporary_launcher = install_dir.join(format!(".pcb-launcher-{}.tmp", std::process::id()));
-    let install_result: Result<()> = (|| {
-        fs::write(&temporary_launcher, bytes).with_context(|| {
-            format!(
-                "failed to stage pcb launcher at {}",
-                temporary_launcher.display()
-            )
-        })?;
-        copy_executable_permissions(&temporary_launcher, &temporary_launcher)?;
+    if let Some(bytes) = download {
+        let temporary_launcher =
+            install_dir.join(format!(".pcb-launcher-{}.tmp", std::process::id()));
+        let install_result: Result<()> = (|| {
+            fs::write(&temporary_launcher, bytes).with_context(|| {
+                format!(
+                    "failed to stage pcb launcher at {}",
+                    temporary_launcher.display()
+                )
+            })?;
+            copy_executable_permissions(&temporary_launcher, &temporary_launcher)?;
 
-        #[cfg(windows)]
-        {
-            let backup_launcher =
-                install_dir.join(format!(".pcb-launcher-{}.old", std::process::id()));
-            if backup_launcher.exists() {
-                fs::remove_file(&backup_launcher).with_context(|| {
-                    format!(
-                        "failed to remove stale pcb launcher backup {}",
-                        backup_launcher.display()
-                    )
-                })?;
-            }
-            let had_installed_launcher = installed_launcher.exists();
-            if had_installed_launcher {
-                fs::rename(&installed_launcher, &backup_launcher).with_context(|| {
-                    format!(
-                        "failed to back up existing pcb launcher {}",
-                        installed_launcher.display()
-                    )
-                })?;
-            }
-            if let Err(install_error) = fs::rename(&temporary_launcher, &installed_launcher) {
+            #[cfg(windows)]
+            {
+                let backup_launcher =
+                    install_dir.join(format!(".pcb-launcher-{}.old", std::process::id()));
+                if backup_launcher.exists() {
+                    fs::remove_file(&backup_launcher).with_context(|| {
+                        format!(
+                            "failed to remove stale pcb launcher backup {}",
+                            backup_launcher.display()
+                        )
+                    })?;
+                }
+                let had_installed_launcher = installed_launcher.exists();
                 if had_installed_launcher {
-                    fs::rename(&backup_launcher, &installed_launcher).with_context(|| {
+                    fs::rename(&installed_launcher, &backup_launcher).with_context(|| {
+                        format!(
+                            "failed to back up existing pcb launcher {}",
+                            installed_launcher.display()
+                        )
+                    })?;
+                }
+                if let Err(install_error) = fs::rename(&temporary_launcher, &installed_launcher) {
+                    if had_installed_launcher {
+                        fs::rename(&backup_launcher, &installed_launcher).with_context(|| {
                         format!(
                             "failed to restore pcb launcher {} after update failed: {install_error}",
                             installed_launcher.display()
                         )
                     })?;
+                    }
+                    return Err(install_error).with_context(|| {
+                        format!(
+                            "failed to install pcb launcher at {}",
+                            installed_launcher.display()
+                        )
+                    });
                 }
-                return Err(install_error).with_context(|| {
-                    format!(
-                        "failed to install pcb launcher at {}",
-                        installed_launcher.display()
-                    )
-                });
-            }
-            if had_installed_launcher {
-                if let Err(error) = fs::remove_file(&backup_launcher) {
-                    eprintln!(
-                        "Warning: failed to remove pcb launcher backup {}: {error}",
-                        backup_launcher.display()
-                    );
+                if had_installed_launcher {
+                    if let Err(error) = fs::remove_file(&backup_launcher) {
+                        eprintln!(
+                            "Warning: failed to remove pcb launcher backup {}: {error}",
+                            backup_launcher.display()
+                        );
+                    }
                 }
             }
-        }
-        #[cfg(not(windows))]
-        fs::rename(&temporary_launcher, &installed_launcher).with_context(|| {
-            format!(
-                "failed to install pcb launcher at {}",
-                installed_launcher.display()
-            )
-        })?;
+            #[cfg(not(windows))]
+            fs::rename(&temporary_launcher, &installed_launcher).with_context(|| {
+                format!(
+                    "failed to install pcb launcher at {}",
+                    installed_launcher.display()
+                )
+            })?;
 
-        Ok(())
-    })();
-    if let Err(error) = install_result {
-        if let Err(cleanup_error) = fs::remove_file(&temporary_launcher)
-            && cleanup_error.kind() != std::io::ErrorKind::NotFound
-        {
-            eprintln!(
-                "Warning: failed to remove staged pcb launcher {}: {cleanup_error}",
-                temporary_launcher.display()
-            );
+            Ok(())
+        })();
+        if let Err(error) = install_result {
+            if let Err(cleanup_error) = fs::remove_file(&temporary_launcher)
+                && cleanup_error.kind() != std::io::ErrorKind::NotFound
+            {
+                eprintln!(
+                    "Warning: failed to remove staged pcb launcher {}: {cleanup_error}",
+                    temporary_launcher.display()
+                );
+            }
+            return Err(error);
         }
-        return Err(error);
     }
 
     let status = Command::new(&installed_launcher)
