@@ -207,7 +207,7 @@ impl LspEvalContext {
         Url::from_file_path(path)
             .ok()
             .or_else(|| Url::parse(path).ok())
-            .and_then(|url| url.as_str().parse().ok())
+            .and_then(|url| server::url_to_uri(&url))
     }
 
     pub fn set_eager(mut self, eager: bool) -> Self {
@@ -1931,6 +1931,15 @@ pcb-version = "0.4"
         let url = LspEvalContext::diagnostic_target_uri("starlark:stdlib/foo.zen")
             .expect("URL should resolve");
         assert_eq!(url.scheme().map(|scheme| scheme.as_str()), Some("starlark"));
+    }
+
+    #[test]
+    fn diagnostic_target_uri_encodes_bracketed_paths() {
+        let path = std::env::temp_dir().join("board[rev2].zen");
+        let uri = LspEvalContext::diagnostic_target_uri(&path.to_string_lossy())
+            .expect("path should resolve");
+
+        assert!(uri.as_str().contains("board%5Brev2%5D.zen"));
     }
 
     #[test]
