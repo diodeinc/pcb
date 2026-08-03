@@ -17,7 +17,6 @@ const DIODEHUB_CREDENTIAL_HELPER: &str = "!pcb auth git";
 const DIODEHUB_CREDENTIAL_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
 const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
     "credential.https://code.diode.computer.useHttpPath";
-const DIODEHUB_HOST: &str = "code.diode.computer";
 const GIT_CONFIG_NOT_FOUND: i32 = 5;
 
 #[derive(Debug, Clone)]
@@ -634,12 +633,7 @@ pub fn push_branch_force(repo_root: &Path, branch: &str, remote: &str) -> anyhow
 /// Clone a repository with HTTPS, falling back to SSH
 pub fn clone_with_fallback(repo_url: &str, dest: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest.parent().unwrap_or(dest))?;
-    let https_url = format!("https://{}.git", repo_url);
-    match clone(&https_url, dest, false) {
-        Ok(()) => Ok(()),
-        Err(error) if is_diodehub_repo(repo_url) => Err(error),
-        Err(_) => clone(&format_ssh_url(repo_url), dest, true),
-    }
+    with_remote_fallback(repo_url, |url, prompt| clone(url, dest, prompt)).map(|_| ())
 }
 
 /// Create or reset a branch to point at a specific ref
@@ -780,10 +774,18 @@ pub fn format_ssh_url(module_path: &str) -> String {
     }
 }
 
-fn is_diodehub_repo(repo_url: &str) -> bool {
-    repo_url
-        .split_once('/')
-        .is_some_and(|(host, _)| host == DIODEHUB_HOST)
+fn with_remote_fallback<T>(
+    repo_url: &str,
+    mut operation: impl FnMut(&str, bool) -> anyhow::Result<T>,
+) -> anyhow::Result<(T, String)> {
+    let https_url = format!("https://{}.git", repo_url);
+    match operation(&https_url, false) {
+        Ok(value) => Ok((value, https_url)),
+        Err(_) => {
+            let ssh_url = format_ssh_url(repo_url);
+            operation(&ssh_url, true).map(|value| (value, ssh_url))
+        }
+    }
 }
 
 pub fn parse_remote_url(url: &str) -> anyhow::Result<String> {
@@ -808,32 +810,21 @@ pub fn ls_remote_with_fallback(
     refspec: &str,
 ) -> anyhow::Result<(String, String)> {
     let (repo_url, _) = split_repo_and_subpath(module_path);
-    let https_url = format!("https://{}.git", repo_url);
-    if let Some(commit) = ls_remote(&https_url, refspec, false)? {
-        return Ok((commit, https_url));
-    }
-
-    if !is_diodehub_repo(repo_url) {
-        let ssh_url = format_ssh_url(repo_url);
-        if let Some(commit) = ls_remote(&ssh_url, refspec, true)? {
-            return Ok((commit, ssh_url));
-        }
-    }
-
-    anyhow::bail!("Failed to ls-remote {} for {}", refspec, module_path)
+    with_remote_fallback(repo_url, |url, interactive| {
+        ls_remote(url, refspec, interactive)
+    })
+    .with_context(|| format!("Failed to ls-remote {} for {}", refspec, module_path))
 }
 
-fn ls_remote(url: &str, refspec: &str, interactive: bool) -> anyhow::Result<Option<String>> {
+fn ls_remote(url: &str, refspec: &str, interactive: bool) -> anyhow::Result<String> {
     let mut cmd = git_global_network_with_prompt(interactive)?;
-    let out = cmd.args(["ls-remote", url, refspec]).output()?;
-    if !out.status.success() {
-        return Ok(None);
-    }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
+    cmd.args(["ls-remote", url, refspec]);
+    let out = run_stdout(cmd)?;
+    out.lines()
         .next()
         .and_then(|line| line.split_whitespace().next())
-        .map(str::to_string))
+        .map(str::to_string)
+        .with_context(|| format!("No matching ref {refspec} at {url}"))
 }
 
 pub fn resolve_branch_head(module_path: &str, branch: &str) -> anyhow::Result<String> {
@@ -997,6 +988,36 @@ mod tests {
         assert_eq!(
             format_ssh_url("gitlab.com/group/project"),
             "git@gitlab.com:group/project.git"
+        );
+    }
+
+    #[test]
+    fn remote_fallback_uses_ssh_after_https_failure() {
+        let mut attempts = Vec::new();
+        let (value, url) =
+            with_remote_fallback("code.diode.computer/diode/registry", |url, interactive| {
+                attempts.push((url.to_string(), interactive));
+                if url.starts_with("https://") {
+                    anyhow::bail!("HTTPS unavailable");
+                }
+                Ok("fetched")
+            })
+            .unwrap();
+
+        assert_eq!(value, "fetched");
+        assert_eq!(url, "git@code.diode.computer:diode/registry.git");
+        assert_eq!(
+            attempts,
+            [
+                (
+                    "https://code.diode.computer/diode/registry.git".to_string(),
+                    false
+                ),
+                (
+                    "git@code.diode.computer:diode/registry.git".to_string(),
+                    true
+                ),
+            ]
         );
     }
 
