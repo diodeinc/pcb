@@ -10,9 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Board-array balancing now uses independent 1 mm filled-region and void-gap regularization, trimming narrow gaps locally instead of discarding whole regions.
-- Board-array copper balancing now varies rounded-hex void sizes to reduce local density and through-stack imbalance while preserving each layer's total copper target.
-- Board-array balancing now derives and certifies safe regions independently for each copper layer.
+- Board-array balancing now certifies per-layer regions and reduces density and stack imbalance with variable voids.
 
 ## [0.4.17] - 2026-07-31
 
@@ -29,11 +27,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Board-array creation now automatically adds best-effort copper balancing that matches each layer's placed-board copper density.
-- Board-array balancing now uses a finer 1.35 mm rounded-hex lattice with 0.2 mm minimum copper webs and exposes compact per-layer balance reports.
-- Board-array copper balancing now fills every feasible edge lattice site with a clipped rounded-hex void while preserving a 0.2 mm boundary web and minimum void width.
 - IPC-2581 fabrication views and panels now omit non-manufacturing data.
-- Board-array balancing regions now enforce 2 mm minimum copper and gap widths with disk morphology, removing sharp corners, slivers, and narrow void corridors.
 - Split the Nix flake's `pcb` shim and `pcbc` compiler into independent package outputs.
 
 ### Fixed
