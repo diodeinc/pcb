@@ -189,19 +189,15 @@ fn resolve_freerouting_jar() -> Option<PathBuf> {
 
     for url in &urls {
         eprintln!("[route test] Downloading FreeRouting JAR from {url} ...");
-        if let Ok(status) = Command::new("curl")
-            .args(["-fsSL", "-o"])
-            .arg(&cached)
-            .arg(url)
-            .status()
-        {
-            if status.success()
-                && cached.exists()
-                && cached.metadata().map(|m| m.len() > 0).unwrap_or(false)
-            {
-                eprintln!("[route test] Downloaded to {}", cached.display());
-                return Some(cached);
-            }
+        let downloaded = reqwest::blocking::get(*url)
+            .and_then(|resp| resp.error_for_status())
+            .and_then(|resp| resp.bytes())
+            .ok()
+            .filter(|bytes| !bytes.is_empty())
+            .and_then(|bytes| std::fs::write(&cached, &bytes).ok());
+        if downloaded.is_some() {
+            eprintln!("[route test] Downloaded to {}", cached.display());
+            return Some(cached);
         }
     }
 
@@ -232,16 +228,14 @@ fn java_compatible() -> bool {
     major >= 21
 }
 
-/// Poll `url` with `curl` until it returns HTTP 200 or `deadline` elapses.
+/// Poll `url` until it returns HTTP 200 or `deadline` elapses.
 fn wait_for_http_ok(url: &str, deadline: Duration) -> bool {
     let start = Instant::now();
     while start.elapsed() < deadline {
-        let code = Command::new("curl")
-            .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", url])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string());
-        if code.as_deref() == Some("200") {
+        let ok = reqwest::blocking::get(url)
+            .map(|resp| resp.status().is_success())
+            .unwrap_or(false);
+        if ok {
             return true;
         }
         std::thread::sleep(Duration::from_millis(100));
