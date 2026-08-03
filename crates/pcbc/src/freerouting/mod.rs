@@ -60,6 +60,12 @@ const FREEROUTING_VERSION: &str = "2.2.4";
 const FREEROUTING_JAR_SHA256: &str =
     "f5ed374182900ccc78e473518bbb9f6b869f4a07159495f663a76f52bb10523b";
 
+/// Max routing passes we tell FreeRouting to run (via `update_settings`).
+/// Shared with `poll_job` so the spinner can show `pass N/{MAX}` as a rough
+/// completion signal — FreeRouting can still finish earlier via its own
+/// `improvement_threshold`, so this is approximate, not exact.
+const FREEROUTING_MAX_PASSES: u32 = 200;
+
 fn freerouting_jar_filename() -> String {
     format!("freerouting-{FREEROUTING_VERSION}.jar")
 }
@@ -515,7 +521,7 @@ fn run_freerouting(
     // aligned --fr-timeout (e.g. 90s truncated to "00:01:00" = 60s), stopping
     // the job early with TIMED_OUT well before the user-requested window
     // ends.
-    api.update_settings(&job_id, 200, &format_hms(timeout_secs.max(1)))?;
+    api.update_settings(&job_id, FREEROUTING_MAX_PASSES, &format_hms(timeout_secs.max(1)))?;
 
     let dsn_bytes = std::fs::read(dsn_path).context("Failed to read DSN file for upload")?;
     let dsn_filename = dsn_path
@@ -622,9 +628,11 @@ fn poll_job(
         // shows visible progress even on boards where FreeRouting sits on
         // one pass for a long time.
         let elapsed = start.elapsed().as_secs();
-        spinner.set_message(match (log::log_enabled!(log::Level::Debug), last_printed_pass) {
-            (true, Some(pass)) => format!("Running FreeRouting... {elapsed}s elapsed, pass {pass}"),
-            _ => format!("Running FreeRouting... {elapsed}s elapsed"),
+        spinner.set_message(match last_printed_pass {
+            Some(pass) => format!(
+                "Running FreeRouting... {elapsed}s elapsed, pass {pass}/{FREEROUTING_MAX_PASSES}"
+            ),
+            None => format!("Running FreeRouting... {elapsed}s elapsed"),
         });
 
         match api.get_job(job_id) {
