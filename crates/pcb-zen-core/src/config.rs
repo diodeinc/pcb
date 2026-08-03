@@ -625,7 +625,7 @@ name = "legacy"
         let err = PcbToml::parse(
             r#"
 [packages]
-registry = "github.com/diodeinc/registry"
+registry = "code.diode.computer/diode/registry"
 "#,
         )
         .expect_err("legacy [packages] should not parse");
@@ -727,7 +727,7 @@ path = "test.zen"
 
 [dependencies]
 "github.com/diodeinc/stdlib" = "0.3.2"
-"github.com/diodeinc/registry/reference/ti/tps54331" = { version = "^1.0.0" }
+"code.diode.computer/diode/registry/reference/ti/tps54331" = { version = "^1.0.0" }
 "github.com/user/custom" = { branch = "main" }
 "github.com/user/local" = { path = "../local" }
 "#;
@@ -750,7 +750,7 @@ path = "test.zen"
         match config
             .dependencies
             .direct
-            .get("github.com/diodeinc/registry/reference/ti/tps54331")
+            .get("code.diode.computer/diode/registry/reference/ti/tps54331")
             .unwrap()
         {
             DependencySpec::Detailed(d) => {
@@ -867,7 +867,7 @@ name = "Test"
 path = "test.zen"
 
 [patch]
-"github.com/diodeinc/registry/components/FOO" = { branch = "feature-branch" }
+"code.diode.computer/diode/registry/components/FOO" = { branch = "feature-branch" }
 "#;
 
         let config = PcbToml::parse(content).unwrap();
@@ -875,7 +875,7 @@ path = "test.zen"
 
         let patch = config
             .patch
-            .get("github.com/diodeinc/registry/components/FOO")
+            .get("code.diode.computer/diode/registry/components/FOO")
             .unwrap();
         assert_eq!(patch.branch.as_deref(), Some("feature-branch"));
         assert_eq!(patch.path, None);
@@ -893,7 +893,7 @@ name = "Test"
 path = "test.zen"
 
 [patch]
-"github.com/diodeinc/registry/components/BAR" = { rev = "abc123def456" }
+"code.diode.computer/diode/registry/components/BAR" = { rev = "abc123def456" }
 "#;
 
         let config = PcbToml::parse(content).unwrap();
@@ -901,7 +901,7 @@ path = "test.zen"
 
         let patch = config
             .patch
-            .get("github.com/diodeinc/registry/components/BAR")
+            .get("code.diode.computer/diode/registry/components/BAR")
             .unwrap();
         assert_eq!(patch.rev.as_deref(), Some("abc123def456"));
         assert_eq!(patch.path, None);

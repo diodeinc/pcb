@@ -2,8 +2,8 @@
 workspace = "0.3.87"
 
 [dependencies.indirect]
-"github.com/diodeinc/registry/components/BMI270@0.3" = "0.3.2"
-"github.com/diodeinc/registry/components/LM5163QDDARQ1@0.3" = "0.3.2"
-"github.com/diodeinc/registry/components/SRN6045-470M@0.3" = "0.3.2"
-"github.com/diodeinc/registry/reference/BMI270x@0.6" = "0.6.2"
-"github.com/diodeinc/registry/reference/LM5163Q1@0.6" = "0.6.0"
+"code.diode.computer/diode/registry/components/BMI270@0.3" = "0.3.2"
+"code.diode.computer/diode/registry/components/LM5163QDDARQ1@0.3" = "0.3.2"
+"code.diode.computer/diode/registry/components/SRN6045-470M@0.3" = "0.3.2"
+"code.diode.computer/diode/registry/reference/BMI270x@0.6" = "0.6.2"
+"code.diode.computer/diode/registry/reference/LM5163Q1@0.6" = "0.6.0"

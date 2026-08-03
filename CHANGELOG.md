@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Legacy Registry references now normalize to the canonical DiodeHub identity before resolution.
+
 ### Fixed
 
 - Git dependency resolution now falls back to SSH when DiodeHub HTTPS authentication is unavailable.

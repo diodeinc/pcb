@@ -7,7 +7,7 @@ and power decoupling per Texas Instruments datasheet requirements.
 
 load("matchers.zen", "is_capacitor", "is_resistor")
 
-LM5163Q1 = Module("github.com/diodeinc/registry/reference/LM5163Q1/LM5163Q1.zen")
+LM5163Q1 = Module("code.diode.computer/diode/registry/reference/LM5163Q1/LM5163Q1.zen")
 
 
 # Custom matcher for the SRN6045 inductor (since it doesn't have type="inductor")

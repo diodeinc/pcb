@@ -25,19 +25,12 @@ pub fn canonicalize_package_reference(value: &str) -> Cow<'_, str> {
     Cow::Owned(format!("{CANONICAL_REGISTRY_REPOSITORY}{suffix}"))
 }
 
-/// Resolve a package reference literally, then retry its canonical identity.
+/// Canonicalize a package reference before resolving it.
 pub fn resolve_package_reference<'a, T>(
     value: &'a str,
-    mut resolve: impl FnMut(&str) -> Option<T>,
+    resolve: impl FnOnce(&str) -> Option<T>,
 ) -> Option<(Cow<'a, str>, T)> {
-    if let Some(resolved) = resolve(value) {
-        return Some((Cow::Borrowed(value), resolved));
-    }
-
     let canonical = canonicalize_package_reference(value);
-    if canonical.as_ref() == value {
-        return None;
-    }
     resolve(&canonical).map(|resolved| (canonical, resolved))
 }
 
@@ -82,16 +75,10 @@ mod tests {
     }
 
     #[test]
-    fn resolves_literal_before_registry_alias() {
+    fn resolves_legacy_registry_reference_with_canonical_identity() {
         let legacy = "github.com/diodeinc/registry/components/Foo/Foo.zen";
         let canonical = "code.diode.computer/diode/registry/components/Foo/Foo.zen";
 
-        assert_eq!(
-            resolve_package_reference(legacy, |candidate| (candidate == legacy)
-                .then_some("literal"))
-            .map(|(matched, resolved)| (matched.into_owned(), resolved)),
-            Some((legacy.to_string(), "literal"))
-        );
         assert_eq!(
             resolve_package_reference(legacy, |candidate| {
                 (candidate == canonical).then_some("canonical")
@@ -99,10 +86,5 @@ mod tests {
             .map(|(matched, resolved)| (matched.into_owned(), resolved)),
             Some((canonical.to_string(), "canonical"))
         );
-        assert_eq!(
-            resolve_package_reference(canonical, |_| Some("literal")),
-            Some((Cow::Borrowed(canonical), "literal"))
-        );
-        assert_eq!(resolve_package_reference(canonical, |_| None::<()>), None);
     }
 }
