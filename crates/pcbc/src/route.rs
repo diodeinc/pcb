@@ -73,7 +73,11 @@ pub fn execute(args: RouteArgs) -> Result<()> {
                 );
             }
             let (board_path, project_path) = resolve_board(&args.file)?;
-            let board_name = board_path.file_stem().unwrap().to_string_lossy().to_string();
+            let board_name = board_path
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
             crate::freerouting::execute(&args, &board_path, &project_path, &board_name)
         }
     }

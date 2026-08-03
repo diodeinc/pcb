@@ -393,45 +393,44 @@ pcbnew.ExportSpecctraDSN(brd, sys.argv[2])
     let (_child, port) = spawn_freerouting_server(&jar_path);
 
     let base = format!("http://127.0.0.1:{port}");
-    let h_env = "Freerouting-Environment-Host: pcb-test/1.0";
+    let h_env = "pcb-test/1.0";
     // Freerouting requires this to be a well-formed UUID even with
     // authentication disabled — an arbitrary string is rejected with a 500.
-    let h_profile = format!("Freerouting-Profile-ID: {}", uuid::Uuid::new_v4());
+    let profile_id = uuid::Uuid::new_v4().to_string();
 
-    let curl_json = |args: &[&str]| -> serde_json::Value {
-        let output = Command::new("curl").args(args).output().expect("curl failed");
-        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null)
+    let client = reqwest::blocking::Client::new();
+    let call_json = |method: reqwest::Method,
+                     path: &str,
+                     body: Option<&serde_json::Value>|
+     -> serde_json::Value {
+        let mut req = client
+            .request(method, format!("{base}{path}"))
+            .header("Freerouting-Environment-Host", h_env)
+            .header("Freerouting-Profile-ID", &profile_id);
+        if let Some(b) = body {
+            req = req.json(b);
+        }
+        req.send()
+            .ok()
+            .and_then(|resp| resp.json().ok())
+            .unwrap_or(serde_json::Value::Null)
     };
 
-    let session = curl_json(&[
-        "-s",
-        "-X",
-        "POST",
-        &format!("{base}/v1/sessions/create"),
-        "-H",
-        h_env,
-        "-H",
-        &h_profile,
-    ]);
+    let session = call_json(reqwest::Method::POST, "/v1/sessions/create", None);
     let session_id = session["id"]
         .as_str()
         .expect("session response missing id")
         .to_string();
 
-    let job = curl_json(&[
-        "-s",
-        "-X",
-        "POST",
-        &format!("{base}/v1/jobs/enqueue"),
-        "-H",
-        h_env,
-        "-H",
-        &h_profile,
-        "-H",
-        "Content-Type: application/json",
-        "-d",
-        &format!(r#"{{"session_id":"{session_id}","name":"cancel-test","priority":"NORMAL"}}"#),
-    ]);
+    let job = call_json(
+        reqwest::Method::POST,
+        "/v1/jobs/enqueue",
+        Some(&serde_json::json!({
+            "session_id": session_id,
+            "name": "cancel-test",
+            "priority": "NORMAL",
+        })),
+    );
     let job_id = job["id"]
         .as_str()
         .expect("enqueue response missing id")
@@ -442,38 +441,18 @@ pcbnew.ExportSpecctraDSN(brd, sys.argv[2])
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(&dsn_bytes)
     };
-    let input_payload_path = sandbox.default_cwd().join("input_payload.json");
-    std::fs::write(
-        &input_payload_path,
-        serde_json::json!({"filename": "board.dsn", "data": dsn_b64}).to_string(),
-    )
-    .unwrap();
 
-    curl_json(&[
-        "-s",
-        "-X",
-        "POST",
-        &format!("{base}/v1/jobs/{job_id}/input"),
-        "-H",
-        h_env,
-        "-H",
-        &h_profile,
-        "-H",
-        "Content-Type: application/json",
-        "--data",
-        &format!("@{}", input_payload_path.display()),
-    ]);
+    call_json(
+        reqwest::Method::POST,
+        &format!("/v1/jobs/{job_id}/input"),
+        Some(&serde_json::json!({"filename": "board.dsn", "data": dsn_b64})),
+    );
 
-    curl_json(&[
-        "-s",
-        "-X",
-        "PUT",
-        &format!("{base}/v1/jobs/{job_id}/start"),
-        "-H",
-        h_env,
-        "-H",
-        &h_profile,
-    ]);
+    call_json(
+        reqwest::Method::PUT,
+        &format!("/v1/jobs/{job_id}/start"),
+        None,
+    );
 
     // Give the router a brief window to complete at least one pass before
     // cancelling — cancelling with truly zero elapsed progress is a real,
@@ -484,42 +463,30 @@ pcbnew.ExportSpecctraDSN(brd, sys.argv[2])
     // guarantee we caught it mid-route — see the doc comment above.
     std::thread::sleep(Duration::from_millis(300));
 
-    curl_json(&[
-        "-s",
-        "-X",
-        "PUT",
-        &format!("{base}/v1/jobs/{job_id}/cancel"),
-        "-H",
-        h_env,
-        "-H",
-        &h_profile,
-    ]);
+    call_json(
+        reqwest::Method::PUT,
+        &format!("/v1/jobs/{job_id}/cancel"),
+        None,
+    );
 
-    let output_resp = Command::new("curl")
-        .args([
-            "-s",
-            "-w",
-            "\n%{http_code}",
-            &format!("{base}/v1/jobs/{job_id}/output"),
-            "-H",
-            h_env,
-            "-H",
-            &h_profile,
-        ])
-        .output()
-        .expect("curl failed");
+    let output_resp = client
+        .get(format!("{base}/v1/jobs/{job_id}/output"))
+        .header("Freerouting-Environment-Host", h_env)
+        .header("Freerouting-Profile-ID", &profile_id)
+        .send()
+        .expect("output request failed");
 
-    let text = String::from_utf8_lossy(&output_resp.stdout);
-    let (body, code) = text
-        .rsplit_once('\n')
-        .expect("curl -w output missing status code");
+    let code = output_resp.status();
+    let body = output_resp
+        .text()
+        .expect("failed to read output response body");
 
     assert!(
-        code == "200" || code == "202",
+        code == reqwest::StatusCode::OK || code == reqwest::StatusCode::ACCEPTED,
         "expected a successful output response after cancel, got {code}:\n{body}"
     );
     let output_json: serde_json::Value =
-        serde_json::from_str(body).expect("output response was not valid JSON");
+        serde_json::from_str(&body).expect("output response was not valid JSON");
     let data = output_json["data"].as_str().unwrap_or("");
     assert!(
         !data.is_empty(),

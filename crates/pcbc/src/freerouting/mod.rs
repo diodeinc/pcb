@@ -41,17 +41,6 @@ use crate::route::{RouteArgs, format_duration, import_ses};
 mod api;
 use api::{FreeroutingApiClient, JobOutput, JobState};
 
-/// Pinned FreeRouting release version. The URL, cache filename, and download
-/// messaging are all derived from this so a version bump only touches this
-/// constant and the hash below.
-///
-/// Upstream issues freerouting/freerouting#721 and #759 report a
-/// `StackOverflowError` in v2.2.4 from recursion in
-/// `PolylineTrace.combine()`. Local reproduction shows v2.0.1, v2.1.0, and
-/// v2.2.4 all crash identically under a constrained stack, so the bug isn't
-/// specific to 2.2.4 and pinning older buys no verified safety — hence
-/// latest. Fix PRs #723 and #764 are open but unmerged; revisit once one
-/// ships in a release.
 const FREEROUTING_VERSION: &str = "2.2.4";
 
 /// SHA-256 digest of the `freerouting-{FREEROUTING_VERSION}.jar` release
@@ -60,10 +49,6 @@ const FREEROUTING_VERSION: &str = "2.2.4";
 const FREEROUTING_JAR_SHA256: &str =
     "f5ed374182900ccc78e473518bbb9f6b869f4a07159495f663a76f52bb10523b";
 
-/// Max routing passes we tell FreeRouting to run (via `update_settings`).
-/// Shared with `poll_job` so the spinner can show `pass N/{MAX}` as a rough
-/// completion signal — FreeRouting can still finish earlier via its own
-/// `improvement_threshold`, so this is approximate, not exact.
 const FREEROUTING_MAX_PASSES: u32 = 200;
 
 fn freerouting_jar_filename() -> String {
@@ -98,8 +83,6 @@ pub fn execute(
     );
     println!("  JAR: {}", fr_jar.display());
 
-    // All work happens in a private temp directory; the workspace board is
-    // never touched until we have a validated result to publish.
     let work_dir = tempfile::tempdir().context("Failed to create temp working directory")?;
     let work_board = work_dir.path().join(format!("{board_name}.kicad_pcb"));
     std::fs::copy(board_path, &work_board).context("Failed to stage board copy")?;
@@ -108,15 +91,15 @@ pub fn execute(
     // default rules, so DSN export and zone fill need this staged too.
     // Never published back: the original project is left untouched.
     if project_path.exists() {
-        std::fs::copy(project_path, work_dir.path().join(format!("{board_name}.kicad_pro")))
-            .context("Failed to stage project file copy")?;
+        std::fs::copy(
+            project_path,
+            work_dir.path().join(format!("{board_name}.kicad_pro")),
+        )
+        .context("Failed to stage project file copy")?;
     }
     let dsn_path = work_dir.path().join(format!("{board_name}.dsn"));
     let ses_path = work_dir.path().join(format!("{board_name}.ses"));
 
-    // The handler only requests cancellation; `run_freerouting`'s poll loop
-    // owns the job and actually cancels it, so process exit always happens
-    // through normal control flow.
     CANCEL.store(false, Ordering::SeqCst);
     if let Err(e) = ctrlc::set_handler(|| {
         eprintln!("\n  Stopping FreeRouting and fetching the best result so far...");
@@ -529,7 +512,11 @@ fn run_freerouting(
     // aligned --fr-timeout (e.g. 90s truncated to "00:01:00" = 60s), stopping
     // the job early with TIMED_OUT well before the user-requested window
     // ends.
-    api.update_settings(&job_id, FREEROUTING_MAX_PASSES, &format_hms(timeout_secs.max(1)))?;
+    api.update_settings(
+        &job_id,
+        FREEROUTING_MAX_PASSES,
+        &format_hms(timeout_secs.max(1)),
+    )?;
 
     let dsn_bytes = std::fs::read(dsn_path).context("Failed to read DSN file for upload")?;
     let dsn_filename = dsn_path
@@ -812,8 +799,7 @@ fn download_to_file(url: &str, dest: &Path, max_attempts: u32) -> Result<()> {
     for attempt in 1..=max_attempts {
         match try_download_to_file(url, &part_path) {
             Ok(()) => {
-                std::fs::rename(&part_path, dest)
-                    .context("Failed to finalize downloaded file")?;
+                std::fs::rename(&part_path, dest).context("Failed to finalize downloaded file")?;
                 return Ok(());
             }
             Err(DownloadError::Permanent(e)) => return Err(e),

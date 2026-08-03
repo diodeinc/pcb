@@ -143,7 +143,11 @@ impl FreeroutingApiClient {
 
     /// Poll `/v1/system/status` (the one endpoint that needs no headers)
     /// until the server responds or `deadline` elapses.
-    pub fn wait_ready(&self, deadline: Duration, mut still_alive: impl FnMut() -> Result<bool>) -> Result<()> {
+    pub fn wait_ready(
+        &self,
+        deadline: Duration,
+        mut still_alive: impl FnMut() -> Result<bool>,
+    ) -> Result<()> {
         let start = std::time::Instant::now();
         loop {
             if let Ok(resp) = self.client.get(self.url("/v1/system/status")).send()
@@ -218,7 +222,10 @@ impl FreeroutingApiClient {
     pub fn upload_input(&self, job_id: &str, filename: &str, dsn_bytes: &[u8]) -> Result<()> {
         use base64::Engine;
         let resp = self
-            .with_headers(self.client.post(self.url(&format!("/v1/jobs/{job_id}/input"))))
+            .with_headers(
+                self.client
+                    .post(self.url(&format!("/v1/jobs/{job_id}/input"))),
+            )
             .json(&UploadInputRequest {
                 filename,
                 data: base64::engine::general_purpose::STANDARD.encode(dsn_bytes),
@@ -233,7 +240,10 @@ impl FreeroutingApiClient {
 
     pub fn start_job(&self, job_id: &str) -> Result<()> {
         let resp = self
-            .with_headers(self.client.put(self.url(&format!("/v1/jobs/{job_id}/start"))))
+            .with_headers(
+                self.client
+                    .put(self.url(&format!("/v1/jobs/{job_id}/start"))),
+            )
             .send()
             .context("Failed to start FreeRouting job")?;
         if !resp.status().is_success() {
@@ -250,7 +260,8 @@ impl FreeroutingApiClient {
         if !resp.status().is_success() {
             return Err(api_error("Failed to get FreeRouting job status", resp));
         }
-        resp.json().context("Failed to parse FreeRouting job status")
+        resp.json()
+            .context("Failed to parse FreeRouting job status")
     }
 
     /// Fetch the job's output (partial or final SES data), decoded to raw
@@ -259,7 +270,10 @@ impl FreeroutingApiClient {
     /// case, since both mean there's no `.ses` to write.
     pub fn get_output(&self, job_id: &str) -> Result<JobOutput> {
         let resp = self
-            .with_headers(self.client.get(self.url(&format!("/v1/jobs/{job_id}/output"))))
+            .with_headers(
+                self.client
+                    .get(self.url(&format!("/v1/jobs/{job_id}/output"))),
+            )
             .send()
             .context("Failed to get FreeRouting job output")?;
 
@@ -288,7 +302,10 @@ impl FreeroutingApiClient {
         //     "The job is in state 'CANCELLED' and has no valid output."
         match resp.json::<ApiErrorBody>() {
             Ok(body) if is_no_output_error(&body.error) => Ok(JobOutput::NothingToRoute),
-            Ok(body) => anyhow::bail!("Failed to get FreeRouting job output ({status}): {}", body.error),
+            Ok(body) => anyhow::bail!(
+                "Failed to get FreeRouting job output ({status}): {}",
+                body.error
+            ),
             Err(_) => anyhow::bail!("Failed to get FreeRouting job output: {status}"),
         }
     }
@@ -298,7 +315,10 @@ impl FreeroutingApiClient {
     /// afterward regardless of whether this succeeds.
     pub fn cancel_job(&self, job_id: &str) -> Result<()> {
         let resp = self
-            .with_headers(self.client.put(self.url(&format!("/v1/jobs/{job_id}/cancel"))))
+            .with_headers(
+                self.client
+                    .put(self.url(&format!("/v1/jobs/{job_id}/cancel"))),
+            )
             .send()
             .context("Failed to cancel FreeRouting job")?;
         if !resp.status().is_success() {
@@ -351,8 +371,8 @@ mod tests {
             ("\"INVALID\"", JobState::Invalid),
         ];
         for (json, expected) in cases {
-            let actual: JobState =
-                serde_json::from_str(json).unwrap_or_else(|e| panic!("failed to parse {json}: {e}"));
+            let actual: JobState = serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("failed to parse {json}: {e}"));
             assert_eq!(actual, expected, "mismatch parsing {json}");
         }
     }
