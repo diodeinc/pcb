@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Hovering local Zener functions now shows their signatures and parameter defaults even when they have no docstring.
 - `pcb layout` now keeps generated KiCad board files canonically formatted after updating board settings.
 - `pcb auth git` now uses ambient Diode API authentication in managed sandboxes.
 - Git dependency resolution now falls back to SSH when DiodeHub HTTPS authentication is unavailable.
