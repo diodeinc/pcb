@@ -13,7 +13,7 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
-    environment::{Methods, MethodsBuilder, MethodsStatic},
+    environment::{Methods, MethodsBuilder},
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_simple_value,
     typing::{
@@ -139,14 +139,17 @@ fn starlark_value_to_decimal(
 pub struct PhysicalValue {
     /// The nominal/typical value (always required)
     #[allocative(skip)]
+    #[freeze(identity)]
     #[serde(with = "rust_decimal::serde::str")]
     pub nominal: Decimal,
     /// Lower bound (can be asymmetric from nominal)
     #[allocative(skip)]
+    #[freeze(identity)]
     #[serde(with = "rust_decimal::serde::str")]
     pub min: Decimal,
     /// Upper bound (can be asymmetric from nominal)
     #[allocative(skip)]
+    #[freeze(identity)]
     #[serde(with = "rust_decimal::serde::str")]
     pub max: Decimal,
     /// Physical unit dimensions
@@ -1714,6 +1717,7 @@ impl<'v> StarlarkValue<'v> for PhysicalUnitDims {
 }
 
 starlark_simple_value!(PhysicalValue);
+starlark::methods_static!(PHYSICAL_VALUE_METHODS = physical_value_methods);
 
 #[starlark::starlark_module]
 fn physical_value_methods(methods: &mut MethodsBuilder) {
@@ -1868,8 +1872,7 @@ fn physical_value_methods(methods: &mut MethodsBuilder) {
 #[starlark_value(type = "PhysicalValue")]
 impl<'v> StarlarkValue<'v> for PhysicalValue {
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new("PhysicalValue", physical_value_methods);
-        Some(RES.methods())
+        Some(PHYSICAL_VALUE_METHODS.methods())
     }
 
     fn write_hash(&self, hasher: &mut StarlarkHasher) -> starlark::Result<()> {
@@ -2014,6 +2017,7 @@ impl Freeze for PhysicalValueType {
 }
 
 starlark_simple_value!(PhysicalValueType);
+starlark::methods_static!(PHYSICAL_VALUE_TYPE_METHODS = value_type_methods);
 
 impl fmt::Display for PhysicalValueType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2342,8 +2346,7 @@ impl<'v> StarlarkValue<'v> for PhysicalValueType {
     }
 
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new("PhysicalValueType", value_type_methods);
-        Some(RES.methods())
+        Some(PHYSICAL_VALUE_TYPE_METHODS.methods())
     }
 }
 

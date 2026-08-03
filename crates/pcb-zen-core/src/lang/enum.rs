@@ -2,7 +2,7 @@ use allocative::Allocative;
 use serde::{Deserialize, Serialize};
 use starlark::{
     any::ProvidesStaticType,
-    environment::{Methods, MethodsBuilder, MethodsStatic},
+    environment::{Methods, MethodsBuilder},
     eval::{Arguments, Evaluator},
     starlark_module, starlark_simple_value,
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
@@ -61,6 +61,7 @@ pub struct EnumType {
 }
 
 starlark_simple_value!(EnumType);
+starlark::methods_static!(ENUM_TYPE_METHODS = enum_type_methods);
 
 impl fmt::Display for EnumType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -183,8 +184,7 @@ impl<'v> StarlarkValue<'v> for EnumType {
     unsafe fn iter_stop(&self) {}
 
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new("EnumType", enum_type_methods);
-        Some(RES.methods())
+        Some(ENUM_TYPE_METHODS.methods())
     }
 
     fn eval_type(&self) -> Option<Ty> {
@@ -265,6 +265,7 @@ pub struct EnumValue {
 }
 
 starlark_simple_value!(EnumValue);
+starlark::methods_static!(ENUM_VALUE_METHODS = enum_value_methods);
 
 impl fmt::Display for EnumValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -345,8 +346,7 @@ impl<'v> StarlarkValue<'v> for EnumValue {
     }
 
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new("EnumValue", enum_value_methods);
-        Some(RES.methods())
+        Some(ENUM_VALUE_METHODS.methods())
     }
 }
 

@@ -122,6 +122,7 @@ use crate::definition::IdentifierDefinition;
 use crate::definition::LspModule;
 use crate::inspect::AstModuleInspect;
 use crate::inspect::AutocompleteType;
+use crate::span::IntoLspRange;
 use crate::symbols::find_symbols_at_location;
 
 const SERVER_NAME: &str = "pcbc";
@@ -821,16 +822,16 @@ impl<T: LspContext> Backend<T> {
     }
 
     /// Simple helper to generate `Some(LocationLink)` objects in `resolve_definition_location`
-    fn location_link<R: Into<Range> + Copy>(
+    fn location_link<R: IntoLspRange + Copy>(
         source: ResolvedSpan,
         uri: &LspUrl,
         target_range: R,
     ) -> anyhow::Result<Option<LocationLink>> {
         Ok(Some(LocationLink {
-            origin_selection_range: Some(source.into()),
+            origin_selection_range: Some(source.to_lsp_range()),
             target_uri: uri.try_into()?,
-            target_range: target_range.into(),
-            target_selection_range: target_range.into(),
+            target_range: target_range.to_lsp_range(),
+            target_selection_range: target_range.to_lsp_range(),
         }))
     }
 
@@ -1250,14 +1251,14 @@ impl<T: LspContext> Backend<T> {
                             contents: HoverContents::Array(vec![MarkedString::String(
                                 render_doc_item_no_link(&symbol.name, &docs),
                             )]),
-                            range: Some(source.into()),
+                            range: Some(source.to_lsp_range()),
                         })
                         .or_else(|| {
                             symbol.param.map(|(starred_name, doc)| Hover {
                                 contents: HoverContents::Array(vec![MarkedString::String(
                                     render_doc_param(starred_name, &doc),
                                 )]),
-                                range: Some(source.into()),
+                                range: Some(source.to_lsp_range()),
                             })
                         })
                 })
@@ -1283,7 +1284,7 @@ impl<T: LspContext> Backend<T> {
                             contents: HoverContents::Array(vec![MarkedString::String(
                                 render_doc_item_no_link(&symbol.name, &docs),
                             )]),
-                            range: Some(source.into()),
+                            range: Some(source.to_lsp_range()),
                         })
                     })
                 })
@@ -1319,7 +1320,7 @@ impl<T: LspContext> Backend<T> {
                                     value: module.ast.codemap().source_span(location).to_owned(),
                                 },
                             )]),
-                            range: Some(source.into()),
+                            range: Some(source.to_lsp_range()),
                         })
                     }
                     _ => None,
@@ -1336,7 +1337,7 @@ impl<T: LspContext> Backend<T> {
                         contents: HoverContents::Array(vec![MarkedString::String(
                             render_doc_item_no_link(&symbol.0, &symbol.1),
                         )]),
-                        range: Some(source.into()),
+                        range: Some(source.to_lsp_range()),
                     })
             }
             IdentifierDefinition::LoadPath { .. } | IdentifierDefinition::NotFound => None,
@@ -2178,6 +2179,7 @@ mod tests {
     use crate::server::StarlarkFileContentsRequest;
     use crate::server::StarlarkFileContentsResponse;
     use crate::server::new_notification;
+    use crate::span::IntoLspRange;
     use crate::test::TestServer;
 
     #[test]
@@ -2253,10 +2255,10 @@ mod tests {
         dest_span: ResolvedSpan,
     ) -> LocationLink {
         LocationLink {
-            origin_selection_range: Some(source_span.into()),
+            origin_selection_range: Some(source_span.to_lsp_range()),
             target_uri: uri,
-            target_range: dest_span.into(),
-            target_selection_range: dest_span.into(),
+            target_range: dest_span.to_lsp_range(),
+            target_selection_range: dest_span.to_lsp_range(),
         }
     }
 
@@ -2907,7 +2909,7 @@ mod tests {
         let foo = FixtureWithRanges::from_fixture(foo_uri.path(), &foo_contents)?;
 
         let expected_location = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("bar_click").into()),
+            origin_selection_range: Some(foo.resolved_span("bar_click").to_lsp_range()),
             target_uri: bar_uri,
             target_range: Default::default(),
             target_selection_range: Default::default(),
@@ -3160,7 +3162,7 @@ mod tests {
         let response = goto_definition_response_location(&mut server, req_id)?;
 
         let expected = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("bar").into()),
+            origin_selection_range: Some(foo.resolved_span("bar").to_lsp_range()),
             target_uri: bar_uri,
             target_range: Default::default(),
             target_selection_range: Default::default(),
@@ -3178,7 +3180,7 @@ mod tests {
         let response = goto_definition_response_location(&mut server, req_id)?;
 
         let expected = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("baz").into()),
+            origin_selection_range: Some(foo.resolved_span("baz").to_lsp_range()),
             target_uri: baz_uri,
             target_range: Default::default(),
             target_selection_range: Default::default(),
@@ -3196,7 +3198,7 @@ mod tests {
         let response = goto_definition_response_location(&mut server, req_id)?;
 
         let expected = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("dir1").into()),
+            origin_selection_range: Some(foo.resolved_span("dir1").to_lsp_range()),
             target_uri: dir1_uri,
             target_range: Default::default(),
             target_selection_range: Default::default(),
@@ -3215,7 +3217,7 @@ mod tests {
         let response = goto_definition_response_location(&mut server, req_id)?;
 
         let expected = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("dir2").into()),
+            origin_selection_range: Some(foo.resolved_span("dir2").to_lsp_range()),
             target_uri: dir2_uri,
             target_range: Default::default(),
             target_selection_range: Default::default(),
@@ -3386,7 +3388,7 @@ mod tests {
 
         assert_eq!(
             n1_location.origin_selection_range,
-            Some(foo.resolved_span("click_n1").into())
+            Some(foo.resolved_span("click_n1").to_lsp_range())
         );
         assert_eq!(n1_location.target_uri, native_uri);
         let native_gen_code = server

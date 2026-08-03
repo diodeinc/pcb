@@ -7,7 +7,7 @@ use starlark::typing::TyUserFields;
 use starlark::{
     any::ProvidesStaticType,
     collections::SmallMap,
-    environment::{Methods, MethodsBuilder, MethodsStatic},
+    environment::{Methods, MethodsBuilder},
     eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam},
     starlark_complex_value, starlark_module,
     typing::{ParamIsRequired, ParamSpec, Ty, TyCallable, TyStarlarkValue, TyUser, TyUserParams},
@@ -15,7 +15,7 @@ use starlark::{
     values::{
         Coerce, Freeze, FreezeResult, Freezer, FrozenValue, Heap, NoSerialize, StarlarkValue,
         Trace, Value, ValueLike,
-        record::field::FieldGen,
+        record::FieldGen,
         starlark_value,
         typing::{TypeCompiled, TypeInstanceId, TypeMatcher, TypeMatcherDyn, TypeMatcherFactory},
     },
@@ -207,6 +207,7 @@ pub struct NetValueGen<V> {
 }
 
 starlark_complex_value!(pub NetValue);
+starlark::methods_static!(NET_METHODS = builtin_net_methods);
 
 impl<V: std::fmt::Debug> std::fmt::Debug for NetValueGen<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -235,8 +236,7 @@ where
     Self: ProvidesStaticType<'v>,
 {
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new("Net", builtin_net_methods);
-        Some(RES.methods())
+        Some(NET_METHODS.methods())
     }
 
     fn get_attr(&self, attribute: &str, heap: Heap<'v>) -> Option<Value<'v>> {
@@ -650,6 +650,7 @@ pub struct NetTypeGen<V> {
 }
 
 starlark_complex_value!(pub NetType);
+starlark::methods_static!(NET_TYPE_METHODS = net_type_methods);
 
 impl<'v> Freeze for NetType<'v> {
     type Frozen = FrozenNetType;
@@ -701,7 +702,7 @@ impl<'v> NetType<'v> {
             // This handles field(), direct types (str/int), and custom types (Enum/PhysicalValue) uniformly
             let type_compiled_result =
                 if let Some(field_gen) = field_value.downcast_ref::<FieldGen<Value<'v>>>() {
-                    Ok(*field_gen.typ())
+                    Ok(field_gen.typ)
                 } else {
                     TypeCompiled::new(field_value, eval.heap())
                 };
@@ -958,11 +959,11 @@ fn compile_field_type<'v>(
     heap: Heap<'v>,
 ) -> anyhow::Result<TypeCompiled<Value<'v>>> {
     if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<Value<'v>>>() {
-        Ok(TypeCompiled::from_ty(field_gen.typ().as_ty(), heap))
+        Ok(TypeCompiled::from_ty(field_gen.typ.as_ty(), heap))
     } else if let Some(field_gen) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
         // Loaded modules freeze field(...) specs, but we still want to honor
         // the original compiled matcher for validation and coercion.
-        Ok(TypeCompiled::from_ty(field_gen.typ().as_ty(), heap))
+        Ok(TypeCompiled::from_ty(field_gen.typ.as_ty(), heap))
     } else {
         TypeCompiled::new(field_spec, heap)
     }
@@ -985,9 +986,9 @@ pub(crate) fn validate_field<'v>(
 
     // Try to extract default from field() spec first (before type compilation)
     let default = if let Some(fg) = field_spec.downcast_ref::<FieldGen<Value>>() {
-        fg.default().map(|d| d.to_value())
+        fg.default.map(|d| d.to_value())
     } else if let Some(fg) = field_spec.downcast_ref::<FieldGen<FrozenValue>>() {
-        fg.default().map(|d| d.to_value())
+        fg.default.map(|d| d.to_value())
     } else {
         None
     };
@@ -1217,8 +1218,7 @@ where
     }
 
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new("NetType", net_type_methods);
-        Some(RES.methods())
+        Some(NET_TYPE_METHODS.methods())
     }
 }
 

@@ -2,13 +2,13 @@ use allocative::Allocative;
 use starlark::collections::SmallMap;
 use starlark::environment::GlobalsBuilder;
 use starlark::eval::{Arguments, Evaluator, ParametersSpec, ParametersSpecParam};
-use starlark::starlark_complex_value;
 use starlark::starlark_module;
 use starlark::values::typing::TypeInstanceId;
 use starlark::values::{
     Coerce, Freeze, FrozenValue, Heap, NoSerialize, ProvidesStaticType, StarlarkValue, Trace,
     Value, ValueLike, starlark_value,
 };
+use starlark::{starlark_complex_value, starlark_complex_values};
 use std::cell::OnceCell;
 
 use std::collections::HashMap;
@@ -503,8 +503,7 @@ impl InterfaceCell for FrozenValue {
     }
 }
 
-#[derive(Clone, Debug, Trace, Coerce, ProvidesStaticType, NoSerialize, Allocative)]
-#[repr(C)]
+#[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative)]
 pub struct InterfaceFactoryGen<V: InterfaceCell> {
     id: TypeInstanceId,
     #[allocative(skip)]
@@ -515,7 +514,9 @@ pub struct InterfaceFactoryGen<V: InterfaceCell> {
     param_spec: ParametersSpec<FrozenValue>,
 }
 
-starlark_complex_value!(pub InterfaceFactory);
+pub type InterfaceFactory<'v> = InterfaceFactoryGen<Value<'v>>;
+pub type FrozenInterfaceFactory = InterfaceFactoryGen<FrozenValue>;
+starlark_complex_values!(InterfaceFactory);
 
 impl Freeze for InterfaceFactory<'_> {
     type Frozen = FrozenInterfaceFactory;
@@ -872,23 +873,6 @@ pub(crate) fn instantiate_interface<'v>(
         "internal error: unexpected value type in instantiate_interface: {} (expected InterfaceFactory or InterfaceValue)",
         spec.get_type()
     ).into())
-}
-
-impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
-    /// Return the map of field specifications (field name -> type value) that
-    /// define this interface. This is primarily used by the input
-    /// deserialization logic to determine the expected type for nested
-    /// interface fields when reconstructing an instance from a serialised
-    /// `InputValue`.
-    #[inline]
-    pub fn fields(&self) -> &SmallMap<String, V> {
-        &self.fields
-    }
-
-    #[inline]
-    pub fn field(&self, name: &str) -> Option<&V> {
-        self.fields.get(name)
-    }
 }
 
 #[cfg(test)]

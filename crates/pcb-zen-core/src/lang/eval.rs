@@ -1212,7 +1212,7 @@ impl EvalContext {
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "<unknown>".to_string());
-        FrozenHeapName::User(Box::new(format!("{}:{source}", self.config.module_path)))
+        FrozenHeapName::user(format!("{}:{source}", self.config.module_path))
     }
 
     /// Enable or disable eager workspace parsing.
@@ -1446,17 +1446,10 @@ impl EvalContext {
         self.json_inputs.extend(json_inputs);
     }
 
-    /// Parse Starlark source with this context's dialect, using the recursive
-    /// descent parser (same AST as the default LALRPOP parser, roughly half
-    /// the cost).
+    /// Parse Starlark source with this context's dialect.
     fn parse_ast(&self, filename: &str, contents: String) -> starlark::Result<AstModule> {
         let _span = info_span!("parse").entered();
-        AstModule::parse_with(
-            filename,
-            contents,
-            &self.dialect(),
-            starlark::syntax::ParserKind::Rd,
-        )
+        AstModule::parse(filename, contents, &self.dialect())
     }
 
     /// Contents + AST for the module being evaluated. Explicit contents (e.g.

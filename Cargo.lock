@@ -41,11 +41,12 @@ dependencies = [
 [[package]]
 name = "allocative"
 version = "0.3.6"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "allocative_derive",
  "bumpalo",
  "ctor",
+ "dashmap",
  "hashbrown 0.16.1",
  "num-bigint",
 ]
@@ -53,7 +54,7 @@ dependencies = [
 [[package]]
 name = "allocative_derive"
 version = "0.3.6"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -139,7 +140,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -150,7 +151,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -222,15 +223,6 @@ name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
-
-[[package]]
-name = "ascii-canvas"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8824ecca2e851cec16968d54a01dd372ef8f95b244fb84b84e70128be347c3c6"
-dependencies = [
- "term",
-]
 
 [[package]]
 name = "assert-json-diff"
@@ -1190,7 +1182,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "clap_lex",
- "strsim 0.11.1",
+ "strsim",
  "terminal_size",
 ]
 
@@ -1239,7 +1231,7 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 [[package]]
 name = "cmp_any"
 version = "0.8.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 
 [[package]]
 name = "cobs"
@@ -1274,7 +1266,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1625,12 +1617,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crunchy"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
-
-[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1729,7 +1715,7 @@ dependencies = [
  "ident_case",
  "proc-macro2",
  "quote",
- "strsim 0.11.1",
+ "strsim",
  "syn 2.0.118",
 ]
 
@@ -1892,12 +1878,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
-name = "diff"
-version = "0.1.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56254986775e3233ffa9c4d7d3faaf6d36a2c09d30b20687e9f88bc8bafc16c8"
-
-[[package]]
 name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1936,16 +1916,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dirs-next"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1"
-dependencies = [
- "cfg-if",
- "dirs-sys-next",
-]
-
-[[package]]
 name = "dirs-sys"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1953,19 +1923,8 @@ checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users 0.5.2",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "dirs-sys-next"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ebda144c4fe02d1f7ea1a7d9641b6fc6b580adcfa024ae48797ecdeb6825b4d"
-dependencies = [
- "libc",
- "redox_users 0.4.6",
- "winapi",
+ "redox_users",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1983,7 +1942,7 @@ dependencies = [
 [[package]]
 name = "display_container"
 version = "0.9.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "either",
  "indenter",
@@ -2036,35 +1995,15 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 [[package]]
 name = "dupe"
 version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ed2bc011db9c93fbc2b6cdb341a53737a55bafb46dbb74cf6764fc33a2fbf9c"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
- "dupe_derive 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "dupe"
-version = "0.9.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
-dependencies = [
- "dupe_derive 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937)",
+ "dupe_derive",
 ]
 
 [[package]]
 name = "dupe_derive"
 version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83e195b4945e88836d826124af44fdcb262ec01ef94d44f14f4fb5103f19892a"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
-
-[[package]]
-name = "dupe_derive"
-version = "0.9.1"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2094,15 +2033,6 @@ name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
-
-[[package]]
-name = "ena"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eabffdaee24bd1bf95c5ef7cec31260444317e72ea56c4c91750e8b7ee58d5f1"
-dependencies = [
- "log",
-]
 
 [[package]]
 name = "encode_unicode"
@@ -2181,7 +2111,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2250,7 +2180,7 @@ checksum = "998b056554fbe42e03ae0e152895cd1a7e1002aec800fdc6635d20270260c46f"
 dependencies = [
  "bit-set 0.8.0",
  "regex-automata",
- "regex-syntax 0.8.11",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -2352,6 +2282,15 @@ name = "float-cmp"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
+
+[[package]]
+name = "fluent-uri"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17c704e9dbe1ddd863da1e6ff3567795087b1eb201ce80d8fa81162e1516500d"
+dependencies = [
+ "bitflags 1.3.2",
+]
 
 [[package]]
 name = "fnv"
@@ -2706,7 +2645,7 @@ dependencies = [
  "bstr",
  "log",
  "regex-automata",
- "regex-syntax 0.8.11",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -3417,7 +3356,7 @@ version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b719c59241cfaac1042a6d26787e28ed7ee4a4e21a5a907786f54222d1b0062"
 dependencies = [
- "memoffset 0.9.1",
+ "memoffset",
 ]
 
 [[package]]
@@ -3477,7 +3416,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3495,15 +3434,6 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
-
-[[package]]
-name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
 
 [[package]]
 name = "itertools"
@@ -3691,37 +3621,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
-name = "lalrpop"
-version = "0.19.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a1cbf952127589f2851ab2046af368fd20645491bb4b376f04b7f94d7a9837b"
-dependencies = [
- "ascii-canvas",
- "bit-set 0.5.3",
- "diff",
- "ena",
- "is-terminal",
- "itertools 0.10.5",
- "lalrpop-util",
- "petgraph 0.6.5",
- "regex",
- "regex-syntax 0.6.29",
- "string_cache",
- "term",
- "tiny-keccak",
- "unicode-xid",
-]
-
-[[package]]
-name = "lalrpop-util"
-version = "0.19.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3c48237b9604c5a4702de6b824e02006c3214327564636aef27c1028a8fa0ed"
-dependencies = [
- "regex",
-]
-
-[[package]]
 name = "lazy-regex"
 version = "3.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3894,7 +3793,7 @@ dependencies = [
  "lazy_static",
  "proc-macro2",
  "quote",
- "regex-syntax 0.8.11",
+ "regex-syntax",
  "rustc_version",
  "syn 2.0.118",
 ]
@@ -3947,6 +3846,19 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "url",
+]
+
+[[package]]
+name = "lsp-types"
+version = "0.97.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53353550a17c04ac46c585feb189c2db82154fc84b79c7a66c96c2c644f66071"
+dependencies = [
+ "bitflags 1.3.2",
+ "fluent-uri",
+ "serde",
+ "serde_json",
+ "serde_repr",
 ]
 
 [[package]]
@@ -4049,15 +3961,6 @@ name = "memo-map"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38d1115007560874e373613744c6fba374c17688327a71c1476d1a5954cc857b"
-
-[[package]]
-name = "memoffset"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
-dependencies = [
- "autocfg",
-]
 
 [[package]]
 name = "memoffset"
@@ -4199,12 +4102,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "new_debug_unreachable"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
-
-[[package]]
 name = "nibble_vec"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4235,7 +4132,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases 0.2.1",
  "libc",
- "memoffset 0.9.1",
+ "memoffset",
 ]
 
 [[package]]
@@ -4306,7 +4203,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4569,7 +4466,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -4580,8 +4477,8 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "pagable"
-version = "0.3.3"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+version = "0.4.1"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "allocative",
  "anyhow",
@@ -4589,10 +4486,12 @@ dependencies = [
  "blake3",
  "bytemuck",
  "dashmap",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937)",
+ "dupe",
  "either",
  "erased-serde 0.4.10",
  "fancy-regex 0.16.2",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "indexmap",
  "inventory",
  "num-bigint",
@@ -4605,17 +4504,19 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "sorted_vector_map",
  "static_assertions",
  "static_interner",
  "strong_hash",
  "take_mut",
+ "thiserror 2.0.18",
  "triomphe",
 ]
 
 [[package]]
 name = "pagable_derive"
-version = "0.3.3"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+version = "0.4.1"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5002,10 +4903,10 @@ dependencies = [
  "anyhow",
  "derivative",
  "derive_more 2.1.1",
- "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dupe",
  "itertools 0.15.0",
  "lsp-server",
- "lsp-types",
+ "lsp-types 0.94.1",
  "maplit",
  "regex",
  "serde",
@@ -5052,7 +4953,7 @@ dependencies = [
  "ariadne",
  "debugserver-types",
  "dirs",
- "dupe 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dupe",
  "fslock",
  "globset",
  "hex",
@@ -5061,7 +4962,7 @@ dependencies = [
  "jiff",
  "log",
  "lsp-server",
- "lsp-types",
+ "lsp-types 0.94.1",
  "path-slash",
  "pcb-canonical",
  "pcb-sch",
@@ -5187,7 +5088,7 @@ dependencies = [
  "pcb-ui",
  "pcb-zen",
  "pcb-zen-core",
- "petgraph 0.8.3",
+ "petgraph",
  "rayon",
  "reqwest",
  "semver",
@@ -5255,16 +5156,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9744bc48116fee06334924bb5f2bad41eed5e89bd26e29b0b799f9a3f82c210"
 dependencies = [
  "pest",
-]
-
-[[package]]
-name = "petgraph"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
-dependencies = [
- "fixedbitset 0.4.2",
- "indexmap",
 ]
 
 [[package]]
@@ -5431,12 +5322,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "precomputed-hash"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
-
-[[package]]
 name = "predicates"
 version = "3.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5554,6 +5439,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
+name = "quickcheck"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95c589f335db0f6aaa168a7cd27b1fc6920f5e1470c804f814d9cd6e62a0f70b"
+dependencies = [
+ "env_logger",
+ "log",
+ "rand 0.10.2",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5607,7 +5503,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5968,17 +5864,6 @@ dependencies = [
 
 [[package]]
 name = "redox_users"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba009ff324d1fc1b900bd1fdb31564febe58a8ccc8a6fdbb93b543d33b13ca43"
-dependencies = [
- "getrandom 0.2.17",
- "libredox",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "redox_users"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
@@ -6017,7 +5902,7 @@ dependencies = [
  "aho-corasick",
  "memchr",
  "regex-automata",
- "regex-syntax 0.8.11",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -6028,7 +5913,7 @@ checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
 dependencies = [
  "aho-corasick",
  "memchr",
- "regex-syntax 0.8.11",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -6036,12 +5921,6 @@ name = "regex-lite"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
-
-[[package]]
-name = "regex-syntax"
-version = "0.6.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f162c6dd7b008981e4d40210aca20b4bd0f9b60ca9271061b07f78537722f2e1"
 
 [[package]]
 name = "regex-syntax"
@@ -6516,7 +6395,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6575,7 +6454,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7184,7 +7063,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
+name = "sorted_vector_map"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94bf565ee1681b4473aa5a9d71d807347c28021bd1d8947cb626b02f42a0141f"
+dependencies = [
+ "itertools 0.14.0",
+ "quickcheck",
 ]
 
 [[package]]
@@ -7225,8 +7114,8 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "starlark"
-version = "0.14.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+version = "0.14.2"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "allocative",
  "anyhow",
@@ -7238,7 +7127,7 @@ dependencies = [
  "derivative",
  "derive_more 1.0.0",
  "display_container",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937)",
+ "dupe",
  "either",
  "erased-serde 0.3.31",
  "hashbrown 0.16.1",
@@ -7246,7 +7135,6 @@ dependencies = [
  "inventory",
  "itertools 0.14.0",
  "maplit",
- "memoffset 0.6.5",
  "num-bigint",
  "num-traits",
  "once_cell",
@@ -7254,7 +7142,6 @@ dependencies = [
  "paste",
  "ref-cast",
  "regex",
- "rust_decimal",
  "rustyline",
  "serde",
  "serde_json",
@@ -7263,17 +7150,17 @@ dependencies = [
  "starlark_syntax",
  "static_assertions",
  "strong_hash",
- "strsim 0.10.0",
+ "strsim",
  "textwrap 0.11.0",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "starlark_derive"
-version = "0.14.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+version = "0.14.2"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937)",
+ "dupe",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -7281,11 +7168,11 @@ dependencies = [
 
 [[package]]
 name = "starlark_map"
-version = "0.14.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+version = "0.14.2"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "allocative",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937)",
+ "dupe",
  "equivalent",
  "fxhash",
  "hashbrown 0.16.1",
@@ -7296,19 +7183,17 @@ dependencies = [
 
 [[package]]
 name = "starlark_syntax"
-version = "0.14.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+version = "0.14.2"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "allocative",
  "annotate-snippets",
  "anyhow",
  "derivative",
  "derive_more 1.0.0",
- "dupe 0.9.1 (git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937)",
- "lalrpop",
- "lalrpop-util",
+ "dupe",
  "logos",
- "lsp-types",
+ "lsp-types 0.97.0",
  "memchr",
  "num-bigint",
  "num-traits",
@@ -7368,18 +7253,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "string_cache"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf776ba3fa74f83bf4b63c3dcbbf82173db2632ed8452cb2d891d33f459de70f"
-dependencies = [
- "new_debug_unreachable",
- "parking_lot",
- "phf_shared",
- "precomputed-hash",
-]
-
-[[package]]
 name = "stringmetrics"
 version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7397,7 +7270,7 @@ dependencies = [
 [[package]]
 name = "strong_hash"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "ref-cast",
  "strong_hash_derive",
@@ -7406,17 +7279,11 @@ dependencies = [
 [[package]]
 name = "strong_hash_derive"
 version = "0.1.0"
-source = "git+https://github.com/diodeinc/starlark-rust?rev=deba1116f93e97b4db3eb0631bae3a39c4f09937#deba1116f93e97b4db3eb0631bae3a39c4f09937"
+source = "git+https://github.com/diodeinc/starlark-rust?rev=c3d776bcd0bf074b00fc059d7700b82ab8dcc010#c3d776bcd0bf074b00fc059d7700b82ab8dcc010"
 dependencies = [
  "quote",
  "syn 2.0.118",
 ]
-
-[[package]]
-name = "strsim"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "strsim"
@@ -7538,7 +7405,7 @@ dependencies = [
  "fnv",
  "once_cell",
  "onig",
- "regex-syntax 0.8.11",
+ "regex-syntax",
  "serde",
  "serde_derive",
  "thiserror 2.0.18",
@@ -7604,21 +7471,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "term"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c59df8ac95d96ff9bede18eb7300b0fda5e5d8d90960e76f8e14ae765eedbf1f"
-dependencies = [
- "dirs-next",
- "rustversion",
- "winapi",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7647,7 +7503,7 @@ dependencies = [
  "parking_lot",
  "rustix 1.1.4",
  "signal-hook",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7663,7 +7519,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7849,15 +7705,6 @@ checksum = "c431b87111666e491a90baa837f914fb45cd5dc3c268591b0220ff5057f2085f"
 dependencies = [
  "num-conv",
  "time-core",
-]
-
-[[package]]
-name = "tiny-keccak"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
-dependencies = [
- "crunchy",
 ]
 
 [[package]]
@@ -8700,7 +8547,7 @@ checksum = "5f2ab60e120fd6eaa68d9567f3226e876684639d22a4219b313ff69ec0ccd5ac"
 dependencies = [
  "log",
  "ordered-float 4.6.0",
- "strsim 0.11.1",
+ "strsim",
  "thiserror 1.0.69",
  "wezterm-dynamic-derive",
 ]
@@ -8761,7 +8608,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
