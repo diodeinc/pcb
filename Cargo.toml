@@ -11,11 +11,11 @@ authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
 glam = "0.33"
-starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
-starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
-starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
-allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
-pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "deba1116f93e97b4db3eb0631bae3a39c4f09937", default-features = false }
+starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
+starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
+starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
+allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
+pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 
 ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.20" }
 ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.20" }
@@ -60,7 +60,7 @@ clap = { version = "4", features = ["derive", "wrap_help"] }
 colored = "3"
 derive_more = { version = "2.1.1", features = ["full"] }
 dirs = "6"
-dupe = "0.9.1"
+dupe = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010" }
 duct = "1.1.1"
 env_logger = "0.11"
 indicatif = "0.18"

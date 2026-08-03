@@ -7,7 +7,7 @@ use starlark::{
     Error,
     any::ProvidesStaticType,
     collections::SmallMap,
-    environment::{GlobalsBuilder, Methods, MethodsBuilder, MethodsStatic},
+    environment::{GlobalsBuilder, Methods, MethodsBuilder},
     eval::{Arguments, Evaluator},
     starlark_module, starlark_simple_value,
     values::{
@@ -37,12 +37,12 @@ impl fmt::Display for Builtin {
 }
 
 starlark_simple_value!(Builtin);
+starlark::methods_static!(BUILTIN_METHODS = builtin_methods);
 
 #[starlark_value(type = "builtin")]
 impl<'v> StarlarkValue<'v> for Builtin {
     fn get_methods() -> Option<&'static Methods> {
-        static RES: MethodsStatic = MethodsStatic::new("Builtin", builtin_methods);
-        Some(RES.methods())
+        Some(BUILTIN_METHODS.methods())
     }
 }
 

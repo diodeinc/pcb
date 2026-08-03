@@ -26,7 +26,6 @@ use lsp_types::CompletionTextEdit;
 use lsp_types::Documentation;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
-use lsp_types::Range;
 use lsp_types::TextEdit;
 use starlark::codemap::ResolvedSpan;
 use starlark::docs::DocItem;
@@ -44,6 +43,7 @@ use crate::exported::SymbolKind as ExportedSymbolKind;
 use crate::server::Backend;
 use crate::server::LspContext;
 use crate::server::LspUrl;
+use crate::span::IntoLspRange;
 use crate::symbols::SymbolKind;
 use crate::symbols::find_symbols_at_location;
 
@@ -167,7 +167,7 @@ impl<T: LspContext> Backend<T> {
                     .map(|symbol| {
                         let mut item: CompletionItem = symbol.into();
                         item.text_edit = Some(CompletionTextEdit::Edit(TextEdit {
-                            range: current_span.into(),
+                            range: current_span.to_lsp_range(),
                             new_text: item.label.clone(),
                         }));
                         item
@@ -323,7 +323,7 @@ impl<T: LspContext> Backend<T> {
             .get_string_completion_options(document_uri, kind, current_value, workspace_root)?
             .into_iter()
             .map(|result| {
-                let mut range: Range = current_span.into();
+                let mut range = current_span.to_lsp_range();
                 range.start.character += result.insert_text_offset as u32;
 
                 CompletionItem {

@@ -22,10 +22,10 @@ use starlark::{
     collections::SmallMap,
     environment::GlobalsBuilder,
     eval::{Arguments, Evaluator},
-    starlark_complex_value, starlark_module, starlark_simple_value,
+    starlark_complex_value, starlark_complex_values, starlark_module, starlark_simple_value,
     values::{
-        Coerce, Freeze, NoSerialize, StarlarkValue, Trace, Value, ValueLike, float::StarlarkFloat,
-        list::ListRef, starlark_value, tuple::TupleRef,
+        Coerce, Freeze, FrozenValue, NoSerialize, StarlarkValue, Trace, Value, ValueLike,
+        float::StarlarkFloat, list::ListRef, starlark_value, tuple::TupleRef,
     },
 };
 
@@ -275,8 +275,7 @@ impl From<MissingInputError> for starlark::Error {
 }
 
 /// Metadata for a module parameter (from io() or config() calls)
-#[derive(Clone, Debug, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
+#[derive(Clone, Debug, Trace, Allocative, Freeze)]
 pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     /// Parameter name
     pub name: String,
@@ -304,20 +303,6 @@ pub struct ParameterMetadataGen<V: ValueLifetimeless> {
     #[freeze(identity)]
     #[allocative(skip)]
     pub declaration_call_stack: starlark::eval::CallStack,
-}
-
-starlark_complex_value!(pub ParameterMetadata);
-
-#[starlark_value(type = "ParameterMetadata")]
-impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ParameterMetadataGen<V> where
-    Self: ProvidesStaticType<'v>
-{
-}
-
-impl<'v, V: ValueLike<'v>> std::fmt::Display for ParameterMetadataGen<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ParameterMetadata({})", self.name)
-    }
 }
 
 impl<'v, V: ValueLike<'v>> ParameterMetadataGen<V> {
@@ -467,8 +452,7 @@ pub(crate) fn io_declaration_site(eval: &Evaluator<'_, '_, '_>) -> DeclarationSi
     }
 }
 
-#[derive(Clone, Coerce, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
-#[repr(C)]
+#[derive(Clone, Trace, ProvidesStaticType, NoSerialize, Allocative, Freeze)]
 pub struct ModuleValueGen<V: ValueLifetimeless> {
     path: ModulePath,
     source_path: String,
@@ -497,7 +481,9 @@ pub struct ModuleValueGen<V: ValueLifetimeless> {
     parent_component_modifiers: Vec<V>,
 }
 
-starlark_complex_value!(pub ModuleValue);
+pub type ModuleValue<'v> = ModuleValueGen<Value<'v>>;
+pub type FrozenModuleValue = ModuleValueGen<FrozenValue>;
+starlark_complex_values!(ModuleValue);
 
 #[starlark_value(type = "Module")]
 impl<'v, V: ValueLike<'v>> StarlarkValue<'v> for ModuleValueGen<V>

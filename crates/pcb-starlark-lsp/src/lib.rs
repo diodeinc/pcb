@@ -30,6 +30,7 @@ mod exported;
 pub(crate) mod inspect;
 pub(crate) mod loaded;
 pub mod server;
+mod span;
 mod symbols;
 #[cfg(test)]
 mod test;

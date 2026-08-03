@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Legacy Registry references now prefer the canonical DiodeHub identity while remaining compatible with legacy workspace identities.
+- Updated the embedded Starlark runtime to the rebased starlark-rust 0.14.2 APIs.
 
 ### Fixed
 
