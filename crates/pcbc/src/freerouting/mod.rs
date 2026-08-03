@@ -591,7 +591,8 @@ fn poll_job(
     timeout_secs: u64,
     spinner: &Spinner,
 ) -> Result<PollResult> {
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let start = Instant::now();
+    let deadline = start + Duration::from_secs(timeout_secs);
     let mut consecutive_errors = 0u32;
     let mut last_printed_pass: Option<u32> = None;
     let mut last_known_output: Option<Vec<u8>> = None;
@@ -616,21 +617,21 @@ fn poll_job(
             });
         }
 
+        // Refresh the elapsed time every ~1s tick (this loop's cadence)
+        // regardless of whether the pass count changed, so the spinner
+        // shows visible progress even on boards where FreeRouting sits on
+        // one pass for a long time.
+        let elapsed = start.elapsed().as_secs();
+        spinner.set_message(match (log::log_enabled!(log::Level::Debug), last_printed_pass) {
+            (true, Some(pass)) => format!("Running FreeRouting... {elapsed}s elapsed, pass {pass}"),
+            _ => format!("Running FreeRouting... {elapsed}s elapsed"),
+        });
+
         match api.get_job(job_id) {
             Ok(status) => {
                 consecutive_errors = 0;
                 if status.current_pass.is_some() && status.current_pass != last_printed_pass {
                     last_printed_pass = status.current_pass;
-                    // "Pass" is FreeRouting's internal routing-iteration
-                    // count, not something meaningful to most users — only
-                    // surface it under --debug rather than in the default
-                    // spinner message.
-                    if log::log_enabled!(log::Level::Debug) {
-                        spinner.set_message(format!(
-                            "Running FreeRouting... pass {}",
-                            last_printed_pass.unwrap()
-                        ));
-                    }
                 }
                 match status.state {
                     JobState::Completed => {
