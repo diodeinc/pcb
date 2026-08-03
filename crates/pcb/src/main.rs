@@ -1990,13 +1990,12 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
                     )
                 });
             }
-            if had_installed_launcher {
-                fs::remove_file(&backup_launcher).with_context(|| {
-                    format!(
-                        "failed to remove pcb launcher backup {}",
-                        backup_launcher.display()
-                    )
-                })?;
+            if had_installed_launcher && let Err(cleanup_error) = fs::remove_file(&backup_launcher)
+            {
+                eprintln!(
+                    "Warning: failed to remove pcb launcher backup {}: {cleanup_error}",
+                    backup_launcher.display()
+                );
             }
         }
         #[cfg(not(windows))]
