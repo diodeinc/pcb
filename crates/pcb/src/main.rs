@@ -2060,19 +2060,28 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
         }
     }
 
-    let status = Command::new(&installed_launcher)
+    // Pipe stderr so Windows GUI-subsystem pcb-launcher errors are captured
+    // even when the child is not attached to this console.
+    let output = Command::new(&installed_launcher)
         .arg("--install")
-        .status()
+        .output()
         .with_context(|| {
             format!(
                 "failed to run pcb launcher registration at {}",
                 installed_launcher.display()
             )
         })?;
-    anyhow::ensure!(
-        status.success(),
-        "pcb launcher registration failed with {status}"
-    );
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            anyhow::bail!("pcb launcher registration failed with {}", output.status);
+        }
+        anyhow::bail!(
+            "pcb launcher registration failed with {}: {stderr}",
+            output.status
+        );
+    }
     Ok(())
 }
 

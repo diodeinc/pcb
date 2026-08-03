@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Launcher installation and updates now remain recoverable when release artifacts or desktop registration are unavailable.
 - Browser-launched KiCad opens now report failures, retain a bounded diagnostic log, and reject untrusted API hosts.
+- Windows `pcb-launcher --install` failures now surface their error details to the parent installer and `pcb self update`.
 
 ## [0.4.20] - 2026-08-03
 

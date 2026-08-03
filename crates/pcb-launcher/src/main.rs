@@ -12,6 +12,11 @@ const PCB_TOOLCHAIN: &str = "+latest";
 const LAUNCHER_LOG_MAX_BYTES: u64 = 1024 * 1024;
 
 fn main() {
+    // GUI-subsystem binaries do not inherit a console; attach so --install errors
+    // from pcb self update / install.ps1 remain visible on the parent terminal.
+    #[cfg(target_os = "windows")]
+    platform::attach_parent_console();
+
     if let Some(result) = run_from_args() {
         if let Err(error) = result {
             eprintln!("pcb-launcher failed: {error:#}");
@@ -526,9 +531,56 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
+    use std::os::windows::io::RawHandle;
     use std::os::windows::process::CommandExt;
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const ATTACH_PARENT_PROCESS: u32 = 0xFFFFFFFF;
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5;
+    const STD_ERROR_HANDLE: u32 = 0xFFFFFFF4;
+    const FILE_TYPE_UNKNOWN: u32 = 0;
+    const INVALID_HANDLE_VALUE: isize = -1;
+
+    /// Attach to the parent console when stdio was not already provided so
+    /// `eprintln!` from `--install` is visible despite the GUI subsystem.
+    ///
+    /// Skip attachment when stderr is already a pipe or console handle (for
+    /// example `pcb self update` capturing output) so those callers keep the
+    /// detailed error text.
+    pub fn attach_parent_console() {
+        use std::fs::OpenOptions;
+        use std::os::windows::io::AsRawHandle;
+
+        unsafe extern "system" {
+            fn AttachConsole(dw_process_id: u32) -> i32;
+            fn GetStdHandle(n_std_handle: u32) -> RawHandle;
+            fn GetFileType(h_file: RawHandle) -> u32;
+            fn SetStdHandle(n_std_handle: u32, h_handle: RawHandle) -> i32;
+        }
+
+        let stderr = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+        if !stderr.is_null()
+            && stderr != INVALID_HANDLE_VALUE as RawHandle
+            && unsafe { GetFileType(stderr) } != FILE_TYPE_UNKNOWN
+        {
+            return;
+        }
+
+        if unsafe { AttachConsole(ATTACH_PARENT_PROCESS) } == 0 {
+            return;
+        }
+
+        let Ok(conout) = OpenOptions::new().write(true).read(true).open("CONOUT$") else {
+            return;
+        };
+        let handle = conout.as_raw_handle();
+        unsafe {
+            SetStdHandle(STD_OUTPUT_HANDLE, handle);
+            SetStdHandle(STD_ERROR_HANDLE, handle);
+        }
+        // Keep CONOUT$ open for the process lifetime.
+        std::mem::forget(conout);
+    }
 
     pub fn install(launcher: &Path, _pcb: &Path) -> Result<()> {
         let command = format!("\"{}\" \"%1\"", launcher.display());
