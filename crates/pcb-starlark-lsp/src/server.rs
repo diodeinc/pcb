@@ -190,10 +190,8 @@ impl Serialize for LspUrl {
     where
         S: Serializer,
     {
-        match Url::try_from(self) {
-            Ok(url) => serializer.serialize_str(url.as_str()),
-            Err(e) => Err(serde::ser::Error::custom(e.to_string())),
-        }
+        let uri = Uri::try_from(self).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(uri.as_str())
     }
 }
 
@@ -2264,6 +2262,10 @@ mod tests {
 
         let uri = Uri::try_from(&lsp_url).expect("path should encode as an LSP URI");
         assert!(uri.as_str().contains("board%5Brev2%5D.zen"));
+        assert_eq!(
+            serde_json::to_value(&lsp_url).unwrap(),
+            serde_json::json!(uri.as_str())
+        );
         assert_eq!(LspUrl::try_from(uri).unwrap(), lsp_url);
     }
 
