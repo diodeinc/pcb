@@ -59,7 +59,7 @@ Ask only when tradeoffs are real: package size, cost, stock, electrical margin, 
 Instantiate the `.zen` entrypoint from the chosen `registry:modules` result directly in the consuming `.zen` file.
 
 ```python
-PartModule = Module("github.com/diodeinc/registry/components/<Manufacturer>/<NAME>/<NAME>.zen")
+PartModule = Module("code.diode.computer/diode/registry/components/<Manufacturer>/<NAME>/<NAME>.zen")
 ```
 
 Do not manually edit `pcb.toml` to add the dependency; `pcb sync` handles manifest updates.
