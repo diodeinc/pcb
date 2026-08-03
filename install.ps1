@@ -80,14 +80,17 @@ try {
             Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact" -OutFile $launcherBinary
         }
 
+        $launcherDownloaded = $true
+    } catch {
+        Write-Warning "pcb-launcher is not available for $($latest.tag); skipping Diode URL launcher install"
+    }
+
+    if ($launcherDownloaded) {
         $launcherExpected = ((Get-Content $launcherSum -Raw) -split "\s+")[0].ToLowerInvariant()
         $launcherActual = (Get-FileHash -Algorithm SHA256 $launcherBinary).Hash.ToLowerInvariant()
         if ($launcherActual -ne $launcherExpected) {
             throw "pcb-launcher checksum mismatch"
         }
-        $launcherDownloaded = $true
-    } catch {
-        Write-Warning "pcb-launcher is not available for $($latest.tag); skipping Diode URL launcher install"
     }
 
     $expected = ((Get-Content $sum -Raw) -split "\s+")[0].ToLowerInvariant()
