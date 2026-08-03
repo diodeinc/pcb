@@ -16,13 +16,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint and Check
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -30,9 +33,6 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
           cache-bin: false
-
-      - name: Check All
-        run: cargo check --workspace --all
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -42,12 +42,6 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --workspace -- -D warnings
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-
-      - name: Type check Python with ty
-        run: uv sync && uvx ty check
 
   test:
     name: Test (${{ matrix.config.name }})
@@ -74,12 +68,12 @@ jobs:
           apt-get update
           apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Cache KiCad (macOS)
         if: contains(matrix.config.name, 'macOS')
         id: cache-kicad-mac
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: /Applications/KiCad
           key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
@@ -95,7 +89,7 @@ jobs:
       - name: Cache KiCad (Windows)
         if: matrix.config.name == 'Windows'
         id: cache-kicad-windows
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: C:\Program Files\KiCad\10.0
           key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
@@ -133,7 +127,6 @@ jobs:
         with:
           rustflags: ""
           toolchain: stable-x86_64-pc-windows-msvc
-          components: rustfmt, clippy
           cache-bin: false
 
       - name: Install Rust
@@ -141,7 +134,6 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          components: rustfmt, clippy
           cache-bin: false
 
       - name: Install nextest
@@ -167,19 +159,21 @@ jobs:
       run:
         working-directory: crates/pcb-layout/src/scripts
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v8.1.0
-      - run: uv sync
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9
+      - run: uv sync --locked
         working-directory: .
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run pytest lens/tests -v
+      - run: uv run --locked ty check
+        working-directory: .
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked pytest lens/tests -v
 
   check_readme:
     name: Check README Sync
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Check README sync
         run: bin/embed-readme --check README.md
