@@ -69,14 +69,14 @@ pub fn run(
 
 pub fn lsp() -> anyhow::Result<()> {
     let ctx = lsp::LspEvalContext::default();
-    pcb_starlark_lsp::server::stdio_server(ctx)
+    pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
 }
 
 /// Start the LSP server with `eager` determining whether all workspace files are pre-loaded.
 /// When `eager` is `false` the server behaves like before (only open files are parsed).
 pub fn lsp_with_eager(eager: bool) -> anyhow::Result<()> {
     let ctx = lsp::LspEvalContext::default().set_eager(eager);
-    pcb_starlark_lsp::server::stdio_server(ctx)
+    pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
 }
 
 /// Start the LSP server with `eager` and a custom request handler.
@@ -90,5 +90,5 @@ where
     let ctx = lsp::LspEvalContext::default()
         .set_eager(eager)
         .with_custom_request_handler(handler);
-    pcb_starlark_lsp::server::stdio_server(ctx)
+    pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
 }

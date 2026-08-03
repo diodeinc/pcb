@@ -76,7 +76,7 @@ use crate::error::eval_message_to_lsp_diagnostic;
 use crate::server::LspContext;
 use crate::server::LspEvalResult;
 use crate::server::LspServerSettings;
-use crate::server::LspUrl;
+use crate::server::LspUri;
 use crate::server::StringLiteralResult;
 use crate::server::new_notification;
 use crate::server::server_with_connection;
@@ -93,16 +93,16 @@ fn get_path_from_uri(uri: &str) -> PathBuf {
 enum ResolveLoadError {
     #[error("Relative path `{}` provided, but current_file_path could not be determined", .0.display())]
     MissingCurrentFilePath(PathBuf),
-    #[error("Url `{}` was expected to be of type `{}`", .1, .0)]
-    WrongScheme(String, LspUrl),
+    #[error("URI `{}` was expected to be of type `{}`", .1, .0)]
+    WrongScheme(String, LspUri),
 }
 
 #[derive(thiserror::Error, Debug)]
 enum RenderLoadError {
     #[error("Path `{}` provided, which does not seem to contain a filename", .0.display())]
     MissingTargetFilename(PathBuf),
-    #[error("Urls `{}` and `{}` was expected to be of type `{}`", .1, .2, .0)]
-    WrongScheme(String, LspUrl, LspUrl),
+    #[error("URIs `{}` and `{}` were expected to be of type `{}`", .1, .2, .0)]
+    WrongScheme(String, LspUri, LspUri),
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -116,26 +116,26 @@ pub(crate) enum TestServerError {
     ReceivedRequest(lsp_server::Request),
     #[error("Got a duplicate response for request ID {:?}: Existing: {:?}, New: {:?}", .new.id, .existing, .new)]
     DuplicateResponse { new: Response, existing: Response },
-    /// The provided Url was not absolute and it needs to be.
-    #[error("Path for URL `{}` was not absolute", .0)]
-    NotAbsolute(LspUrl),
+    /// The provided URI was not absolute and it needs to be.
+    #[error("Path for URI `{}` was not absolute", .0)]
+    NotAbsolute(LspUri),
     #[error("Path is directory: `{0}`")]
-    IsADirectory(LspUrl),
+    IsADirectory(LspUri),
 }
 
 pub(crate) struct TestServerContext {
     file_contents: Arc<RwLock<HashMap<PathBuf, String>>>,
     dirs: Arc<RwLock<HashSet<PathBuf>>>,
-    builtin_docs: Arc<HashMap<LspUrl, String>>,
-    builtin_symbols: Arc<HashMap<String, LspUrl>>,
+    builtin_docs: Arc<HashMap<LspUri, String>>,
+    builtin_symbols: Arc<HashMap<String, LspUri>>,
     netlist_subscribed: AtomicBool,
     netlist_update_counter: AtomicU64,
 }
 
 impl LspContext for TestServerContext {
-    fn parse_file_with_contents(&self, uri: &LspUrl, content: String) -> LspEvalResult {
+    fn parse_file_with_contents(&self, uri: &LspUri, content: String) -> LspEvalResult {
         match uri {
-            LspUrl::File(path) | LspUrl::Starlark(path) => {
+            LspUri::File(path) | LspUri::Starlark(path) => {
                 match AstModule::parse(
                     &path.to_string_lossy(),
                     content,
@@ -168,34 +168,38 @@ impl LspContext for TestServerContext {
     fn resolve_load(
         &self,
         path: &str,
-        current_file: &LspUrl,
+        current_file: &LspUri,
         _workspace_root: Option<&Path>,
-    ) -> anyhow::Result<LspUrl> {
+    ) -> Result<LspUri, String> {
         let path = PathBuf::from(path);
         match current_file {
-            LspUrl::File(current_file_path) => {
+            LspUri::File(current_file_path) => {
                 let current_file_dir = current_file_path.parent();
                 let absolute_path = match (current_file_dir, path.is_absolute()) {
                     (_, true) => Ok(path),
                     (Some(current_file_dir), false) => Ok(current_file_dir.join(&path)),
-                    (None, false) => Err(ResolveLoadError::MissingCurrentFilePath(path)),
+                    (None, false) => {
+                        Err(ResolveLoadError::MissingCurrentFilePath(path).to_string())
+                    }
                 }?;
-                Ok(Url::from_file_path(absolute_path).unwrap().try_into()?)
+                LspUri::try_from(Url::from_file_path(absolute_path).unwrap())
+                    .map_err(|error| error.to_string())
             }
             _ => Err(
-                ResolveLoadError::WrongScheme("file://".to_owned(), current_file.clone()).into(),
+                ResolveLoadError::WrongScheme("file://".to_owned(), current_file.clone())
+                    .to_string(),
             ),
         }
     }
 
     fn render_as_load(
         &self,
-        target: &LspUrl,
-        current_file: &LspUrl,
+        target: &LspUri,
+        current_file: &LspUri,
         workspace_root: Option<&Path>,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String, String> {
         match (target, current_file) {
-            (LspUrl::File(target_path), LspUrl::File(current_file_path)) => {
+            (LspUri::File(target_path), LspUri::File(current_file_path)) => {
                 let target_package = target_path.parent();
                 let current_file_package = current_file_path.parent();
                 let target_filename = target_path.file_name();
@@ -205,7 +209,8 @@ impl LspContext for TestServerContext {
                     return match target_filename {
                         Some(filename) => Ok(format!(":{}", filename.to_string_lossy())),
                         None => {
-                            Err(RenderLoadError::MissingTargetFilename(target_path.clone()).into())
+                            Err(RenderLoadError::MissingTargetFilename(target_path.clone())
+                                .to_string())
                         }
                     };
                 }
@@ -229,38 +234,35 @@ impl LspContext for TestServerContext {
                 target.clone(),
                 current_file.clone(),
             )
-            .into()),
+            .to_string()),
         }
     }
 
     fn resolve_string_literal(
         &self,
         literal: &str,
-        current_file: &LspUrl,
+        current_file: &LspUri,
         workspace_root: Option<&Path>,
-    ) -> anyhow::Result<Option<StringLiteralResult>> {
-        let re = regex::Regex::new(r#"--(\d+):(\d+)$"#)?;
+    ) -> Result<Option<StringLiteralResult>, String> {
+        let re = regex::Regex::new(r#"--(\d+):(\d+)$"#).unwrap();
         let (literal, span) = match re.captures(literal) {
             Some(cap) => {
                 let start_pos = cap.get(1).unwrap().as_str().parse().unwrap();
                 let end_pos = cap.get(2).unwrap().as_str().parse().unwrap();
                 let span = Span::new(Pos::new(start_pos), Pos::new(end_pos));
-                (
-                    literal[0..cap.get(0).unwrap().start()].to_owned(),
-                    Some(span),
-                )
+                (literal[0..cap.get_match().start()].to_owned(), Some(span))
             }
             None => (literal.to_owned(), None),
         };
         self.resolve_load(&literal, current_file, workspace_root)
-            .map(|url| match &url {
-                LspUrl::File(u) => match u.extension() {
+            .map(|uri| match &uri {
+                LspUri::File(u) => match u.extension() {
                     Some(e) if e == "star" || e == "zen" => Some(StringLiteralResult {
-                        url,
+                        uri,
                         location_finder: Some(Box::new(move |_ast| Ok(span))),
                     }),
                     _ => Some(StringLiteralResult {
-                        url,
+                        uri,
                         location_finder: None,
                     }),
                 },
@@ -268,31 +270,31 @@ impl LspContext for TestServerContext {
             })
     }
 
-    fn get_load_contents(&self, uri: &LspUrl) -> anyhow::Result<Option<String>> {
+    fn get_load_contents(&self, uri: &LspUri) -> Result<Option<String>, String> {
         match uri {
-            LspUrl::File(u) => {
+            LspUri::File(u) => {
                 let path = get_path_from_uri(&u.to_string_lossy());
                 let is_dir = self.dirs.read().unwrap().contains(&path);
                 match (path.is_absolute(), is_dir) {
                     (true, false) => Ok(self.file_contents.read().unwrap().get(&path).cloned()),
-                    (true, true) => Err(TestServerError::IsADirectory(uri.clone()).into()),
-                    (false, _) => Err(TestServerError::NotAbsolute(uri.clone()).into()),
+                    (true, true) => Err(TestServerError::IsADirectory(uri.clone()).to_string()),
+                    (false, _) => Err(TestServerError::NotAbsolute(uri.clone()).to_string()),
                 }
             }
-            LspUrl::Starlark(_) => Ok(self.builtin_docs.get(uri).cloned()),
+            LspUri::Starlark(_) => Ok(self.builtin_docs.get(uri).cloned()),
             _ => Ok(None),
         }
     }
 
-    fn get_url_for_global_symbol(
+    fn get_uri_for_global_symbol(
         &self,
-        _current_file: &LspUrl,
+        _current_file: &LspUri,
         symbol: &str,
-    ) -> anyhow::Result<Option<LspUrl>> {
+    ) -> Result<Option<LspUri>, String> {
         Ok(self.builtin_symbols.get(symbol).cloned())
     }
 
-    fn get_environment(&self, _uri: &LspUrl) -> DocModule {
+    fn get_environment(&self, _uri: &LspUri) -> DocModule {
         DocModule {
             docs: None,
             members: self
@@ -327,7 +329,7 @@ impl LspContext for TestServerContext {
         }
     }
 
-    fn netlist_update(&self, _uri: &LspUrl) -> anyhow::Result<Option<serde_json::Value>> {
+    fn netlist_update(&self, _uri: &LspUri) -> Result<Option<serde_json::Value>, String> {
         if !self.netlist_subscribed.load(Ordering::Relaxed) {
             return Ok(None);
         }
@@ -339,9 +341,9 @@ impl LspContext for TestServerContext {
         })))
     }
 
-    fn watched_file_changed(&self, uri: &LspUrl) -> bool {
+    fn watched_file_changed(&self, uri: &LspUri) -> bool {
         match uri {
-            LspUrl::File(path) => path.extension().is_some_and(|ext| ext == "kicad_sym"),
+            LspUri::File(path) => path.extension().is_some_and(|ext| ext == "kicad_sym"),
             _ => false,
         }
     }
@@ -370,7 +372,7 @@ pub struct TestServer {
     /// If it's been received, the response payload for initialization.
     initialize_response: Option<InitializeResult>,
     /// Documentation for built in symbols.
-    builtin_docs: Arc<HashMap<LspUrl, String>>,
+    builtin_docs: Arc<HashMap<LspUri, String>>,
 }
 
 impl Drop for TestServer {
@@ -406,22 +408,22 @@ impl Drop for TestServer {
 }
 
 impl TestServer {
-    pub(crate) fn docs_as_code(&self, uri: &LspUrl) -> Option<String> {
+    pub(crate) fn docs_as_code(&self, uri: &LspUri) -> Option<String> {
         self.builtin_docs.get(uri).cloned()
     }
 
     /// A static set of "builtins" to use for testing
-    fn testing_builtins(root: &Path) -> anyhow::Result<HashMap<LspUrl, DocModule>> {
+    fn testing_builtins(root: &Path) -> anyhow::Result<HashMap<LspUri, DocModule>> {
         let prelude_path = root.join("dir/prelude.bzl");
         let ret = hashmap! {
-            LspUrl::try_from(Url::parse("starlark:/native/builtin.bzl")?)? => DocModule {
+            LspUri::try_from(Url::parse("starlark:/native/builtin.bzl")?)? => DocModule {
                 docs: None,
                 members: [
                     ("native_function1".to_owned(), DocItem::Member(DocMember::Function(DocFunction::default()))),
                     ("native_function2".to_owned(), DocItem::Member(DocMember::Function(DocFunction::default()))),
                 ].into_iter().collect(),
             },
-            LspUrl::try_from(Url::from_file_path(prelude_path).unwrap())? => DocModule {
+            LspUri::try_from(Url::from_file_path(prelude_path).unwrap())? => DocModule {
                 docs: None,
                 members: [
                     ("prelude_function".to_owned(), DocItem::Member(DocMember::Function(DocFunction::default()))),
@@ -474,7 +476,7 @@ impl TestServer {
         let prelude_file_contents = builtin_docs
             .iter()
             .filter_map(|(u, d)| match u {
-                LspUrl::File(p) => Some((p.clone(), d.clone())),
+                LspUri::File(p) => Some((p.clone(), d.clone())),
                 _ => None,
             })
             .collect();

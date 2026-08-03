@@ -8,7 +8,7 @@ use lsp_types::{
 };
 use pcb_sch::position::{Position, edit_position_comments, symbol_id_to_comment_key};
 use pcb_starlark_lsp::server::{
-    self, CompletionMeta, LspContext, LspEvalResult, LspUrl, Response, StringLiteralResult,
+    self, CompletionMeta, LspContext, LspEvalResult, LspUri, Response, StringLiteralResult,
 };
 use pcb_zen_core::config::find_workspace_root;
 use pcb_zen_core::file_extensions::is_kicad_symbol_file;
@@ -56,7 +56,7 @@ fn offset_to_lsp_position(content: &str, offset: usize) -> lsp_types::Position {
 /// Wrapper around EvalContext that implements LspContext
 pub struct LspEvalContext {
     inner: EvalContext,
-    builtin_docs: HashMap<LspUrl, String>,
+    builtin_docs: HashMap<LspUri, String>,
     file_provider: Arc<dyn FileProvider>,
     resolution_cache: RwLock<HashMap<PathBuf, Arc<ResolutionResult>>>,
     workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
@@ -167,7 +167,7 @@ impl Default for LspEvalContext {
         let mut builtin_docs = HashMap::new();
         for (name, item) in globals.documentation().members {
             if let Ok(url) = Url::parse(&format!("starlark:/{name}.zen"))
-                && let Ok(lsp_url) = LspUrl::try_from(url)
+                && let Ok(lsp_url) = LspUri::try_from(url)
             {
                 builtin_docs.insert(lsp_url, item.render_as_code(&name));
             }
@@ -390,7 +390,7 @@ impl LspEvalContext {
         path_buf: &Path,
         inputs: &HashMap<String, JsonValue>,
     ) -> anyhow::Result<ZenerEvaluateResponse> {
-        let uri = LspUrl::File(path_buf.to_path_buf());
+        let uri = LspUri::File(path_buf.to_path_buf());
         let maybe_contents = self.get_load_contents(&uri).ok().flatten();
         let evaluated_content_hash = maybe_contents.as_deref().map(content_hash);
 
@@ -646,8 +646,8 @@ impl LspContext for LspEvalContext {
         }
     }
 
-    fn did_change_file_contents(&self, uri: &LspUrl, contents: &str) {
-        if let LspUrl::File(path) = uri {
+    fn did_change_file_contents(&self, uri: &LspUri, contents: &str) {
+        if let LspUri::File(path) = uri {
             self.store_open_file(path, contents);
             self.inner.invalidate_file(path);
             self.maybe_invalidate_symbol_library(path);
@@ -655,8 +655,8 @@ impl LspContext for LspEvalContext {
         }
     }
 
-    fn did_close_file(&self, uri: &LspUrl) {
-        if let LspUrl::File(path) = uri {
+    fn did_close_file(&self, uri: &LspUri) {
+        if let LspUri::File(path) = uri {
             self.remove_open_file(path);
             let key = self.normalize_path(path);
             self.netlist_subscriptions.write().unwrap().remove(&key);
@@ -667,15 +667,15 @@ impl LspContext for LspEvalContext {
         }
     }
 
-    fn did_save_file(&self, uri: &LspUrl) {
-        if let LspUrl::File(path) = uri {
+    fn did_save_file(&self, uri: &LspUri) {
+        if let LspUri::File(path) = uri {
             self.maybe_invalidate_on_saved_source(path);
         }
     }
 
-    fn watched_file_changed(&self, uri: &LspUrl) -> bool {
+    fn watched_file_changed(&self, uri: &LspUri) -> bool {
         match uri {
-            LspUrl::File(path) => {
+            LspUri::File(path) => {
                 let mut should_revalidate = false;
 
                 if is_kicad_symbol_file(path.extension()) {
@@ -693,9 +693,9 @@ impl LspContext for LspEvalContext {
         }
     }
 
-    fn on_save_diagnostics(&self, uri: &LspUrl) -> Vec<lsp_types::Diagnostic> {
+    fn on_save_diagnostics(&self, uri: &LspUri) -> Vec<lsp_types::Diagnostic> {
         let path = match uri {
-            LspUrl::File(p) => p,
+            LspUri::File(p) => p,
             _ => return vec![],
         };
 
@@ -779,9 +779,9 @@ impl LspContext for LspEvalContext {
         }
     }
 
-    fn netlist_update(&self, uri: &LspUrl) -> anyhow::Result<Option<JsonValue>> {
+    fn netlist_update(&self, uri: &LspUri) -> Result<Option<JsonValue>, String> {
         let path = match uri {
-            LspUrl::File(path) => path,
+            LspUri::File(path) => path,
             _ => return Ok(None),
         };
 
@@ -789,7 +789,9 @@ impl LspContext for LspEvalContext {
             return Ok(None);
         };
 
-        let response = self.evaluate_with_inputs(path, &inputs)?;
+        let response = self
+            .evaluate_with_inputs(path, &inputs)
+            .map_err(|error| format!("{error:#}"))?;
         self.maybe_update_symbol_watch_paths_from_response(path, &response);
         let params = ZenerNetlistUpdateParams {
             uri: uri.clone(),
@@ -800,16 +802,18 @@ impl LspContext for LspEvalContext {
                 Some(inputs)
             },
         };
-        Ok(Some(serde_json::to_value(params)?))
+        serde_json::to_value(params)
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
 
     fn watched_file_paths(&self) -> Vec<PathBuf> {
         self.watched_symbol_paths()
     }
 
-    fn parse_file_with_contents(&self, uri: &LspUrl, content: String) -> LspEvalResult {
+    fn parse_file_with_contents(&self, uri: &LspUri, content: String) -> LspEvalResult {
         match uri {
-            LspUrl::File(path) => {
+            LspUri::File(path) => {
                 let workspace_root = self.workspace_root_for(path);
                 let config = self.config_for(path);
 
@@ -859,28 +863,30 @@ impl LspContext for LspEvalContext {
     fn resolve_load(
         &self,
         path: &str,
-        current_file: &LspUrl,
+        current_file: &LspUri,
         _workspace_root: Option<&Path>,
-    ) -> anyhow::Result<LspUrl> {
+    ) -> Result<LspUri, String> {
         // Use the load resolver from the inner context
         match current_file {
-            LspUrl::File(current_path) => {
+            LspUri::File(current_path) => {
                 let config = self.config_for(current_path);
-                let resolved = config.resolve_path(path, current_path)?;
-                Ok(LspUrl::File(resolved))
+                let resolved = config
+                    .resolve_path(path, current_path)
+                    .map_err(|error| format!("{error:#}"))?;
+                Ok(LspUri::File(resolved))
             }
-            _ => Err(anyhow::anyhow!("Cannot resolve load from non-file URL")),
+            _ => Err("Cannot resolve load from non-file URI".to_owned()),
         }
     }
 
     fn render_as_load(
         &self,
-        target: &LspUrl,
-        current_file: &LspUrl,
+        target: &LspUri,
+        current_file: &LspUri,
         _workspace_root: Option<&Path>,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String, String> {
         match (target, current_file) {
-            (LspUrl::File(target_path), LspUrl::File(current_path)) => {
+            (LspUri::File(target_path), LspUri::File(current_path)) => {
                 // Simple implementation: if in same directory, use relative path
                 if let (Some(target_parent), Some(current_parent)) =
                     (target_path.parent(), current_path.parent())
@@ -892,25 +898,25 @@ impl LspContext for LspEvalContext {
                 // Otherwise use absolute path
                 Ok(target_path.to_string_lossy().to_string())
             }
-            _ => Err(anyhow::anyhow!("Can only render file URLs")),
+            _ => Err("Can only render file URIs".to_owned()),
         }
     }
 
     fn resolve_string_literal(
         &self,
         literal: &str,
-        current_file: &LspUrl,
+        current_file: &LspUri,
         _workspace_root: Option<&Path>,
-    ) -> anyhow::Result<Option<StringLiteralResult>> {
+    ) -> Result<Option<StringLiteralResult>, String> {
         match current_file {
-            LspUrl::File(current_path) => {
+            LspUri::File(current_path) => {
                 // Try to resolve as a file path
                 let config = self.config_for(current_path);
                 if let Ok(resolved) = config.resolve_path(literal, current_path)
                     && resolved.exists()
                 {
                     return Ok(Some(StringLiteralResult {
-                        url: LspUrl::File(resolved),
+                        uri: LspUri::File(resolved),
                         location_finder: None,
                     }));
                 }
@@ -920,20 +926,23 @@ impl LspContext for LspEvalContext {
         }
     }
 
-    fn get_load_contents(&self, uri: &LspUrl) -> anyhow::Result<Option<String>> {
+    fn get_load_contents(&self, uri: &LspUri) -> Result<Option<String>, String> {
         match uri {
-            LspUrl::File(path) => {
+            LspUri::File(path) => {
                 if let Some(contents) = self.open_file_contents(path) {
                     return Ok(Some(contents));
                 }
 
                 if self.file_provider.exists(path) {
-                    Ok(Some(self.file_provider.read_file(path)?))
+                    self.file_provider
+                        .read_file(path)
+                        .map(Some)
+                        .map_err(|error| format!("{error:#}"))
                 } else {
                     Ok(None)
                 }
             }
-            LspUrl::Starlark(_) => {
+            LspUri::Starlark(_) => {
                 // For starlark: URLs, check if we have builtin documentation
                 Ok(self.builtin_docs.get(uri).cloned())
             }
@@ -941,24 +950,24 @@ impl LspContext for LspEvalContext {
         }
     }
 
-    fn get_environment(&self, _uri: &LspUrl) -> DocModule {
+    fn get_environment(&self, _uri: &LspUri) -> DocModule {
         // Return empty doc module for now
         DocModule::default()
     }
 
-    fn get_url_for_global_symbol(
+    fn get_uri_for_global_symbol(
         &self,
-        current_file: &LspUrl,
+        current_file: &LspUri,
         symbol: &str,
-    ) -> anyhow::Result<Option<LspUrl>> {
+    ) -> Result<Option<LspUri>, String> {
         match current_file {
-            LspUrl::File(path) => {
+            LspUri::File(path) => {
                 if let Some(target_path) = self.inner.get_url_for_global_symbol(path, symbol) {
-                    Ok(Some(LspUrl::File(target_path)))
+                    Ok(Some(LspUri::File(target_path)))
                 } else {
                     // Check if it's a builtin
                     if let Ok(parsed_url) = Url::parse(&format!("starlark:/{symbol}.zen"))
-                        && let Ok(lsp_url) = LspUrl::try_from(parsed_url)
+                        && let Ok(lsp_url) = LspUri::try_from(parsed_url)
                         && self.builtin_docs.contains_key(&lsp_url)
                     {
                         return Ok(Some(lsp_url));
@@ -970,9 +979,9 @@ impl LspContext for LspEvalContext {
         }
     }
 
-    fn get_completion_meta(&self, current_file: &LspUrl, symbol: &str) -> Option<CompletionMeta> {
+    fn get_completion_meta(&self, current_file: &LspUri, symbol: &str) -> Option<CompletionMeta> {
         match current_file {
-            LspUrl::File(path) => {
+            LspUri::File(path) => {
                 // First check for symbol info from the file
                 if let Some(info) = self.inner.get_symbol_info(path, symbol) {
                     return Some(CompletionMeta {
@@ -984,7 +993,7 @@ impl LspContext for LspEvalContext {
 
                 // Fallback to builtin docs
                 if let Ok(parsed_url) = Url::parse(&format!("starlark:/{symbol}.zen"))
-                    && let Ok(lsp_url) = LspUrl::try_from(parsed_url)
+                    && let Ok(lsp_url) = LspUri::try_from(parsed_url)
                     && let Some(doc) = self.builtin_docs.get(&lsp_url)
                 {
                     let first_line = doc.lines().next().unwrap_or("").to_string();
@@ -1007,8 +1016,10 @@ impl LspContext for LspEvalContext {
     fn workspace_files(
         &self,
         workspace_roots: &[std::path::PathBuf],
-    ) -> anyhow::Result<Vec<std::path::PathBuf>> {
-        self.inner.find_workspace_files(workspace_roots)
+    ) -> Result<Vec<std::path::PathBuf>, String> {
+        self.inner
+            .find_workspace_files(workspace_roots)
+            .map_err(|error| format!("{error:#}"))
     }
 
     fn has_module_dependency(&self, from: &Path, to: &Path) -> bool {
@@ -1019,12 +1030,12 @@ impl LspContext for LspEvalContext {
         &self,
         load_path: &str,
         _symbol_name: &str,
-        current_file: &LspUrl,
+        current_file: &LspUri,
         _workspace_root: Option<&Path>,
-    ) -> anyhow::Result<Option<Hover>> {
+    ) -> Result<Option<Hover>, String> {
         // Check if the load path is a directory
         match current_file {
-            LspUrl::File(current_path) => {
+            LspUri::File(current_path) => {
                 let config = self.config_for(current_path);
                 if let Ok(resolved) = config.resolve_path(load_path, current_path)
                     && resolved.is_dir()
@@ -1053,7 +1064,7 @@ impl LspContext for LspEvalContext {
         if req.method == "textDocument/signatureHelp" {
             match serde_json::from_value::<lsp_types::SignatureHelpParams>(req.params.clone()) {
                 Ok(params) => {
-                    let uri: LspUrl = match params
+                    let uri: LspUri = match params
                         .text_document_position_params
                         .text_document
                         .uri
@@ -1119,7 +1130,7 @@ impl LspContext for LspEvalContext {
             match serde_json::from_value::<ViewerGetStateParams>(req.params.clone()) {
                 Ok(params) => {
                     let state_json: Option<JsonValue> = match &params.uri {
-                        LspUrl::File(path_buf) => {
+                        LspUri::File(path_buf) => {
                             // Try the cached schematic first (populated during
                             // parse_file_with_contents) so we can return the
                             // schematic without a redundant full evaluation.
@@ -1286,7 +1297,7 @@ impl LspEvalContext {
         base_hash: &str,
         rewrite: impl FnOnce(&str) -> (usize, String),
     ) -> Result<PcbPositionEditResponse, ResponseError> {
-        let uri = LspUrl::File(PathBuf::from(file_path));
+        let uri = LspUri::File(PathBuf::from(file_path));
         let content = match self.get_load_contents(&uri) {
             Ok(Some(content)) => content,
             Ok(None) => {
@@ -1337,7 +1348,7 @@ impl LspEvalContext {
         params: ZenerEvaluateParams,
     ) -> anyhow::Result<ZenerEvaluateResponse> {
         let path_buf = match &params.uri {
-            LspUrl::File(path) => path,
+            LspUri::File(path) => path,
             _ => return Err(anyhow::anyhow!("Only file URIs are supported")),
         };
 
@@ -1433,7 +1444,7 @@ impl lsp_types::request::Request for ViewerGetStateRequest {
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ViewerGetStateParams {
-    uri: LspUrl,
+    uri: LspUri,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
@@ -1453,7 +1464,7 @@ impl lsp_types::request::Request for ZenerEvaluateRequest {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ZenerEvaluateParams {
-    uri: LspUrl,
+    uri: LspUri,
     inputs: HashMap<String, JsonValue>,
 }
 
@@ -1475,7 +1486,7 @@ struct ZenerEvaluateResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ZenerNetlistUpdateParams {
-    uri: LspUrl,
+    uri: LspUri,
     result: ZenerEvaluateResponse,
     #[serde(skip_serializing_if = "Option::is_none")]
     inputs: Option<HashMap<String, JsonValue>>,
@@ -1518,7 +1529,7 @@ struct PcbPositionEditResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{LspContext, LspEvalContext, LspUrl};
+    use super::{LspContext, LspEvalContext, LspUri};
     use lsp_server::Request;
     use lsp_server::RequestId;
     use pcb_zen_core::DiagnosticReference;
@@ -1534,7 +1545,7 @@ mod tests {
     fn closing_document_removes_netlist_subscription_and_symbol_watches() {
         let ctx = LspEvalContext::default();
         let path = std::env::temp_dir().join("subscribed.zen");
-        let uri = LspUrl::File(path.clone());
+        let uri = LspUri::File(path.clone());
         let symbol_path = std::env::temp_dir().join("symbols.kicad_sym");
 
         ctx.set_netlist_subscription(&path, &HashMap::new());
@@ -1566,8 +1577,8 @@ mod tests {
         fs::write(&dep_path, "def foo():\n    return 0\n")?;
 
         let ctx = LspEvalContext::default();
-        let main_url = LspUrl::File(main_path.clone());
-        let dep_url = LspUrl::File(dep_path.clone());
+        let main_url = LspUri::File(main_path.clone());
+        let dep_url = LspUri::File(dep_path.clone());
 
         ctx.did_change_file_contents(&main_url, main_contents);
         ctx.did_change_file_contents(&dep_url, "def foo():\n    return 1\n");
@@ -1693,8 +1704,8 @@ pcb-version = "0.4"
         fs::write(&main_path, main_contents)?;
 
         let ctx = LspEvalContext::default();
-        let main_url = LspUrl::File(main_path.clone());
-        let lib_url = LspUrl::File(lib_path.clone());
+        let main_url = LspUri::File(main_path.clone());
+        let lib_url = LspUri::File(lib_path.clone());
 
         ctx.did_change_file_contents(&main_url, main_contents);
         let result = ctx.parse_file_with_contents(&main_url, main_contents.to_string());
@@ -1773,7 +1784,7 @@ pcb-version = "0.4"
         fs::write(&zen_path, disk_contents)?;
 
         let ctx = LspEvalContext::default();
-        ctx.did_change_file_contents(&LspUrl::File(zen_path.clone()), buffer_contents);
+        ctx.did_change_file_contents(&LspUri::File(zen_path.clone()), buffer_contents);
 
         let base_hash = super::content_hash(buffer_contents);
         let response = ctx
