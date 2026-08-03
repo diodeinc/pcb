@@ -18,6 +18,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   lint:
@@ -160,7 +161,7 @@ jobs:
         working-directory: crates/pcb-layout/src/scripts
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9
+      - uses: astral-sh/setup-uv@v8.1.0
       - run: uv sync --locked
         working-directory: .
       - run: uv run --locked ty check
