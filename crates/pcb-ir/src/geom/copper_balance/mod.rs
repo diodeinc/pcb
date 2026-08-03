@@ -97,15 +97,6 @@ impl DenseCopperBalanceProfile {
                 self.min_copper_web_mm
             )));
         }
-        // Containment classification assigns boundary points to their nearest
-        // lattice center; that is the owning hexagon only when radius-limited
-        // disks around distinct centers cannot overlap.
-        if self.pitch_mm + NUMERIC_EPSILON < 2.0 * self.max_void_radius_mm {
-            return Err(DenseCopperBalanceError::InvalidProfile(format!(
-                "pitch {} mm is below twice the {} mm maximum void radius",
-                self.pitch_mm, self.max_void_radius_mm
-            )));
-        }
         Ok(())
     }
 }
@@ -867,6 +858,44 @@ mod tests {
         assert_eq!(DenseCopperBalanceProfile::V1.min_copper_web_mm, 0.20);
         assert_eq!(DenseCopperBalanceProfile::V1.boundary_web_mm, 0.20);
         assert_eq!(2.0 * minimum_core_radius, 0.20);
+    }
+
+    #[test]
+    fn tight_pitch_profile_keeps_voids_inside_the_boundary_web() {
+        // Pitch below twice the maximum void radius: boundary sites must be
+        // classified by hexagon containment, not center proximity.
+        let profile = DenseCopperBalanceProfile {
+            pitch_mm: 1.2,
+            min_void_radius_mm: 0.2,
+            max_void_radius_mm: 0.65,
+            min_copper_web_mm: 0.05,
+            boundary_web_mm: 0.2,
+            density_sigma_mm: 5.0,
+        };
+        profile.validate().unwrap();
+        let safe_region = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(12.0, 8.0)),
+            tol::REGION_MM,
+        );
+        let result = generate_dense_copper_balance(
+            profile,
+            DenseCopperBalanceRequest {
+                safe_region: &safe_region,
+                retained_area_mm2: 96.0,
+                existing_copper_area_mm2: 0.0,
+                target_density: 0.15,
+                lattice_origin: Point::new(0.0, 0.0),
+            },
+        )
+        .unwrap();
+
+        let DenseCopperBalanceMode::Perforated { void_radius_mm } = result.solution.mode else {
+            panic!("expected perforated balance");
+        };
+        assert!(void_radius_mm > 0.6, "expected near-maximum voids");
+        let voids = result_voids(&result);
+        let voidable = safe_region.disk_erode(profile.boundary_web_mm);
+        assert!(voids.difference(&voidable).is_empty());
     }
 
     #[test]

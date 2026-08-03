@@ -321,6 +321,8 @@ impl ContourSet {
             return true;
         }
 
+        // Regularized boolean output nests pairwise-disjoint rings, so
+        // even-odd parity across rings coincides with the nonzero fill rule.
         self.rings.iter().fold(false, |inside, ring| {
             inside ^ ring_contains_point(ring, point)
         })
@@ -532,9 +534,11 @@ impl ContourSet {
     ///
     /// The raw closing residual `close(self, disk(radius)) \ self` also contains
     /// the rounded bite at an isolated concave corner. A residual component is
-    /// a gap only when it contacts nonincident source-boundary segments with
-    /// opposing tangents. An empty result proves no two facing boundary
-    /// branches fail the rolling-disk test.
+    /// a gap when it contacts nonincident, separated source-boundary segments
+    /// on distinct rings, or on one ring with opposing tangents — the latter
+    /// distinguishes hairpins and notches from the bite of a single smooth
+    /// concavity. An empty result proves no two facing boundary branches fail
+    /// the rolling-disk test.
     pub fn disk_gap_violations(&self, radius: f64) -> Self {
         if self.is_empty() || radius <= 0.0 {
             return Self::empty(self.tolerance);
@@ -806,9 +810,15 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
                 contacts[index + 1..].iter().any(|right| {
                     let separation =
                         segment_separation(left.start, left.end, right.start, right.end);
+                    // Contacts on distinct rings always face each other across
+                    // void, whatever their relative angle. Same-ring pairs
+                    // must additionally oppose so the rounded bite of one
+                    // smooth concavity is not mistaken for a gap; walls at
+                    // exactly 90° remain ambiguous there by construction.
                     !boundary_segments_are_incident(left.topology, right.topology)
-                        && boundary_tangents_oppose(left, right)
                         && separation > contact_tolerance
+                        && (left.topology.ring != right.topology.ring
+                            || boundary_tangents_oppose(left, right))
                 })
             })
         })
@@ -1446,6 +1456,19 @@ mod tests {
         assert!(close_violations.area() > 1.5);
         assert!(wide_violations.is_empty());
         assert!(left.disk_gap_violations(0.5).is_empty());
+    }
+
+    #[test]
+    fn disk_gap_violations_flag_a_diagonal_corner_to_corner_approach() {
+        // The facing contacts here include perpendicular wall pairs; distinct
+        // rings are classified as a gap without any tangent condition.
+        let lower = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
+        let upper = ContourSet::rectangle(rect(4.3, 4.3, 8.0, 8.0), tol::REGION_MM);
+
+        let violations = lower.union(&upper).disk_gap_violations(1.0);
+
+        assert!(!violations.is_empty());
+        assert!(violations.contains_point(Point::new(4.15, 4.15)));
     }
 
     #[test]

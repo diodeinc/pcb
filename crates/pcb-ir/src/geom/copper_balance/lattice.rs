@@ -232,8 +232,9 @@ fn minimum_disk_core_points(
 ) -> Vec<Point> {
     let minimum_radius = profile.minimum_partial_void_inradius_mm();
     let mut points = representative_points(&raw.disk_erode(minimum_radius));
-    // Preserve the exact equality case, where erosion can collapse a valid
-    // minimum disk to a zero-area point that regularization omits.
+    // Preserve the exact equality case: a clipped void exactly one minimum
+    // disk in diameter erodes to a degenerate point or segment that falls
+    // below the ring-area floor, even though the disk itself fits.
     points.extend(candidates.iter().filter_map(|(center, _)| {
         voidable
             .contains_disk(*center, minimum_radius)
@@ -251,6 +252,12 @@ fn representative_points(region: &ContourSet) -> Vec<Point> {
         .collect()
 }
 
+/// Mark each candidate whose hexagon contains one of the points.
+///
+/// The candidate hexagons are pairwise disjoint, so hexagon membership
+/// identifies the unique owner of every point produced by boolean operations
+/// over their union — corner rounding only removes area strictly inside the
+/// sharp hexagon.
 fn candidate_point_mask(
     candidates: &[(Point, f64)],
     points: &[Point],
@@ -266,19 +273,30 @@ fn candidate_point_mask(
     let search_radius = profile.max_void_radius_mm + tol::FLATTEN_MM;
     for point in points {
         let first = by_x.partition_point(|(_, center, _)| center.x < point.x - search_radius);
-        let nearest = by_x[first..]
+        let owner = by_x[first..]
             .iter()
             .take_while(|(_, center, _)| center.x <= point.x + search_radius)
-            .filter_map(|&(index, center, radius)| {
-                let distance = center.distance_to(*point);
-                (distance <= radius + tol::FLATTEN_MM).then_some((index, distance))
-            })
-            .min_by(|left, right| left.1.total_cmp(&right.1));
-        if let Some((index, _)) = nearest {
-            matched[index] = true;
+            .find(|&&(_, center, radius)| {
+                hexagon_contains(center, radius, *point, tol::FLATTEN_MM)
+            });
+        if let Some((index, _, _)) = owner {
+            matched[*index] = true;
         }
     }
     matched
+}
+
+/// Whether the sharp flat-top hexagon of circumradius `radius` centered at
+/// `center` contains `point`, within `tolerance`.
+fn hexagon_contains(center: Point, radius: f64, point: Point, tolerance: f64) -> bool {
+    let delta = point - center;
+    // The three flat-pair normals of a flat-top hexagon are at 30°, 90°, and
+    // 150°; each flat lies one apothem from the center.
+    let axis = |x: f64, y: f64| (delta.x * x + delta.y * y).abs();
+    let reach = axis(SQRT_3 / 2.0, 0.5)
+        .max(axis(0.0, 1.0))
+        .max(axis(SQRT_3 / 2.0, -0.5));
+    reach <= radius * SQRT_3 / 2.0 + tolerance
 }
 
 fn component_contains_any_point(component: &ContourSet, points: &[Point]) -> bool {

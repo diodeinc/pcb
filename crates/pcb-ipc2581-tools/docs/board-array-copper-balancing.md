@@ -49,16 +49,19 @@ projection, but replaces the single interior radius with one radius field.
 
 ## Local density field
 
-Use the void lattice as a shared sampling grid on every copper layer. At panel
-lattice site `j`, sample the fixed-copper indicator:
+Use the void lattice as a shared sampling grid on every copper layer. The
+staggered columns tile the plane exactly with equal-area rectangles centered
+on the sites, one column pitch wide and one pitch tall. At panel lattice site
+`j`, measure the fixed-copper coverage of that tile:
 
 ```text
-c_lj = 1 when x_j is in C_l, otherwise 0
+c_lj = area(C_l ∩ tile_j) / area(tile_j)
 ```
 
-This is midpoint quadrature over the lattice's equal-area hexagonal Voronoi
-cells. Smooth the samples with a normalized Gaussian with `sigma = 5 mm`,
-truncated at `3 sigma`:
+estimated by a stratified 3 × 3 subsample grid inside the tile, so copper
+narrower than the lattice pitch contributes its true area fraction instead of
+aliasing to zero or one. Smooth the coverage with a normalized Gaussian with
+`sigma = 5 mm`, truncated at `3 sigma`:
 
 ```text
 rho_fixed_li =
@@ -118,8 +121,10 @@ E_stack = sqrt(weighted_mean_i(m_i^2)) / W
 
 The reference is the board's own per-layer density, not zero copper moment.
 The optimizer therefore avoids adding new stack asymmetry without trying to
-repair immutable board content from the rails. The per-layer report exposes
-the physical stack weight when it is available.
+repair immutable board content from the rails. Board-array creation prints a
+per-layer balance summary, warns when stackup thickness data is missing (the
+solver then balances each layer independently), and the per-layer report
+retains the signed stack weight.
 
 ## One spatial solve
 
