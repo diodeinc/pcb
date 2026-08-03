@@ -1938,15 +1938,34 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
     })?;
     copy_executable_permissions(&temporary_launcher, &temporary_launcher)?;
 
+    // Windows cannot rename over an existing executable. Move the previous
+    // launcher aside first and restore it if the final rename fails.
     #[cfg(windows)]
-    if installed_launcher.exists() {
-        fs::remove_file(&installed_launcher).with_context(|| {
-            format!(
-                "failed to replace existing pcb launcher {}",
-                installed_launcher.display()
-            )
-        })?;
+    {
+        let backup_launcher = install_dir.join(format!(".pcb-launcher-{}.old", std::process::id()));
+        let _ = fs::remove_file(&backup_launcher);
+        if installed_launcher.exists() {
+            fs::rename(&installed_launcher, &backup_launcher).with_context(|| {
+                format!(
+                    "failed to replace existing pcb launcher {}",
+                    installed_launcher.display()
+                )
+            })?;
+        }
+        if let Err(err) = fs::rename(&temporary_launcher, &installed_launcher) {
+            if backup_launcher.exists() {
+                let _ = fs::rename(&backup_launcher, &installed_launcher);
+            }
+            return Err(err).with_context(|| {
+                format!(
+                    "failed to install pcb launcher at {}",
+                    installed_launcher.display()
+                )
+            });
+        }
+        let _ = fs::remove_file(&backup_launcher);
     }
+    #[cfg(not(windows))]
     fs::rename(&temporary_launcher, &installed_launcher).with_context(|| {
         format!(
             "failed to install pcb launcher at {}",

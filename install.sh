@@ -158,20 +158,33 @@ download_binary() {
     downloaded="true"
     break
   done
-  [ -n "$downloaded" ] || { echo "could not find $binary_name release artifact for $target" >&2; exit 1; }
+  [ -n "$downloaded" ]
 }
 
-download_binary pcb
-download_binary pcb-launcher
+download_binary pcb || { echo "could not find pcb release artifact for $target" >&2; exit 1; }
+
+launcher_downloaded=""
+if download_binary pcb-launcher; then
+  launcher_downloaded="true"
+else
+  echo "Warning: pcb-launcher is not available for $tag yet; skipping Diode URL launcher install" >&2
+fi
 
 mkdir -p "$install_dir"
 chmod +x "$tmp/pcb"
-chmod +x "$tmp/pcb-launcher"
 mv "$tmp/pcb" "$install_dir/pcb"
-mv "$tmp/pcb-launcher" "$install_dir/pcb-launcher"
+
+if [ -n "$launcher_downloaded" ]; then
+  chmod +x "$tmp/pcb-launcher"
+  mv "$tmp/pcb-launcher" "$install_dir/pcb-launcher"
+fi
 
 add_install_dir_to_path
-register_url_launcher
+if [ -n "$launcher_downloaded" ]; then
+  register_url_launcher
+fi
 
 echo "Installed pcb to $install_dir/pcb"
-echo "Installed Diode URL launcher to $install_dir/pcb-launcher"
+if [ -n "$launcher_downloaded" ]; then
+  echo "Installed Diode URL launcher to $install_dir/pcb-launcher"
+fi

@@ -43,7 +43,6 @@ try {
     $launcherBinary = Join-Path $tmp "pcb-launcher.exe"
     $launcherSum = Join-Path $tmp "pcb-launcher.exe.sha256"
     Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact.sha256" -OutFile $sum
-    Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact.sha256" -OutFile $launcherSum
     $zstd = Get-Command zstd -ErrorAction SilentlyContinue
     $downloadedCompressed = $false
     if ($zstd) {
@@ -62,20 +61,33 @@ try {
         Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact" -OutFile $binary
     }
 
-    $launcherDownloadedCompressed = $false
-    if ($zstd) {
-        $launcherCompressedPath = Join-Path $tmp "pcb-launcher.exe.zst"
-        try {
-            Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact.zst" -OutFile $launcherCompressedPath
-            $launcherDownloadedCompressed = $true
-        } catch {
-            $launcherDownloadedCompressed = $false
+    $launcherDownloaded = $false
+    try {
+        Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact.sha256" -OutFile $launcherSum
+        $launcherDownloadedCompressed = $false
+        if ($zstd) {
+            $launcherCompressedPath = Join-Path $tmp "pcb-launcher.exe.zst"
+            try {
+                Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact.zst" -OutFile $launcherCompressedPath
+                $launcherDownloadedCompressed = $true
+            } catch {
+                $launcherDownloadedCompressed = $false
+            }
         }
-    }
-    if ($launcherDownloadedCompressed) {
-        & $zstd.Source -q -d -f $launcherCompressedPath -o $launcherBinary
-    } else {
-        Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact" -OutFile $launcherBinary
+        if ($launcherDownloadedCompressed) {
+            & $zstd.Source -q -d -f $launcherCompressedPath -o $launcherBinary
+        } else {
+            Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact" -OutFile $launcherBinary
+        }
+
+        $launcherExpected = ((Get-Content $launcherSum -Raw) -split "\s+")[0].ToLowerInvariant()
+        $launcherActual = (Get-FileHash -Algorithm SHA256 $launcherBinary).Hash.ToLowerInvariant()
+        if ($launcherActual -ne $launcherExpected) {
+            throw "pcb-launcher checksum mismatch"
+        }
+        $launcherDownloaded = $true
+    } catch {
+        Write-Warning "pcb-launcher is not available for $($latest.tag) yet; skipping Diode URL launcher install"
     }
 
     $expected = ((Get-Content $sum -Raw) -split "\s+")[0].ToLowerInvariant()
@@ -83,33 +95,33 @@ try {
     if ($actual -ne $expected) {
         throw "checksum mismatch"
     }
-    $launcherExpected = ((Get-Content $launcherSum -Raw) -split "\s+")[0].ToLowerInvariant()
-    $launcherActual = (Get-FileHash -Algorithm SHA256 $launcherBinary).Hash.ToLowerInvariant()
-    if ($launcherActual -ne $launcherExpected) {
-        throw "pcb-launcher checksum mismatch"
-    }
 
     New-Item -ItemType Directory -Force $installDir | Out-Null
     $installedPcb = Join-Path $installDir "pcb.exe"
     $installedLauncher = Join-Path $installDir "pcb-launcher.exe"
     Move-Item -Force $binary $installedPcb
-    Move-Item -Force $launcherBinary $installedLauncher
 
-    # pcb-launcher uses the Windows GUI subsystem, so invoke it through a
-    # process handle to wait for registration and read the correct exit code.
-    try {
-        $launcherInstall = Start-Process -FilePath $installedLauncher -ArgumentList "--install" -Wait -PassThru
-        if ($launcherInstall.ExitCode -ne 0) {
-            Write-Warning "Installed pcb, but could not register the Diode URL launcher"
+    if ($launcherDownloaded) {
+        Move-Item -Force $launcherBinary $installedLauncher
+
+        # pcb-launcher uses the Windows GUI subsystem, so invoke it through a
+        # process handle to wait for registration and read the correct exit code.
+        try {
+            $launcherInstall = Start-Process -FilePath $installedLauncher -ArgumentList "--install" -Wait -PassThru
+            if ($launcherInstall.ExitCode -ne 0) {
+                Write-Warning "Installed pcb, but could not register the Diode URL launcher"
+            }
+        } catch {
+            Write-Warning "Installed pcb, but could not register the Diode URL launcher: $_"
         }
-    } catch {
-        Write-Warning "Installed pcb, but could not register the Diode URL launcher: $_"
     }
 
     Add-InstallDirToPath $installDir
 
     Write-Host "Installed pcb to $installedPcb"
-    Write-Host "Installed Diode URL launcher to $installedLauncher"
+    if ($launcherDownloaded) {
+        Write-Host "Installed Diode URL launcher to $installedLauncher"
+    }
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
