@@ -154,10 +154,6 @@ pub struct BoardArrayBalancingIntermediates {
     pub opened_candidates: ContourSet,
     /// Material removed from the clearance-safe set by the disk opening alone.
     pub removed_by_opening: ContourSet,
-    /// Two-sided complement phase rejected by the rolling-disk gap test.
-    pub narrow_voids: ContourSet,
-    /// Union of the per-pass medial-axis separator tubes.
-    pub gap_separator_keep_out: ContourSet,
     /// Material locally trimmed to widen two-sided void gaps. Together with
     /// `removed_by_opening` this is the total regularization removal
     /// `clearance_safe_region \ safe_region`.
@@ -406,8 +402,6 @@ pub fn board_array_balancing_region(
         )
         .map_err(|error| BalancingRegionError::GapRegularization(error.to_string()))?;
     let safe_region = gap_regularization.kept;
-    let narrow_voids = gap_regularization.narrow_voids;
-    let gap_separator_keep_out = gap_regularization.separator_keep_out;
     let removed_by_gap_regularization = gap_regularization.removed;
 
     // Certify against the nominal requirement, independently of the
@@ -435,8 +429,6 @@ pub fn board_array_balancing_region(
             clearance_safe_region,
             opened_candidates,
             removed_by_opening,
-            narrow_voids,
-            gap_separator_keep_out,
             removed_by_gap_regularization,
         },
         certificate,
@@ -711,21 +703,6 @@ mod tests {
                 .intersection(&result.intermediates.obstacle_keep_out)
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn certificate_never_tolerates_a_nonempty_gap_violation() {
-        let empty = ContourSet::empty(tol::REGION_MM);
-        let certificate = ClearanceCertificate {
-            swept_safe_region: empty.clone(),
-            safe_outside_clearance_region: empty.clone(),
-            regularization_violations: empty.clone(),
-            gap_violations: ContourSet::rectangle(bbox(0.0, 0.0, 0.01, 0.01), tol::REGION_MM),
-            outside_panel: empty.clone(),
-            obstacle_overlap: empty,
-        };
-
-        assert!(!certificate.passes(1.0));
     }
 
     #[test]

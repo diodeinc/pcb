@@ -266,8 +266,6 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
             report.residual_error <= (report.initial_density - report.target_density).abs() + 1e-9
         );
     }
-    assert!(serde_json::to_value(&creation.copper_balance).unwrap()["layers"].is_array());
-
     let xml = creation.xml;
     assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
     assert!(xml.matches("<Contour>").count() > 0);

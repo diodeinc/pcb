@@ -59,12 +59,13 @@ Sₖ₊₁ = open(Sₖ \ (Γₖ ⊕ disk(v + e)), disk(q)) ∩ Sₖ
 ```
 
 The Voronoi axis gives the least local cut and treats competing sides
-symmetrically. The guard `e` separates every checked quantity from every
+symmetrically; a void component too thin to carry an axis stroke is swept
+whole instead. The guard `e` separates every checked quantity from every
 constructed one: a cut leaves a `2 (v + e)` void, so construction noise cannot
 push it back under the nominal test. Each pass only removes material, and the
-filled-region opening after every trim prevents new copper slivers. Iteration
-ends when `Nₖ` is empty or reports an error if a pass cannot make meaningful
-geometric progress.
+filled-region opening after every trim prevents new copper slivers. The safe
+region is the fixed point where `Nₖ` is empty; a pass that cannot make
+meaningful geometric progress reports an error.
 
 The independent nominal certificate is:
 
@@ -154,8 +155,7 @@ Each run overwrites a deterministic artifact set:
 | `70-clearance-safe-region.svg` | Clearance-safe set `F` |
 | `75-opened-candidates.svg` | Filled-region opening `A` |
 | `80-removed-by-opening.svg` | Material rejected by filled regularization |
-| `82-narrow-voids.svg` | Detected two-sided closing residuals |
-| `83-gap-separator-keep-out.svg` | Medial-axis and residual sweep tubes |
+| `82-narrow-voids.svg` | Two-sided closing residuals of the opened candidates |
 | `85-removed-by-gap-regularization.svg` | Material locally trimmed around gaps |
 | `90-safe-region.svg` | Final balancing-safe region |
 | `100-clearance-certificate.svg` | Safe region swept by nominal clearance |

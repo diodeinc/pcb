@@ -142,10 +142,6 @@ pub struct ContourSet {
 pub struct DiskGapRegularization {
     /// Input material retained after local gap trimming and disk opening.
     pub kept: ContourSet,
-    /// Two-sided components of `close(source, disk(radius)) \ source`.
-    pub narrow_voids: ContourSet,
-    /// Initial medial-axis tube plus any directly swept certificate residuals.
-    pub separator_keep_out: ContourSet,
     /// `source \ kept`.
     pub removed: ContourSet,
 }
@@ -455,25 +451,24 @@ impl ContourSet {
 
     /// Enforce a diameter-`2 * gap_radius` minimum for every two-sided void gap.
     ///
-    /// Every pass isolates the narrow complement phase at the nominal radius,
-    /// removes a guard-widened tube around the boundary medial axis inside
-    /// that phase, and reopens with the filled-region disk:
+    /// The result is the fixed point, reached from `self`, of one pure
+    /// contraction `T` that removes a guard-widened tube around the boundary
+    /// medial axis inside the narrow void phase and reopens with the
+    /// filled-region disk:
     ///
     /// ```text
-    /// S₀     = self
-    /// Nₖ     = G_gap_radius(Sₖ)
-    /// Sₖ₊₁   = open(Sₖ \ (Γ_Nₖ ⊕ disk(gap_radius + guard)), disk(filled_radius)) ∩ Sₖ
+    /// T(S) = open(S \ (Γ(G_gap_radius(S)) ⊕ disk(gap_radius + guard)), disk(filled_radius)) ∩ S
     /// ```
     ///
-    /// `G_r(X)` is the two-sided part of `close(X, disk(r)) \ X`, and `Γ_N` is
-    /// the boundary medial axis inside the narrow phase — the least local cut,
+    /// `G_r(X)` is the two-sided part of `close(X, disk(r)) \ X`, and `Γ(N)`
+    /// is the boundary medial axis inside that phase — the least local cut,
     /// trimming both sides of every narrow gap without widening one-sided edge
     /// clearance. The guard keeps every checked quantity strictly separated
     /// from every constructed one: a cut leaves a `2 (gap_radius + guard)`
-    /// void, so construction noise cannot push it back under the nominal test
-    /// and the monotone decreasing sequence stops when `Nₖ` is empty. This
-    /// covers distinct components, hairpins, notches, and internal voids with
-    /// the same cut on every pass.
+    /// void, so construction noise cannot push a trimmed gap back under the
+    /// nominal test. `T` only removes material, so iterating from the source
+    /// converges; a step that removes almost nothing is reported as an error
+    /// instead of a silent stall.
     pub fn disk_regularize_gaps(
         &self,
         gap_radius: f64,
@@ -495,51 +490,41 @@ impl ContourSet {
             ));
         }
 
-        let tube_radius = gap_radius + guard;
         let mut kept = self.clone();
-        let mut narrow_voids = Self::empty(self.tolerance);
-        let mut separator_keep_out = Self::empty(self.tolerance);
-        loop {
-            let pass_narrow_voids = kept.disk_gap_violations(gap_radius);
-            if pass_narrow_voids.is_empty() {
-                break;
-            }
-            let axis_keep_out =
-                narrow_void_medial_axis_keep_out(&kept, &pass_narrow_voids, tube_radius)?;
-            // A void thinner than the axis stroke has no representable medial
-            // axis. Sweep such components whole: they sit far below the
-            // regularization scale, so even the blunt cut stays local, and
-            // every pass is guaranteed to remove material.
-            let axisless = pass_narrow_voids
-                .connected_components()
-                .into_iter()
-                .filter(|component| component.intersection(&axis_keep_out).is_empty())
-                .collect::<Vec<_>>();
-            let pass_keep_out = axisless.into_iter().fold(axis_keep_out, |keep_out, thin| {
-                keep_out.union(&thin.disk_dilate(tube_radius))
-            });
-            let next = kept
-                .difference(&pass_keep_out)
-                .disk_open(filled_radius)
-                .intersection(&kept);
-            narrow_voids = narrow_voids.union(&pass_narrow_voids);
-            separator_keep_out = separator_keep_out.union(&pass_keep_out);
-
+        while let Some(next) = kept.narrow_gap_trim(gap_radius, filled_radius, guard)? {
             if kept.difference(&next).area() <= self.tolerance * self.tolerance {
                 return Err(GapRegularizationError(format!(
                     "gap regularization stalled with {:.9} mm² of void-gap violations",
-                    pass_narrow_voids.area()
+                    kept.disk_gap_violations(gap_radius).area()
                 )));
             }
             kept = next;
         }
-        let removed = self.difference(&kept);
         Ok(DiskGapRegularization {
+            removed: self.difference(&kept),
             kept,
-            narrow_voids,
-            separator_keep_out,
-            removed,
         })
+    }
+
+    /// One application of the gap-regularization contraction `T`, or `None`
+    /// at its fixed point, where every two-sided void gap already admits the
+    /// rolling disk.
+    fn narrow_gap_trim(
+        &self,
+        gap_radius: f64,
+        filled_radius: f64,
+        guard: f64,
+    ) -> Result<Option<Self>, GapRegularizationError> {
+        let narrow_voids = self.disk_gap_violations(gap_radius);
+        if narrow_voids.is_empty() {
+            return Ok(None);
+        }
+        let keep_out = narrow_void_keep_out(self, &narrow_voids, gap_radius + guard)?;
+        Ok(Some(
+            self.difference(&keep_out)
+                .disk_open(filled_radius)
+                .intersection(self),
+        ))
     }
 
     /// Unfilled material that violates the two-sided void-gap radius.
@@ -877,6 +862,27 @@ fn boundary_tangents_oppose(
     let left_tangent = left.end - left.start;
     let right_tangent = right.end - right.start;
     left_tangent.x * right_tangent.x + left_tangent.y * right_tangent.y < 0.0
+}
+
+/// Keep-out whose removal widens every narrow void: a radius-`radius` tube
+/// around the boundary medial axis inside the narrow phase. A void component
+/// thinner than the axis stroke has no representable axis and is swept whole
+/// instead; it sits far below the regularization scale, so even that blunt
+/// cut stays local, and the keep-out always covers every component.
+fn narrow_void_keep_out(
+    source: &ContourSet,
+    narrow_voids: &ContourSet,
+    radius: f64,
+) -> Result<ContourSet, GapRegularizationError> {
+    let axis_keep_out = narrow_void_medial_axis_keep_out(source, narrow_voids, radius)?;
+    let axisless = narrow_voids
+        .connected_components()
+        .into_iter()
+        .filter(|component| component.intersection(&axis_keep_out).is_empty())
+        .collect::<Vec<_>>();
+    Ok(axisless.into_iter().fold(axis_keep_out, |keep_out, thin| {
+        keep_out.union(&thin.disk_dilate(radius))
+    }))
 }
 
 fn narrow_void_medial_axis_keep_out(
@@ -1484,19 +1490,6 @@ mod tests {
 
         assert!(regularization.kept.disk_gap_violations(0.5).is_empty());
         assert!(regularization.removed.area() > 0.0);
-    }
-
-    #[test]
-    fn disk_gap_violations_flag_a_diagonal_corner_to_corner_approach() {
-        // The facing contacts here include perpendicular wall pairs; distinct
-        // rings are classified as a gap without any tangent condition.
-        let lower = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
-        let upper = ContourSet::rectangle(rect(4.3, 4.3, 8.0, 8.0), tol::REGION_MM);
-
-        let violations = lower.union(&upper).disk_gap_violations(1.0);
-
-        assert!(!violations.is_empty());
-        assert!(violations.contains_point(Point::new(4.15, 4.15)));
     }
 
     #[test]

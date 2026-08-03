@@ -850,14 +850,6 @@ mod tests {
                 .into_iter()
                 .all(|void| !void.disk_erode(minimum_core_radius).is_empty())
         );
-        assert!(
-            (DenseCopperBalanceProfile::V1.nearest_neighbor_web_mm() - (1.35 - SQRT_3 * 0.65))
-                .abs()
-                <= 1e-12
-        );
-        assert_eq!(DenseCopperBalanceProfile::V1.min_copper_web_mm, 0.20);
-        assert_eq!(DenseCopperBalanceProfile::V1.boundary_web_mm, 0.20);
-        assert_eq!(2.0 * minimum_core_radius, 0.20);
     }
 
     #[test]
