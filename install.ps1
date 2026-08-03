@@ -57,6 +57,10 @@ try {
 
     if ($downloadedCompressed) {
         & $zstd.Source -q -d -f $compressedPath -o $binary
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -Force -ErrorAction SilentlyContinue $binary
+            Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact" -OutFile $binary
+        }
     } else {
         Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact" -OutFile $binary
     }
@@ -77,7 +81,8 @@ try {
         if ($launcherDownloadedCompressed) {
             & $zstd.Source -q -d -f $launcherCompressedPath -o $launcherBinary
             if ($LASTEXITCODE -ne 0) {
-                throw "failed to decompress pcb-launcher"
+                Remove-Item -Force -ErrorAction SilentlyContinue $launcherBinary
+                Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact" -OutFile $launcherBinary
             }
         } else {
             Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact" -OutFile $launcherBinary

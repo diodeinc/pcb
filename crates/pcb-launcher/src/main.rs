@@ -55,10 +55,27 @@ fn install_protocol_handler() -> Result<()> {
 fn launch_pcb(uri: &str) -> Result<()> {
     let result = launch_pcb_inner(uri);
     if let Err(error) = &result {
-        append_launcher_error(error);
-        platform::show_error(error, &launcher_log_path());
+        report_launch_error(error);
     }
     result
+}
+
+fn report_launch_error(error: &anyhow::Error) {
+    append_launcher_error(error);
+    platform::show_error(error, &launcher_log_path());
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_uri_worker(uri: &str) -> Result<()> {
+    let launcher = std::env::current_exe().context("failed to locate pcb-launcher")?;
+    Command::new(&launcher)
+        .arg(uri)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to start {}", launcher.display()))?;
+    Ok(())
 }
 
 fn launch_pcb_inner(uri: &str) -> Result<()> {
@@ -541,8 +558,9 @@ mod macos {
                 RECEIVED_URL.store(true, Ordering::Release);
                 for url in urls {
                     if let Some(value) = url.absoluteString()
-                        && let Err(error) = super::launch_pcb(&value.to_string())
+                        && let Err(error) = super::spawn_uri_worker(&value.to_string())
                     {
+                        super::report_launch_error(&error);
                         eprintln!("Failed to open in KiCad: {error:#}");
                     }
                 }

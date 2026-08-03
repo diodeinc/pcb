@@ -150,7 +150,10 @@ download_binary() {
     if command -v zstd >/dev/null \
       && curl -fsSL "$base_url/$tag/$artifact.zst" -o "$compressed" 2>/dev/null; then
       if ! zstd -q -d -f "$compressed" -o "$output"; then
-        continue
+        rm -f "$output"
+        if ! curl -fsSL "$base_url/$tag/$artifact" -o "$output" 2>/dev/null; then
+          continue
+        fi
       fi
     elif ! curl -fsSL "$base_url/$tag/$artifact" -o "$output" 2>/dev/null; then
       continue
