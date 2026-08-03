@@ -5,22 +5,28 @@
 //! per-layer areas; the solver chooses the closest manufacturable copper area
 //! and generates a deterministic perforated plane.
 
-use std::{collections::HashMap, f64::consts::PI};
+use std::collections::HashMap;
 
-use crate::geom::path::transform_cmds;
-use crate::geom::{Affine2, BBox, ContourBuf, ContourSet, FillRule, PathCmd, Point, tol};
+use crate::geom::{ContourSet, Point};
+
+mod lattice;
+mod spatial;
+
+pub use lattice::rounded_hexagonal_void;
+
+use lattice::{
+    LatticeCandidates, ROUNDED_HEXAGON_AREA_FACTOR, hex_aligned_lattice_centers, lattice_index,
+};
+use spatial::{
+    LatticeDensityKernel, density_evaluation_points, lattice_cell_coverage,
+    normalized_stack_weights, project_box_sum, spatial_result_from_squared_radii,
+};
 
 const NUMERIC_EPSILON: f64 = 1e-9;
 const RADIUS_SOLVE_TOLERANCE_MM: f64 = 1e-4;
 const AREA_SOLVE_TOLERANCE_MM2: f64 = 1e-3;
 const SPATIAL_SOLVE_ITERATIONS: usize = 64;
-const DENSITY_KERNEL_TRUNCATION: f64 = 3.0;
 const SQRT_3: f64 = 1.732_050_807_568_877_2;
-const HEXAGON_CORNER_RADIUS_RATIO: f64 = 0.15;
-// A sharp regular hexagon has area 3√3 R² / 2. Rounding each 120° corner
-// inward by fillet radius kR removes (2√3 - π)k²R² across all six corners.
-const ROUNDED_HEXAGON_AREA_FACTOR: f64 = 3.0 * SQRT_3 / 2.0
-    - (2.0 * SQRT_3 - PI) * HEXAGON_CORNER_RADIUS_RATIO * HEXAGON_CORNER_RADIUS_RATIO;
 
 /// Fixed geometry constraints for a dense perforated copper plane.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,12 +101,6 @@ impl DenseCopperBalanceProfile {
     }
 }
 
-impl Default for DenseCopperBalanceProfile {
-    fn default() -> Self {
-        Self::V1
-    }
-}
-
 /// The selected topology and, for a perforated plane, its equivalent radius.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DenseCopperBalanceMode {
@@ -127,9 +127,9 @@ pub struct DenseCopperBalanceSolution {
     pub residual_error: f64,
 }
 
-/// Geometry inputs once a safe region is available.
+/// Geometry inputs for the internal single-layer baseline solve.
 #[derive(Debug, Clone, Copy)]
-pub struct DenseCopperBalanceRequest<'a> {
+pub(crate) struct DenseCopperBalanceRequest<'a> {
     /// Safe, initially empty subset of the retained board-array area.
     pub safe_region: &'a ContourSet,
     /// Entire retained board-array area used as the density denominator.
@@ -218,7 +218,13 @@ impl std::fmt::Display for DenseCopperBalanceError {
 impl std::error::Error for DenseCopperBalanceError {}
 
 /// Generate a dense copper balance region from an explicit safe region.
-pub fn generate_dense_copper_balance(
+///
+/// Test-only wrapper over the internal baseline of
+/// [`generate_spatial_dense_copper_balance`], which is the sole public entry
+/// point; a single zero-weight layer over its own panel region reproduces
+/// this uniform solve.
+#[cfg(test)]
+pub(crate) fn generate_dense_copper_balance(
     profile: DenseCopperBalanceProfile,
     request: DenseCopperBalanceRequest<'_>,
 ) -> Result<DenseCopperBalanceResult, DenseCopperBalanceError> {
@@ -351,12 +357,12 @@ pub fn generate_spatial_dense_copper_balance(
         })
         .collect::<Vec<_>>();
 
-    let panel_samples =
+    let mut panel_samples =
         hex_aligned_lattice_centers(request.panel_region.bbox, request.lattice_origin, profile)
             .into_iter()
             .filter(|point| request.panel_region.contains_point(*point))
             .collect::<Vec<_>>();
-    let sample_indices = panel_samples
+    let mut sample_indices = panel_samples
         .iter()
         .enumerate()
         .map(|(index, point)| {
@@ -366,6 +372,9 @@ pub fn generate_spatial_dense_copper_balance(
             )
         })
         .collect::<HashMap<_, _>>();
+    // Full centers lie in eroded safe regions inside the panel; appending any
+    // center the tolerance-bound point test missed keeps sample membership
+    // structural rather than tolerance-dependent.
     let active_sites = lattices
         .iter()
         .map(|lattice| {
@@ -373,7 +382,12 @@ pub fn generate_spatial_dense_copper_balance(
                 .full_centers
                 .iter()
                 .map(|center| {
-                    sample_indices[&lattice_index(*center, request.lattice_origin, profile)]
+                    *sample_indices
+                        .entry(lattice_index(*center, request.lattice_origin, profile))
+                        .or_insert_with(|| {
+                            panel_samples.push(*center);
+                            panel_samples.len() - 1
+                        })
                 })
                 .collect::<Vec<_>>()
         })
@@ -397,18 +411,32 @@ pub fn generate_spatial_dense_copper_balance(
         .layers
         .iter()
         .map(|layer| {
-            density_kernel.smooth(&scanline_indicator(&panel_samples, layer.existing_copper))
+            density_kernel.smooth(&lattice_cell_coverage(
+                &panel_samples,
+                layer.existing_copper,
+                profile,
+            ))
         })
         .collect::<Vec<_>>();
     let available_density = request
         .layers
         .iter()
-        .map(|layer| density_kernel.smooth(&scanline_indicator(&panel_samples, layer.safe_region)))
+        .map(|layer| {
+            density_kernel.smooth(&lattice_cell_coverage(
+                &panel_samples,
+                layer.safe_region,
+                profile,
+            ))
+        })
         .collect::<Vec<_>>();
     let partial_void_density = uniform
         .iter()
         .map(|result| {
-            density_kernel.smooth(&scanline_indicator(&panel_samples, &result.partial_voids))
+            density_kernel.smooth(&lattice_cell_coverage(
+                &panel_samples,
+                &result.partial_voids,
+                profile,
+            ))
         })
         .collect::<Vec<_>>();
 
@@ -420,18 +448,14 @@ pub fn generate_spatial_dense_copper_balance(
         .iter()
         .map(|active| vec![profile.max_void_radius_mm.powi(2); active.len()])
         .collect::<Vec<_>>();
+    // The uniform solve already selected each layer's full-void area; its
+    // radius is within the profile bounds, so the sum is directly feasible.
     let squared_radius_sums = uniform
         .iter()
         .enumerate()
         .map(|(layer_index, result)| match result.solution.mode {
-            DenseCopperBalanceMode::Perforated { .. } => {
-                let target_full_void_area_mm2 = result.usable.area()
-                    - result.solution.generated_area_mm2
-                    - result.partial_voids.area();
-                (target_full_void_area_mm2 / ROUNDED_HEXAGON_AREA_FACTOR).clamp(
-                    lower[layer_index].iter().sum(),
-                    upper[layer_index].iter().sum(),
-                )
+            DenseCopperBalanceMode::Perforated { void_radius_mm } => {
+                active_sites[layer_index].len() as f64 * void_radius_mm.powi(2)
             }
             DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => 0.0,
         })
@@ -606,250 +630,6 @@ fn validate_spatial_request(
     Ok(())
 }
 
-fn normalized_stack_weights(layers: &[SpatialCopperBalanceLayerRequest<'_>]) -> Vec<f64> {
-    let scale = layers
-        .iter()
-        .map(|layer| layer.stack_weight_mm2.abs())
-        .sum::<f64>();
-    layers
-        .iter()
-        .map(|layer| {
-            if scale > NUMERIC_EPSILON {
-                layer.stack_weight_mm2 / scale
-            } else {
-                0.0
-            }
-        })
-        .collect()
-}
-
-/// Sparse row-normalized convolution from panel-lattice samples to a shared
-/// evaluation field. `smooth_adjoint` is the exact transpose of `smooth`, so
-/// projected gradient follows the same density model used by the objective.
-struct LatticeDensityKernel {
-    sample_count: usize,
-    rows: Vec<Vec<(usize, f64)>>,
-}
-
-impl LatticeDensityKernel {
-    fn new(
-        samples: &[Point],
-        evaluation_points: &[Point],
-        origin: Point,
-        profile: DenseCopperBalanceProfile,
-    ) -> Self {
-        let index = |point| lattice_index(point, origin, profile);
-        let sample_indices = samples
-            .iter()
-            .enumerate()
-            .map(|(sample_index, point)| (index(*point), sample_index))
-            .collect::<HashMap<_, _>>();
-        let evaluation_sites = evaluation_points
-            .iter()
-            .map(|point| index(*point))
-            .collect::<Vec<_>>();
-        let support_mm = DENSITY_KERNEL_TRUNCATION * profile.density_sigma_mm;
-        let inverse_two_sigma_squared = 0.5 / profile.density_sigma_mm.powi(2);
-        let column_span = (support_mm / profile.lattice_column_pitch_mm()).ceil() as i64;
-        let row_span = (support_mm / profile.pitch_mm).ceil() as i64 + 1;
-        let offsets = [0_i64, 1_i64].map(|parity| {
-            (-column_span..=column_span)
-                .flat_map(|column| {
-                    (-row_span..=row_span).filter_map(move |row| {
-                        let neighbor_parity = (parity + column).rem_euclid(2);
-                        let dx = column as f64 * profile.lattice_column_pitch_mm();
-                        let dy = (row as f64 + (neighbor_parity - parity) as f64 / 2.0)
-                            * profile.pitch_mm;
-                        let distance_squared = dx * dx + dy * dy;
-                        (distance_squared <= support_mm.powi(2)).then(|| {
-                            (
-                                column,
-                                row,
-                                (-distance_squared * inverse_two_sigma_squared).exp(),
-                            )
-                        })
-                    })
-                })
-                .collect::<Vec<(i64, i64, f64)>>()
-        });
-        let rows = evaluation_sites
-            .iter()
-            .map(|&(column, row)| {
-                let mut neighbors = offsets[column.rem_euclid(2) as usize]
-                    .iter()
-                    .filter_map(|&(column_offset, row_offset, weight)| {
-                        let sample_index =
-                            sample_indices.get(&(column + column_offset, row + row_offset))?;
-                        Some((*sample_index, weight))
-                    })
-                    .collect::<Vec<_>>();
-                let weight_sum = neighbors.iter().map(|(_, weight)| weight).sum::<f64>();
-                if weight_sum > 0.0 {
-                    for (_, weight) in &mut neighbors {
-                        *weight /= weight_sum;
-                    }
-                }
-                neighbors
-            })
-            .collect();
-        Self {
-            sample_count: samples.len(),
-            rows,
-        }
-    }
-
-    fn smooth(&self, values: &[f64]) -> Vec<f64> {
-        debug_assert_eq!(values.len(), self.sample_count);
-        self.rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(sample_index, weight)| weight * values[*sample_index])
-                    .sum()
-            })
-            .collect()
-    }
-
-    fn smooth_adjoint(&self, values: &[f64]) -> Vec<f64> {
-        debug_assert_eq!(values.len(), self.rows.len());
-        let mut result = vec![0.0; self.sample_count];
-        for (value, row) in values.iter().zip(&self.rows) {
-            for (sample_index, weight) in row {
-                result[*sample_index] += weight * value;
-            }
-        }
-        result
-    }
-}
-
-/// Sample the 5 mm-scale objective on a deterministic subset of the 1.35 mm
-/// fabrication lattice. Geometry and output stay on the full lattice.
-fn density_evaluation_points(
-    samples: &[Point],
-    origin: Point,
-    profile: DenseCopperBalanceProfile,
-) -> Vec<Point> {
-    let stride = (profile.density_sigma_mm / profile.pitch_mm)
-        .round()
-        .max(1.0) as i64;
-    let evaluation = samples
-        .iter()
-        .copied()
-        .filter(|point| {
-            let (column, row) = lattice_index(*point, origin, profile);
-            column.rem_euclid(stride) == 0 && row.rem_euclid(stride) == 0
-        })
-        .collect::<Vec<_>>();
-    if evaluation.is_empty() {
-        samples.to_vec()
-    } else {
-        evaluation
-    }
-}
-
-fn lattice_index(point: Point, origin: Point, profile: DenseCopperBalanceProfile) -> (i64, i64) {
-    let column = ((point.x - origin.x) / profile.lattice_column_pitch_mm()).round() as i64;
-    let column_offset = column.rem_euclid(2) as f64 * profile.pitch_mm / 2.0;
-    let row = ((point.y - origin.y - column_offset) / profile.pitch_mm).round() as i64;
-    (column, row)
-}
-
-fn scanline_indicator(points: &[Point], region: &ContourSet) -> Vec<f64> {
-    let mut result = vec![0.0; points.len()];
-    let mut by_y = (0..points.len()).collect::<Vec<_>>();
-    by_y.sort_by(|left, right| {
-        points[*left]
-            .y
-            .total_cmp(&points[*right].y)
-            .then_with(|| points[*left].x.total_cmp(&points[*right].x))
-    });
-    let edges = region
-        .rings
-        .iter()
-        .flat_map(|ring| {
-            ring.iter()
-                .copied()
-                .zip(ring.iter().copied().cycle().skip(1))
-                .take(ring.len())
-        })
-        .collect::<Vec<_>>();
-
-    let mut first = 0;
-    while first < by_y.len() {
-        let y = points[by_y[first]].y;
-        let mut last = first + 1;
-        while last < by_y.len() && (points[by_y[last]].y - y).abs() <= NUMERIC_EPSILON {
-            last += 1;
-        }
-        let mut crossings = edges
-            .iter()
-            .filter_map(|([x0, y0], [x1, y1])| {
-                let direction = if *y0 <= y && y < *y1 {
-                    1
-                } else if *y1 <= y && y < *y0 {
-                    -1
-                } else {
-                    return None;
-                };
-                let x = x0 + (y - y0) * (x1 - x0) / (y1 - y0);
-                Some((x, direction))
-            })
-            .collect::<Vec<_>>();
-        crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
-        let mut crossing_index = 0;
-        let mut winding = 0;
-        for &point_index in &by_y[first..last] {
-            while crossing_index < crossings.len()
-                && crossings[crossing_index].0 <= points[point_index].x
-            {
-                winding += crossings[crossing_index].1;
-                crossing_index += 1;
-            }
-            result[point_index] = (winding != 0) as u8 as f64;
-        }
-        first = last;
-    }
-    result
-}
-
-fn project_box_sum(values: &[f64], lower: &[f64], upper: &[f64], target: f64) -> Vec<f64> {
-    debug_assert_eq!(values.len(), lower.len());
-    debug_assert_eq!(values.len(), upper.len());
-    let mut low_shift = values
-        .iter()
-        .zip(upper)
-        .map(|(value, bound)| value - bound)
-        .min_by(f64::total_cmp)
-        .unwrap_or(0.0);
-    let mut high_shift = values
-        .iter()
-        .zip(lower)
-        .map(|(value, bound)| value - bound)
-        .max_by(f64::total_cmp)
-        .unwrap_or(0.0);
-    for _ in 0..64 {
-        let shift = (low_shift + high_shift) / 2.0;
-        let sum = values
-            .iter()
-            .zip(lower)
-            .zip(upper)
-            .map(|((value, lower), upper)| (value - shift).clamp(*lower, *upper))
-            .sum::<f64>();
-        if sum > target {
-            low_shift = shift;
-        } else {
-            high_shift = shift;
-        }
-    }
-    let shift = (low_shift + high_shift) / 2.0;
-    values
-        .iter()
-        .zip(lower)
-        .zip(upper)
-        .map(|((value, lower), upper)| (value - shift).clamp(*lower, *upper))
-        .collect()
-}
-
 #[derive(Debug, Clone, Copy)]
 struct ProjectedArea {
     mode: DenseCopperBalanceMode,
@@ -1001,384 +781,17 @@ fn validate_request(request: DenseCopperBalanceRequest<'_>) -> Result<(), DenseC
         > request.retained_area_mm2 + NUMERIC_EPSILON
     {
         return Err(DenseCopperBalanceError::InvalidInput(
-            "existing copper and usable regions must be disjoint within retained area".to_string(),
+            "existing copper and usable areas together exceed the retained area".to_string(),
         ));
     }
     Ok(())
 }
 
-#[derive(Debug, Default)]
-struct LatticeCandidates {
-    full_centers: Vec<Point>,
-    edge_candidates: Vec<(Point, f64)>,
-}
-
-impl LatticeCandidates {
-    fn new(voidable: &ContourSet, origin: Point, profile: DenseCopperBalanceProfile) -> Self {
-        if voidable.is_empty() {
-            return Self::default();
-        }
-
-        let candidate_region = voidable.disk_dilate(profile.max_void_radius_mm);
-        let centers = hex_aligned_lattice_centers(candidate_region.bbox, origin, profile)
-            .into_iter()
-            .filter(|center| candidate_region.contains_point(*center))
-            .collect::<Vec<_>>();
-        let fully_contained = fully_contained_hexagons(voidable, &centers, profile);
-        let mut full_centers = Vec::new();
-        let mut edge_centers = Vec::new();
-        for (center, full) in centers.into_iter().zip(fully_contained) {
-            if full {
-                full_centers.push(center);
-            } else {
-                edge_centers.push(center);
-            }
-        }
-        let edge_candidates = minimum_partial_candidates(voidable, &edge_centers, profile);
-        Self {
-            full_centers,
-            edge_candidates,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.full_centers.is_empty() && self.edge_candidates.is_empty()
-    }
-
-    fn full_void_area(&self, radius: f64) -> f64 {
-        self.full_centers.len() as f64 * ROUNDED_HEXAGON_AREA_FACTOR * radius.powi(2)
-    }
-
-    fn partial_voids(
-        &self,
-        voidable: &ContourSet,
-        radius: f64,
-        profile: DenseCopperBalanceProfile,
-    ) -> ContourSet {
-        let candidates = self
-            .edge_candidates
-            .iter()
-            .map(|(center, activation_radius)| (*center, radius.max(*activation_radius)))
-            .collect::<Vec<_>>();
-        clipped_voids_containing_minimum_disk(voidable, &candidates, profile)
-    }
-
-    fn void_area(
-        &self,
-        voidable: &ContourSet,
-        radius: f64,
-        profile: DenseCopperBalanceProfile,
-    ) -> f64 {
-        self.full_void_area(radius) + self.partial_voids(voidable, radius, profile).area()
-    }
-}
-
-fn spatial_result_from_squared_radii(
-    centers: &[Point],
-    squared_radii: &[f64],
-    baseline: DenseCopperBalanceResult,
-    layer: SpatialCopperBalanceLayerRequest<'_>,
-    retained_area_mm2: f64,
-) -> DenseCopperBalanceResult {
-    let full_voids = centers
-        .iter()
-        .zip(squared_radii)
-        .map(|(center, radius_squared)| DenseCopperVoid {
-            center: *center,
-            radius_mm: radius_squared.sqrt(),
-        })
-        .collect::<Vec<_>>();
-    let full_void_area_mm2 = ROUNDED_HEXAGON_AREA_FACTOR * squared_radii.iter().sum::<f64>();
-    let partial_voids = baseline.partial_voids;
-    let void_area_mm2 = full_void_area_mm2 + partial_voids.area();
-    let generated_area_mm2 = (baseline.usable.area() - void_area_mm2).max(0.0);
-    let achieved_density = (layer.existing_copper.area() + generated_area_mm2) / retained_area_mm2;
-    let equivalent_radius_mm =
-        (squared_radii.iter().sum::<f64>() / squared_radii.len() as f64).sqrt();
-    let solution = DenseCopperBalanceSolution {
-        mode: DenseCopperBalanceMode::Perforated {
-            void_radius_mm: equivalent_radius_mm,
-        },
-        desired_added_area_mm2: baseline.solution.desired_added_area_mm2,
-        generated_area_mm2,
-        initial_density: baseline.solution.initial_density,
-        achieved_density,
-        target_density: layer.target_density,
-        residual_error: (achieved_density - layer.target_density).abs(),
-    };
-    DenseCopperBalanceResult {
-        solution,
-        usable: baseline.usable,
-        full_voids,
-        partial_voids,
-    }
-}
-
-fn hex_aligned_lattice_centers(
-    bbox: BBox,
-    origin: Point,
-    profile: DenseCopperBalanceProfile,
-) -> Vec<Point> {
-    // Hexagon vertices are at 0°, 60°, ...; nearest-neighbor center vectors
-    // are at 30°, 90°, ... so parallel flats face each other.
-    let column_pitch = profile.lattice_column_pitch_mm();
-    let first_column = ((bbox.min.x - origin.x) / column_pitch).floor() as i64;
-    let last_column = ((bbox.max.x - origin.x) / column_pitch).ceil() as i64;
-    let mut centers = Vec::new();
-
-    for column in first_column..=last_column {
-        let x = origin.x + column as f64 * column_pitch;
-        let column_offset = if column.rem_euclid(2) == 0 {
-            0.0
-        } else {
-            profile.pitch_mm / 2.0
-        };
-        let column_origin_y = origin.y + column_offset;
-        let first_row = ((bbox.min.y - column_origin_y) / profile.pitch_mm).floor() as i64;
-        let last_row = ((bbox.max.y - column_origin_y) / profile.pitch_mm).ceil() as i64;
-
-        for row in first_row..=last_row {
-            centers.push(Point::new(
-                x,
-                column_origin_y + row as f64 * profile.pitch_mm,
-            ));
-        }
-    }
-
-    centers
-}
-
-fn minimum_partial_candidates(
-    voidable: &ContourSet,
-    centers: &[Point],
-    profile: DenseCopperBalanceProfile,
-) -> Vec<(Point, f64)> {
-    if centers.is_empty() {
-        return Vec::new();
-    }
-
-    let min_radius = profile.min_void_radius_mm;
-    let max_radius = profile.max_void_radius_mm;
-    let min_trials = uniform_candidates(centers, min_radius);
-    let max_trials = uniform_candidates(centers, max_radius);
-    let accepted_at_min = accepted_candidate_mask(voidable, &min_trials, profile);
-    let accepted_at_max = accepted_candidate_mask(voidable, &max_trials, profile);
-    let mut bounds = accepted_at_min
-        .into_iter()
-        .zip(accepted_at_max)
-        .map(|(at_min, at_max)| match (at_min, at_max) {
-            (true, _) => Some((min_radius, min_radius)),
-            (false, true) => Some((min_radius, max_radius)),
-            (false, false) => None,
-        })
-        .collect::<Vec<_>>();
-
-    loop {
-        let trials = centers
-            .iter()
-            .copied()
-            .zip(&bounds)
-            .enumerate()
-            .filter_map(|(index, (center, bounds))| {
-                let &(low, high) = bounds.as_ref()?;
-                (high - low > tol::FLATTEN_MM).then_some((index, center, (low + high) / 2.0))
-            })
-            .collect::<Vec<_>>();
-        if trials.is_empty() {
-            break;
-        }
-        let trial_geometry = trials
-            .iter()
-            .map(|(_, center, radius)| (*center, *radius))
-            .collect::<Vec<_>>();
-        let accepted = accepted_candidate_mask(voidable, &trial_geometry, profile);
-        for ((index, _, radius), accepted) in trials.into_iter().zip(accepted) {
-            let (low, high) = bounds[index].as_mut().expect("trial has radius bounds");
-            if accepted {
-                *high = radius;
-            } else {
-                *low = radius;
-            }
-        }
-    }
-
-    centers
-        .iter()
-        .copied()
-        .zip(bounds)
-        .filter_map(|(center, bounds)| bounds.map(|(_, high)| (center, high)))
-        .collect()
-}
-
-fn fully_contained_hexagons(
-    voidable: &ContourSet,
-    centers: &[Point],
-    profile: DenseCopperBalanceProfile,
-) -> Vec<bool> {
-    let candidates = uniform_candidates(centers, profile.max_void_radius_mm);
-    let outside = hexagon_set_with_radii(&candidates, voidable.tolerance).difference(voidable);
-    let outside_points = representative_points(&outside);
-    candidate_point_mask(&candidates, &outside_points, profile)
-        .into_iter()
-        .map(|has_outside_point| !has_outside_point)
-        .collect()
-}
-
-fn uniform_candidates(centers: &[Point], radius: f64) -> Vec<(Point, f64)> {
-    centers.iter().map(|center| (*center, radius)).collect()
-}
-
-fn accepted_candidate_mask(
-    voidable: &ContourSet,
-    candidates: &[(Point, f64)],
-    profile: DenseCopperBalanceProfile,
-) -> Vec<bool> {
-    let raw = hexagon_set_with_radii(candidates, voidable.tolerance).intersection(voidable);
-    let core_points = minimum_disk_core_points(&raw, voidable, candidates, profile);
-    candidate_point_mask(candidates, &core_points, profile)
-}
-
-fn clipped_voids_containing_minimum_disk(
-    voidable: &ContourSet,
-    candidates: &[(Point, f64)],
-    profile: DenseCopperBalanceProfile,
-) -> ContourSet {
-    let raw = hexagon_set_with_radii(candidates, voidable.tolerance).intersection(voidable);
-    let mut core_points = minimum_disk_core_points(&raw, voidable, candidates, profile);
-    core_points.sort_by(|left, right| left.x.total_cmp(&right.x));
-    let rings = raw
-        .connected_components()
-        .into_iter()
-        .filter(|component| component_contains_any_point(component, &core_points))
-        .flat_map(|component| component.rings)
-        .collect();
-    ContourSet::new(rings, FillRule::NonZero, voidable.tolerance)
-}
-
-fn minimum_disk_core_points(
-    raw: &ContourSet,
-    voidable: &ContourSet,
-    candidates: &[(Point, f64)],
-    profile: DenseCopperBalanceProfile,
-) -> Vec<Point> {
-    let minimum_radius = profile.minimum_partial_void_inradius_mm();
-    let mut points = representative_points(&raw.disk_erode(minimum_radius));
-    // Preserve the exact equality case, where erosion can collapse a valid
-    // minimum disk to a zero-area point that regularization omits.
-    points.extend(candidates.iter().filter_map(|(center, _)| {
-        voidable
-            .contains_disk(*center, minimum_radius)
-            .then_some(*center)
-    }));
-    points
-}
-
-fn representative_points(region: &ContourSet) -> Vec<Point> {
-    region
-        .connected_components()
-        .into_iter()
-        .filter_map(|component| component.rings.first()?.first().copied())
-        .map(|[x, y]| Point::new(x, y))
-        .collect()
-}
-
-fn candidate_point_mask(
-    candidates: &[(Point, f64)],
-    points: &[Point],
-    profile: DenseCopperBalanceProfile,
-) -> Vec<bool> {
-    let mut matched = vec![false; candidates.len()];
-    let mut by_x = candidates
-        .iter()
-        .enumerate()
-        .map(|(index, (center, radius))| (index, *center, *radius))
-        .collect::<Vec<_>>();
-    by_x.sort_by(|left, right| left.1.x.total_cmp(&right.1.x));
-    let search_radius = profile.max_void_radius_mm + tol::FLATTEN_MM;
-    for point in points {
-        let first = by_x.partition_point(|(_, center, _)| center.x < point.x - search_radius);
-        let nearest = by_x[first..]
-            .iter()
-            .take_while(|(_, center, _)| center.x <= point.x + search_radius)
-            .filter_map(|&(index, center, radius)| {
-                let distance = center.distance_to(*point);
-                (distance <= radius + tol::FLATTEN_MM).then_some((index, distance))
-            })
-            .min_by(|left, right| left.1.total_cmp(&right.1));
-        if let Some((index, _)) = nearest {
-            matched[index] = true;
-        }
-    }
-    matched
-}
-
-fn component_contains_any_point(component: &ContourSet, points: &[Point]) -> bool {
-    let first = points.partition_point(|point| point.x < component.bbox.min.x);
-    points[first..]
-        .iter()
-        .take_while(|point| point.x <= component.bbox.max.x)
-        .any(|point| {
-            point.y >= component.bbox.min.y
-                && point.y <= component.bbox.max.y
-                && component.contains_point(*point)
-        })
-}
-
-fn hexagon_set_with_radii(candidates: &[(Point, f64)], tolerance: f64) -> ContourSet {
-    let contours = candidates
-        .iter()
-        .map(|(center, radius)| {
-            let hexagon = rounded_hexagonal_void(*radius).expect("candidate radius is validated");
-            transform_cmds(hexagon.cmds.iter().copied(), Affine2::translation(*center))
-        })
-        .collect::<Vec<_>>();
-    ContourSet::from_filled_contours(&contours, tolerance)
-}
-
-/// One slightly rounded, flat-top regular hexagonal void centered at zero.
-pub fn rounded_hexagonal_void(radius: f64) -> Option<ContourBuf> {
-    if !radius.is_finite() || radius <= 0.0 {
-        return None;
-    }
-
-    let corner_radius = radius * HEXAGON_CORNER_RADIUS_RATIO;
-    let tangent_distance = corner_radius / SQRT_3;
-    let center_inset = 2.0 * corner_radius / SQRT_3;
-    let vertices = (0..6)
-        .map(|index| {
-            let angle = index as f64 * PI / 3.0;
-            Point::new(radius * angle.cos(), radius * angle.sin())
-        })
-        .collect::<Vec<_>>();
-
-    let corner = |index: usize| {
-        let previous = vertices[(index + 5) % 6];
-        let vertex = vertices[index];
-        let next = vertices[(index + 1) % 6];
-        let incoming = vertex + (previous - vertex) * (tangent_distance / radius);
-        let outgoing = vertex + (next - vertex) * (tangent_distance / radius);
-        let center = vertex * ((radius - center_inset) / radius);
-        (incoming, outgoing, center)
-    };
-
-    let (first_incoming, _, _) = corner(0);
-    let mut commands = Vec::with_capacity(14);
-    commands.push(PathCmd::move_to(first_incoming));
-    for index in 0..6 {
-        let (incoming, outgoing, center) = corner(index);
-        if index > 0 {
-            commands.push(PathCmd::line_to(incoming));
-        }
-        commands.push(PathCmd::arc_to(outgoing, center, false));
-    }
-    commands.push(PathCmd::close());
-    Some(ContourBuf::new(commands))
-}
-
 #[cfg(test)]
 mod tests {
+    use super::lattice::hexagon_set_with_radii;
     use super::*;
-    use crate::geom::{BBox, PathOp, Point, tol};
+    use crate::geom::{BBox, FillRule, Point, tol};
 
     fn result_voids(result: &DenseCopperBalanceResult) -> ContourSet {
         match result.solution.mode {
@@ -1437,14 +850,44 @@ mod tests {
                 .into_iter()
                 .all(|void| !void.disk_erode(minimum_core_radius).is_empty())
         );
-        assert!(
-            (DenseCopperBalanceProfile::V1.nearest_neighbor_web_mm() - (1.35 - SQRT_3 * 0.65))
-                .abs()
-                <= 1e-12
+    }
+
+    #[test]
+    fn tight_pitch_profile_keeps_voids_inside_the_boundary_web() {
+        // Pitch below twice the maximum void radius: boundary sites must be
+        // classified by hexagon containment, not center proximity.
+        let profile = DenseCopperBalanceProfile {
+            pitch_mm: 1.2,
+            min_void_radius_mm: 0.2,
+            max_void_radius_mm: 0.65,
+            min_copper_web_mm: 0.05,
+            boundary_web_mm: 0.2,
+            density_sigma_mm: 5.0,
+        };
+        profile.validate().unwrap();
+        let safe_region = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(12.0, 8.0)),
+            tol::REGION_MM,
         );
-        assert_eq!(DenseCopperBalanceProfile::V1.min_copper_web_mm, 0.20);
-        assert_eq!(DenseCopperBalanceProfile::V1.boundary_web_mm, 0.20);
-        assert_eq!(2.0 * minimum_core_radius, 0.20);
+        let result = generate_dense_copper_balance(
+            profile,
+            DenseCopperBalanceRequest {
+                safe_region: &safe_region,
+                retained_area_mm2: 96.0,
+                existing_copper_area_mm2: 0.0,
+                target_density: 0.15,
+                lattice_origin: Point::new(0.0, 0.0),
+            },
+        )
+        .unwrap();
+
+        let DenseCopperBalanceMode::Perforated { void_radius_mm } = result.solution.mode else {
+            panic!("expected perforated balance");
+        };
+        assert!(void_radius_mm > 0.6, "expected near-maximum voids");
+        let voids = result_voids(&result);
+        let voidable = safe_region.disk_erode(profile.boundary_web_mm);
+        assert!(voids.difference(&voidable).is_empty());
     }
 
     #[test]
@@ -1505,41 +948,6 @@ mod tests {
         .unwrap();
 
         assert!(result.is_empty());
-    }
-
-    #[test]
-    fn density_kernel_adjoint_matches_the_forward_operator() {
-        let profile = DenseCopperBalanceProfile::V1;
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
-            tol::REGION_MM,
-        );
-        let samples = hex_aligned_lattice_centers(panel.bbox, Point::ZERO, profile)
-            .into_iter()
-            .filter(|point| panel.contains_point(*point))
-            .collect::<Vec<_>>();
-        let evaluation = density_evaluation_points(&samples, Point::ZERO, profile);
-        let kernel = LatticeDensityKernel::new(&samples, &evaluation, Point::ZERO, profile);
-        let source = (0..samples.len())
-            .map(|index| ((index * 17 % 29) as f64 - 14.0) / 29.0)
-            .collect::<Vec<_>>();
-        let residual = (0..evaluation.len())
-            .map(|index| ((index * 11 % 23) as f64 - 11.0) / 23.0)
-            .collect::<Vec<_>>();
-
-        let forward_inner_product = kernel
-            .smooth(&source)
-            .iter()
-            .zip(&residual)
-            .map(|(left, right)| left * right)
-            .sum::<f64>();
-        let adjoint_inner_product = source
-            .iter()
-            .zip(kernel.smooth_adjoint(&residual))
-            .map(|(left, right)| left * right)
-            .sum::<f64>();
-
-        assert!((forward_inner_product - adjoint_inner_product).abs() <= 1e-12);
     }
 
     #[test]
@@ -1896,60 +1304,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_partial_voids_that_cannot_hold_the_minimum_disk() {
-        let profile = DenseCopperBalanceProfile::V1;
-        let voidable = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(0.15, 10.0)),
-            tol::REGION_MM,
-        );
-        let lattice = LatticeCandidates::new(&voidable, Point::new(0.0, 0.0), profile);
-
-        assert!(lattice.edge_candidates.is_empty());
-    }
-
-    #[test]
-    fn exact_hex_containment_is_not_circumcircle_conservative() {
-        let profile = DenseCopperBalanceProfile::V1;
-        let voidable = ContourSet::rectangle(
-            BBox::new(Point::new(-0.66, -0.57), Point::new(0.66, 0.57)),
-            tol::REGION_MM,
-        );
-        let center = Point::new(0.0, 0.0);
-
-        assert!(!voidable.contains_disk(center, profile.max_void_radius_mm));
-        assert_eq!(
-            fully_contained_hexagons(&voidable, &[center], profile),
-            vec![true]
-        );
-    }
-
-    #[test]
-    fn partial_void_activation_is_monotone_in_radius() {
-        let profile = DenseCopperBalanceProfile::V1;
-        let voidable = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(4.0, 4.0)),
-            tol::REGION_MM,
-        );
-        let centers = hex_aligned_lattice_centers(
-            voidable.disk_dilate(profile.max_void_radius_mm).bbox,
-            Point::new(0.0, 0.0),
-            profile,
-        );
-        let mut previously_accepted = vec![false; centers.len()];
-        for radius in [0.20, 0.30, 0.40, 0.50, 0.60, 0.65] {
-            let candidates = uniform_candidates(&centers, radius);
-            let accepted = accepted_candidate_mask(&voidable, &candidates, profile);
-            assert!(
-                previously_accepted
-                    .iter()
-                    .zip(&accepted)
-                    .all(|(previous, current)| !previous || *current)
-            );
-            previously_accepted = accepted;
-        }
-    }
-
-    #[test]
     fn geometric_projection_never_worsens_target_sweep() {
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(8.0, 5.0)),
@@ -1973,31 +1327,5 @@ mod tests {
                     <= (result.solution.initial_density - target_density).abs() + NUMERIC_EPSILON
             );
         }
-    }
-
-    #[test]
-    fn rounded_hexagon_uses_six_scaled_corner_arcs_and_tracks_analytic_area() {
-        let radius = 0.8;
-        let hexagon = rounded_hexagonal_void(radius).unwrap();
-        let arcs = hexagon
-            .cmds
-            .iter()
-            .filter(|command| command.op == PathOp::ArcTo)
-            .collect::<Vec<_>>();
-        assert_eq!(arcs.len(), 6);
-        for arc in arcs {
-            assert!(
-                (arc.p0.distance_to(arc.p1) - radius * HEXAGON_CORNER_RADIUS_RATIO).abs() <= 1e-12
-            );
-        }
-
-        let region = ContourSet::from_filled_contours(&[hexagon], tol::REGION_MM);
-        let expected_area = ROUNDED_HEXAGON_AREA_FACTOR * radius.powi(2);
-        assert!(
-            (region.area() - expected_area).abs() <= expected_area * 2e-3,
-            "geometric area {}, analytic area {}",
-            region.area(),
-            expected_area
-        );
     }
 }

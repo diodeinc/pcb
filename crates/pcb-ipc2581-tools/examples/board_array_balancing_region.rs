@@ -9,28 +9,29 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use pcb_ipc2581_tools::commands::board_array::balance::{
+    ArraySupportLayerSource, extract_array_support_layers,
+};
 use pcb_ipc2581_tools::geometry::{
-    board_array_fabrication_profile_with_debug, board_array_vscore_lines, extract_layer_for_view,
-    extract_layout,
+    board_array_fabrication_profile_with_debug, board_array_vscore_lines, extract_layout,
 };
 use pcb_ipc2581_tools::ipc2581::{Ipc2581, Symbol, types::LayerFunction};
 use pcb_ipc2581_tools::layers::copper_layers;
 use pcb_ipc2581_tools::utils::file::load_ipc_file;
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, BoardArrayBalancingResult, BoardArraySupportDocument,
-    BoardArraySupportLayerGeometry, BoardArraySupportLayerPolicy, DEFAULT_BALANCING_CLEARANCE_MM,
+    BoardArraySupportLayerGeometry, DEFAULT_BALANCING_CLEARANCE_MM,
     DEFAULT_BALANCING_GAP_RADIUS_MM, DEFAULT_BALANCING_NUMERICAL_GUARD_MM,
-    DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM, View, board_array_balancing_region,
+    DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM, board_array_balancing_region,
     inspect_board_array_balancing_input, root_panel_step,
 };
 use pcb_ir::geom::{BBox, ContourSet};
 use serde::Serialize;
 
-const SCHEMA: &str = "pcb-ir.board-array-balancing-debug.v8";
+const SCHEMA: &str = "pcb-ir.board-array-balancing-debug.v9";
 const DEFAULT_CHECK_AREA_TOLERANCE_MM2: f64 = 1e-4;
 const SVG_PADDING_MM: f64 = 2.0;
 const SVG_STROKE_MM: f64 = 0.12;
-type GeometryDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -88,14 +89,6 @@ struct SupportLayer {
 }
 
 #[derive(Debug)]
-struct SupportLayerSource {
-    name: String,
-    function: String,
-    policy: BoardArraySupportLayerPolicy,
-    document: GeometryDocument,
-}
-
-#[derive(Debug)]
 struct Regions {
     panel_outer: ContourSet,
     board_footprints: ContourSet,
@@ -108,7 +101,6 @@ struct Regions {
     opened_candidates: ContourSet,
     removed_by_opening: ContourSet,
     narrow_voids: ContourSet,
-    gap_separator_keep_out: ContourSet,
     removed_by_gap_regularization: ContourSet,
     removed_by_regularization: ContourSet,
     safe_region: ContourSet,
@@ -211,7 +203,6 @@ struct RegularizationJson {
     removed_area_mm2: f64,
     removed_by_opening_area_mm2: f64,
     narrow_void_area_mm2: f64,
-    gap_separator_keep_out_area_mm2: f64,
     removed_by_gap_regularization_area_mm2: f64,
     retained_fraction: f64,
     clearance_safe_component_count: usize,
@@ -250,7 +241,6 @@ struct RegionsJson {
     opened_candidates: RegionJson,
     removed_by_opening: RegionJson,
     narrow_voids: RegionJson,
-    gap_separator_keep_out: RegionJson,
     removed_by_gap_regularization: RegionJson,
     removed_by_regularization: RegionJson,
     safe_region: RegionJson,
@@ -305,18 +295,8 @@ fn component_areas(region: &ContourSet) -> Vec<f64> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if !args.clearance_mm.is_finite() || args.clearance_mm <= 0.0 {
-        bail!("--clearance-mm must be a finite positive number");
-    }
-    if !args.regularization_radius_mm.is_finite() || args.regularization_radius_mm <= 0.0 {
-        bail!("--regularization-radius-mm must be a finite positive number");
-    }
-    if !args.gap_radius_mm.is_finite() || args.gap_radius_mm <= 0.0 {
-        bail!("--gap-radius-mm must be a finite positive number");
-    }
-    if !args.numerical_guard_mm.is_finite() || args.numerical_guard_mm < 0.0 {
-        bail!("--numerical-guard-mm must be a finite non-negative number");
-    }
+    // The radius and clearance options are validated by
+    // `board_array_balancing_region` itself.
     if !args.check_area_tolerance_mm2.is_finite() || args.check_area_tolerance_mm2 < 0.0 {
         bail!("--check-area-tolerance-mm2 must be a finite non-negative number");
     }
@@ -358,7 +338,7 @@ fn main() -> Result<()> {
         board_array_fabrication_profile_with_debug(&ipc, &layout, &score_lines)
             .context("failed to compose board-array fabrication profile")?;
 
-    let support_sources = extract_support_layers(&ipc)?;
+    let support_sources = extract_array_support_layers(&ipc)?;
     let collection = inspect_board_array_balancing_input(
         &layout,
         &fabrication_profile,
@@ -369,17 +349,15 @@ fn main() -> Result<()> {
     )
     .context("failed to collect board-array balancing inputs")?;
     let balancing_input = collection.input_for_layer(selected_copper.name);
-    let result = board_array_balancing_region(
-        &balancing_input,
-        BalancingRegionOptions {
-            clearance_mm: args.clearance_mm,
-            regularization_radius_mm: args.regularization_radius_mm,
-            gap_radius_mm: args.gap_radius_mm,
-            numerical_guard_mm: args.numerical_guard_mm,
-        },
-    )
-    .context("failed to compute board-array balancing region")?;
-    let construction_clearance_mm = args.clearance_mm + args.numerical_guard_mm;
+    let options = BalancingRegionOptions {
+        clearance_mm: args.clearance_mm,
+        regularization_radius_mm: args.regularization_radius_mm,
+        gap_radius_mm: args.gap_radius_mm,
+        numerical_guard_mm: args.numerical_guard_mm,
+    };
+    let result = board_array_balancing_region(&balancing_input, options)
+        .context("failed to compute board-array balancing region")?;
+    let construction_clearance_mm = options.construction_clearance_mm();
     let certificate_passed = result.certificate.passes(args.check_area_tolerance_mm2);
     let support_features = balancing_input.support_features;
     let panel_outer = collection.panel_outer;
@@ -410,6 +388,12 @@ fn main() -> Result<()> {
             ContourSet::empty(safe_region.tolerance),
             |undersized, component| undersized.union(&component),
         );
+    let removed_by_regularization = intermediates
+        .removed_by_opening
+        .union(&intermediates.removed_by_gap_regularization);
+    let narrow_voids = intermediates
+        .opened_candidates
+        .disk_gap_violations(args.gap_radius_mm);
     let regions = Regions {
         panel_outer,
         board_footprints,
@@ -421,10 +405,9 @@ fn main() -> Result<()> {
         clearance_safe_region: intermediates.clearance_safe_region,
         opened_candidates: intermediates.opened_candidates,
         removed_by_opening: intermediates.removed_by_opening,
-        narrow_voids: intermediates.narrow_voids,
-        gap_separator_keep_out: intermediates.gap_separator_keep_out,
+        narrow_voids,
         removed_by_gap_regularization: intermediates.removed_by_gap_regularization,
-        removed_by_regularization: intermediates.removed_by_regularization,
+        removed_by_regularization,
         safe_region,
         undersized_final_components,
         clearance_certificate: certificate.swept_safe_region,
@@ -461,7 +444,6 @@ fn main() -> Result<()> {
         removed_area_mm2: regions.removed_by_regularization.area(),
         removed_by_opening_area_mm2: regions.removed_by_opening.area(),
         narrow_void_area_mm2: regions.narrow_voids.area(),
-        gap_separator_keep_out_area_mm2: regions.gap_separator_keep_out.area(),
         removed_by_gap_regularization_area_mm2: regions.removed_by_gap_regularization.area(),
         retained_fraction: if clearance_safe_area_mm2 > 0.0 {
             final_safe_area_mm2 / clearance_safe_area_mm2
@@ -551,7 +533,6 @@ fn main() -> Result<()> {
             opened_candidates: RegionJson::from(&regions.opened_candidates),
             removed_by_opening: RegionJson::from(&regions.removed_by_opening),
             narrow_voids: RegionJson::from(&regions.narrow_voids),
-            gap_separator_keep_out: RegionJson::from(&regions.gap_separator_keep_out),
             removed_by_gap_regularization: RegionJson::from(&regions.removed_by_gap_regularization),
             removed_by_regularization: RegionJson::from(&regions.removed_by_regularization),
             safe_region: RegionJson::from(&regions.safe_region),
@@ -619,38 +600,14 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn extract_support_layers(ipc: &Ipc2581) -> Result<Vec<SupportLayerSource>> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    ecad.cad_data
-        .layers
-        .iter()
-        .map(|source_layer| {
-            let name = ipc.resolve(source_layer.name);
-            let document = extract_layer_for_view(ipc, name, View::ArraySupport)
-                .with_context(|| format!("failed to extract ArraySupport layer '{name}'"))?;
-            let policy = if source_layer.layer_function == LayerFunction::VCut {
-                BoardArraySupportLayerPolicy::VCutOperationsOnly
-            } else {
-                BoardArraySupportLayerPolicy::AllPaintedFeatures
-            };
-            Ok(SupportLayerSource {
-                name: name.to_string(),
-                function: layer_function_name(source_layer.layer_function),
-                policy,
-                document,
-            })
-        })
-        .collect()
-}
-
 fn support_layer(
-    source: SupportLayerSource,
+    source: ArraySupportLayerSource,
     geometry: BoardArraySupportLayerGeometry<Symbol>,
     copper_layer: Symbol,
 ) -> SupportLayer {
     SupportLayer {
         name: source.name,
-        function: source.function,
+        function: layer_function_name(source.layer_function),
         source_feature_count: geometry.source_feature_count,
         feature_count: geometry.feature_count,
         source_path_count: geometry.source_path_count,
@@ -776,13 +733,6 @@ fn write_artifacts(
             region: &regions.narrow_voids,
             fill: "#22d3ee",
             stroke: "#0e7490",
-        },
-        Stage {
-            filename: "83-gap-separator-keep-out.svg",
-            title: "83 — medial-axis keep-out tubes through narrow voids",
-            region: &regions.gap_separator_keep_out,
-            fill: "#c084fc",
-            stroke: "#7e22ce",
         },
         Stage {
             filename: "85-removed-by-gap-regularization.svg",
@@ -1007,12 +957,6 @@ fn render_overview_svg(title: &str, regions: &Regions) -> String {
         "narrow-voids",
         &regions.narrow_voids,
         "fill='#22d3ee' stroke='#0e7490' fill-opacity='0.42'",
-    );
-    write_region(
-        &mut svg,
-        "gap-separator-keep-out",
-        &regions.gap_separator_keep_out,
-        "fill='#c084fc' stroke='#7e22ce' fill-opacity='0.24'",
     );
     write_region(
         &mut svg,
@@ -1244,7 +1188,6 @@ fn render_index_html(
         <label><input type="checkbox" data-layer="opened-candidates"{opened_candidates}><span class="swatch" style="background:#86efac"></span>disk-opened candidates</label>
         <label><input type="checkbox" data-layer="removed-by-opening"{removed_by_opening}><span class="swatch" style="background:#fb923c"></span>discarded by opening</label>
         <label><input type="checkbox" data-layer="narrow-voids"{narrow_voids}><span class="swatch" style="background:#22d3ee"></span>narrow two-sided voids</label>
-        <label><input type="checkbox" data-layer="gap-separator-keep-out"{gap_separator_keep_out}><span class="swatch" style="background:#c084fc"></span>gap separator keep-out</label>
         <label><input type="checkbox" data-layer="removed-by-gap-regularization"{removed_by_gap_regularization}><span class="swatch" style="background:#f472b6"></span>trimmed to widen gaps</label>
         <label><input type="checkbox" data-layer="safe-region"{safe_region}><span class="swatch" style="background:#4ade80"></span>regularized safe region</label>
         <label><input type="checkbox" data-layer="board-footprints"{board_footprints}><span class="swatch" style="background:#fb7185"></span>board footprints</label>
@@ -1267,7 +1210,6 @@ fn render_index_html(
         <dt>Removed area</dt><dd>{removed_area:.3} mm²</dd>
         <dt>Removed by opening</dt><dd>{removed_by_opening_area:.3} mm²</dd>
         <dt>Narrow voids</dt><dd>{narrow_void_area:.3} mm²</dd>
-        <dt>Gap keep-out</dt><dd>{gap_separator_keep_out_area:.3} mm²</dd>
         <dt>Trimmed to widen gaps</dt><dd>{removed_by_gap_regularization_area:.3} mm²</dd>
         <dt>Retained</dt><dd>{retained_fraction:.1}%</dd>
         <dt>Safe fraction</dt><dd>{safe_fraction:.1}%</dd>
@@ -1321,7 +1263,6 @@ fn render_index_html(
         opened_candidates = checked(false),
         removed_by_opening = checked(false),
         narrow_voids = checked(false),
-        gap_separator_keep_out = checked(false),
         removed_by_gap_regularization = checked(true),
         safe_region = checked(true),
         board_footprints = checked(true),
@@ -1337,7 +1278,6 @@ fn render_index_html(
         removed_area = artifact.regularization.removed_area_mm2,
         removed_by_opening_area = artifact.regularization.removed_by_opening_area_mm2,
         narrow_void_area = artifact.regularization.narrow_void_area_mm2,
-        gap_separator_keep_out_area = artifact.regularization.gap_separator_keep_out_area_mm2,
         removed_by_gap_regularization_area = artifact
             .regularization
             .removed_by_gap_regularization_area_mm2,

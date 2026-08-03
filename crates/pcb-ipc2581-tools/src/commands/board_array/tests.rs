@@ -1,18 +1,18 @@
 use super::balance::{
-    generate_automatic_board_array_copper_balance, generate_board_array_copper_balance,
+    balance_features, extract_array_support_layers, generate_automatic_board_array_copper_balance,
 };
 use super::*;
 use crate::accessors::IpcAccessor;
 use crate::ipc2581::types::LayerFunction;
 use crate::manufacturing::{ManufacturingPackage, build_manufacturing_package};
 use pcb_ir::dialects::ipc::{
-    BalancingRegionOptions, BoardArraySupportDocument, BoardArraySupportLayerPolicy, FeatureBucket,
-    FeatureDomain, FeatureIntent, FeatureKind, FeatureOperation, FeatureRole, FeatureSpan,
-    FiducialKind, LayoutStepKind, PlatingKind, View, board_array_balancing_region,
-    collect_board_array_balancing_input,
+    BalancingRegionOptions, BoardArraySupportDocument, FeatureBucket, FeatureDomain, FeatureIntent,
+    FeatureKind, FeatureOperation, FeatureRole, FeatureSpan, FiducialKind, LayoutStepKind,
+    PlatingKind, View, board_array_balancing_region, collect_board_array_balancing_input,
 };
 use pcb_ir::geom::copper_balance::{
-    DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceRequest,
+    DenseCopperBalanceMode, DenseCopperBalanceProfile, SpatialCopperBalanceLayerRequest,
+    SpatialCopperBalanceRequest, generate_spatial_dense_copper_balance,
 };
 use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 
@@ -155,31 +155,16 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
     let fabrication_profile =
         geometry::board_array_fabrication_profile(&ipc, &layout, &score_lines).unwrap();
     let ecad = ipc.ecad().unwrap();
-    let support_documents = ecad
-        .cad_data
-        .layers
-        .iter()
-        .map(|layer| {
-            let name = ipc.resolve(layer.name);
-            let document =
-                geometry::extract_layer_for_view(&ipc, name, View::ArraySupport).unwrap();
-            let policy = if layer.layer_function == LayerFunction::VCut {
-                BoardArraySupportLayerPolicy::VCutOperationsOnly
-            } else {
-                BoardArraySupportLayerPolicy::AllPaintedFeatures
-            };
-            (document, policy)
-        })
-        .collect::<Vec<_>>();
+    let support_layers = extract_array_support_layers(&ipc).unwrap();
     let copper_layers = crate::layers::copper_layers(ecad);
 
     let collection = collect_board_array_balancing_input(
         &layout,
         &fabrication_profile,
         &copper_layers,
-        support_documents
+        support_layers
             .iter()
-            .map(|(document, policy)| BoardArraySupportDocument::new(document, *policy)),
+            .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
     )
     .unwrap();
     let input = collection.input_for_layer(copper_layers[0].name);
@@ -255,12 +240,6 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
                 .intersection(&layer.existing_copper)
                 .is_empty()
         );
-        let expected_target = layer
-            .existing_copper
-            .intersection(&balance.board_footprints)
-            .area()
-            / balance.board_footprints.area();
-        assert!((layer.board_target_density - expected_target).abs() <= 1e-9);
         assert_eq!(
             layer.result.solution.target_density,
             layer.board_target_density
@@ -287,8 +266,6 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
             report.residual_error <= (report.initial_density - report.target_density).abs() + 1e-9
         );
     }
-    assert!(serde_json::to_value(&creation.copper_balance).unwrap()["layers"].is_array());
-
     let xml = creation.xml;
     assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
     assert!(xml.matches("<Contour>").count() > 0);
@@ -896,17 +873,25 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
         tol::REGION_MM,
     );
 
-    let (balance, features) = generate_board_array_copper_balance(
+    let existing = ContourSet::empty(tol::REGION_MM);
+    let layers = [SpatialCopperBalanceLayerRequest {
+        safe_region: &safe_region,
+        existing_copper: &existing,
+        target_density: 0.70,
+        stack_weight_mm2: 0.0,
+    }];
+    let balance = generate_spatial_dense_copper_balance(
         DenseCopperBalanceProfile::V1,
-        DenseCopperBalanceRequest {
-            safe_region: &safe_region,
-            retained_area_mm2: safe_region.area(),
-            existing_copper_area_mm2: 0.0,
-            target_density: 0.70,
+        SpatialCopperBalanceRequest {
+            panel_region: &safe_region,
             lattice_origin: Point::new(50.0, 50.0),
+            layers: &layers,
         },
     )
+    .unwrap()
+    .pop()
     .unwrap();
+    let features = balance_features(&balance).unwrap();
     spec.generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         "TOP",

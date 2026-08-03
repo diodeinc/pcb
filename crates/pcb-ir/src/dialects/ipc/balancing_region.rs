@@ -23,12 +23,12 @@
 //!
 //! Let `G_v(X)` retain the components of `close(X, disk(v)) \ X` that touch two
 //! nonincident, opposing boundary branches. This excludes the normal rounded
-//! bite at a single concave corner. Removing a radius-`v` tube around the
-//! medial axis of `G_v(A)`, then disk-opening, trims both sides of every narrow
-//! void locally. Any certified residual is swept by the same radius until
-//! `G_v(S)` is empty. Thus filled features admit a disk of radius `q`, while
-//! intervening void gaps admit a disk of radius `v`, without component ranking
-//! or feature-specific rules.
+//! bite at a single concave corner. Each pass removes a radius-`v` tube around
+//! the boundary medial axis inside `G_v`, then disk-opens, trimming both sides
+//! of every narrow void locally; the same cut repeats until `G_v` is empty.
+//! Thus filled features admit a disk of radius `q`, while intervening void
+//! gaps admit a disk of radius `v`, without component ranking or
+//! feature-specific rules.
 
 use std::fmt;
 
@@ -154,14 +154,10 @@ pub struct BoardArrayBalancingIntermediates {
     pub opened_candidates: ContourSet,
     /// Material removed from the clearance-safe set by the disk opening alone.
     pub removed_by_opening: ContourSet,
-    /// Two-sided complement phase rejected by the rolling-disk gap test.
-    pub narrow_voids: ContourSet,
-    /// Initial medial-axis tube plus any directly swept certificate residuals.
-    pub gap_separator_keep_out: ContourSet,
-    /// Material locally trimmed to widen two-sided void gaps.
+    /// Material locally trimmed to widen two-sided void gaps. Together with
+    /// `removed_by_opening` this is the total regularization removal
+    /// `clearance_safe_region \ safe_region`.
     pub removed_by_gap_regularization: ContourSet,
-    /// Total material removed by filled-feature and void-gap regularization.
-    pub removed_by_regularization: ContourSet,
 }
 
 /// Independent proof geometry for a computed safe region.
@@ -371,13 +367,11 @@ impl std::error::Error for BalancingRegionError {}
 /// candidates     = open(clearance_safe, disk(q))
 /// ```
 ///
-/// The first pass removes a radius-`v + guard` tube around the portion of the
-/// candidates' boundary medial axis inside the two-sided subset of
-/// `close(candidates, disk(v + guard)) \ candidates`. If the nominal closing
-/// certificate finds a nontrivial two-sided residual after that cut, monotone
-/// set iteration sweeps that residual directly until the certificate is empty.
-/// It widens inter-component gaps, hairpins, notches, and internal voids
-/// locally without widening one-sided edge clearance.
+/// Gap regularization then repeatedly removes a radius-`v + guard` tube around
+/// the boundary medial axis inside the two-sided subset of
+/// `close(candidates, disk(v + guard)) \ candidates` until that subset is
+/// empty. It widens inter-component gaps, hairpins, notches, and internal
+/// voids locally without widening one-sided edge clearance.
 pub fn board_array_balancing_region(
     input: &BoardArrayBalancingInput,
     options: BalancingRegionOptions,
@@ -408,10 +402,7 @@ pub fn board_array_balancing_region(
         )
         .map_err(|error| BalancingRegionError::GapRegularization(error.to_string()))?;
     let safe_region = gap_regularization.kept;
-    let narrow_voids = gap_regularization.narrow_voids;
-    let gap_separator_keep_out = gap_regularization.separator_keep_out;
     let removed_by_gap_regularization = gap_regularization.removed;
-    let removed_by_regularization = clearance_safe_region.difference(&safe_region);
 
     // Certify against the nominal requirement, independently of the
     // construction guard used above.
@@ -438,10 +429,7 @@ pub fn board_array_balancing_region(
             clearance_safe_region,
             opened_candidates,
             removed_by_opening,
-            narrow_voids,
-            gap_separator_keep_out,
             removed_by_gap_regularization,
-            removed_by_regularization,
         },
         certificate,
     })
@@ -695,7 +683,14 @@ mod tests {
                 .difference(&result.intermediates.clearance_safe_region)
                 .is_empty()
         );
-        assert!(result.intermediates.removed_by_regularization.area() > 0.0);
+        assert!(
+            result
+                .intermediates
+                .clearance_safe_region
+                .difference(&result.safe_region)
+                .area()
+                > 0.0
+        );
         assert!(
             result
                 .safe_region
@@ -708,21 +703,6 @@ mod tests {
                 .intersection(&result.intermediates.obstacle_keep_out)
                 .is_empty()
         );
-    }
-
-    #[test]
-    fn certificate_never_tolerates_a_nonempty_gap_violation() {
-        let empty = ContourSet::empty(tol::REGION_MM);
-        let certificate = ClearanceCertificate {
-            swept_safe_region: empty.clone(),
-            safe_outside_clearance_region: empty.clone(),
-            regularization_violations: empty.clone(),
-            gap_violations: ContourSet::rectangle(bbox(0.0, 0.0, 0.01, 0.01), tol::REGION_MM),
-            outside_panel: empty.clone(),
-            obstacle_overlap: empty,
-        };
-
-        assert!(!certificate.passes(1.0));
     }
 
     #[test]

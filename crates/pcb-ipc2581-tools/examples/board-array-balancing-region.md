@@ -44,32 +44,28 @@ defaults, both surviving filled regions and empty gaps use a 1 mm nominal
 scale, while clearance remains an independent 0.5 mm distance.
 
 For any set `X`, define `G_t(X)` as the connected components of
-`close(X, disk(t)) \ X` that touch nonincident source-boundary branches with
-opposing tangents. This keeps genuine two-sided gaps—including gaps between
-components, hairpins, notches, and holes—and rejects the ordinary closing bite
-at an isolated concave corner.
+`close(X, disk(t)) \ X` that touch nonincident, separated source-boundary
+branches on distinct rings, or on one ring with opposing tangents. This keeps
+genuine two-sided gaps—including gaps between components, hairpins, notches,
+and holes—and rejects the ordinary closing bite at an isolated concave corner.
 
-Gap regularization is a monotone local trim:
+Gap regularization repeats one monotone local trim:
 
 ```text
-N₀   = G_(v + e)(A_l)
-Γ₀   = source-boundary generalized Voronoi axis inside N₀
-S₀   = open(A_l \ (Γ₀ ⊕ disk(v + e)), disk(q))
-
-Rₖ   = G_v(Sₖ)
-Vₖ   = open(Rₖ, disk(e))
-Wₖ   = Vₖ if Vₖ is nonempty, otherwise Rₖ
-Sₖ₊₁ = open(Sₖ \ (Wₖ ⊕ disk(v + e)), disk(q))
+S₀   = A_l
+Nₖ   = G_v(Sₖ)
+Γₖ   = source-boundary generalized Voronoi axis inside Nₖ
+Sₖ₊₁ = open(Sₖ \ (Γₖ ⊕ disk(v + e)), disk(q)) ∩ Sₖ
 ```
 
-The Voronoi axis gives the least local first cut and treats competing sides
-symmetrically. Meaningful residuals are denoised before sweeping. A residual too
-thin for that filter is swept raw rather than treated as safe. This avoids
-repeated Voronoi construction over Boolean-generated boundaries without letting
-an extremely tight real gap evade the proof. Each pass only removes material,
-and the filled-region opening after every trim prevents new copper slivers.
-Iteration ends when `Rₖ` is empty or reports an error if a pass cannot make
-meaningful geometric progress.
+The Voronoi axis gives the least local cut and treats competing sides
+symmetrically; a void component too thin to carry an axis stroke is swept
+whole instead. The guard `e` separates every checked quantity from every
+constructed one: a cut leaves a `2 (v + e)` void, so construction noise cannot
+push it back under the nominal test. Each pass only removes material, and the
+filled-region opening after every trim prevents new copper slivers. The safe
+region is the fixed point where `Nₖ` is empty; a pass that cannot make
+meaningful geometric progress reports an error.
 
 The independent nominal certificate is:
 
@@ -159,8 +155,7 @@ Each run overwrites a deterministic artifact set:
 | `70-clearance-safe-region.svg` | Clearance-safe set `F` |
 | `75-opened-candidates.svg` | Filled-region opening `A` |
 | `80-removed-by-opening.svg` | Material rejected by filled regularization |
-| `82-narrow-voids.svg` | Detected two-sided closing residuals |
-| `83-gap-separator-keep-out.svg` | Medial-axis and residual sweep tubes |
+| `82-narrow-voids.svg` | Two-sided closing residuals of the opened candidates |
 | `85-removed-by-gap-regularization.svg` | Material locally trimmed around gaps |
 | `90-safe-region.svg` | Final balancing-safe region |
 | `100-clearance-certificate.svg` | Safe region swept by nominal clearance |
