@@ -1556,10 +1556,13 @@ impl<T: LspContext> Backend<T> {
     }
 
     fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i64>) {
-        let uri = uri
-            .as_str()
-            .parse()
-            .expect("url::Url should always be a valid LSP URI");
+        let Some(uri) = protocol_uri(&uri) else {
+            self.log_message(
+                MessageType::WARNING,
+                &format!("Skipping diagnostics for invalid URI: {uri}"),
+            );
+            return;
+        };
         self.send_notification(new_notification::<PublishDiagnostics>(
             PublishDiagnosticsParams::new(uri, diags, version.map(|i| i as i32)),
         ));
@@ -1577,6 +1580,7 @@ impl<T: LspContext> Backend<T> {
         data.get("targetUri")
             .and_then(|value| value.as_str())
             .and_then(|value| Url::parse(value).ok())
+            .filter(|url| protocol_uri(url).is_some())
             .unwrap_or_else(|| fallback.clone())
     }
 
@@ -1738,11 +1742,8 @@ impl<T: LspContext> Backend<T> {
             && let (Some(parent), Some(file_name)) =
                 (watched_path.parent(), watched_path.file_name())
             && let Ok(base_uri) = Url::from_directory_path(parent)
+            && let Some(base_uri) = protocol_uri(&base_uri)
         {
-            let base_uri = base_uri
-                .as_str()
-                .parse()
-                .expect("url::Url should always be a valid LSP URI");
             return Some(FileSystemWatcher {
                 glob_pattern: GlobPattern::Relative(RelativePattern {
                     base_uri: OneOf::Right(base_uri),
@@ -2092,6 +2093,10 @@ fn uri_to_file_path(uri: &Uri) -> Option<PathBuf> {
     Url::parse(uri.as_str()).ok()?.to_file_path().ok()
 }
 
+fn protocol_uri(url: &Url) -> Option<Uri> {
+    url.as_str().parse().ok()
+}
+
 fn display_uri_path(uri: &Uri) -> String {
     uri_to_file_path(uri)
         .map(|path| path.display().to_string())
@@ -2226,6 +2231,13 @@ mod tests {
         assert!(!record_netlist_payload(&mut last_emitted, &uri, &a));
         assert!(record_netlist_payload(&mut last_emitted, &uri, &b));
         assert!(record_netlist_payload(&mut last_emitted, &uri, &a));
+    }
+
+    #[test]
+    fn rejects_urls_that_are_not_valid_protocol_uris() {
+        let url = Url::from_file_path(std::env::temp_dir().join("board[rev2].zen")).unwrap();
+
+        assert!(super::protocol_uri(&url).is_none());
     }
 
     fn goto_definition_request(
