@@ -526,13 +526,16 @@ fn run_freerouting(
     api.start_job(&job_id)?;
     spinner.finish();
 
-    println!("  Running FreeRouting (timeout: {timeout_secs}s)...");
+    let spinner =
+        Spinner::builder(format!("Running FreeRouting (timeout: {timeout_secs}s)...")).start();
     let start = Instant::now();
-    let poll_result = poll_job(&api, &job_id, timeout_secs)?;
-    println!(
-        "  FreeRouting finished in {:.1}s",
-        start.elapsed().as_secs_f64()
-    );
+    let poll_result = poll_job(&api, &job_id, timeout_secs, &spinner)?;
+    let elapsed_msg = format!("FreeRouting finished in {:.1}s", start.elapsed().as_secs_f64());
+    if poll_result.outcome == RunOutcome::Cancelled {
+        spinner.warning(elapsed_msg);
+    } else {
+        spinner.success(elapsed_msg);
+    }
 
     if let Some(bytes) = poll_result.output {
         std::fs::write(ses_path, bytes).context("Failed to write FreeRouting SES output")?;
@@ -568,9 +571,12 @@ struct PollResult {
 /// permanently lose real progress. Falling back to output captured during
 /// the last known-safe `RUNNING` poll sidesteps that race entirely, rather
 /// than trying to win it.
-fn poll_job(api: &FreeroutingApiClient, job_id: &str, timeout_secs: u64) -> Result<PollResult> {
-    use std::io::Write;
-
+fn poll_job(
+    api: &FreeroutingApiClient,
+    job_id: &str,
+    timeout_secs: u64,
+    spinner: &Spinner,
+) -> Result<PollResult> {
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let mut consecutive_errors = 0u32;
     let mut last_printed_pass: Option<u32> = None;
@@ -579,7 +585,6 @@ fn poll_job(api: &FreeroutingApiClient, job_id: &str, timeout_secs: u64) -> Resu
     loop {
         for _ in 0..10 {
             if CANCEL.load(Ordering::SeqCst) {
-                println!();
                 let _ = api.cancel_job(job_id);
                 return Ok(PollResult {
                     outcome: RunOutcome::Cancelled,
@@ -590,7 +595,6 @@ fn poll_job(api: &FreeroutingApiClient, job_id: &str, timeout_secs: u64) -> Resu
         }
 
         if Instant::now() > deadline {
-            println!();
             let _ = api.cancel_job(job_id);
             return Ok(PollResult {
                 outcome: RunOutcome::Cancelled,
@@ -603,12 +607,13 @@ fn poll_job(api: &FreeroutingApiClient, job_id: &str, timeout_secs: u64) -> Resu
                 consecutive_errors = 0;
                 if status.current_pass.is_some() && status.current_pass != last_printed_pass {
                     last_printed_pass = status.current_pass;
-                    print!("  pass {}\r", last_printed_pass.unwrap());
-                    std::io::stdout().flush().ok();
+                    spinner.set_message(format!(
+                        "Running FreeRouting (timeout: {timeout_secs}s)... pass {}",
+                        last_printed_pass.unwrap()
+                    ));
                 }
                 match status.state {
                     JobState::Completed => {
-                        println!();
                         return Ok(PollResult {
                             outcome: RunOutcome::Completed,
                             output: best_effort_output(api, job_id).or(last_known_output),
@@ -623,14 +628,12 @@ fn poll_job(api: &FreeroutingApiClient, job_id: &str, timeout_secs: u64) -> Resu
                         // empty — that's the same structural limitation
                         // CLI mode has for this specific case, just not one
                         // we can poll our way around after the fact.
-                        println!();
                         return Ok(PollResult {
                             outcome: RunOutcome::Cancelled,
                             output: best_effort_output(api, job_id).or(last_known_output),
                         });
                     }
                     JobState::Invalid => {
-                        println!();
                         anyhow::bail!(
                             "FreeRouting rejected the job input (state: INVALID) — the exported DSN may be malformed"
                         );
@@ -654,7 +657,6 @@ fn poll_job(api: &FreeroutingApiClient, job_id: &str, timeout_secs: u64) -> Resu
             Err(e) => {
                 consecutive_errors += 1;
                 if consecutive_errors >= 20 {
-                    println!();
                     // Server's unreachable, but whatever we cached during
                     // the last known-good RUNNING poll is still real
                     // progress worth returning, same as a cancel/timeout.
