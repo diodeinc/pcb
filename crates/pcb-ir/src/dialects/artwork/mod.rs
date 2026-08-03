@@ -322,6 +322,13 @@ pub fn expand_native_geometry_to_regions<LayerMeta, ObjectMeta>(
 }
 
 /// Compose ordered dark/clear objects into final positive per-layer images.
+///
+/// Objects paint stage by stage — [`PaintStage::Base`], then
+/// [`PaintStage::Overlay`], then [`PaintStage::FinalCutout`] — preserving
+/// paint order within each stage, so overlay objects survive base-stage
+/// clears and final cutouts remove painted material. A layer containing only
+/// final-cutout objects, such as a drill or rout document, images the
+/// removals themselves.
 pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
 ) -> mask::Document<LayerMeta> {
@@ -340,13 +347,23 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     }
 
     for (layer_index, layer) in doc.layers.iter().enumerate() {
+        let mut objects = layer.objects.slice(&doc.objects).iter().collect::<Vec<_>>();
+        objects.sort_by_key(|object| object.order.stage);
+        let has_material = objects
+            .iter()
+            .any(|object| object.order.stage != PaintStage::FinalCutout);
         let mut composer = region::PaintComposer::default();
-        for object in layer.objects.slice(&doc.objects) {
+        for object in objects {
             let image = object_image_rings(&doc, object);
             if image.is_empty() {
                 continue;
             }
-            composer.push(object.polarity, image);
+            let polarity = if object.order.stage == PaintStage::FinalCutout && has_material {
+                Polarity::Clear
+            } else {
+                object.polarity
+            };
+            composer.push(polarity, image);
         }
 
         let contours = region::rings_to_contours(composer.finish());
@@ -524,6 +541,67 @@ mod tests {
         assert_eq!(mask.layers[0].shapes.len(), 1);
         assert!(!mask.layers[0].bbox.is_empty());
         mask.validate().unwrap();
+    }
+
+    #[test]
+    fn composition_stages_overlays_over_base_clears_and_final_cutouts_last() {
+        let mut doc = Document::<(), ()>::new();
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        let rect = |doc: &mut Document<(), ()>, x0: f64, y0: f64, x1: f64, y1: f64| {
+            doc.push_path(
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                vec![ContourBuf::new(vec![
+                    PathCmd::move_to(Point::new(x0, y0)),
+                    PathCmd::line_to(Point::new(x1, y0)),
+                    PathCmd::line_to(Point::new(x1, y1)),
+                    PathCmd::line_to(Point::new(x0, y1)),
+                    PathCmd::close(),
+                ])],
+            )
+        };
+        let stage_object = |polarity, path, stage| {
+            let mut object = Object::new(polarity, Geometry::Region { path });
+            object.order = PaintOrder { stage };
+            object
+        };
+
+        // Painted out of stage order: overlay trace first, then the base pour
+        // with a clear, then a dark-drawn final cutout.
+        let overlay = rect(&mut doc, 4.0, 4.0, 6.0, 6.0);
+        doc.push_object(
+            layer,
+            stage_object(Polarity::Dark, overlay, PaintStage::Overlay),
+        );
+        let base = rect(&mut doc, 0.0, 0.0, 10.0, 10.0);
+        doc.push_object(layer, stage_object(Polarity::Dark, base, PaintStage::Base));
+        let base_clear = rect(&mut doc, 3.0, 3.0, 7.0, 7.0);
+        doc.push_object(
+            layer,
+            stage_object(Polarity::Clear, base_clear, PaintStage::Base),
+        );
+        let cutout = rect(&mut doc, 0.0, 0.0, 1.0, 1.0);
+        doc.push_object(
+            layer,
+            stage_object(Polarity::Dark, cutout, PaintStage::FinalCutout),
+        );
+
+        let mask = compose_to_mask(&doc);
+        let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
+        let image = region::ContourSet::from_contours(
+            &mask.arena.path_contours(&shape),
+            FillRule::NonZero,
+            crate::geom::tol::REGION_MM,
+        );
+
+        // Overlay survives the base-stage clear painted after it.
+        assert!(image.contains_point(Point::new(5.0, 5.0)));
+        // The base clear still removes material around the overlay.
+        assert!(!image.contains_point(Point::new(3.5, 5.0)));
+        // The dark-drawn final cutout removes material.
+        assert!(!image.contains_point(Point::new(0.5, 0.5)));
+        assert!(image.contains_point(Point::new(9.0, 9.0)));
     }
 
     #[test]

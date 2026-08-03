@@ -1222,6 +1222,49 @@ mod tests {
     }
 
     #[test]
+    fn flattening_keeps_layer_cutouts_clear() {
+        // Cutout features keep their dark-drawn geometry after composition;
+        // flattening must subtract it, not union it back over the clearance.
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rect_contour(0.0, 0.0, 4.0, 4.0)],
+        );
+        doc.features.push(Feature {
+            paths: Span::new(0, 1),
+            ..Feature::new(FeatureKind::Polygon, Polarity::Dark)
+        });
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rect_contour(1.0, 1.0, 3.0, 3.0)],
+        );
+        let mut cutout = Feature::new(FeatureKind::Polygon, Polarity::Dark);
+        cutout.bucket = FeatureBucket::Cutout;
+        doc.features.push(Feature {
+            paths: Span::new(1, 1),
+            ..cutout
+        });
+        doc.layers.push(test_layer(Span::new(0, 2)));
+
+        compose_for_rendering(&mut doc);
+        flatten_layers_to_masks(&mut doc);
+
+        assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
+        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
+        let image = ContourSet::from_contours(
+            &doc.arena.path_contours(path),
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+        assert!(image.contains_point(Point::new(0.5, 0.5)));
+        assert!(!image.contains_point(Point::new(2.0, 2.0)));
+    }
+
+    #[test]
     fn compact_reclaims_orphaned_paths() {
         let mut doc = TestDoc::new();
         doc.push_path(
