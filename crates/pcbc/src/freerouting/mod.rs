@@ -253,9 +253,12 @@ fn is_java_21_plus(java_path: impl AsRef<Path>) -> bool {
 ///   3. `freerouting.jar` on `$PATH`
 ///   4. Auto-download to `~/.cache/pcb/freerouting/freerouting-{FREEROUTING_VERSION}.jar`
 fn find_freerouting_jar(provided: Option<&Path>) -> Result<PathBuf> {
+    let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
+
     // 1. Explicit --fr-jar flag
     if let Some(path) = provided {
         if path.exists() {
+            warn_on_hash_mismatch(path, &expected_hash);
             return Ok(path.to_path_buf());
         }
         anyhow::bail!(
@@ -268,12 +271,11 @@ fn find_freerouting_jar(provided: Option<&Path>) -> Result<PathBuf> {
     if let Ok(path) = std::env::var("FREEROUTING_JAR") {
         let p = PathBuf::from(&path);
         if p.exists() {
+            warn_on_hash_mismatch(&p, &expected_hash);
             return Ok(p);
         }
         anyhow::bail!("FreeRouting JAR not found at FREEROUTING_JAR={}", path);
     }
-
-    let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
 
     // 3. Search $PATH for freerouting.jar. Unlike --fr-jar/FREEROUTING_JAR
     //    (explicit user overrides, which may intentionally point at a
@@ -708,6 +710,27 @@ fn format_hms(total_secs: u64) -> String {
     let mm = (total_secs % 3600) / 60;
     let ss = total_secs % 60;
     format!("{hh:02}:{mm:02}:{ss:02}")
+}
+
+/// Warn (non-fatally) if `path` doesn't match `expected_hash`. Used for
+/// --fr-jar/FREEROUTING_JAR: both are explicit user overrides, so a mismatch
+/// isn't rejected outright (it may be an intentional dev/patched build) —
+/// but it's surfaced rather than silently running an unverified JAR with no
+/// visibility at all.
+fn warn_on_hash_mismatch(path: &Path, expected_hash: &[u8; 32]) {
+    match sha256_file(path) {
+        Ok(hash) if hash == *expected_hash => {}
+        Ok(_) => eprintln!(
+            "  {} {} does not match the pinned FreeRouting v{FREEROUTING_VERSION} SHA-256; using it anyway since it was explicitly provided",
+            "!".yellow(),
+            path.display()
+        ),
+        Err(e) => eprintln!(
+            "  {} Could not verify {}: {e}",
+            "!".yellow(),
+            path.display()
+        ),
+    }
 }
 
 /// Hash `path` with SHA-256, returning the raw 32-byte digest. Byte
