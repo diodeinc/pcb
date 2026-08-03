@@ -124,7 +124,7 @@ try {
         try {
             $launcherInstall = Start-Process -FilePath $installedLauncher -ArgumentList "--install" -Wait -PassThru
             if ($launcherInstall.ExitCode -ne 0) {
-                Write-Warning "Installed pcb, but could not register the Diode URL launcher"
+                Write-Warning "Installed pcb, but could not register the Diode URL launcher. See $HOME\.pcb\pcb-launcher.log for details"
             }
         } catch {
             Write-Warning "Installed pcb, but could not register the Diode URL launcher: $_"

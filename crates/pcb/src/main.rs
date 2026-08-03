@@ -2069,9 +2069,13 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
                 installed_launcher.display()
             )
         })?;
+    let launcher_log = dirs::home_dir()
+        .map(|home| home.join(".pcb/pcb-launcher.log"))
+        .unwrap_or_else(|| std::env::temp_dir().join("pcb-launcher.log"));
     anyhow::ensure!(
         status.success(),
-        "pcb launcher registration failed with {status}"
+        "pcb launcher registration failed with {status}; see {}",
+        launcher_log.display()
     );
     Ok(())
 }

@@ -41,9 +41,8 @@ fn run_from_args() -> Option<Result<()>> {
     }
     if first == "--install" {
         let result = install_protocol_handler();
-        #[cfg(target_os = "windows")]
         if let Err(error) = &result {
-            report_launch_error(error);
+            append_launcher_error(error);
         }
         Some(result)
     } else {
