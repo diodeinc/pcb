@@ -93,7 +93,7 @@ pub fn execute(
     let java_path = resolve_java()?;
 
     println!(
-        "Local routing {} via FreeRouting",
+        "Routing {} via FreeRouting",
         board_path.file_name().unwrap().to_string_lossy().green()
     );
     println!("  JAR: {}", fr_jar.display());
@@ -627,12 +627,19 @@ fn poll_job(
         // regardless of whether the pass count changed, so the spinner
         // shows visible progress even on boards where FreeRouting sits on
         // one pass for a long time.
+        //
+        // Only show the pass counter once it's > 0: FreeRouting's initial
+        // routing stage runs before any numbered optimization pass starts,
+        // so `pass 0` can sit static for a long time on some boards. Since
+        // that's indistinguishable from a stuck/broken counter, it's better
+        // to just show elapsed time until a real pass increment proves the
+        // counter is actually moving.
         let elapsed = start.elapsed().as_secs();
         spinner.set_message(match last_printed_pass {
-            Some(pass) => format!(
+            Some(pass) if pass > 0 => format!(
                 "Running FreeRouting... {elapsed}s elapsed, pass {pass}/{FREEROUTING_MAX_PASSES}"
             ),
-            None => format!("Running FreeRouting... {elapsed}s elapsed"),
+            _ => format!("Running FreeRouting... {elapsed}s elapsed"),
         });
 
         match api.get_job(job_id) {
