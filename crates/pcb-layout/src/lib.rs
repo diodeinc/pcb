@@ -204,25 +204,34 @@ fn check_submodule_moved_paths(schematic: &Schematic) -> Vec<String> {
     warnings
 }
 
-fn apply_patches_to_file(
+fn write_file_atomically(path: &Path, content: &str) -> anyhow::Result<()> {
+    AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
+        .write(|f| {
+            f.write_all(content.as_bytes())?;
+            f.flush()
+        })
+        .with_context(|| format!("Failed to write file atomically: {}", path.display()))?;
+    Ok(())
+}
+
+fn apply_source_preserving_patches_to_file(
     pcb_path: &Path,
     pcb_content: &str,
     patches: &pcb_sexpr::PatchSet,
-    prettify: bool,
 ) -> anyhow::Result<()> {
     let patched = render_patches(pcb_content, patches)?;
-    let output = if prettify {
-        pcb_sexpr::formatter::prettify(&patched, pcb_sexpr::formatter::FormatMode::Normal)
-    } else {
-        patched
-    };
-    AtomicFile::new(pcb_path, OverwriteBehavior::AllowOverwrite)
-        .write(|f| {
-            f.write_all(output.as_bytes())?;
-            f.flush()
-        })
-        .with_context(|| format!("Failed to write file atomically: {}", pcb_path.display()))?;
-    Ok(())
+    write_file_atomically(pcb_path, &patched)
+}
+
+fn apply_canonical_patches_to_file(
+    pcb_path: &Path,
+    pcb_content: &str,
+    patches: &pcb_sexpr::PatchSet,
+) -> anyhow::Result<()> {
+    let patched = render_patches(pcb_content, patches)?;
+    let canonical =
+        pcb_sexpr::formatter::prettify(&patched, pcb_sexpr::formatter::FormatMode::Normal);
+    write_file_atomically(pcb_path, &canonical)
 }
 
 fn render_patches(source: &str, patches: &pcb_sexpr::PatchSet) -> anyhow::Result<String> {
@@ -255,7 +264,7 @@ fn apply_moved_paths(
         return Ok(());
     }
 
-    apply_patches_to_file(pcb_path, &pcb_content, &patches, false)?;
+    apply_source_preserving_patches_to_file(pcb_path, &pcb_content, &patches)?;
 
     for (old_path, new_path) in &renames {
         diagnostics.diagnostics.push(Diagnostic::categorized(
@@ -307,7 +316,7 @@ fn repair_net_names(
 
     if !result.renames.is_empty() {
         let (patches, _) = moved::compute_net_renames_patches(&board, &result.renames);
-        apply_patches_to_file(pcb_path, &pcb_content, &patches, false)?;
+        apply_source_preserving_patches_to_file(pcb_path, &pcb_content, &patches)?;
 
         // Only report implicit renames after the patch successfully applies.
         for (old_net, new_net) in &result.renames {
@@ -982,27 +991,14 @@ fn patch_pcb_file(
         layout_name,
         internal_connectivity_by_path,
     )?;
-    let patched = render_patches(&pcb_content, &patches).map_err(|e| {
+    info!("Updating PCB settings in {}", pcb_path.display());
+    apply_canonical_patches_to_file(pcb_path, &pcb_content, &patches).map_err(|e| {
         LayoutError::StackupPatchingError(format!(
-            "Failed to patch PCB file {}: {}",
+            "Failed to write updated PCB file {}: {}",
             pcb_path.display(),
             e
         ))
     })?;
-
-    info!("Updating PCB settings in {}", pcb_path.display());
-    AtomicFile::new(pcb_path, OverwriteBehavior::AllowOverwrite)
-        .write(|f| {
-            f.write_all(patched.as_bytes())?;
-            f.flush()
-        })
-        .map_err(|e| {
-            LayoutError::StackupPatchingError(format!(
-                "Failed to write updated PCB file {}: {}",
-                pcb_path.display(),
-                e
-            ))
-        })?;
     info!("Successfully updated PCB settings");
 
     Ok(())
@@ -1456,9 +1452,9 @@ mod tests {
     use super::{
         PCB_GIT_HASH_PLACEHOLDER, PCB_VERSION_PLACEHOLDER, PcbIu, build_board_properties_patchset,
         build_footprint_internal_connectivity_patchset, build_stackup_patchset,
-        build_title_block_patchset, stackup_thickness_iu,
+        build_title_block_patchset, patch_pcb_file, stackup_thickness_iu,
     };
-    use pcb_zen_core::lang::stackup::{CopperRole, DielectricForm, Layer, Stackup};
+    use pcb_zen_core::lang::stackup::{BoardConfig, CopperRole, DielectricForm, Layer, Stackup};
     use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
@@ -1512,7 +1508,6 @@ mod tests {
         let mut out = Vec::new();
         patches.write_to(input, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
-        let out = pcb_sexpr::formatter::prettify(&out, pcb_sexpr::formatter::FormatMode::Normal);
 
         assert!(out.contains(r#"(property "PCB_NAME" "DemoBoard")"#));
         assert!(out.contains(&format!(
@@ -1698,6 +1693,87 @@ mod tests {
     }
 
     #[test]
+    fn patch_pcb_file_writes_canonical_document() {
+        let input = r#"(kicad_pcb
+	(version 20250101)
+	(generator "pcbnew")
+	(general
+		(thickness 1.6)
+	)
+	(paper "A4")
+	(title_block
+		(title "Old")
+		(date "2020-01-01")
+		(rev "A")
+	)
+	(layers
+		(0 "F.Cu" signal)
+		(2 "B.Cu" signal)
+	)
+	(setup
+		(stackup
+			(old yes)
+		)
+	)
+)
+"#;
+        let stackup = Stackup {
+            materials: None,
+            silk_screen_color: None,
+            solder_mask_color: None,
+            layers: Some(vec![
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+                Layer::Dielectric {
+                    thickness: 1.51,
+                    material: "FR4".to_string(),
+                    form: DielectricForm::Core,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+            ]),
+            copper_finish: None,
+        };
+        let board_config = BoardConfig {
+            design_rules: None,
+            stackup: Some(stackup),
+            num_user_layers: 0,
+        };
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pcb_path = temp_dir.path().join("layout.kicad_pcb");
+        std::fs::write(&pcb_path, input).unwrap();
+
+        patch_pcb_file(
+            &pcb_path,
+            Some(&board_config),
+            Some("DemoBoard"),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let first = std::fs::read_to_string(&pcb_path).unwrap();
+        let canonical =
+            pcb_sexpr::formatter::prettify(&first, pcb_sexpr::formatter::FormatMode::Normal);
+
+        assert_eq!(first, canonical);
+        assert!(first.contains("\t(title_block\n\t\t(title"));
+        assert!(first.contains("\t(layers\n\t\t(0"));
+        assert!(first.contains("\t\t(stackup\n\t\t\t(layer"));
+
+        patch_pcb_file(
+            &pcb_path,
+            Some(&board_config),
+            Some("DemoBoard"),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&pcb_path).unwrap(), first);
+    }
+
+    #[test]
     fn build_title_block_patchset_replaces_existing_title_block() {
         let input = r#"(kicad_pcb
 	(version 20240101)
@@ -1718,7 +1794,6 @@ mod tests {
         let mut out = Vec::new();
         patches.write_to(input, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
-        let out = pcb_sexpr::formatter::prettify(&out, pcb_sexpr::formatter::FormatMode::Normal);
 
         assert!(out.contains(r#"(title "${PCB_NAME}")"#));
         assert!(out.contains(r#"(date "${CURRENT_DATE}")"#));
@@ -1741,7 +1816,6 @@ mod tests {
         let mut out = Vec::new();
         patches.write_to(input, &mut out).unwrap();
         let out = String::from_utf8(out).unwrap();
-        let out = pcb_sexpr::formatter::prettify(&out, pcb_sexpr::formatter::FormatMode::Normal);
 
         assert!(out.contains("(title_block"));
         assert!(out.contains(r#"(title "${PCB_NAME}")"#));

@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb layout` now keeps generated KiCad board files canonically formatted after updating board settings.
 - Git dependency resolution now falls back to SSH when DiodeHub HTTPS authentication is unavailable.
 
 ## [0.4.18] - 2026-08-03
