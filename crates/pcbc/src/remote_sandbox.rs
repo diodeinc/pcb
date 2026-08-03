@@ -240,7 +240,13 @@ fn open_layout_and_sync(
                 "Remote sync stopped; local recovery file is {}",
                 local.pcb_file.display()
             ));
+            #[cfg(target_os = "macos")]
             let terminate_result = session.terminate();
+            // There is no portable graceful-close mechanism for a directly
+            // spawned GUI process. Leave KiCad open on Windows and Linux so
+            // an interrupted sync cannot discard unsaved edits.
+            #[cfg(not(target_os = "macos"))]
+            let terminate_result: Result<()> = Ok(());
             let release_result = lock.release();
             if let Err(terminate_err) = terminate_result {
                 return Err(error).with_context(|| {

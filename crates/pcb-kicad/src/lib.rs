@@ -399,6 +399,7 @@ impl PcbnewSession {
             .context("Failed while checking KiCad PCB Editor status")
     }
 
+    #[cfg(target_os = "macos")]
     pub fn terminate(&mut self) -> Result<()> {
         if self.try_wait()?.is_some() {
             return Ok(());
@@ -467,14 +468,6 @@ fn spawn_pcbnew_command(mut cmd: Command, pcbnew_path: &str, pcb_path: &Path) ->
 #[cfg(target_os = "macos")]
 fn request_pcbnew_shutdown(session: &mut PcbnewSession) -> Result<()> {
     quit_macos_app(&session.pcbnew_app)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn request_pcbnew_shutdown(session: &mut PcbnewSession) -> Result<()> {
-    session
-        .child
-        .kill()
-        .context("Failed to stop KiCad PCB Editor")
 }
 
 #[cfg(target_os = "macos")]

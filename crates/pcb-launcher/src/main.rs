@@ -173,8 +173,6 @@ fn is_trusted_api_host(host: &str, port: Option<u16>) -> bool {
     let host = host.to_ascii_lowercase();
     let is_loopback = host == "localhost"
         || host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
             .parse::<IpAddr>()
             .is_ok_and(|address| address.is_loopback());
     if is_loopback {
@@ -504,6 +502,9 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     pub fn install(launcher: &Path, _pcb: &Path) -> Result<()> {
         let command = format!("\"{}\" \"%1\"", launcher.display());
@@ -523,7 +524,9 @@ mod platform {
 
     pub fn show_error(error: &anyhow::Error, log_path: &Path) {
         let message = format!("{error:#}\n\nDetails: {}", log_path.display());
-        let _ = Command::new("powershell.exe")
+        let mut command = Command::new("powershell.exe");
+        command.creation_flags(CREATE_NO_WINDOW);
+        let _ = command
             .env("PCB_LAUNCHER_ERROR", &message)
             .args([
                 "-NoProfile",
@@ -536,6 +539,7 @@ mod platform {
 
     fn reg_add(key: &str, name: Option<&str>, value: &str) -> Result<()> {
         let mut command = Command::new("reg.exe");
+        command.creation_flags(CREATE_NO_WINDOW);
         command.args(["ADD", key]);
         match name {
             Some(name) => command.args(["/v", name]),
@@ -646,7 +650,7 @@ mod tests {
         assert!(is_trusted_api_host("api.gov.diode.computer", None));
         assert!(is_trusted_api_host("localhost", Some(3001)));
         assert!(is_trusted_api_host("127.0.0.1", Some(3001)));
-        assert!(is_trusted_api_host("[::1]", Some(3001)));
+        assert!(!is_trusted_api_host("[::1]", Some(3001)));
         assert!(!is_trusted_api_host("localhost", Some(8080)));
         assert!(!is_trusted_api_host("preview.api.diode.computer", None));
         assert!(!is_trusted_api_host("evil.diode.computer", None));
