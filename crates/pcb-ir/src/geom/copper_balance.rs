@@ -130,9 +130,9 @@ pub struct DenseCopperBalanceSolution {
     pub residual_error: f64,
 }
 
-/// Geometry inputs once a safe region is available.
+/// Geometry inputs for the internal single-layer baseline solve.
 #[derive(Debug, Clone, Copy)]
-pub struct DenseCopperBalanceRequest<'a> {
+pub(crate) struct DenseCopperBalanceRequest<'a> {
     /// Safe, initially empty subset of the retained board-array area.
     pub safe_region: &'a ContourSet,
     /// Entire retained board-array area used as the density denominator.
@@ -221,7 +221,13 @@ impl std::fmt::Display for DenseCopperBalanceError {
 impl std::error::Error for DenseCopperBalanceError {}
 
 /// Generate a dense copper balance region from an explicit safe region.
-pub fn generate_dense_copper_balance(
+///
+/// Test-only wrapper over the internal baseline of
+/// [`generate_spatial_dense_copper_balance`], which is the sole public entry
+/// point; a single zero-weight layer over its own panel region reproduces
+/// this uniform solve.
+#[cfg(test)]
+pub(crate) fn generate_dense_copper_balance(
     profile: DenseCopperBalanceProfile,
     request: DenseCopperBalanceRequest<'_>,
 ) -> Result<DenseCopperBalanceResult, DenseCopperBalanceError> {
@@ -354,12 +360,12 @@ pub fn generate_spatial_dense_copper_balance(
         })
         .collect::<Vec<_>>();
 
-    let panel_samples =
+    let mut panel_samples =
         hex_aligned_lattice_centers(request.panel_region.bbox, request.lattice_origin, profile)
             .into_iter()
             .filter(|point| request.panel_region.contains_point(*point))
             .collect::<Vec<_>>();
-    let sample_indices = panel_samples
+    let mut sample_indices = panel_samples
         .iter()
         .enumerate()
         .map(|(index, point)| {
@@ -369,6 +375,9 @@ pub fn generate_spatial_dense_copper_balance(
             )
         })
         .collect::<HashMap<_, _>>();
+    // Full centers lie in eroded safe regions inside the panel; appending any
+    // center the tolerance-bound point test missed keeps sample membership
+    // structural rather than tolerance-dependent.
     let active_sites = lattices
         .iter()
         .map(|lattice| {
@@ -376,7 +385,12 @@ pub fn generate_spatial_dense_copper_balance(
                 .full_centers
                 .iter()
                 .map(|center| {
-                    sample_indices[&lattice_index(*center, request.lattice_origin, profile)]
+                    *sample_indices
+                        .entry(lattice_index(*center, request.lattice_origin, profile))
+                        .or_insert_with(|| {
+                            panel_samples.push(*center);
+                            panel_samples.len() - 1
+                        })
                 })
                 .collect::<Vec<_>>()
         })
@@ -400,18 +414,32 @@ pub fn generate_spatial_dense_copper_balance(
         .layers
         .iter()
         .map(|layer| {
-            density_kernel.smooth(&scanline_indicator(&panel_samples, layer.existing_copper))
+            density_kernel.smooth(&lattice_cell_coverage(
+                &panel_samples,
+                layer.existing_copper,
+                profile,
+            ))
         })
         .collect::<Vec<_>>();
     let available_density = request
         .layers
         .iter()
-        .map(|layer| density_kernel.smooth(&scanline_indicator(&panel_samples, layer.safe_region)))
+        .map(|layer| {
+            density_kernel.smooth(&lattice_cell_coverage(
+                &panel_samples,
+                layer.safe_region,
+                profile,
+            ))
+        })
         .collect::<Vec<_>>();
     let partial_void_density = uniform
         .iter()
         .map(|result| {
-            density_kernel.smooth(&scanline_indicator(&panel_samples, &result.partial_voids))
+            density_kernel.smooth(&lattice_cell_coverage(
+                &panel_samples,
+                &result.partial_voids,
+                profile,
+            ))
         })
         .collect::<Vec<_>>();
 
@@ -731,19 +759,18 @@ fn density_evaluation_points(
     let stride = (profile.density_sigma_mm / profile.pitch_mm)
         .round()
         .max(1.0) as i64;
-    let evaluation = samples
+    // Anchoring the coarse grid on the first sample keeps the result nonempty
+    // for every nonempty input.
+    let (anchor_column, anchor_row) = lattice_index(samples[0], origin, profile);
+    samples
         .iter()
         .copied()
         .filter(|point| {
             let (column, row) = lattice_index(*point, origin, profile);
-            column.rem_euclid(stride) == 0 && row.rem_euclid(stride) == 0
+            (column - anchor_column).rem_euclid(stride) == 0
+                && (row - anchor_row).rem_euclid(stride) == 0
         })
-        .collect::<Vec<_>>();
-    if evaluation.is_empty() {
-        samples.to_vec()
-    } else {
-        evaluation
-    }
+        .collect()
 }
 
 fn lattice_index(point: Point, origin: Point, profile: DenseCopperBalanceProfile) -> (i64, i64) {
@@ -751,6 +778,35 @@ fn lattice_index(point: Point, origin: Point, profile: DenseCopperBalanceProfile
     let column_offset = column.rem_euclid(2) as f64 * profile.pitch_mm / 2.0;
     let row = ((point.y - origin.y - column_offset) / profile.pitch_mm).round() as i64;
     (column, row)
+}
+
+/// Fraction of each site's rectangular lattice tile covered by `region`.
+///
+/// The staggered columns tile the plane exactly with column-pitch × pitch
+/// rectangles centered on the sites, so stratified subsamples of every tile
+/// estimate local density without aliasing sub-pitch geometry to zero or one.
+fn lattice_cell_coverage(
+    points: &[Point],
+    region: &ContourSet,
+    profile: DenseCopperBalanceProfile,
+) -> Vec<f64> {
+    const STRATA: usize = 3;
+    let offset = |index: usize, span: f64| ((index as f64 + 0.5) / STRATA as f64 - 0.5) * span;
+    let mut subsamples = Vec::with_capacity(points.len() * STRATA * STRATA);
+    for point in points {
+        for row in 0..STRATA {
+            for column in 0..STRATA {
+                subsamples.push(Point::new(
+                    point.x + offset(column, profile.lattice_column_pitch_mm()),
+                    point.y + offset(row, profile.pitch_mm),
+                ));
+            }
+        }
+    }
+    scanline_indicator(&subsamples, region)
+        .chunks_exact(STRATA * STRATA)
+        .map(|tile| tile.iter().sum::<f64>() / (STRATA * STRATA) as f64)
+        .collect()
 }
 
 fn scanline_indicator(points: &[Point], region: &ContourSet) -> Vec<f64> {

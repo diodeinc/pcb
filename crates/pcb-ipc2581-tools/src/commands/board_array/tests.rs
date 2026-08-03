@@ -11,8 +11,8 @@ use pcb_ir::dialects::ipc::{
     PlatingKind, View, board_array_balancing_region, collect_board_array_balancing_input,
 };
 use pcb_ir::geom::copper_balance::{
-    DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceRequest,
-    generate_dense_copper_balance,
+    DenseCopperBalanceMode, DenseCopperBalanceProfile, SpatialCopperBalanceLayerRequest,
+    SpatialCopperBalanceRequest, generate_spatial_dense_copper_balance,
 };
 use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 
@@ -875,16 +875,23 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
         tol::REGION_MM,
     );
 
-    let balance = generate_dense_copper_balance(
+    let existing = ContourSet::empty(tol::REGION_MM);
+    let layers = [SpatialCopperBalanceLayerRequest {
+        safe_region: &safe_region,
+        existing_copper: &existing,
+        target_density: 0.70,
+        stack_weight_mm2: 0.0,
+    }];
+    let balance = generate_spatial_dense_copper_balance(
         DenseCopperBalanceProfile::V1,
-        DenseCopperBalanceRequest {
-            safe_region: &safe_region,
-            retained_area_mm2: safe_region.area(),
-            existing_copper_area_mm2: 0.0,
-            target_density: 0.70,
+        SpatialCopperBalanceRequest {
+            panel_region: &safe_region,
             lattice_origin: Point::new(50.0, 50.0),
+            layers: &layers,
         },
     )
+    .unwrap()
+    .pop()
     .unwrap();
     let features = balance_features(&balance).unwrap();
     spec.generated_geometry.add_layer_feature(

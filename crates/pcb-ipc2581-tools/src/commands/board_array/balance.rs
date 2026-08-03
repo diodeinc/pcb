@@ -239,17 +239,25 @@ pub fn generate_automatic_board_array_copper_balance(
         let board_target_density = (existing_copper.intersection(board_footprints).area()
             / board_area_mm2)
             .clamp(0.0, 1.0);
+        // Existing copper outside the board footprints participates as an
+        // obstacle, so copper the array-support geometry does not capture
+        // shrinks the certified safe region instead of failing the solve.
+        let frame_copper = existing_copper.difference(board_footprints);
+        let frame_copper_empty = frame_copper.is_empty();
         let stack_weight_mm2 = stack_weights
             .as_ref()
             .and_then(|weights| weights.get(&layer_name).copied())
             .unwrap_or(0.0);
-        let safe_region = if let Some(representative) = prepared
-            .iter()
-            .find(|candidate| collection.has_same_support_scope(candidate.layer, layer.name))
-        {
+        let safe_region = if frame_copper_empty
+            && let Some(representative) = prepared.iter().find(|candidate| {
+                candidate.frame_copper_empty
+                    && collection.has_same_support_scope(candidate.layer, layer.name)
+            }) {
             representative.safe_region.clone()
         } else {
-            let balancing_input = collection.input_for_layer(layer.name);
+            let mut balancing_input = collection.input_for_layer(layer.name);
+            balancing_input.support_features =
+                balancing_input.support_features.union(&frame_copper);
             let balancing_region =
                 board_array_balancing_region(&balancing_input, BalancingRegionOptions::default());
             let balancing_region = balancing_region.context(format!(
@@ -269,6 +277,7 @@ pub fn generate_automatic_board_array_copper_balance(
             layer: layer.name,
             board_target_density,
             stack_weight_mm2,
+            frame_copper_empty,
             existing_copper,
             safe_region,
         });
@@ -319,6 +328,7 @@ struct PreparedLayerBalance {
     layer: Symbol,
     board_target_density: f64,
     stack_weight_mm2: f64,
+    frame_copper_empty: bool,
     existing_copper: ContourSet,
     safe_region: ContourSet,
 }
@@ -587,7 +597,6 @@ fn ipc_polygon_from_contour(contour: &ContourBuf) -> Result<Polygon> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcb_ir::geom::copper_balance::{DenseCopperBalanceRequest, generate_dense_copper_balance};
     use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 
     #[test]
@@ -596,16 +605,23 @@ mod tests {
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
             tol::REGION_MM,
         );
-        let result = generate_dense_copper_balance(
+        let existing = ContourSet::empty(tol::REGION_MM);
+        let layers = [SpatialCopperBalanceLayerRequest {
+            safe_region: &safe_region,
+            existing_copper: &existing,
+            target_density: 0.75,
+            stack_weight_mm2: 0.0,
+        }];
+        let result = generate_spatial_dense_copper_balance(
             DenseCopperBalanceProfile::V1,
-            DenseCopperBalanceRequest {
-                safe_region: &safe_region,
-                retained_area_mm2: 200.0,
-                existing_copper_area_mm2: 0.0,
-                target_density: 0.75,
+            SpatialCopperBalanceRequest {
+                panel_region: &safe_region,
                 lattice_origin: Point::new(10.0, 5.0),
+                layers: &layers,
             },
         )
+        .unwrap()
+        .pop()
         .unwrap();
         let features = balance_features(&result).unwrap();
 
