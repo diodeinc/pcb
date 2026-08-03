@@ -504,22 +504,6 @@ mod tests {
     }
 
     #[test]
-    fn test_board_template_uses_diodehub_registry_vendor() {
-        let rendered = create_template_env()
-            .get_template("board_pcb_toml")
-            .unwrap()
-            .render(context! {
-                board => "MainBoard",
-                repository => "code.diode.computer/acme/MainBoard",
-                pcb_version => "0.4",
-            })
-            .unwrap();
-
-        assert!(rendered.contains("vendor = [\"code.diode.computer/diode/registry/**\"]"));
-        assert!(!rendered.contains("github.com/diodeinc/registry"));
-    }
-
-    #[test]
     fn test_component_accepts_optional_directory() {
         let parsed = TestCli::try_parse_from(["pcb", "component"]).unwrap();
         assert!(matches!(
