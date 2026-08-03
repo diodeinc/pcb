@@ -8,7 +8,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::WorkspaceContext;
 
 const AUTHTYPE_CAPABILITY: &str = "authtype";
-const DIODEHUB_HOST: &str = "code.diode.computer";
 const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
 
 #[derive(Args, Debug)]
@@ -16,6 +15,9 @@ const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
 pub struct GitAuthArgs {
     /// Git credential helper operation, `configure`, or `unconfigure`
     operation: String,
+
+    /// DiodeHub HTTPS repository URL to configure
+    repository_url: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -69,7 +71,12 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
     let mut stdout = io::stdout().lock();
 
     match args.operation.as_str() {
-        "configure" => pcb_zen::git::configure_diodehub_credentials_globally()?,
+        "configure" => {
+            let repository_url = args.repository_url.as_deref().context(
+                "Missing DiodeHub repository URL; use `pcb auth git configure <repository-url>`",
+            )?;
+            pcb_zen::git::configure_diodehub_credentials_globally(repository_url)?;
+        }
         "unconfigure" => pcb_zen::git::unconfigure_diodehub_credentials_globally()?,
         "capability" => {
             writeln!(stdout, "version 0")?;
@@ -99,12 +106,13 @@ fn provide_credential(
     request: CredentialRequest,
     output: &mut impl Write,
 ) -> Result<()> {
-    if request.protocol.as_deref() != Some(b"https")
-        || request.host.as_deref() != Some(DIODEHUB_HOST.as_bytes())
-    {
+    if request.protocol.as_deref() != Some(b"https") {
         return Ok(());
     }
 
+    let Some(host) = request.host.as_deref().filter(|host| !host.is_empty()) else {
+        return Ok(());
+    };
     let Some(path) = request.path.as_deref().filter(|path| !path.is_empty()) else {
         return Ok(());
     };
@@ -117,8 +125,9 @@ fn provide_credential(
         bail!("Git did not advertise the `authtype` credential capability");
     }
 
+    let host = std::str::from_utf8(host).context("Git credential host is not UTF-8")?;
     let path = std::str::from_utf8(path).context("Git credential path is not UTF-8")?;
-    let credential = exchange_credential(ctx, DIODEHUB_HOST, path)?;
+    let credential = exchange_credential(ctx, host, path)?;
 
     writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
     writeln!(output, "authtype=Bearer")?;

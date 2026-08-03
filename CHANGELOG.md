@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `pcb auth git configure` now accepts a DiodeHub repository URL and scopes Git credentials to its exact HTTPS origin.
 - Panasonic house resistor matches now use the current Panasonic Industry manufacturer name.
 - The TDK MPZ house ferrite bead now uses the current TDK manufacturer name.
 

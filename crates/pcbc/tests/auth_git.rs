@@ -9,9 +9,13 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, MutexGuard};
 
-const GIT_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
-const GIT_HOST: &str = "code.diode.computer";
-const GIT_USE_HTTP_PATH_CONFIG: &str = "credential.https://code.diode.computer.useHttpPath";
+const GIT_ORIGIN: &str = "https://git.preview.diode.localhost:8443";
+const GIT_HELPER_CONFIG: &str = "credential.https://git.preview.diode.localhost:8443.helper";
+const GIT_HOST: &str = "git.preview.diode.localhost:8443";
+const GIT_USE_HTTP_PATH_CONFIG: &str =
+    "credential.https://git.preview.diode.localhost:8443.useHttpPath";
+const LEGACY_GIT_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
+const LEGACY_GIT_USE_HTTP_PATH_CONFIG: &str = "credential.https://code.diode.computer.useHttpPath";
 const REPOSITORY_PATH: &str = "acme/boards/widget.git";
 const USER_ACCESS_TOKEN: &str = "user-access-token";
 const REPOSITORY_TOKEN: &str = "repository-token";
@@ -100,6 +104,10 @@ impl TestContext {
         self.config_dir.join("git-credential-cache/socket")
     }
 
+    fn managed_git_config(&self) -> PathBuf {
+        self.config_dir.join("gitconfig")
+    }
+
     fn run_git_config(&self, args: &[&str]) -> Output {
         self.git()
             .args(["config", "--global"])
@@ -121,9 +129,39 @@ impl TestContext {
             .collect()
     }
 
+    fn managed_git_config_values(&self, key: &str) -> Vec<String> {
+        let output = self
+            .git()
+            .args(["config", "--file"])
+            .arg(self.managed_git_config())
+            .args(["--get-all", key])
+            .output()
+            .expect("read PCB-managed Git config");
+        if output.status.code() == Some(1) {
+            return Vec::new();
+        }
+        assert_success(&output);
+        String::from_utf8(output.stdout)
+            .expect("PCB-managed Git config output is UTF-8")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
     fn run_config_command(&self, operation: &str) -> Output {
+        let mut command = self.pcbc();
+        command.args(["auth", "git", operation]);
+        if operation == "configure" {
+            command.arg(format!("{GIT_ORIGIN}/{REPOSITORY_PATH}"));
+        }
+        command
+            .output()
+            .expect("run pcb auth git configuration command")
+    }
+
+    fn run_config_command_with_url(&self, repository_url: &str) -> Output {
         self.pcbc()
-            .args(["auth", "git", operation])
+            .args(["auth", "git", "configure", repository_url])
             .output()
             .expect("run pcb auth git configuration command")
     }
@@ -267,39 +305,124 @@ fn advertises_authtype_and_ignores_unknown_operations() {
 #[test]
 fn configure_is_idempotent_and_preserves_unrelated_global_config() {
     let context = TestContext::new("http://127.0.0.1:1".to_string());
+    let unrelated_include = context._tempdir.path().join("unrelated.gitconfig");
+    fs::write(&unrelated_include, "[alias]\n\tco = checkout\n").unwrap();
     assert_clean_success(&context.run_git_config(&["--add", "user.email", "dev@example.com"]));
     assert_clean_success(&context.run_git_config(&["--add", "credential.helper", "store"]));
     assert_clean_success(&context.run_git_config(&[
         "--add",
-        "credential.https://code.diode.computer.username",
+        "include.path",
+        unrelated_include.to_str().unwrap(),
+    ]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        "credential.https://git.preview.diode.localhost:8443.username",
         "developer",
     ]));
-    assert_clean_success(&context.run_git_config(&["--add", GIT_HELPER_CONFIG, "!old-helper"]));
-    assert_clean_success(&context.run_git_config(&["--add", GIT_USE_HTTP_PATH_CONFIG, "false"]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        LEGACY_GIT_HELPER_CONFIG,
+        "!pcb auth git",
+    ]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        LEGACY_GIT_USE_HTTP_PATH_CONFIG,
+        "true",
+    ]));
 
     assert_clean_success(&context.run_config_command("configure"));
     assert_clean_success(&context.run_config_command("configure"));
 
-    let helpers = context.git_config_values(GIT_HELPER_CONFIG);
+    let helpers = context.managed_git_config_values(GIT_HELPER_CONFIG);
     assert_eq!(helpers.len(), 3);
     assert_eq!(helpers[0], "");
     assert!(helpers[1].starts_with("cache --timeout=3300 --socket="));
     assert_eq!(helpers[2], "!pcb auth git");
     assert_eq!(
-        context.git_config_values(GIT_USE_HTTP_PATH_CONFIG),
+        context.managed_git_config_values(GIT_USE_HTTP_PATH_CONFIG),
         ["true"]
+    );
+    let includes = context.git_config_values("include.path");
+    assert_eq!(
+        includes
+            .iter()
+            .filter(|value| *value == context.managed_git_config().to_str().unwrap())
+            .count(),
+        1
+    );
+    assert!(includes.contains(&unrelated_include.to_string_lossy().into_owned()));
+    assert!(
+        context
+            .git_config_values(LEGACY_GIT_HELPER_CONFIG)
+            .is_empty()
+    );
+    assert!(
+        context
+            .git_config_values(LEGACY_GIT_USE_HTTP_PATH_CONFIG)
+            .is_empty()
     );
     assert_eq!(context.git_config_values("user.email"), ["dev@example.com"]);
     assert_eq!(context.git_config_values("credential.helper"), ["store"]);
     assert_eq!(
-        context.git_config_values("credential.https://code.diode.computer.username"),
+        context.git_config_values("credential.https://git.preview.diode.localhost:8443.username"),
         ["developer"]
     );
 }
 
 #[test]
+fn configure_replaces_the_managed_credential_origin() {
+    let context = TestContext::new("http://127.0.0.1:1".to_string());
+    assert_clean_success(&context.run_config_command("configure"));
+
+    let other_origin = "https://code.gov.diode.computer";
+    assert_clean_success(
+        &context.run_config_command_with_url(&format!("{other_origin}/acme/boards/widget.git")),
+    );
+
+    assert!(
+        context
+            .managed_git_config_values(GIT_HELPER_CONFIG)
+            .is_empty()
+    );
+    let helpers = context.managed_git_config_values(&format!("credential.{other_origin}.helper"));
+    assert_eq!(helpers.len(), 3);
+    assert_eq!(helpers[0], "");
+    assert!(helpers[1].starts_with("cache --timeout=3300 --socket="));
+    assert_eq!(helpers[2], "!pcb auth git");
+}
+
+#[test]
+fn configure_requires_an_https_repository_url() {
+    let context = TestContext::new("http://127.0.0.1:1".to_string());
+
+    let missing = context
+        .pcbc()
+        .args(["auth", "git", "configure"])
+        .output()
+        .expect("run configure without a repository URL");
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains(
+        "Missing DiodeHub repository URL; use `pcb auth git configure <repository-url>`"
+    ));
+
+    let http = context.run_config_command_with_url("http://code.example.com/acme/widget.git");
+    assert!(!http.status.success());
+    assert!(
+        String::from_utf8_lossy(&http.stderr).contains("DiodeHub repository URL must use HTTPS")
+    );
+    assert!(!context.managed_git_config().exists());
+}
+
+#[test]
 fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
     let context = TestContext::new("http://127.0.0.1:1".to_string());
+    let unrelated_include = context._tempdir.path().join("unrelated.gitconfig");
+    fs::write(&unrelated_include, "[alias]\n\tco = checkout\n").unwrap();
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        "include.path",
+        unrelated_include.to_str().unwrap(),
+    ]));
     assert_clean_success(&context.run_git_config(&[
         "--add",
         "credential.https://github.com.helper",
@@ -307,7 +430,7 @@ fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
     ]));
     assert_clean_success(&context.run_git_config(&[
         "--add",
-        "credential.https://code.diode.computer.username",
+        "credential.https://git.preview.diode.localhost:8443.username",
         "developer",
     ]));
     assert_clean_success(&context.run_config_command("configure"));
@@ -331,6 +454,7 @@ fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
     assert_clean_success(&context.run_config_command("unconfigure"));
 
     assert!(!context.cache_socket().exists());
+    assert!(!context.managed_git_config().exists());
     assert!(context.git_config_values(GIT_HELPER_CONFIG).is_empty());
     assert!(
         context
@@ -338,11 +462,15 @@ fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
             .is_empty()
     );
     assert_eq!(
+        context.git_config_values("include.path"),
+        [unrelated_include.to_string_lossy().into_owned()]
+    );
+    assert_eq!(
         context.git_config_values("credential.https://github.com.helper"),
         ["!github-helper"]
     );
     assert_eq!(
-        context.git_config_values("credential.https://code.diode.computer.username"),
+        context.git_config_values("credential.https://git.preview.diode.localhost:8443.username"),
         ["developer"]
     );
 }
