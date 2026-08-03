@@ -504,8 +504,20 @@ impl ContourSet {
             if pass_narrow_voids.is_empty() {
                 break;
             }
-            let pass_keep_out =
+            let axis_keep_out =
                 narrow_void_medial_axis_keep_out(&kept, &pass_narrow_voids, tube_radius)?;
+            // A void thinner than the axis stroke has no representable medial
+            // axis. Sweep such components whole: they sit far below the
+            // regularization scale, so even the blunt cut stays local, and
+            // every pass is guaranteed to remove material.
+            let axisless = pass_narrow_voids
+                .connected_components()
+                .into_iter()
+                .filter(|component| component.intersection(&axis_keep_out).is_empty())
+                .collect::<Vec<_>>();
+            let pass_keep_out = axisless.into_iter().fold(axis_keep_out, |keep_out, thin| {
+                keep_out.union(&thin.disk_dilate(tube_radius))
+            });
             let next = kept
                 .difference(&pass_keep_out)
                 .disk_open(filled_radius)
@@ -1456,6 +1468,22 @@ mod tests {
         assert!(close_violations.area() > 1.5);
         assert!(wide_violations.is_empty());
         assert!(left.disk_gap_violations(0.5).is_empty());
+    }
+
+    #[test]
+    fn disk_gap_regularization_sweeps_a_void_thinner_than_the_axis_stroke() {
+        // A 3 µm gap is two-sided but too thin to carry a medial-axis stroke;
+        // the whole-component sweep must still make progress instead of
+        // stalling into an error.
+        let left = ContourSet::rectangle(rect(0.0, 0.0, 5.0, 6.0), tol::REGION_MM);
+        let right = ContourSet::rectangle(rect(5.003, 0.0, 10.0, 6.0), tol::REGION_MM);
+        let region = left.union(&right);
+        assert!(!region.disk_gap_violations(0.5).is_empty());
+
+        let regularization = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+
+        assert!(regularization.kept.disk_gap_violations(0.5).is_empty());
+        assert!(regularization.removed.area() > 0.0);
     }
 
     #[test]
