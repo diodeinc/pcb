@@ -1940,19 +1940,42 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
     for target in download_target_triples().iter().copied() {
         let binary_name = binary_artifact_name_for("pcb-launcher", target);
         let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
+        let checksum_url = format!("{binary_url}.sha256");
+        let expected_sha256 = download_optional(&client, &checksum_url)?
+            .map(|bytes| {
+                let checksum = String::from_utf8(bytes)
+                    .with_context(|| format!("checksum is not UTF-8: {checksum_url}"))?;
+                parse_sha256(&checksum)
+            })
+            .transpose()?;
+
+        if let Some(expected_sha256) = expected_sha256.as_deref()
+            && installed_launcher.is_file()
+            && sha256_file(&installed_launcher)? == expected_sha256
+        {
+            return Ok(());
+        }
+
         if let Some(bytes) = download_optional_artifact(&client, &binary_url)? {
-            download = Some((binary_url, bytes));
+            let expected_sha256 = expected_sha256.with_context(|| {
+                format!("missing checksum for pcb launcher artifact: {binary_url}")
+            })?;
+            let actual_sha256 = sha256_hex(&bytes);
+            anyhow::ensure!(
+                actual_sha256 == expected_sha256,
+                "checksum mismatch for {binary_url}: expected {expected_sha256}, got {actual_sha256}"
+            );
+            download = Some(bytes);
             break;
         }
     }
-    let Some((binary_url, bytes)) = download else {
+    let Some(bytes) = download else {
         anyhow::bail!(
             "no pcb launcher binary found for {} on {}",
             latest.tag,
             target_triple()
         );
     };
-    verify_checksum(&binary_url, &bytes)?;
 
     let temporary_launcher = install_dir.join(format!(".pcb-launcher-{}.tmp", std::process::id()));
     let install_result: Result<()> = (|| {
