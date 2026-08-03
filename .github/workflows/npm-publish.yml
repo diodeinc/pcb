@@ -10,24 +10,45 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+          cache-bin: false
       - uses: taiki-e/install-action@wasm-pack
-      - uses: actions/setup-node@v6
+      - name: Build WASM bundle
+        run: ./bin/build-wasm-bundle.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-package
+          path: target/wasm-bundle
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package
+          path: target/wasm-bundle
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-      - name: Build WASM bundle
-        run: ./bin/build-wasm-bundle.sh
       - name: Publish to npm
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [[ "${{ github.ref_name }}" == *-* ]]; then
+          if [[ "$REF_NAME" == *-* ]]; then
             npm publish --access public --tag next --provenance
           else
             npm publish --access public --provenance

@@ -15,7 +15,7 @@ jobs:
   bump:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.DIODE_ROBOT_TOKEN }}
           fetch-depth: 0
@@ -38,7 +38,7 @@ jobs:
           git config user.email "info@diode.run"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v9
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1

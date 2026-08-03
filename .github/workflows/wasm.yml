@@ -14,6 +14,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   wasm:
     name: Evaluate publish bundles
@@ -28,7 +31,7 @@ jobs:
           apt-get update
           apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev jq git openssh-client zstd
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -39,15 +42,12 @@ jobs:
 
       - uses: taiki-e/install-action@wasm-pack
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
-      - name: Install local pcb toolchain
-        run: |
-          ./install.sh --local
-          export PATH="$HOME/.local/bin:$PATH"
-          pcb +local --help
+      - name: Build pcbc
+        run: cargo build --release -p pcbc --bin pcbc
 
       - name: Prepare stdlib artifact
         run: tar -C lib/std -cf - . | zstd -q -3 -c > "$RUNNER_TEMP/stdlib.tar.zst"
@@ -92,8 +92,7 @@ jobs:
           for board in Demeter Feign; do
             node crates/pcb-zen-wasm/scripts/eval-publish-bundle.mjs \
               --publish "workspaces/$board/$board.zen" \
-              --pcbc pcb \
-              --pcbc-arg +local \
+              --pcbc target/release/pcbc \
               --stdlib "$RUNNER_TEMP/stdlib.tar.zst" \
               > "$RUNNER_TEMP/$board-wasm-netlist.json"
           done

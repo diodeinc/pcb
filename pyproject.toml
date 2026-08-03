@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 dependencies = ["click>=8.0"]
 
 [dependency-groups]
-dev = ["pytest>=7.0", "hypothesis>=6.0", "ruff>=0.4"]
+dev = ["pytest>=7.0", "hypothesis>=6.0", "ruff>=0.4", "ty>=0.0.65"]
 
 [tool.ty.src]
 exclude = ["**/tests/"]
