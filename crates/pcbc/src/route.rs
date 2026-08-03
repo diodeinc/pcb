@@ -66,9 +66,9 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     match args.engine {
         RouteEngine::Deeppcb => execute_deeppcb(args),
         RouteEngine::Freerouting => {
-            if !(1..=3540).contains(&args.fr_timeout) {
+            if !(1..=3600).contains(&args.fr_timeout) {
                 anyhow::bail!(
-                    "--fr-timeout must be between 1 and 3540 seconds (59 minutes), got {}",
+                    "--fr-timeout must be between 1 and 3600 seconds (60 minutes), got {}",
                     args.fr_timeout
                 );
             }
