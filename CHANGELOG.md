@@ -8,10 +8,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### Fixed
-
-- Flattened IPC-2581 layer renders no longer drop stroked features such as plane-layer traces.
-
 ### Changed
 
 - Board-array balancing now certifies per-layer regions and reduces density and stack imbalance with variable voids.
@@ -21,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Board-array creation now emits fiducials on both declared copper and solder-mask surfaces.
+- Flattened IPC-2581 layer renders no longer drop stroked features such as plane-layer traces.
 
 ## [0.4.17] - 2026-07-31
 
