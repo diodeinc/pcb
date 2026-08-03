@@ -21,10 +21,8 @@ use crate::file_walker;
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[value(rename_all = "kebab-case")]
 pub enum RouteEngine {
-    /// DeepPCB cloud auto-routing service (default).
     #[default]
     Deeppcb,
-    /// Local, offline routing via a FreeRouting JAR.
     Freerouting,
 }
 

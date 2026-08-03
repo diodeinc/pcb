@@ -9,11 +9,8 @@ const BOARD_NO_LAYOUT_ZEN: &str = r#"
 p1 = Net("P1")
 "#;
 
-/// Kills the wrapped child on drop, including on an early panic (e.g. from
-/// `assert!`/`.expect()`) — without this, a spawned FreeRouting process
-/// leaks for the rest of the test run whenever a later assertion fails,
-/// which is exactly the kind of orphaned-process bug production code (see
-/// `FreeroutingServer` in freerouting.rs) uses the same pattern to prevent.
+/// Kills the wrapped child on drop, so a spawned FreeRouting process doesn't
+/// leak past a failed assertion.
 struct ChildGuard(std::process::Child);
 
 impl Drop for ChildGuard {
@@ -23,9 +20,6 @@ impl Drop for ChildGuard {
     }
 }
 
-/// A .zen file that declares a layout path but whose board files have not
-/// been generated yet. resolve_board() will fail with a "run pcb layout"
-/// error.
 const BOARD_WITH_LAYOUT_ZEN: &str = r#"
 LoadCap = Module("@stdlib/generics/Capacitor.zen")
 vcc = Net("VCC")
@@ -34,12 +28,8 @@ LoadCap(name = "C1", value = "100nF", package = "0402", P1 = vcc, P2 = gnd)
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 "#;
 
-/// Two components connected by a shared net, placed apart by auto-placement
-/// so the net actually needs a routed trace between them — unlike
-/// `BOARD_WITH_LAYOUT_ZEN`'s single capacitor, whose two pads are close
-/// enough that FreeRouting needs zero real routing work and never produces
-/// an output object at all. Needed for tests that assert on *retrieving*
-/// output, not just on a clean DRC pass.
+/// Unlike `BOARD_WITH_LAYOUT_ZEN`, has nets that actually need a routed
+/// trace, so FreeRouting produces a real output object.
 const BOARD_WITH_ROUTABLE_NETS_ZEN: &str = r#"
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
@@ -53,9 +43,6 @@ Resistor(name = "R2", value = "1k", package = "0402", P1 = n2, P2 = n3)
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 "#;
 
-/// Helper: create a minimal KiCad layout directory (kicad_pro + kicad_pcb)
-/// inside the sandbox so that resolve_board() passes and routing can proceed
-/// until the Java/JAR prerequisite check.
 fn scaffold_layout(sandbox: &mut Sandbox) {
     sandbox.write(
         "build/TestBoard/test.kicad_pro",
@@ -69,11 +56,6 @@ fn scaffold_layout(sandbox: &mut Sandbox) {
 
 /// Run `pcbc route --engine freerouting <extra_args...> board.zen` in
 /// `sandbox` and return (exit_code, stdout, stderr).
-///
-/// We deliberately don't snapshot this output: it embeds absolute paths,
-/// timings, network errors, and upstream FreeRouting log lines, none of
-/// which are stable across machines or runs. Assert on exit status and
-/// specific substrings instead.
 fn run_route_freerouting(sandbox: &mut Sandbox, extra_args: &[&str]) -> (i32, String, String) {
     let mut args = vec!["route", "--engine", "freerouting"];
     args.extend_from_slice(extra_args);
@@ -113,8 +95,6 @@ fn test_freerouting_no_layout() {
 
 #[test]
 fn test_freerouting_java_not_found() {
-    // Sandbox passes through the host PATH; if Java isn't on the host, this
-    // naturally covers the error.
     let mut sandbox = Sandbox::new().with_workspace();
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
     scaffold_layout(&mut sandbox);
@@ -123,9 +103,6 @@ fn test_freerouting_java_not_found() {
     let combined = format!("{stdout}{stderr}");
     if combined.contains("Java 25+ not found") {
         assert_ne!(code, 0);
-    } else {
-        // Host has Java 25+: we'll hit the JAR lookup instead, which is
-        // covered by test_freerouting_bad_jar_path. Nothing to assert here.
     }
 }
 
@@ -149,15 +126,9 @@ fn test_freerouting_bad_jar_path() {
 // Integration tests — need Java + FreeRouting JAR on the host
 // ---------------------------------------------------------------------------
 
-/// Resolve the FreeRouting JAR path for integration tests.
-///
-/// Priority:
-/// 1. `FREEROUTING_TEST_JAR` env var (test-specific override)
-/// 2. `FREEROUTING_JAR` env var
-/// 3. Cached download (`~/.cache/pcb/test-cache/freerouting-cli.jar`)
-/// 4. Download to cache from GitHub releases
-///
-/// Returns `None` (and prints a diagnostic) so the calling test can skip.
+/// Resolve the FreeRouting JAR path for integration tests: `FREEROUTING_TEST_JAR`
+/// or `FREEROUTING_JAR` env var, a cached download, or fetch one. Returns
+/// `None` so the calling test can skip.
 fn resolve_freerouting_jar() -> Option<PathBuf> {
     for var in &["FREEROUTING_TEST_JAR", "FREEROUTING_JAR"] {
         if let Ok(path) = std::env::var(var) {
@@ -228,14 +199,8 @@ fn java_compatible() -> bool {
     major >= 25
 }
 
-/// Poll `url` until it returns HTTP 200 or `deadline` elapses.
-///
-/// Bypasses HTTP_PROXY/NO_PROXY explicitly (matching `FreeroutingApiClient`
-/// in production, see `freerouting/api.rs`) since this always targets a
-/// FreeRouting process we spawned ourselves on 127.0.0.1. This is what lets
-/// the sandbox route all other HTTP(S) through a dead proxy without an
-/// exemption for loopback: the client that actually needs to reach it opts
-/// out itself, rather than the sandbox widening what every test can reach.
+/// Poll `url` until it returns HTTP 200 or `deadline` elapses. Bypasses the
+/// sandbox's dead HTTP(S) proxy explicitly, matching `FreeroutingApiClient`.
 fn wait_for_http_ok(url: &str, deadline: Duration) -> bool {
     let client = match reqwest::blocking::Client::builder().no_proxy().build() {
         Ok(c) => c,
@@ -257,13 +222,8 @@ fn wait_for_http_ok(url: &str, deadline: Duration) -> bool {
 }
 
 /// Spawn a FreeRouting API server on a free loopback port and wait for it to
-/// report ready. Mirrors the exact flags `FreeroutingServer::spawn` uses in
-/// production (headless, GUI disabled, API server on a private loopback
-/// port, no auth since there's a single local caller, analytics off) so this
-/// stays a faithful smoke test of the same invocation path.
-///
-/// Panics (via `expect`/`assert!`) on failure to spawn or become ready — this
-/// is test setup, not something callers are expected to recover from.
+/// report ready. Mirrors the flags `FreeroutingServer::spawn` uses in
+/// production.
 fn spawn_freerouting_server(jar_path: &PathBuf) -> (ChildGuard, u16) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -298,12 +258,6 @@ fn spawn_freerouting_server(jar_path: &PathBuf) -> (ChildGuard, u16) {
 
 #[test]
 fn test_freerouting_api_server_boots() {
-    // Smoke test that the resolved JAR is a genuine FreeRouting build
-    // capable of running in local API-server mode — the mode production
-    // code depends on exclusively (see freerouting.rs: driven through
-    // FreeRouting's REST API rather than one-shot CLI mode specifically so
-    // Ctrl+C/timeout can recover partial output). Protects against e.g.
-    // FREEROUTING_JAR pointing at a stale or incompatible build.
     if !java_compatible() {
         eprintln!("[route test] Skipping: Java 25+ not available");
         return;
@@ -317,22 +271,9 @@ fn test_freerouting_api_server_boots() {
     let (_child, _port) = spawn_freerouting_server(&jar_path);
 }
 
-/// Regression guard for the specific capability CLI mode structurally
-/// cannot provide: retrieving real routed output after cancelling a job.
-/// FreeRouting's CLI mode (`-de`/`-do`) only writes its `.ses` output once,
-/// gated on an internal `COMPLETED` state that a confirmed upstream bug
-/// prevents an interrupted job from ever reaching — so Ctrl+C/timeout in CLI
-/// mode never yields a partial result. The API's `GET /jobs/{id}/output`
-/// explicitly supports returning output for a cancelled job.
-///
-/// This drives the API directly (session -> job -> settings -> input ->
-/// start -> cancel -> output) rather than through `pcbc route`, so we
-/// control the exact cancel timing. We don't try to catch the job strictly
-/// mid-route before cancelling — on a small test board FreeRouting can
-/// finish before our cancel call lands, and that's fine: the assertion is
-/// "output is valid and non-empty after a cancel call", regardless of
-/// whether cancel landed pre- or post-completion. Both are meaningful
-/// confirmations of the capability under test.
+/// Drives the FreeRouting API directly (session -> job -> input -> start ->
+/// cancel -> output) to confirm `GET /jobs/{id}/output` returns valid,
+/// non-empty output for a cancelled job.
 #[test]
 fn test_freerouting_cancel_returns_output() {
     if !java_compatible() {
@@ -372,7 +313,6 @@ fn test_freerouting_cancel_returns_output() {
         .join("build/TestBoard/layout.kicad_pcb");
     let dsn_path = sandbox.default_cwd().join("board.dsn");
 
-    // Same export used in production (freerouting.rs::export_dsn).
     let dsn_script = r#"
 import pcbnew
 import sys
@@ -454,13 +394,7 @@ pcbnew.ExportSpecctraDSN(brd, sys.argv[2])
         None,
     );
 
-    // Give the router a brief window to complete at least one pass before
-    // cancelling — cancelling with truly zero elapsed progress is a real,
-    // separate scenario (verified to correctly report "no output" rather
-    // than crash, matching production's NothingToRoute handling) but isn't
-    // what this test is checking. This is still "cancel while probably
-    // still running or just finished" on these tiny fixtures, not a
-    // guarantee we caught it mid-route — see the doc comment above.
+    // Give the router a brief window to make progress before cancelling.
     std::thread::sleep(Duration::from_millis(300));
 
     call_json(
@@ -503,8 +437,6 @@ pcbnew.ExportSpecctraDSN(brd, sys.argv[2])
 
 #[test]
 fn test_freerouting_cli() {
-    // Full integration test: requires Java, FreeRouting JAR, and KiCad
-    // (for DSN export, SES import, and a post-route DRC check).
     if !java_compatible() {
         eprintln!("[route test] Skipping: Java 25+ not available");
         return;
@@ -515,7 +447,6 @@ fn test_freerouting_cli() {
         None => return,
     };
 
-    // KiCad is needed for DSN export and SES import
     let kicad_missing = Command::new("kicad-cli")
         .arg("version")
         .output()
@@ -528,7 +459,6 @@ fn test_freerouting_cli() {
         return;
     }
 
-    // Build a board then route it locally
     let mut sandbox = Sandbox::new().with_workspace();
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
 
@@ -569,17 +499,11 @@ fn test_freerouting_cli() {
         "route --engine freerouting failed:\nstdout:{stdout}\nstderr:{stderr}"
     );
 
-    // The board should now be routed with no unresolved airwires. We only
-    // assert on unconnected items (routing completeness), not on overall DRC
-    // cleanliness: this minimal fixture has no board outline, which trips an
-    // unrelated `invalid_outline` violation regardless of routing quality
-    // (the same reason `pcbc publish` suppresses it for bare test boards via
-    // `-S layout.drc.invalid_outline`).
+    // Only assert on unconnected items, not overall DRC: this fixture has no
+    // board outline, which trips an unrelated `invalid_outline` violation.
     let board_path = sandbox
         .default_cwd()
         .join("build/TestBoard/layout.kicad_pcb");
-    // Explicit `-o` keeps the report inside the sandbox instead of defaulting
-    // to a `layout-drc.rpt` file in the test process's cwd (the repo itself).
     let drc_report_path = sandbox.default_cwd().join("layout-drc.rpt");
     let drc_output = Command::new("kicad-cli")
         .args(["pcb", "drc", "-o"])

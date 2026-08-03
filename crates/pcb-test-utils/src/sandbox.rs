@@ -672,13 +672,6 @@ impl Sandbox {
             self.cache_dir.to_string_lossy().into_owned(),
         );
 
-        // Block network access for sandboxed commands:
-        // - Git: only allow `file://` (fixtures are rewritten to local file URLs).
-        // - HTTP(S): route via a dead proxy to avoid accidental egress.
-        // No loopback exemption here: a client that legitimately needs to
-        // reach a local server it spawned itself (e.g. FreeroutingApiClient)
-        // opts out of proxying explicitly via `.no_proxy()`, rather than
-        // this sandbox widening what every sandboxed command can reach.
         env_map.insert("GIT_ALLOW_PROTOCOL".into(), "file".into());
         env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
         env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());
