@@ -229,10 +229,23 @@ fn java_compatible() -> bool {
 }
 
 /// Poll `url` until it returns HTTP 200 or `deadline` elapses.
+///
+/// Bypasses HTTP_PROXY/NO_PROXY explicitly (matching `FreeroutingApiClient`
+/// in production, see `freerouting/api.rs`) since this always targets a
+/// FreeRouting process we spawned ourselves on 127.0.0.1. This is what lets
+/// the sandbox route all other HTTP(S) through a dead proxy without an
+/// exemption for loopback: the client that actually needs to reach it opts
+/// out itself, rather than the sandbox widening what every test can reach.
 fn wait_for_http_ok(url: &str, deadline: Duration) -> bool {
+    let client = match reqwest::blocking::Client::builder().no_proxy().build() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
     let start = Instant::now();
     while start.elapsed() < deadline {
-        let ok = reqwest::blocking::get(url)
+        let ok = client
+            .get(url)
+            .send()
             .map(|resp| resp.status().is_success())
             .unwrap_or(false);
         if ok {
