@@ -49,15 +49,16 @@ try {
         $compressedPath = Join-Path $tmp "pcb.exe.zst"
         try {
             Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact.zst" -OutFile $compressedPath
-            $downloadedCompressed = $true
+            & $zstd.Source -q -d -f $compressedPath -o $binary
+            if ($LASTEXITCODE -eq 0) {
+                $downloadedCompressed = $true
+            }
         } catch {
             $downloadedCompressed = $false
         }
     }
 
-    if ($downloadedCompressed) {
-        & $zstd.Source -q -d -f $compressedPath -o $binary
-    } else {
+    if (-not $downloadedCompressed) {
         Invoke-WebRequest "$baseUrl/$($latest.tag)/$artifact" -OutFile $binary
     }
 
@@ -69,17 +70,15 @@ try {
             $launcherCompressedPath = Join-Path $tmp "pcb-launcher.exe.zst"
             try {
                 Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact.zst" -OutFile $launcherCompressedPath
-                $launcherDownloadedCompressed = $true
+                & $zstd.Source -q -d -f $launcherCompressedPath -o $launcherBinary
+                if ($LASTEXITCODE -eq 0) {
+                    $launcherDownloadedCompressed = $true
+                }
             } catch {
                 $launcherDownloadedCompressed = $false
             }
         }
-        if ($launcherDownloadedCompressed) {
-            & $zstd.Source -q -d -f $launcherCompressedPath -o $launcherBinary
-            if ($LASTEXITCODE -ne 0) {
-                throw "failed to decompress pcb-launcher"
-            }
-        } else {
+        if (-not $launcherDownloadedCompressed) {
             Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact" -OutFile $launcherBinary
         }
 

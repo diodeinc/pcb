@@ -537,16 +537,24 @@ mod macos {
 
         unsafe impl NSApplicationDelegate for LauncherDelegate {
             #[unsafe(method(application:openURLs:))]
-            fn application_open_urls(&self, application: &NSApplication, urls: &NSArray<NSURL>) {
+            fn application_open_urls(&self, _application: &NSApplication, urls: &NSArray<NSURL>) {
                 RECEIVED_URL.store(true, Ordering::Release);
+                let mut uris = Vec::new();
                 for url in urls {
-                    if let Some(value) = url.absoluteString()
-                        && let Err(error) = super::launch_pcb(&value.to_string())
-                    {
-                        eprintln!("Failed to open in KiCad: {error:#}");
+                    if let Some(value) = url.absoluteString() {
+                        uris.push(value.to_string());
                     }
                 }
-                application.terminate(None);
+                // Keep waiting for `pcb open` off the AppKit main thread so a
+                // long-lived sync session cannot stall further Apple Events.
+                std::thread::spawn(move || {
+                    for uri in uris {
+                        if let Err(error) = super::launch_pcb(&uri) {
+                            eprintln!("Failed to open in KiCad: {error:#}");
+                        }
+                    }
+                    std::process::exit(0);
+                });
             }
         }
     );
