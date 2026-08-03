@@ -661,6 +661,23 @@ fn poll_job(api: &FreeroutingApiClient, job_id: &str, timeout_secs: u64) -> Resu
                 consecutive_errors += 1;
                 if consecutive_errors >= 20 {
                     println!();
+                    // The server is unreachable, so there's no point trying
+                    // best_effort_output — but whatever we cached during the
+                    // last known-good RUNNING poll is still real progress.
+                    // Losing contact shouldn't also lose that: fail the run
+                    // with an error, but still return it for the caller to
+                    // publish, same as a cancel/timeout.
+                    if last_known_output.is_some() {
+                        eprintln!(
+                            "  {} Lost contact with FreeRouting API server: {e}",
+                            "!".yellow()
+                        );
+                        eprintln!("  Saving last known routing progress.");
+                        return Ok(PollResult {
+                            outcome: RunOutcome::Cancelled,
+                            output: last_known_output,
+                        });
+                    }
                     anyhow::bail!("Lost contact with FreeRouting API server: {e}");
                 }
             }
