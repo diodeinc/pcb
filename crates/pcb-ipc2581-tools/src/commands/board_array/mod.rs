@@ -385,6 +385,7 @@ struct VcutLine {
 pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
     let creation = create_board_array(&content, options)?;
+    print_copper_balance_summary(&creation.copper_balance);
     write_board_array_output(output, &creation.xml)?;
     Ok(())
 }
@@ -392,8 +393,15 @@ pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -
 pub fn execute_auto(input: &Path, output: &Path, sheet: Option<AutoSheetSize>) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
     let creation = create_auto_board_array(&content, sheet)?;
+    print_copper_balance_summary(&creation.copper_balance);
     write_board_array_output(output, &creation.xml)?;
     Ok(())
+}
+
+fn print_copper_balance_summary(report: &balance::AutomaticBoardArrayCopperBalanceReport) {
+    for line in report.summary_lines() {
+        eprintln!("  {line}");
+    }
 }
 
 fn write_board_array_output(output: &Path, content: &str) -> Result<()> {
@@ -554,7 +562,7 @@ fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
     Ok(bbox)
 }
 
-fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
+fn board_array_edited_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
     let generated_spec_xml = write_generated_specs_xml(spec);
     let generated_layer_xml = write_generated_layers_xml(&spec.generated_geometry);
     let generated_steps_xml = write_generated_steps_xml(spec)?;
@@ -573,7 +581,11 @@ fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
         &doc,
         "Created board array",
     )?);
-    let xml = ipc2581::edit::apply(xml, edits)?;
+    Ok(ipc2581::edit::apply(xml, edits)?)
+}
+
+fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
+    let xml = board_array_edited_xml(xml, spec)?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
 
     Ipc2581::parse(&xml).context("Generated IPC-2581 board array XML did not parse")?;
@@ -584,7 +596,9 @@ fn write_balanced_board_array_xml(
     xml: &str,
     mut spec: BoardArraySpec,
 ) -> Result<BoardArrayCreation> {
-    let provisional_xml = write_board_array_xml(xml, &spec)?;
+    // The provisional array only feeds safe-region discovery; parsing it below
+    // already validates it, so skip the cosmetic reformat pass.
+    let provisional_xml = board_array_edited_xml(xml, &spec)?;
     let provisional = Ipc2581::parse(&provisional_xml)
         .context("Failed to parse provisional IPC-2581 board array")?;
     let balance = balance::generate_automatic_board_array_copper_balance(&provisional)?;

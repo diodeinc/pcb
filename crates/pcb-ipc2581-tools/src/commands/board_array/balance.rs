@@ -1,9 +1,8 @@
 //! Automatic board-array copper balancing.
 //!
-//! The high-level planner derives a certified safe region and the composed
-//! copper image of every copper layer from a completed board array. The
-//! low-level adapter remains available for callers that already have explicit
-//! geometry and area inputs.
+//! The planner derives a certified safe region and the composed copper image
+//! of every copper layer from a completed board array, then runs one joint
+//! spatial solve across the stackup.
 
 use std::collections::HashMap;
 
@@ -21,9 +20,9 @@ use pcb_ir::dialects::ipc::{
     board_array_balancing_region, collect_board_array_balancing_input,
 };
 use pcb_ir::geom::copper_balance::{
-    DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceRequest,
-    DenseCopperBalanceResult, SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest,
-    generate_dense_copper_balance, generate_spatial_dense_copper_balance, rounded_hexagonal_void,
+    DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult,
+    SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest,
+    generate_spatial_dense_copper_balance, rounded_hexagonal_void,
 };
 use pcb_ir::geom::path::transform_cmds;
 use pcb_ir::geom::region::simplify_shapes;
@@ -41,7 +40,8 @@ pub struct AutomaticBoardArrayLayerBalance {
     pub layer_name: String,
     /// Copper density measured inside the repeated board footprints.
     pub board_target_density: f64,
-    pub stack_weight_mm2: Option<f64>,
+    /// Signed physical stack weight, or zero when the stackup supplied none.
+    pub stack_weight_mm2: f64,
     pub existing_copper: ContourSet,
     pub result: DenseCopperBalanceResult,
     pub features: Vec<SetFeature>,
@@ -50,9 +50,11 @@ pub struct AutomaticBoardArrayLayerBalance {
 /// Inspectable result of planning automatic copper balance for a board array.
 #[derive(Debug, Clone)]
 pub struct AutomaticBoardArrayCopperBalance {
-    pub panel_outer: ContourSet,
     pub board_footprints: ContourSet,
     pub retained_area_mm2: f64,
+    /// Whether the physical stackup supplied signed stack weights. When false,
+    /// every layer balances independently with zero through-stack coupling.
+    pub stack_weights_available: bool,
     pub layers: Vec<AutomaticBoardArrayLayerBalance>,
 }
 
@@ -64,7 +66,7 @@ pub struct AutomaticBoardArrayLayerBalanceReport {
     pub void_radius_mm: Option<f64>,
     pub min_void_radius_mm: Option<f64>,
     pub max_void_radius_mm: Option<f64>,
-    pub stack_weight_mm2: Option<f64>,
+    pub stack_weight_mm2: f64,
     pub target_density: f64,
     pub initial_density: f64,
     pub achieved_density: f64,
@@ -72,7 +74,6 @@ pub struct AutomaticBoardArrayLayerBalanceReport {
     pub existing_copper_area_mm2: f64,
     pub desired_added_area_mm2: f64,
     pub generated_area_mm2: f64,
-    pub safe_area_mm2: f64,
     pub usable_area_mm2: f64,
     pub fixed_empty_area_mm2: f64,
     pub void_count: usize,
@@ -92,7 +93,49 @@ pub enum AutomaticBoardArrayCopperBalanceMode {
 pub struct AutomaticBoardArrayCopperBalanceReport {
     pub retained_area_mm2: f64,
     pub board_footprint_area_mm2: f64,
+    pub stack_weights_available: bool,
     pub layers: Vec<AutomaticBoardArrayLayerBalanceReport>,
+}
+
+impl AutomaticBoardArrayCopperBalanceReport {
+    /// One short status line per copper layer, plus a warning when the
+    /// stackup could not supply physical stack weights.
+    pub fn summary_lines(&self) -> Vec<String> {
+        let mut lines = self
+            .layers
+            .iter()
+            .map(|layer| {
+                let geometry = match (
+                    layer.mode,
+                    layer.min_void_radius_mm,
+                    layer.max_void_radius_mm,
+                ) {
+                    (AutomaticBoardArrayCopperBalanceMode::None, ..) => "no fill".to_string(),
+                    (AutomaticBoardArrayCopperBalanceMode::Solid, ..) => "solid fill".to_string(),
+                    (AutomaticBoardArrayCopperBalanceMode::Perforated, Some(min), Some(max)) => {
+                        format!("{} hex voids r {min:.2}-{max:.2} mm", layer.void_count)
+                    }
+                    (AutomaticBoardArrayCopperBalanceMode::Perforated, ..) => {
+                        format!("{} hex voids", layer.void_count)
+                    }
+                };
+                format!(
+                    "balance {}: {geometry}, density {:.3} -> {:.3} (target {:.3})",
+                    layer.layer_name,
+                    layer.initial_density,
+                    layer.achieved_density,
+                    layer.target_density
+                )
+            })
+            .collect::<Vec<_>>();
+        if !self.layers.is_empty() && !self.stack_weights_available {
+            lines.push(
+                "balance: stackup thickness data unavailable; layers balanced independently"
+                    .to_string(),
+            );
+        }
+        lines
+    }
 }
 
 impl AutomaticBoardArrayCopperBalance {
@@ -101,6 +144,7 @@ impl AutomaticBoardArrayCopperBalance {
         AutomaticBoardArrayCopperBalanceReport {
             retained_area_mm2: self.retained_area_mm2,
             board_footprint_area_mm2: self.board_footprints.area(),
+            stack_weights_available: self.stack_weights_available,
             layers: self
                 .layers
                 .iter()
@@ -141,7 +185,6 @@ impl AutomaticBoardArrayCopperBalance {
                         existing_copper_area_mm2,
                         desired_added_area_mm2: solution.desired_added_area_mm2,
                         generated_area_mm2: solution.generated_area_mm2,
-                        safe_area_mm2: layer.result.usable.area(),
                         usable_area_mm2,
                         fixed_empty_area_mm2,
                         void_count: layer.result.void_count(),
@@ -172,53 +215,34 @@ pub fn generate_automatic_board_array_copper_balance(
         .context("failed to derive board-array fabrication profile for copper balancing")?;
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let copper_layers = crate::layers::copper_layers(ecad);
-    let support_documents = ecad
-        .cad_data
-        .layers
-        .iter()
-        .map(|layer| {
-            let layer_name = ipc.resolve(layer.name);
-            let document =
-                geometry::extract_layer_for_view(ipc, layer_name, View::ArraySupport).with_context(
-                    || {
-                        format!(
-                            "failed to extract IPC-2581 array-support layer '{layer_name}' for copper balancing"
-                        )
-                    },
-                )?;
-            let policy = if layer.layer_function == LayerFunction::VCut {
-                BoardArraySupportLayerPolicy::VCutOperationsOnly
-            } else {
-                BoardArraySupportLayerPolicy::AllPaintedFeatures
-            };
-            Ok((document, policy))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let support_layers = extract_array_support_layers(ipc)?;
     let collection = collect_board_array_balancing_input(
         &layout,
         &fabrication_profile,
         &copper_layers,
-        support_documents
+        support_layers
             .iter()
-            .map(|(document, policy)| BoardArraySupportDocument::new(document, *policy)),
+            .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
     )
     .context("failed to collect board-array balancing obstacles")?;
-    let panel_outer = collection.panel_outer.clone();
-    let board_footprints = collection.board_footprints.clone();
+    let panel_outer = &collection.panel_outer;
+    let board_footprints = &collection.board_footprints;
     let retained_area_mm2 = panel_outer.area();
     let board_area_mm2 = board_footprints.area();
     let lattice_origin = panel_outer.bbox.min;
     let stack_weights = physical_copper_stack_weights(ipc);
+    let stack_weights_available = stack_weights.is_some();
     let mut prepared: Vec<PreparedLayerBalance> = Vec::with_capacity(copper_layers.len());
     for layer in &copper_layers {
         let layer_name = ipc.resolve(layer.name).to_string();
-        let existing_copper = composed_copper_image(ipc, &layer_name)?.intersection(&panel_outer);
-        let board_target_density = (existing_copper.intersection(&board_footprints).area()
+        let existing_copper = composed_copper_image(ipc, &layer_name)?.intersection(panel_outer);
+        let board_target_density = (existing_copper.intersection(board_footprints).area()
             / board_area_mm2)
             .clamp(0.0, 1.0);
         let stack_weight_mm2 = stack_weights
             .as_ref()
-            .and_then(|weights| weights.get(&layer_name).copied());
+            .and_then(|weights| weights.get(&layer_name).copied())
+            .unwrap_or(0.0);
         let safe_region = if let Some(representative) = prepared
             .iter()
             .find(|candidate| collection.has_same_support_scope(candidate.layer, layer.name))
@@ -255,13 +279,13 @@ pub fn generate_automatic_board_array_copper_balance(
             safe_region: &layer.safe_region,
             existing_copper: &layer.existing_copper,
             target_density: layer.board_target_density,
-            stack_weight_mm2: layer.stack_weight_mm2.unwrap_or(0.0),
+            stack_weight_mm2: layer.stack_weight_mm2,
         })
         .collect::<Vec<_>>();
     let results = generate_spatial_dense_copper_balance(
         DenseCopperBalanceProfile::V1,
         SpatialCopperBalanceRequest {
-            panel_region: &panel_outer,
+            panel_region: panel_outer,
             lattice_origin,
             layers: &spatial_layers,
         },
@@ -271,12 +295,7 @@ pub fn generate_automatic_board_array_copper_balance(
         .into_iter()
         .zip(results)
         .map(|(layer, result)| {
-            let features = match result.solution.mode {
-                DenseCopperBalanceMode::None => Vec::new(),
-                DenseCopperBalanceMode::Solid | DenseCopperBalanceMode::Perforated { .. } => {
-                    ipc_contour_features(&result)?
-                }
-            };
+            let features = balance_features(&result)?;
             Ok(AutomaticBoardArrayLayerBalance {
                 layer_name: ipc.resolve(layer.layer).to_string(),
                 board_target_density: layer.board_target_density,
@@ -289,9 +308,9 @@ pub fn generate_automatic_board_array_copper_balance(
         .collect::<Result<Vec<_>>>()?;
 
     Ok(AutomaticBoardArrayCopperBalance {
-        panel_outer,
-        board_footprints,
+        board_footprints: collection.board_footprints,
         retained_area_mm2,
+        stack_weights_available,
         layers,
     })
 }
@@ -299,24 +318,62 @@ pub fn generate_automatic_board_array_copper_balance(
 struct PreparedLayerBalance {
     layer: Symbol,
     board_target_density: f64,
-    stack_weight_mm2: Option<f64>,
+    stack_weight_mm2: f64,
     existing_copper: ContourSet,
     safe_region: ContourSet,
 }
 
-/// Solve and convert one layer's explicit safe region to positive IPC contours.
-pub fn generate_board_array_copper_balance(
-    profile: DenseCopperBalanceProfile,
-    request: DenseCopperBalanceRequest<'_>,
-) -> Result<(DenseCopperBalanceResult, Vec<SetFeature>)> {
-    let result = generate_dense_copper_balance(profile, request)?;
-    let features = match result.solution.mode {
-        DenseCopperBalanceMode::None => Vec::new(),
+/// One ECAD layer's `ArraySupport` view plus its physical-obstacle policy.
+///
+/// V-cut layers restrict physical obstacles to `V_Cut` operation features so
+/// same-layer callout arrows and labels stay documentation; every other layer
+/// contributes all painted features.
+pub struct ArraySupportLayerSource {
+    pub name: String,
+    pub layer_function: LayerFunction,
+    pub policy: BoardArraySupportLayerPolicy,
+    pub document: SupportDocument,
+}
+
+type SupportDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
+
+/// Extract every ECAD layer as an `ArraySupport` document for safe-region
+/// discovery.
+pub fn extract_array_support_layers(ipc: &Ipc2581) -> Result<Vec<ArraySupportLayerSource>> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    ecad.cad_data
+        .layers
+        .iter()
+        .map(|layer| {
+            let name = ipc.resolve(layer.name).to_string();
+            let document = geometry::extract_layer_for_view(ipc, &name, View::ArraySupport)
+                .with_context(|| {
+                    format!("failed to extract IPC-2581 array-support layer '{name}'")
+                })?;
+            let policy = if layer.layer_function == LayerFunction::VCut {
+                BoardArraySupportLayerPolicy::VCutOperationsOnly
+            } else {
+                BoardArraySupportLayerPolicy::AllPaintedFeatures
+            };
+            Ok(ArraySupportLayerSource {
+                name,
+                layer_function: layer.layer_function,
+                policy,
+                document,
+            })
+        })
+        .collect()
+}
+
+/// Convert a solved layer to positive IPC features; empty when nothing was
+/// generated.
+pub(crate) fn balance_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeature>> {
+    match result.solution.mode {
+        DenseCopperBalanceMode::None => Ok(Vec::new()),
         DenseCopperBalanceMode::Solid | DenseCopperBalanceMode::Perforated { .. } => {
-            ipc_contour_features(&result)?
+            ipc_contour_features(result)
         }
-    };
-    Ok((result, features))
+    }
 }
 
 fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourSet> {
@@ -530,6 +587,7 @@ fn ipc_polygon_from_contour(contour: &ContourBuf) -> Result<Polygon> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcb_ir::geom::copper_balance::{DenseCopperBalanceRequest, generate_dense_copper_balance};
     use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 
     #[test]
@@ -538,7 +596,7 @@ mod tests {
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
             tol::REGION_MM,
         );
-        let (result, features) = generate_board_array_copper_balance(
+        let result = generate_dense_copper_balance(
             DenseCopperBalanceProfile::V1,
             DenseCopperBalanceRequest {
                 safe_region: &safe_region,
@@ -549,6 +607,7 @@ mod tests {
             },
         )
         .unwrap();
+        let features = balance_features(&result).unwrap();
 
         assert!(
             matches!(

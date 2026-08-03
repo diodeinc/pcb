@@ -9,18 +9,20 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use pcb_ipc2581_tools::commands::board_array::balance::{
+    ArraySupportLayerSource, extract_array_support_layers,
+};
 use pcb_ipc2581_tools::geometry::{
-    board_array_fabrication_profile_with_debug, board_array_vscore_lines, extract_layer_for_view,
-    extract_layout,
+    board_array_fabrication_profile_with_debug, board_array_vscore_lines, extract_layout,
 };
 use pcb_ipc2581_tools::ipc2581::{Ipc2581, Symbol, types::LayerFunction};
 use pcb_ipc2581_tools::layers::copper_layers;
 use pcb_ipc2581_tools::utils::file::load_ipc_file;
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, BoardArrayBalancingResult, BoardArraySupportDocument,
-    BoardArraySupportLayerGeometry, BoardArraySupportLayerPolicy, DEFAULT_BALANCING_CLEARANCE_MM,
+    BoardArraySupportLayerGeometry, DEFAULT_BALANCING_CLEARANCE_MM,
     DEFAULT_BALANCING_GAP_RADIUS_MM, DEFAULT_BALANCING_NUMERICAL_GUARD_MM,
-    DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM, View, board_array_balancing_region,
+    DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM, board_array_balancing_region,
     inspect_board_array_balancing_input, root_panel_step,
 };
 use pcb_ir::geom::{BBox, ContourSet};
@@ -30,7 +32,6 @@ const SCHEMA: &str = "pcb-ir.board-array-balancing-debug.v8";
 const DEFAULT_CHECK_AREA_TOLERANCE_MM2: f64 = 1e-4;
 const SVG_PADDING_MM: f64 = 2.0;
 const SVG_STROKE_MM: f64 = 0.12;
-type GeometryDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -85,14 +86,6 @@ struct SupportLayer {
     excluded_documentation_path_count: usize,
     unpainted_path_count: usize,
     region: ContourSet,
-}
-
-#[derive(Debug)]
-struct SupportLayerSource {
-    name: String,
-    function: String,
-    policy: BoardArraySupportLayerPolicy,
-    document: GeometryDocument,
 }
 
 #[derive(Debug)]
@@ -305,18 +298,8 @@ fn component_areas(region: &ContourSet) -> Vec<f64> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if !args.clearance_mm.is_finite() || args.clearance_mm <= 0.0 {
-        bail!("--clearance-mm must be a finite positive number");
-    }
-    if !args.regularization_radius_mm.is_finite() || args.regularization_radius_mm <= 0.0 {
-        bail!("--regularization-radius-mm must be a finite positive number");
-    }
-    if !args.gap_radius_mm.is_finite() || args.gap_radius_mm <= 0.0 {
-        bail!("--gap-radius-mm must be a finite positive number");
-    }
-    if !args.numerical_guard_mm.is_finite() || args.numerical_guard_mm < 0.0 {
-        bail!("--numerical-guard-mm must be a finite non-negative number");
-    }
+    // The radius and clearance options are validated by
+    // `board_array_balancing_region` itself.
     if !args.check_area_tolerance_mm2.is_finite() || args.check_area_tolerance_mm2 < 0.0 {
         bail!("--check-area-tolerance-mm2 must be a finite non-negative number");
     }
@@ -358,7 +341,7 @@ fn main() -> Result<()> {
         board_array_fabrication_profile_with_debug(&ipc, &layout, &score_lines)
             .context("failed to compose board-array fabrication profile")?;
 
-    let support_sources = extract_support_layers(&ipc)?;
+    let support_sources = extract_array_support_layers(&ipc)?;
     let collection = inspect_board_array_balancing_input(
         &layout,
         &fabrication_profile,
@@ -369,17 +352,15 @@ fn main() -> Result<()> {
     )
     .context("failed to collect board-array balancing inputs")?;
     let balancing_input = collection.input_for_layer(selected_copper.name);
-    let result = board_array_balancing_region(
-        &balancing_input,
-        BalancingRegionOptions {
-            clearance_mm: args.clearance_mm,
-            regularization_radius_mm: args.regularization_radius_mm,
-            gap_radius_mm: args.gap_radius_mm,
-            numerical_guard_mm: args.numerical_guard_mm,
-        },
-    )
-    .context("failed to compute board-array balancing region")?;
-    let construction_clearance_mm = args.clearance_mm + args.numerical_guard_mm;
+    let options = BalancingRegionOptions {
+        clearance_mm: args.clearance_mm,
+        regularization_radius_mm: args.regularization_radius_mm,
+        gap_radius_mm: args.gap_radius_mm,
+        numerical_guard_mm: args.numerical_guard_mm,
+    };
+    let result = board_array_balancing_region(&balancing_input, options)
+        .context("failed to compute board-array balancing region")?;
+    let construction_clearance_mm = options.construction_clearance_mm();
     let certificate_passed = result.certificate.passes(args.check_area_tolerance_mm2);
     let support_features = balancing_input.support_features;
     let panel_outer = collection.panel_outer;
@@ -410,6 +391,9 @@ fn main() -> Result<()> {
             ContourSet::empty(safe_region.tolerance),
             |undersized, component| undersized.union(&component),
         );
+    let removed_by_regularization = intermediates
+        .removed_by_opening
+        .union(&intermediates.removed_by_gap_regularization);
     let regions = Regions {
         panel_outer,
         board_footprints,
@@ -424,7 +408,7 @@ fn main() -> Result<()> {
         narrow_voids: intermediates.narrow_voids,
         gap_separator_keep_out: intermediates.gap_separator_keep_out,
         removed_by_gap_regularization: intermediates.removed_by_gap_regularization,
-        removed_by_regularization: intermediates.removed_by_regularization,
+        removed_by_regularization,
         safe_region,
         undersized_final_components,
         clearance_certificate: certificate.swept_safe_region,
@@ -619,38 +603,14 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn extract_support_layers(ipc: &Ipc2581) -> Result<Vec<SupportLayerSource>> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    ecad.cad_data
-        .layers
-        .iter()
-        .map(|source_layer| {
-            let name = ipc.resolve(source_layer.name);
-            let document = extract_layer_for_view(ipc, name, View::ArraySupport)
-                .with_context(|| format!("failed to extract ArraySupport layer '{name}'"))?;
-            let policy = if source_layer.layer_function == LayerFunction::VCut {
-                BoardArraySupportLayerPolicy::VCutOperationsOnly
-            } else {
-                BoardArraySupportLayerPolicy::AllPaintedFeatures
-            };
-            Ok(SupportLayerSource {
-                name: name.to_string(),
-                function: layer_function_name(source_layer.layer_function),
-                policy,
-                document,
-            })
-        })
-        .collect()
-}
-
 fn support_layer(
-    source: SupportLayerSource,
+    source: ArraySupportLayerSource,
     geometry: BoardArraySupportLayerGeometry<Symbol>,
     copper_layer: Symbol,
 ) -> SupportLayer {
     SupportLayer {
         name: source.name,
-        function: source.function,
+        function: layer_function_name(source.layer_function),
         source_feature_count: geometry.source_feature_count,
         feature_count: geometry.feature_count,
         source_path_count: geometry.source_path_count,

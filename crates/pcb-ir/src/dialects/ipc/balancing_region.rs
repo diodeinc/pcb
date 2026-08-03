@@ -158,10 +158,10 @@ pub struct BoardArrayBalancingIntermediates {
     pub narrow_voids: ContourSet,
     /// Initial medial-axis tube plus any directly swept certificate residuals.
     pub gap_separator_keep_out: ContourSet,
-    /// Material locally trimmed to widen two-sided void gaps.
+    /// Material locally trimmed to widen two-sided void gaps. Together with
+    /// `removed_by_opening` this is the total regularization removal
+    /// `clearance_safe_region \ safe_region`.
     pub removed_by_gap_regularization: ContourSet,
-    /// Total material removed by filled-feature and void-gap regularization.
-    pub removed_by_regularization: ContourSet,
 }
 
 /// Independent proof geometry for a computed safe region.
@@ -411,7 +411,6 @@ pub fn board_array_balancing_region(
     let narrow_voids = gap_regularization.narrow_voids;
     let gap_separator_keep_out = gap_regularization.separator_keep_out;
     let removed_by_gap_regularization = gap_regularization.removed;
-    let removed_by_regularization = clearance_safe_region.difference(&safe_region);
 
     // Certify against the nominal requirement, independently of the
     // construction guard used above.
@@ -441,7 +440,6 @@ pub fn board_array_balancing_region(
             narrow_voids,
             gap_separator_keep_out,
             removed_by_gap_regularization,
-            removed_by_regularization,
         },
         certificate,
     })
@@ -695,7 +693,14 @@ mod tests {
                 .difference(&result.intermediates.clearance_safe_region)
                 .is_empty()
         );
-        assert!(result.intermediates.removed_by_regularization.area() > 0.0);
+        assert!(
+            result
+                .intermediates
+                .clearance_safe_region
+                .difference(&result.safe_region)
+                .area()
+                > 0.0
+        );
         assert!(
             result
                 .safe_region

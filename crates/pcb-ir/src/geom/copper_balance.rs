@@ -91,13 +91,16 @@ impl DenseCopperBalanceProfile {
                 self.min_copper_web_mm
             )));
         }
+        // Containment classification assigns boundary points to their nearest
+        // lattice center; that is the owning hexagon only when radius-limited
+        // disks around distinct centers cannot overlap.
+        if self.pitch_mm + NUMERIC_EPSILON < 2.0 * self.max_void_radius_mm {
+            return Err(DenseCopperBalanceError::InvalidProfile(format!(
+                "pitch {} mm is below twice the {} mm maximum void radius",
+                self.pitch_mm, self.max_void_radius_mm
+            )));
+        }
         Ok(())
-    }
-}
-
-impl Default for DenseCopperBalanceProfile {
-    fn default() -> Self {
-        Self::V1
     }
 }
 
@@ -420,18 +423,14 @@ pub fn generate_spatial_dense_copper_balance(
         .iter()
         .map(|active| vec![profile.max_void_radius_mm.powi(2); active.len()])
         .collect::<Vec<_>>();
+    // The uniform solve already selected each layer's full-void area; its
+    // radius is within the profile bounds, so the sum is directly feasible.
     let squared_radius_sums = uniform
         .iter()
         .enumerate()
         .map(|(layer_index, result)| match result.solution.mode {
-            DenseCopperBalanceMode::Perforated { .. } => {
-                let target_full_void_area_mm2 = result.usable.area()
-                    - result.solution.generated_area_mm2
-                    - result.partial_voids.area();
-                (target_full_void_area_mm2 / ROUNDED_HEXAGON_AREA_FACTOR).clamp(
-                    lower[layer_index].iter().sum(),
-                    upper[layer_index].iter().sum(),
-                )
+            DenseCopperBalanceMode::Perforated { void_radius_mm } => {
+                active_sites[layer_index].len() as f64 * void_radius_mm.powi(2)
             }
             DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => 0.0,
         })
@@ -1001,7 +1000,7 @@ fn validate_request(request: DenseCopperBalanceRequest<'_>) -> Result<(), DenseC
         > request.retained_area_mm2 + NUMERIC_EPSILON
     {
         return Err(DenseCopperBalanceError::InvalidInput(
-            "existing copper and usable regions must be disjoint within retained area".to_string(),
+            "existing copper and usable areas together exceed the retained area".to_string(),
         ));
     }
     Ok(())

@@ -424,7 +424,12 @@ impl ContourSet {
     /// `distance(C_i, C_j) < 2r`. Subtracting `self` localizes the diagnostic
     /// to the intervening void. Bounding-box pruning and segment distance avoid
     /// constructing dilations for non-conflicting pairs.
-    pub fn disk_inter_component_gap_violations(&self, radius: f64) -> Self {
+    ///
+    /// Verification-only diagnostic: production gap analysis goes through
+    /// [`ContourSet::disk_gap_violations`], which also covers gaps within one
+    /// connected component.
+    #[cfg(test)]
+    pub(crate) fn disk_inter_component_gap_violations(&self, radius: f64) -> Self {
         if self.is_empty() || radius <= 0.0 {
             return Self::empty(self.tolerance);
         }
@@ -1005,7 +1010,7 @@ fn narrow_void_medial_axis_keep_out(
 }
 
 fn boundary_segments_are_incident(left: BoundarySegment, right: BoundarySegment) -> bool {
-    if left.ring != right.ring || left.ring_len != right.ring_len {
+    if left.ring != right.ring {
         return false;
     }
     let distance = left.index.abs_diff(right.index);
@@ -1212,6 +1217,7 @@ fn voronoi_cell_segment<'a>(
     })
 }
 
+#[cfg(test)]
 fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64) -> bool {
     if !left.bbox.expand(distance).intersects(right.bbox) {
         return false;

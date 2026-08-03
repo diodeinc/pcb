@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Board-array balancing now certifies per-layer regions and reduces density and stack imbalance with variable voids.
+- Board-array creation now prints a per-layer copper-balance summary and warns when stackup data is missing.
 
 ### Fixed
 
