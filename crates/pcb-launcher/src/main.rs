@@ -301,6 +301,13 @@ mod macos {
     }
 
     pub fn run() {
+        // LaunchServices may start the app bundle without delivering an open-URL
+        // event, so bound the lifetime of this background-only helper.
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            std::process::exit(0);
+        });
+
         let mtm = MainThreadMarker::new().expect("pcb-launcher must run on the main thread");
         let application = NSApplication::sharedApplication(mtm);
         application.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);
