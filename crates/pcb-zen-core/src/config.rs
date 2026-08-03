@@ -234,7 +234,7 @@ impl PcbToml {
     ///
     /// Takes the last path segment as the alias key. Only creates alias if unique (no collisions).
     /// Examples:
-    /// - "github.com/diodeinc/registry/reference/XAL7070-562MEx" → "@XAL7070-562MEx"
+    /// - "code.diode.computer/diode/registry/reference/XAL7070-562MEx" → "@XAL7070-562MEx"
     pub fn auto_generated_aliases(&self) -> HashMap<String, String> {
         let mut aliases = HashMap::new();
         let mut seen_names: HashMap<String, usize> = HashMap::new();
@@ -293,7 +293,7 @@ pub struct WorkspaceConfig {
     pub name: Option<String>,
 
     /// Repository URL for workspace (V2 only, required for V2 multi-package workspaces)
-    /// Example: "github.com/diodeinc/registry"
+    /// Example: "code.diode.computer/diode/registry"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
 
@@ -323,7 +323,7 @@ pub struct WorkspaceConfig {
     pub default_board: Option<String>,
 
     /// Patterns for dependencies to auto-vendor during build (supports globs)
-    /// Example: ["github.com/diodeinc/registry/*"]
+    /// Example: ["code.diode.computer/diode/registry/*"]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vendor: Vec<String>,
 

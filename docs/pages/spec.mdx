@@ -47,7 +47,7 @@ load("@stdlib/interfaces.zen", "Spi")
 
 # Remote packages (version declared in pcb.toml)
 Resistor = Module("@stdlib/generics/Resistor.zen")
-TPS54331 = Module("github.com/diodeinc/registry/components/TPS54331/TPS54331.zen")
+TPS54331 = Module("code.diode.computer/diode/registry/components/TPS54331/TPS54331.zen")
 ```
 
 The toolchain supplies the virtual `@stdlib` package. Do not declare it in
@@ -58,7 +58,7 @@ statements remain stable across upgrades:
 
 ```toml
 [dependencies]
-"github.com/diodeinc/registry/components/TPS54331" = "1.0"
+"code.diode.computer/diode/registry/components/TPS54331" = "1.0"
 ```
 
 ### Dependency resolution
@@ -150,7 +150,7 @@ pcb-version = "0.4"
 
 ```toml
 [dependencies]
-"github.com/diodeinc/registry/components/TPS54331" = "1.0"
+"code.diode.computer/diode/registry/components/TPS54331" = "1.0"
 
 parts = [
   { mpn = "TPS54331DR", symbol = "TPS54331.kicad_sym", symbol_name = "TPS54331", manufacturer = "Texas Instruments", qualifications = ["Preferred"] },
@@ -448,7 +448,7 @@ Modules are reusable subcircuits — `.zen` files that declare their electrical 
 
 ```python
 PowerSupply = Module("./modules/PowerSupply.zen")
-TPS54331 = Module("github.com/diodeinc/registry/components/TPS54331/TPS54331.zen")
+TPS54331 = Module("code.diode.computer/diode/registry/components/TPS54331/TPS54331.zen")
 ```
 
 Instantiation takes a required `name` and passes remaining arguments as inputs to the module's `io()` and `config()` declarations:

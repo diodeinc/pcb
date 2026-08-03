@@ -152,7 +152,7 @@ each package to use:
 
 ```toml
 [dependencies]
-"github.com/diodeinc/registry/components/ti/tps54331" = "1.0"
+"code.diode.computer/diode/registry/components/ti/tps54331" = "1.0"
 ```
 
 This separation keeps import statements stable across upgrades and confines
@@ -168,11 +168,11 @@ Workspaces store resolved dependency state in `pcb.toml`. `pcb sync` updates:
 
 ```toml
 [dependencies]
-"github.com/diodeinc/registry/modules/Regulator" = "1.0"
+"code.diode.computer/diode/registry/modules/Regulator" = "1.0"
 
 [dependencies.indirect]
-"github.com/diodeinc/registry/components/TPS54331@1" = "1.0.2"
-"github.com/diodeinc/registry/modules/Feedback@1" = "1.1.0"
+"code.diode.computer/diode/registry/components/TPS54331@1" = "1.0.2"
+"code.diode.computer/diode/registry/modules/Feedback@1" = "1.1.0"
 ```
 
 The `@1` suffix is a compatibility lane. It allows multiple
@@ -246,7 +246,7 @@ which uses fuzzy matching.
 Registry-backed `pcb search` searches the public Diode registry and the
 registries configured by `[workspace].repository`.
 
-- `pcb search --registry github.com/diodeinc/registry ...` overrides the default
+- `pcb search --registry code.diode.computer/diode/registry ...` overrides the default
   scope for that invocation.
 - Repeat `--registry` to search more than one registry.
 
