@@ -514,7 +514,7 @@ mod platform {
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($args[0], 'Open in KiCad failed', 'OK', 'Error')",
+                "& { Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($args[0], 'Open in KiCad failed', 'OK', 'Error') }",
             ])
             .arg(message)
             .status();
