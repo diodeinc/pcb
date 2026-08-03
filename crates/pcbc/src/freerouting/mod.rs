@@ -325,7 +325,6 @@ fn find_freerouting_jar(provided: Option<&Path>) -> Result<PathBuf> {
         }
     }
 
-    println!("  Downloading FreeRouting v{FREEROUTING_VERSION}...");
     std::fs::create_dir_all(&cache_dir).context("Failed to create FreeRouting cache dir")?;
 
     let tmp_path = cache_dir.join(format!("{jar_filename}.tmp"));
@@ -863,7 +862,34 @@ fn try_download_to_file(url: &str, part_path: &Path) -> Result<(), DownloadError
 
     let mut file =
         std::fs::File::create(part_path).map_err(|e| DownloadError::Transient(e.into()))?;
-    std::io::copy(&mut response, &mut file).map_err(|e| DownloadError::Transient(e.into()))?;
+
+    // Report percentage progress when the server tells us the total size;
+    // fall back to a plain unstyled copy (no total to show a bar against)
+    // when it doesn't, e.g. a chunked-encoding response with no
+    // Content-Length.
+    match response.content_length() {
+        Some(total) if total > 0 => {
+            let bar = pcb_ui::ProgressBar::builder(total)
+                .message("Downloading FreeRouting JAR")
+                .start();
+            let mut buf = [0u8; 65536];
+            loop {
+                let n = std::io::Read::read(&mut response, &mut buf)
+                    .map_err(|e| DownloadError::Transient(e.into()))?;
+                if n == 0 {
+                    break;
+                }
+                std::io::Write::write_all(&mut file, &buf[..n])
+                    .map_err(|e| DownloadError::Transient(e.into()))?;
+                bar.inc(n as u64);
+            }
+            bar.finish();
+        }
+        _ => {
+            std::io::copy(&mut response, &mut file)
+                .map_err(|e| DownloadError::Transient(e.into()))?;
+        }
+    }
 
     Ok(())
 }
