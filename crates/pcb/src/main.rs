@@ -1838,13 +1838,11 @@ fn fetch_latest_release() -> Result<LatestRelease> {
 }
 
 fn self_update_latest_release() -> Result<LatestRelease> {
-    if std::env::var_os(SELF_UPDATE_REEXEC_ENV).is_none() {
-        return fetch_latest_release();
+    // Older shims reexec with only PCB_SELF_UPDATE_REEXEC; fetch when release metadata is absent.
+    match std::env::var(SELF_UPDATE_RELEASE_ENV) {
+        Ok(release) => Ok(serde_json::from_str(&release)?),
+        Err(_) => fetch_latest_release(),
     }
-
-    let release = std::env::var(SELF_UPDATE_RELEASE_ENV)
-        .context("updated pcb shim is missing release metadata")?;
-    Ok(serde_json::from_str(&release)?)
 }
 
 fn fetch_nightly_release(force_refresh: bool) -> Result<NightlyRelease> {
