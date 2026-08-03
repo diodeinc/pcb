@@ -45,32 +45,13 @@ use api::{FreeroutingApiClient, JobOutput, JobState};
 /// messaging are all derived from this so a version bump only touches this
 /// constant and the hash below.
 ///
-/// Pinned to latest (v2.2.4), not an older release. Upstream issues
-/// freerouting/freerouting#721 and #759 report a `StackOverflowError` in
-/// v2.2.4 from recursion in `PolylineTrace.combine()`, framed as a
-/// regression vs. 2.1.0. We tried to use that to justify staying on an
-/// older version, but direct local reproduction contradicts the
-/// "2.2.4-only" framing: using the exact fixture from freerouting/freerouting#723
-/// (`Issue723-CombineStackOverflow.dsn`) with a deliberately constrained
-/// `-Xss256k` stack (the same technique #723's own unit test uses to force
-/// determinism), **v2.0.1, v2.1.0, and v2.2.4 all crash identically** —
-/// same `PolylineTrace.combine()` recursive chain, same
-/// `StackOverflowError`. Under default JVM stack size, none of the three
-/// crashed on that fixture at all. So the recursive `combine()` structure
-/// that's vulnerable to stack exhaustion is present across every version
-/// tested, not introduced in 2.2.4 — the upstream reports (real production
-/// crashes on large ~2000-net boards under default settings) may simply
-/// reflect that those boards are large enough to overflow the default
-/// stack regardless of version, something we don't have an equivalent
-/// large fixture to verify locally. There is no version we've confirmed
-/// safe from this bug class under production-scale boards, so pinning to
-/// an older release buys no verified safety while forgoing upstream fixes
-/// and improvements — hence latest.
-///
-/// Fix PRs #723 and #764 (convert `PolylineTrace.combine()` to iterative)
-/// are open but unmerged as of writing. Revisit this pin once one lands and
-/// ships in a release; consider re-testing with a production-scale board
-/// and default stack size before then if this bug is hit in practice.
+/// Upstream issues freerouting/freerouting#721 and #759 report a
+/// `StackOverflowError` in v2.2.4 from recursion in
+/// `PolylineTrace.combine()`. Local reproduction shows v2.0.1, v2.1.0, and
+/// v2.2.4 all crash identically under a constrained stack, so the bug isn't
+/// specific to 2.2.4 and pinning older buys no verified safety — hence
+/// latest. Fix PRs #723 and #764 are open but unmerged; revisit once one
+/// ships in a release.
 const FREEROUTING_VERSION: &str = "2.2.4";
 
 /// SHA-256 digest of the `freerouting-{FREEROUTING_VERSION}.jar` release
@@ -101,7 +82,7 @@ pub fn execute(
     project_path: &Path,
     board_name: &str,
 ) -> Result<()> {
-    // 1. Check prerequisites — JAR first so --fr-jar errors surface immediately
+    // JAR first so --fr-jar errors surface immediately
     let fr_jar = find_freerouting_jar(args.fr_jar.as_deref())?;
     let java_path = resolve_java()?;
 
@@ -111,17 +92,14 @@ pub fn execute(
     );
     println!("  JAR: {}", fr_jar.display());
 
-    // 2. Do all work in a private temp directory; the workspace board is
-    //    never touched until we have a validated result to publish.
+    // All work happens in a private temp directory; the workspace board is
+    // never touched until we have a validated result to publish.
     let work_dir = tempfile::tempdir().context("Failed to create temp working directory")?;
     let work_board = work_dir.path().join(format!("{board_name}.kicad_pcb"));
     std::fs::copy(board_path, &work_board).context("Failed to stage board copy")?;
-    // Stage the sibling .kicad_pro alongside the board copy under the same
-    // stem. Since KiCad 6, design rules and net classes (clearance, track
-    // widths, via sizes) live in the project file, not the board file — a
-    // project-less pcbnew.LoadBoard falls back to default rules, so without
-    // this both the DSN export and the post-import zone fill would silently
-    // route/fill to defaults instead of the board's actual constraints.
+    // Since KiCad 6, design rules and net classes live in the project file,
+    // not the board file — a project-less pcbnew.LoadBoard falls back to
+    // default rules, so DSN export and zone fill need this staged too.
     // Never published back: the original project is left untouched.
     if project_path.exists() {
         std::fs::copy(project_path, work_dir.path().join(format!("{board_name}.kicad_pro")))
@@ -130,11 +108,9 @@ pub fn execute(
     let dsn_path = work_dir.path().join(format!("{board_name}.dsn"));
     let ses_path = work_dir.path().join(format!("{board_name}.ses"));
 
-    // 3. Install a Ctrl+C handler that only requests cancellation. The
-    //    handler itself never touches the FreeRouting job or exits the
-    //    process directly; `run_freerouting`'s poll loop is what owns the
-    //    job and actually cancels it, so process exit always happens
-    //    through normal control flow.
+    // The handler only requests cancellation; `run_freerouting`'s poll loop
+    // owns the job and actually cancels it, so process exit always happens
+    // through normal control flow.
     CANCEL.store(false, Ordering::SeqCst);
     if let Err(e) = ctrlc::set_handler(|| {
         eprintln!("\n  Stopping FreeRouting and fetching the best result so far...");
@@ -143,15 +119,13 @@ pub fn execute(
         eprintln!("{} Could not set Ctrl+C handler: {}", "!".yellow(), e);
     }
 
-    // 4. Export DSN → run FreeRouting → import SES, all against the temp copy.
     let spinner = Spinner::builder("Exporting DSN...").start();
     export_dsn(&work_board, &dsn_path)?;
     spinner.finish();
 
-    // CANCEL is only otherwise consulted inside run_freerouting's poll loop,
-    // so without this check a Ctrl+C during export prints "Stopping..." but
-    // then silently starts FreeRouting anyway (which the next poll_job call
-    // would then immediately cancel) instead of actually stopping here.
+    // CANCEL is otherwise only consulted inside run_freerouting's poll loop;
+    // without this, Ctrl+C during export would print "Stopping..." but then
+    // still start FreeRouting anyway.
     if CANCEL.load(Ordering::SeqCst) {
         println!("  No routing progress to save. Board left untouched.");
         return Ok(());
@@ -169,9 +143,7 @@ pub fn execute(
     import_ses(&work_board, &ses_path)?;
     spinner.finish();
 
-    // Same as above: a Ctrl+C during import_ses's zone fill sets CANCEL but
-    // is otherwise never checked again, so without this the command would
-    // publish and open the board as if nothing happened.
+    // Same as above, for Ctrl+C during import_ses's zone fill.
     if CANCEL.load(Ordering::SeqCst) {
         publish_board(&work_board, board_path)?;
         println!(
@@ -181,7 +153,7 @@ pub fn execute(
         return Ok(());
     }
 
-    // 5. Only now replace the original board, atomically.
+    // Only now replace the original board, atomically.
     publish_board(&work_board, board_path)?;
 
     let elapsed = start_time.elapsed();
@@ -328,7 +300,6 @@ fn find_freerouting_jar(provided: Option<&Path>) -> Result<PathBuf> {
     let jar_filename = freerouting_jar_filename();
     let cached = cache_dir.join(&jar_filename);
 
-    // Verify cached file integrity; discard if corrupted
     if cached.exists() {
         match sha256_file(&cached) {
             Ok(hash) if hash == expected_hash => return Ok(cached),
@@ -684,12 +655,9 @@ fn poll_job(api: &FreeroutingApiClient, job_id: &str, timeout_secs: u64) -> Resu
                 consecutive_errors += 1;
                 if consecutive_errors >= 20 {
                     println!();
-                    // The server is unreachable, so there's no point trying
-                    // best_effort_output — but whatever we cached during the
-                    // last known-good RUNNING poll is still real progress.
-                    // Losing contact shouldn't also lose that: fail the run
-                    // with an error, but still return it for the caller to
-                    // publish, same as a cancel/timeout.
+                    // Server's unreachable, but whatever we cached during
+                    // the last known-good RUNNING poll is still real
+                    // progress worth returning, same as a cancel/timeout.
                     if last_known_output.is_some() {
                         eprintln!(
                             "  {} Lost contact with FreeRouting API server: {e}",

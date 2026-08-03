@@ -113,10 +113,8 @@ fn test_freerouting_no_layout() {
 
 #[test]
 fn test_freerouting_java_not_found() {
-    // Sandbox passes through the host PATH, but we can simulate a missing
-    // Java by pointing to an empty directory first in PATH. The simplest
-    // approach is to rely on the sandbox env — if Java is not on the host,
-    // this test naturally covers the error.
+    // Sandbox passes through the host PATH; if Java isn't on the host, this
+    // naturally covers the error.
     let mut sandbox = Sandbox::new().with_workspace();
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
     scaffold_layout(&mut sandbox);
@@ -222,7 +220,7 @@ fn java_compatible() -> bool {
     if !output.status.success() {
         return false;
     }
-    // Parse major version from stderr (java -version writes to stderr)
+    // java -version writes to stderr, not stdout
     let stderr = String::from_utf8_lossy(&output.stderr);
     let major = stderr
         .lines()
