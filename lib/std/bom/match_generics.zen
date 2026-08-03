@@ -83,7 +83,7 @@ SERIES_BY_PKG = {
     "0201": [
         # 0 ohm jumpers (checked first for exact 0 ohm match)
         discrete_resistor_series(
-            "Panasonic Electronic Components",
+            "Panasonic Industry",
             "ERJ-1GJ",
             "25V",
             "0.05W",
@@ -126,7 +126,7 @@ SERIES_BY_PKG = {
     "0402": [
         # 0 ohm jumpers (checked first for exact 0 ohm match)
         discrete_resistor_series(
-            "Panasonic Electronic Components",
+            "Panasonic Industry",
             "ERJ-2G",
             "50V",
             "0.1W",
@@ -189,7 +189,7 @@ SERIES_BY_PKG = {
     "0603": [
         # 0 ohm jumpers (checked first for exact 0 ohm match)
         discrete_resistor_series(
-            "Panasonic Electronic Components",
+            "Panasonic Industry",
             "ERJ-3G",
             "75V",
             "0.333W",

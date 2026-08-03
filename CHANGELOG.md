@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Added AEC-Q200-qualified Vishay D/CRCW e3 parts as 0402 generic resistor matches through 10 MΩ.
 
+### Changed
+
+- Panasonic house resistor matches now use the current Panasonic Industry manufacturer name.
+
 ## [0.4.20] - 2026-08-03
 
 ### Changed
