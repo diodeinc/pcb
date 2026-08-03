@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Board-array balancing now certifies per-layer regions and reduces density and stack imbalance with variable voids.
 
+### Fixed
+
+- Board-array creation now emits fiducials on both declared copper and solder-mask surfaces.
+
 ## [0.4.17] - 2026-07-31
 
 ### Fixed

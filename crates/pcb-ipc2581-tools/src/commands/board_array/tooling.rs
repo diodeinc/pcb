@@ -39,7 +39,7 @@ pub(super) fn add_board_array_tooling(
     ecad: &ipc2581::types::Ecad,
     used_layer_names: &mut HashSet<String>,
     spec: BoardArrayToolingSpec,
-) {
+) -> Result<()> {
     let (span_count, board_span) = match spec.orientation {
         BoardArrayToolingOrientation::TopBottom => (spec.columns, spec.board_width_mm),
         BoardArrayToolingOrientation::LeftRight => (spec.rows, spec.board_height_mm),
@@ -50,43 +50,29 @@ pub(super) fn add_board_array_tooling(
         MULTI_BOARD_TOOLING_MIN_SPAN_MM
     };
     if board_span + EPSILON < min_span {
-        return;
+        return Ok(());
     }
 
-    let top_copper_layer_name =
-        ensure_top_copper_layer_name(generated_geometry, ipc, ecad, used_layer_names);
-    let top_soldermask_layer_name =
-        ensure_top_soldermask_layer_name(generated_geometry, ipc, ecad, used_layer_names);
     let tooling_hole_layer_name =
         ensure_tooling_hole_layer_name(generated_geometry, used_layer_names);
 
     let fiducials = board_array_tooling_fiducials(&spec);
-    generated_geometry.add_layer_feature(
+    add_two_sided_fiducials(
+        generated_geometry,
+        ipc,
+        ecad,
         GeneratedFeatureScope::Array,
-        top_copper_layer_name,
-        Polarity::Positive,
-        round_fiducial_features(
-            IpcFiducialKind::Global,
-            fiducials,
-            FIDUCIAL_COPPER_DIAMETER_MM,
-        ),
-    );
-    generated_geometry.add_layer_feature(
-        GeneratedFeatureScope::Array,
-        top_soldermask_layer_name,
-        Polarity::Positive,
-        round_fiducial_features(
-            IpcFiducialKind::Global,
-            fiducials,
-            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
-        ),
-    );
+        IpcFiducialKind::Global,
+        fiducials,
+    )
+    .context("cannot add global board-array fiducials")?;
     generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         tooling_hole_layer_name,
         Polarity::Positive,
         round_nonplated_hole_features(board_array_tooling_holes(&spec), TOOLING_HOLE_DIAMETER_MM),
     );
+    Ok(())
 }
 
 pub(super) fn add_board_array_corner_tooling(
@@ -118,38 +104,46 @@ pub(super) fn add_board_cell_fiducials(
     generated_geometry: &mut BoardArrayGeneratedGeometry,
     ipc: &Ipc2581,
     ecad: &ipc2581::types::Ecad,
-    used_layer_names: &mut HashSet<String>,
     spec: BoardCellFiducialSpec,
-) {
+) -> Result<()> {
     let Some(fiducials) = board_cell_fiducials(&spec) else {
-        return;
+        return Ok(());
     };
 
-    let top_copper_layer_name =
-        ensure_top_copper_layer_name(generated_geometry, ipc, ecad, used_layer_names);
-    let top_soldermask_layer_name =
-        ensure_top_soldermask_layer_name(generated_geometry, ipc, ecad, used_layer_names);
+    add_two_sided_fiducials(
+        generated_geometry,
+        ipc,
+        ecad,
+        GeneratedFeatureScope::BoardCell,
+        IpcFiducialKind::Local,
+        fiducials,
+    )
+    .context("cannot add local board-cell fiducials")
+}
 
-    generated_geometry.add_layer_feature(
-        GeneratedFeatureScope::BoardCell,
-        top_copper_layer_name,
-        Polarity::Positive,
-        round_fiducial_features(
-            IpcFiducialKind::Local,
-            fiducials,
-            FIDUCIAL_COPPER_DIAMETER_MM,
-        ),
-    );
-    generated_geometry.add_layer_feature(
-        GeneratedFeatureScope::BoardCell,
-        top_soldermask_layer_name,
-        Polarity::Positive,
-        round_fiducial_features(
-            IpcFiducialKind::Local,
-            fiducials,
-            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
-        ),
-    );
+fn add_two_sided_fiducials(
+    generated_geometry: &mut BoardArrayGeneratedGeometry,
+    ipc: &Ipc2581,
+    ecad: &ipc2581::types::Ecad,
+    scope: GeneratedFeatureScope,
+    kind: IpcFiducialKind,
+    points: [(f64, f64); 4],
+) -> Result<()> {
+    let layers = crate::layers::two_sided_surface_layers(ecad)?;
+    for (layer, diameter_mm) in [
+        (layers.top_copper, FIDUCIAL_COPPER_DIAMETER_MM),
+        (layers.top_soldermask, FIDUCIAL_MASK_OPENING_DIAMETER_MM),
+        (layers.bottom_copper, FIDUCIAL_COPPER_DIAMETER_MM),
+        (layers.bottom_soldermask, FIDUCIAL_MASK_OPENING_DIAMETER_MM),
+    ] {
+        generated_geometry.add_layer_feature(
+            scope,
+            ipc.resolve(layer),
+            Polarity::Positive,
+            round_fiducial_features(kind, points, diameter_mm),
+        );
+    }
+    Ok(())
 }
 
 /// Place board array tooling on the shorter pair of array rails.

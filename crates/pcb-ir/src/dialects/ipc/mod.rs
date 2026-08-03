@@ -15,6 +15,7 @@ pub mod lower;
 pub mod process;
 pub mod relief;
 pub mod spec;
+pub mod surface_layers;
 pub mod validate;
 
 pub use analysis::{
@@ -48,4 +49,7 @@ pub use lower::{
     board_array_fabrication_profile, lower_layer_to_artwork, lower_to_nc,
 };
 pub use spec::{Spec, SpecItem, SpecItemKind, SpecProperty, SpecRef};
+pub use surface_layers::{
+    PhysicalLayer, SurfaceLayerError, TwoSidedSurfaceLayers, resolve_two_sided_surface_layers,
+};
 pub use validate::{validate_artwork_ready, validate_homogeneous_features};
