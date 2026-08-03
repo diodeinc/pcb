@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::str::FromStr;
 
 use thiserror::Error;
@@ -195,12 +196,25 @@ fn is_safe_path_segment(segment: &str) -> bool {
 }
 
 fn host_api_base_url(host: &str) -> String {
-    let scheme = if host.starts_with("localhost") || host.starts_with("127.") {
+    let scheme = if is_loopback_api_host(host) {
         "http"
     } else {
         "https"
     };
     format!("{scheme}://{host}")
+}
+
+fn is_loopback_api_host(host: &str) -> bool {
+    if host.starts_with("localhost") || host.starts_with("127.") {
+        return true;
+    }
+    let Some(inner) = host.strip_prefix('[') else {
+        return false;
+    };
+    let Some((address, _)) = inner.split_once(']') else {
+        return false;
+    };
+    address.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]
@@ -235,6 +249,21 @@ mod tests {
 
         assert_eq!(uri.host, "localhost:3001");
         assert_eq!(uri.api_base_url(), "http://localhost:3001");
+        assert_eq!(
+            uri.sandbox_path,
+            "/home/sandbox/registry/boards/My Board/main.zen"
+        );
+    }
+
+    #[test]
+    fn parses_ipv6_loopback_host_with_http_api_base_url() {
+        let uri = SandboxFileUri::parse(
+            "diode://[::1]:3001/sandboxes/sbx_123/fs/read?path=%2Fhome%2Fsandbox%2Fregistry%2Fboards%2FMy%20Board%2Fmain.zen",
+        )
+        .unwrap();
+
+        assert_eq!(uri.host, "[::1]:3001");
+        assert_eq!(uri.api_base_url(), "http://[::1]:3001");
         assert_eq!(
             uri.sandbox_path,
             "/home/sandbox/registry/boards/My Board/main.zen"
