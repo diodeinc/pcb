@@ -66,6 +66,12 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     match args.engine {
         RouteEngine::Deeppcb => execute_deeppcb(args),
         RouteEngine::Freerouting => {
+            if !(1..=3540).contains(&args.fr_timeout) {
+                anyhow::bail!(
+                    "--fr-timeout must be between 1 and 3540 seconds (59 minutes), got {}",
+                    args.fr_timeout
+                );
+            }
             let (board_path, project_path) = resolve_board(&args.file)?;
             let board_name = board_path.file_stem().unwrap().to_string_lossy().to_string();
             crate::freerouting::execute(&args, &board_path, &project_path, &board_name)
