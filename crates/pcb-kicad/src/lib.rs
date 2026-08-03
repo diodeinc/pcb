@@ -388,8 +388,6 @@ pub fn open_pcbnew(pcb_path: impl AsRef<Path>) -> Result<()> {
 
 pub struct PcbnewSession {
     child: Child,
-    #[cfg(target_os = "macos")]
-    pcbnew_app: String,
 }
 
 impl PcbnewSession {
@@ -397,18 +395,6 @@ impl PcbnewSession {
         self.child
             .try_wait()
             .context("Failed while checking KiCad PCB Editor status")
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn terminate(&mut self) -> Result<()> {
-        if self.try_wait()?.is_some() {
-            return Ok(());
-        }
-        request_pcbnew_shutdown(self)?;
-        self.child
-            .wait()
-            .context("Failed while waiting for KiCad PCB Editor to terminate")?;
-        Ok(())
     }
 }
 
@@ -426,8 +412,7 @@ pub fn open_pcbnew_session(pcb_path: impl AsRef<Path>) -> Result<PcbnewSession> 
             .arg("-a")
             .arg(&pcbnew_app)
             .arg(pcb_path);
-        spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path)
-            .map(|child| PcbnewSession { child, pcbnew_app })
+        spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path).map(|child| PcbnewSession { child })
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -463,32 +448,6 @@ fn spawn_pcbnew_command(mut cmd: Command, pcbnew_path: &str, pcb_path: &Path) ->
                 pcb_path.display()
             )
         })
-}
-
-#[cfg(target_os = "macos")]
-fn request_pcbnew_shutdown(session: &mut PcbnewSession) -> Result<()> {
-    quit_macos_app(&session.pcbnew_app)
-}
-
-#[cfg(target_os = "macos")]
-fn quit_macos_app(app_path: &str) -> Result<()> {
-    let script = format!("tell application {} to quit", applescript_string(app_path));
-    let status = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .status()
-        .with_context(|| format!("Failed to ask macOS to quit KiCad PCB Editor at {app_path}"))?;
-    if !status.success() {
-        return Err(anyhow!(
-            "macOS failed to quit KiCad PCB Editor at {app_path}"
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn applescript_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// Builder for KiCad CLI commands
