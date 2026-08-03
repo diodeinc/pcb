@@ -810,21 +810,23 @@ pub fn ls_remote_with_fallback(
     refspec: &str,
 ) -> anyhow::Result<(String, String)> {
     let (repo_url, _) = split_repo_and_subpath(module_path);
-    with_remote_fallback(repo_url, |url, interactive| {
+    let (commit, url) = with_remote_fallback(repo_url, |url, interactive| {
         ls_remote(url, refspec, interactive)
     })
-    .with_context(|| format!("Failed to ls-remote {} for {}", refspec, module_path))
+    .with_context(|| format!("Failed to ls-remote {} for {}", refspec, module_path))?;
+    let commit = commit.with_context(|| format!("No matching ref {refspec} for {module_path}"))?;
+    Ok((commit, url))
 }
 
-fn ls_remote(url: &str, refspec: &str, interactive: bool) -> anyhow::Result<String> {
+fn ls_remote(url: &str, refspec: &str, interactive: bool) -> anyhow::Result<Option<String>> {
     let mut cmd = git_global_network_with_prompt(interactive)?;
     cmd.args(["ls-remote", url, refspec]);
     let out = run_stdout(cmd)?;
-    out.lines()
+    Ok(out
+        .lines()
         .next()
         .and_then(|line| line.split_whitespace().next())
-        .map(str::to_string)
-        .with_context(|| format!("No matching ref {refspec} at {url}"))
+        .map(str::to_string))
 }
 
 pub fn resolve_branch_head(module_path: &str, branch: &str) -> anyhow::Result<String> {
@@ -1019,6 +1021,19 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn remote_fallback_stops_after_https_success() {
+        let mut attempts = Vec::new();
+        let (value, _) = with_remote_fallback("code.diode.computer/diode/registry", |_, prompt| {
+            attempts.push(prompt);
+            Ok(None::<String>)
+        })
+        .unwrap();
+
+        assert_eq!(value, None);
+        assert_eq!(attempts, [false]);
     }
 
     #[test]
