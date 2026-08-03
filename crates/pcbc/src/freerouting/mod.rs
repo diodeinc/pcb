@@ -148,6 +148,15 @@ pub fn execute(
     export_dsn(&work_board, &dsn_path)?;
     spinner.finish();
 
+    // CANCEL is only otherwise consulted inside run_freerouting's poll loop,
+    // so without this check a Ctrl+C during export prints "Stopping..." but
+    // then silently starts FreeRouting anyway (which the next poll_job call
+    // would then immediately cancel) instead of actually stopping here.
+    if CANCEL.load(Ordering::SeqCst) {
+        println!("  No routing progress to save. Board left untouched.");
+        return Ok(());
+    }
+
     let start_time = Instant::now();
     let outcome = run_freerouting(&java_path, &fr_jar, &dsn_path, &ses_path, args.fr_timeout)?;
 
@@ -159,6 +168,18 @@ pub fn execute(
     let spinner = Spinner::builder("Importing SES...").start();
     import_ses(&work_board, &ses_path)?;
     spinner.finish();
+
+    // Same as above: a Ctrl+C during import_ses's zone fill sets CANCEL but
+    // is otherwise never checked again, so without this the command would
+    // publish and open the board as if nothing happened.
+    if CANCEL.load(Ordering::SeqCst) {
+        publish_board(&work_board, board_path)?;
+        println!(
+            "Partial result saved to {}",
+            board_path.display().to_string().cyan()
+        );
+        return Ok(());
+    }
 
     // 5. Only now replace the original board, atomically.
     publish_board(&work_board, board_path)?;
