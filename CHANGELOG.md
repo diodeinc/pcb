@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Legacy Registry references now normalize to the canonical DiodeHub identity before resolution.
+- Legacy Registry references now prefer the canonical DiodeHub identity while remaining compatible with legacy workspace identities.
 
 ### Fixed
 

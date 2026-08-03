@@ -946,7 +946,11 @@ impl ResolutionResult {
             let canonical = crate::package_url::canonicalize_package_reference(reference);
             if canonical != reference {
                 let canonical_uri = format!("{}{canonical}", pcb_sch::PACKAGE_URI_PREFIX);
-                return pcb_sch::resolve_package_uri(&canonical_uri, &self.indexes.package_roots);
+                if let Ok(path) =
+                    pcb_sch::resolve_package_uri(&canonical_uri, &self.indexes.package_roots)
+                {
+                    return Ok(path);
+                }
             }
         }
 
@@ -1039,40 +1043,54 @@ mod tests {
     }
 
     #[test]
-    fn package_uri_resolves_migrated_registry_alias() {
-        let dep = crate::package_url::CANONICAL_REGISTRY_REPOSITORY.to_string() + "/components/Foo";
-        let dep_root = PathBuf::from("/cache").join(&dep).join("1.2.3");
-        let result = ResolutionResult::frozen(
-            WorkspaceInfo {
-                root: PathBuf::from("/workspace"),
-                cache_dir: PathBuf::new(),
-                config: None,
-                packages: BTreeMap::new(),
-                errors: vec![],
-            },
-            BTreeMap::from([(
-                "github.com/acme/root".into(),
-                FrozenResolutionMap {
-                    selected_remote: BTreeMap::new(),
-                    packages: BTreeMap::from([(
-                        PathBuf::from("/workspace"),
-                        FrozenPackage {
-                            identity: FrozenPackageIdentity::Workspace(
-                                "github.com/acme/root".into(),
-                            ),
-                            deps: BTreeMap::from([(dep, dep_root.clone())]),
-                            parts: Vec::new(),
-                        },
-                    )]),
+    fn package_uri_prefers_migrated_registry_alias_with_legacy_fallback() {
+        fn result_for(dep: String) -> (ResolutionResult, PathBuf) {
+            let dep_root = PathBuf::from("/cache").join(&dep).join("1.2.3");
+            let result = ResolutionResult::frozen(
+                WorkspaceInfo {
+                    root: PathBuf::from("/workspace"),
+                    cache_dir: PathBuf::new(),
+                    config: None,
+                    packages: BTreeMap::new(),
+                    errors: vec![],
                 },
-            )]),
-            HashMap::new(),
-        );
+                BTreeMap::from([(
+                    "github.com/acme/root".into(),
+                    FrozenResolutionMap {
+                        selected_remote: BTreeMap::new(),
+                        packages: BTreeMap::from([(
+                            PathBuf::from("/workspace"),
+                            FrozenPackage {
+                                identity: FrozenPackageIdentity::Workspace(
+                                    "github.com/acme/root".into(),
+                                ),
+                                deps: BTreeMap::from([(dep, dep_root.clone())]),
+                                parts: Vec::new(),
+                            },
+                        )]),
+                    },
+                )]),
+                HashMap::new(),
+            );
+            (result, dep_root)
+        }
 
         let legacy_uri = format!(
             "package://{}/components/Foo@1.2.3/Foo.kicad_mod",
             crate::package_url::LEGACY_REGISTRY_REPOSITORY
         );
+
+        let canonical_dep =
+            crate::package_url::CANONICAL_REGISTRY_REPOSITORY.to_string() + "/components/Foo";
+        let (result, dep_root) = result_for(canonical_dep);
+        assert_eq!(
+            result.resolve_package_uri(&legacy_uri).unwrap(),
+            dep_root.join("Foo.kicad_mod")
+        );
+
+        let legacy_dep =
+            crate::package_url::LEGACY_REGISTRY_REPOSITORY.to_string() + "/components/Foo";
+        let (result, dep_root) = result_for(legacy_dep);
         assert_eq!(
             result.resolve_package_uri(&legacy_uri).unwrap(),
             dep_root.join("Foo.kicad_mod")

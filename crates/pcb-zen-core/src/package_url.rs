@@ -25,13 +25,21 @@ pub fn canonicalize_package_reference(value: &str) -> Cow<'_, str> {
     Cow::Owned(format!("{CANONICAL_REGISTRY_REPOSITORY}{suffix}"))
 }
 
-/// Canonicalize a package reference before resolving it.
+/// Resolve a package reference by preferring its canonical identity.
 pub fn resolve_package_reference<'a, T>(
     value: &'a str,
-    resolve: impl FnOnce(&str) -> Option<T>,
+    mut resolve: impl FnMut(&str) -> Option<T>,
 ) -> Option<(Cow<'a, str>, T)> {
     let canonical = canonicalize_package_reference(value);
-    resolve(&canonical).map(|resolved| (canonical, resolved))
+    if let Some(resolved) = resolve(&canonical) {
+        return Some((canonical, resolved));
+    }
+
+    if canonical != value {
+        return resolve(value).map(|resolved| (Cow::Borrowed(value), resolved));
+    }
+
+    None
 }
 
 /// Whether a package reference belongs to the canonical registry repository.
@@ -85,6 +93,14 @@ mod tests {
             })
             .map(|(matched, resolved)| (matched.into_owned(), resolved)),
             Some((canonical.to_string(), "canonical"))
+        );
+
+        assert_eq!(
+            resolve_package_reference(legacy, |candidate| {
+                (candidate == legacy).then_some("legacy")
+            })
+            .map(|(matched, resolved)| (matched.into_owned(), resolved)),
+            Some((legacy.to_string(), "legacy"))
         );
     }
 }
