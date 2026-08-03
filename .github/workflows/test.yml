@@ -31,7 +31,6 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
           components: rustfmt, clippy
           cache-bin: false
 
@@ -127,14 +126,12 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           rustflags: ""
-          toolchain: stable-x86_64-pc-windows-msvc
           cache-bin: false
 
       - name: Install Rust
         if: runner.os != 'Windows'
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
           cache-bin: false
 
       - name: Install nextest
