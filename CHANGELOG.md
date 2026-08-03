@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Board-array creation now emits fiducials on both declared copper and solder-mask surfaces.
+- Launcher installation and updates now remain recoverable when release artifacts or desktop registration are unavailable.
 
 ## [0.4.17] - 2026-07-31
 

@@ -28,6 +28,7 @@ const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const RELEASE_LIST_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const NIGHTLY_RELEASE_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 const SELF_UPDATE_REEXEC_ENV: &str = "PCB_SELF_UPDATE_REEXEC";
+const SELF_UPDATE_RELEASE_ENV: &str = "PCB_SELF_UPDATE_RELEASE";
 
 #[derive(Parser)]
 #[command(name = "pcb")]
@@ -105,7 +106,7 @@ struct InstallReceipt {
     installed_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct LatestRelease {
     version: Version,
     tag: String,
@@ -1708,14 +1709,14 @@ fn self_update() -> Result<()> {
     let current_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
     let mut failures = Vec::new();
     let mut shim_status = format!("pcb shim {current_version}: current");
-    let latest_release = match fetch_latest_release() {
+    let latest_release = match self_update_latest_release() {
         Ok(latest) => {
             if std::env::var_os(SELF_UPDATE_REEXEC_ENV).is_none()
                 && latest.version > current_version
             {
                 let version = latest.version.clone();
                 let shim = install_shim_update(&latest)?;
-                reexec_self_update(&shim, &current_version, &version)?;
+                reexec_self_update(&shim, &current_version, &version, &latest)?;
             }
             Some(latest)
         }
@@ -1836,6 +1837,16 @@ fn fetch_latest_release() -> Result<LatestRelease> {
     Ok(serde_json::from_str(&content)?)
 }
 
+fn self_update_latest_release() -> Result<LatestRelease> {
+    if std::env::var_os(SELF_UPDATE_REEXEC_ENV).is_none() {
+        return fetch_latest_release();
+    }
+
+    let release = std::env::var(SELF_UPDATE_RELEASE_ENV)
+        .context("updated pcb shim is missing release metadata")?;
+    Ok(serde_json::from_str(&release)?)
+}
+
 fn fetch_nightly_release(force_refresh: bool) -> Result<NightlyRelease> {
     if !force_refresh
         && let Some(cache) = read_nightly_release_cache()?
@@ -1939,14 +1950,51 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
     copy_executable_permissions(&temporary_launcher, &temporary_launcher)?;
 
     #[cfg(windows)]
-    if installed_launcher.exists() {
-        fs::remove_file(&installed_launcher).with_context(|| {
-            format!(
-                "failed to replace existing pcb launcher {}",
-                installed_launcher.display()
-            )
-        })?;
+    {
+        let backup_launcher = install_dir.join(format!(".pcb-launcher-{}.old", std::process::id()));
+        if backup_launcher.exists() {
+            fs::remove_file(&backup_launcher).with_context(|| {
+                format!(
+                    "failed to remove stale pcb launcher backup {}",
+                    backup_launcher.display()
+                )
+            })?;
+        }
+        let had_installed_launcher = installed_launcher.exists();
+        if had_installed_launcher {
+            fs::rename(&installed_launcher, &backup_launcher).with_context(|| {
+                format!(
+                    "failed to back up existing pcb launcher {}",
+                    installed_launcher.display()
+                )
+            })?;
+        }
+        if let Err(install_error) = fs::rename(&temporary_launcher, &installed_launcher) {
+            if had_installed_launcher {
+                fs::rename(&backup_launcher, &installed_launcher).with_context(|| {
+                    format!(
+                        "failed to restore pcb launcher {} after update failed: {install_error}",
+                        installed_launcher.display()
+                    )
+                })?;
+            }
+            return Err(install_error).with_context(|| {
+                format!(
+                    "failed to install pcb launcher at {}",
+                    installed_launcher.display()
+                )
+            });
+        }
+        if had_installed_launcher {
+            fs::remove_file(&backup_launcher).with_context(|| {
+                format!(
+                    "failed to remove pcb launcher backup {}",
+                    backup_launcher.display()
+                )
+            })?;
+        }
     }
+    #[cfg(not(windows))]
     fs::rename(&temporary_launcher, &installed_launcher).with_context(|| {
         format!(
             "failed to install pcb launcher at {}",
@@ -1970,13 +2018,19 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
     Ok(())
 }
 
-fn reexec_self_update(shim: &Path, from: &Version, to: &Version) -> Result<()> {
+fn reexec_self_update(
+    shim: &Path,
+    from: &Version,
+    to: &Version,
+    latest: &LatestRelease,
+) -> Result<()> {
     println!("Updated pcb {from} → {to}; continuing with updated shim");
 
     let mut command = Command::new(shim);
     command
         .args(["self", "update"])
-        .env(SELF_UPDATE_REEXEC_ENV, "1");
+        .env(SELF_UPDATE_REEXEC_ENV, "1")
+        .env(SELF_UPDATE_RELEASE_ENV, serde_json::to_string(latest)?);
 
     #[cfg(unix)]
     {
