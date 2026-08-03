@@ -92,7 +92,7 @@ impl LoadSpec {
     ///
     /// • **Package URI** – `"package://<url>/<path>"`.
     ///   A stable, machine-independent reference to a file within a resolved package.
-    ///   Example: `"package://github.com/diodeinc/registry/reference/TPS54331/TPS54331.zen"`.
+    ///   Example: `"package://code.diode.computer/diode/registry/reference/TPS54331/TPS54331.zen"`.
     ///
     /// • **Stdlib package URI** – `"package://stdlib/<path>"`.
     ///   A stable reference to a toolchain-managed stdlib file.

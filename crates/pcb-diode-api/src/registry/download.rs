@@ -15,7 +15,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 
 const REGISTRIES_ROUTE: &str = "/api/registries";
-pub const DEFAULT_REGISTRY_URL: &str = "github.com/diodeinc/registry";
+pub const DEFAULT_REGISTRY_URL: &str = pcb_zen_core::package_url::CANONICAL_REGISTRY_REPOSITORY;
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize, PartialEq, Eq)]
 pub struct RegistryInfo {
@@ -37,13 +37,13 @@ impl RegistryInfo {
     pub fn default_registry() -> Self {
         Self {
             id: "default".to_string(),
-            workspace: "diodeinc".to_string(),
-            name: "registry".to_string(),
-            provider: "github".to_string(),
-            owner: "diodeinc".to_string(),
-            repo: "registry".to_string(),
+            workspace: "diode".to_string(),
+            name: "default".to_string(),
+            provider: "diodehub".to_string(),
+            owner: "git".to_string(),
+            repo: "diode/registry".to_string(),
             registry_url: DEFAULT_REGISTRY_URL.to_string(),
-            default_branch: None,
+            default_branch: Some("main".to_string()),
             updated_at: None,
         }
     }
@@ -781,19 +781,10 @@ mod tests {
     }
 
     #[test]
-    fn registry_scope_matches_registry_url() {
-        let registries = vec![registry(
-            "reg_1",
-            "diode",
-            "registry",
-            "github.com/diodeinc/registry",
-        )];
+    fn registry_scope_matches_diodehub_registry_url() {
+        let registries = vec![registry("reg_1", "diode", "registry", DEFAULT_REGISTRY_URL)];
 
-        let scoped = resolve_registry_scope(
-            registries,
-            &["https://github.com/diodeinc/registry.git".into()],
-        )
-        .unwrap();
+        let scoped = resolve_registry_scope(registries, &[DEFAULT_REGISTRY_URL.into()]).unwrap();
 
         assert_eq!(scoped.len(), 1);
         assert_eq!(scoped[0].id, "reg_1");
@@ -809,8 +800,9 @@ mod tests {
             Some("code.diode.computer/revel/registry")
         );
         assert_eq!(
-            registry_url_from_package_url("github.com/diodeinc/registry/modules/foo").as_deref(),
-            Some("github.com/diodeinc/registry")
+            registry_url_from_package_url("code.diode.computer/diode/registry/modules/foo")
+                .as_deref(),
+            Some(DEFAULT_REGISTRY_URL)
         );
     }
 
@@ -830,12 +822,7 @@ mod tests {
     #[test]
     fn default_scope_selects_public_and_workspace_registries() {
         let registries = vec![
-            registry(
-                "public",
-                "diode",
-                "registry",
-                "github.com/diodeinc/registry",
-            ),
+            registry("public", "diode", "registry", DEFAULT_REGISTRY_URL),
             registry(
                 "workspace",
                 "weave",
@@ -853,6 +840,22 @@ mod tests {
             .map(|registry| registry.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["public", "workspace"]);
+    }
+
+    #[test]
+    fn cached_default_scope_uses_diodehub_registry_metadata() {
+        let fallback = RegistryInfo::default_registry();
+        assert_eq!(fallback.workspace, "diode");
+        assert_eq!(fallback.name, "default");
+        assert_eq!(fallback.provider, "diodehub");
+        assert_eq!(fallback.owner, "git");
+        assert_eq!(fallback.repo, "diode/registry");
+        assert_eq!(fallback.registry_url, DEFAULT_REGISTRY_URL);
+        assert_eq!(fallback.default_branch.as_deref(), Some("main"));
+
+        let selected = default_registry_scope_for_prefix(vec![fallback], None);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].registry_url, DEFAULT_REGISTRY_URL);
     }
 
     #[test]
@@ -908,18 +911,13 @@ repository = "code.diode.computer/wildwestsystems"
 
     #[test]
     fn registry_scope_rejects_unknown_selector() {
-        let registries = vec![registry(
-            "reg_1",
-            "diode",
-            "registry",
-            "github.com/diodeinc/registry",
-        )];
+        let registries = vec![registry("reg_1", "diode", "registry", DEFAULT_REGISTRY_URL)];
 
         let err = resolve_registry_scope(registries, &["github.com/acme/parts".into()])
             .unwrap_err()
             .to_string();
 
         assert!(err.contains("github.com/acme/parts"));
-        assert!(err.contains("github.com/diodeinc/registry"));
+        assert!(err.contains(DEFAULT_REGISTRY_URL));
     }
 }

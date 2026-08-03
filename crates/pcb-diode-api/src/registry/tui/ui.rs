@@ -1643,7 +1643,7 @@ fn render_dependency_tree(lines: &mut Vec<Line>, deps: &[RegistryModuleDependenc
     let count = deps.len();
 
     for dep in deps.iter().take(max_shown) {
-        // Split URL into parts: "github.com/diodeinc/registry" / rest
+        // Split URL into parts: "code.diode.computer/diode/registry" / rest
         let parts: Vec<_> = dep.url.split('/').collect();
         let registry_prefix = if parts.len() >= 3 {
             format!("{}/{}/{}/", parts[0], parts[1], parts[2])
