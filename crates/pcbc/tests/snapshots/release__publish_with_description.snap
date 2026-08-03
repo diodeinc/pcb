@@ -29,6 +29,9 @@ expression: sb.snapshot_dir(&staging_dir)
   },
   "release": {
     "board_name": "DescBoard",
+    "bom": {
+      "strict": true
+    },
     "created_at": "<TIMESTAMP>",
     "description": "A test board with a description",
     "git_version": "<GIT_HASH>",

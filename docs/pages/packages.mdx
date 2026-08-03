@@ -230,16 +230,13 @@ endpoint = "diode.computer"
 
 ## BOM matching (`[workspace.bom]`)
 
-Workspace manifests can enable strict BOM matching for `pcb bom` availability
-queries:
+`pcb bom` availability queries use strict BOM matching by default, requiring
+exact MPN matches. Workspace manifests can opt out to use fuzzy matching:
 
 ```toml
 [workspace.bom]
-strict = true
+strict = false
 ```
-
-When enabled, `pcb bom` requires exact MPN matches. The default is `false`,
-which uses fuzzy matching.
 
 ## Registry search scope
 

@@ -102,6 +102,9 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
   },
   "release": {
     "board_name": "TestBoard",
+    "bom": {
+      "strict": true
+    },
     "created_at": "<TIMESTAMP>",
     "git_version": "<GIT_HASH>",
     "layout_path": "boards/build/TestBoard",
