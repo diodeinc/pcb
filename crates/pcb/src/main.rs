@@ -188,6 +188,8 @@ fn is_migrate_command(args: &[OsString]) -> bool {
     matches!(first_command_arg(args), Some("migrate" | "m"))
 }
 
+// These commands ignore workspace pins but retain the normal latest-toolchain
+// fallback. `migrate` is separate because it requires the current latest.
 fn is_toolchain_independent_command(args: &[OsString]) -> bool {
     matches!(first_command_arg(args), Some("auth"))
 }
