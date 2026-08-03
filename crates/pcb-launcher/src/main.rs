@@ -173,6 +173,8 @@ fn is_trusted_api_host(host: &str, port: Option<u16>) -> bool {
     let host = host.to_ascii_lowercase();
     let is_loopback = host == "localhost"
         || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
             .parse::<IpAddr>()
             .is_ok_and(|address| address.is_loopback());
     if is_loopback {
@@ -644,6 +646,7 @@ mod tests {
         assert!(is_trusted_api_host("api.gov.diode.computer", None));
         assert!(is_trusted_api_host("localhost", Some(3001)));
         assert!(is_trusted_api_host("127.0.0.1", Some(3001)));
+        assert!(is_trusted_api_host("[::1]", Some(3001)));
         assert!(!is_trusted_api_host("localhost", Some(8080)));
         assert!(!is_trusted_api_host("preview.api.diode.computer", None));
         assert!(!is_trusted_api_host("evil.diode.computer", None));
