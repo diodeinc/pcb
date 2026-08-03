@@ -181,7 +181,7 @@ else
   if [ "$launcher_status" -eq 1 ]; then
     echo "Warning: pcb-launcher is not available for $tag; skipping Diode URL launcher install" >&2
   else
-    exit "$launcher_status"
+    echo "Warning: pcb-launcher failed integrity verification; skipping Diode URL launcher install" >&2
   fi
 fi
 
