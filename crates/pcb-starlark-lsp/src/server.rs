@@ -93,6 +93,9 @@ use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Completion;
 use lsp_types::request::GotoDefinition;
 use lsp_types::request::HoverRequest;
+use percent_encoding::AsciiSet;
+use percent_encoding::CONTROLS;
+use percent_encoding::utf8_percent_encode;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -284,9 +287,7 @@ impl TryFrom<&LspUrl> for Uri {
 
     fn try_from(lsp_url: &LspUrl) -> Result<Self, Self::Error> {
         let url = Url::try_from(lsp_url)?;
-        url.as_str()
-            .parse()
-            .map_err(|_| LspUrlError::Unparsable(lsp_url.clone()))
+        url_to_uri(&url).ok_or_else(|| LspUrlError::Unparsable(lsp_url.clone()))
     }
 }
 
@@ -1556,7 +1557,7 @@ impl<T: LspContext> Backend<T> {
     }
 
     fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i64>) {
-        let Some(uri) = protocol_uri(&uri) else {
+        let Some(uri) = url_to_uri(&uri) else {
             self.log_message(
                 MessageType::WARNING,
                 &format!("Skipping diagnostics for invalid URI: {uri}"),
@@ -1580,7 +1581,7 @@ impl<T: LspContext> Backend<T> {
         data.get("targetUri")
             .and_then(|value| value.as_str())
             .and_then(|value| Url::parse(value).ok())
-            .filter(|url| protocol_uri(url).is_some())
+            .filter(|url| url_to_uri(url).is_some())
             .unwrap_or_else(|| fallback.clone())
     }
 
@@ -1742,7 +1743,7 @@ impl<T: LspContext> Backend<T> {
             && let (Some(parent), Some(file_name)) =
                 (watched_path.parent(), watched_path.file_name())
             && let Ok(base_uri) = Url::from_directory_path(parent)
-            && let Some(base_uri) = protocol_uri(&base_uri)
+            && let Some(base_uri) = url_to_uri(&base_uri)
         {
             return Some(FileSystemWatcher {
                 glob_pattern: GlobPattern::Relative(RelativePattern {
@@ -2093,8 +2094,29 @@ fn uri_to_file_path(uri: &Uri) -> Option<PathBuf> {
     Url::parse(uri.as_str()).ok()?.to_file_path().ok()
 }
 
-fn protocol_uri(url: &Url) -> Option<Uri> {
-    url.as_str().parse().ok()
+const URI_PATH_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'<')
+    .add(b'>')
+    .add(b'`')
+    .add(b'[')
+    .add(b'\\')
+    .add(b']')
+    .add(b'^')
+    .add(b'|')
+    .add(b'{')
+    .add(b'}');
+
+/// Convert a WHATWG URL to the stricter RFC 3986 URI used by LSP 3.18.
+pub fn url_to_uri(url: &Url) -> Option<Uri> {
+    if let Ok(uri) = url.as_str().parse() {
+        return Some(uri);
+    }
+
+    let mut encoded = url.clone();
+    encoded.set_path(&utf8_percent_encode(url.path(), URI_PATH_ENCODE_SET).to_string());
+    encoded.as_str().parse().ok()
 }
 
 fn display_uri_path(uri: &Uri) -> String {
@@ -2234,10 +2256,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_urls_that_are_not_valid_protocol_uris() {
-        let url = Url::from_file_path(std::env::temp_dir().join("board[rev2].zen")).unwrap();
+    fn path_urls_round_trip_through_protocol_uris() {
+        let path = std::env::temp_dir().join("board[rev2].zen");
+        let lsp_url = LspUrl::File(path);
 
-        assert!(super::protocol_uri(&url).is_none());
+        let uri = Uri::try_from(&lsp_url).expect("path should encode as an LSP URI");
+        assert!(uri.as_str().contains("board%5Brev2%5D.zen"));
+        assert_eq!(LspUrl::try_from(uri).unwrap(), lsp_url);
     }
 
     fn goto_definition_request(

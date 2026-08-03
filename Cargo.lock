@@ -4895,6 +4895,7 @@ dependencies = [
  "lsp-server",
  "lsp-types",
  "maplit",
+ "percent-encoding",
  "regex",
  "serde",
  "serde_json",
