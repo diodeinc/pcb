@@ -63,7 +63,6 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
           cache-bin: false
 
       - name: Install local pcb toolchain

@@ -35,7 +35,6 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
           cache-bin: false
           cache: false
 
@@ -99,7 +98,6 @@ jobs:
         with:
           cache-bin: false
           rustflags: ""
-          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
           target: ${{ matrix.target }}
 
       - name: Install Linux musl build dependencies
