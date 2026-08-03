@@ -1834,7 +1834,18 @@ fn finish_self_update(failures: Vec<String>) -> Result<()> {
 
 fn fetch_latest_release() -> Result<LatestRelease> {
     let content = download_text(&http_client(METADATA_TIMEOUT)?, SHIM_LATEST_RELEASE_URL)?;
-    Ok(serde_json::from_str(&content)?)
+    parse_latest_release(&content)
+}
+
+fn parse_latest_release(content: &str) -> Result<LatestRelease> {
+    let release: LatestRelease = serde_json::from_str(content)?;
+    let expected_tag = format!("pcb/v{}", release.version);
+    anyhow::ensure!(
+        release.tag == expected_tag,
+        "invalid pcb release tag {:?}; expected {expected_tag:?}",
+        release.tag
+    );
+    Ok(release)
 }
 
 fn self_update_latest_release() -> Result<LatestRelease> {
@@ -1847,7 +1858,7 @@ fn self_update_latest_release() -> Result<LatestRelease> {
         Err(std::env::VarError::NotPresent) => return fetch_latest_release(),
         Err(error) => return Err(error.into()),
     };
-    Ok(serde_json::from_str(&release)?)
+    parse_latest_release(&release)
 }
 
 fn fetch_nightly_release(force_refresh: bool) -> Result<NightlyRelease> {
@@ -1991,12 +2002,12 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
                 });
             }
             if had_installed_launcher {
-                fs::remove_file(&backup_launcher).with_context(|| {
-                    format!(
-                        "failed to remove pcb launcher backup {}",
+                if let Err(error) = fs::remove_file(&backup_launcher) {
+                    eprintln!(
+                        "Warning: failed to remove pcb launcher backup {}: {error}",
                         backup_launcher.display()
-                    )
-                })?;
+                    );
+                }
             }
         }
         #[cfg(not(windows))]
@@ -2453,6 +2464,18 @@ mod tests {
                 Version::parse("0.4.0-beta.1").unwrap(),
             ]
         );
+    }
+
+    #[test]
+    fn latest_release_requires_canonical_tag() {
+        let release = parse_latest_release(r#"{"version":"0.4.17","tag":"pcb/v0.4.17"}"#).unwrap();
+        assert_eq!(release.tag, "pcb/v0.4.17");
+
+        let error =
+            parse_latest_release(r#"{"version":"0.4.17","tag":"pcb/v0.4.17/../../attacker"}"#)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("invalid pcb release tag"));
     }
 
     #[test]
