@@ -28,7 +28,9 @@ installer writes `pcb.exe` to `%USERPROFILE%\.pcb\bin` by default. Set
 The installer also registers the `diode://` URL scheme for the current user.
 Registry can use these links to open sandbox layouts in KiCad without a
 terminal. `pcb self update` updates and re-registers the launcher together with
-the `pcb` shim.
+the `pcb` shim. If a browser-launched open fails, the launcher displays the
+error and records command output in `~/.pcb/pcb-launcher.log` (or
+`%USERPROFILE%\.pcb\pcb-launcher.log` on Windows).
 
 KiCad 10.x is required only for generating and editing layouts. Building and
 validating Zener files does not require KiCad.

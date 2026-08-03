@@ -1,10 +1,15 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use anyhow::{Context, Result, bail};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use url::Url;
 
 const PCB_TOOLCHAIN: &str = "+latest";
+const LAUNCHER_LOG_MAX_BYTES: u64 = 1024 * 1024;
 
 fn main() {
     if let Some(result) = run_from_args() {
@@ -48,16 +53,35 @@ fn install_protocol_handler() -> Result<()> {
 }
 
 fn launch_pcb(uri: &str) -> Result<()> {
+    let result = launch_pcb_inner(uri);
+    if let Err(error) = &result {
+        append_launcher_error(error);
+        platform::show_error(error, &launcher_log_path());
+    }
+    result
+}
+
+fn launch_pcb_inner(uri: &str) -> Result<()> {
     validate_uri(uri)?;
     let pcb = sibling_pcb_executable()?;
+    let mut log = open_launcher_log()?;
+    writeln!(
+        log,
+        "\n--- pcb-launcher invocation at {:?} ---",
+        std::time::SystemTime::now()
+    )
+    .context("failed to write the launcher log")?;
+    let stdout = log
+        .try_clone()
+        .context("failed to clone the launcher log handle")?;
     let mut command = Command::new(&pcb);
     command
         .arg(PCB_TOOLCHAIN)
         .arg("open")
         .arg(uri)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(log));
 
     #[cfg(target_os = "windows")]
     {
@@ -67,40 +91,110 @@ fn launch_pcb(uri: &str) -> Result<()> {
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let child = command
+    let mut child = command
         .spawn()
         .with_context(|| format!("failed to start {}", pcb.display()))?;
-
-    #[cfg(target_os = "windows")]
-    {
-        let mut child = child;
-        // Keep the protocol handler alive while pcb opens KiCad. Some browsers
-        // launch handlers in a job that terminates their children on exit.
-        let status = child
-            .wait()
-            .with_context(|| format!("failed to wait for {}", pcb.display()))?;
-        if !status.success() {
-            bail!("{} failed: {status}", pcb.display());
-        }
+    // Keep the protocol handler alive while pcb opens KiCad. This preserves
+    // browser-launched children on Windows and lets every platform surface a
+    // non-zero exit instead of silently discarding it.
+    let status = child
+        .wait()
+        .with_context(|| format!("failed to wait for {}", pcb.display()))?;
+    if !status.success() {
+        bail!("{} failed: {status}", pcb.display());
     }
-
-    #[cfg(not(target_os = "windows"))]
-    drop(child);
 
     Ok(())
 }
 
 fn validate_uri(uri: &str) -> Result<()> {
-    if !uri
-        .get(..8)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("diode://"))
-    {
+    let url = Url::parse(uri).context("invalid diode URI")?;
+    if url.scheme() != "diode" {
         bail!("expected a diode:// sandbox file URI");
     }
-    if uri.contains('\0') {
-        bail!("URI must not contain a NUL byte");
+    if !url.username().is_empty() || url.password().is_some() {
+        bail!("diode URI must not include user info");
+    }
+    if url.fragment().is_some() {
+        bail!("diode URI must not include a fragment");
+    }
+
+    let host = url.host_str().context("diode URI must include a host")?;
+    if !is_trusted_api_host(host, url.port()) {
+        bail!("refusing untrusted diode API host: {host}");
+    }
+
+    let segments: Vec<_> = url.path().split('/').skip(1).collect();
+    if segments.len() != 4
+        || segments[0] != "sandboxes"
+        || segments[1].is_empty()
+        || segments[2] != "fs"
+        || segments[3] != "read"
+    {
+        bail!("expected /sandboxes/{{sandboxId}}/fs/read");
+    }
+
+    let mut query = url.query_pairs();
+    let Some((key, path)) = query.next() else {
+        bail!("diode URI must include one path query parameter");
+    };
+    if key != "path" || query.next().is_some() {
+        bail!("diode URI must include only one path query parameter");
+    }
+    if !path.starts_with('/')
+        || path
+            .split('/')
+            .skip(1)
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        bail!("diode URI path must be a safe absolute sandbox path");
     }
     Ok(())
+}
+
+fn is_trusted_api_host(host: &str, port: Option<u16>) -> bool {
+    let host = host.to_ascii_lowercase();
+    let is_loopback = host == "localhost"
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if is_loopback {
+        return port == Some(3001);
+    }
+    port.is_none() && (host == "diode.computer" || host.ends_with(".diode.computer"))
+}
+
+fn launcher_log_path() -> PathBuf {
+    dirs::home_dir()
+        .map(|home| home.join(".pcb/pcb-launcher.log"))
+        .unwrap_or_else(|| std::env::temp_dir().join("pcb-launcher.log"))
+}
+
+fn open_launcher_log() -> Result<File> {
+    let path = launcher_log_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    if path
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() >= LAUNCHER_LOG_MAX_BYTES)
+    {
+        let rotated = path.with_extension("log.old");
+        let _ = fs::remove_file(&rotated);
+        let _ = fs::rename(&path, rotated);
+    }
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("failed to open {}", path.display()))
+}
+
+fn append_launcher_error(error: &anyhow::Error) {
+    if let Ok(mut log) = open_launcher_log() {
+        let _ = writeln!(log, "pcb-launcher failed: {error:#}");
+    }
 }
 
 fn sibling_pcb_executable() -> Result<PathBuf> {
@@ -286,6 +380,22 @@ mod platform {
         Ok(())
     }
 
+    pub fn show_error(error: &anyhow::Error, log_path: &Path) {
+        let message = format!("{error:#}\n\nDetails: {}", log_path.display());
+        let _ = Command::new("osascript")
+            .args([
+                "-e",
+                "on run argv",
+                "-e",
+                "display alert \"Open in KiCad failed\" message (item 1 of argv) as critical",
+                "-e",
+                "end run",
+                "--",
+            ])
+            .arg(message)
+            .status();
+    }
+
     fn remove_dir_if_exists(path: &Path) -> Result<()> {
         if path.exists() {
             fs::remove_dir_all(path)
@@ -330,6 +440,21 @@ mod platform {
         Ok(())
     }
 
+    pub fn show_error(error: &anyhow::Error, log_path: &Path) {
+        let message = format!("{error:#}\n\nDetails: {}", log_path.display());
+        let shown = Command::new("zenity")
+            .args(["--error", "--title=Open in KiCad failed", "--text"])
+            .arg(&message)
+            .status()
+            .is_ok_and(|status| status.success());
+        if !shown {
+            let _ = Command::new("kdialog")
+                .args(["--title", "Open in KiCad failed", "--error"])
+                .arg(message)
+                .status();
+        }
+    }
+
     fn run_optional(command: &mut Command, description: &str) -> Result<()> {
         match command.status() {
             Ok(status) if status.success() => Ok(()),
@@ -365,6 +490,19 @@ mod platform {
         Ok(())
     }
 
+    pub fn show_error(error: &anyhow::Error, log_path: &Path) {
+        let message = format!("{error:#}\n\nDetails: {}", log_path.display());
+        let _ = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($args[0], 'Open in KiCad failed', 'OK', 'Error')",
+            ])
+            .arg(message)
+            .status();
+    }
+
     fn reg_add(key: &str, name: Option<&str>, value: &str) -> Result<()> {
         let mut command = Command::new("reg.exe");
         command.args(["ADD", key]);
@@ -379,11 +517,15 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
     use objc2::{MainThreadOnly, define_class, msg_send};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
     use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSURL};
+
+    static RECEIVED_URL: AtomicBool = AtomicBool::new(false);
 
     define_class!(
         #[unsafe(super = NSObject)]
@@ -396,6 +538,7 @@ mod macos {
         unsafe impl NSApplicationDelegate for LauncherDelegate {
             #[unsafe(method(application:openURLs:))]
             fn application_open_urls(&self, application: &NSApplication, urls: &NSArray<NSURL>) {
+                RECEIVED_URL.store(true, Ordering::Release);
                 for url in urls {
                     if let Some(value) = url.absoluteString()
                         && let Err(error) = super::launch_pcb(&value.to_string())
@@ -420,7 +563,9 @@ mod macos {
         // event, so bound the lifetime of this background-only helper.
         std::thread::spawn(|| {
             std::thread::sleep(std::time::Duration::from_secs(10));
-            std::process::exit(0);
+            if !RECEIVED_URL.load(Ordering::Acquire) {
+                std::process::exit(0);
+            }
         });
 
         let mtm = MainThreadMarker::new().expect("pcb-launcher must run on the main thread");
@@ -434,7 +579,7 @@ mod macos {
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_desktop_exec_path, validate_uri};
+    use super::{escape_desktop_exec_path, is_trusted_api_host, validate_uri};
     use std::path::Path;
 
     #[test]
@@ -448,6 +593,44 @@ mod tests {
     #[test]
     fn rejects_other_schemes() {
         assert!(validate_uri("https://example.com/layout.kicad_pcb").is_err());
+    }
+
+    #[test]
+    fn rejects_untrusted_api_hosts() {
+        assert!(
+            validate_uri(
+                "diode://attacker.example/sandboxes/sandbox/fs/read?path=%2Fworkspace%2Flayout.kicad_pcb",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_diode_preview_and_loopback_hosts() {
+        assert!(is_trusted_api_host(
+            "pr-983.preview.api.diode.computer",
+            None
+        ));
+        assert!(is_trusted_api_host("api.gov.diode.computer", None));
+        assert!(is_trusted_api_host("localhost", Some(3001)));
+        assert!(is_trusted_api_host("127.0.0.1", Some(3001)));
+        assert!(!is_trusted_api_host("localhost", Some(8080)));
+    }
+
+    #[test]
+    fn rejects_malformed_sandbox_file_uris() {
+        assert!(
+            validate_uri(
+                "diode://api.diode.computer/sandboxes/sandbox/fs/write?path=%2Fworkspace%2Flayout.kicad_pcb",
+            )
+            .is_err()
+        );
+        assert!(
+            validate_uri(
+                "diode://api.diode.computer/sandboxes/sandbox/fs/read?path=%2Fworkspace%2F..%2Flayout.kicad_pcb",
+            )
+            .is_err()
+        );
     }
 
     #[test]
