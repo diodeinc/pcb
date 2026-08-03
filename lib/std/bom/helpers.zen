@@ -213,7 +213,7 @@ def resistor_series(
     """Helper to create resistor series entry.
 
     Args:
-        manufacturer: Manufacturer name (e.g., "Panasonic Electronic Components")
+        manufacturer: Manufacturer name (e.g., "Panasonic Industry")
         series: Series prefix (e.g., "ERJ-2RKF")
         resistance_range: Resistance range (e.g., "10Ohm – 1MOhm")
         max_v: Max voltage (e.g., "50V")
@@ -258,7 +258,7 @@ def panasonic_erj(series, resistance_range, voltage, power, tolerance, e_series,
     """
     datasheet = panasonic_datasheet(datasheet_path) if datasheet_path else None
     return resistor_series(
-        "Panasonic Electronic Components",
+        "Panasonic Industry",
         series,
         resistance_range,
         voltage,
