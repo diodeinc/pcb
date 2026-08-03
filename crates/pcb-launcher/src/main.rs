@@ -88,15 +88,37 @@ fn validate_uri(uri: &str) -> Result<()> {
 
 fn sibling_pcb_executable() -> Result<PathBuf> {
     let current = std::env::current_exe().context("failed to locate pcb-launcher")?;
+    let parent = current
+        .parent()
+        .context("pcb-launcher has no parent directory")?;
+
+    #[cfg(target_os = "macos")]
+    if let Some(contents) = parent.parent() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let pcb_path = contents.join("Resources/pcb-path");
+        if pcb_path.is_file() {
+            let pcb = PathBuf::from(OsString::from_vec(
+                std::fs::read(&pcb_path)
+                    .with_context(|| format!("failed to read {}", pcb_path.display()))?,
+            ));
+            if !pcb.is_file() {
+                bail!(
+                    "pcb executable not found at bundled path: {}",
+                    pcb.display()
+                );
+            }
+            return Ok(pcb);
+        }
+    }
+
     let name = if cfg!(target_os = "windows") {
         "pcb.exe"
     } else {
         "pcb"
     };
-    let pcb = current
-        .parent()
-        .context("pcb-launcher has no parent directory")?
-        .join(name);
+    let pcb = parent.join(name);
     if !pcb.is_file() {
         bail!(
             "pcb executable not found beside launcher: {}",
@@ -104,6 +126,14 @@ fn sibling_pcb_executable() -> Result<PathBuf> {
         );
     }
     Ok(pcb)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn escape_desktop_exec_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\\\\\")
+        .replace('"', "\\\\\"")
+        .replace('%', "%%")
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -121,6 +151,7 @@ fn run_checked(command: &mut Command, description: &str) -> Result<()> {
 mod platform {
     use super::*;
     use std::fs;
+    use std::os::unix::ffi::OsStrExt;
 
     const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -144,33 +175,102 @@ mod platform {
 </plist>
 "#;
 
+    struct StagedAppCleanup(PathBuf);
+
+    impl Drop for StagedAppCleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     pub fn install(launcher: &Path, pcb: &Path) -> Result<()> {
         let home = dirs::home_dir().context("could not locate the home directory")?;
-        let app = home.join("Applications/Diode PCB Launcher.app");
-        let contents = app.join("Contents");
+        let applications = home.join("Applications");
+        fs::create_dir_all(&applications)
+            .with_context(|| format!("failed to create {}", applications.display()))?;
+        let app = applications.join("Diode PCB Launcher.app");
+        let staged_app = applications.join(format!(
+            ".Diode PCB Launcher-{}.app.tmp",
+            std::process::id()
+        ));
+        let backup_app = applications.join(format!(
+            ".Diode PCB Launcher-{}.app.old",
+            std::process::id()
+        ));
+        remove_dir_if_exists(&staged_app)?;
+        remove_dir_if_exists(&backup_app)?;
+        let _staged_app_cleanup = StagedAppCleanup(staged_app.clone());
+
+        let contents = staged_app.join("Contents");
         let macos = contents.join("MacOS");
+        let resources = contents.join("Resources");
         fs::create_dir_all(&macos)
             .with_context(|| format!("failed to create {}", macos.display()))?;
+        fs::create_dir_all(&resources)
+            .with_context(|| format!("failed to create {}", resources.display()))?;
         fs::copy(launcher, macos.join("pcb-launcher"))
             .context("failed to install the macOS launcher executable")?;
-        fs::copy(pcb, macos.join("pcb")).context("failed to install pcb in the macOS app")?;
+        let pcb =
+            fs::canonicalize(pcb).context("failed to resolve the installed pcb executable")?;
+        fs::write(resources.join("pcb-path"), pcb.as_os_str().as_bytes())
+            .context("failed to store the installed pcb path")?;
         fs::write(contents.join("Info.plist"), INFO_PLIST)
             .context("failed to write the macOS launcher Info.plist")?;
 
-        run_checked(
+        if let Err(error) = run_checked(
             Command::new("codesign")
                 .args(["--force", "--deep", "--sign", "-"])
-                .arg(&app),
+                .arg(&staged_app),
             "sign the macOS launcher app",
-        )?;
+        ) {
+            let _ = fs::remove_dir_all(&staged_app);
+            return Err(error);
+        }
+
+        let had_app = app.exists();
+        if had_app {
+            fs::rename(&app, &backup_app)
+                .context("failed to back up the existing macOS launcher app")?;
+        }
+        if let Err(error) = fs::rename(&staged_app, &app) {
+            if had_app {
+                fs::rename(&backup_app, &app)
+                    .context("failed to restore the existing macOS launcher app")?;
+            }
+            return Err(error).context("failed to install the macOS launcher app");
+        }
+
         let lsregister = Path::new(
             "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
         );
-        if lsregister.is_file() {
-            run_checked(
+        if lsregister.is_file()
+            && let Err(error) = run_checked(
                 Command::new(lsregister).arg("-f").arg(&app),
                 "register the macOS launcher app",
-            )?;
+            )
+        {
+            fs::remove_dir_all(&app)
+                .context("failed to remove the unregistered macOS launcher app")?;
+            if had_app {
+                fs::rename(&backup_app, &app)
+                    .context("failed to restore the existing macOS launcher app")?;
+                let _ = Command::new(lsregister).arg("-f").arg(&app).status();
+            }
+            return Err(error);
+        }
+        if had_app && let Err(error) = fs::remove_dir_all(&backup_app) {
+            eprintln!(
+                "warning: failed to remove macOS launcher backup {}: {error}",
+                backup_app.display()
+            );
+        }
+        Ok(())
+    }
+
+    fn remove_dir_if_exists(path: &Path) -> Result<()> {
+        if path.exists() {
+            fs::remove_dir_all(path)
+                .with_context(|| format!("failed to remove stale {}", path.display()))?;
         }
         Ok(())
     }
@@ -189,11 +289,7 @@ mod platform {
         let applications = data_home.join("applications");
         fs::create_dir_all(&applications)
             .with_context(|| format!("failed to create {}", applications.display()))?;
-        let escaped = launcher
-            .to_string_lossy()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('%', "%%");
+        let escaped = escape_desktop_exec_path(launcher);
         let desktop = format!(
             "[Desktop Entry]\nType=Application\nName=Diode PCB Launcher\nNoDisplay=true\nTerminal=false\nExec=\"{escaped}\" %u\nMimeType=x-scheme-handler/diode;\n"
         );
@@ -319,7 +415,8 @@ mod macos {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_uri;
+    use super::{escape_desktop_exec_path, validate_uri};
+    use std::path::Path;
 
     #[test]
     fn accepts_diode_uri() {
@@ -332,5 +429,13 @@ mod tests {
     #[test]
     fn rejects_other_schemes() {
         assert!(validate_uri("https://example.com/layout.kicad_pcb").is_err());
+    }
+
+    #[test]
+    fn escapes_linux_desktop_exec_paths() {
+        assert_eq!(
+            escape_desktop_exec_path(Path::new("/tmp/a\\b\"c%d")),
+            "/tmp/a\\\\\\\\b\\\\\"c%%d"
+        );
     }
 }
