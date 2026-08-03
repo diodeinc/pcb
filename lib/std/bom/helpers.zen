@@ -103,6 +103,35 @@ def encode_4digit_R_notation(value):
     return str(i) + "R" + str(f)
 
 
+def vishay_dcrcw_resistance_code(value):
+    """Encode a resistance using the four-character D/CRCW R/K/M notation."""
+    if value >= 1000000.0:
+        unit = 1000000.0
+        marker = "M"
+    elif value >= 1000.0:
+        unit = 1000.0
+        marker = "K"
+    else:
+        unit = 1.0
+        marker = "R"
+
+    normalized = value / unit
+
+    if normalized < 10.0:
+        scaled = int(normalized * 100.0 + 0.5)
+        whole = scaled // 100
+        fraction = scaled % 100
+        return str(whole) + marker + ("0" if fraction < 10 else "") + str(fraction)
+
+    if normalized < 100.0:
+        scaled = int(normalized * 10.0 + 0.5)
+        whole = scaled // 10
+        fraction = scaled % 10
+        return str(whole) + marker + str(fraction)
+
+    return str(int(normalized + 0.5)) + marker
+
+
 def iec60062_4digit(value):
     """IEC 60062 4-digit code: 3 significant digits + multiplier (e.g., 10kΩ → 1002)."""
     if value < 100.0:
