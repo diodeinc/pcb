@@ -190,8 +190,10 @@ chmod +x "$tmp/pcb"
 mv "$tmp/pcb" "$install_dir/pcb"
 
 if [ -n "$launcher_downloaded" ]; then
-  chmod +x "$tmp/pcb-launcher"
-  mv "$tmp/pcb-launcher" "$install_dir/pcb-launcher"
+  if ! chmod +x "$tmp/pcb-launcher" || ! mv "$tmp/pcb-launcher" "$install_dir/pcb-launcher"; then
+    echo "Warning: installed pcb, but could not install the Diode URL launcher" >&2
+    launcher_downloaded=""
+  fi
 fi
 
 add_install_dir_to_path

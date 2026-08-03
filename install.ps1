@@ -105,8 +105,15 @@ try {
     Move-Item -Force $binary $installedPcb
 
     if ($launcherDownloaded) {
-        Move-Item -Force $launcherBinary $installedLauncher
+        try {
+            Move-Item -Force $launcherBinary $installedLauncher
+        } catch {
+            $launcherDownloaded = $false
+            Write-Warning "Installed pcb, but could not install the Diode URL launcher: $_"
+        }
+    }
 
+    if ($launcherDownloaded) {
         # pcb-launcher uses the Windows GUI subsystem, so invoke it through a
         # process handle to wait for registration and read the correct exit code.
         try {
