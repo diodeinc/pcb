@@ -453,27 +453,25 @@ impl ContourSet {
 
     /// Enforce a diameter-`2 * gap_radius` minimum for every two-sided void gap.
     ///
-    /// First isolate the narrow complement phase `N`, then take its medial axis
-    /// `Γ_N` from the source boundary's primary generalized Voronoi branches:
+    /// Every pass isolates the narrow complement phase at the nominal radius,
+    /// removes a guard-widened tube around the boundary medial axis inside
+    /// that phase, and reopens with the filled-region disk:
     ///
     /// ```text
-    /// N₀     = G_(gap_radius + guard)(self)
-    /// S₀     = open(self \ (Γ_N₀ ⊕ disk(gap_radius + guard)), disk(filled_radius))
-    /// Rₖ     = G_gap_radius(Sₖ)
-    /// Vₖ     = open(Rₖ, disk(guard))
-    /// Wₖ     = Vₖ if Vₖ is nonempty, otherwise Rₖ
-    /// Sₖ₊₁   = open(Sₖ \ (Wₖ ⊕ disk(gap_radius + guard)), disk(filled_radius))
+    /// S₀     = self
+    /// Nₖ     = G_gap_radius(Sₖ)
+    /// Sₖ₊₁   = open(Sₖ \ (Γ_Nₖ ⊕ disk(gap_radius + guard)), disk(filled_radius)) ∩ Sₖ
     /// ```
     ///
-    /// `G_r(X)` is the two-sided part of `close(X, disk(r)) \ X`, and `Γ_N₀` is
-    /// the source-boundary medial axis inside the initial narrow void
-    /// phase. It gives the least local first cut. Meaningful residuals are
-    /// denoised before sweeping; a residual too thin for that filter is swept
-    /// raw rather than mistaken for a passing certificate. Boolean-generated
-    /// boundaries never require another Voronoi diagram. Iteration stops only
-    /// when `Rₖ` is empty. The sequence is monotone decreasing: every pass only
-    /// trims the source. This covers distinct components, hairpins, notches,
-    /// and internal voids without treating one-sided edge clearance as a gap.
+    /// `G_r(X)` is the two-sided part of `close(X, disk(r)) \ X`, and `Γ_N` is
+    /// the boundary medial axis inside the narrow phase — the least local cut,
+    /// trimming both sides of every narrow gap without widening one-sided edge
+    /// clearance. The guard keeps every checked quantity strictly separated
+    /// from every constructed one: a cut leaves a `2 (gap_radius + guard)`
+    /// void, so construction noise cannot push it back under the nominal test
+    /// and the monotone decreasing sequence stops when `Nₖ` is empty. This
+    /// covers distinct components, hairpins, notches, and internal voids with
+    /// the same cut on every pass.
     pub fn disk_regularize_gaps(
         &self,
         gap_radius: f64,
@@ -494,52 +492,24 @@ impl ContourSet {
                 "gap-regularization guard must be finite and non-negative".to_string(),
             ));
         }
-        if self.is_empty() {
-            return Ok(DiskGapRegularization {
-                kept: self.clone(),
-                narrow_voids: Self::empty(self.tolerance),
-                separator_keep_out: Self::empty(self.tolerance),
-                removed: Self::empty(self.tolerance),
-            });
-        }
 
         let tube_radius = gap_radius + guard;
-        let initial_narrow_voids = self.disk_gap_violations(tube_radius);
-        if initial_narrow_voids.is_empty() {
-            return Ok(DiskGapRegularization {
-                kept: self.clone(),
-                narrow_voids: Self::empty(self.tolerance),
-                separator_keep_out: Self::empty(self.tolerance),
-                removed: Self::empty(self.tolerance),
-            });
-        }
-        let initial_keep_out =
-            narrow_void_medial_axis_keep_out(self, &initial_narrow_voids, tube_radius)?;
-        let mut kept = self
-            .difference(&initial_keep_out)
-            .disk_open(filled_radius)
-            .intersection(self);
-        let mut narrow_voids = initial_narrow_voids;
-        let mut separator_keep_out = initial_keep_out;
-        let denoise_radius = guard.max(self.tolerance);
+        let mut kept = self.clone();
+        let mut narrow_voids = Self::empty(self.tolerance);
+        let mut separator_keep_out = Self::empty(self.tolerance);
         loop {
             let pass_narrow_voids = kept.disk_gap_violations(gap_radius);
             if pass_narrow_voids.is_empty() {
                 break;
             }
-            let denoised = pass_narrow_voids.disk_open(denoise_radius);
-            let sweep = if denoised.is_empty() {
-                &pass_narrow_voids
-            } else {
-                &denoised
-            };
-            let pass_separator_keep_out = sweep.disk_dilate(tube_radius);
+            let pass_keep_out =
+                narrow_void_medial_axis_keep_out(&kept, &pass_narrow_voids, tube_radius)?;
             let next = kept
-                .difference(&pass_separator_keep_out)
+                .difference(&pass_keep_out)
                 .disk_open(filled_radius)
                 .intersection(&kept);
             narrow_voids = narrow_voids.union(&pass_narrow_voids);
-            separator_keep_out = separator_keep_out.union(&pass_separator_keep_out);
+            separator_keep_out = separator_keep_out.union(&pass_keep_out);
 
             if kept.difference(&next).area() <= self.tolerance * self.tolerance {
                 return Err(GapRegularizationError(format!(

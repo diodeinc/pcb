@@ -23,12 +23,12 @@
 //!
 //! Let `G_v(X)` retain the components of `close(X, disk(v)) \ X` that touch two
 //! nonincident, opposing boundary branches. This excludes the normal rounded
-//! bite at a single concave corner. Removing a radius-`v` tube around the
-//! medial axis of `G_v(A)`, then disk-opening, trims both sides of every narrow
-//! void locally. Any certified residual is swept by the same radius until
-//! `G_v(S)` is empty. Thus filled features admit a disk of radius `q`, while
-//! intervening void gaps admit a disk of radius `v`, without component ranking
-//! or feature-specific rules.
+//! bite at a single concave corner. Each pass removes a radius-`v` tube around
+//! the boundary medial axis inside `G_v`, then disk-opens, trimming both sides
+//! of every narrow void locally; the same cut repeats until `G_v` is empty.
+//! Thus filled features admit a disk of radius `q`, while intervening void
+//! gaps admit a disk of radius `v`, without component ranking or
+//! feature-specific rules.
 
 use std::fmt;
 
@@ -156,7 +156,7 @@ pub struct BoardArrayBalancingIntermediates {
     pub removed_by_opening: ContourSet,
     /// Two-sided complement phase rejected by the rolling-disk gap test.
     pub narrow_voids: ContourSet,
-    /// Initial medial-axis tube plus any directly swept certificate residuals.
+    /// Union of the per-pass medial-axis separator tubes.
     pub gap_separator_keep_out: ContourSet,
     /// Material locally trimmed to widen two-sided void gaps. Together with
     /// `removed_by_opening` this is the total regularization removal
@@ -371,13 +371,11 @@ impl std::error::Error for BalancingRegionError {}
 /// candidates     = open(clearance_safe, disk(q))
 /// ```
 ///
-/// The first pass removes a radius-`v + guard` tube around the portion of the
-/// candidates' boundary medial axis inside the two-sided subset of
-/// `close(candidates, disk(v + guard)) \ candidates`. If the nominal closing
-/// certificate finds a nontrivial two-sided residual after that cut, monotone
-/// set iteration sweeps that residual directly until the certificate is empty.
-/// It widens inter-component gaps, hairpins, notches, and internal voids
-/// locally without widening one-sided edge clearance.
+/// Gap regularization then repeatedly removes a radius-`v + guard` tube around
+/// the boundary medial axis inside the two-sided subset of
+/// `close(candidates, disk(v + guard)) \ candidates` until that subset is
+/// empty. It widens inter-component gaps, hairpins, notches, and internal
+/// voids locally without widening one-sided edge clearance.
 pub fn board_array_balancing_region(
     input: &BoardArrayBalancingInput,
     options: BalancingRegionOptions,
