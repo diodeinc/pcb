@@ -84,7 +84,12 @@ install_local() {
 
   mkdir -p "$install_dir"
   install -m 755 "$target_dir/release/pcb" "$install_dir/pcb"
-  install -m 755 "$target_dir/release/pcb-launcher" "$install_dir/pcb-launcher"
+  launcher_installed=""
+  if install -m 755 "$target_dir/release/pcb-launcher" "$install_dir/pcb-launcher"; then
+    launcher_installed="true"
+  else
+    echo "Warning: installed pcb, but could not install the Diode URL launcher" >&2
+  fi
 
   mkdir -p "$local_target_dir/lib"
   install -m 755 "$target_dir/release/pcbc" "$local_target_dir/pcbc"
@@ -94,10 +99,14 @@ install_local() {
   cp -R "$source_dir/lib/std" "$stdlib_dir"
 
   add_install_dir_to_path
-  register_url_launcher
+  if [ -n "$launcher_installed" ]; then
+    register_url_launcher
+  fi
 
   echo "Installed local pcb to $install_dir/pcb"
-  echo "Installed Diode URL launcher to $install_dir/pcb-launcher"
+  if [ -n "$launcher_installed" ]; then
+    echo "Installed Diode URL launcher to $install_dir/pcb-launcher"
+  fi
   echo "Installed local pcbc to $local_target_dir/pcbc"
   echo "Installed local pcb-rectify to $local_target_dir/pcb-rectify"
   echo "Installed local stdlib to $stdlib_dir"
