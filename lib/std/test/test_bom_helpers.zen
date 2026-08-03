@@ -1,6 +1,13 @@
 """Tests for BOM helper functions"""
 
-load("../bom/helpers.zen", "encode_R_notation", "find_e_series_match", "iec60062_3digit", "iec60062_4digit")
+load(
+    "../bom/helpers.zen",
+    "encode_R_notation",
+    "find_e_series_match",
+    "iec60062_3digit",
+    "iec60062_4digit",
+    "vishay_dcrcw_resistance_code",
+)
 load("../units.zen", "Resistance")
 
 # Test encode_R_notation
@@ -8,6 +15,26 @@ check(encode_R_notation(4.7) == "4R7", "4.7Ω should encode to 4R7")
 check(encode_R_notation(22.0) == "22R0", "22Ω should encode to 22R0")
 check(encode_R_notation(1.0) == "1R0", "1Ω should encode to 1R0")
 check(encode_R_notation(10.0) == "10R0", "10Ω should encode to 10R0")
+
+# Test Vishay D/CRCW four-character resistance codes across unit boundaries.
+for value, expected in [
+    (1.0, "1R00"),
+    (1.02, "1R02"),
+    (9.76, "9R76"),
+    (10.0, "10R0"),
+    (10.2, "10R2"),
+    (100.0, "100R"),
+    (1000.0, "1K00"),
+    (1020.0, "1K02"),
+    (10000.0, "10K0"),
+    (100000.0, "100K"),
+    (1000000.0, "1M00"),
+    (1020000.0, "1M02"),
+    (2200000.0, "2M20"),
+    (6040000.0, "6M04"),
+    (10000000.0, "10M0"),
+]:
+    check(vishay_dcrcw_resistance_code(value) == expected, str(value) + "Ω should encode to " + expected)
 
 # Test IEC 60062 4-digit code (3 sig figs + multiplier)
 check(iec60062_4digit(0.562) == "R562", "0.562Ω should use 4-character R notation")
