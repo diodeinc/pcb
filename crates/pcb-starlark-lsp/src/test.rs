@@ -46,7 +46,6 @@ use lsp_types::InitializedParams;
 use lsp_types::TextDocumentClientCapabilities;
 use lsp_types::TextDocumentContentChangeEvent;
 use lsp_types::TextDocumentItem;
-use lsp_types::Url;
 use lsp_types::VersionedTextDocumentIdentifier;
 use lsp_types::notification::DidChangeTextDocument;
 use lsp_types::notification::DidChangeWatchedFiles;
@@ -71,6 +70,7 @@ use starlark::errors::EvalMessage;
 use starlark::syntax::AstModule;
 use starlark::syntax::Dialect;
 use starlark_syntax::slice_vec_ext::VecExt;
+use url::Url;
 
 use crate::error::eval_message_to_lsp_diagnostic;
 use crate::server::LspContext;
@@ -80,6 +80,10 @@ use crate::server::LspUrl;
 use crate::server::StringLiteralResult;
 use crate::server::new_notification;
 use crate::server::server_with_connection;
+
+fn protocol_uri(uri: &Url) -> lsp_types::Uri {
+    uri.as_str().parse().unwrap()
+}
 
 fn get_path_from_uri(uri: &str) -> PathBuf {
     PathBuf::from(uri)
@@ -108,8 +112,6 @@ pub(crate) enum TestServerError {
     /// The response came back, but was an error response, not a successful one.
     #[error("Response error: {0:?}")]
     ResponseError(ResponseError),
-    #[error("Invalid response message for request {0}: {1:?}")]
-    InvalidResponse(RequestId, Response),
     #[error("Client received a request (not response/notification) from the server: {0:?}")]
     ReceivedRequest(lsp_server::Request),
     #[error("Got a duplicate response for request ID {:?}: Existing: {:?}, New: {:?}", .new.id, .existing, .new)]
@@ -313,18 +315,13 @@ impl LspContext for TestServerContext {
     ) -> Option<lsp_server::Response> {
         if req.method == "starlark/echo" {
             let payload: String = serde_json::from_value(req.params.clone()).ok()?;
-            Some(lsp_server::Response {
-                id: req.id.clone(),
-                result: Some(serde_json::to_value(format!("echo:{payload}")).unwrap()),
-                error: None,
-            })
+            Some(lsp_server::Response::new_ok(
+                req.id.clone(),
+                format!("echo:{payload}"),
+            ))
         } else if req.method == "test/subscribeNetlist" {
             self.netlist_subscribed.store(true, Ordering::Relaxed);
-            Some(lsp_server::Response {
-                id: req.id.clone(),
-                result: Some(serde_json::Value::Bool(true)),
-                error: None,
-            })
+            Some(lsp_server::Response::new_ok(req.id.clone(), true))
         } else {
             None
         }
@@ -583,21 +580,16 @@ impl TestServer {
 
             match self.responses.get(&id) {
                 Some(Response {
-                    error: None,
-                    result: Some(result),
+                    response_result: Ok(result),
                     ..
                 }) => {
                     break Ok(serde_json::from_value::<T>(result.clone())?);
                 }
                 Some(Response {
-                    error: Some(err),
-                    result: None,
+                    response_result: Err(err),
                     ..
                 }) => {
                     break Err(TestServerError::ResponseError(err.clone()).into());
-                }
-                Some(msg) => {
-                    break Err(TestServerError::InvalidResponse(id, msg.clone()).into());
                 }
                 None => {}
             }
@@ -666,7 +658,7 @@ impl TestServer {
     pub fn open_file(&mut self, uri: Url, contents: String) -> anyhow::Result<()> {
         let open_params = DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
-                uri: uri.clone(),
+                uri: protocol_uri(&uri),
                 language_id: String::new(),
                 version: self.next_document_version(),
                 text: contents,
@@ -675,10 +667,10 @@ impl TestServer {
         let open_notification = new_notification::<DidOpenTextDocument>(open_params);
         self.send_notification(open_notification)?;
         let notification = self.get_notification::<PublishDiagnostics>()?;
-        if notification.uri != uri {
+        if notification.uri != protocol_uri(&uri) {
             Err(anyhow::anyhow!(
                 "Got a diagnostics message for `{}`, but expected it for `{}`",
-                notification.uri,
+                notification.uri.as_str(),
                 uri
             ))
         } else if !notification.diagnostics.is_empty() {
@@ -696,7 +688,7 @@ impl TestServer {
     pub fn change_file(&mut self, uri: Url, contents: String) -> anyhow::Result<()> {
         let change_params = DidChangeTextDocumentParams {
             text_document: VersionedTextDocumentIdentifier {
-                uri,
+                uri: protocol_uri(&uri),
                 version: self.next_document_version(),
             },
             content_changes: vec![TextDocumentContentChangeEvent {

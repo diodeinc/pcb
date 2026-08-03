@@ -3,7 +3,7 @@ pub mod signature;
 use log::{debug, info};
 use lsp_server::ResponseError;
 use lsp_types::{
-    Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities, SignatureHelpOptions, Url,
+    Hover, HoverContents, MarkupContent, MarkupKind, ServerCapabilities, SignatureHelpOptions,
     WorkDoneProgressOptions, request::Request,
 };
 use pcb_sch::position::{Position, edit_position_comments, symbol_id_to_comment_key};
@@ -24,6 +24,7 @@ use starlark::docs::DocModule;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use url::Url;
 
 // JSON-RPC 2.0 error codes
 const INVALID_PARAMS: i32 = -32602;
@@ -198,14 +199,15 @@ impl Default for LspEvalContext {
 }
 
 impl LspEvalContext {
-    fn diagnostic_target_uri(path: &str) -> Option<lsp_types::Url> {
+    fn diagnostic_target_uri(path: &str) -> Option<lsp_types::Uri> {
         if path.is_empty() {
             return None;
         }
 
-        lsp_types::Url::from_file_path(path)
+        Url::from_file_path(path)
             .ok()
-            .or_else(|| lsp_types::Url::parse(path).ok())
+            .or_else(|| Url::parse(path).ok())
+            .and_then(|url| url.as_str().parse().ok())
     }
 
     pub fn set_eager(mut self, eager: bool) -> Self {
@@ -518,8 +520,7 @@ impl LspEvalContext {
         };
 
         let to_location = |path: &str, span: &starlark::codemap::ResolvedSpan| Location {
-            uri: lsp_types::Url::from_file_path(path)
-                .unwrap_or_else(|_| lsp_types::Url::parse(&format!("file://{}", path)).unwrap()),
+            uri: Self::diagnostic_target_uri(path).expect("diagnostic path should be a valid URI"),
             range: Range {
                 start: Position {
                     line: span.begin.line as u32,
@@ -1057,15 +1058,11 @@ impl LspContext for LspEvalContext {
                     {
                         Ok(u) => u,
                         Err(e) => {
-                            return Some(Response {
-                                id: req.id.clone(),
-                                result: None,
-                                error: Some(ResponseError {
-                                    code: 0,
-                                    message: format!("Invalid URI: {e}"),
-                                    data: None,
-                                }),
-                            });
+                            return Some(Response::new_err(
+                                req.id.clone(),
+                                0,
+                                format!("Invalid URI: {e}"),
+                            ));
                         }
                     };
 
@@ -1088,11 +1085,7 @@ impl LspContext for LspEvalContext {
                                 active_signature: None,
                                 active_parameter: None,
                             };
-                            return Some(Response {
-                                id: req.id.clone(),
-                                result: Some(serde_json::to_value(empty).unwrap()),
-                                error: None,
-                            });
+                            return Some(Response::new_ok(req.id.clone(), empty));
                         }
                     };
 
@@ -1106,22 +1099,14 @@ impl LspContext for LspEvalContext {
                         &uri,
                     );
 
-                    return Some(Response {
-                        id: req.id.clone(),
-                        result: Some(serde_json::to_value(sig_help).unwrap()),
-                        error: None,
-                    });
+                    return Some(Response::new_ok(req.id.clone(), sig_help));
                 }
                 Err(e) => {
-                    return Some(Response {
-                        id: req.id.clone(),
-                        result: None,
-                        error: Some(ResponseError {
-                            code: 0,
-                            message: format!("Failed to parse params: {e}"),
-                            data: None,
-                        }),
-                    });
+                    return Some(Response::new_err(
+                        req.id.clone(),
+                        0,
+                        format!("Failed to parse params: {e}"),
+                    ));
                 }
             }
         }
@@ -1166,22 +1151,14 @@ impl LspContext for LspEvalContext {
                     };
 
                     let response_payload = ViewerGetStateResponse { state: state_json };
-                    return Some(Response {
-                        id: req.id.clone(),
-                        result: Some(serde_json::to_value(response_payload).unwrap()),
-                        error: None,
-                    });
+                    return Some(Response::new_ok(req.id.clone(), response_payload));
                 }
                 Err(e) => {
-                    return Some(Response {
-                        id: req.id.clone(),
-                        result: None,
-                        error: Some(ResponseError {
-                            code: 0,
-                            message: format!("Failed to parse params: {e}"),
-                            data: None,
-                        }),
-                    });
+                    return Some(Response::new_err(
+                        req.id.clone(),
+                        0,
+                        format!("Failed to parse params: {e}"),
+                    ));
                 }
             }
         }
@@ -1193,35 +1170,23 @@ impl LspContext for LspEvalContext {
                     let result = self.evaluate_module(params);
                     match result {
                         Ok(response) => {
-                            return Some(Response {
-                                id: req.id.clone(),
-                                result: Some(serde_json::to_value(response).unwrap()),
-                                error: None,
-                            });
+                            return Some(Response::new_ok(req.id.clone(), response));
                         }
                         Err(e) => {
-                            return Some(Response {
-                                id: req.id.clone(),
-                                result: None,
-                                error: Some(ResponseError {
-                                    code: 0,
-                                    message: format!("Evaluation failed: {e}"),
-                                    data: None,
-                                }),
-                            });
+                            return Some(Response::new_err(
+                                req.id.clone(),
+                                0,
+                                format!("Evaluation failed: {e}"),
+                            ));
                         }
                     }
                 }
                 Err(e) => {
-                    return Some(Response {
-                        id: req.id.clone(),
-                        result: None,
-                        error: Some(ResponseError {
-                            code: 0,
-                            message: format!("Failed to parse params: {e}"),
-                            data: None,
-                        }),
-                    });
+                    return Some(Response::new_err(
+                        req.id.clone(),
+                        0,
+                        format!("Failed to parse params: {e}"),
+                    ));
                 }
             }
         }
@@ -1243,15 +1208,11 @@ impl LspContext for LspEvalContext {
                     let mut flat_positions = BTreeMap::new();
                     for (symbol_id, position) in params.symbol_positions {
                         let Some(comment_name) = symbol_id_to_comment_key(&symbol_id) else {
-                            return Some(Response {
-                                id: req.id.clone(),
-                                result: None,
-                                error: Some(ResponseError {
-                                    code: INVALID_PARAMS,
-                                    message: format!("Invalid symbol ID format: {symbol_id}"),
-                                    data: None,
-                                }),
-                            });
+                            return Some(Response::new_err(
+                                req.id.clone(),
+                                INVALID_PARAMS,
+                                format!("Invalid symbol ID format: {symbol_id}"),
+                            ));
                         };
                         flat_positions.insert(comment_name, position);
                     }
@@ -1259,15 +1220,11 @@ impl LspContext for LspEvalContext {
                     let mut deleted_comment_names = Vec::new();
                     for symbol_id in params.deleted_symbol_ids {
                         let Some(comment_name) = symbol_id_to_comment_key(&symbol_id) else {
-                            return Some(Response {
-                                id: req.id.clone(),
-                                result: None,
-                                error: Some(ResponseError {
-                                    code: INVALID_PARAMS,
-                                    message: format!("Invalid symbol ID format: {symbol_id}"),
-                                    data: None,
-                                }),
-                            });
+                            return Some(Response::new_err(
+                                req.id.clone(),
+                                INVALID_PARAMS,
+                                format!("Invalid symbol ID format: {symbol_id}"),
+                            ));
                         };
                         deleted_comment_names.push(comment_name);
                     }
@@ -1279,15 +1236,11 @@ impl LspContext for LspEvalContext {
                     return Some(position_edit_result_to_response(req.id.clone(), result));
                 }
                 Err(e) => {
-                    return Some(Response {
-                        id: req.id.clone(),
-                        result: None,
-                        error: Some(ResponseError {
-                            code: INVALID_PARAMS,
-                            message: format!("Invalid pcb/savePositions params: {e}"),
-                            data: None,
-                        }),
-                    });
+                    return Some(Response::new_err(
+                        req.id.clone(),
+                        INVALID_PARAMS,
+                        format!("Invalid pcb/savePositions params: {e}"),
+                    ));
                 }
             }
         }
@@ -1295,23 +1248,15 @@ impl LspContext for LspEvalContext {
         if let Some(handler) = &self.custom_request_handler {
             match handler(&req.method, &req.params) {
                 Ok(Some(result)) => {
-                    return Some(Response {
-                        id: req.id.clone(),
-                        result: Some(result),
-                        error: None,
-                    });
+                    return Some(Response::new_ok(req.id.clone(), result));
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    return Some(Response {
-                        id: req.id.clone(),
-                        result: None,
-                        error: Some(ResponseError {
-                            code: INTERNAL_ERROR,
-                            message: err.to_string(),
-                            data: None,
-                        }),
-                    });
+                    return Some(Response::new_err(
+                        req.id.clone(),
+                        INTERNAL_ERROR,
+                        err.to_string(),
+                    ));
                 }
             }
         }
@@ -1405,15 +1350,10 @@ fn position_edit_result_to_response(
     result: Result<PcbPositionEditResponse, ResponseError>,
 ) -> Response {
     match result {
-        Ok(response) => Response {
-            id,
-            result: Some(serde_json::to_value(response).unwrap()),
-            error: None,
-        },
+        Ok(response) => Response::new_ok(id, response),
         Err(error) => Response {
             id,
-            result: None,
-            error: Some(error),
+            response_result: Err(error),
         },
     }
 }
@@ -1836,8 +1776,7 @@ pcb-version = "0.4"
             )
             .expect("request should be handled");
 
-        assert!(response.error.is_none(), "error: {:?}", response.error);
-        let result = response.result.unwrap();
+        let result = response.response_result.expect("request should succeed");
         assert_eq!(result["baseHash"], json!(base_hash));
 
         let edit: lsp_types::TextEdit = serde_json::from_value(result["edit"].clone())?;
@@ -1871,7 +1810,9 @@ pcb-version = "0.4"
             )
             .expect("request should be handled");
 
-        let error = response.error.expect("stale hash should be rejected");
+        let error = response
+            .response_result
+            .expect_err("stale hash should be rejected");
         assert_eq!(error.code, super::CONTENT_MODIFIED);
         // The file was not modified.
         assert_eq!(fs::read_to_string(&zen_path)?, "x = 1\n");
@@ -1898,8 +1839,8 @@ pcb-version = "0.4"
             .expect("request should be handled");
 
         let error = response
-            .error
-            .expect("missing deletedSymbolIds should fail");
+            .response_result
+            .expect_err("missing deletedSymbolIds should fail");
         assert_eq!(error.code, super::INVALID_PARAMS);
         assert_eq!(fs::read_to_string(&zen_path)?, contents);
 
@@ -1921,7 +1862,9 @@ pcb-version = "0.4"
             .handle_custom_request(&request, &lsp_types::InitializeParams::default())
             .expect("request should be handled");
 
-        let error = response.error.expect("missing baseHash should fail");
+        let error = response
+            .response_result
+            .expect_err("missing baseHash should fail");
         assert_eq!(error.code, super::INVALID_PARAMS);
         assert_eq!(fs::read_to_string(&zen_path)?, contents);
 
@@ -1953,15 +1896,14 @@ pcb-version = "0.4"
             .handle_custom_request(&req, &lsp_types::InitializeParams::default())
             .expect("custom request should be handled");
 
-        assert!(response.error.is_none());
         assert_eq!(
-            response.result,
-            Some(json!({
+            response.response_result.expect("request should succeed"),
+            json!({
                 "ok": true,
                 "echo": {
                     "datasheetUrl": "https://example.com/datasheet.pdf"
                 }
-            }))
+            })
         );
     }
 
@@ -1974,13 +1916,13 @@ pcb-version = "0.4"
         };
 
         let url = LspEvalContext::diagnostic_target_uri(path).expect("path should resolve");
-        assert_eq!(url.scheme(), "file");
+        assert_eq!(url.scheme().map(|scheme| scheme.as_str()), Some("file"));
     }
 
     #[test]
     fn diagnostic_target_uri_still_accepts_non_file_urls() {
         let url = LspEvalContext::diagnostic_target_uri("starlark:stdlib/foo.zen")
             .expect("URL should resolve");
-        assert_eq!(url.scheme(), "starlark");
+        assert_eq!(url.scheme().map(|scheme| scheme.as_str()), Some("starlark"));
     }
 }

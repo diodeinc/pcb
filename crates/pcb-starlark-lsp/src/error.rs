@@ -20,11 +20,9 @@ use lsp_types::Range;
 use starlark::analysis::EvalMessage;
 use starlark::analysis::EvalSeverity;
 
-use crate::span::IntoLspRange;
-
 pub fn eval_message_to_lsp_diagnostic(eval_message: EvalMessage) -> lsp_types::Diagnostic {
     let range = match eval_message.span {
-        Some(s) => s.to_lsp_range(),
+        Some(s) => s.into(),
         _ => Range::default(),
     };
     lsp_types::Diagnostic::new(
