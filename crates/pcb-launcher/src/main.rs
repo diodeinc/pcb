@@ -205,6 +205,7 @@ fn open_launcher_log() -> Result<File> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
+    secure_launcher_log_permissions(&path)?;
     if path
         .metadata()
         .is_ok_and(|metadata| metadata.len() >= LAUNCHER_LOG_MAX_BYTES)
@@ -213,11 +214,34 @@ fn open_launcher_log() -> Result<File> {
         let _ = fs::remove_file(&rotated);
         let _ = fs::rename(&path, rotated);
     }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
         .open(&path)
-        .with_context(|| format!("failed to open {}", path.display()))
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    secure_launcher_log_permissions(&path)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn secure_launcher_log_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if path.exists() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to secure {}", path.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn secure_launcher_log_permissions(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn append_launcher_error(error: &anyhow::Error) {
@@ -682,5 +706,32 @@ mod tests {
             escape_desktop_exec_path(Path::new("/tmp/a\\b\"c`d$e%f")),
             "/tmp/a\\\\\\\\b\\\\\"c\\\\`d\\\\$e%%f"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secures_existing_launcher_log() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "pcb-launcher-permissions-{}-{nonce}.log",
+            std::process::id()
+        ));
+        fs::write(&path, "sandbox output").expect("write log");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("set permissions");
+
+        super::secure_launcher_log_permissions(&path).expect("secure log");
+
+        let mode = fs::metadata(&path)
+            .expect("log metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        fs::remove_file(path).expect("remove log");
     }
 }
