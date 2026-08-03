@@ -12,10 +12,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tar::Archive;
 use tempfile::Builder;
-use url::Url;
+use url::{Position, Url};
 
 const DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS: u64 = 55 * 60;
-const DIODEHUB_CREDENTIAL_HELPER: &str = "!pcb auth git";
+const DIODEHUB_HOST: &str = "code.diode.computer";
+const LEGACY_DIODEHUB_CREDENTIAL_HELPER: &str = "!pcb auth git";
 const DIODEHUB_CREDENTIAL_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
 const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
     "credential.https://code.diode.computer.useHttpPath";
@@ -102,6 +103,10 @@ fn credential_cache_helper(socket: &Path) -> anyhow::Result<String> {
     ))
 }
 
+fn diodehub_credential_helper(host: &str) -> String {
+    format!("!pcb auth git --host={host}")
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -112,13 +117,10 @@ fn add_git_config(cmd: &mut Command, key: &str, value: &str) {
 
 fn add_diodehub_https_auth_config(cmd: &mut Command, cache_socket: &Path) -> anyhow::Result<()> {
     let cache_helper = credential_cache_helper(cache_socket)?;
+    let credential_helper = diodehub_credential_helper(DIODEHUB_HOST);
     add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, "");
     add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, &cache_helper);
-    add_git_config(
-        cmd,
-        DIODEHUB_CREDENTIAL_HELPER_CONFIG,
-        DIODEHUB_CREDENTIAL_HELPER,
-    );
+    add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, &credential_helper);
     add_git_config(cmd, DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG, "true");
     Ok(())
 }
@@ -208,10 +210,17 @@ pub fn init(repo_root: &Path) -> anyhow::Result<()> {
 }
 
 pub fn configure_diodehub_credentials_globally(repository_url: &str) -> anyhow::Result<()> {
-    let credential_origin = credential_origin(repository_url)?;
+    let url = credential_url(repository_url)?;
+    let credential_origin = url.origin().ascii_serialization();
+    let credential_host = &url[Position::BeforeHost..Position::AfterPort];
     let config_path = pcb_git_config_path()?;
     let cache_helper = credential_cache_helper(&credential_cache_socket()?)?;
-    write_pcb_git_config(&config_path, &credential_origin, &cache_helper)?;
+    write_pcb_git_config(
+        &config_path,
+        &credential_origin,
+        credential_host,
+        &cache_helper,
+    )?;
     ensure_git_config_include(&config_path)?;
     remove_legacy_diodehub_config()
 }
@@ -231,7 +240,7 @@ pub fn unconfigure_diodehub_credentials_globally() -> anyhow::Result<()> {
     remove_legacy_diodehub_config()
 }
 
-fn credential_origin(repository_url: &str) -> anyhow::Result<String> {
+fn credential_url(repository_url: &str) -> anyhow::Result<Url> {
     let url = Url::parse(repository_url).context("Invalid DiodeHub repository URL")?;
     if url.scheme() != "https" {
         bail!("DiodeHub repository URL must use HTTPS");
@@ -242,12 +251,13 @@ fn credential_origin(repository_url: &str) -> anyhow::Result<String> {
     if !url.username().is_empty() || url.password().is_some() {
         bail!("DiodeHub repository URL must not include credentials");
     }
-    Ok(url.origin().ascii_serialization())
+    Ok(url)
 }
 
 fn write_pcb_git_config(
     config_path: &Path,
     credential_origin: &str,
+    credential_host: &str,
     cache_helper: &str,
 ) -> anyhow::Result<()> {
     let config_dir = config_path
@@ -261,13 +271,11 @@ fn write_pcb_git_config(
     let temp_path = temp.into_temp_path();
     let helper_config = format!("credential.{credential_origin}.helper");
     let use_http_path_config = format!("credential.{credential_origin}.useHttpPath");
+    let credential_helper = diodehub_credential_helper(credential_host);
 
     run_git_config_file(&temp_path, &["--replace-all", &helper_config, ""])?;
     run_git_config_file(&temp_path, &["--add", &helper_config, cache_helper])?;
-    run_git_config_file(
-        &temp_path,
-        &["--add", &helper_config, DIODEHUB_CREDENTIAL_HELPER],
-    )?;
+    run_git_config_file(&temp_path, &["--add", &helper_config, &credential_helper])?;
     run_git_config_file(
         &temp_path,
         &["--replace-all", &use_http_path_config, "true"],
@@ -304,8 +312,11 @@ fn ensure_git_config_include(config_path: &Path) -> anyhow::Result<()> {
 }
 
 fn remove_legacy_diodehub_config() -> anyhow::Result<()> {
-    unset_git_config(DIODEHUB_CREDENTIAL_HELPER_CONFIG)?;
-    unset_git_config(DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG)
+    let cache_helper = credential_cache_helper(&credential_cache_socket()?)?;
+    for value in ["", cache_helper.as_str(), LEGACY_DIODEHUB_CREDENTIAL_HELPER] {
+        unset_git_config_value(DIODEHUB_CREDENTIAL_HELPER_CONFIG, value)?;
+    }
+    unset_git_config_value(DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG, "true")
 }
 
 pub fn clear_diodehub_credential_cache() {
@@ -355,17 +366,6 @@ fn run_git_config_file(path: &Path, args: &[&str]) -> anyhow::Result<()> {
             path.display(),
             args.join(" ")
         );
-    }
-    Ok(())
-}
-
-fn unset_git_config(key: &str) -> anyhow::Result<()> {
-    let status = git_global()
-        .args(["config", "--global", "--unset-all", key])
-        .status()
-        .context("Failed to run `git config`")?;
-    if !status.success() && status.code() != Some(GIT_CONFIG_NOT_FOUND) {
-        bail!("`git config --global --unset-all {key}` failed with {status}");
     }
     Ok(())
 }
@@ -1175,14 +1175,20 @@ mod tests {
     #[test]
     fn derives_the_exact_https_credential_origin() {
         assert_eq!(
-            credential_origin("https://code.gov.diode.computer/acme/widget.git").unwrap(),
+            credential_url("https://code.gov.diode.computer/acme/widget.git")
+                .unwrap()
+                .origin()
+                .ascii_serialization(),
             "https://code.gov.diode.computer"
         );
         assert_eq!(
-            credential_origin("https://git.preview.diode.localhost:8443/acme/widget.git").unwrap(),
+            credential_url("https://git.preview.diode.localhost:8443/acme/widget.git")
+                .unwrap()
+                .origin()
+                .ascii_serialization(),
             "https://git.preview.diode.localhost:8443"
         );
-        assert!(credential_origin("http://code.diode.computer/acme/widget.git").is_err());
+        assert!(credential_url("http://code.diode.computer/acme/widget.git").is_err());
     }
 
     #[test]

@@ -13,6 +13,10 @@ const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
 #[derive(Args, Debug)]
 #[command(about = "Configure or provide Git credentials using PCB authentication")]
 pub struct GitAuthArgs {
+    /// DiodeHub host assigned to this credential helper
+    #[arg(long, hide = true)]
+    host: Option<String>,
+
     /// Git credential helper operation, `configure`, or `unconfigure`
     operation: String,
 
@@ -83,8 +87,9 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
             writeln!(stdout, "capability {AUTHTYPE_CAPABILITY}")?;
         }
         "get" => {
+            let host = args.host.as_deref().unwrap_or_default();
             let result = read_credential_request(stdin.lock())
-                .and_then(|request| provide_credential(ctx, request, &mut stdout));
+                .and_then(|request| provide_credential(ctx, host, request, &mut stdout));
             if let Err(error) = result {
                 writeln!(stdout, "quit=true")?;
                 writeln!(stdout)?;
@@ -103,16 +108,16 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
 
 fn provide_credential(
     ctx: &WorkspaceContext,
+    configured_host: &str,
     request: CredentialRequest,
     output: &mut impl Write,
 ) -> Result<()> {
-    if request.protocol.as_deref() != Some(b"https") {
+    if request.protocol.as_deref() != Some(b"https")
+        || request.host.as_deref() != Some(configured_host.as_bytes())
+    {
         return Ok(());
     }
 
-    let Some(host) = request.host.as_deref().filter(|host| !host.is_empty()) else {
-        return Ok(());
-    };
     let Some(path) = request.path.as_deref().filter(|path| !path.is_empty()) else {
         return Ok(());
     };
@@ -125,9 +130,8 @@ fn provide_credential(
         bail!("Git did not advertise the `authtype` credential capability");
     }
 
-    let host = std::str::from_utf8(host).context("Git credential host is not UTF-8")?;
     let path = std::str::from_utf8(path).context("Git credential path is not UTF-8")?;
-    let credential = exchange_credential(ctx, host, path)?;
+    let credential = exchange_credential(ctx, configured_host, path)?;
 
     writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
     writeln!(output, "authtype=Bearer")?;

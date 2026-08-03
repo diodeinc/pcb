@@ -322,7 +322,17 @@ fn configure_is_idempotent_and_preserves_unrelated_global_config() {
     assert_clean_success(&context.run_git_config(&[
         "--add",
         LEGACY_GIT_HELPER_CONFIG,
+        "!developer-helper",
+    ]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        LEGACY_GIT_HELPER_CONFIG,
         "!pcb auth git",
+    ]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        LEGACY_GIT_USE_HTTP_PATH_CONFIG,
+        "false",
     ]));
     assert_clean_success(&context.run_git_config(&[
         "--add",
@@ -337,7 +347,7 @@ fn configure_is_idempotent_and_preserves_unrelated_global_config() {
     assert_eq!(helpers.len(), 3);
     assert_eq!(helpers[0], "");
     assert!(helpers[1].starts_with("cache --timeout=3300 --socket="));
-    assert_eq!(helpers[2], "!pcb auth git");
+    assert_eq!(helpers[2], format!("!pcb auth git --host={GIT_HOST}"));
     assert_eq!(
         context.managed_git_config_values(GIT_USE_HTTP_PATH_CONFIG),
         ["true"]
@@ -351,15 +361,13 @@ fn configure_is_idempotent_and_preserves_unrelated_global_config() {
         1
     );
     assert!(includes.contains(&unrelated_include.to_string_lossy().into_owned()));
-    assert!(
-        context
-            .git_config_values(LEGACY_GIT_HELPER_CONFIG)
-            .is_empty()
+    assert_eq!(
+        context.git_config_values(LEGACY_GIT_HELPER_CONFIG),
+        ["!developer-helper"]
     );
-    assert!(
-        context
-            .git_config_values(LEGACY_GIT_USE_HTTP_PATH_CONFIG)
-            .is_empty()
+    assert_eq!(
+        context.git_config_values(LEGACY_GIT_USE_HTTP_PATH_CONFIG),
+        ["false"]
     );
     assert_eq!(context.git_config_values("user.email"), ["dev@example.com"]);
     assert_eq!(context.git_config_values("credential.helper"), ["store"]);
@@ -388,7 +396,7 @@ fn configure_replaces_the_managed_credential_origin() {
     assert_eq!(helpers.len(), 3);
     assert_eq!(helpers[0], "");
     assert!(helpers[1].starts_with("cache --timeout=3300 --socket="));
-    assert_eq!(helpers[2], "!pcb auth git");
+    assert_eq!(helpers[2], "!pcb auth git --host=code.gov.diode.computer");
 }
 
 #[test]
@@ -626,14 +634,30 @@ fn modern_git_honors_quit_when_the_exchange_fails() {
 }
 
 #[test]
-fn global_helper_ignores_unrelated_hosts() {
+fn credential_helpers_ignore_unrelated_hosts() {
     let context = TestContext::new("http://127.0.0.1:1".to_string());
+    let github_request = "capability[]=authtype\n\
+                          protocol=https\n\
+                          host=github.com\n\
+                          path=acme/widget.git\n\
+                          \n";
+    let scoped_helper = run_with_input(
+        {
+            let mut command = context.pcbc();
+            command.args(["auth", "git", "--host", GIT_HOST, "get"]);
+            command
+        },
+        github_request,
+    );
+    assert_clean_success(&scoped_helper);
+
     let credential_file = context._tempdir.path().join("credentials");
     fs::write(
         &credential_file,
         "https://fallback-user:fallback-password@github.com/acme/widget.git\n",
     )
     .expect("write fallback credentials");
+    assert_clean_success(&context.run_git_config(&["--add", "credential.helper", "!pcb auth git"]));
     assert_clean_success(&context.run_git_config(&[
         "--add",
         "credential.helper",
@@ -644,14 +668,7 @@ fn global_helper_ignores_unrelated_hosts() {
     ]));
     assert_clean_success(&context.run_config_command("configure"));
 
-    let fill = run_with_input(
-        context.git_credential("fill"),
-        "capability[]=authtype\n\
-         protocol=https\n\
-         host=github.com\n\
-         path=acme/widget.git\n\
-         \n",
-    );
+    let fill = run_with_input(context.git_credential("fill"), github_request);
     assert_success(&fill);
     assert!(fill.stderr.is_empty());
 
