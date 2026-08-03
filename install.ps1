@@ -76,6 +76,9 @@ try {
         }
         if ($launcherDownloadedCompressed) {
             & $zstd.Source -q -d -f $launcherCompressedPath -o $launcherBinary
+            if ($LASTEXITCODE -ne 0) {
+                throw "failed to decompress pcb-launcher"
+            }
         } else {
             Invoke-WebRequest "$baseUrl/$($latest.tag)/$launcherArtifact" -OutFile $launcherBinary
         }
