@@ -268,7 +268,9 @@ mod macos {
     use objc2::runtime::ProtocolObject;
     use objc2::{MainThreadOnly, define_class, msg_send};
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
-    use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSURL};
+    use objc2_foundation::{
+        MainThreadMarker, NSArray, NSNotification, NSObject, NSObjectProtocol, NSURL,
+    };
 
     define_class!(
         #[unsafe(super = NSObject)]
@@ -289,6 +291,14 @@ mod macos {
                     }
                 }
                 application.terminate(None);
+            }
+
+            #[unsafe(method(applicationDidFinishLaunching:))]
+            fn application_did_finish_launching(&self, _notification: &NSNotification) {
+                // URL cold-starts receive openURLs: before this (and terminate
+                // there). Direct .app opens never get a URL, so exit here
+                // instead of blocking forever in application.run().
+                NSApplication::sharedApplication(self.mtm()).terminate(None);
             }
         }
     );
