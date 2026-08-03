@@ -285,10 +285,10 @@ fn board_array_creation_accepts_no_source_copper_layers() {
 #[test]
 fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_layers() {
     let input = large_board_fixture_mm();
-    let ipc = Ipc2581::parse(&input).unwrap();
+    let ipc = Ipc2581::parse(input).unwrap();
     let (options, validation_mode, panelization) = auto_board_array_options(&ipc, None).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
-    let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
+    let provisional_xml = write_board_array_xml(input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
     let top = balance
