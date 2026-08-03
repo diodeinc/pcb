@@ -121,10 +121,10 @@ fn test_freerouting_java_not_found() {
 
     let (code, stdout, stderr) = run_route_freerouting(&mut sandbox, &[]);
     let combined = format!("{stdout}{stderr}");
-    if combined.contains("Java 21+ not found") {
+    if combined.contains("Java 25+ not found") {
         assert_ne!(code, 0);
     } else {
-        // Host has Java 21+: we'll hit the JAR lookup instead, which is
+        // Host has Java 25+: we'll hit the JAR lookup instead, which is
         // covered by test_freerouting_bad_jar_path. Nothing to assert here.
     }
 }
@@ -225,7 +225,7 @@ fn java_compatible() -> bool {
         .and_then(|v| v.split('.').next())
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
-    major >= 21
+    major >= 25
 }
 
 /// Poll `url` until it returns HTTP 200 or `deadline` elapses.
@@ -305,7 +305,7 @@ fn test_freerouting_api_server_boots() {
     // Ctrl+C/timeout can recover partial output). Protects against e.g.
     // FREEROUTING_JAR pointing at a stale or incompatible build.
     if !java_compatible() {
-        eprintln!("[route test] Skipping: Java 21+ not available");
+        eprintln!("[route test] Skipping: Java 25+ not available");
         return;
     }
 
@@ -336,7 +336,7 @@ fn test_freerouting_api_server_boots() {
 #[test]
 fn test_freerouting_cancel_returns_output() {
     if !java_compatible() {
-        eprintln!("[route test] Skipping: Java 21+ not available");
+        eprintln!("[route test] Skipping: Java 25+ not available");
         return;
     }
     let jar_path = match resolve_freerouting_jar() {
@@ -539,7 +539,7 @@ fn test_freerouting_cli() {
     // Full integration test: requires Java, FreeRouting JAR, and KiCad
     // (for DSN export, SES import, and a post-route DRC check).
     if !java_compatible() {
-        eprintln!("[route test] Skipping: Java 21+ not available");
+        eprintln!("[route test] Skipping: Java 25+ not available");
         return;
     }
 

@@ -200,27 +200,36 @@ fn publish_board(src: &Path, dst: &Path) -> Result<()> {
 // Java resolution
 // ---------------------------------------------------------------------------
 
-/// Resolve a Java 21+ binary on `$PATH`.
+/// Minimum Java major version FreeRouting's pinned jar requires. FreeRouting
+/// v2.2.4's `build.gradle` targets `JavaVersion.VERSION_25`, so a jar built
+/// against that toolchain refuses to load (`UnsupportedClassVersionError`)
+/// on anything older, regardless of what FreeRouting's own docs suggest.
+/// Keep in sync with `FREEROUTING_VERSION`'s pinned release.
+const REQUIRED_JAVA_VERSION: u32 = 25;
+
+/// Resolve a Java binary on `$PATH` meeting `REQUIRED_JAVA_VERSION`.
 ///
 /// We deliberately do not auto-download a JRE/JDK — that's too heavy and
 /// opinionated for a CLI tool. Ask the user to install one instead.
 fn resolve_java() -> Result<PathBuf> {
-    if is_java_21_plus("java") {
+    if is_java_version_sufficient("java") {
         return Ok(PathBuf::from("java"));
     }
 
     anyhow::bail!(
-        "Java 21+ not found on $PATH. FreeRouting requires a Java 21+ runtime.\n\
+        "Java {v}+ not found on $PATH. FreeRouting requires a Java {v}+ runtime.\n\
          Install one and try again:\n\
-         macOS:   brew install openjdk@21\n\
-         Linux:   apt install openjdk-21-jdk  (or your distro's equivalent)\n\
-         Windows: https://adoptium.net/temurin/releases/?version=21\n\
-         Then ensure 'java -version' shows version 21 or later."
+         macOS:   brew install openjdk@{v}\n\
+         Linux:   apt install openjdk-{v}-jdk  (or your distro's equivalent)\n\
+         Windows: https://adoptium.net/temurin/releases/?version={v}\n\
+         Then ensure 'java -version' shows version {v} or later.",
+        v = REQUIRED_JAVA_VERSION
     );
 }
 
-/// Check whether `java_path` is a Java 21+ binary by running `java -version`.
-fn is_java_21_plus(java_path: impl AsRef<Path>) -> bool {
+/// Check whether `java_path` is a Java binary meeting `REQUIRED_JAVA_VERSION`
+/// by running `java -version`.
+fn is_java_version_sufficient(java_path: impl AsRef<Path>) -> bool {
     let output = match Command::new(java_path.as_ref()).arg("-version").output() {
         Ok(o) => o,
         Err(_) => return false,
@@ -239,7 +248,7 @@ fn is_java_21_plus(java_path: impl AsRef<Path>) -> bool {
         .and_then(|v| v.split('.').next())
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
-    major >= 21
+    major >= REQUIRED_JAVA_VERSION
 }
 
 // ---------------------------------------------------------------------------
@@ -864,8 +873,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_java_21_plus_returns_false_for_nonexistent_path() {
-        assert!(!is_java_21_plus("/nonexistent/java"));
+    fn is_java_version_sufficient_returns_false_for_nonexistent_path() {
+        assert!(!is_java_version_sufficient("/nonexistent/java"));
     }
 
     #[test]
