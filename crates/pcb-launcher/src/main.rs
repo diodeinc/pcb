@@ -67,9 +67,26 @@ fn launch_pcb(uri: &str) -> Result<()> {
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
-    command
+    let child = command
         .spawn()
         .with_context(|| format!("failed to start {}", pcb.display()))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut child = child;
+        // Keep the protocol handler alive while pcb opens KiCad. Some browsers
+        // launch handlers in a job that terminates their children on exit.
+        let status = child
+            .wait()
+            .with_context(|| format!("failed to wait for {}", pcb.display()))?;
+        if !status.success() {
+            bail!("{} failed: {status}", pcb.display());
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    drop(child);
+
     Ok(())
 }
 
@@ -133,6 +150,8 @@ fn escape_desktop_exec_path(path: &Path) -> String {
     path.to_string_lossy()
         .replace('\\', "\\\\\\\\")
         .replace('"', "\\\\\"")
+        .replace('`', "\\\\`")
+        .replace('$', "\\\\$")
         .replace('%', "%%")
 }
 
@@ -434,8 +453,8 @@ mod tests {
     #[test]
     fn escapes_linux_desktop_exec_paths() {
         assert_eq!(
-            escape_desktop_exec_path(Path::new("/tmp/a\\b\"c%d")),
-            "/tmp/a\\\\\\\\b\\\\\"c%%d"
+            escape_desktop_exec_path(Path::new("/tmp/a\\b\"c`d$e%f")),
+            "/tmp/a\\\\\\\\b\\\\\"c\\\\`d\\\\$e%%f"
         );
     }
 }
