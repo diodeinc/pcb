@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::WorkspaceContext;
 
 const AUTHTYPE_CAPABILITY: &str = "authtype";
+const DEFAULT_DIODEHUB_HOST: &str = "code.diode.computer";
 const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
 
 #[derive(Args, Debug)]
@@ -87,7 +88,7 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
             writeln!(stdout, "capability {AUTHTYPE_CAPABILITY}")?;
         }
         "get" => {
-            let host = args.host.as_deref().unwrap_or_default();
+            let host = args.host.as_deref().unwrap_or(DEFAULT_DIODEHUB_HOST);
             let result = read_credential_request(stdin.lock())
                 .and_then(|request| provide_credential(ctx, host, request, &mut stdout));
             if let Err(error) = result {

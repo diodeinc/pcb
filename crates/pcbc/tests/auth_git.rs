@@ -247,13 +247,18 @@ fn assert_clean_success(output: &Output) {
     assert!(output.stderr.is_empty());
 }
 
-fn mock_exchange<'a>(server: &'a MockServer, status: u16, authorization: Option<&str>) -> Mock<'a> {
+fn mock_exchange<'a>(
+    server: &'a MockServer,
+    host: &'a str,
+    status: u16,
+    authorization: Option<&str>,
+) -> Mock<'a> {
     server.mock(move |when, then| {
         let when = when
             .method(POST)
             .path("/api/git/credentials")
             .json_body(json!({
-                "host": GIT_HOST,
+                "host": host,
                 "path": REPOSITORY_PATH,
             }));
         if let Some(authorization) = authorization {
@@ -486,7 +491,7 @@ fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
 #[test]
 fn modern_git_fill_caches_the_bearer_credential_until_rejected() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200, Some("Bearer user-access-token"));
+    let exchange = mock_exchange(&server, GIT_HOST, 200, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
 
@@ -534,7 +539,7 @@ fn modern_git_fill_caches_the_bearer_credential_until_rejected() {
 #[test]
 fn ambient_api_auth_without_auth_file_returns_bearer_credential_to_git() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200, None);
+    let exchange = mock_exchange(&server, GIT_HOST, 200, None);
     let context = TestContext::new(server.base_url());
     fs::remove_dir_all(context.config_dir.join("auth")).expect("remove PCB auth directory");
     assert!(!context.config_dir.join("auth").exists());
@@ -563,7 +568,7 @@ fn ambient_api_auth_without_auth_file_returns_bearer_credential_to_git() {
 #[test]
 fn modern_git_ignores_an_expired_cached_bearer_credential() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200, Some("Bearer user-access-token"));
+    let exchange = mock_exchange(&server, GIT_HOST, 200, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
     let expired_credential = format!(
@@ -593,7 +598,7 @@ fn modern_git_ignores_an_expired_cached_bearer_credential() {
 #[test]
 fn auth_logout_stops_the_git_credential_cache() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200, Some("Bearer user-access-token"));
+    let exchange = mock_exchange(&server, GIT_HOST, 200, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
 
@@ -618,7 +623,7 @@ fn auth_logout_stops_the_git_credential_cache() {
 #[test]
 fn modern_git_honors_quit_when_the_exchange_fails() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 403, Some("Bearer user-access-token"));
+    let exchange = mock_exchange(&server, GIT_HOST, 403, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
 
@@ -675,6 +680,37 @@ fn credential_helpers_ignore_unrelated_hosts() {
     let credential = String::from_utf8(fill.stdout).unwrap();
     assert!(credential.contains("username=fallback-user"));
     assert!(credential.contains("password=fallback-password"));
+}
+
+#[test]
+fn legacy_helper_defaults_to_the_commercial_diodehub_host() {
+    let server = MockServer::start();
+    let host = "code.diode.computer";
+    let exchange = mock_exchange(&server, host, 200, Some("Bearer user-access-token"));
+    let context = TestContext::new(server.base_url());
+    let output = run_with_input(
+        {
+            let mut command = context.pcbc();
+            command.args(["auth", "git", "get"]);
+            command
+        },
+        &format!(
+            "capability[]=authtype\n\
+             protocol=https\n\
+             host={host}\n\
+             path={REPOSITORY_PATH}\n\
+             \n"
+        ),
+    );
+
+    assert_success(&output);
+    assert!(output.stderr.is_empty());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains(&format!("credential={REPOSITORY_TOKEN}"))
+    );
+    exchange.assert_calls(1);
 }
 
 #[test]
