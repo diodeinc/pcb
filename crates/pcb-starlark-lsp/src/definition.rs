@@ -253,7 +253,7 @@ impl LspModule {
         };
         let current_pos = std::cmp::min(line_span.begin() + col, line_span.end());
 
-        // Finalize the results after recursing down from and back up to the the top level scope.
+        // Finalize the results after recursing down from and back up to the top level scope.
         match Self::find_definition_in_scope(&scope, current_pos) {
             TempDefinition::Identifier(def) => self
                 .get_definition_location(def, &scope, current_pos)
@@ -658,7 +658,7 @@ pub(crate) mod helpers {
 
             let mut fixture_idx = 0;
             for matches in re.captures_iter(fixture) {
-                let full_tag = matches.get(0).unwrap();
+                let full_tag = matches.get_match();
                 let is_end_tag = matches.get(1).is_some();
                 let identifier = matches.get(2).unwrap().as_str().to_owned();
 
