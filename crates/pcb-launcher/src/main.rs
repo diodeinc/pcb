@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-const PCB_TOOLCHAIN: &str = "+0.4";
+const PCB_TOOLCHAIN: &str = "+latest";
 
 fn main() {
     if let Some(result) = run_from_args() {
