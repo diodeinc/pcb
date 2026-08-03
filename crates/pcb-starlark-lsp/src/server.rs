@@ -555,7 +555,7 @@ pub(crate) struct Backend<T: LspContext> {
     /// Tracks currently open documents, including those without a valid parse.
     open_documents: RwLock<HashSet<LspUrl>>,
     /// Diagnostics published on behalf of each validated root document, grouped by target URI.
-    published_diagnostics_by_origin: RwLock<HashMap<LspUrl, HashMap<Url, Vec<Diagnostic>>>>,
+    published_diagnostics_by_origin: RwLock<HashMap<LspUrl, HashMap<String, Vec<Diagnostic>>>>,
     /// Complete payload most recently emitted for each subscribed document.
     last_emitted_netlist_payloads: RwLock<HashMap<LspUrl, JsonValue>>,
     watched_file_paths: RwLock<HashSet<PathBuf>>,
@@ -1556,56 +1556,55 @@ impl<T: LspContext> Backend<T> {
         }))
     }
 
-    fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i64>) {
-        let Some(uri) = url_to_uri(&uri) else {
-            self.log_message(
-                MessageType::WARNING,
-                &format!("Skipping diagnostics for invalid URI: {uri}"),
-            );
-            return;
-        };
+    fn publish_diagnostics(&self, uri: String, diags: Vec<Diagnostic>, version: Option<i64>) {
+        let uri = uri
+            .parse()
+            .expect("validated diagnostic URI key should remain valid");
         self.send_notification(new_notification::<PublishDiagnostics>(
             PublishDiagnosticsParams::new(uri, diags, version.map(|i| i as i32)),
         ));
     }
 
-    fn origin_url(origin_uri: &LspUrl) -> Url {
-        Url::try_from(origin_uri).expect("LspUrl should always be convertible back to Url")
+    fn origin_uri_key(origin_uri: &LspUrl) -> String {
+        Uri::try_from(origin_uri)
+            .expect("LspUrl should always be convertible to an LSP URI")
+            .as_str()
+            .to_owned()
     }
 
-    fn diagnostic_target_uri(diag: &Diagnostic, fallback: &Url) -> Url {
+    fn diagnostic_target_uri_key(diag: &Diagnostic, fallback: &str) -> String {
         let Some(data) = diag.data.as_ref() else {
-            return fallback.clone();
+            return fallback.to_owned();
         };
 
         data.get("targetUri")
             .and_then(|value| value.as_str())
-            .and_then(|value| Url::parse(value).ok())
-            .filter(|url| url_to_uri(url).is_some())
-            .unwrap_or_else(|| fallback.clone())
+            .and_then(|value| value.parse::<Uri>().ok())
+            .map(|uri| uri.as_str().to_owned())
+            .unwrap_or_else(|| fallback.to_owned())
     }
 
     fn group_diagnostics_by_target(
         origin_uri: &LspUrl,
         diagnostics: Vec<Diagnostic>,
-    ) -> HashMap<Url, Vec<Diagnostic>> {
-        let fallback = Self::origin_url(origin_uri);
-        let mut grouped: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
+    ) -> HashMap<String, Vec<Diagnostic>> {
+        let fallback = Self::origin_uri_key(origin_uri);
+        let mut grouped: HashMap<String, Vec<Diagnostic>> = HashMap::new();
         grouped.entry(fallback.clone()).or_default();
         for diag in diagnostics {
-            let target = Self::diagnostic_target_uri(&diag, &fallback);
+            let target = Self::diagnostic_target_uri_key(&diag, &fallback);
             grouped.entry(target).or_default().push(diag);
         }
         grouped
     }
 
     fn merged_diagnostics_for_target(
-        published_by_origin: &HashMap<LspUrl, HashMap<Url, Vec<Diagnostic>>>,
-        target: &Url,
+        published_by_origin: &HashMap<LspUrl, HashMap<String, Vec<Diagnostic>>>,
+        target: &str,
     ) -> Vec<Diagnostic> {
         let mut merged = Vec::new();
         let mut origins: Vec<_> = published_by_origin.iter().collect();
-        origins.sort_by_key(|(origin, _)| Self::origin_url(origin).to_string());
+        origins.sort_by_key(|(origin, _)| Self::origin_uri_key(origin));
 
         for (_, per_origin) in origins {
             if let Some(diags) = per_origin.get(target) {
@@ -1621,9 +1620,9 @@ impl<T: LspContext> Backend<T> {
     }
 
     fn affected_targets(
-        previous: Option<&HashMap<Url, Vec<Diagnostic>>>,
-        current: Option<&HashMap<Url, Vec<Diagnostic>>>,
-    ) -> HashSet<Url> {
+        previous: Option<&HashMap<String, Vec<Diagnostic>>>,
+        current: Option<&HashMap<String, Vec<Diagnostic>>>,
+    ) -> HashSet<String> {
         let mut affected = HashSet::new();
         if let Some(previous) = previous {
             affected.extend(previous.keys().cloned());
@@ -1635,14 +1634,14 @@ impl<T: LspContext> Backend<T> {
     }
 
     fn collect_publications(
-        published_by_origin: &HashMap<LspUrl, HashMap<Url, Vec<Diagnostic>>>,
-        affected: HashSet<Url>,
-        root_url: Option<&Url>,
-    ) -> Vec<(Url, Vec<Diagnostic>)> {
+        published_by_origin: &HashMap<LspUrl, HashMap<String, Vec<Diagnostic>>>,
+        affected: HashSet<String>,
+        root_uri: Option<&str>,
+    ) -> Vec<(String, Vec<Diagnostic>)> {
         let mut affected: Vec<_> = affected.into_iter().collect();
         affected.sort_by_key(|target| {
             (
-                usize::from(root_url.is_some_and(|root| target != root)),
+                usize::from(root_uri.is_some_and(|root| target != root)),
                 target.as_str().to_owned(),
             )
         });
@@ -1662,7 +1661,7 @@ impl<T: LspContext> Backend<T> {
         diagnostics: Vec<Diagnostic>,
         version: Option<i64>,
     ) {
-        let root_url = Self::origin_url(origin_uri);
+        let root_uri = Self::origin_uri_key(origin_uri);
         let grouped = Self::group_diagnostics_by_target(origin_uri, diagnostics);
         let publications = {
             let mut published_by_origin = self.published_diagnostics_by_origin.write().unwrap();
@@ -1671,11 +1670,11 @@ impl<T: LspContext> Backend<T> {
                 .unwrap_or_default();
             let affected =
                 Self::affected_targets(Some(&previous), published_by_origin.get(origin_uri));
-            Self::collect_publications(&published_by_origin, affected, Some(&root_url))
+            Self::collect_publications(&published_by_origin, affected, Some(&root_uri))
         };
 
         for (target, diags) in publications {
-            let target_version = if target == root_url { version } else { None };
+            let target_version = if target == root_uri { version } else { None };
             self.publish_diagnostics(target, diags, target_version);
         }
     }
@@ -2201,6 +2200,7 @@ mod tests {
     use lsp_server::RequestId;
     use lsp_types::CompletionParams;
     use lsp_types::CompletionResponse;
+    use lsp_types::Diagnostic;
     use lsp_types::DidOpenTextDocumentParams;
     use lsp_types::DidSaveTextDocumentParams;
     use lsp_types::GotoDefinitionParams;
@@ -2227,6 +2227,7 @@ mod tests {
     use textwrap::dedent;
     use url::Url;
 
+    use super::Backend;
     use super::record_netlist_payload;
     use super::{SERVER_NAME, SERVER_VERSION};
     use crate::definition::helpers::FixtureWithRanges;
@@ -2237,6 +2238,7 @@ mod tests {
     use crate::server::StarlarkFileContentsResponse;
     use crate::server::new_notification;
     use crate::test::TestServer;
+    use crate::test::TestServerContext;
 
     fn protocol_uri(uri: &Url) -> Uri {
         uri.as_str().parse().unwrap()
@@ -2263,6 +2265,20 @@ mod tests {
         let uri = Uri::try_from(&lsp_url).expect("path should encode as an LSP URI");
         assert!(uri.as_str().contains("board%5Brev2%5D.zen"));
         assert_eq!(LspUrl::try_from(uri).unwrap(), lsp_url);
+    }
+
+    #[test]
+    fn bracketed_diagnostic_targets_share_the_origin_key() {
+        let origin = LspUrl::File(std::env::temp_dir().join("board[rev2].zen"));
+        let target = Uri::try_from(&origin).expect("path should encode as an LSP URI");
+        let mut diagnostic = Diagnostic::new_simple(Range::default(), "cross-file".to_owned());
+        diagnostic.data = Some(serde_json::json!({ "targetUri": target }));
+
+        let grouped =
+            Backend::<TestServerContext>::group_diagnostics_by_target(&origin, vec![diagnostic]);
+
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[target.as_str()].len(), 1);
     }
 
     fn goto_definition_request(
