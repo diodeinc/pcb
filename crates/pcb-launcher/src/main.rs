@@ -63,8 +63,11 @@ fn launch_pcb(uri: &str) -> Result<()> {
     {
         use std::os::windows::process::CommandExt;
 
+        // CREATE_BREAKAWAY_FROM_JOB lets pcb survive when a browser starts this
+        // protocol handler inside a job with kill-on-close semantics.
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
     }
 
     command
