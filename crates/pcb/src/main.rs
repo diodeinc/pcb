@@ -85,6 +85,13 @@ enum ToolchainRequest {
     Local,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolchainPolicy {
+    Workspace,
+    LatestStable,
+    LatestStableRequired,
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedToolchain {
     binary: PathBuf,
@@ -168,7 +175,7 @@ fn run() -> Result<()> {
     let override_request = take_cli_override(&mut args)?;
     let selection = select_toolchain(
         override_request,
-        is_migrate_command(&args),
+        toolchain_policy(&args),
         is_help_request(&args),
     )?;
     exec_toolchain(&selection.binary, &args)
@@ -188,8 +195,12 @@ fn is_shim_command(args: &[OsString]) -> bool {
     )
 }
 
-fn is_migrate_command(args: &[OsString]) -> bool {
-    matches!(first_command_arg(args), Some("migrate" | "m"))
+fn toolchain_policy(args: &[OsString]) -> ToolchainPolicy {
+    match first_command_arg(args) {
+        Some("auth") => ToolchainPolicy::LatestStable,
+        Some("migrate" | "m") => ToolchainPolicy::LatestStableRequired,
+        _ => ToolchainPolicy::Workspace,
+    }
 }
 
 fn first_command_arg(args: &[OsString]) -> Option<&str> {
@@ -274,24 +285,25 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
 
 fn select_toolchain(
     override_request: Option<ToolchainRequest>,
-    migrate_command: bool,
+    policy: ToolchainPolicy,
     prefer_local: bool,
 ) -> Result<ResolvedToolchain> {
+    let managed_only = override_request.is_none() && policy == ToolchainPolicy::LatestStable;
     let (request, allow_latest_fallback) = if let Some(request) = override_request {
-        let allow_latest_fallback =
-            should_allow_latest_fallback(&request, migrate_command, prefer_local);
-        (request, allow_latest_fallback)
-    } else if migrate_command {
-        let request = ToolchainRequest::Latest;
-        let allow_latest_fallback =
-            should_allow_latest_fallback(&request, migrate_command, prefer_local);
+        let allow_latest_fallback = should_allow_latest_fallback(&request, policy, prefer_local);
         (request, allow_latest_fallback)
     } else {
-        let (request, _) = configured_toolchain_request(false)?;
-        (request, true)
+        match policy {
+            ToolchainPolicy::Workspace => {
+                let (request, _) = configured_toolchain_request(false)?;
+                (request, true)
+            }
+            ToolchainPolicy::LatestStable => (ToolchainRequest::Latest, true),
+            ToolchainPolicy::LatestStableRequired => (ToolchainRequest::Latest, prefer_local),
+        }
     };
 
-    resolve_request(&request, prefer_local, allow_latest_fallback)
+    resolve_request(&request, prefer_local, allow_latest_fallback, managed_only)
 }
 
 fn configured_toolchain_request(allow_local: bool) -> Result<(ToolchainRequest, String)> {
@@ -314,16 +326,19 @@ fn configured_toolchain_request(allow_local: bool) -> Result<(ToolchainRequest, 
 
 fn should_allow_latest_fallback(
     request: &ToolchainRequest,
-    migrate_command: bool,
+    policy: ToolchainPolicy,
     prefer_local: bool,
 ) -> bool {
-    !matches!(request, ToolchainRequest::Latest) || !migrate_command || prefer_local
+    !matches!(request, ToolchainRequest::Latest)
+        || policy != ToolchainPolicy::LatestStableRequired
+        || prefer_local
 }
 
 fn resolve_request(
     request: &ToolchainRequest,
     prefer_local: bool,
     allow_latest_fallback: bool,
+    managed_only: bool,
 ) -> Result<ResolvedToolchain> {
     if matches!(request, ToolchainRequest::Local) {
         let Some((_, binary)) = local_toolchain() else {
@@ -349,14 +364,23 @@ fn resolve_request(
                 return Ok(ResolvedToolchain { binary });
             }
             Err(remote_error) => {
-                if allow_latest_fallback && let Some(local) = best_local_toolchain(request)? {
-                    eprintln!(
-                        "Warning: failed to check latest release ({remote_error}); using installed pcbc {}",
-                        local.0
-                    );
-                    return Ok(ResolvedToolchain { binary: local.1 });
+                if allow_latest_fallback {
+                    let fallback = if managed_only {
+                        best_installed_toolchain(request)?
+                    } else {
+                        best_local_toolchain(request)?
+                    };
+                    if let Some(local) = fallback {
+                        eprintln!(
+                            "Warning: failed to check latest release ({remote_error}); using installed pcbc {}",
+                            local.0
+                        );
+                        return Ok(ResolvedToolchain { binary: local.1 });
+                    }
                 }
-                return Err(remote_error);
+                return Err(remote_error).context(
+                    "latest stable pcbc toolchain is unavailable; connect to the network or run `pcb toolchain install latest` when online",
+                );
             }
         }
     }
@@ -399,6 +423,12 @@ fn best_local_toolchain(request: &ToolchainRequest) -> Result<Option<(Version, P
     }
 
     Ok(candidates
+        .into_iter()
+        .rfind(|(version, _)| request_matches(request, version)))
+}
+
+fn best_installed_toolchain(request: &ToolchainRequest) -> Result<Option<(Version, PathBuf)>> {
+    Ok(installed_toolchains()?
         .into_iter()
         .rfind(|(version, _)| request_matches(request, version)))
 }
@@ -2099,43 +2129,57 @@ mod tests {
     }
 
     #[test]
-    fn migrate_command_uses_latest_stable_toolchain() {
-        assert!(is_migrate_command(&args(&["migrate"])));
-        assert!(is_migrate_command(&args(&["m", "--dry-run"])));
-        assert!(is_migrate_command(&args(&["-d", "migrate"])));
-        assert!(is_migrate_command(&args(&["--debug", "migrate"])));
-        assert!(is_migrate_command(&args(&[
-            "--profile",
-            "profile.json",
-            "migrate"
-        ])));
-        assert!(is_migrate_command(&args(&[
-            "--profile=profile.json",
-            "migrate"
-        ])));
-        assert!(!is_migrate_command(&args(&["build"])));
+    fn commands_have_explicit_toolchain_policies() {
+        assert_eq!(
+            toolchain_policy(&args(&["auth"])),
+            ToolchainPolicy::LatestStable
+        );
+        assert_eq!(
+            toolchain_policy(&args(&["auth", "git", "configure"])),
+            ToolchainPolicy::LatestStable
+        );
+        assert_eq!(
+            toolchain_policy(&args(&["-d", "auth", "git", "get"])),
+            ToolchainPolicy::LatestStable
+        );
+        assert_eq!(
+            toolchain_policy(&args(&["migrate"])),
+            ToolchainPolicy::LatestStableRequired
+        );
+        assert_eq!(
+            toolchain_policy(&args(&["m", "--dry-run"])),
+            ToolchainPolicy::LatestStableRequired
+        );
+        assert_eq!(
+            toolchain_policy(&args(&["--profile", "profile.json", "migrate"])),
+            ToolchainPolicy::LatestStableRequired
+        );
+        assert_eq!(
+            toolchain_policy(&args(&["build"])),
+            ToolchainPolicy::Workspace
+        );
     }
 
     #[test]
     fn migrate_latest_does_not_fallback_to_installed_toolchain() {
         assert!(!should_allow_latest_fallback(
             &ToolchainRequest::Latest,
-            true,
+            ToolchainPolicy::LatestStableRequired,
             false
         ));
         assert!(should_allow_latest_fallback(
             &ToolchainRequest::Latest,
-            true,
+            ToolchainPolicy::LatestStableRequired,
             true
         ));
         assert!(should_allow_latest_fallback(
             &ToolchainRequest::Latest,
-            false,
+            ToolchainPolicy::LatestStable,
             false
         ));
         assert!(should_allow_latest_fallback(
             &ToolchainRequest::Lane { major: 0, minor: 4 },
-            true,
+            ToolchainPolicy::LatestStableRequired,
             false
         ));
     }
