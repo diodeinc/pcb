@@ -526,8 +526,7 @@ fn run_freerouting(
     api.start_job(&job_id)?;
     spinner.finish();
 
-    let spinner =
-        Spinner::builder(format!("Running FreeRouting (timeout: {timeout_secs}s)...")).start();
+    let spinner = Spinner::builder("Running FreeRouting...").start();
     let start = Instant::now();
     let poll_result = poll_job(&api, &job_id, timeout_secs, &spinner)?;
     let elapsed_msg = format!("FreeRouting finished in {:.1}s", start.elapsed().as_secs_f64());
@@ -607,10 +606,16 @@ fn poll_job(
                 consecutive_errors = 0;
                 if status.current_pass.is_some() && status.current_pass != last_printed_pass {
                     last_printed_pass = status.current_pass;
-                    spinner.set_message(format!(
-                        "Running FreeRouting (timeout: {timeout_secs}s)... pass {}",
-                        last_printed_pass.unwrap()
-                    ));
+                    // "Pass" is FreeRouting's internal routing-iteration
+                    // count, not something meaningful to most users — only
+                    // surface it under --debug rather than in the default
+                    // spinner message.
+                    if log::log_enabled!(log::Level::Debug) {
+                        spinner.set_message(format!(
+                            "Running FreeRouting... pass {}",
+                            last_printed_pass.unwrap()
+                        ));
+                    }
                 }
                 match status.state {
                     JobState::Completed => {
