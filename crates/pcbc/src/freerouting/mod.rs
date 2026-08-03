@@ -529,11 +529,26 @@ fn run_freerouting(
     let spinner = Spinner::builder("Running FreeRouting...").start();
     let start = Instant::now();
     let poll_result = poll_job(&api, &job_id, timeout_secs, &spinner)?;
-    let elapsed_msg = format!("FreeRouting finished in {:.1}s", start.elapsed().as_secs_f64());
-    if poll_result.outcome == RunOutcome::Cancelled {
-        spinner.warning(elapsed_msg);
-    } else {
-        spinner.success(elapsed_msg);
+    let elapsed = start.elapsed().as_secs_f64();
+    match (poll_result.outcome, poll_result.output.is_some()) {
+        (RunOutcome::Completed, _) => {
+            spinner.success(format!("FreeRouting finished in {elapsed:.1}s"));
+        }
+        (RunOutcome::Cancelled, true) => {
+            spinner.warning(format!(
+                "FreeRouting stopped after {elapsed:.1}s (partial result)"
+            ));
+        }
+        (RunOutcome::Cancelled, false) => {
+            // Distinct from the "finished" wording above: nothing was
+            // produced, so there's no result to save (execute() checks
+            // ses_path.exists() next and reports "No routing progress to
+            // save" — this message is what explains *why* to the user
+            // instead of just "finished", which read as success).
+            spinner.warning(format!(
+                "FreeRouting stopped after {elapsed:.1}s with no routing progress"
+            ));
+        }
     }
 
     if let Some(bytes) = poll_result.output {
