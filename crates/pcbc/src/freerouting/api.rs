@@ -60,7 +60,6 @@ pub struct JobStatus {
     pub current_pass: Option<u32>,
 }
 
-/// Result of fetching a job's output.
 pub enum JobOutput {
     /// Routed data is available (final or partial).
     Data(Vec<u8>),
