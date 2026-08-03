@@ -3824,28 +3824,15 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lsp-server"
-version = "0.7.9"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d6ada348dbc2703cbe7637b2dda05cff84d3da2819c24abcb305dd613e0ba2e"
+checksum = "3ee25a31f2e571e426eef2896179450cafc7e2f5be00d8a93b1c2d21c0ff7656"
 dependencies = [
  "crossbeam-channel",
  "log",
  "serde",
  "serde_derive",
  "serde_json",
-]
-
-[[package]]
-name = "lsp-types"
-version = "0.94.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c66bfd44a06ae10647fe3f8214762e9369fd4248df1350924b4ef9e770a85ea1"
-dependencies = [
- "bitflags 1.3.2",
- "serde",
- "serde_json",
- "serde_repr",
- "url",
 ]
 
 [[package]]
@@ -4906,7 +4893,7 @@ dependencies = [
  "dupe",
  "itertools 0.15.0",
  "lsp-server",
- "lsp-types 0.94.1",
+ "lsp-types",
  "maplit",
  "regex",
  "serde",
@@ -4915,6 +4902,7 @@ dependencies = [
  "starlark_syntax",
  "textwrap 0.16.2",
  "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]
@@ -4962,7 +4950,7 @@ dependencies = [
  "jiff",
  "log",
  "lsp-server",
- "lsp-types 0.94.1",
+ "lsp-types",
  "path-slash",
  "pcb-canonical",
  "pcb-sch",
@@ -4987,6 +4975,7 @@ dependencies = [
  "termtree 1.0.0",
  "toml",
  "tracing",
+ "url",
  "zstd",
 ]
 
@@ -7193,7 +7182,7 @@ dependencies = [
  "derive_more 1.0.0",
  "dupe",
  "logos",
- "lsp-types 0.97.0",
+ "lsp-types",
  "memchr",
  "num-bigint",
  "num-traits",
@@ -8240,7 +8229,6 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
- "serde_derive",
 ]
 
 [[package]]

@@ -35,7 +35,6 @@ use lsp_server::Connection;
 use lsp_server::Message;
 use lsp_server::Notification;
 use lsp_server::RequestId;
-use lsp_server::ResponseError;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionOptions;
@@ -80,7 +79,7 @@ use lsp_types::TextDocumentSyncOptions;
 use lsp_types::TextDocumentSyncSaveOptions;
 use lsp_types::Unregistration;
 use lsp_types::UnregistrationParams;
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::WatchKind;
 use lsp_types::WorkDoneProgressOptions;
 use lsp_types::WorkspaceFolder;
@@ -110,6 +109,7 @@ use starlark::docs::markdown::render_doc_param;
 use starlark::syntax::AstModule;
 use starlark_syntax::codemap::ResolvedPos;
 use starlark_syntax::syntax::module::AstModuleFields;
+use url::Url;
 
 pub use lsp_server::Request;
 pub use lsp_server::Response;
@@ -122,7 +122,6 @@ use crate::definition::IdentifierDefinition;
 use crate::definition::LspModule;
 use crate::inspect::AstModuleInspect;
 use crate::inspect::AutocompleteType;
-use crate::span::IntoLspRange;
 use crate::symbols::find_symbols_at_location;
 
 const SERVER_NAME: &str = "pcbc";
@@ -164,6 +163,8 @@ pub enum LspUrlError {
     Unparsable(LspUrl),
     #[error("invalid URL for file:// schema (possibly not absolute?): `{}`", .0)]
     InvalidFileUrl(Url),
+    #[error("invalid LSP URI: `{}`", .0.as_str())]
+    InvalidUri(Uri),
 }
 
 /// A URL that represents the two types (plus an "Other") of URIs that are supported.
@@ -187,7 +188,7 @@ impl Serialize for LspUrl {
         S: Serializer,
     {
         match Url::try_from(self) {
-            Ok(url) => url.serialize(serializer),
+            Ok(url) => serializer.serialize_str(url.as_str()),
             Err(e) => Err(serde::ser::Error::custom(e.to_string())),
         }
     }
@@ -198,7 +199,8 @@ impl<'de> Deserialize<'de> for LspUrl {
     where
         D: Deserializer<'de>,
     {
-        let url = Url::deserialize(deserializer)?;
+        let value = String::deserialize(deserializer)?;
+        let url = Url::parse(&value).map_err(serde::de::Error::custom)?;
         LspUrl::try_from(url).map_err(|e| serde::de::Error::custom(e.to_string()))
     }
 }
@@ -245,6 +247,15 @@ impl TryFrom<Url> for LspUrl {
     }
 }
 
+impl TryFrom<Uri> for LspUrl {
+    type Error = LspUrlError;
+
+    fn try_from(uri: Uri) -> Result<Self, Self::Error> {
+        let url = Url::parse(uri.as_str()).map_err(|_| LspUrlError::InvalidUri(uri))?;
+        url.try_into()
+    }
+}
+
 impl TryFrom<LspUrl> for Url {
     type Error = LspUrlError;
 
@@ -265,6 +276,17 @@ impl TryFrom<&LspUrl> for Url {
                 .map_err(|_| LspUrlError::Unparsable(url.clone())),
             LspUrl::Other(u) => Ok(u.clone()),
         }
+    }
+}
+
+impl TryFrom<&LspUrl> for Uri {
+    type Error = LspUrlError;
+
+    fn try_from(lsp_url: &LspUrl) -> Result<Self, Self::Error> {
+        let url = Url::try_from(lsp_url)?;
+        url.as_str()
+            .parse()
+            .map_err(|_| LspUrlError::Unparsable(lsp_url.clone()))
     }
 }
 
@@ -634,10 +656,9 @@ impl<T: LspContext> Backend<T> {
     /// Parse, update AST cache, and return diagnostics without publishing them.
     fn validate_and_collect(
         &self,
-        uri: &Url,
+        lsp_url: LspUrl,
         text: String,
     ) -> anyhow::Result<(LspUrl, Vec<Diagnostic>)> {
-        let lsp_url: LspUrl = uri.clone().try_into()?;
         let eval_result = self.context.parse_file_with_contents(&lsp_url, text);
         if let Some(ast) = eval_result.ast {
             let module = Arc::new(LspModule::new(ast));
@@ -647,8 +668,8 @@ impl<T: LspContext> Backend<T> {
         Ok((lsp_url, eval_result.diagnostics))
     }
 
-    fn validate(&self, uri: Url, version: Option<i64>, text: String) -> anyhow::Result<()> {
-        let (lsp_url, diagnostics) = self.validate_and_collect(&uri, text)?;
+    fn validate(&self, lsp_url: LspUrl, version: Option<i64>, text: String) -> anyhow::Result<()> {
+        let (lsp_url, diagnostics) = self.validate_and_collect(lsp_url, text)?;
         self.publish_grouped_diagnostics(&lsp_url, diagnostics, version);
         self.maybe_publish_netlist_update(&lsp_url)?;
 
@@ -666,7 +687,7 @@ impl<T: LspContext> Backend<T> {
         self.context
             .did_change_file_contents(&lsp_url, &params.text_document.text);
         self.validate(
-            params.text_document.uri,
+            lsp_url,
             Some(params.text_document.version as i64),
             params.text_document.text,
         )
@@ -679,7 +700,7 @@ impl<T: LspContext> Backend<T> {
         self.context
             .did_change_file_contents(&lsp_url, &change.text);
         self.validate(
-            params.text_document.uri,
+            lsp_url,
             Some(params.text_document.version as i64),
             change.text,
         )
@@ -724,7 +745,7 @@ impl<T: LspContext> Backend<T> {
             return Ok(());
         };
 
-        let (lsp_url, mut diagnostics) = self.validate_and_collect(&uri, text)?;
+        let (lsp_url, mut diagnostics) = self.validate_and_collect(lsp_url, text)?;
 
         // Collect save-time diagnostics (e.g. simulation) and merge them in.
         let sim_diagnostics = self.context.on_save_diagnostics(&lsp_url);
@@ -822,16 +843,17 @@ impl<T: LspContext> Backend<T> {
     }
 
     /// Simple helper to generate `Some(LocationLink)` objects in `resolve_definition_location`
-    fn location_link<R: IntoLspRange + Copy>(
+    fn location_link<R: Into<Range> + Copy>(
         source: ResolvedSpan,
         uri: &LspUrl,
         target_range: R,
     ) -> anyhow::Result<Option<LocationLink>> {
+        let target_range: Range = target_range.into();
         Ok(Some(LocationLink {
-            origin_selection_range: Some(source.to_lsp_range()),
+            origin_selection_range: Some(source.into()),
             target_uri: uri.try_into()?,
-            target_range: target_range.to_lsp_range(),
-            target_selection_range: target_range.to_lsp_range(),
+            target_range,
+            target_selection_range: target_range,
         }))
     }
 
@@ -1251,14 +1273,14 @@ impl<T: LspContext> Backend<T> {
                             contents: HoverContents::Array(vec![MarkedString::String(
                                 render_doc_item_no_link(&symbol.name, &docs),
                             )]),
-                            range: Some(source.to_lsp_range()),
+                            range: Some(source.into()),
                         })
                         .or_else(|| {
                             symbol.param.map(|(starred_name, doc)| Hover {
                                 contents: HoverContents::Array(vec![MarkedString::String(
                                     render_doc_param(starred_name, &doc),
                                 )]),
-                                range: Some(source.to_lsp_range()),
+                                range: Some(source.into()),
                             })
                         })
                 })
@@ -1284,7 +1306,7 @@ impl<T: LspContext> Backend<T> {
                             contents: HoverContents::Array(vec![MarkedString::String(
                                 render_doc_item_no_link(&symbol.name, &docs),
                             )]),
-                            range: Some(source.to_lsp_range()),
+                            range: Some(source.into()),
                         })
                     })
                 })
@@ -1320,7 +1342,7 @@ impl<T: LspContext> Backend<T> {
                                     value: module.ast.codemap().source_span(location).to_owned(),
                                 },
                             )]),
-                            range: Some(source.to_lsp_range()),
+                            range: Some(source.into()),
                         })
                     }
                     _ => None,
@@ -1337,7 +1359,7 @@ impl<T: LspContext> Backend<T> {
                         contents: HoverContents::Array(vec![MarkedString::String(
                             render_doc_item_no_link(&symbol.0, &symbol.1),
                         )]),
-                        range: Some(source.to_lsp_range()),
+                        range: Some(source.into()),
                     })
             }
             IdentifierDefinition::LoadPath { .. } | IdentifierDefinition::NotFound => None,
@@ -1352,7 +1374,7 @@ impl<T: LspContext> Backend<T> {
             LspUrl::File(target) => workspace_roots.and_then(|roots| {
                 roots
                     .iter()
-                    .filter_map(|root| root.uri.to_file_path().ok())
+                    .filter_map(|root| uri_to_file_path(&root.uri))
                     .find(|root| target.starts_with(root))
             }),
             _ => None,
@@ -1360,6 +1382,7 @@ impl<T: LspContext> Backend<T> {
     }
 
     /// Preload all workspace files if [`LspContext::is_eager`] is `true`.
+    #[allow(deprecated)] // Keep the LSP rootUri fallback for older clients.
     fn preload_workspace(&self, initialize_params: &InitializeParams) {
         use std::path::PathBuf;
 
@@ -1372,10 +1395,10 @@ impl<T: LspContext> Backend<T> {
             if let Some(folders) = initialize_params.workspace_folders.as_ref() {
                 folders
                     .iter()
-                    .filter_map(|f| f.uri.to_file_path().ok())
+                    .filter_map(|f| uri_to_file_path(&f.uri))
                     .collect()
             } else if let Some(root_uri) = initialize_params.root_uri.as_ref() {
-                root_uri.to_file_path().ok().into_iter().collect()
+                uri_to_file_path(root_uri).into_iter().collect()
             } else {
                 Vec::new()
             };
@@ -1383,12 +1406,10 @@ impl<T: LspContext> Backend<T> {
         match self.context.workspace_files(&workspace_roots) {
             Ok(paths) => {
                 for path in paths {
-                    if let Ok(url) = Url::from_file_path(&path)
-                        && let Ok(lsp_url) = LspUrl::try_from(url.clone())
-                        && let Ok(Some(contents)) = self.context.get_load_contents(&lsp_url)
-                    {
+                    let lsp_url = LspUrl::File(path);
+                    if let Ok(Some(contents)) = self.context.get_load_contents(&lsp_url) {
                         // Ignore any error – they are surfaced via diagnostics when needed.
-                        let _ = self.validate(url, None, contents);
+                        let _ = self.validate(lsp_url, None, contents);
                     }
                 }
             }
@@ -1535,6 +1556,10 @@ impl<T: LspContext> Backend<T> {
     }
 
     fn publish_diagnostics(&self, uri: Url, diags: Vec<Diagnostic>, version: Option<i64>) {
+        let uri = uri
+            .as_str()
+            .parse()
+            .expect("url::Url should always be a valid LSP URI");
         self.send_notification(new_notification::<PublishDiagnostics>(
             PublishDiagnosticsParams::new(uri, diags, version.map(|i| i as i32)),
         ));
@@ -1714,6 +1739,10 @@ impl<T: LspContext> Backend<T> {
                 (watched_path.parent(), watched_path.file_name())
             && let Ok(base_uri) = Url::from_directory_path(parent)
         {
+            let base_uri = base_uri
+                .as_str()
+                .parse()
+                .expect("url::Url should always be a valid LSP URI");
             return Some(FileSystemWatcher {
                 glob_pattern: GlobPattern::Relative(RelativePattern {
                     base_uri: OneOf::Right(base_uri),
@@ -2043,6 +2072,7 @@ pub fn server_with_connection<T: LspContext>(
     Ok(())
 }
 
+#[allow(deprecated)] // Keep the LSP rootUri fallback for older clients.
 fn workspace_root_labels(initialize_params: &InitializeParams) -> Vec<String> {
     if let Some(workspace_folders) = initialize_params.workspace_folders.as_ref() {
         return workspace_folders
@@ -2058,10 +2088,14 @@ fn workspace_root_labels(initialize_params: &InitializeParams) -> Vec<String> {
     Vec::new()
 }
 
-fn display_uri_path(uri: &Url) -> String {
-    uri.to_file_path()
+fn uri_to_file_path(uri: &Uri) -> Option<PathBuf> {
+    Url::parse(uri.as_str()).ok()?.to_file_path().ok()
+}
+
+fn display_uri_path(uri: &Uri) -> String {
+    uri_to_file_path(uri)
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| uri.to_string())
+        .unwrap_or_else(|| uri.as_str().to_owned())
 }
 
 fn enabled(value: bool) -> &'static str {
@@ -2124,20 +2158,8 @@ where
     T: serde::Serialize,
 {
     match params {
-        Ok(params) => Response {
-            id,
-            result: Some(serde_json::to_value(params).unwrap()),
-            error: None,
-        },
-        Err(e) => Response {
-            id,
-            result: None,
-            error: Some(ResponseError {
-                code: 0,
-                message: format!("{e:#?}"),
-                data: None,
-            }),
-        },
+        Ok(params) => Response::new_ok(id, params),
+        Err(e) => Response::new_err(id, 0, format!("{e:#?}")),
     }
 }
 
@@ -2150,25 +2172,33 @@ mod tests {
     use anyhow::Context;
     use lsp_server::Request;
     use lsp_server::RequestId;
+    use lsp_types::CompletionParams;
+    use lsp_types::CompletionResponse;
     use lsp_types::DidOpenTextDocumentParams;
     use lsp_types::DidSaveTextDocumentParams;
     use lsp_types::GotoDefinitionParams;
     use lsp_types::GotoDefinitionResponse;
+    use lsp_types::Hover;
+    use lsp_types::HoverContents;
+    use lsp_types::HoverParams;
     use lsp_types::LocationLink;
     use lsp_types::Position;
     use lsp_types::Range;
     use lsp_types::TextDocumentIdentifier;
     use lsp_types::TextDocumentItem;
     use lsp_types::TextDocumentPositionParams;
-    use lsp_types::Url;
+    use lsp_types::Uri;
     use lsp_types::notification::DidOpenTextDocument;
     use lsp_types::notification::DidSaveTextDocument;
     use lsp_types::notification::LogMessage;
+    use lsp_types::request::Completion;
     use lsp_types::request::GotoDefinition;
+    use lsp_types::request::HoverRequest;
     use lsp_types::{FileChangeType, FileEvent, notification::PublishDiagnostics};
     use starlark::codemap::ResolvedSpan;
     use starlark::wasm::is_wasm;
     use textwrap::dedent;
+    use url::Url;
 
     use super::record_netlist_payload;
     use super::{SERVER_NAME, SERVER_VERSION};
@@ -2179,8 +2209,11 @@ mod tests {
     use crate::server::StarlarkFileContentsRequest;
     use crate::server::StarlarkFileContentsResponse;
     use crate::server::new_notification;
-    use crate::span::IntoLspRange;
     use crate::test::TestServer;
+
+    fn protocol_uri(uri: &Url) -> Uri {
+        uri.as_str().parse().unwrap()
+    }
 
     #[test]
     fn netlist_payload_deduplication_only_compares_with_previous_value() {
@@ -2203,7 +2236,9 @@ mod tests {
     ) -> Request {
         server.new_request::<GotoDefinition>(GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri },
+                text_document: TextDocumentIdentifier {
+                    uri: protocol_uri(&uri),
+                },
                 position: Position { line, character },
             },
             work_done_progress_params: Default::default(),
@@ -2243,7 +2278,7 @@ mod tests {
         );
         LocationLink {
             origin_selection_range: Some(source_range),
-            target_uri: uri,
+            target_uri: protocol_uri(&uri),
             target_range: dest_range,
             target_selection_range: dest_range,
         }
@@ -2255,10 +2290,10 @@ mod tests {
         dest_span: ResolvedSpan,
     ) -> LocationLink {
         LocationLink {
-            origin_selection_range: Some(source_span.to_lsp_range()),
-            target_uri: uri,
-            target_range: dest_span.to_lsp_range(),
-            target_selection_range: dest_span.to_lsp_range(),
+            origin_selection_range: Some(source_span.into()),
+            target_uri: protocol_uri(&uri),
+            target_range: dest_span.into(),
+            target_selection_range: dest_span.into(),
         }
     }
 
@@ -2303,6 +2338,52 @@ mod tests {
     }
 
     #[test]
+    fn lsp_session_handles_diagnostics_completion_and_hover() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let uri = temp_file_uri("protocol.star");
+        let mut server = TestServer::new()?;
+        server.open_file(
+            uri.clone(),
+            "def hello():\n    \"Greeting.\"\n    pass\nhello()\n".to_owned(),
+        )?;
+
+        let completion = server.new_request::<Completion>(CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: protocol_uri(&uri),
+                },
+                position: Position::new(3, 3),
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        });
+        let completion_id = server.send_request(completion)?;
+        let CompletionResponse::Array(items) = server.get_response(completion_id)? else {
+            anyhow::bail!("expected an array completion response");
+        };
+        assert!(items.iter().any(|item| item.label == "hello"));
+
+        let hover = server.new_request::<HoverRequest>(HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: protocol_uri(&uri),
+                },
+                position: Position::new(3, 1),
+            },
+            work_done_progress_params: Default::default(),
+        });
+        let hover_id = server.send_request(hover)?;
+        let hover: Hover = server.get_response(hover_id)?;
+        assert!(!matches!(hover.contents, HoverContents::Array(contents) if contents.is_empty()));
+
+        Ok(())
+    }
+
+    #[test]
     fn sends_empty_goto_definition_on_non_access_symbol() -> anyhow::Result<()> {
         if is_wasm() {
             return Ok(());
@@ -2341,12 +2422,12 @@ mod tests {
         server.set_file_contents(&uri, "x =\n".to_string())?;
 
         server.watched_files_changed(vec![FileEvent {
-            uri: kicad_uri,
+            uri: protocol_uri(&kicad_uri),
             typ: FileChangeType::CHANGED,
         }])?;
 
         let notification = server.get_notification::<PublishDiagnostics>()?;
-        assert_eq!(notification.uri, uri);
+        assert_eq!(notification.uri, protocol_uri(&uri));
         assert!(
             !notification.diagnostics.is_empty(),
             "expected diagnostics after watched file change"
@@ -2370,7 +2451,7 @@ mod tests {
         server.send_notification(new_notification::<DidOpenTextDocument>(
             DidOpenTextDocumentParams {
                 text_document: TextDocumentItem {
-                    uri: uri.clone(),
+                    uri: protocol_uri(&uri),
                     language_id: String::new(),
                     version: 1,
                     text: "x =\n".to_owned(),
@@ -2379,7 +2460,7 @@ mod tests {
         ))?;
 
         let notification = server.get_notification::<PublishDiagnostics>()?;
-        assert_eq!(notification.uri, uri);
+        assert_eq!(notification.uri, protocol_uri(&uri));
         assert!(
             !notification.diagnostics.is_empty(),
             "expected diagnostics for invalid open file"
@@ -2387,12 +2468,12 @@ mod tests {
 
         server.set_file_contents(&uri, "x =\n".to_string())?;
         server.watched_files_changed(vec![FileEvent {
-            uri: kicad_uri,
+            uri: protocol_uri(&kicad_uri),
             typ: FileChangeType::CHANGED,
         }])?;
 
         let notification = server.get_notification::<PublishDiagnostics>()?;
-        assert_eq!(notification.uri, uri);
+        assert_eq!(notification.uri, protocol_uri(&uri));
         assert!(
             !notification.diagnostics.is_empty(),
             "expected diagnostics after watched file change for open file without cached parse"
@@ -2413,13 +2494,15 @@ mod tests {
 
         server.send_notification(new_notification::<DidSaveTextDocument>(
             DidSaveTextDocumentParams {
-                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                text_document: TextDocumentIdentifier {
+                    uri: protocol_uri(&uri),
+                },
                 text: Some("x =\n".to_owned()),
             },
         ))?;
 
         let notification = server.get_notification::<PublishDiagnostics>()?;
-        assert_eq!(notification.uri, uri);
+        assert_eq!(notification.uri, protocol_uri(&uri));
         assert!(
             !notification.diagnostics.is_empty(),
             "expected diagnostics after didSave revalidation"
@@ -2450,7 +2533,9 @@ mod tests {
         server.change_file(uri.clone(), changed)?;
         server.send_notification(new_notification::<DidSaveTextDocument>(
             DidSaveTextDocumentParams {
-                text_document: TextDocumentIdentifier { uri },
+                text_document: TextDocumentIdentifier {
+                    uri: protocol_uri(&uri),
+                },
                 text: None,
             },
         ))?;
@@ -2487,7 +2572,7 @@ mod tests {
         server.send_notification(new_notification::<DidOpenTextDocument>(
             DidOpenTextDocumentParams {
                 text_document: TextDocumentItem {
-                    uri: other_uri.clone(),
+                    uri: protocol_uri(&other_uri),
                     language_id: String::new(),
                     version: 1,
                     text: "x =\n".to_owned(),
@@ -2499,7 +2584,7 @@ mod tests {
         server.send_notification(new_notification::<DidSaveTextDocument>(
             DidSaveTextDocumentParams {
                 text_document: TextDocumentIdentifier {
-                    uri: save_uri.clone(),
+                    uri: protocol_uri(&save_uri),
                 },
                 text: Some("x = 1\n".to_owned()),
             },
@@ -2507,6 +2592,7 @@ mod tests {
 
         let first = server.get_notification::<PublishDiagnostics>()?;
         let second = server.get_notification::<PublishDiagnostics>()?;
+        let other_uri = protocol_uri(&other_uri);
         let saw_other = first.uri == other_uri || second.uri == other_uri;
 
         assert!(
@@ -2909,8 +2995,8 @@ mod tests {
         let foo = FixtureWithRanges::from_fixture(foo_uri.path(), &foo_contents)?;
 
         let expected_location = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("bar_click").to_lsp_range()),
-            target_uri: bar_uri,
+            origin_selection_range: Some(foo.resolved_span("bar_click").into()),
+            target_uri: protocol_uri(&bar_uri),
             target_range: Default::default(),
             target_selection_range: Default::default(),
         };
@@ -3162,8 +3248,8 @@ mod tests {
         let response = goto_definition_response_location(&mut server, req_id)?;
 
         let expected = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("bar").to_lsp_range()),
-            target_uri: bar_uri,
+            origin_selection_range: Some(foo.resolved_span("bar").into()),
+            target_uri: protocol_uri(&bar_uri),
             target_range: Default::default(),
             target_selection_range: Default::default(),
         };
@@ -3180,8 +3266,8 @@ mod tests {
         let response = goto_definition_response_location(&mut server, req_id)?;
 
         let expected = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("baz").to_lsp_range()),
-            target_uri: baz_uri,
+            origin_selection_range: Some(foo.resolved_span("baz").into()),
+            target_uri: protocol_uri(&baz_uri),
             target_range: Default::default(),
             target_selection_range: Default::default(),
         };
@@ -3198,8 +3284,8 @@ mod tests {
         let response = goto_definition_response_location(&mut server, req_id)?;
 
         let expected = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("dir1").to_lsp_range()),
-            target_uri: dir1_uri,
+            origin_selection_range: Some(foo.resolved_span("dir1").into()),
+            target_uri: protocol_uri(&dir1_uri),
             target_range: Default::default(),
             target_selection_range: Default::default(),
         };
@@ -3217,8 +3303,8 @@ mod tests {
         let response = goto_definition_response_location(&mut server, req_id)?;
 
         let expected = LocationLink {
-            origin_selection_range: Some(foo.resolved_span("dir2").to_lsp_range()),
-            target_uri: dir2_uri,
+            origin_selection_range: Some(foo.resolved_span("dir2").into()),
+            target_uri: protocol_uri(&dir2_uri),
             target_range: Default::default(),
             target_selection_range: Default::default(),
         };
@@ -3388,9 +3474,9 @@ mod tests {
 
         assert_eq!(
             n1_location.origin_selection_range,
-            Some(foo.resolved_span("click_n1").to_lsp_range())
+            Some(foo.resolved_span("click_n1").into())
         );
-        assert_eq!(n1_location.target_uri, native_uri);
+        assert_eq!(n1_location.target_uri, protocol_uri(&native_uri));
         let native_gen_code = server
             .docs_as_code(&native_uri.try_into().unwrap())
             .unwrap();

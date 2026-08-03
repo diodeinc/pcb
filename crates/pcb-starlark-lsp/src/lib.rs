@@ -16,7 +16,7 @@
  */
 
 //! The server that allows IDEs to evaluate and interpret starlark code according
-//! to the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/).
+//! to the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.18/specification/).
 
 // Lints that don't necessarily make sense
 #[allow(clippy::needless_lifetimes)]
@@ -30,7 +30,6 @@ mod exported;
 pub(crate) mod inspect;
 pub(crate) mod loaded;
 pub mod server;
-mod span;
 mod symbols;
 #[cfg(test)]
 mod test;
