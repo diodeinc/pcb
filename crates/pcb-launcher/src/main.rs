@@ -178,7 +178,19 @@ fn is_trusted_api_host(host: &str, port: Option<u16>) -> bool {
     if is_loopback {
         return port == Some(3001);
     }
-    port.is_none() && (host == "diode.computer" || host.ends_with(".diode.computer"))
+    port.is_none()
+        && (host == "api.diode.computer"
+            || host == "api.gov.diode.computer"
+            || is_preview_api_host(&host))
+}
+
+fn is_preview_api_host(host: &str) -> bool {
+    let Some(pr) = host.strip_suffix(".preview.api.diode.computer") else {
+        return false;
+    };
+    pr.strip_prefix("pr-").is_some_and(|number| {
+        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 fn launcher_log_path() -> PathBuf {
@@ -510,13 +522,13 @@ mod platform {
     pub fn show_error(error: &anyhow::Error, log_path: &Path) {
         let message = format!("{error:#}\n\nDetails: {}", log_path.display());
         let _ = Command::new("powershell.exe")
+            .env("PCB_LAUNCHER_ERROR", &message)
             .args([
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($args[0], 'Open in KiCad failed', 'OK', 'Error')",
+                "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($env:PCB_LAUNCHER_ERROR, 'Open in KiCad failed', 'OK', 'Error')",
             ])
-            .arg(message)
             .status();
     }
 
@@ -633,6 +645,12 @@ mod tests {
         assert!(is_trusted_api_host("localhost", Some(3001)));
         assert!(is_trusted_api_host("127.0.0.1", Some(3001)));
         assert!(!is_trusted_api_host("localhost", Some(8080)));
+        assert!(!is_trusted_api_host("preview.api.diode.computer", None));
+        assert!(!is_trusted_api_host("evil.diode.computer", None));
+        assert!(!is_trusted_api_host(
+            "pr-main.preview.api.diode.computer",
+            None
+        ));
     }
 
     #[test]
