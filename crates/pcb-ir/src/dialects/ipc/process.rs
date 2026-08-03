@@ -225,7 +225,12 @@ fn remap_span(span: Span, mapping: &[Option<u32>]) -> Span {
     Span::new(start, span.count)
 }
 
-/// Flatten every layer's positive features into one unioned fill mask.
+/// Flatten every layer's ordered paint into one unioned fill mask.
+///
+/// Each layer is lowered to artwork and composed with the same machinery as
+/// rendering and Gerber export, so strokes, flashes, and polarity sequencing
+/// flatten exactly as they manufacture instead of through a second
+/// composition implementation.
 pub fn flatten_layers_to_masks<S, L>(doc: &mut Document<S, L>)
 where
     S: Copy + Eq + Hash,
@@ -237,28 +242,29 @@ where
             continue;
         }
 
-        let feature_indices = layer.features.range().collect::<Vec<_>>();
-        let rings = feature_indices
-            .iter()
-            .flat_map(|&feature_index| {
-                let feature = &doc.features[feature_index];
-                if feature.bucket == FeatureBucket::Cutout || feature.polarity != Polarity::Dark {
-                    Vec::new()
-                } else {
-                    feature_filled_rings(doc, feature)
-                }
+        let artwork = super::lower_layer_to_artwork(
+            doc,
+            layer_index,
+            crate::dialects::LayerRole::Other,
+            crate::dialects::Side::None,
+        );
+        let mask = crate::dialects::artwork::compose_to_mask(&artwork);
+        let contours = mask
+            .layers
+            .first()
+            .map(|mask_layer| {
+                mask.shapes(mask_layer)
+                    .iter()
+                    .flat_map(|shape| mask.arena.path_contours(shape))
+                    .collect::<Vec<_>>()
             })
-            .collect::<Vec<_>>();
+            .unwrap_or_default();
 
+        let feature_indices = layer.features.range().collect::<Vec<_>>();
         for &feature_index in &feature_indices {
             clear_feature_paths(doc, feature_index);
         }
 
-        if rings.is_empty() {
-            continue;
-        }
-
-        let contours = region::rings_to_contours(region::union_rings(rings, FillRule::NonZero));
         if contours.is_empty() {
             continue;
         }
@@ -1177,6 +1183,42 @@ mod tests {
         assert_eq!(path.bbox.max, Point::new(3.0, 1.0));
         assert_eq!(doc.layers[0].bbox.min, Point::new(0.0, 0.0));
         assert_eq!(doc.layers[0].bbox.max, Point::new(3.0, 1.0));
+    }
+
+    #[test]
+    fn flattening_expands_strokes_that_composition_left_unexpanded() {
+        // Only copper-trace features expand strokes during composition;
+        // primitive strokes reach the flattener as strokes and must still
+        // contribute their swept copper to the mask.
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            Paint::Stroke(StrokeStyle::new(1.0, LineCap::Round)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(5.0, 0.0)),
+            ])],
+        );
+        doc.features.push(Feature {
+            paths: Span::new(0, 1),
+            ..Feature::new(FeatureKind::Primitive, Polarity::Dark)
+        });
+        doc.layers.push(test_layer(Span::new(0, 1)));
+
+        compose_for_rendering(&mut doc);
+        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
+        assert!(
+            path.stroke().is_some(),
+            "precondition: stroke survives composition"
+        );
+
+        flatten_layers_to_masks(&mut doc);
+
+        assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
+        assert_eq!(doc.features[0].paths.len(), 1);
+        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
+        assert!(path.is_filled());
+        assert_eq!(path.bbox.min, Point::new(-0.5, -0.5));
+        assert_eq!(path.bbox.max, Point::new(5.5, 0.5));
     }
 
     #[test]

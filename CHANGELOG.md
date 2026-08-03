@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Flattened IPC-2581 layer renders no longer drop stroked features such as plane-layer traces.
+
 ### Changed
 
 - Board-array balancing now certifies per-layer regions and reduces density and stack imbalance with variable voids.
