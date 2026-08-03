@@ -123,7 +123,7 @@ pub(crate) enum TestServerError {
     IsADirectory(LspUrl),
 }
 
-struct TestServerContext {
+pub(crate) struct TestServerContext {
     file_contents: Arc<RwLock<HashMap<PathBuf, String>>>,
     dirs: Arc<RwLock<HashSet<PathBuf>>>,
     builtin_docs: Arc<HashMap<LspUrl, String>>,
