@@ -36,6 +36,20 @@ the native environment.
 `pcb` manages `pcbc`, the standard library, and bundled sidecars such as
 `pcb-rectify` as one versioned toolchain.
 
+Commands that interpret or modify workspace source, manifests, or generated
+artifacts use the toolchain selected by the workspace `pcb-version`. Commands
+that manage global state do not use the workspace pin. Currently, the complete
+`pcb auth` command tree uses the latest stable managed toolchain. The shim-owned
+`pcb self` and `pcb toolchain` commands run directly in the launcher, while
+`pcb migrate` requires the latest stable toolchain because it updates workspace
+versions.
+
+An explicit `+<toolchain>` argument always overrides this command policy,
+including for `pcb auth`. If the release service is unavailable, commands that
+use the latest stable toolchain fall back to the newest installed stable version
+and print a warning. If none is installed, PCB reports how to install it when a
+network connection is available.
+
 ```bash
 pcb toolchain show                 # Show the active and latest matching versions
 pcb toolchain show --offline       # Use installed and cached data only
