@@ -6,7 +6,7 @@ use starlark::syntax::AstModule;
 use starlark::syntax::ast::*;
 use starlark_syntax::syntax::module::AstModuleFields;
 
-use pcb_starlark_lsp::server::{LspContext, LspUrl};
+use pcb_starlark_lsp::server::{LspContext, LspUri};
 
 use std::collections::HashMap;
 
@@ -137,30 +137,30 @@ pub(crate) fn find_def_params<P: AstPayload>(
 /// Inspect all `load()` statements in `ast` and attempt to resolve the
 /// parameters of each imported symbol. Returns two maps:
 /// 1. `alias → Vec<param names>` so that signature helpers can surface them.
-/// 2. `alias → LspUrl` pointing at the originating module for go-to-definition.
+/// 2. `alias → LspUri` pointing at the originating module for go-to-definition.
 pub fn load_symbols_info<T: LspContext>(
     ast: &AstModule,
     ctx: &T,
-    current_uri: &LspUrl,
-) -> (HashMap<String, Vec<String>>, HashMap<String, LspUrl>) {
+    current_uri: &LspUri,
+) -> (HashMap<String, Vec<String>>, HashMap<String, LspUri>) {
     use starlark::syntax::ast::{LoadArgP, StmtP};
 
     let mut param_map: HashMap<String, Vec<String>> = HashMap::new();
-    let mut url_map: HashMap<String, LspUrl> = HashMap::new();
+    let mut uri_map: HashMap<String, LspUri> = HashMap::new();
 
     ast.statement().visit_stmt(|stmt| {
         if let StmtP::Load(load) = &stmt.node {
             let module_path = &load.module.node;
 
-            if let Ok(target_url) = ctx.resolve_load(module_path, current_uri, None) {
-                // Note: store URL for *all* aliases, even if we fail to parse later; this
+            if let Ok(target_uri) = ctx.resolve_load(module_path, current_uri, None) {
+                // Note: store the URI for all aliases, even if we fail to parse later; this
                 // still enables go-to-definition to jump to the file.
                 for LoadArgP { local, .. } in &load.args {
-                    url_map.insert(local.node.ident.clone(), target_url.clone());
+                    uri_map.insert(local.node.ident.clone(), target_uri.clone());
                 }
 
-                // For file URLs, try to parse the target module
-                if let LspUrl::File(path) = &target_url
+                // For file URIs, try to parse the target module.
+                if let LspUri::File(path) = &target_uri
                     && let Ok(contents) = std::fs::read_to_string(path)
                 {
                     // Parse target module using same dialect semantics.
@@ -185,7 +185,7 @@ pub fn load_symbols_info<T: LspContext>(
         }
     });
 
-    (param_map, url_map)
+    (param_map, uri_map)
 }
 
 /// Produce an LSP [`SignatureHelp`] value for the given AST and cursor position.
@@ -199,7 +199,7 @@ pub fn signature_help<T: LspContext>(
     line: u32,
     character: u32,
     ctx: &T,
-    current_uri: &LspUrl,
+    current_uri: &LspUri,
 ) -> SignatureHelp {
     let calls = calls_at_position(ast, line, character).unwrap_or_default();
     if calls.is_empty() {
@@ -226,13 +226,13 @@ pub fn signature_help<T: LspContext>(
     // First try Context symbol index / built-ins.
     // ------------------------------------------------------------------
     if params.is_empty() {
-        // Resolve the target URL for the symbol (if any).
-        if let Ok(Some(target_url)) =
-            ctx.get_url_for_global_symbol(current_uri, &call.function_name)
+        // Resolve the target URI for the symbol (if any).
+        if let Ok(Some(target_uri)) =
+            ctx.get_uri_for_global_symbol(current_uri, &call.function_name)
         {
-            match &target_url {
+            match &target_uri {
                 // User-defined Starlark file – parse its AST and look for `def`.
-                LspUrl::File(path) => {
+                LspUri::File(path) => {
                     if let Ok(contents) = std::fs::read_to_string(path) {
                         // Parse using the same dialect settings as the main evaluator
                         let mut dialect = starlark::syntax::Dialect::Extended;
@@ -248,7 +248,7 @@ pub fn signature_help<T: LspContext>(
                     }
                 }
                 // Built-in global – check if we have documentation
-                LspUrl::Starlark(_) => {
+                LspUri::Starlark(_) => {
                     if let Some(meta) = ctx.get_completion_meta(current_uri, &call.function_name)
                         && let Some(doc) = meta.documentation
                     {
