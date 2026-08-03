@@ -1842,8 +1842,11 @@ fn self_update_latest_release() -> Result<LatestRelease> {
         return fetch_latest_release();
     }
 
-    let release = std::env::var(SELF_UPDATE_RELEASE_ENV)
-        .context("updated pcb shim is missing release metadata")?;
+    let release = match std::env::var(SELF_UPDATE_RELEASE_ENV) {
+        Ok(release) => release,
+        Err(std::env::VarError::NotPresent) => return fetch_latest_release(),
+        Err(error) => return Err(error.into()),
+    };
     Ok(serde_json::from_str(&release)?)
 }
 
