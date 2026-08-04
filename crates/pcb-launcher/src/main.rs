@@ -481,14 +481,17 @@ mod platform {
             Command::new("update-desktop-database").arg(&applications),
             "update the desktop database",
         )?;
-        run_optional(
-            Command::new("xdg-mime").args([
+        let status = Command::new("xdg-mime")
+            .args([
                 "default",
                 "diode-pcb-launcher.desktop",
                 "x-scheme-handler/diode",
-            ]),
-            "register the diode URL handler",
-        )?;
+            ])
+            .status()
+            .context("failed to run xdg-mime to register the diode URL handler")?;
+        if !status.success() {
+            bail!("xdg-mime failed to register the diode URL handler: {status}");
+        }
         Ok(())
     }
 
