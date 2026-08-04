@@ -3,7 +3,6 @@
 use anyhow::{Context, Result, bail};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use url::Url;
@@ -175,11 +174,7 @@ fn validate_uri(uri: &str) -> Result<()> {
 
 fn is_trusted_api_host(host: &str, port: Option<u16>) -> bool {
     let host = host.to_ascii_lowercase();
-    let is_loopback = host == "localhost"
-        || host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| address.is_loopback());
-    if is_loopback {
+    if host == "localhost" || host == "127.0.0.1" {
         return port == Some(3001);
     }
     port.is_none()
@@ -679,6 +674,7 @@ mod tests {
         assert!(is_trusted_api_host("api.gov.diode.computer", None));
         assert!(is_trusted_api_host("localhost", Some(3001)));
         assert!(is_trusted_api_host("127.0.0.1", Some(3001)));
+        assert!(!is_trusted_api_host("127.0.0.2", Some(3001)));
         assert!(!is_trusted_api_host("[::1]", Some(3001)));
         assert!(!is_trusted_api_host("localhost", Some(8080)));
         assert!(!is_trusted_api_host("preview.api.diode.computer", None));
