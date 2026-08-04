@@ -434,13 +434,14 @@ fn combos_for_request<'v>(
 
         // Enumerate pin maps (product), excluding duplicate pins within the instance.
         let mut pinmaps: Vec<Vec<(String, RPin)>> = vec![Vec::new()];
+        let mut truncated = false;
         for (s, cands) in &cand_lists {
             let mut next = Vec::new();
             for base in &pinmaps {
-                for c in cands {
-                    if base.iter().any(|(_, b)| b.name == c.name) {
-                        continue;
-                    }
+                let mut usable = cands
+                    .iter()
+                    .filter(|c| !base.iter().any(|(_, b)| b.name == c.name));
+                for c in &mut usable {
                     let mut d = base.clone();
                     d.push(((*s).to_owned(), (*c).clone()));
                     next.push(d);
@@ -448,8 +449,18 @@ fn combos_for_request<'v>(
                         break;
                     }
                 }
+                truncated |= usable.next().is_some();
             }
             pinmaps = next;
+        }
+        if truncated {
+            warn_at_call_site(
+                eval,
+                format!(
+                    "pin_solve: request `{}`: pin combinations for `{}` capped at {PINMAP_CAP}; the assignment may be suboptimal",
+                    req.name, p.name
+                ),
+            );
         }
 
         let surplus = p.provides_ids.len() as i64 - req.iface_closure_len as i64;

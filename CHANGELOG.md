@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Added `pin_request(if_connected=True)` for optional `io()` capability slots and `pin_request(bind=)` for dict-of-roles demands like `Mcu(gpio = {"LED": at(led_net, "PA8")})`.
 - Added `interface(implies = [...])`: capability matching is nominal and closed over the implication DAG (a `Usart` provider satisfies a `Uart` request, never the reverse).
 - Added `interface(attrs = {...})` to declare the capability-attribute vocabulary peripheral attrs are validated against; the stdlib interfaces now declare `clk_max`/`baud_max`/`bitrate_max`/`vio` where applicable.
+- `pin_solve` now warns when a request's pin-combination enumeration hits the internal cap on wide pin matrices, since the chosen assignment may then be suboptimal.
 - Added `pcb auth git configure` and `pcb auth git unconfigure` to manage host-specific global Git credential configuration for DiodeHub.
 - PCB now authenticates its own DiodeHub Git operations without requiring global Git configuration.
 

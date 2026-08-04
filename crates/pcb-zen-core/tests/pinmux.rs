@@ -450,6 +450,34 @@ check(res["assignment"]["BOOT_BTN"]["signals"]["PIN"]["pin"] == "GPIO9", "locked
 }
 
 #[test]
+fn pinmap_cap_truncation_warns() {
+    let result = eval_with_fixtures(
+        r#"
+load("./ifaces.zen", "Uart")
+
+WIDE = peripheral(
+    "WIDE",
+    provides = [Uart],
+    rebind = "firmware",
+    signals = {
+        "TX": [pin("P" + str(i)) for i in range(24)],
+        "RX": [pin("P" + str(i)) for i in range(24)],
+    },
+)
+
+res = pin_solve([WIDE], [pin_request("LINK", Uart)])
+check(res["assignment"]["LINK"]["instance"] == "WIDE", "assigned despite cap")
+"#,
+    );
+    assert_ok(&result);
+    let text = diag_text(&result);
+    assert!(
+        text.contains("capped at"),
+        "expected a pin-combination cap warning, got:\n{text}"
+    );
+}
+
+#[test]
 fn gpio_pool_swap_class() {
     let result = eval_with_fixtures(
         r#"
