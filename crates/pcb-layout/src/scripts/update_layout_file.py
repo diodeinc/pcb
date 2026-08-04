@@ -877,8 +877,8 @@ class FinalizeBoard(Step):
         # Trigger KiCad's connectivity updates and fix orphaned items
         try:
             self.board.GetConnectivity().Build(self.board)
-        except Exception:  # noqa: BLE001, S110 - FIXME: silently swallows connectivity-rebuild failures
-            pass
+        except Exception as e:  # noqa: BLE001 - best-effort; the board is still saved below
+            logger.warning(f"Connectivity rebuild failed: {e}")
 
         # Save board only once at the very end
         save_start = time.time()

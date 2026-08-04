@@ -532,6 +532,9 @@ fn surface_finish_to_html(finish: &SurfaceFinishInfo) -> SurfaceFinish {
     }
 }
 
+const HTML_TEMPLATE: &str = include_str!("html_template.html.jinja");
+const CSS_STYLES: &str = include_str!("style.css");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,6 +804,3 @@ mod tests {
 </IPC-2581>"#
     }
 }
-
-const HTML_TEMPLATE: &str = include_str!("html_template.html.jinja");
-const CSS_STYLES: &str = include_str!("style.css");
