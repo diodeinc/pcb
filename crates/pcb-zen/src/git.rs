@@ -15,7 +15,6 @@ use tempfile::Builder;
 use url::{Position, Url};
 
 const DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS: u64 = 55 * 60;
-const DIODEHUB_HOST: &str = "code.diode.computer";
 const LEGACY_DIODEHUB_CREDENTIAL_HELPER: &str = "!pcb auth git";
 const DIODEHUB_CREDENTIAL_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
 const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
@@ -44,25 +43,19 @@ fn make_noninteractive(cmd: &mut Command) {
     cmd.env("GCM_INTERACTIVE", "never");
 }
 
-fn git_network(repo_root: &Path) -> anyhow::Result<Command> {
-    let mut cmd = git_global_network()?;
+fn git_network(repo_root: &Path) -> Command {
+    let mut cmd = git_global();
     make_noninteractive(&mut cmd);
     cmd.arg("-C").arg(repo_root);
-    Ok(cmd)
+    cmd
 }
 
-fn git_global_network() -> anyhow::Result<Command> {
+fn git_global_network_with_prompt(interactive: bool) -> Command {
     let mut cmd = git_global();
-    add_diodehub_https_auth_config(&mut cmd, &credential_cache_socket()?)?;
-    Ok(cmd)
-}
-
-fn git_global_network_with_prompt(interactive: bool) -> anyhow::Result<Command> {
-    let mut cmd = git_global_network()?;
     if !interactive {
         make_noninteractive(&mut cmd);
     }
-    Ok(cmd)
+    cmd
 }
 
 fn pcb_config_dir() -> anyhow::Result<PathBuf> {
@@ -109,20 +102,6 @@ fn diodehub_credential_helper(host: &str) -> String {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn add_git_config(cmd: &mut Command, key: &str, value: &str) {
-    cmd.arg("-c").arg(format!("{key}={value}"));
-}
-
-fn add_diodehub_https_auth_config(cmd: &mut Command, cache_socket: &Path) -> anyhow::Result<()> {
-    let cache_helper = credential_cache_helper(cache_socket)?;
-    let credential_helper = diodehub_credential_helper(DIODEHUB_HOST);
-    add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, "");
-    add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, &cache_helper);
-    add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, &credential_helper);
-    add_git_config(cmd, DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG, "true");
-    Ok(())
 }
 
 fn run_silent(mut cmd: Command) -> anyhow::Result<()> {
@@ -175,7 +154,7 @@ pub fn run_in(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
 }
 
 fn run_network_in(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
-    let mut cmd = git_network(repo_root)?;
+    let mut cmd = git_network(repo_root);
     cmd.args(args);
     run_silent(cmd)
 }
@@ -291,23 +270,7 @@ fn ensure_git_config_include(config_path: &Path) -> anyhow::Result<()> {
     let config_path = config_path
         .to_str()
         .context("PCB config directory is not valid UTF-8")?;
-    let output = git_global()
-        .args(["config", "--global", "--get-all", PCB_GIT_CONFIG_INCLUDE])
-        .output()
-        .context("Failed to read global Git configuration")?;
-    if output.status.success()
-        && String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .any(|value| value == config_path)
-    {
-        return Ok(());
-    }
-    if !output.status.success() && output.status.code() != Some(1) {
-        bail!(
-            "`git config --global --get-all include.path` failed with {}",
-            output.status
-        );
-    }
+    unset_git_config_value(PCB_GIT_CONFIG_INCLUDE, config_path)?;
     run_git_config(&["--add", PCB_GIT_CONFIG_INCLUDE, config_path])
 }
 
@@ -666,7 +629,7 @@ fn parse_git_timezone_offset(offset: &str) -> Option<i32> {
 }
 
 fn clone(remote_url: &str, dest_dir: &Path, prompt: bool) -> anyhow::Result<()> {
-    let mut cmd = git_global_network_with_prompt(prompt)?;
+    let mut cmd = git_global_network_with_prompt(prompt);
     cmd.arg("clone");
     cmd.args(["--quiet", "--no-checkout", remote_url])
         .arg(dest_dir);
@@ -947,7 +910,7 @@ pub fn ls_remote_with_fallback(
 }
 
 fn ls_remote(url: &str, refspec: &str, interactive: bool) -> anyhow::Result<Option<String>> {
-    let mut cmd = git_global_network_with_prompt(interactive)?;
+    let mut cmd = git_global_network_with_prompt(interactive);
     cmd.args(["ls-remote", url, refspec]);
     let out = run_stdout(cmd)?;
     Ok(out
@@ -1004,56 +967,6 @@ pub fn lock_dir(dir: &Path) -> anyhow::Result<fslock::LockFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::io::Write;
-    use std::process::Output;
-
-    struct CredentialCacheGuard(PathBuf);
-
-    impl Drop for CredentialCacheGuard {
-        fn drop(&mut self) {
-            let mut socket_argument = OsString::from("--socket=");
-            socket_argument.push(&self.0);
-            let _ = git_global()
-                .arg("credential-cache")
-                .arg(socket_argument)
-                .arg("exit")
-                .output();
-        }
-    }
-
-    fn run_with_input(mut command: Command, input: &str) -> Output {
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        child.wait_with_output().unwrap()
-    }
-
-    fn isolate_git_config(command: &mut Command, config: &Path) {
-        command
-            .env("GIT_CONFIG_GLOBAL", config)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_TERMINAL_PROMPT", "0");
-    }
-
-    fn assert_success(output: &Output) {
-        assert!(
-            output.status.success(),
-            "command failed with {}\nstdout:\n{}\nstderr:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
 
     #[test]
     fn test_lock_path_appends_suffix() {
@@ -1193,7 +1106,7 @@ mod tests {
 
     #[test]
     fn repository_network_commands_are_noninteractive() {
-        let command = git_network(Path::new(".")).unwrap();
+        let command = git_network(Path::new("."));
         let env = |key| {
             command
                 .get_envs()
@@ -1209,99 +1122,5 @@ mod tests {
             env(std::ffi::OsStr::new("GCM_INTERACTIVE")),
             Some(std::ffi::OsStr::new("never"))
         );
-    }
-
-    #[test]
-    fn process_local_auth_uses_the_pcb_cache_without_mutating_global_config() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let git_config = tempdir.path().join("gitconfig");
-        let original_config = b"[user]\n\temail = dev@example.com\n";
-        fs::write(&git_config, original_config).unwrap();
-        let cache_socket = tempdir.path().join("git-credential-cache/socket");
-        let _cache_guard = CredentialCacheGuard(cache_socket.clone());
-        let cached_credential = "capability[]=authtype\n\
-                                 protocol=https\n\
-                                 host=code.diode.computer\n\
-                                 path=diode/registry.git\n\
-                                 authtype=Bearer\n\
-                                 credential=repository-token\n\
-                                 password_expiry_utc=4102444800\n\
-                                 \n";
-
-        let mut socket_argument = OsString::from("--socket=");
-        socket_argument.push(&cache_socket);
-        let mut store = git_global();
-        store
-            .arg("credential-cache")
-            .arg(socket_argument)
-            .arg("--timeout=3300")
-            .arg("store");
-        isolate_git_config(&mut store, &git_config);
-        assert_success(&run_with_input(store, cached_credential));
-
-        let mut fill = git_global();
-        add_diodehub_https_auth_config(&mut fill, &cache_socket).unwrap();
-        fill.args(["credential", "fill"]);
-        isolate_git_config(&mut fill, &git_config);
-        let output = run_with_input(
-            fill,
-            "capability[]=authtype\n\
-             protocol=https\n\
-             host=code.diode.computer\n\
-             path=diode/registry.git\n\
-             \n",
-        );
-        assert_success(&output);
-
-        let credential = String::from_utf8(output.stdout).unwrap();
-        assert!(credential.contains("authtype=Bearer"));
-        assert!(credential.contains("credential=repository-token"));
-        assert!(credential.contains("path=diode/registry.git"));
-        assert_eq!(fs::read(&git_config).unwrap(), original_config);
-    }
-
-    #[test]
-    fn process_local_https_auth_preserves_remote_transport() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let repo = tempdir.path().join("repo");
-        fs::create_dir(&repo).unwrap();
-        init(&repo).unwrap();
-        let git_config = tempdir.path().join("gitconfig");
-        fs::write(&git_config, "").unwrap();
-        for (remote, stored_url) in [
-            ("bare", "code.diode.computer:diode/registry.git"),
-            ("scp", "git@code.diode.computer:diode/registry.git"),
-            (
-                "ssh-default-port",
-                "ssh://git@code.diode.computer/diode/registry.git",
-            ),
-            (
-                "ssh",
-                "ssh://git@code.diode.computer:23231/diode/registry.git",
-            ),
-            ("https", "https://code.diode.computer/diode/registry.git"),
-        ] {
-            run_in(&repo, &["remote", "add", remote, stored_url]).unwrap();
-
-            let mut command = git_global();
-            add_diodehub_https_auth_config(
-                &mut command,
-                &tempdir.path().join("git-credential-cache/socket"),
-            )
-            .unwrap();
-            command
-                .arg("-C")
-                .arg(&repo)
-                .args(["remote", "get-url", remote]);
-            isolate_git_config(&mut command, &git_config);
-            let output = command.output().unwrap();
-            assert_success(&output);
-
-            assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), stored_url);
-            assert_eq!(
-                run_output(&repo, &["config", "--get", &format!("remote.{remote}.url")]).unwrap(),
-                stored_url
-            );
-        }
     }
 }

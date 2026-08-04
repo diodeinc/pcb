@@ -132,7 +132,10 @@ fn provide_credential(
     }
 
     let path = std::str::from_utf8(path).context("Git credential path is not UTF-8")?;
-    let credential = exchange_credential(ctx, configured_host, path)?;
+    let api_host = configured_host
+        .split_once(':')
+        .map_or(configured_host, |(host, _)| host);
+    let credential = exchange_credential(ctx, api_host, path)?;
 
     writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
     writeln!(output, "authtype=Bearer")?;

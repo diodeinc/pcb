@@ -12,6 +12,7 @@ use std::sync::{Mutex, MutexGuard};
 const GIT_ORIGIN: &str = "https://git.preview.diode.localhost:8443";
 const GIT_HELPER_CONFIG: &str = "credential.https://git.preview.diode.localhost:8443.helper";
 const GIT_HOST: &str = "git.preview.diode.localhost:8443";
+const GIT_API_HOST: &str = "git.preview.diode.localhost";
 const GIT_USE_HTTP_PATH_CONFIG: &str =
     "credential.https://git.preview.diode.localhost:8443.useHttpPath";
 const LEGACY_GIT_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
@@ -383,6 +384,18 @@ fn configure_is_idempotent_and_preserves_unrelated_global_config() {
 }
 
 #[test]
+fn configure_keeps_the_managed_include_last() {
+    let context = TestContext::new("http://127.0.0.1:1".to_string());
+    assert_clean_success(&context.run_config_command("configure"));
+    assert_clean_success(&context.run_git_config(&["--add", "credential.helper", "!later-helper"]));
+
+    assert_clean_success(&context.run_config_command("configure"));
+
+    let config = fs::read_to_string(&context.git_config).unwrap();
+    assert!(config.rfind("[include]").unwrap() > config.rfind("[credential]").unwrap());
+}
+
+#[test]
 fn configure_replaces_the_managed_credential_origin() {
     let context = TestContext::new("http://127.0.0.1:1".to_string());
     assert_clean_success(&context.run_config_command("configure"));
@@ -491,7 +504,7 @@ fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
 #[test]
 fn modern_git_fill_caches_the_bearer_credential_until_rejected() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, GIT_HOST, 200, Some("Bearer user-access-token"));
+    let exchange = mock_exchange(&server, GIT_API_HOST, 200, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
 
@@ -539,7 +552,7 @@ fn modern_git_fill_caches_the_bearer_credential_until_rejected() {
 #[test]
 fn ambient_api_auth_without_auth_file_returns_bearer_credential_to_git() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, GIT_HOST, 200, None);
+    let exchange = mock_exchange(&server, GIT_API_HOST, 200, None);
     let context = TestContext::new(server.base_url());
     fs::remove_dir_all(context.config_dir.join("auth")).expect("remove PCB auth directory");
     assert!(!context.config_dir.join("auth").exists());
@@ -568,7 +581,7 @@ fn ambient_api_auth_without_auth_file_returns_bearer_credential_to_git() {
 #[test]
 fn modern_git_ignores_an_expired_cached_bearer_credential() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, GIT_HOST, 200, Some("Bearer user-access-token"));
+    let exchange = mock_exchange(&server, GIT_API_HOST, 200, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
     let expired_credential = format!(
@@ -598,7 +611,7 @@ fn modern_git_ignores_an_expired_cached_bearer_credential() {
 #[test]
 fn auth_logout_stops_the_git_credential_cache() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, GIT_HOST, 200, Some("Bearer user-access-token"));
+    let exchange = mock_exchange(&server, GIT_API_HOST, 200, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
 
@@ -623,7 +636,7 @@ fn auth_logout_stops_the_git_credential_cache() {
 #[test]
 fn modern_git_honors_quit_when_the_exchange_fails() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, GIT_HOST, 403, Some("Bearer user-access-token"));
+    let exchange = mock_exchange(&server, GIT_API_HOST, 403, Some("Bearer user-access-token"));
     let context = TestContext::new(server.base_url());
     assert_clean_success(&context.run_config_command("configure"));
 
