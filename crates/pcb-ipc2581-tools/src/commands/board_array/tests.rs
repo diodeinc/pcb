@@ -1,6 +1,6 @@
-use super::balance::{
-    balance_features, extract_array_support_layers, generate_automatic_board_array_copper_balance,
-};
+use crate::copper_balance::balance_features;
+
+use super::balance::{extract_array_support_layers, generate_automatic_board_array_copper_balance};
 use super::*;
 use crate::accessors::IpcAccessor;
 use crate::ipc2581::types::LayerFunction;
@@ -227,8 +227,8 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
         .iter()
         .find(|layer| layer.layer_name == "BOTTOM")
         .unwrap();
-    assert!(top.board_target_density > 0.0);
-    assert_eq!(bottom.board_target_density, 0.0);
+    assert!(top.target_density > 0.0);
+    assert_eq!(bottom.target_density, 0.0);
     assert!(!top.features.is_empty());
     assert!(bottom.features.is_empty());
 
@@ -240,14 +240,10 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
                 .intersection(&layer.existing_copper)
                 .is_empty()
         );
-        assert_eq!(
-            layer.result.solution.target_density,
-            layer.board_target_density
-        );
+        assert_eq!(layer.result.solution.target_density, layer.target_density);
         assert!(
             layer.result.solution.residual_error
-                <= (layer.result.solution.initial_density - layer.board_target_density).abs()
-                    + 1e-9
+                <= (layer.result.solution.initial_density - layer.target_density).abs() + 1e-9
         );
     }
 

@@ -1,4 +1,4 @@
-//! Safe copper-balancing regions for board arrays.
+//! Safe copper-balancing regions for board arrays and fabrication panels.
 //!
 //! This module separates IPC semantic collection from planar set operations:
 //! callers provide the canonical layout document, its fabrication profile, the
@@ -34,8 +34,8 @@ use std::fmt;
 
 use crate::dialects::Side;
 use crate::dialects::ipc::{
-    BoardArrayFabricationProfile, Document, Feature, FeatureSpan, ProfileOccurrenceRole,
-    ProfileSet, profile_occurrences_for, relief::is_vcut_operation_feature,
+    BoardArrayFabricationProfile, Document, Feature, FeatureSpan, LayoutPurpose,
+    ProfileOccurrenceRole, ProfileSet, profile_occurrences_for, relief::is_vcut_operation_feature,
 };
 use crate::geom::{ContourSet, FillRule, Paint, tol};
 
@@ -312,6 +312,8 @@ pub enum BalancingRegionError {
     InvalidNumericalGuard(f64),
     EmptyPanelOutline,
     EmptyBoardFootprints,
+    EmptyAssemblyPanels,
+    NotAFabricationPanel,
     UnpaintedSupportPaths(usize),
     GapRegularization(String),
 }
@@ -340,6 +342,12 @@ impl fmt::Display for BalancingRegionError {
             }
             Self::EmptyBoardFootprints => {
                 write!(f, "board array has no final board-instance profiles")
+            }
+            Self::EmptyAssemblyPanels => {
+                write!(f, "fabrication panel has no placed assembly panels")
+            }
+            Self::NotAFabricationPanel => {
+                write!(f, "layout root is not a fabrication panel")
             }
             Self::UnpaintedSupportPaths(count) => write!(
                 f,
@@ -467,6 +475,45 @@ where
         ));
     }
     Ok(collection)
+}
+
+/// Collect the geometry-only balancing input for a fabrication panel.
+///
+/// The domain is the caller-supplied usable region between the stock's
+/// reserved process margins, so the margins never enter the density
+/// denominator and stay bare. The placed assembly panels are the only
+/// footprint obstacles: every cutout, score, and copper feature of a placed
+/// panel lies inside its nominal outline, and the fabrication-panel step adds
+/// no per-layer geometry of its own, so one input serves every copper layer.
+/// Profile cutouts still ride along as material removal for completeness.
+pub fn collect_fab_panel_balancing_input(
+    usable_region: ContourSet,
+    fabrication_profile: &BoardArrayFabricationProfile,
+) -> Result<BoardArrayBalancingInput, BalancingRegionError> {
+    if fabrication_profile.purpose != LayoutPurpose::FabricationPanel {
+        return Err(BalancingRegionError::NotAFabricationPanel);
+    }
+    let panel_contours = fabrication_profile
+        .assembly_panel_outlines
+        .iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let board_footprints = ContourSet::from_filled_contours(&panel_contours, tol::REGION_MM);
+    if board_footprints.is_empty() {
+        return Err(BalancingRegionError::EmptyAssemblyPanels);
+    }
+
+    Ok(BoardArrayBalancingInput {
+        panel_outer: usable_region,
+        board_footprints,
+        material_removal: ContourSet::from_contours(
+            &fabrication_profile.material_removal,
+            FillRule::NonZero,
+            tol::REGION_MM,
+        ),
+        support_features: ContourSet::empty(tol::REGION_MM),
+    })
 }
 
 /// Collect the same inputs and coverage data as
@@ -1146,6 +1193,62 @@ mod tests {
         assert_eq!(geometry.path_count, 1);
         assert_eq!(geometry.excluded_documentation_path_count, 1);
         assert!(geometry.region_for_layer(100).bbox.max.y < 1.0);
+    }
+
+    #[test]
+    fn fab_panel_collector_uses_assembly_panels_as_the_only_footprints() {
+        let usable_region = ContourSet::rectangle(bbox(10.0, 10.0, 90.0, 60.0), tol::REGION_MM);
+        let profile = BoardArrayFabricationProfile {
+            purpose: LayoutPurpose::FabricationPanel,
+            array_outlines: vec![vec![rectangle_contour(0.0, 0.0, 100.0, 70.0)]],
+            assembly_panel_outlines: vec![
+                vec![rectangle_contour(15.0, 15.0, 45.0, 55.0)],
+                vec![rectangle_contour(50.0, 15.0, 85.0, 55.0)],
+            ],
+            material_removal: vec![rectangle_contour(20.0, 20.0, 22.0, 22.0)],
+        };
+
+        let input = collect_fab_panel_balancing_input(usable_region.clone(), &profile).unwrap();
+
+        assert!((input.panel_outer.area() - usable_region.area()).abs() <= 1e-9);
+        assert!((input.board_footprints.area() - (30.0 * 40.0 + 35.0 * 40.0)).abs() <= 1e-6);
+        assert!((input.material_removal.area() - 4.0).abs() <= 1e-6);
+        assert!(input.support_features.is_empty());
+
+        let result =
+            board_array_balancing_region(&input, BalancingRegionOptions::default()).unwrap();
+        assert!(result.certificate.passes(1e-4));
+        assert!(!result.safe_region.is_empty());
+        assert!(
+            result
+                .safe_region
+                .intersection(&input.board_footprints)
+                .is_empty()
+        );
+        assert!(result.safe_region.difference(&usable_region).is_empty());
+    }
+
+    #[test]
+    fn fab_panel_collector_rejects_wrong_purpose_and_missing_panels() {
+        let usable_region = ContourSet::rectangle(bbox(0.0, 0.0, 50.0, 50.0), tol::REGION_MM);
+        let mut profile = BoardArrayFabricationProfile {
+            purpose: LayoutPurpose::Product,
+            array_outlines: vec![vec![rectangle_contour(0.0, 0.0, 60.0, 60.0)]],
+            assembly_panel_outlines: vec![vec![rectangle_contour(5.0, 5.0, 25.0, 25.0)]],
+            material_removal: Vec::new(),
+        };
+
+        assert_eq!(
+            collect_fab_panel_balancing_input(usable_region.clone(), &profile).unwrap_err(),
+            BalancingRegionError::NotAFabricationPanel
+        );
+
+        profile.purpose = LayoutPurpose::FabricationPanel;
+        profile.assembly_panel_outlines.clear();
+        assert_eq!(
+            collect_fab_panel_balancing_input(usable_region, &profile).unwrap_err(),
+            BalancingRegionError::EmptyAssemblyPanels
+        );
     }
 
     #[test]
