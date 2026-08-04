@@ -11,36 +11,32 @@ Bug 2 (Group Deletion): Deleting a group was also deleting all its contents,
 causing footprints to be unintentionally removed.
 """
 
-from typing import Any, Dict, List
+from __future__ import annotations
+
+from typing import Any
 from unittest.mock import Mock
 
+from ..changeset import SyncChangeset
 from ..types import (
-    EntityPath,
-    EntityId,
-    FootprintView,
-    BoardView,
     BoardComplement,
+    BoardView,
+    EntityId,
+    EntityPath,
+    FootprintView,
     default_footprint_complement,
 )
-from ..changeset import SyncChangeset
 
 
 class StaleObjectError(Exception):
     """Raised when accessing an invalidated SWIG-like object."""
 
-    pass
-
 
 class _FakeFOOTPRINT:
     """Base class for fake footprints (defined early for inheritance)."""
 
-    pass
-
 
 class _FakePCB_GROUP:
     """Base class for fake groups (defined early for inheritance)."""
-
-    pass
 
 
 class InvalidatableFootprint(_FakeFOOTPRINT):
@@ -139,7 +135,7 @@ class InvalidatableGroup(_FakePCB_GROUP):
     def __init__(self, name: str):
         self._valid = True
         self._name = name
-        self._items: List[Any] = []
+        self._items: list[Any] = []
 
     def _check_valid(self):
         if not self._valid:
@@ -158,7 +154,7 @@ class InvalidatableGroup(_FakePCB_GROUP):
         self._check_valid()
         self._name = name
 
-    def GetItems(self) -> List[Any]:
+    def GetItems(self) -> list[Any]:
         self._check_valid()
         return list(self._items)
 
@@ -177,11 +173,11 @@ class InvalidatableBoard:
     """Fake KiCad board that invalidates cached objects on mutations."""
 
     def __init__(self):
-        self._footprints: List[InvalidatableFootprint] = []
-        self._groups: List[InvalidatableGroup] = []
-        self._nets: Dict[str, Any] = {}
-        self._deleted_footprints: List[InvalidatableFootprint] = []
-        self._deleted_groups: List[InvalidatableGroup] = []
+        self._footprints: list[InvalidatableFootprint] = []
+        self._groups: list[InvalidatableGroup] = []
+        self._nets: dict[str, Any] = {}
+        self._deleted_footprints: list[InvalidatableFootprint] = []
+        self._deleted_groups: list[InvalidatableGroup] = []
 
     def _invalidate_all_cached(self):
         """Simulate SWIG pointer invalidation after structural change."""
@@ -210,11 +206,11 @@ class InvalidatableBoard:
             new_groups.append(new_g)
         self._groups = new_groups
 
-    def GetFootprints(self) -> List[InvalidatableFootprint]:
+    def GetFootprints(self) -> list[InvalidatableFootprint]:
         # Return fresh wrappers each time (simulates real KiCad behavior)
         return list(self._footprints)
 
-    def Groups(self) -> List[InvalidatableGroup]:
+    def Groups(self) -> list[InvalidatableGroup]:
         # Return fresh wrappers each time
         return list(self._groups)
 

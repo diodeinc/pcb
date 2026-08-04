@@ -8,21 +8,23 @@ Note: Renames (moved() paths) are now handled in Rust preprocessing before
 the Python sync runs. Rename-related tests have been moved to Rust integration tests.
 """
 
+from __future__ import annotations
+
 from typing import Any
 
-from ..types import (
-    EntityPath,
-    EntityId,
-    Position,
-    FootprintView,
-    FootprintComplement,
-    GroupView,
-    GroupComplement,
-    BoardView,
-    BoardComplement,
-)
-from ..lens import adapt_complement
 from ..changeset import build_sync_changeset
+from ..lens import adapt_complement
+from ..types import (
+    BoardComplement,
+    BoardView,
+    EntityId,
+    EntityPath,
+    FootprintComplement,
+    FootprintView,
+    GroupComplement,
+    GroupView,
+    Position,
+)
 
 
 def make_footprint_view(
@@ -499,6 +501,7 @@ class TestUnmanagedFootprints:
         """Footprint with matching KIID_PATH should be extracted normally."""
         import uuid as uuid_module
         from unittest.mock import Mock
+
         from ..lens import extract
 
         path_str = "Power.R1"
@@ -538,7 +541,7 @@ class TestUnmanagedFootprints:
         pcbnew.B_Cu = 31
 
         diagnostics: list[dict[str, Any]] = []
-        view, complement = extract(board, pcbnew, None, diagnostics)
+        view, _complement = extract(board, pcbnew, None, diagnostics)
 
         # Should be extracted as managed footprint
         assert len(view.footprints) == 1
@@ -548,6 +551,7 @@ class TestUnmanagedFootprints:
         """Old boards without Path field should use kiid_to_path map to identify footprints."""
         import uuid as uuid_module
         from unittest.mock import Mock
+
         from ..lens import extract
 
         path_str = "Power.R1"
@@ -590,19 +594,20 @@ class TestUnmanagedFootprints:
         kiid_to_path = {expected_uuid: path_str}
 
         diagnostics: list[dict[str, Any]] = []
-        view, complement = extract(board, pcbnew, kiid_to_path, diagnostics)
+        view, _complement = extract(board, pcbnew, kiid_to_path, diagnostics)
 
         # Should be extracted successfully using KIID fallback
         assert len(view.footprints) == 1
         assert len(diagnostics) == 0
 
         # Verify the path was correctly resolved
-        entity_id = list(view.footprints.keys())[0]
+        entity_id = next(iter(view.footprints.keys()))
         assert str(entity_id.path) == path_str
 
     def test_footprint_with_wrong_kiid_path_is_not_extracted(self):
         """Footprint with mismatched KIID_PATH should not be extracted as managed."""
         from unittest.mock import Mock
+
         from ..lens import extract
 
         path_str = "Power.R1"
@@ -626,7 +631,7 @@ class TestUnmanagedFootprints:
         pcbnew = Mock()
 
         diagnostics: list[dict[str, Any]] = []
-        view, complement = extract(board, pcbnew, None, diagnostics)
+        view, _complement = extract(board, pcbnew, None, diagnostics)
 
         # Should NOT be extracted
         assert len(view.footprints) == 0
@@ -637,6 +642,7 @@ class TestUnmanagedFootprints:
     def test_apply_prunes_footprint_with_wrong_kiid_path(self):
         """Normal sync should delete footprints with a Path but wrong KIID_PATH."""
         from unittest.mock import Mock
+
         from ..changeset import SyncChangeset
         from ..kicad_adapter import apply_changeset
 

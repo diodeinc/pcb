@@ -22,25 +22,26 @@ Run with: pytest -v test_properties.py
 Requires: hypothesis>=6.0
 """
 
-from hypothesis import given, settings, assume
+from __future__ import annotations
 
-from ..types import (
-    EntityId,
-    Position,
-    FootprintView,
-    FootprintComplement,
-    BoardView,
-    BoardComplement,
-    NetView,
-)
-from ..lens import adapt_complement, check_lens_invariants
+from hypothesis import assume, given, settings
+
 from ..changeset import build_sync_changeset
+from ..lens import adapt_complement, check_lens_invariants
+from ..types import (
+    BoardComplement,
+    BoardView,
+    EntityId,
+    FootprintComplement,
+    FootprintView,
+    NetView,
+    Position,
+)
 from .strategies import (
-    board_view_strategy,
     board_complement_strategy,
+    board_view_strategy,
     footprint_complement_strategy,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Law 1: View Consistency
@@ -185,11 +186,11 @@ class TestStructuralFidelity:
         new_complement = adapt_complement(view, complement)
 
         # Every complement should have a view
-        for entity_id in new_complement.footprints.keys():
+        for entity_id in new_complement.footprints:
             assert entity_id in view.footprints, f"Stale complement for {entity_id}"
 
         # Every view should have a complement
-        for entity_id in view.footprints.keys():
+        for entity_id in view.footprints:
             assert entity_id in new_complement.footprints, (
                 f"Missing complement for {entity_id}"
             )

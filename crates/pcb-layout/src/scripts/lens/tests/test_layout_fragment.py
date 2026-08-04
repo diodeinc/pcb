@@ -5,21 +5,23 @@ These tests verify that when a parent module has a layout_path,
 new footprints can inherit their positions from the layout fragment.
 """
 
-from ..types import (
-    EntityId,
-    Position,
-    FootprintView,
-    FootprintComplement,
-    GroupView,
-    GroupComplement,
-    BoardView,
-    BoardComplement,
-)
-from ..lens import (
-    adapt_complement,
-    FragmentData,
-)
+from __future__ import annotations
+
 from ..changeset import build_sync_changeset
+from ..lens import (
+    FragmentData,
+    adapt_complement,
+)
+from ..types import (
+    BoardComplement,
+    BoardView,
+    EntityId,
+    FootprintComplement,
+    FootprintView,
+    GroupComplement,
+    GroupView,
+    Position,
+)
 
 
 def make_footprint_view(

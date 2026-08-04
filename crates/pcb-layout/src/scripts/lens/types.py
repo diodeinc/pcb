@@ -2,19 +2,21 @@
 Core data types for the lens-based layout synchronization system.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from __future__ import annotations
+
 import uuid as uuid_module
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
 class EntityPath:
     """Hierarchical path identifying an entity. Immutable and hashable."""
 
-    segments: Tuple[str, ...]
+    segments: tuple[str, ...]
 
     @classmethod
-    def from_string(cls, path: str) -> "EntityPath":
+    def from_string(cls, path: str) -> EntityPath:
         if not path:
             return cls(segments=())
         return cls(segments=tuple(path.split(".")))
@@ -25,18 +27,18 @@ class EntityPath:
     def __bool__(self) -> bool:
         return len(self.segments) > 0
 
-    def parent(self) -> Optional["EntityPath"]:
+    def parent(self) -> EntityPath | None:
         if len(self.segments) <= 1:
             return None
         return EntityPath(segments=self.segments[:-1])
 
-    def is_ancestor_of(self, other: "EntityPath") -> bool:
+    def is_ancestor_of(self, other: EntityPath) -> bool:
         return (
             len(other.segments) > len(self.segments)
             and other.segments[: len(self.segments)] == self.segments
         )
 
-    def relative_to(self, ancestor: "EntityPath") -> Optional["EntityPath"]:
+    def relative_to(self, ancestor: EntityPath) -> EntityPath | None:
         if not ancestor.is_ancestor_of(self) and ancestor != self:
             return None
         suffix = self.segments[len(ancestor.segments) :]
@@ -87,7 +89,7 @@ class EntityId:
         return self.path == other.path and self.fpid == other.fpid
 
     @classmethod
-    def from_string(cls, path: str, fpid: str = "") -> "EntityId":
+    def from_string(cls, path: str, fpid: str = "") -> EntityId:
         return cls(path=EntityPath.from_string(path), fpid=fpid)
 
     @property
@@ -111,7 +113,7 @@ class FootprintView:
     dnp: bool = False
     exclude_from_bom: bool = False
     exclude_from_pos: bool = False
-    fields: Dict[str, str] = field(default_factory=dict)
+    fields: dict[str, str] = field(default_factory=dict)
 
     @property
     def path(self) -> EntityPath:
@@ -123,8 +125,8 @@ class GroupView:
     """View portion of a group - derived from SOURCE netlist."""
 
     entity_id: EntityId
-    member_ids: Tuple[EntityId, ...]
-    layout_path: Optional[str] = None
+    member_ids: tuple[EntityId, ...]
+    layout_path: str | None = None
 
     @property
     def path(self) -> EntityPath:
@@ -136,12 +138,12 @@ class NetView:
     """View portion of a net - derived from SOURCE netlist."""
 
     name: str
-    connections: Tuple[Tuple[EntityId, str], ...]
+    connections: tuple[tuple[EntityId, str], ...]
     kind: str = "Net"  # Net type kind (e.g., "Net", "Power", "Ground", "NotConnected")
     # Unique logical ports touched by this net, as (refdes, pin_name) pairs.
     # This is SOURCE-derived metadata used for diagnostics and adapter behavior
     # (e.g. when it's valid to mark pads as no_connect).
-    logical_ports: Tuple[Tuple[str, str], ...] = ()
+    logical_ports: tuple[tuple[str, str], ...] = ()
 
     def has_connection_to(self, entity_id: EntityId) -> bool:
         return any(fp_id == entity_id for fp_id, _ in self.connections)
@@ -151,9 +153,9 @@ class NetView:
 class BoardView:
     """Complete View derived from SOURCE netlist."""
 
-    footprints: Dict[EntityId, FootprintView] = field(default_factory=dict)
-    groups: Dict[EntityId, GroupView] = field(default_factory=dict)
-    nets: Dict[str, NetView] = field(default_factory=dict)
+    footprints: dict[EntityId, FootprintView] = field(default_factory=dict)
+    groups: dict[EntityId, GroupView] = field(default_factory=dict)
+    nets: dict[str, NetView] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -163,13 +165,13 @@ class Position:
     x: int
     y: int
 
-    def offset_by(self, dx: int, dy: int) -> "Position":
+    def offset_by(self, dx: int, dy: int) -> Position:
         return Position(x=self.x + dx, y=self.y + dy)
 
-    def __add__(self, other: "Position") -> "Position":
+    def __add__(self, other: Position) -> Position:
         return Position(x=self.x + other.x, y=self.y + other.y)
 
-    def __sub__(self, other: "Position") -> "Position":
+    def __sub__(self, other: Position) -> Position:
         return Position(x=self.x - other.x, y=self.y - other.y)
 
 
@@ -181,12 +183,12 @@ class FootprintComplement:
     orientation: float
     layer: str
     locked: bool = False
-    reference_position: Optional[Position] = None
+    reference_position: Position | None = None
     reference_visible: bool = True
-    value_position: Optional[Position] = None
+    value_position: Position | None = None
     value_visible: bool = False
 
-    def with_position(self, position: Position) -> "FootprintComplement":
+    def with_position(self, position: Position) -> FootprintComplement:
         return FootprintComplement(
             position=position,
             orientation=self.orientation,
@@ -198,7 +200,7 @@ class FootprintComplement:
             value_visible=self.value_visible,
         )
 
-    def with_locked(self, locked: bool) -> "FootprintComplement":
+    def with_locked(self, locked: bool) -> FootprintComplement:
         return FootprintComplement(
             position=self.position,
             orientation=self.orientation,
@@ -241,11 +243,11 @@ class ZoneComplement:
 
     uuid: str
     name: str
-    outline: Tuple[Position, ...]
+    outline: tuple[Position, ...]
     layer: str
     priority: int = 0
     net_name: str = ""
-    fill_settings: Dict[str, Any] = field(default_factory=dict)
+    fill_settings: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -255,17 +257,17 @@ class GraphicComplement:
     uuid: str
     graphic_type: str
     layer: str
-    geometry: Dict[str, Any] = field(default_factory=dict)
+    geometry: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class GroupComplement:
     """Complement for a group - routing and graphics within the group."""
 
-    tracks: Tuple[TrackComplement, ...] = ()
-    vias: Tuple[ViaComplement, ...] = ()
-    zones: Tuple[ZoneComplement, ...] = ()
-    graphics: Tuple[GraphicComplement, ...] = ()
+    tracks: tuple[TrackComplement, ...] = ()
+    vias: tuple[ViaComplement, ...] = ()
+    zones: tuple[ZoneComplement, ...] = ()
+    graphics: tuple[GraphicComplement, ...] = ()
 
     @property
     def is_empty(self) -> bool:
@@ -281,15 +283,15 @@ class GroupComplement:
 class BoardComplement:
     """Complete Complement - all user-authored data from DEST."""
 
-    footprints: Dict[EntityId, FootprintComplement] = field(default_factory=dict)
-    groups: Dict[EntityId, GroupComplement] = field(default_factory=dict)
+    footprints: dict[EntityId, FootprintComplement] = field(default_factory=dict)
+    groups: dict[EntityId, GroupComplement] = field(default_factory=dict)
 
     def get_footprint_complement(
         self, entity_id: EntityId
-    ) -> Optional[FootprintComplement]:
+    ) -> FootprintComplement | None:
         return self.footprints.get(entity_id)
 
-    def get_group_complement(self, entity_id: EntityId) -> Optional[GroupComplement]:
+    def get_group_complement(self, entity_id: EntityId) -> GroupComplement | None:
         return self.groups.get(entity_id)
 
 

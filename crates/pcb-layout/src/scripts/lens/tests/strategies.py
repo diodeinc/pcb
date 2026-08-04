@@ -8,21 +8,22 @@ Note: Renames (moved() paths) are now handled in Rust preprocessing.
 Paths are already in their final form when the Python sync runs.
 """
 
+from __future__ import annotations
+
 from hypothesis import strategies as st
 from hypothesis.strategies import composite
 
 from ..types import (
-    EntityPath,
-    EntityId,
-    Position,
-    FootprintView,
-    FootprintComplement,
-    GroupView,
-    GroupComplement,
-    BoardView,
     BoardComplement,
+    BoardView,
+    EntityId,
+    EntityPath,
+    FootprintComplement,
+    FootprintView,
+    GroupComplement,
+    GroupView,
+    Position,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Primitive Strategies
@@ -262,9 +263,9 @@ def board_view_strategy(draw, min_footprints: int = 0, max_footprints: int = 6):
     # Derive groups from footprint paths
     # Skip groups whose path equals a footprint path (NoLeafGroups invariant)
     groups = {}
-    fp_paths = {fp_id.path for fp_id in footprints.keys()}
+    fp_paths = {fp_id.path for fp_id in footprints}
 
-    for fp_id in footprints.keys():
+    for fp_id in footprints:
         parent = fp_id.path.parent()
         while parent and parent.segments:
             # Skip if this path is also a footprint path
@@ -277,7 +278,7 @@ def board_view_strategy(draw, min_footprints: int = 0, max_footprints: int = 6):
                 # Find all descendant footprints
                 member_ids = [
                     other_id
-                    for other_id in footprints.keys()
+                    for other_id in footprints
                     if parent.is_ancestor_of(other_id.path)
                 ]
 
@@ -314,11 +315,11 @@ def board_complement_strategy(draw, view: BoardView = None):
 
     if view is not None:
         # Create complements for entities in view
-        for entity_id in view.footprints.keys():
+        for entity_id in view.footprints:
             if draw(st.booleans()):  # Maybe we have a complement
                 footprints[entity_id] = draw(footprint_complement_strategy())
 
-        for entity_id in view.groups.keys():
+        for entity_id in view.groups:
             if draw(st.booleans()):
                 groups[entity_id] = draw(group_complement_strategy())
 

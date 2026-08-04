@@ -1,5 +1,7 @@
 """Lens-based layout synchronization module."""
 
-from .lens import run_lens_sync, SyncResult
+from __future__ import annotations
 
-__all__ = ["run_lens_sync", "SyncResult"]
+from .lens import SyncResult, run_lens_sync
+
+__all__ = ["SyncResult", "run_lens_sync"]
