@@ -325,7 +325,10 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
 
     std::fs::create_dir_all(&cache_dir).context("Failed to create FreeRouting cache dir")?;
 
-    let tmp_path = cache_dir.join(format!("{jar_filename}.tmp"));
+    // Unique per-process suffix so two concurrent `pcb route` invocations
+    // downloading into the same cache dir don't interleave writes into (or
+    // race the rename of) the same `.tmp`/`.part` file.
+    let tmp_path = cache_dir.join(format!("{jar_filename}.{}.tmp", std::process::id()));
     download_to_file(&freerouting_jar_url(), &tmp_path, 3)?;
 
     let actual_hash =
@@ -522,11 +525,9 @@ fn run_freerouting(
     let job_id = api.enqueue_job(&session_id, &job_name)?;
 
     // Full HH:MM:SS precision so FreeRouting's own job_timeout matches our
-    // poll deadline exactly. Rounding down to whole minutes (as before) let
-    // FreeRouting time itself out under our own deadline for any non-minute-
-    // aligned --fr-timeout (e.g. 90s truncated to "00:01:00" = 60s), stopping
-    // the job early with TIMED_OUT well before the user-requested window
-    // ends.
+    // poll deadline (--fr-timeout minutes * 60) exactly, rather than
+    // rounding down and letting FreeRouting time itself out before our own
+    // deadline.
     api.update_settings(
         &job_id,
         FREEROUTING_MAX_PASSES,
@@ -937,8 +938,9 @@ mod tests {
     #[test]
     fn format_hms_preserves_seconds_not_just_minutes() {
         // Regression test: a prior version rounded down to whole minutes
-        // (90s -> "00:01:00" = 60s), letting FreeRouting's own job_timeout
-        // expire before our poll deadline.
+        // (e.g. 90s -> "00:01:00" = 60s), which would let FreeRouting's own
+        // job_timeout expire before our poll deadline if this function were
+        // ever fed a non-minute-aligned value.
         assert_eq!(format_hms(90), "00:01:30");
         assert_eq!(format_hms(59), "00:00:59");
         assert_eq!(format_hms(3661), "01:01:01");
