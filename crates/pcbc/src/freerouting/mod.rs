@@ -326,14 +326,16 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     // 4. Auto-download to cache dir as a last resort
     //
     // When `dirs::cache_dir()` can't be determined (e.g. $HOME/$XDG_CACHE_HOME
-    // unset), fall back to a per-user subdirectory of the system temp dir
-    // rather than a fixed shared path. `/tmp/pcb/freerouting` would be
-    // predictable and creatable by any local user, who could pre-stake it
+    // unset), fall back to a uid-scoped subdirectory of the system temp dir
+    // rather than a fixed shared path. A fixed `/tmp/pcb/freerouting` would
+    // be predictable and creatable by any local user, who could pre-stake it
     // with hostile permissions/ownership before we get there.
-    let cache_dir = dirs::cache_dir()
-        .unwrap_or_else(process_temp_dir)
-        .join("pcb")
-        .join("freerouting");
+    let cache_dir = match dirs::cache_dir() {
+        Some(dir) => dir.join("pcb").join("freerouting"),
+        None => process_temp_dir()
+            .join(temp_cache_subdir())
+            .join("freerouting"),
+    };
     let jar_filename = freerouting_jar_filename();
     let cached = cache_dir.join(&jar_filename);
 
@@ -386,21 +388,42 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
 }
 
 /// Fallback base directory when `dirs::cache_dir()` can't be determined.
-/// Just `std::env::temp_dir()` — the caller is responsible for locking down
-/// permissions on whatever it creates underneath, since this base is shared
-/// with every other local user.
+/// Just `std::env::temp_dir()` — the caller joins a uid-scoped subdirectory
+/// (`temp_cache_subdir`) underneath it, since this base is shared with every
+/// other local user.
 fn process_temp_dir() -> PathBuf {
     std::env::temp_dir()
+}
+
+/// Subdirectory name to join under `process_temp_dir()`, scoped to the
+/// current effective user so two different local users never contend for
+/// (or need to fight over ownership of) the same fallback cache path.
+/// `restrict_dir_to_owner` remains as defense in depth against a
+/// misconfigured or hostile pre-existing directory, but this is the primary
+/// mechanism that avoids sharing a path with other users in the first place.
+#[cfg(unix)]
+fn temp_cache_subdir() -> String {
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let euid = unsafe { libc_geteuid() };
+    format!("pcb-{euid}")
+}
+
+#[cfg(not(unix))]
+fn temp_cache_subdir() -> String {
+    "pcb".to_string()
 }
 
 /// Restrict `dir` (assumed just-created via `create_dir_all`) to owner-only
 /// access, returning `false` if it's owned by someone else so the caller can
 /// refuse to reuse it. Only meaningful on unix; always `true` elsewhere.
 ///
-/// This guards the `std::env::temp_dir()` fallback path in
-/// `find_or_download_freerouting_jar`, where the cache directory lives at a
-/// predictable, world-writable location another local user could pre-create
-/// with hostile permissions or ownership before we get there.
+/// Defense in depth for the `std::env::temp_dir()` fallback path in
+/// `find_or_download_freerouting_jar`: `temp_cache_subdir` already scopes
+/// that path per-uid so different local users don't share it, but this
+/// still catches a misconfigured or hostile pre-existing directory at that
+/// path (e.g. left over from before `temp_cache_subdir` existed, or a
+/// deliberately pre-staked uid-scoped path on a system where uids aren't
+/// trustworthy isolation boundaries).
 #[cfg(unix)]
 fn restrict_dir_to_owner(dir: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
