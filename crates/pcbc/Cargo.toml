@@ -78,4 +78,3 @@ httpmock = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 pcb-test-utils = { workspace = true }
-jiff = { workspace = true }
