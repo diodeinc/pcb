@@ -337,6 +337,17 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     let jar_filename = freerouting_jar_filename();
     let cached = cache_dir.join(&jar_filename);
 
+    std::fs::create_dir_all(&cache_dir).context("Failed to create FreeRouting cache dir")?;
+    if !restrict_dir_to_owner(&cache_dir) {
+        anyhow::bail!(
+            "Refusing to use FreeRouting cache dir {} — it's owned by another user.\n\
+             This can happen when the system cache/temp dir is shared between users.\n\
+             Remove the directory (if you control it) or set --fr-jar/FREEROUTING_JAR \
+             to point at a JAR directly.",
+            cache_dir.display()
+        );
+    }
+
     if cached.exists() {
         match sha256_file(&cached) {
             Ok(hash) if hash == *expected_hash => return Ok(cached),
@@ -346,9 +357,6 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
             }
         }
     }
-
-    std::fs::create_dir_all(&cache_dir).context("Failed to create FreeRouting cache dir")?;
-    restrict_dir_to_owner(&cache_dir);
 
     // Unique per-process suffix so two concurrent `pcb route` invocations
     // downloading into the same cache dir don't interleave writes into (or
@@ -385,37 +393,35 @@ fn process_temp_dir() -> PathBuf {
     std::env::temp_dir()
 }
 
-/// Best-effort: restrict `dir` (assumed just-created via `create_dir_all`)
-/// to owner-only access, and refuse to reuse it if it's owned by someone
-/// else. Only meaningful on unix; a no-op elsewhere.
+/// Restrict `dir` (assumed just-created via `create_dir_all`) to owner-only
+/// access, returning `false` if it's owned by someone else so the caller can
+/// refuse to reuse it. Only meaningful on unix; always `true` elsewhere.
 ///
 /// This guards the `std::env::temp_dir()` fallback path in
 /// `find_or_download_freerouting_jar`, where the cache directory lives at a
 /// predictable, world-writable location another local user could pre-create
 /// with hostile permissions or ownership before we get there.
 #[cfg(unix)]
-fn restrict_dir_to_owner(dir: &Path) {
+fn restrict_dir_to_owner(dir: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::fs::PermissionsExt;
 
     let Ok(meta) = std::fs::metadata(dir) else {
-        return;
+        return false;
     };
     // SAFETY: geteuid takes no arguments and cannot fail.
     let euid = unsafe { libc_geteuid() };
     if meta.uid() != euid {
-        eprintln!(
-            "  {} {} is owned by another user, not restricting permissions",
-            "!".yellow(),
-            dir.display()
-        );
-        return;
+        return false;
     }
     let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    true
 }
 
 #[cfg(not(unix))]
-fn restrict_dir_to_owner(_dir: &Path) {}
+fn restrict_dir_to_owner(_dir: &Path) -> bool {
+    true
+}
 
 #[cfg(unix)]
 unsafe extern "C" {
