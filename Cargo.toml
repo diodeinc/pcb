@@ -102,7 +102,6 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 csv = "1.4"
 debugserver-types = "0.5.0"
 derivative = "2.2"
-either = "1.16"
 fixedbitset = "0.5"
 globset = "0.4.18"
 lsp-server = "0.10.0"
@@ -119,7 +118,6 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 rand = "0.10"
 serde-wasm-bindgen = "0.6"
-serde_yaml = "0.9"
 self-replace = "1.5"
 serial_test = "4.0"
 smallvec = "1.15"
@@ -131,7 +129,9 @@ terminal_size = "0.4.4"
 terminal_hyperlink = "0.1"
 uppsala = "0.9.0"
 termimad = "0.35"
-syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig"] }
+# regex-fancy (pure Rust, and fancy-regex is already in the tree via pagable)
+# rather than regex-onig, which compiles Oniguruma from C via onig_sys.
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 textwrap = "0.16"
 unicode-width = "0.2.2"
 urlencoding = "2.1"
