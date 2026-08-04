@@ -79,7 +79,6 @@ tempfile = "3.27.0"
 thiserror = "2"
 toml = "1"
 toml_edit = "0.25"
-tokio = { version = "1", features = ["rt-multi-thread"] }
 uuid = { version = "1.23", features = ["v4", "v5", "js"] }
 walkdir = "2.5"
 deunicode = "1.6"
@@ -110,7 +109,7 @@ pathdiff = "0.2"
 percent-encoding = "2.3"
 petgraph = "0.8"
 rayon = "1.12"
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "charset", "http2", "json", "multipart", "rustls", "system-proxy"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "http2", "json", "multipart", "rustls", "system-proxy"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 rand = "0.10"
 serde-wasm-bindgen = "0.6"
