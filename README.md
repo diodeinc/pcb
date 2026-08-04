@@ -63,6 +63,9 @@ cargo build -p pcb -p pcbc
 ./install.sh --local
 ```
 
+Repository maintenance scripts are run by their explicit path, such as
+`./bin/embed-readme --check README.md`; no shell environment activation is needed.
+
 ## Quick start
 
 Create `blinky.zen`:

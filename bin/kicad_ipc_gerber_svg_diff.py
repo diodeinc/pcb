@@ -92,7 +92,17 @@ def main() -> int:
 
     # pcbc pipeline: KiCad IPC-2581 -> Gerber/XNC package.
     ipc_xml = out_dir / "layout.ipc2581.xml"
-    run([kicad_cli, "pcb", "export", "ipc2581", "--output", str(ipc_xml), str(prepared_layout)])
+    run(
+        [
+            kicad_cli,
+            "pcb",
+            "export",
+            "ipc2581",
+            "--output",
+            str(ipc_xml),
+            str(prepared_layout),
+        ]
+    )
     gerber_zip = out_dir / "ipc-gerbers.zip"
     run_pcbc(
         args,
@@ -137,7 +147,9 @@ def main() -> int:
 
     drill_result = None
     if args.drills:
-        drill_result = compare_drills(kicad_cli, prepared_layout, out_dir, ipc_gerber_dir)
+        drill_result = compare_drills(
+            kicad_cli, prepared_layout, out_dir, ipc_gerber_dir
+        )
 
     print()
     print(f"Artifacts: {out_dir}")
@@ -288,12 +300,26 @@ def select_layers(ipc_gerber_dir: Path, layers_arg: str) -> list[tuple[str, str]
 
 
 def layer_sort_key(kicad_layer: str) -> tuple[int, int, str]:
-    order = ["F.Cu", "In", "B.Cu", "F.Mask", "B.Mask", "F.Paste", "B.Paste",
-             "F.SilkS", "B.SilkS", "Edge.Cuts"]
+    order = [
+        "F.Cu",
+        "In",
+        "B.Cu",
+        "F.Mask",
+        "B.Mask",
+        "F.Paste",
+        "B.Paste",
+        "F.SilkS",
+        "B.SilkS",
+        "Edge.Cuts",
+    ]
     inner = re.fullmatch(r"In(\d+)\.Cu", kicad_layer)
     if inner:
         return (order.index("In"), int(inner.group(1)), kicad_layer)
-    return (order.index(kicad_layer) if kicad_layer in order else len(order), 0, kicad_layer)
+    return (
+        order.index(kicad_layer) if kicad_layer in order else len(order),
+        0,
+        kicad_layer,
+    )
 
 
 # --- Per-layer raster comparison -------------------------------------------
@@ -409,7 +435,9 @@ def write_diff_panel(
     draw.rectangle([0, 0, image_width, header_height], fill=(245, 245, 245))
     diff_mm2 = int((reference ^ candidate).sum()) / (px_per_mm * px_per_mm)
     draw.text((18, 12), f"KiCad vs IPC->Gerber: {layer}", fill=(20, 20, 20))
-    draw.text((18, 36), f"XOR {diff_mm2:.4f} mm^2 at {px_per_mm} px/mm", fill=(40, 40, 40))
+    draw.text(
+        (18, 36), f"XOR {diff_mm2:.4f} mm^2 at {px_per_mm} px/mm", fill=(40, 40, 40)
+    )
     panel.paste(
         diff.resize((image_width, image_height), Image.Resampling.LANCZOS),
         (0, header_height),
@@ -480,7 +508,10 @@ def parse_svg(svg: Path) -> ET.Element:
 
 def effective_px_per_mm(requested: int, width_mm: float, height_mm: float) -> int:
     px_per_mm = requested
-    while px_per_mm > 1 and width_mm * height_mm * px_per_mm * px_per_mm > MAX_RASTER_PIXELS:
+    while (
+        px_per_mm > 1
+        and width_mm * height_mm * px_per_mm * px_per_mm > MAX_RASTER_PIXELS
+    ):
         px_per_mm = int(px_per_mm * 0.8)
     if px_per_mm != requested:
         print(
@@ -610,7 +641,9 @@ def parse_excellon(path: Path, out: DrillFile) -> None:
             continue
         tool_def = re.fullmatch(r"T(\d+)C([\d.]+)", line)
         if tool_def and in_header:
-            tools[tool_def.group(1).lstrip("0") or "0"] = float(tool_def.group(2)) * scale
+            tools[tool_def.group(1).lstrip("0") or "0"] = (
+                float(tool_def.group(2)) * scale
+            )
             continue
         tool_select = re.fullmatch(r"T(\d+)", line)
         if tool_select and not in_header:
@@ -655,7 +688,9 @@ def parse_excellon(path: Path, out: DrillFile) -> None:
 
 
 def parse_coords(text: str, scale: float) -> tuple[float, float] | None:
-    values = dict((axis, float(value) * scale) for axis, value in COORD_RE.findall(text))
+    values = dict(
+        (axis, float(value) * scale) for axis, value in COORD_RE.findall(text)
+    )
     if "X" not in values or "Y" not in values:
         return None
     return values["X"], values["Y"]
@@ -693,10 +728,11 @@ def entries_match(a: Sequence[float], b: Sequence[float]) -> bool:
         return coords_close(a_coords, b_coords)
     # Slots may list their endpoints in either order (KiCad routes are
     # mirrored around Y relative to nothing in particular).
-    return coords_close(a_coords[:2], b_coords[:2]) and coords_close(
-        a_coords[2:], b_coords[2:]
-    ) or coords_close(a_coords[:2], b_coords[2:]) and coords_close(
-        a_coords[2:], b_coords[:2]
+    return (
+        coords_close(a_coords[:2], b_coords[:2])
+        and coords_close(a_coords[2:], b_coords[2:])
+        or coords_close(a_coords[:2], b_coords[2:])
+        and coords_close(a_coords[2:], b_coords[:2])
     )
 
 
@@ -793,7 +829,9 @@ KICAD_FILE_ALIASES = {
 
 
 def kicad_gerber_file(output_dir: Path, kicad_layer: str) -> Path:
-    stem_fragments = KICAD_FILE_ALIASES.get(kicad_layer, [kicad_layer.replace(".", "_")])
+    stem_fragments = KICAD_FILE_ALIASES.get(
+        kicad_layer, [kicad_layer.replace(".", "_")]
+    )
     matches = [
         path
         for path in output_dir.iterdir()
@@ -803,7 +841,9 @@ def kicad_gerber_file(output_dir: Path, kicad_layer: str) -> Path:
     ]
     if len(matches) != 1:
         names = ", ".join(path.name for path in output_dir.iterdir()) or "none"
-        fail(f"expected one KiCad Gerber for {kicad_layer} in {output_dir}, got: {names}")
+        fail(
+            f"expected one KiCad Gerber for {kicad_layer} in {output_dir}, got: {names}"
+        )
     return matches[0]
 
 
