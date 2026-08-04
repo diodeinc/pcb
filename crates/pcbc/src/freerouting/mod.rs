@@ -673,9 +673,28 @@ fn poll_job(
                 }
                 match status.state {
                     JobState::Completed => {
-                        return Ok(PollResult {
-                            outcome: RunOutcome::Completed,
-                            output: best_effort_output(api, job_id).or(last_known_output),
+                        // Unlike the Cancelled/TimedOut branch below, a
+                        // failed fetch here must NOT silently fall back to
+                        // last_known_output while still reporting Completed
+                        // — that would publish a stale, partially-routed
+                        // snapshot as a finished result. Downgrade to
+                        // Cancelled instead so callers print "partial
+                        // result" wording, matching what's actually saved.
+                        return Ok(match best_effort_output(api, job_id) {
+                            Some(bytes) => PollResult {
+                                outcome: RunOutcome::Completed,
+                                output: Some(bytes),
+                            },
+                            None => {
+                                eprintln!(
+                                    "  {} FreeRouting finished but its final output could not be fetched; saving last known progress instead.",
+                                    "!".yellow()
+                                );
+                                PollResult {
+                                    outcome: RunOutcome::Cancelled,
+                                    output: last_known_output,
+                                }
+                            }
                         });
                     }
                     JobState::Cancelled | JobState::TimedOut => {
