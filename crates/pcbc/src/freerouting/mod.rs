@@ -51,6 +51,12 @@ const FREEROUTING_JAR_SHA256: &str =
 
 const FREEROUTING_MAX_PASSES: u32 = 200;
 
+/// Minimum interval between `get_output` refreshes of the poll loop's
+/// cached partial result. Each call forces the server to serialize and
+/// base64-encode the whole in-progress board, so refreshing at full ~1s
+/// poll cadence would be wasteful on large boards over long runs.
+const OUTPUT_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+
 fn freerouting_jar_filename() -> String {
     format!("freerouting-{FREEROUTING_VERSION}.jar")
 }
@@ -682,6 +688,7 @@ fn poll_job(
     let mut consecutive_errors = 0u32;
     let mut last_printed_pass: Option<u32> = None;
     let mut last_known_output: Option<Vec<u8>> = None;
+    let mut last_output_refresh: Option<Instant> = None;
 
     loop {
         for _ in 0..10 {
@@ -783,8 +790,22 @@ fn poll_job(
                         // toward Cancelled): refresh our cached output now,
                         // while the API is guaranteed to serve it, rather
                         // than waiting until we're racing a cancellation.
-                        if let Ok(JobOutput::Data(bytes)) = api.get_output(job_id) {
-                            last_known_output = Some(bytes);
+                        //
+                        // Throttled to once every OUTPUT_REFRESH_INTERVAL:
+                        // get_output makes the server serialize the whole
+                        // in-progress board to SES and base64-encode it, so
+                        // doing this on every ~1s poll tick would be a
+                        // needless full serialize/encode/decode cycle every
+                        // second for the entire run. The cache only needs to
+                        // be recent enough to survive a cancel/output race,
+                        // not perfectly up to date.
+                        let should_refresh = last_output_refresh
+                            .is_none_or(|t| t.elapsed() >= OUTPUT_REFRESH_INTERVAL);
+                        if should_refresh {
+                            if let Ok(JobOutput::Data(bytes)) = api.get_output(job_id) {
+                                last_known_output = Some(bytes);
+                            }
+                            last_output_refresh = Some(Instant::now());
                         }
                     }
                 }
