@@ -6,6 +6,8 @@ use super::board_array_auto::{
     AutoBoardArrayPlan, AutoSheetSize, TargetSizeMm, auto_board_array_plan,
     auto_board_array_plan_for_sheet,
 };
+use crate::copper_balance::CopperBalanceReport;
+use crate::generated::GeneratedLayerFeature;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
@@ -55,7 +57,6 @@ const KICAD_VCUT_LABEL_GLYPHS: [&str; 5] = [
     "JZLFXF RR[RF",
 ];
 const TOOLING_HOLE_LAYER_BASE_NAME: &str = "Board_Array_Drill";
-const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
 const FIDUCIAL_COPPER_DIAMETER_MM: f64 = 1.0;
 const FIDUCIAL_MASK_OPENING_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_DIAMETER_MM: f64 = 2.0;
@@ -186,7 +187,7 @@ pub struct BoardArrayCreateOptions {
 #[derive(Debug, Clone)]
 pub struct BoardArrayCreation {
     pub xml: String,
-    pub copper_balance: balance::AutomaticBoardArrayCopperBalanceReport,
+    pub copper_balance: CopperBalanceReport,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,7 +292,7 @@ impl BoardArrayPanelizationMode {
 #[derive(Debug, Clone, Default)]
 struct BoardArrayGeneratedGeometry {
     layers: Vec<GeneratedLayer>,
-    layer_features: Vec<GeneratedLayerFeature>,
+    layer_features: Vec<(GeneratedFeatureScope, GeneratedLayerFeature)>,
 }
 
 impl BoardArrayGeneratedGeometry {
@@ -317,20 +318,22 @@ impl BoardArrayGeneratedGeometry {
         spec_refs: Vec<String>,
         features: Vec<SetFeature>,
     ) {
-        self.layer_features.push(GeneratedLayerFeature {
+        self.layer_features.push((
             scope,
-            layer_name: layer_name.into(),
-            polarity,
-            spec_refs,
-            features,
-        });
+            GeneratedLayerFeature {
+                layer_name: layer_name.into(),
+                polarity,
+                spec_refs,
+                features,
+            },
+        ));
     }
 
     fn referenced_layer_names(&self) -> impl Iterator<Item = &str> {
         self.layers.iter().map(|layer| layer.name.as_str()).chain(
             self.layer_features
                 .iter()
-                .map(|layer_feature| layer_feature.layer_name.as_str()),
+                .map(|(_, layer_feature)| layer_feature.layer_name.as_str()),
         )
     }
 }
@@ -357,15 +360,6 @@ impl GeneratedLayer {
             polarity,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-struct GeneratedLayerFeature {
-    scope: GeneratedFeatureScope,
-    layer_name: String,
-    polarity: Polarity,
-    spec_refs: Vec<String>,
-    features: Vec<SetFeature>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -398,7 +392,7 @@ pub fn execute_auto(input: &Path, output: &Path, sheet: Option<AutoSheetSize>) -
     Ok(())
 }
 
-fn print_copper_balance_summary(report: &balance::AutomaticBoardArrayCopperBalanceReport) {
+fn print_copper_balance_summary(report: &CopperBalanceReport) {
     for line in report.summary_lines() {
         eprintln!("  {line}");
     }

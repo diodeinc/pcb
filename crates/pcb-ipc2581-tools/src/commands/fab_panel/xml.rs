@@ -7,6 +7,7 @@ use ipc2581::{Ipc2581, XmlWriter};
 
 use super::{FabPanelSpec, SourcePanel};
 use crate::commands::fab_panel::packing::Placement;
+use crate::generated::{GeneratedLayerFeature, GeneratedNameState, write_generated_layer_feature};
 use crate::steps::FAB_PANEL_STEP_NAME;
 
 const FAB_ROLE_ID: &str = "fab_panel_role";
@@ -181,6 +182,7 @@ pub(super) fn write_fab_panel_xml(
     placements: &[Placement],
     shared_stackup_layers: &HashSet<String>,
     spec: FabPanelSpec,
+    balance_features: &[GeneratedLayerFeature],
 ) -> Result<String> {
     let docs = sources
         .iter()
@@ -209,6 +211,7 @@ pub(super) fn write_fab_panel_xml(
         placements,
         shared_stackup_layers,
         spec,
+        balance_features,
     )?;
     writer.end_element("IPC-2581");
 
@@ -357,6 +360,7 @@ fn write_history_record(writer: &mut XmlWriter) {
     writer.end_element("HistoryRecord");
 }
 
+#[expect(clippy::too_many_arguments)]
 fn write_ecad(
     writer: &mut XmlWriter,
     sources: &[SourcePanel],
@@ -365,6 +369,7 @@ fn write_ecad(
     placements: &[Placement],
     shared_stackup_layers: &HashSet<String>,
     spec: FabPanelSpec,
+    balance_features: &[GeneratedLayerFeature],
 ) -> Result<()> {
     let units = sources
         .first()
@@ -406,7 +411,15 @@ fn write_ecad(
             writer.raw(doc.source(step));
         }
     }
-    write_fab_step(writer, sources, occurrences, placements, units, spec)?;
+    write_fab_step(
+        writer,
+        sources,
+        occurrences,
+        placements,
+        units,
+        spec,
+        balance_features,
+    )?;
     writer.end_element("CadData");
     writer.end_element("Ecad");
     Ok(())
@@ -419,6 +432,7 @@ fn write_fab_step(
     placements: &[Placement],
     units: Units,
     spec: FabPanelSpec,
+    balance_features: &[GeneratedLayerFeature],
 ) -> Result<()> {
     let usable = spec.usable_bbox()?;
     writer.start_element("Step", &[("name", FAB_PANEL_STEP_NAME), ("type", "PALLET")]);
@@ -530,6 +544,10 @@ fn write_fab_step(
                 ("mirror", "false"),
             ],
         );
+    }
+    let mut names = GeneratedNameState::default();
+    for layer_feature in balance_features {
+        write_generated_layer_feature(writer, units, layer_feature, &mut names)?;
     }
     writer.end_element("Step");
     Ok(())

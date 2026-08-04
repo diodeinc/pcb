@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `fab-panel create` now automatically balances copper in the gutters between placed assembly panels.
+
 ## [0.4.22] - 2026-08-04
 
 ### Changed
