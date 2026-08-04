@@ -672,6 +672,9 @@ impl Sandbox {
             self.cache_dir.to_string_lossy().into_owned(),
         );
 
+        // Block network access for sandboxed commands:
+        // - Git: only allow `file://` (fixtures are rewritten to local file URLs).
+        // - HTTP(S): route via a dead proxy to avoid accidental egress.
         env_map.insert("GIT_ALLOW_PROTOCOL".into(), "file".into());
         env_map.insert("HTTP_PROXY".into(), "http://127.0.0.1:0".into());
         env_map.insert("HTTPS_PROXY".into(), "http://127.0.0.1:0".into());
