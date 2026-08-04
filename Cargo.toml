@@ -17,8 +17,8 @@ starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3
 allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 
-ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.20" }
-ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.15.20" }
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.16.1" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.16.1" }
 
 mimalloc = "0.1"
 
