@@ -35,9 +35,11 @@ Mcu(
     FLASH = FLASH,
     # Pooled capabilities: the design names its roles, as many as it needs.
     # "LED" is a design label, not a capability — the capability is a GPIO.
-    # at() pins the role to PA8 (hard: build error if missing or taken; the
-    # pin also leaves the swap classes). Drop at() to let the solver choose.
-    gpio = {"LED": at(LED_CTRL, "PA8")},
+    # at() pins the role to a physical pad (hard: build error if missing or
+    # taken; the pad also leaves the swap classes) — on this package pads are
+    # shared, so the constraint names the pad, not a port. Drop at() to let
+    # the solver choose.
+    gpio = {"LED": at(LED_CTRL, "PB0/PB1/PB2/PA8")},
     adc = {"VBAT": VBAT_SENSE},
 )
 
