@@ -623,8 +623,15 @@ fn run_freerouting(
     let poll_result = poll_job(&api, &job_id, timeout_secs, &spinner)?;
     let elapsed = start.elapsed().as_secs_f64();
     match (poll_result.outcome, poll_result.output.is_some()) {
-        (RunOutcome::Completed, _) => {
+        (RunOutcome::Completed, true) => {
             spinner.success(format!("FreeRouting finished in {elapsed:.1}s"));
+        }
+        (RunOutcome::Completed, false) => {
+            // Board had nothing left to route — a clean success, not a
+            // failure, even though there's no SES to write.
+            spinner.success(format!(
+                "FreeRouting finished in {elapsed:.1}s (nothing to route)"
+            ));
         }
         (RunOutcome::Cancelled, true) => {
             spinner.warning(format!(
@@ -744,12 +751,23 @@ fn poll_job(
                         // snapshot as a finished result. Downgrade to
                         // Cancelled instead so callers print "partial
                         // result" wording, matching what's actually saved.
-                        return Ok(match best_effort_output(api, job_id) {
-                            Some(bytes) => PollResult {
+                        //
+                        // NothingToRoute is a distinct, legitimate outcome
+                        // (the board had nothing left to route) and must NOT
+                        // be treated the same as a fetch failure — otherwise
+                        // an already fully-routed board reports a scary
+                        // "could not be fetched" warning for a run that
+                        // actually succeeded.
+                        return Ok(match api.get_output(job_id) {
+                            Ok(JobOutput::Data(bytes)) => PollResult {
                                 outcome: RunOutcome::Completed,
                                 output: Some(bytes),
                             },
-                            None => {
+                            Ok(JobOutput::NothingToRoute) => PollResult {
+                                outcome: RunOutcome::Completed,
+                                output: None,
+                            },
+                            Err(_) => {
                                 eprintln!(
                                     "  {} FreeRouting finished but its final output could not be fetched; saving last known progress instead.",
                                     "!".yellow()
