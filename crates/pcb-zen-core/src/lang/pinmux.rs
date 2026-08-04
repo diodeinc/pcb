@@ -1,17 +1,14 @@
-//! Peripheral capability model: `pin`/`peripheral`/`pool`/`pin_request`/
-//! `pin_solve` builtins plus the `at()` connection wrapper.
-//!
-//! Components declare what their pins *can do*; `pin_solve` performs the
-//! joint instance x pin assignment at elaboration, with exclusivity at both
-//! tiers structural (infeasible, not lint). Capability matching is nominal
-//! over `interface()` identities, closed over `interface(implies=[...])`.
-//! Results land in the `pin_assignment` / `swap_classes` module properties.
+//! Peripheral capability model: components declare what their pins *can do*,
+//! `pin_solve` performs the joint instance x pin assignment at elaboration,
+//! with exclusivity at both tiers structural (infeasible, not lint). Matching
+//! is nominal over `interface()` identities, closed over `implies=[...]`;
+//! results land in the `pin_assignment` / `swap_classes` module properties.
 
-use allocative::Allocative;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 
+use allocative::Allocative;
 use pcb_sch::physical::PhysicalValue;
 use starlark::collections::SmallMap;
 use starlark::environment::GlobalsBuilder;
@@ -35,10 +32,6 @@ use crate::lang::net::{FrozenNetValue, NetValue};
 const REBIND_VALUES: [&str; 3] = ["none", "firmware", "fixed"];
 const PINMAP_CAP: usize = 512;
 const SOLVER_BUDGET: usize = 200_000;
-
-// ---------------------------------------------------------------------------
-// Interface introspection (closure over `implies`)
-// ---------------------------------------------------------------------------
 
 struct IfaceInfo<'v> {
     id: TypeInstanceId,
@@ -102,10 +95,6 @@ fn iface_closure<'v>(root: Value<'v>) -> anyhow::Result<Vec<IfaceInfo<'v>>> {
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
-// Dict helpers (the builtins exchange plain Starlark dicts)
-// ---------------------------------------------------------------------------
-
 fn dict_get<'v>(d: &DictRef<'v>, heap: Heap<'v>, key: &str) -> Option<Value<'v>> {
     d.get(heap.alloc(key)).ok().flatten()
 }
@@ -119,10 +108,6 @@ fn is_kind<'v>(v: Value<'v>, heap: Heap<'v>, kind: &str) -> bool {
         .map(|d| dict_get_str(&d, heap, "kind").as_deref() == Some(kind))
         .unwrap_or(false)
 }
-
-// ---------------------------------------------------------------------------
-// Internal solver model
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 struct RPin {
@@ -188,10 +173,6 @@ struct PrevAssign {
     instance: String,
     pins: HashMap<String, String>,
 }
-
-// ---------------------------------------------------------------------------
-// Parsing of peripheral/request dicts into the solver model
-// ---------------------------------------------------------------------------
 
 fn parse_rpin<'v>(v: Value<'v>, heap: Heap<'v>, ctx: &str) -> anyhow::Result<RPin> {
     if let Some(s) = v.unpack_str() {
@@ -378,15 +359,11 @@ fn parse_previous<'v>(v: Value<'v>, heap: Heap<'v>) -> HashMap<String, PrevAssig
     out
 }
 
-// ---------------------------------------------------------------------------
-// Candidate generation
-// ---------------------------------------------------------------------------
-
 fn config_truthy<'v>(config: &SmallMap<String, Value<'v>>, key: &str) -> bool {
     config.get(key).map(|v| v.to_bool()).unwrap_or(false)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 fn combos_for_request<'v>(
     req: &RReq<'v>,
     periphs: &[RPeriph<'v>],
@@ -527,21 +504,12 @@ fn combos_for_request<'v>(
     Ok((out, rejects))
 }
 
-// ---------------------------------------------------------------------------
-// Optimal assignment: deterministic branch-and-bound
-// ---------------------------------------------------------------------------
-
-/// Deterministic branch-and-bound over the joint assignment space.
-///
-/// Candidates are explored in per-request cost order and subtrees are pruned
-/// with an admissible lower bound (each unplaced request costs at least its
-/// cheapest combo), so the returned solution minimizes the *total* cost — not
-/// merely the first feasible one. Note this is constraint optimization, not
-/// plain bipartite matching: pin conflicts couple otherwise independent
-/// instance choices, which is why Hungarian-style matching does not apply
-/// directly. On budget exhaustion the best solution found so far is returned
-/// (feasibility stays exact; only optimality can degrade on pathological
-/// instances).
+/// Deterministic branch-and-bound over the joint assignment space (pin
+/// conflicts couple otherwise independent instance choices, so this is
+/// constraint optimization, not plain matching). Candidates are explored in
+/// per-request cost order and pruned with an admissible lower bound, so the
+/// result minimizes total cost. On budget exhaustion the best solution found
+/// so far is returned; only optimality can degrade, never feasibility.
 fn assign<'v>(reqs: &[RReq<'v>], all_combos: &[Vec<Combo>]) -> Option<Vec<usize>> {
     let n = reqs.len();
     if n == 0 {
@@ -638,10 +606,6 @@ fn assign<'v>(reqs: &[RReq<'v>], all_combos: &[Vec<Combo>]) -> Option<Vec<usize>
     best.map(|(_, sol)| sol)
 }
 
-// ---------------------------------------------------------------------------
-// JSON -> Starlark conversion for the result value
-// ---------------------------------------------------------------------------
-
 fn json_to_value<'v>(heap: Heap<'v>, v: &serde_json::Value) -> Value<'v> {
     match v {
         serde_json::Value::Null => Value::new_none(),
@@ -678,10 +642,6 @@ fn warn_at_call_site(eval: &mut Evaluator<'_, '_, '_>, msg: String) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// `at()` — pin constraint attached at the connection site
-// ---------------------------------------------------------------------------
-
 /// Wrapper produced by `at(value, pins, soft=)`: the caller constrains which
 /// physical pin(s) a capability may land on, on the connection itself
 /// (`Mcu(IO0 = at(led_net, "PA8"))`). `io()` unwraps it at binding time: the
@@ -706,6 +666,16 @@ impl<'v, V: ValueLike<'v>> std::fmt::Display for PinAtGen<V> {
     }
 }
 
+/// `(inner, pins, soft)` of an `at()` wrapper (mutable or frozen), if `v` is one.
+fn unpack_pin_at<'v>(v: Value<'v>) -> Option<(Value<'v>, Vec<String>, bool)> {
+    if let Some(w) = v.downcast_ref::<PinAt<'v>>() {
+        Some((w.inner.to_value(), w.pins.clone(), w.soft))
+    } else {
+        v.downcast_ref::<FrozenPinAt>()
+            .map(|w| (w.inner.to_value(), w.pins.clone(), w.soft))
+    }
+}
+
 /// If `value` is an `at()` wrapper, record its constraint against the io()
 /// input `name` and return the inner value; otherwise return `value` as-is.
 pub(crate) fn unwrap_pin_at<'v>(
@@ -713,14 +683,7 @@ pub(crate) fn unwrap_pin_at<'v>(
     value: Value<'v>,
     eval: &mut Evaluator<'v, '_, '_>,
 ) -> Value<'v> {
-    let unwrapped = if let Some(w) = value.downcast_ref::<PinAt<'v>>() {
-        Some((w.inner.to_value(), w.pins.clone(), w.soft))
-    } else if let Some(w) = value.downcast_ref::<FrozenPinAt>() {
-        Some((w.inner.to_value(), w.pins.clone(), w.soft))
-    } else {
-        None
-    };
-    match unwrapped {
+    match unpack_pin_at(value) {
         Some((inner, pins, soft)) => {
             if let Some(ctx) = eval.context_value() {
                 ctx.add_pin_constraint(name, pins, soft);
@@ -730,10 +693,6 @@ pub(crate) fn unwrap_pin_at<'v>(
         None => value,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Builtins
-// ---------------------------------------------------------------------------
 
 /// Shared construction of a peripheral dict (used by `peripheral()` and `pool()`).
 #[allow(clippy::too_many_arguments)]
@@ -977,6 +936,7 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
 
     /// A resource cluster: signals -> candidate pins, provided interfaces,
     /// rebind cost, attributes, optional config-conditional availability.
+    #[allow(clippy::too_many_arguments)]
     fn peripheral<'v>(
         #[starlark(require = pos)] name: String,
         #[starlark(require = named)] provides: UnpackList<Value<'v>>,
@@ -1079,6 +1039,7 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
     /// signals (`uses=`) consume pins. With `if_connected=True` the request is
     /// served only when the caller actually connected the module input of the
     /// same name — the `io(Iface, optional=True)` slot pattern.
+    #[allow(clippy::too_many_arguments)]
     fn pin_request<'v>(
         #[starlark(require = pos)] name: String,
         #[starlark(require = pos)] iface: Value<'v>,
@@ -1097,15 +1058,10 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
         // dict-of-roles pattern). An at() wrapper contributes its pin
         // constraint here and the inner value flows on.
         let (bind_val, bind_pins, bind_soft) = match bind {
-            NoneOr::Other(v) => {
-                if let Some(w) = v.downcast_ref::<PinAt<'v>>() {
-                    (Some(w.inner.to_value()), Some(w.pins.clone()), w.soft)
-                } else if let Some(w) = v.downcast_ref::<FrozenPinAt>() {
-                    (Some(w.inner.to_value()), Some(w.pins.clone()), w.soft)
-                } else {
-                    (Some(v), None, false)
-                }
-            }
+            NoneOr::Other(v) => match unpack_pin_at(v) {
+                Some((inner, pins, soft)) => (Some(inner), Some(pins), soft),
+                None => (Some(v), None, false),
+            },
             NoneOr::None => (None, None, false),
         };
         // Validate the bound value early, with the role name in the message —
@@ -1541,13 +1497,9 @@ pub(crate) fn pinmux_globals(builder: &mut GlobalsBuilder) {
         for (req_name, raw_val) in ifaces.iter() {
             // Accept at()-wrapped values: the constraint was consumed at solve
             // time, only the inner net matters here.
-            let iface_val = &if let Some(w) = raw_val.downcast_ref::<PinAt<'v>>() {
-                w.inner.to_value()
-            } else if let Some(w) = raw_val.downcast_ref::<FrozenPinAt>() {
-                w.inner.to_value()
-            } else {
-                *raw_val
-            };
+            let iface_val = &unpack_pin_at(*raw_val)
+                .map(|(inner, _, _)| inner)
+                .unwrap_or(*raw_val);
             let Some(entry) = dict_get(&ad, heap, req_name) else {
                 continue;
             };

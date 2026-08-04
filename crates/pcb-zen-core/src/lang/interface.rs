@@ -512,12 +512,7 @@ pub struct InterfaceFactoryGen<V: InterfaceCell> {
     interface_type_data: V::InterfaceTypeDataOpt,
     fields: SmallMap<String, V>,
     post_init_fn: Option<V>,
-    /// Interface types this one implies (capability closure): a peripheral
-    /// providing this interface also satisfies requests for any implied one.
     implies: Vec<V>,
-    /// Declared attribute vocabulary for capability providers: attribute
-    /// name -> physical value type (e.g. {"baud_max": Frequency}). Providers
-    /// may only declare attrs listed here, with matching dimensions.
     attr_spec: SmallMap<String, V>,
     param_spec: ParametersSpec<FrozenValue>,
 }

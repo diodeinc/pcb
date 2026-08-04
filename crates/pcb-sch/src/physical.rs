@@ -2032,8 +2032,6 @@ impl PhysicalValueType {
             exported_name: Default::default(),
         }
     }
-
-    /// Dimensions this type accepts (e.g. Frequency's 1/s).
     pub fn dims(&self) -> PhysicalUnitDims {
         self.unit
     }

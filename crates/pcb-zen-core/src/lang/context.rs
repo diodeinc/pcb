@@ -74,6 +74,8 @@ pub struct ContextValue<'v> {
     /// contexts we leave this `false` so that io()/config() placeholders behave
     /// permissively and synthesize defaults instead of failing.
     strict_io_config: bool,
+    /// Names of required io()/config() inputs that were not provided, recorded
+    /// during this module's evaluation; not preserved across freeze.
     missing_inputs: RefCell<Vec<String>>,
     #[allocative(skip)]
     diagnostics: RefCell<Vec<crate::Diagnostic>>,
@@ -200,14 +202,12 @@ impl<'v> ContextValue<'v> {
         self.missing_inputs.borrow_mut().push(name);
     }
 
-    /// Record a caller-side pin constraint (`at()` wrapper) for an io() input.
     pub(crate) fn add_pin_constraint(&self, name: &str, pins: Vec<String>, soft: bool) {
         self.pin_constraints
             .borrow_mut()
             .insert(name.to_owned(), (pins, soft));
     }
 
-    /// Caller-side pin constraint recorded for an io() input, if any.
     pub(crate) fn pin_constraint(&self, name: &str) -> Option<(Vec<String>, bool)> {
         self.pin_constraints.borrow().get(name).cloned()
     }
