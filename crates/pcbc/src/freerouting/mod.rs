@@ -318,8 +318,14 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     }
 
     // 4. Auto-download to cache dir as a last resort
+    //
+    // When `dirs::cache_dir()` can't be determined (e.g. $HOME/$XDG_CACHE_HOME
+    // unset), fall back to a per-user subdirectory of the system temp dir
+    // rather than a fixed shared path. `/tmp/pcb/freerouting` would be
+    // predictable and creatable by any local user, who could pre-stake it
+    // with hostile permissions/ownership before we get there.
     let cache_dir = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .unwrap_or_else(process_temp_dir)
         .join("pcb")
         .join("freerouting");
     let jar_filename = freerouting_jar_filename();
@@ -336,6 +342,7 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     }
 
     std::fs::create_dir_all(&cache_dir).context("Failed to create FreeRouting cache dir")?;
+    restrict_dir_to_owner(&cache_dir);
 
     // Unique per-process suffix so two concurrent `pcb route` invocations
     // downloading into the same cache dir don't interleave writes into (or
@@ -362,6 +369,56 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     println!("  Downloaded to {}", cached.display());
 
     Ok(cached)
+}
+
+/// Fallback base directory when `dirs::cache_dir()` can't be determined.
+/// Just `std::env::temp_dir()` — the caller is responsible for locking down
+/// permissions on whatever it creates underneath, since this base is shared
+/// with every other local user.
+fn process_temp_dir() -> PathBuf {
+    std::env::temp_dir()
+}
+
+/// Best-effort: restrict `dir` (assumed just-created via `create_dir_all`)
+/// to owner-only access, and refuse to reuse it if it's owned by someone
+/// else. Only meaningful on unix; a no-op elsewhere.
+///
+/// This guards the `std::env::temp_dir()` fallback path in
+/// `find_or_download_freerouting_jar`, where the cache directory lives at a
+/// predictable, world-writable location another local user could pre-create
+/// with hostile permissions or ownership before we get there.
+#[cfg(unix)]
+fn restrict_dir_to_owner(dir: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(meta) = std::fs::metadata(dir) else {
+        return;
+    };
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let euid = unsafe { libc_geteuid() };
+    if meta.uid() != euid {
+        eprintln!(
+            "  {} {} is owned by another user, not restricting permissions",
+            "!".yellow(),
+            dir.display()
+        );
+        return;
+    }
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(not(unix))]
+fn restrict_dir_to_owner(_dir: &Path) {}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn geteuid() -> u32;
+}
+
+#[cfg(unix)]
+unsafe fn libc_geteuid() -> u32 {
+    unsafe { geteuid() }
 }
 
 // ---------------------------------------------------------------------------
