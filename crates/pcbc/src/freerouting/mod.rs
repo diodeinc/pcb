@@ -148,16 +148,6 @@ pub fn execute(
     import_ses(&work_board, &ses_path)?;
     spinner.finish();
 
-    // Same as above, for Ctrl+C during import_ses's zone fill.
-    if CANCEL.load(Ordering::SeqCst) {
-        publish_board(&work_board, board_path)?;
-        println!(
-            "Partial result saved to {}",
-            board_path.display().to_string().cyan()
-        );
-        return Ok(());
-    }
-
     // Only now replace the original board, atomically.
     publish_board(&work_board, board_path)?;
 
