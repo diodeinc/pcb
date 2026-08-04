@@ -132,10 +132,7 @@ fn provide_credential(
     }
 
     let path = std::str::from_utf8(path).context("Git credential path is not UTF-8")?;
-    let api_host = configured_host
-        .split_once(':')
-        .map_or(configured_host, |(host, _)| host);
-    let credential = exchange_credential(ctx, api_host, path)?;
+    let credential = exchange_credential(ctx, host_without_port(configured_host), path)?;
 
     writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
     writeln!(output, "authtype=Bearer")?;
@@ -145,6 +142,12 @@ fn provide_credential(
     output.flush()?;
 
     Ok(())
+}
+
+fn host_without_port(host: &str) -> &str {
+    host.rsplit_once(':')
+        .filter(|(hostname, _)| !hostname.ends_with(':'))
+        .map_or(host, |(hostname, _)| hostname)
 }
 
 fn exchange_credential(
@@ -290,5 +293,15 @@ mod tests {
                 .to_string()
                 .contains("Git credential request line exceeds 65535 bytes")
         );
+    }
+
+    #[test]
+    fn strips_ports_without_mangling_ipv6_hosts() {
+        assert_eq!(
+            host_without_port("code.example.com:8443"),
+            "code.example.com"
+        );
+        assert_eq!(host_without_port("[::1]:8443"), "[::1]");
+        assert_eq!(host_without_port("[::1]"), "[::1]");
     }
 }
