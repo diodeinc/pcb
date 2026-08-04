@@ -156,7 +156,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-chrome = "0.7"
 
 # rectify: STEP tessellation (foxtrot), raster grids, and FFT numerics
-triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "a1e6d588743ef474454497ba07e3662502e792f7" }
+triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "e74e9446dc8acf78d3f09ef2b59dfd90a493fac8" }
 ndarray = "0.17"
 rustfft = "6.4"
 num-complex = "0.4"
