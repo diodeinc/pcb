@@ -404,16 +404,6 @@ reaches `pin_solve`. Hard by default (unsatisfiable → build error);
 interface field; a bare `Net` works for single-signal requests). Requests
 absent from the assignment (e.g. dropped by `if_connected`) are skipped.
 
-Two conventions keep the model sound. **Capabilities name hardware
-peripherals** — `GpioPin`, `AdcIn`, `Uart` are facts about the silicon;
-application roles (LED, buzzer) are design-side labels, never capability
-interfaces. And **pooled capabilities are demanded through dicts, not
-numbered slots**: the component takes `gpio = config(dict, default = {})`
-and fans each entry into `pin_request(n, GpioPin, bind = gpio[n])`, so the
-design names its roles (`Mcu(gpio = {"LED": at(led_net, "PA8")})`) in
-whatever number it needs. Named `io()` slots remain for singular ports
-(`SWD`, a debug `Uart`).
-
 `pin_solve` returns a dict:
 
 | Key | Content |
