@@ -39,7 +39,7 @@ use pcb_ui::prelude::*;
 use crate::route::{RouteArgs, format_duration, import_ses};
 
 mod api;
-use api::{FreeroutingApiClient, JobOutput, JobState};
+use api::{DEFAULT_TIMEOUT, FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, JobState};
 
 const FREEROUTING_VERSION: &str = "2.2.5";
 
@@ -795,7 +795,7 @@ fn poll_job(
                         // an already fully-routed board reports a scary
                         // "could not be fetched" warning for a run that
                         // actually succeeded.
-                        return Ok(match api.get_output(job_id) {
+                        return Ok(match api.get_output(job_id, GET_OUTPUT_TIMEOUT) {
                             Ok(JobOutput::Data(bytes)) => PollResult {
                                 outcome: RunOutcome::Completed,
                                 output: Some(bytes),
@@ -857,7 +857,9 @@ fn poll_job(
                         let should_refresh = last_output_refresh
                             .is_none_or(|t| t.elapsed() >= OUTPUT_REFRESH_INTERVAL);
                         if should_refresh {
-                            if let Ok(JobOutput::Data(bytes)) = api.get_output(job_id) {
+                            if let Ok(JobOutput::Data(bytes)) =
+                                api.get_output(job_id, DEFAULT_TIMEOUT)
+                            {
                                 last_known_output = Some(bytes);
                             }
                             last_output_refresh = Some(Instant::now());
@@ -893,7 +895,7 @@ fn poll_job(
 /// a bonus on top of `last_known_output`, for the case where the job hasn't
 /// actually settled into `CANCELLED` yet and a fresher result is available.
 fn best_effort_output(api: &FreeroutingApiClient, job_id: &str) -> Option<Vec<u8>> {
-    match api.get_output(job_id) {
+    match api.get_output(job_id, DEFAULT_TIMEOUT) {
         Ok(JobOutput::Data(bytes)) => Some(bytes),
         _ => None,
     }
