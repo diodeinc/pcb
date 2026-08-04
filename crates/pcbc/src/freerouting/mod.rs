@@ -41,13 +41,21 @@ use crate::route::{RouteArgs, format_duration, import_ses};
 mod api;
 use api::{FreeroutingApiClient, JobOutput, JobState};
 
-const FREEROUTING_VERSION: &str = "2.2.4";
+const FREEROUTING_VERSION: &str = "2.2.5";
+
+// TEMPORARY: pinned to a fork's release, not upstream freerouting/freerouting.
+// Upstream has been slow to cut releases off `main`, so this points at
+// AdamMomen/freerouting's `v2.2.5` tag (built off upstream's release head)
+// as a stopgap. Revert `FREEROUTING_REPO` to `"freerouting/freerouting"` (and
+// re-pin `FREEROUTING_JAR_SHA256` to the matching upstream release) once
+// upstream catches up.
+const FREEROUTING_REPO: &str = "AdamMomen/freerouting";
 
 /// SHA-256 digest of the `freerouting-{FREEROUTING_VERSION}.jar` release
 /// artifact. Verifying this hash catches truncated downloads and tampered
 /// releases.
 const FREEROUTING_JAR_SHA256: &str =
-    "f5ed374182900ccc78e473518bbb9f6b869f4a07159495f663a76f52bb10523b";
+    "9a932414209c8431a75cda9f4d2104c1c79d57029b463fd89c3408eb4945783d";
 
 const FREEROUTING_MAX_PASSES: u32 = 200;
 
@@ -63,7 +71,7 @@ fn freerouting_jar_filename() -> String {
 
 fn freerouting_jar_url() -> String {
     format!(
-        "https://github.com/freerouting/freerouting/releases/download/v{FREEROUTING_VERSION}/freerouting-{FREEROUTING_VERSION}.jar"
+        "https://github.com/{FREEROUTING_REPO}/releases/download/v{FREEROUTING_VERSION}/freerouting-{FREEROUTING_VERSION}.jar"
     )
 }
 
@@ -375,7 +383,7 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
              Expected: {}\n\
              Actual:   {}\n\
              The download may have been tampered with or the release has changed.\n\
-             Download manually from: https://github.com/freerouting/freerouting/releases/tag/v{FREEROUTING_VERSION}",
+             Download manually from: https://github.com/{FREEROUTING_REPO}/releases/tag/v{FREEROUTING_VERSION}",
             FREEROUTING_JAR_SHA256,
             hex::encode(actual_hash),
         );
