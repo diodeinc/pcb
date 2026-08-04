@@ -176,7 +176,10 @@ fn should_namespace_attr(
     }
 }
 
-pub(super) fn write_fab_panel_xml(
+/// Render the fabrication-panel document from already-stripped sources. The
+/// provisional balancing pass consumes this directly; only the final document
+/// pays for reformatting via [`write_fab_panel_xml`].
+pub(super) fn render_fab_panel_xml(
     sources: &[SourcePanel],
     occurrences: &[usize],
     placements: &[Placement],
@@ -215,10 +218,26 @@ pub(super) fn write_fab_panel_xml(
     )?;
     writer.end_element("IPC-2581");
 
-    let xml = super::super::fabrication::strip_non_manufacturing(&writer.into_string())?;
+    Ok(writer.into_string())
+}
+
+pub(super) fn write_fab_panel_xml(
+    sources: &[SourcePanel],
+    occurrences: &[usize],
+    placements: &[Placement],
+    shared_stackup_layers: &HashSet<String>,
+    spec: FabPanelSpec,
+    balance_features: &[GeneratedLayerFeature],
+) -> Result<String> {
+    let xml = render_fab_panel_xml(
+        sources,
+        occurrences,
+        placements,
+        shared_stackup_layers,
+        spec,
+        balance_features,
+    )?;
     let xml = crate::utils::format::reformat_xml(&xml)?;
-    Ipc2581::validate(&xml)
-        .context("Generated IPC-2581 fabrication panel XML failed schema validation")?;
     Ipc2581::parse(&xml).context("Generated IPC-2581 fabrication panel XML did not parse")?;
     Ok(xml)
 }
@@ -228,8 +247,15 @@ fn write_content(
     docs: &[Doc<'_>],
     shared_stackup_layers: &HashSet<String>,
 ) -> Result<()> {
+    let section_key = super::super::fabrication::fabrication_section_key_union(docs);
     writer.start_element("Content", &[("roleRef", FAB_ROLE_ID)]);
-    writer.empty_element("FunctionMode", &[("mode", "FABRICATION")]);
+    writer.empty_element(
+        "FunctionMode",
+        &[
+            ("mode", "FABRICATION"),
+            ("sectionKey", section_key.as_str()),
+        ],
+    );
     writer.empty_element("StepRef", &[("name", FAB_PANEL_STEP_NAME)]);
 
     for (doc_index, doc) in docs.iter().enumerate() {

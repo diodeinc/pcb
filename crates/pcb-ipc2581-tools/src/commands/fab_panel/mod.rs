@@ -244,6 +244,31 @@ fn create_fab_panel(
         bail!("at least one assembly panel is required");
     }
 
+    // Reduce every source to manufacturing content once, up front: assembling
+    // already-stripped sources keeps the fabrication panel a pure composition
+    // and avoids stripping the much larger composed document.
+    let source_xml = std::thread::scope(|scope| {
+        let strips = source_xml
+            .iter()
+            .map(|xml| scope.spawn(|| super::fabrication::strip_non_manufacturing(xml)))
+            .collect::<Vec<_>>();
+        strips
+            .into_iter()
+            .enumerate()
+            .map(|(source_index, strip)| {
+                strip
+                    .join()
+                    .expect("assembly panel stripping panicked")
+                    .with_context(|| {
+                        format!(
+                            "failed to reduce assembly panel input {} to manufacturing content",
+                            source_index + 1
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+
     let stackups = source_xml
         .iter()
         .enumerate()
@@ -294,7 +319,9 @@ fn create_fab_panel(
 
     // The provisional panel only feeds copper-balance planning: gutters and
     // placed-panel copper must exist before balance copper can be derived.
-    let provisional = xml::write_fab_panel_xml(
+    // Parsing it below already validates it, so it skips the final document's
+    // reformat and schema-validation passes.
+    let provisional = xml::render_fab_panel_xml(
         &sources,
         occurrences,
         &placements,

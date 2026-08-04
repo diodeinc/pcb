@@ -43,14 +43,31 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     let footprint_area_mm2 = footprints.area();
 
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let copper_images = crate::layers::copper_layers(ecad)
+    let layer_names = crate::layers::copper_layers(ecad)
         .iter()
-        .map(|layer| {
-            let layer_name = ipc.resolve(layer.name).to_string();
-            let image = composed_copper_image(ipc, &layer_name)?.intersection(&usable_region);
-            Ok((layer_name, image))
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .map(|layer| ipc.resolve(layer.name).to_string())
+        .collect::<Vec<_>>();
+    let copper_images = std::thread::scope(|scope| {
+        let extractions = layer_names
+            .iter()
+            .map(|layer_name| {
+                scope.spawn(|| {
+                    composed_copper_image(ipc, layer_name)
+                        .map(|image| image.intersection(&usable_region))
+                })
+            })
+            .collect::<Vec<_>>();
+        layer_names
+            .iter()
+            .zip(extractions)
+            .map(|(layer_name, extraction)| {
+                let image = extraction
+                    .join()
+                    .expect("copper-image extraction panicked")?;
+                Ok((layer_name.clone(), image))
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
     // Copper found outside the placed panels joins the shared obstacle set,
     // so unexpected overhang shrinks the certified safe region for every
     // layer instead of failing the solve.
