@@ -1,26 +1,10 @@
-//! Local auto-routing engine backed by FreeRouting.
+//! Local auto-routing engine backed by FreeRouting (`pcb route --engine
+//! freerouting`). KiCad board -> Specctra DSN -> FreeRouting -> SES -> board.
 //!
-//! Invoked as `pcb route --engine freerouting`. Routes boards locally using a
-//! FreeRouting Java JAR.
-//!
-//! The local path uses **Specctra DSN** as an intermediate format: the KiCad
-//! board is exported to DSN via `pcbnew`, FreeRouting reads the DSN and
-//! writes a **SES** session file, which is then imported back into the
-//! `.kicad_pcb`.
-//!
-//! All work happens on a copy of the board in a private temp directory. The
-//! original board on disk is only overwritten once a validated result is
-//! ready, so a failed or interrupted run never leaves the workspace board
-//! mutated or littered with `.bak`/`.dsn`/`.ses` files.
-//!
-//! Routing itself goes through FreeRouting's local REST API server mode
-//! (`self::api`) rather than its one-shot CLI mode (`-de`/`-do`).
-//! CLI mode only writes `.ses` output once, gated on an internal `COMPLETED`
-//! state that a confirmed upstream bug (`TIMED_OUT` never promotes to
-//! `COMPLETED`) prevents an interrupted or timed-out job from ever reaching —
-//! so Ctrl+C and timeouts can never recover a partial route in CLI mode. The
-//! API's `GET /jobs/{id}/output` explicitly supports returning partial output
-//! for a still-running or just-cancelled job.
+//! Uses FreeRouting's REST API server mode (`self::api`), not its one-shot
+//! CLI mode: an upstream bug leaves CLI mode unable to recover partial
+//! output on timeout/interrupt, which the API's `GET /jobs/{id}/output`
+//! supports.
 
 use std::io::Read;
 use std::net::TcpListener;
@@ -43,26 +27,20 @@ use api::{DEFAULT_TIMEOUT, FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, 
 
 const FREEROUTING_VERSION: &str = "2.2.5";
 
-// TEMPORARY: pinned to a fork's release, not upstream freerouting/freerouting.
-// Upstream has been slow to cut releases off `main`, so this points at
-// AdamMomen/freerouting's `v2.2.5` tag (built off upstream's release head)
-// as a stopgap. Revert `FREEROUTING_REPO` to `"freerouting/freerouting"` (and
-// re-pin `FREEROUTING_JAR_SHA256` to the matching upstream release) once
+// TEMPORARY: pinned to a fork's release, not upstream freerouting/freerouting
+// — upstream has been slow to cut releases off `main`. Revert `FREEROUTING_REPO`
+// to `"freerouting/freerouting"` (and re-pin `FREEROUTING_JAR_SHA256`) once
 // upstream catches up.
 const FREEROUTING_REPO: &str = "AdamMomen/freerouting";
 
-/// SHA-256 digest of the `freerouting-{FREEROUTING_VERSION}.jar` release
-/// artifact. Verifying this hash catches truncated downloads and tampered
-/// releases.
+/// SHA-256 of the `freerouting-{FREEROUTING_VERSION}.jar` release artifact.
 const FREEROUTING_JAR_SHA256: &str =
     "9a932414209c8431a75cda9f4d2104c1c79d57029b463fd89c3408eb4945783d";
 
 const FREEROUTING_MAX_PASSES: u32 = 200;
 
-/// Minimum interval between `get_output` refreshes of the poll loop's
-/// cached partial result. Each call forces the server to serialize and
-/// base64-encode the whole in-progress board, so refreshing at full ~1s
-/// poll cadence would be wasteful on large boards over long runs.
+/// get_output serializes the whole in-progress board server-side, so cache
+/// refreshes are throttled to this interval instead of every ~1s poll tick.
 const OUTPUT_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 fn freerouting_jar_filename() -> String {
@@ -75,10 +53,8 @@ fn freerouting_jar_url() -> String {
     )
 }
 
-/// Cancellation flag shared between the Ctrl+C handler and the routing loop.
-/// The handler only *requests* cancellation; the code that owns the
-/// FreeRouting `Child` (in `run_freerouting`) is responsible for actually
-/// killing it and cleaning up through normal control flow.
+/// Set by the Ctrl+C handler; only a request — `run_freerouting` owns the
+/// `Child` and does the actual killing.
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 pub fn execute(
@@ -87,10 +63,8 @@ pub fn execute(
     project_path: &Path,
     board_name: &str,
 ) -> Result<()> {
-    // Explicit --fr-jar/FREEROUTING_JAR errors surface immediately. The
-    // PATH search and auto-download fallback are deferred until after the
-    // Java check below, so a machine without Java doesn't pay for a
-    // multi-megabyte download before being told it can't run the JAR anyway.
+    // Java check happens before the PATH search / auto-download fallback so
+    // a machine without Java doesn't pay for a multi-megabyte download first.
     let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
     let explicit_jar = resolve_explicit_freerouting_jar(args.fr_jar.as_deref(), &expected_hash)?;
 
@@ -110,20 +84,16 @@ pub fn execute(
     let work_dir = tempfile::tempdir().context("Failed to create temp working directory")?;
     let work_board = work_dir.path().join(format!("{board_name}.kicad_pcb"));
     std::fs::copy(board_path, &work_board).context("Failed to stage board copy")?;
-    // Since KiCad 6, design rules and net classes live in the project file,
-    // not the board file — a project-less pcbnew.LoadBoard falls back to
-    // default rules, so DSN export and zone fill need this staged too.
-    // Never published back: the original project is left untouched.
+    // Design rules/net classes live in the project file (KiCad 6+), not the
+    // board file, so DSN export and zone fill need it staged too.
     if project_path.exists() {
         std::fs::copy(
             project_path,
             work_dir.path().join(format!("{board_name}.kicad_pro")),
         )
         .context("Failed to stage project file copy")?;
-        // Custom design rules live in a sibling .kicad_dru file, not the
-        // project file. Without it, the DRC engine that ZONE_FILLER.Fill()
-        // consults in import_ses falls back to default clearances, so a
-        // routed board's zone fills would silently drop the user's rules.
+        // Custom design rules live in a sibling .kicad_dru, not the project
+        // file itself.
         let dru_path = project_path.with_extension("kicad_dru");
         if dru_path.exists() {
             std::fs::copy(
@@ -148,9 +118,8 @@ pub fn execute(
     export_dsn(&work_board, &dsn_path)?;
     spinner.finish();
 
-    // CANCEL is otherwise only consulted inside run_freerouting's poll loop;
-    // without this, Ctrl+C during export would print "Stopping..." but then
-    // still start FreeRouting anyway.
+    // Otherwise CANCEL is only checked inside run_freerouting's poll loop, so
+    // Ctrl+C during export would print "Stopping..." then start anyway.
     if CANCEL.load(Ordering::SeqCst) {
         println!("  No routing progress to save. Board left untouched.");
         return Ok(());
@@ -199,8 +168,6 @@ pub fn execute(
     Ok(())
 }
 
-/// Atomically replace `dst` with the contents of `src` (rename when on the
-/// same filesystem, falling back to copy).
 fn publish_board(src: &Path, dst: &Path) -> Result<()> {
     if std::fs::rename(src, dst).is_ok() {
         return Ok(());
@@ -215,17 +182,11 @@ fn publish_board(src: &Path, dst: &Path) -> Result<()> {
 // Java resolution
 // ---------------------------------------------------------------------------
 
-/// Minimum Java major version FreeRouting's pinned jar requires. FreeRouting
-/// v2.2.4's `build.gradle` targets `JavaVersion.VERSION_25`, so a jar built
-/// against that toolchain refuses to load (`UnsupportedClassVersionError`)
-/// on anything older, regardless of what FreeRouting's own docs suggest.
-/// Keep in sync with `FREEROUTING_VERSION`'s pinned release.
+/// The pinned jar's `build.gradle` targets this; keep in sync with
+/// `FREEROUTING_VERSION`.
 const REQUIRED_JAVA_VERSION: u32 = 25;
 
-/// Resolve a Java binary on `$PATH` meeting `REQUIRED_JAVA_VERSION`.
-///
-/// We deliberately do not auto-download a JRE/JDK — that's too heavy and
-/// opinionated for a CLI tool. Ask the user to install one instead.
+/// No auto-download of a JRE/JDK — too heavy for a CLI tool; ask the user.
 fn resolve_java() -> Result<PathBuf> {
     if is_java_version_sufficient("java") {
         return Ok(PathBuf::from("java"));
@@ -242,8 +203,6 @@ fn resolve_java() -> Result<PathBuf> {
     );
 }
 
-/// Check whether `java_path` is a Java binary meeting `REQUIRED_JAVA_VERSION`
-/// by running `java -version`.
 fn is_java_version_sufficient(java_path: impl AsRef<Path>) -> bool {
     let output = match Command::new(java_path.as_ref()).arg("-version").output() {
         Ok(o) => o,
@@ -270,11 +229,8 @@ fn is_java_version_sufficient(java_path: impl AsRef<Path>) -> bool {
 // FreeRouting JAR resolution
 // ---------------------------------------------------------------------------
 
-/// Validate an explicitly provided FreeRouting JAR: `--fr-jar` flag (priority
-/// 1) or `FREEROUTING_JAR` env var (priority 2). Returns `Ok(None)` if
-/// neither is set, so the caller can fall back to a PATH search or
-/// auto-download — deferred until after the Java check, since those can
-/// involve a network fetch.
+/// `--fr-jar` flag (priority 1) or `FREEROUTING_JAR` env var (priority 2).
+/// `Ok(None)` means neither is set — caller falls back to PATH/auto-download.
 fn resolve_explicit_freerouting_jar(
     provided: Option<&Path>,
     expected_hash: &[u8; 32],
@@ -302,18 +258,11 @@ fn resolve_explicit_freerouting_jar(
     Ok(None)
 }
 
-/// Locate the FreeRouting JAR via (in priority order):
-///   3. `freerouting.jar` on `$PATH`
-///   4. Auto-download to `~/.cache/pcb/freerouting/freerouting-{FREEROUTING_VERSION}.jar`
-///
-/// Only called once Java has been confirmed installed, since both steps here
-/// can be expensive (hashing, or a multi-megabyte download).
+/// Priority: `freerouting.jar` on `$PATH`, then auto-download to
+/// `~/.cache/pcb/freerouting/`.
 fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf> {
-    // 3. Search $PATH for freerouting.jar. Unlike --fr-jar/FREEROUTING_JAR
-    //    (explicit user overrides, which may intentionally point at a
-    //    different build), this candidate is discovered implicitly, so we
-    //    hold it to the same integrity bar as the auto-download path below
-    //    rather than handing an unverified JAR straight to `java -jar`.
+    // Unlike --fr-jar/FREEROUTING_JAR, a PATH match is discovered implicitly,
+    // so it's still hash-checked rather than handed straight to `java -jar`.
     if let Ok(paths) = std::env::var("PATH") {
         for dir in std::env::split_paths(&paths) {
             let candidate = dir.join("freerouting.jar");
@@ -331,13 +280,8 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
         }
     }
 
-    // 4. Auto-download to cache dir as a last resort
-    //
-    // When `dirs::cache_dir()` can't be determined (e.g. $HOME/$XDG_CACHE_HOME
-    // unset), fall back to a uid-scoped subdirectory of the system temp dir
-    // rather than a fixed shared path. A fixed `/tmp/pcb/freerouting` would
-    // be predictable and creatable by any local user, who could pre-stake it
-    // with hostile permissions/ownership before we get there.
+    // Fall back to a uid-scoped temp subdir when dirs::cache_dir() is
+    // unavailable — a fixed shared path could be pre-staked by another user.
     let cache_dir = match dirs::cache_dir() {
         Some(dir) => dir.join("pcb").join("freerouting"),
         None => process_temp_dir()
@@ -368,9 +312,8 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
         }
     }
 
-    // Unique per-process suffix so two concurrent `pcb route` invocations
-    // downloading into the same cache dir don't interleave writes into (or
-    // race the rename of) the same `.tmp`/`.part` file.
+    // Per-process suffix so concurrent `pcb route` invocations don't race the
+    // same `.tmp`/`.part` file.
     let tmp_path = cache_dir.join(format!("{jar_filename}.{}.tmp", std::process::id()));
     download_to_file(&freerouting_jar_url(), &tmp_path, 3)?;
 
@@ -395,20 +338,13 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     Ok(cached)
 }
 
-/// Fallback base directory when `dirs::cache_dir()` can't be determined.
-/// Just `std::env::temp_dir()` — the caller joins a uid-scoped subdirectory
-/// (`temp_cache_subdir`) underneath it, since this base is shared with every
-/// other local user.
 fn process_temp_dir() -> PathBuf {
     std::env::temp_dir()
 }
 
-/// Subdirectory name to join under `process_temp_dir()`, scoped to the
-/// current effective user so two different local users never contend for
-/// (or need to fight over ownership of) the same fallback cache path.
-/// `restrict_dir_to_owner` remains as defense in depth against a
-/// misconfigured or hostile pre-existing directory, but this is the primary
-/// mechanism that avoids sharing a path with other users in the first place.
+/// Per-uid subdirectory under `process_temp_dir()` so different local users
+/// never share the fallback cache path. `restrict_dir_to_owner` is defense
+/// in depth on top of this, not the primary mechanism.
 #[cfg(unix)]
 fn temp_cache_subdir() -> String {
     // SAFETY: geteuid takes no arguments and cannot fail.
@@ -421,17 +357,8 @@ fn temp_cache_subdir() -> String {
     "pcb".to_string()
 }
 
-/// Restrict `dir` (assumed just-created via `create_dir_all`) to owner-only
-/// access, returning `false` if it's owned by someone else so the caller can
-/// refuse to reuse it. Only meaningful on unix; always `true` elsewhere.
-///
-/// Defense in depth for the `std::env::temp_dir()` fallback path in
-/// `find_or_download_freerouting_jar`: `temp_cache_subdir` already scopes
-/// that path per-uid so different local users don't share it, but this
-/// still catches a misconfigured or hostile pre-existing directory at that
-/// path (e.g. left over from before `temp_cache_subdir` existed, or a
-/// deliberately pre-staked uid-scoped path on a system where uids aren't
-/// trustworthy isolation boundaries).
+/// Chmod `dir` to owner-only, returning `false` (don't reuse it) if it's
+/// owned by someone else. No-op / always `true` on non-unix.
 #[cfg(unix)]
 fn restrict_dir_to_owner(dir: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -468,7 +395,6 @@ unsafe fn libc_geteuid() -> u32 {
 // DSN/SES pipeline
 // ---------------------------------------------------------------------------
 
-/// Export a Specctra DSN file from the KiCad board via `pcbnew`.
 fn export_dsn(board_path: &Path, dsn_path: &Path) -> Result<()> {
     let script = r#"
 import pcbnew
@@ -506,11 +432,8 @@ enum RunOutcome {
     Cancelled,
 }
 
-/// A running FreeRouting API-server process, bound to `127.0.0.1` on an
-/// OS-assigned free port. Owns the `Child` for its whole lifetime: `Drop`
-/// guarantees the process is killed on every exit path — success, failure,
-/// our own timeout, or Ctrl+C — without needing to remember to call `kill()`
-/// at each return site.
+/// Owns the `Child`; `Drop` kills it on every exit path (success, failure,
+/// timeout, Ctrl+C) instead of relying on each return site to do it.
 struct FreeroutingServer {
     child: Child,
     base_url: String,
@@ -519,7 +442,6 @@ struct FreeroutingServer {
 }
 
 impl FreeroutingServer {
-    /// Spawn FreeRouting in headless, local-only API-server mode.
     fn spawn(java_path: &Path, jar_path: &Path) -> Result<Self> {
         let port = pick_free_port()?;
 
@@ -552,7 +474,6 @@ impl FreeroutingServer {
         Ok(self.child.try_wait()?.is_none())
     }
 
-    /// Captured server stdout+stderr, for diagnostics when startup fails.
     fn log(&self) -> String {
         format!(
             "{}{}",
@@ -569,19 +490,14 @@ impl Drop for FreeroutingServer {
     }
 }
 
-/// Bind an OS-assigned free port on loopback and immediately release it.
-/// Small TOCTOU race between release and FreeRouting binding it is accepted
-/// (same tradeoff already used for the OAuth callback server elsewhere in
-/// this codebase); this only needs to avoid colliding with concurrent `pcb
-/// route` invocations on the default FreeRouting port, not be airtight.
+/// TOCTOU race between release and FreeRouting binding it is accepted (same
+/// tradeoff as the OAuth callback server elsewhere in this codebase).
 fn pick_free_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .context("Failed to bind ephemeral port for FreeRouting API server")?;
     Ok(listener.local_addr()?.port())
 }
 
-/// Spawn a background thread that reads `stream` to EOF into a shared
-/// buffer, for capturing a child process's stdout/stderr without blocking.
 fn capture_stream(mut stream: impl Read + Send + 'static) -> Arc<Mutex<String>> {
     let buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let buf2 = buf.clone();
@@ -601,12 +517,6 @@ fn capture_stream(mut stream: impl Read + Send + 'static) -> Arc<Mutex<String>> 
     buf
 }
 
-/// Route `dsn_path` via FreeRouting's local REST API, writing the resulting
-/// SES data to `ses_path`. We use the API instead of FreeRouting's one-shot
-/// CLI mode (`-de`/`-do`) specifically so Ctrl+C and timeouts can retrieve a
-/// genuine partial result: CLI mode only writes its output once, gated on
-/// reaching an internal `COMPLETED` state that a confirmed upstream bug
-/// prevents an interrupted/timed-out job from ever reaching.
 fn run_freerouting(
     java_path: &Path,
     jar_path: &Path,
@@ -636,10 +546,8 @@ fn run_freerouting(
         .unwrap_or_else(|| "pcb-route".to_string());
     let job_id = api.enqueue_job(&session_id, &job_name)?;
 
-    // Full HH:MM:SS precision so FreeRouting's own job_timeout matches our
-    // poll deadline (--fr-timeout minutes * 60) exactly, rather than
-    // rounding down and letting FreeRouting time itself out before our own
-    // deadline.
+    // Full HH:MM:SS so FreeRouting's job_timeout matches our poll deadline
+    // exactly, rather than rounding down and timing out early.
     api.update_settings(
         &job_id,
         FREEROUTING_MAX_PASSES,
@@ -664,8 +572,6 @@ fn run_freerouting(
             spinner.success(format!("FreeRouting finished in {elapsed:.1}s"));
         }
         (RunOutcome::Completed, false) => {
-            // Board had nothing left to route — a clean success, not a
-            // failure, even though there's no SES to write.
             spinner.success(format!(
                 "FreeRouting finished in {elapsed:.1}s (nothing to route)"
             ));
@@ -676,11 +582,6 @@ fn run_freerouting(
             ));
         }
         (RunOutcome::Cancelled, false) => {
-            // Distinct from the "finished" wording above: nothing was
-            // produced, so there's no result to save (execute() checks
-            // ses_path.exists() next and reports "No routing progress to
-            // save" — this message is what explains *why* to the user
-            // instead of just "finished", which read as success).
             spinner.warning(format!(
                 "FreeRouting stopped after {elapsed:.1}s with no routing progress"
             ));
@@ -690,12 +591,8 @@ fn run_freerouting(
     if let Some(bytes) = poll_result.output {
         std::fs::write(ses_path, bytes).context("Failed to write FreeRouting SES output")?;
     }
-    // Else: no output was ever produced — cancelled before any progress, or
-    // the board had nothing left to route. Leaving `ses_path` absent is
-    // correct either way: `execute()` already treats a missing SES as "no
-    // progress to save".
+    // else: leave ses_path absent — execute() treats that as "nothing to save".
 
-    // `server` drops here, killing the FreeRouting process.
     Ok(poll_result.outcome)
 }
 
@@ -704,23 +601,12 @@ struct PollResult {
     output: Option<Vec<u8>>,
 }
 
-/// Poll the job's status until it completes, our own timeout elapses, or
-/// cancellation is requested via Ctrl+C — checked every 100ms regardless of
-/// the ~1s HTTP poll cadence, so Ctrl+C stays responsive without hammering
-/// the local server.
-///
-/// While the job is still genuinely in progress, we opportunistically fetch
-/// and cache its latest output alongside its status. This is deliberate:
-/// FreeRouting's `GET /output` only returns partial data while the job is
-/// `RUNNING`/`PAUSED`/`STOPPING` — the instant it settles into the terminal
-/// `CANCELLED` state, the same endpoint unconditionally reports "no valid
-/// output", even if valid partial data existed moments earlier. Since
-/// `cancel_job` only *requests* a stop and returns well before the job
-/// actually reaches that terminal state, a single `get_output()` call made
-/// right after cancelling would race the state transition and could
-/// permanently lose real progress. Falling back to output captured during
-/// the last known-safe `RUNNING` poll sidesteps that race entirely, rather
-/// than trying to win it.
+/// FreeRouting's `GET /output` returns partial data while `RUNNING`, but
+/// unconditionally reports "no output" once a job settles into `CANCELLED` —
+/// so a call made right after `cancel_job` (which only requests a stop) can
+/// race the transition and lose real progress. We sidestep this by caching
+/// output opportunistically while still running, and falling back to that
+/// cache if the post-cancel fetch comes back empty.
 fn poll_job(
     api: &FreeroutingApiClient,
     job_id: &str,
@@ -754,17 +640,9 @@ fn poll_job(
             });
         }
 
-        // Refresh the elapsed time every ~1s tick (this loop's cadence)
-        // regardless of whether the pass count changed, so the spinner
-        // shows visible progress even on boards where FreeRouting sits on
-        // one pass for a long time.
-        //
-        // Only show the pass counter once it's > 0: FreeRouting's initial
-        // routing stage runs before any numbered optimization pass starts,
-        // so `pass 0` can sit static for a long time on some boards. Since
-        // that's indistinguishable from a stuck/broken counter, it's better
-        // to just show elapsed time until a real pass increment proves the
-        // counter is actually moving.
+        // Hide the pass counter until it's > 0: FreeRouting's initial routing
+        // stage can sit at "pass 0" for a long time, indistinguishable from
+        // a stuck counter.
         let elapsed = start.elapsed().as_secs();
         spinner.set_message(match last_printed_pass {
             Some(pass) if pass > 0 => format!(
@@ -781,20 +659,9 @@ fn poll_job(
                 }
                 match status.state {
                     JobState::Completed => {
-                        // Unlike the Cancelled/TimedOut branch below, a
-                        // failed fetch here must NOT silently fall back to
-                        // last_known_output while still reporting Completed
-                        // — that would publish a stale, partially-routed
-                        // snapshot as a finished result. Downgrade to
-                        // Cancelled instead so callers print "partial
-                        // result" wording, matching what's actually saved.
-                        //
-                        // NothingToRoute is a distinct, legitimate outcome
-                        // (the board had nothing left to route) and must NOT
-                        // be treated the same as a fetch failure — otherwise
-                        // an already fully-routed board reports a scary
-                        // "could not be fetched" warning for a run that
-                        // actually succeeded.
+                        // Unlike Cancelled/TimedOut below, a failed fetch here
+                        // must downgrade to Cancelled rather than silently
+                        // reporting Completed with a stale cached snapshot.
                         return Ok(match api.get_output(job_id, GET_OUTPUT_TIMEOUT) {
                             Ok(JobOutput::Data(bytes)) => PollResult {
                                 outcome: RunOutcome::Completed,
@@ -817,14 +684,8 @@ fn poll_job(
                         });
                     }
                     JobState::Cancelled | JobState::TimedOut => {
-                        // FreeRouting stopped on its own (e.g. its internal
-                        // job_timeout fired) without us calling cancel_job,
-                        // so we never got a chance to cache output right
-                        // before this. Best-effort output here can still
-                        // land after the CANCELLED transition and come back
-                        // empty — that's the same structural limitation
-                        // CLI mode has for this specific case, just not one
-                        // we can poll our way around after the fact.
+                        // FreeRouting stopped on its own (e.g. internal
+                        // job_timeout), so we never cached output beforehand.
                         return Ok(PollResult {
                             outcome: RunOutcome::Cancelled,
                             output: best_effort_output(api, job_id).or(last_known_output),
@@ -840,20 +701,9 @@ fn poll_job(
                     | JobState::Running
                     | JobState::Paused
                     | JobState::Stopping => {
-                        // Still safely in progress (Stopping is a job we or
-                        // FreeRouting itself asked to cancel, still settling
-                        // toward Cancelled): refresh our cached output now,
-                        // while the API is guaranteed to serve it, rather
-                        // than waiting until we're racing a cancellation.
-                        //
-                        // Throttled to once every OUTPUT_REFRESH_INTERVAL:
-                        // get_output makes the server serialize the whole
-                        // in-progress board to SES and base64-encode it, so
-                        // doing this on every ~1s poll tick would be a
-                        // needless full serialize/encode/decode cycle every
-                        // second for the entire run. The cache only needs to
-                        // be recent enough to survive a cancel/output race,
-                        // not perfectly up to date.
+                        // Refresh the cache now, while the API is guaranteed
+                        // to serve it, instead of waiting until we're racing
+                        // a cancellation (see OUTPUT_REFRESH_INTERVAL).
                         let should_refresh = last_output_refresh
                             .is_none_or(|t| t.elapsed() >= OUTPUT_REFRESH_INTERVAL);
                         if should_refresh {
@@ -870,9 +720,6 @@ fn poll_job(
             Err(e) => {
                 consecutive_errors += 1;
                 if consecutive_errors >= 20 {
-                    // Server's unreachable, but whatever we cached during
-                    // the last known-good RUNNING poll is still real
-                    // progress worth returning, same as a cancel/timeout.
                     if last_known_output.is_some() {
                         eprintln!(
                             "  {} Lost contact with FreeRouting API server: {e}",
@@ -891,9 +738,6 @@ fn poll_job(
     }
 }
 
-/// A single, non-retried attempt at fetching current output — used only as
-/// a bonus on top of `last_known_output`, for the case where the job hasn't
-/// actually settled into `CANCELLED` yet and a fresher result is available.
 fn best_effort_output(api: &FreeroutingApiClient, job_id: &str) -> Option<Vec<u8>> {
     match api.get_output(job_id, DEFAULT_TIMEOUT) {
         Ok(JobOutput::Data(bytes)) => Some(bytes),
@@ -905,10 +749,7 @@ fn best_effort_output(api: &FreeroutingApiClient, job_id: &str) -> Option<Vec<u8
 // Utilities
 // ---------------------------------------------------------------------------
 
-/// Format a duration in seconds as `HH:MM:SS` for FreeRouting's
-/// `job_timeout` setting, at full second precision (no rounding to whole
-/// minutes, which would let FreeRouting time itself out before our own
-/// deadline).
+/// `HH:MM:SS` for FreeRouting's `job_timeout`, at full second precision.
 fn format_hms(total_secs: u64) -> String {
     let hh = total_secs / 3600;
     let mm = (total_secs % 3600) / 60;
@@ -916,11 +757,8 @@ fn format_hms(total_secs: u64) -> String {
     format!("{hh:02}:{mm:02}:{ss:02}")
 }
 
-/// Warn (non-fatally) if `path` doesn't match `expected_hash`. Used for
-/// --fr-jar/FREEROUTING_JAR: both are explicit user overrides, so a mismatch
-/// isn't rejected outright (it may be an intentional dev/patched build) —
-/// but it's surfaced rather than silently running an unverified JAR with no
-/// visibility at all.
+/// Non-fatal warning for --fr-jar/FREEROUTING_JAR: an explicit user override
+/// may intentionally point at a patched build, so a mismatch isn't rejected.
 fn warn_on_hash_mismatch(path: &Path, expected_hash: &[u8; 32]) {
     match sha256_file(path) {
         Ok(hash) if hash == *expected_hash => {}
@@ -937,9 +775,6 @@ fn warn_on_hash_mismatch(path: &Path, expected_hash: &[u8; 32]) {
     }
 }
 
-/// Hash `path` with SHA-256, returning the raw 32-byte digest. Byte
-/// comparison (rather than comparing hex-encoded strings) is the natural way
-/// to check a hash for equality.
 fn sha256_file(path: &Path) -> Result<[u8; 32]> {
     use sha2::Digest;
     let file = std::fs::File::open(path)
@@ -959,8 +794,6 @@ fn sha256_file(path: &Path) -> Result<[u8; 32]> {
     Ok(hasher.finalize().into())
 }
 
-/// Decode a lowercase hex string (as used for our pinned SHA-256 constants)
-/// into a raw 32-byte digest.
 fn hex_decode32(hex: &str) -> [u8; 32] {
     <[u8; 32]>::try_from(
         hex::decode(hex).expect("FREEROUTING_JAR_SHA256 must be a valid 64-char hex constant"),
@@ -968,10 +801,8 @@ fn hex_decode32(hex: &str) -> [u8; 32] {
     .expect("FREEROUTING_JAR_SHA256 must decode to exactly 32 bytes")
 }
 
-/// Download `url` to `dest` (via a `.part` sibling, renamed on success once
-/// fully written), retrying only on transient failures (network errors and
-/// 5xx responses). Client errors (4xx) are treated as permanent and are not
-/// retried.
+/// Retries transient failures (network errors, 5xx); 4xx is treated as
+/// permanent.
 fn download_to_file(url: &str, dest: &Path, max_attempts: u32) -> Result<()> {
     let part_path = dest.with_extension(format!(
         "{}.part",
@@ -1031,17 +862,10 @@ fn try_download_to_file(url: &str, part_path: &Path) -> Result<(), DownloadError
     let mut file =
         std::fs::File::create(part_path).map_err(|e| DownloadError::Transient(e.into()))?;
 
-    // Report percentage progress when the server tells us the total size;
-    // fall back to a plain unstyled copy (no total to show a bar against)
-    // when it doesn't, e.g. a chunked-encoding response with no
-    // Content-Length.
     match response.content_length() {
         Some(total) if total > 0 => {
             let bar = pcb_ui::ProgressBar::builder(total)
                 .message(format!("Downloading FreeRouting ({FREEROUTING_VERSION})"))
-                // indicatif's {bytes}/{total_bytes} auto-format human-
-                // readable sizes (e.g. "2.3 MiB") instead of the default
-                // template's raw {pos}/{len} byte counts.
                 .template("{msg}  |{bar:40.green/gray}| {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta})")
                 .start();
             let mut buf = [0u8; 65536];
@@ -1103,10 +927,9 @@ mod tests {
 
     #[test]
     fn format_hms_preserves_seconds_not_just_minutes() {
-        // Regression test: a prior version rounded down to whole minutes
+        // Regression: a prior version rounded down to whole minutes
         // (e.g. 90s -> "00:01:00" = 60s), which would let FreeRouting's own
-        // job_timeout expire before our poll deadline if this function were
-        // ever fed a non-minute-aligned value.
+        // job_timeout expire before our poll deadline.
         assert_eq!(format_hms(90), "00:01:30");
         assert_eq!(format_hms(59), "00:00:59");
         assert_eq!(format_hms(3661), "01:01:01");
