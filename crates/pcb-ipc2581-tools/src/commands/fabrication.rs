@@ -406,8 +406,26 @@ fn rewrite_function_mode(xml: &str) -> Result<String> {
 }
 
 fn fabrication_section_key(xml: &str) -> Result<String> {
-    let doc = Doc::parse(xml)?;
+    Ok(fabrication_section_key_union(std::slice::from_ref(
+        &Doc::parse(xml)?,
+    )))
+}
+
+/// The IPC-2581 fabrication `sectionKey` implied by the union of the given
+/// documents' physical content. Element presence is monotone under document
+/// composition, so a composed document's key is the union of its sources'.
+pub(crate) fn fabrication_section_key_union(docs: &[Doc<'_>]) -> String {
     let mut keys = HashSet::new();
+    for doc in docs {
+        collect_section_keys(doc, &mut keys);
+    }
+    "KSUMLRDOIEFY"
+        .chars()
+        .filter(|key| keys.contains(key))
+        .collect()
+}
+
+fn collect_section_keys(doc: &Doc<'_>, keys: &mut HashSet<char>) {
     if !doc.find_all("PadStackDef").is_empty() {
         keys.insert('K');
     }
@@ -469,11 +487,6 @@ fn fabrication_section_key(xml: &str) -> Result<String> {
             _ => {}
         }
     }
-
-    Ok("KSUMLRDOIEFY"
-        .chars()
-        .filter(|key| keys.contains(key))
-        .collect())
 }
 
 fn is_manufacturing_layer(function: &str) -> bool {
