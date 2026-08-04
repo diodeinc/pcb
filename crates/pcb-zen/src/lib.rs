@@ -1,4 +1,3 @@
-pub mod archive;
 pub mod ast_utils;
 pub mod cache_index;
 pub mod diagnostics;
