@@ -51,10 +51,6 @@ anyhow = "1.0"
 atomicwrites = "0.4"
 arboard = { version = "3.6", default-features = false }
 ariadne = { version = "0.6", features = ["auto-color"] }
-aws-config = "1.8.18"
-aws-credential-types = "1.2.14"
-aws-sigv4 = "1.4.5"
-aws-smithy-runtime-api = "1.13.0"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 colored = "3"

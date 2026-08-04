@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb doc` now renders Markdown list items as styled bullets instead of literal hyphens.
+- Removed API authentication via AWS credentials.
 
 ### Fixed
 
