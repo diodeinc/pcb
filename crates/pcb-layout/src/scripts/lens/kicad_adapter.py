@@ -1042,7 +1042,8 @@ def _apply_fragment_routing(
         layout_file = _discover_kicad_pcb_file(layout_dir)
     except ValueError:
         raise
-    except Exception:  # noqa: BLE001 - FIXME: silently swallows fragment-discovery failures
+    except Exception as e:  # noqa: BLE001 - fragment is optional; skip it rather than fail the sync
+        logger.warning(f"Skipping layout fragment for {group_name}: {e}")
         return
     if not layout_file.exists():
         return
