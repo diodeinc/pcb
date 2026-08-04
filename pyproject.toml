@@ -16,6 +16,12 @@ dev = ["pytest>=7.0", "hypothesis>=6.0", "ruff>=0.4", "ty>=0.0.65"]
 # pytest and ty both run on 3.12 and do not catch it.
 target-version = "py39"
 
+[tool.ruff.lint]
+# `required-imports` below is only enforced by I002, which is NOT part of ruff's
+# default selection (that only includes I001), so it must be selected explicitly
+# or the setting is silently inert.
+extend-select = ["I002"]
+
 [tool.ruff.lint.isort]
 # Paired with target-version above: `from __future__ import annotations` makes
 # every annotation a lazy string, so modern `list[str]` / `X | None` spellings
