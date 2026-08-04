@@ -10,22 +10,23 @@ Note: Renames (moved() paths) are handled in Rust preprocessing before
 the Python sync runs. This module no longer tracks renames.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import Any, Literal
 
 from .types import (
+    BoardComplement,
+    BoardView,
     EntityId,
     EntityPath,
-    Position,
-    BoardView,
-    BoardComplement,
-    FootprintView,
     FootprintComplement,
-    GroupView,
+    FootprintView,
     GroupComplement,
+    GroupView,
+    Position,
     default_footprint_complement,
 )
-
 
 # =============================================================================
 # Serialization Utilities
@@ -101,7 +102,7 @@ def parse_value(s: str) -> Any:
         return s
 
 
-def _split_list(s: str) -> List[str]:
+def _split_list(s: str) -> list[str]:
     """Split a comma-separated list, respecting quotes and brackets."""
     items = []
     current = ""
@@ -136,7 +137,7 @@ def _split_list(s: str) -> List[str]:
     return items
 
 
-def _tokenize(line: str) -> List[str]:
+def _tokenize(line: str) -> list[str]:
     """Tokenize a line into command and key=value pairs."""
     tokens = []
     current = ""
@@ -172,7 +173,7 @@ def _tokenize(line: str) -> List[str]:
     return tokens
 
 
-def format_line(kind: str, fields: Dict[str, Any]) -> str:
+def format_line(kind: str, fields: dict[str, Any]) -> str:
     """Format a single line: KIND key=value key=value ..."""
     parts = [kind]
     for key, value in fields.items():
@@ -191,7 +192,7 @@ def parse_line(line: str) -> tuple:
         raise ValueError(f"No tokens in line: {line!r}")
 
     kind = tokens[0]
-    fields: Dict[str, Any] = {}
+    fields: dict[str, Any] = {}
 
     for token in tokens[1:]:
         if "=" not in token:
@@ -218,7 +219,7 @@ def _normalize_layout_path(path: str) -> str:
 
 def _serialize_footprint_view(fp: FootprintView) -> str:
     """Serialize a FootprintView to a single line."""
-    fields: Dict[str, Any] = {
+    fields: dict[str, Any] = {
         "path": str(fp.path),
         "ref": fp.reference,
         "value": fp.value,
@@ -245,7 +246,7 @@ def _serialize_footprint_complement(
     entity_id: EntityId, fc: FootprintComplement
 ) -> str:
     """Serialize a FootprintComplement to a single line."""
-    fields: Dict[str, Any] = {
+    fields: dict[str, Any] = {
         "path": str(entity_id.path),
         "x": fc.position.x,
         "y": fc.position.y,
@@ -270,7 +271,7 @@ def _serialize_footprint_complement(
 def _serialize_group_view(gv: GroupView) -> str:
     """Serialize a GroupView to a single line."""
     members = sorted(str(m.path) for m in gv.member_ids)
-    fields: Dict[str, Any] = {
+    fields: dict[str, Any] = {
         "path": str(gv.path),
         "members": members,
     }
@@ -279,13 +280,13 @@ def _serialize_group_view(gv: GroupView) -> str:
     return format_line("GRV", fields)
 
 
-def _serialize_group_complement(entity_id: EntityId, gc: GroupComplement) -> List[str]:
+def _serialize_group_complement(entity_id: EntityId, gc: GroupComplement) -> list[str]:
     """Serialize a GroupComplement to multiple lines (one per routing item)."""
-    lines: List[str] = []
+    lines: list[str] = []
     path = str(entity_id.path)
 
     for track in sorted(gc.tracks, key=lambda t: (t.layer, t.net_name, t.uuid)):
-        fields: Dict[str, Any] = {
+        fields: dict[str, Any] = {
             "group": path,
             "net": track.net_name or "",
             "layer": track.layer,
@@ -319,9 +320,9 @@ def _serialize_group_complement(entity_id: EntityId, gc: GroupComplement) -> Lis
     return lines
 
 
-def serialize_view(view: BoardView) -> List[str]:
+def serialize_view(view: BoardView) -> list[str]:
     """Serialize a BoardView to lines (footprints and groups only, not nets)."""
-    lines: List[str] = []
+    lines: list[str] = []
 
     for entity_id in sorted(view.footprints.keys(), key=lambda e: str(e.path)):
         lines.append(_serialize_footprint_view(view.footprints[entity_id]))
@@ -332,9 +333,9 @@ def serialize_view(view: BoardView) -> List[str]:
     return lines
 
 
-def serialize_complement(complement: BoardComplement) -> List[str]:
+def serialize_complement(complement: BoardComplement) -> list[str]:
     """Serialize a BoardComplement to lines."""
-    lines: List[str] = []
+    lines: list[str] = []
 
     for entity_id in sorted(complement.footprints.keys(), key=lambda e: str(e.path)):
         lines.append(
@@ -380,13 +381,13 @@ class SyncChangeset:
     view: BoardView
     complement: BoardComplement
 
-    added_footprints: Set[EntityId] = field(default_factory=set)
-    removed_footprints: Dict[EntityId, FootprintComplement] = field(
+    added_footprints: set[EntityId] = field(default_factory=set)
+    removed_footprints: dict[EntityId, FootprintComplement] = field(
         default_factory=dict
     )
 
-    added_groups: Set[EntityId] = field(default_factory=set)
-    removed_groups: Set[EntityId] = field(default_factory=set)
+    added_groups: set[EntityId] = field(default_factory=set)
+    removed_groups: set[EntityId] = field(default_factory=set)
 
     @property
     def is_empty(self) -> bool:
@@ -398,8 +399,8 @@ class SyncChangeset:
         )
 
     @property
-    def footprint_changes(self) -> List[FootprintChange]:
-        changes: List[FootprintChange] = []
+    def footprint_changes(self) -> list[FootprintChange]:
+        changes: list[FootprintChange] = []
         for eid in sorted(self.added_footprints, key=lambda e: str(e.path)):
             changes.append(FootprintChange(kind="add", entity_id=eid))
         for eid in sorted(self.removed_footprints.keys(), key=lambda e: str(e.path)):
@@ -407,8 +408,8 @@ class SyncChangeset:
         return changes
 
     @property
-    def group_changes(self) -> List[GroupChange]:
-        changes: List[GroupChange] = []
+    def group_changes(self) -> list[GroupChange]:
+        changes: list[GroupChange] = []
         for eid in sorted(self.added_groups, key=lambda e: str(e.path)):
             changes.append(GroupChange(kind="add", entity_id=eid))
         for eid in sorted(self.removed_groups, key=lambda e: str(e.path)):
@@ -417,7 +418,7 @@ class SyncChangeset:
 
     def to_plaintext(self) -> str:
         """Serialize to plaintext - one line per change, parseable."""
-        lines: List[str] = []
+        lines: list[str] = []
 
         for change in self.footprint_changes:
             if change.kind == "add":
@@ -471,12 +472,12 @@ class SyncChangeset:
     @classmethod
     def from_plaintext(
         cls, text: str, view: BoardView, complement: BoardComplement
-    ) -> "SyncChangeset":
+    ) -> SyncChangeset:
         """Parse plaintext back to SyncChangeset."""
-        added_footprints: Set[EntityId] = set()
-        removed_footprints: Dict[EntityId, FootprintComplement] = {}
-        added_groups: Set[EntityId] = set()
-        removed_groups: Set[EntityId] = set()
+        added_footprints: set[EntityId] = set()
+        removed_footprints: dict[EntityId, FootprintComplement] = {}
+        added_groups: set[EntityId] = set()
+        removed_groups: set[EntityId] = set()
 
         for line in text.strip().split("\n"):
             line = line.strip()
@@ -522,7 +523,7 @@ class SyncChangeset:
 def build_sync_changeset(
     new_view: BoardView,
     new_complement: BoardComplement,
-    old_complement: Optional[BoardComplement] = None,
+    old_complement: BoardComplement | None = None,
 ) -> SyncChangeset:
     """Build a SyncChangeset by diffing new and old complements.
 
@@ -573,7 +574,7 @@ def log_lens_state(
         logger.info(f"{prefix} {line}")
 
 
-def log_changeset(changeset: "SyncChangeset", logger: Any) -> None:
+def log_changeset(changeset: SyncChangeset, logger: Any) -> None:
     """Log changeset as INFO-level messages."""
     text = changeset.to_plaintext()
     if text.strip():

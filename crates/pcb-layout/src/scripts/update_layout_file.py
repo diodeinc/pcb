@@ -20,19 +20,19 @@ Pipeline Overview
    • Save the updated *.kicad_pcb*.
 """
 
+from __future__ import annotations
+
 import argparse
+import json
 import logging
 import os
 import os.path
 import re
-import time
-from abc import ABC, abstractmethod
-from typing import Optional
-from pathlib import Path
-import json
 import sys
+import time
 import uuid
-from typing import List, Dict
+from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
 # Global logger.
@@ -45,7 +45,7 @@ def footprint_field_is_true(fp: Any, name: str) -> bool:
     return field is not None and field.GetText() == "true"
 
 
-def export_diagnostics(diagnostics: List[Dict[str, Any]], path: Path) -> None:
+def export_diagnostics(diagnostics: list[dict[str, Any]], path: Path) -> None:
     """Export diagnostics to JSON file."""
     output = {"diagnostics": diagnostics}
     with open(path, "w", encoding="utf-8") as f:
@@ -119,7 +119,7 @@ if python_path:
             logger.info(f"Added {path} to Python search path")
 
 # Available in KiCad's Python environment.
-import pcbnew  # noqa: E402
+import pcbnew
 
 # Suppress wxWidgets debug messages (e.g., "Adding duplicate image handler")
 # These are noisy and non-deterministic, interfering with test snapshots.
@@ -127,7 +127,7 @@ try:
     import wx
 
     wx.Log.EnableLogging(False)
-except Exception:
+except Exception:  # noqa: BLE001, S110 - wx is optional; its absence is expected
     pass  # wx may not be available in all environments
 
 
@@ -290,45 +290,46 @@ class JsonNetlistParser:
 
             # Add properties from attributes
             for attr_name, attr_value in instance["attributes"].items():
-                if attr_name not in ["footprint", "value", "Value"]:
-                    if isinstance(attr_value, dict):
-                        if "String" in attr_value:
-                            prop = JsonNetlistParser.Property(
-                                attr_name, attr_value["String"]
-                            )
-                            part.properties.append(prop)
-                        elif "Boolean" in attr_value:
-                            # Convert boolean to string for consistency
-                            prop = JsonNetlistParser.Property(
-                                attr_name, "true" if attr_value["Boolean"] else "false"
-                            )
-                            part.properties.append(prop)
-                        elif "Number" in attr_value:
-                            prop = JsonNetlistParser.Property(
-                                attr_name, str(attr_value["Number"])
-                            )
-                            part.properties.append(prop)
-                        elif "Array" in attr_value:
-                            # Arrays are formatted as CSV strings
-                            # Convert array elements to CSV format
-                            array_items = []
-                            for item in attr_value["Array"]:
-                                if isinstance(item, dict):
-                                    if "String" in item:
-                                        array_items.append(item["String"])
-                                    elif "Number" in item:
-                                        array_items.append(str(item["Number"]))
-                                    elif "Boolean" in item:
-                                        array_items.append(
-                                            "true" if item["Boolean"] else "false"
-                                        )
-                                    else:
-                                        # For other types, use string representation
-                                        array_items.append(str(item))
-                            prop = JsonNetlistParser.Property(
-                                attr_name, ",".join(array_items)
-                            )
-                            part.properties.append(prop)
+                if attr_name not in ["footprint", "value", "Value"] and isinstance(
+                    attr_value, dict
+                ):
+                    if "String" in attr_value:
+                        prop = JsonNetlistParser.Property(
+                            attr_name, attr_value["String"]
+                        )
+                        part.properties.append(prop)
+                    elif "Boolean" in attr_value:
+                        # Convert boolean to string for consistency
+                        prop = JsonNetlistParser.Property(
+                            attr_name, "true" if attr_value["Boolean"] else "false"
+                        )
+                        part.properties.append(prop)
+                    elif "Number" in attr_value:
+                        prop = JsonNetlistParser.Property(
+                            attr_name, str(attr_value["Number"])
+                        )
+                        part.properties.append(prop)
+                    elif "Array" in attr_value:
+                        # Arrays are formatted as CSV strings
+                        # Convert array elements to CSV format
+                        array_items = []
+                        for item in attr_value["Array"]:
+                            if isinstance(item, dict):
+                                if "String" in item:
+                                    array_items.append(item["String"])
+                                elif "Number" in item:
+                                    array_items.append(str(item["Number"]))
+                                elif "Boolean" in item:
+                                    array_items.append(
+                                        "true" if item["Boolean"] else "false"
+                                    )
+                                else:
+                                    # For other types, use string representation
+                                    array_items.append(str(item))
+                        prop = JsonNetlistParser.Property(
+                            attr_name, ",".join(array_items)
+                        )
+                        part.properties.append(prop)
 
             parser.parts.append(part)
 
@@ -388,7 +389,7 @@ class JsonNetlistParser:
 
     def get_component_module(
         self, component_path: str
-    ) -> Optional["JsonNetlistParser.Module"]:
+    ) -> JsonNetlistParser.Module | None:
         """Find which module a component belongs to based on its hierarchical path.
 
         For example, if component_path is "Power.Regulator.C1", this will check:
@@ -475,7 +476,7 @@ class SyncState:
 
     def __init__(self):
         # Diagnostics collected during sync (e.g., FPID mismatches)
-        self.layout_diagnostics: List[Dict[str, Any]] = []
+        self.layout_diagnostics: list[dict[str, Any]] = []
 
 
 ####################################################################################################
@@ -486,8 +487,8 @@ class SyncState:
 ####################################################################################################
 
 # Import the lens module (extracted to temp dir by Rust and added to PYTHONPATH)
-from lens import run_lens_sync  # noqa: E402
-from lens.kicad_adapter import get_footprint_field  # noqa: E402
+from lens import run_lens_sync
+from lens.kicad_adapter import get_footprint_field
 
 
 class ImportNetlist(Step):
@@ -511,11 +512,11 @@ class ImportNetlist(Step):
         self.board_path = Path(board_path)
         self.netlist = netlist
         self.package_roots = netlist.package_roots
-        self.footprint_lib_map: Dict[str, str] = {}
+        self.footprint_lib_map: dict[str, str] = {}
 
     def _setup_env(self):
         """Set up project-local variables for footprint resolution."""
-        if "KIPRJMOD" not in os.environ.keys():
+        if "KIPRJMOD" not in os.environ:
             os.environ["KIPRJMOD"] = str(self.board_path.parent)
 
     def _load_footprint_lib_map(self):
@@ -527,7 +528,7 @@ class ImportNetlist(Step):
             try:
                 with open(path) as fp:
                     tbl = fp.read()
-            except IOError:
+            except OSError:
                 return
 
             # Get individual "(lib ...)" entries from the string.
@@ -629,8 +630,8 @@ class FinalizeBoard(Step):
         self,
         state: SyncState,
         board: pcbnew.BOARD,
-        snapshot_path: Optional[Path],
-        diagnostics_path: Optional[Path] = None,
+        snapshot_path: Path | None,
+        diagnostics_path: Path | None = None,
     ):
         self.state = state
         self.board = board
@@ -876,7 +877,7 @@ class FinalizeBoard(Step):
         # Trigger KiCad's connectivity updates and fix orphaned items
         try:
             self.board.GetConnectivity().Build(self.board)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - FIXME: silently swallows connectivity-rebuild failures
             pass
 
         # Save board only once at the very end

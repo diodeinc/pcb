@@ -1,12 +1,14 @@
 """Tests for lens core types."""
 
+from __future__ import annotations
+
 from ..types import (
-    EntityPath,
-    EntityId,
-    Position,
-    FootprintView,
-    FootprintComplement,
     BoardView,
+    EntityId,
+    EntityPath,
+    FootprintComplement,
+    FootprintView,
+    Position,
     default_footprint_complement,
     default_group_complement,
 )

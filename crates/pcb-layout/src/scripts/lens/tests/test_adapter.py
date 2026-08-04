@@ -5,24 +5,24 @@ These tests verify the pure computation logic in the adapter layer
 without requiring actual KiCad objects.
 """
 
-from typing import Dict, Tuple
+from __future__ import annotations
 
 from .. import kicad_adapter
+from ..lens import (
+    FragmentData,
+    _remap_routing_nets,
+    build_fragment_net_remap,
+)
 from ..types import (
-    EntityPath,
     EntityId,
-    Position,
+    EntityPath,
     FootprintComplement,
     GroupComplement,
+    Position,
     TrackComplement,
     ViaComplement,
     ZoneComplement,
     default_footprint_complement,
-)
-from ..lens import (
-    build_fragment_net_remap,
-    FragmentData,
-    _remap_routing_nets,
 )
 
 
@@ -91,12 +91,12 @@ class TestBuildFragmentNetRemap:
         member_paths = [EntityPath.from_string("Power.R1")]
 
         # Fragment: R1.1 is connected to "LOCAL_VCC"
-        fragment_pad_net_map: Dict[Tuple[str, str], str] = {
+        fragment_pad_net_map: dict[tuple[str, str], str] = {
             ("R1", "1"): "LOCAL_VCC",
         }
 
         # Board: Power.R1.1 is connected to "VCC_3V3"
-        board_pad_net_map: Dict[Tuple[EntityId, str], str] = {
+        board_pad_net_map: dict[tuple[EntityId, str], str] = {
             (EntityId.from_string("Power.R1"), "1"): "VCC_3V3",
         }
 
@@ -115,12 +115,12 @@ class TestBuildFragmentNetRemap:
             EntityPath.from_string("Power.R2"),
         ]
 
-        fragment_pad_net_map: Dict[Tuple[str, str], str] = {
+        fragment_pad_net_map: dict[tuple[str, str], str] = {
             ("R1", "1"): "LOCAL_GND",
             ("R2", "2"): "LOCAL_GND",
         }
 
-        board_pad_net_map: Dict[Tuple[EntityId, str], str] = {
+        board_pad_net_map: dict[tuple[EntityId, str], str] = {
             (EntityId.from_string("Power.R1"), "1"): "GND",
             (EntityId.from_string("Power.R2"), "2"): "GND",
         }
@@ -137,12 +137,12 @@ class TestBuildFragmentNetRemap:
         group_path = EntityPath.from_string("Power")
         member_paths = [EntityPath.from_string("Power.R1")]
 
-        fragment_pad_net_map: Dict[Tuple[str, str], str] = {
+        fragment_pad_net_map: dict[tuple[str, str], str] = {
             ("R1", "1"): "LOCAL_VCC",
             ("R1", "2"): "LOCAL_GND",
         }
 
-        board_pad_net_map: Dict[Tuple[EntityId, str], str] = {
+        board_pad_net_map: dict[tuple[EntityId, str], str] = {
             (EntityId.from_string("Power.R1"), "1"): "VCC_3V3",
             (EntityId.from_string("Power.R1"), "2"): "GND",
         }
@@ -163,12 +163,12 @@ class TestBuildFragmentNetRemap:
         ]
 
         # Both pads have same fragment net but different board nets
-        fragment_pad_net_map: Dict[Tuple[str, str], str] = {
+        fragment_pad_net_map: dict[tuple[str, str], str] = {
             ("R1", "1"): "LOCAL_VCC",
             ("R2", "1"): "LOCAL_VCC",
         }
 
-        board_pad_net_map: Dict[Tuple[EntityId, str], str] = {
+        board_pad_net_map: dict[tuple[EntityId, str], str] = {
             (EntityId.from_string("Power.R1"), "1"): "VCC_3V3",
             (EntityId.from_string("Power.R2"), "1"): "VCC_5V",  # Different!
         }
@@ -188,11 +188,11 @@ class TestBuildFragmentNetRemap:
         group_path = EntityPath.from_string("Power")
         member_paths = [EntityPath.from_string("Power.R1")]
 
-        fragment_pad_net_map: Dict[Tuple[str, str], str] = {
+        fragment_pad_net_map: dict[tuple[str, str], str] = {
             # R1.1 is NOT in fragment map
         }
 
-        board_pad_net_map: Dict[Tuple[EntityId, str], str] = {
+        board_pad_net_map: dict[tuple[EntityId, str], str] = {
             (EntityId.from_string("Power.R1"), "1"): "VCC_3V3",
         }
 
@@ -209,11 +209,11 @@ class TestBuildFragmentNetRemap:
         member_paths = [EntityPath.from_string("TopModule.Power.R1")]
 
         # Fragment uses relative path "R1"
-        fragment_pad_net_map: Dict[Tuple[str, str], str] = {
+        fragment_pad_net_map: dict[tuple[str, str], str] = {
             ("R1", "1"): "LOCAL_VCC",
         }
 
-        board_pad_net_map: Dict[Tuple[EntityId, str], str] = {
+        board_pad_net_map: dict[tuple[EntityId, str], str] = {
             (EntityId.from_string("TopModule.Power.R1"), "1"): "VCC_3V3",
         }
 
@@ -564,8 +564,9 @@ class TestFieldVisibility:
     def test_create_footprint_hides_value_and_custom_fields(self):
         """New footprints should have Value and custom fields hidden."""
         from unittest.mock import Mock
+
         from ..kicad_adapter import _create_footprint
-        from ..types import FootprintView, FootprintComplement, Position, EntityId
+        from ..types import EntityId, FootprintComplement, FootprintView, Position
 
         # Create view with custom fields
         entity_id = EntityId.from_string("Power.R1", fpid="Resistor_SMD:R_0603")
@@ -627,8 +628,9 @@ class TestFieldVisibility:
     def test_update_footprint_preserves_field_visibility(self):
         """Updating footprints should not change field visibility."""
         from unittest.mock import Mock
+
         from ..kicad_adapter import _update_footprint_view
-        from ..types import FootprintView, EntityId
+        from ..types import EntityId, FootprintView
 
         entity_id = EntityId.from_string("Power.R1", fpid="Resistor_SMD:R_0603")
         view = FootprintView(

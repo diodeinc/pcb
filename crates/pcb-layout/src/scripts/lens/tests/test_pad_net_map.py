@@ -6,15 +6,17 @@ BoardView.nets (SOURCE) rather than copying from existing pads (DEST).
 This ensures the netlist is always the source of truth for connectivity.
 """
 
+from __future__ import annotations
+
 from unittest.mock import Mock
 
+from ..kicad_adapter import _build_pad_net_map
 from ..types import (
+    BoardView,
     EntityId,
     FootprintView,
-    BoardView,
     NetView,
 )
-from ..kicad_adapter import _build_pad_net_map
 
 
 class MockNetInfo:

@@ -1,17 +1,19 @@
 """Tests for lens operations."""
 
-from ..types import (
-    EntityId,
-    Position,
-    FootprintView,
-    FootprintComplement,
-    GroupView,
-    GroupComplement,
-    BoardView,
-    BoardComplement,
-)
-from ..lens import adapt_complement
+from __future__ import annotations
+
 from ..changeset import build_sync_changeset
+from ..lens import adapt_complement
+from ..types import (
+    BoardComplement,
+    BoardView,
+    EntityId,
+    FootprintComplement,
+    FootprintView,
+    GroupComplement,
+    GroupView,
+    Position,
+)
 
 
 class TestAdaptComplement:

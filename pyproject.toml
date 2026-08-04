@@ -7,13 +7,21 @@ dependencies = ["click>=8.0"]
 [dependency-groups]
 dev = ["pytest>=7.0", "hypothesis>=6.0", "ruff>=0.4", "ty>=0.0.65"]
 
-[tool.ruff.lint]
-# ruff 0.16 widened its default rule selection well beyond the pre-0.16 default
-# of E4/E7/E9/F. Pinning it here keeps the ruff 0.15 -> 0.16 bump
-# behaviour-preserving. Adopting 0.16's defaults is a separate decision: it
-# reports 420 findings on this tree (369 auto-fixable), mostly UP006
-# non-pep585-annotation, UP045, and I001 unsorted-imports.
-select = ["E4", "E7", "E9", "F"]
+[tool.ruff]
+# These scripts execute inside KiCad's bundled interpreter, which is Python
+# 3.9.13 as of KiCad 10 -- NOT the >=3.10 above, which only describes the uv
+# dev/test environment. Without this, ruff infers py310 from requires-python and
+# rewrites `Optional[X]` to PEP 604 `X | None`, which raises
+# `TypeError: unsupported operand type(s) for |` at import time under KiCad.
+# pytest and ty both run on 3.12 and do not catch it.
+target-version = "py39"
+
+[tool.ruff.lint.isort]
+# Paired with target-version above: `from __future__ import annotations` makes
+# every annotation a lazy string, so modern `list[str]` / `X | None` spellings
+# are safe to write even though KiCad's interpreter is 3.9. Without it those
+# spellings would be evaluated at import time and raise.
+required-imports = ["from __future__ import annotations"]
 
 [tool.ty.src]
 exclude = ["**/tests/"]

@@ -8,11 +8,12 @@ Note: Renames (moved() paths) are handled in Rust preprocessing before
 the Python sync runs. This module does not log rename operations.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal
+from typing import Any, Literal
 
 from .changeset import format_line, parse_line
-
 
 OpKind = Literal[
     "NET_ADD",
@@ -38,14 +39,14 @@ class OpEvent:
     """A single structured operation event."""
 
     kind: OpKind
-    fields: Dict[str, Any] = field(default_factory=dict)
+    fields: dict[str, Any] = field(default_factory=dict)
 
     def to_line(self) -> str:
         """Serialize to a single human-readable line."""
         return format_line(self.kind, self.fields)
 
     @classmethod
-    def from_line(cls, line: str) -> "OpEvent":
+    def from_line(cls, line: str) -> OpEvent:
         """Parse a single line back to OpEvent."""
         kind, fields = parse_line(line)
         return cls(kind=kind, fields=fields)
@@ -55,7 +56,7 @@ class OpEvent:
 class OpLog:
     """Accumulates layout operations for debugging and testing."""
 
-    events: List[OpEvent] = field(default_factory=list)
+    events: list[OpEvent] = field(default_factory=list)
 
     def emit(self, event: OpEvent) -> None:
         """Append an event to the log."""
@@ -98,7 +99,7 @@ class OpLog:
         layer: str = "",
         pad_count: int = 0,
     ) -> None:
-        fields: Dict[str, Any] = {
+        fields: dict[str, Any] = {
             "path": path,
             "ref": reference,
             "fpid": fpid,
@@ -135,7 +136,7 @@ class OpLog:
         dx = end_x - start_x
         dy = end_y - start_y
         length = int(math.sqrt(dx * dx + dy * dy))
-        fields: Dict[str, Any] = {
+        fields: dict[str, Any] = {
             "group": group_path,
             "net": net_name,
             "layer": layer,
@@ -157,7 +158,7 @@ class OpLog:
         y: int,
         drill: int = 0,
     ) -> None:
-        fields: Dict[str, Any] = {
+        fields: dict[str, Any] = {
             "group": group_path,
             "net": net_name,
             "x": x,
@@ -168,7 +169,7 @@ class OpLog:
         self.emit(OpEvent(kind="FRAG_VIA", fields=fields))
 
     def frag_zone(self, group_path: str, net_name: str, layer: str, name: str) -> None:
-        fields: Dict[str, Any] = {
+        fields: dict[str, Any] = {
             "group": group_path,
             "net": net_name,
             "layer": layer,
@@ -190,14 +191,14 @@ class OpLog:
     # =========================================================================
 
     def place_fp(self, path: str, x: int, y: int, w: int = 0, h: int = 0) -> None:
-        fields: Dict[str, Any] = {"path": path, "x": x, "y": y}
+        fields: dict[str, Any] = {"path": path, "x": x, "y": y}
         if w and h:
             fields["w"] = w
             fields["h"] = h
         self.emit(OpEvent(kind="PLACE_FP", fields=fields))
 
     def place_gr(self, path: str, x: int, y: int, w: int = 0, h: int = 0) -> None:
-        fields: Dict[str, Any] = {"path": path, "x": x, "y": y}
+        fields: dict[str, Any] = {"path": path, "x": x, "y": y}
         if w and h:
             fields["w"] = w
             fields["h"] = h
@@ -298,9 +299,9 @@ class OpLog:
             logger.info(f"OPLOG {event.to_line()}")
 
     @classmethod
-    def from_plaintext(cls, text: str) -> "OpLog":
+    def from_plaintext(cls, text: str) -> OpLog:
         """Parse plaintext back to OpLog."""
-        events: List[OpEvent] = []
+        events: list[OpEvent] = []
         for line in text.strip().split("\n"):
             line = line.strip()
             if not line or line.startswith("#"):

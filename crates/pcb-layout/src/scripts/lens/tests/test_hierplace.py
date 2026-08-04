@@ -14,18 +14,20 @@ Invariants tested:
 Run with: pytest -v test_hierplace.py
 """
 
-from hypothesis import given, settings, assume
+from __future__ import annotations
+
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from ..types import EntityPath, EntityId
 from ..hierplace import (
     PlacementRect,
     Rect,
-    rects_intersect,
     merge_rects,
     pack,
     pad_for_depth,
+    rects_intersect,
 )
+from ..types import EntityId, EntityPath
 
 # A4 sheet dimensions
 SHEET_CENTER_X = 297_000_000 // 2

@@ -8,13 +8,14 @@ Algorithm:
 4. Optionally normalize so cluster top-left is at (0, 0)
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 from .types import EntityId
 
 # Bounding box: (left, top, width, height)
-Rect = Tuple[int, int, int, int]
+Rect = tuple[int, int, int, int]
 
 # A4 sheet dimensions in nanometers
 DEFAULT_SHEET_WIDTH = 297_000_000
@@ -40,7 +41,7 @@ class PlacementRect:
     x: int = 0
     y: int = 0
 
-    def move_to(self, x: int, y: int) -> "PlacementRect":
+    def move_to(self, x: int, y: int) -> PlacementRect:
         """Return a new PlacementRect at (x, y)."""
         return PlacementRect(self.entity_id, self.width, self.height, x, y)
 
@@ -64,7 +65,7 @@ def merge_rects(a: Rect, b: Rect) -> Rect:
     return (min_x, min_y, max_x - min_x, max_y - min_y)
 
 
-def compute_cluster_bbox(rects: List[PlacementRect]) -> Optional[Rect]:
+def compute_cluster_bbox(rects: list[PlacementRect]) -> Rect | None:
     """Compute the bounding box of all placed rectangles."""
     if not rects:
         return None
@@ -75,13 +76,13 @@ def compute_cluster_bbox(rects: List[PlacementRect]) -> Optional[Rect]:
 
 
 def pack(
-    rects: List[PlacementRect],
+    rects: list[PlacementRect],
     gap: int = 0,
-    anchor: Optional[Rect] = None,
+    anchor: Rect | None = None,
     sheet_width: int = DEFAULT_SHEET_WIDTH,
     sheet_height: int = DEFAULT_SHEET_HEIGHT,
     normalize: bool = False,
-) -> Dict[EntityId, Tuple[int, int]]:
+) -> dict[EntityId, tuple[int, int]]:
     """Pack rectangles using corner-based greedy placement.
 
     Args:
@@ -100,9 +101,9 @@ def pack(
     valid = sorted(valid, key=lambda r: (-r.width * r.height, str(r.entity_id.path)))
 
     half_gap = gap // 2
-    placed: List[Rect] = []  # (x, y, w, h) tuples
-    pts: List[Tuple[int, int]] = []  # candidate bottom-left points
-    result: Dict[EntityId, Tuple[int, int]] = {}
+    placed: list[Rect] = []  # (x, y, w, h) tuples
+    pts: list[tuple[int, int]] = []  # candidate bottom-left points
+    result: dict[EntityId, tuple[int, int]] = {}
 
     # Initialize placement points and pre-placed rects
     if anchor:
@@ -122,7 +123,7 @@ def pack(
         pts.append((start_x, start_y + first.height))
 
     for rect in valid:
-        best_pos: Optional[Tuple[int, int]] = None
+        best_pos: tuple[int, int] | None = None
         best_size = float("inf")
 
         for pt_x, pt_y in pts:

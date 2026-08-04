@@ -5,18 +5,20 @@ and effectful application.
 Note: Renames (moved() paths) are now handled in Rust preprocessing.
 """
 
-from ..types import (
-    EntityId,
-    Position,
-    FootprintView,
-    FootprintComplement,
-    BoardView,
-    BoardComplement,
-    default_footprint_complement,
-)
+from __future__ import annotations
+
 from ..changeset import (
     SyncChangeset,
     build_sync_changeset,
+)
+from ..types import (
+    BoardComplement,
+    BoardView,
+    EntityId,
+    FootprintComplement,
+    FootprintView,
+    Position,
+    default_footprint_complement,
 )
 
 

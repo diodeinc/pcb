@@ -20,37 +20,39 @@ Note: Renames (moved() paths) are now handled in Rust preprocessing before
 the Python sync runs. Paths are already in their final form.
 """
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from __future__ import annotations
+
 import logging
 import uuid as uuid_module
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .changeset import SyncChangeset
     from .oplog import OpLog
 
+from .kicad_adapter import (
+    extract_zone_outline_positions,
+    get_footprint_field,
+    get_group_items,
+)
 from .types import (
-    EntityPath,
-    EntityId,
-    Position,
-    FootprintView,
-    FootprintComplement,
-    GroupView,
-    GroupComplement,
-    NetView,
-    BoardView,
     BoardComplement,
+    BoardView,
+    EntityId,
+    EntityPath,
+    FootprintComplement,
+    FootprintView,
+    GroupComplement,
+    GroupView,
+    NetView,
+    Position,
     TrackComplement,
     ViaComplement,
     ZoneComplement,
     default_footprint_complement,
     default_group_complement,
-)
-from .kicad_adapter import (
-    extract_zone_outline_positions,
-    get_footprint_field,
-    get_group_items,
 )
 
 logger = logging.getLogger("pcb.lens")
@@ -70,8 +72,8 @@ class FragmentData:
     """
 
     group_complement: GroupComplement
-    footprint_complements: Dict[str, FootprintComplement]
-    pad_net_map: Dict[Tuple[str, str], str] = field(default_factory=dict)
+    footprint_complements: dict[str, FootprintComplement]
+    pad_net_map: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
 def get(netlist: Any) -> BoardView:
@@ -81,9 +83,9 @@ def get(netlist: Any) -> BoardView:
     This is a pure function that extracts all SOURCE-authoritative data
     and structures it for the lens.
     """
-    footprints: Dict[EntityId, FootprintView] = {}
-    groups: Dict[EntityId, GroupView] = {}
-    nets: Dict[str, NetView] = {}
+    footprints: dict[EntityId, FootprintView] = {}
+    groups: dict[EntityId, GroupView] = {}
+    nets: dict[str, NetView] = {}
 
     for part in netlist.parts:
         path_str = part.sheetpath.names.split(":")[-1] if part.sheetpath.names else ""
@@ -91,7 +93,7 @@ def get(netlist: Any) -> BoardView:
         # Include fpid in entity identity - FPID change = delete + create
         entity_id = EntityId(path=entity_path, fpid=part.footprint)
 
-        fields: Dict[str, str] = {
+        fields: dict[str, str] = {
             "Datasheet": "",
             "Description": "",
             "Path": path_str,
@@ -134,7 +136,7 @@ def get(netlist: Any) -> BoardView:
             fields=fields,
         )
 
-    fp_id_by_ref: Dict[str, EntityId] = {
+    fp_id_by_ref: dict[str, EntityId] = {
         fp_view.reference: fp_id for fp_id, fp_view in footprints.items()
     }
 
@@ -150,9 +152,7 @@ def get(netlist: Any) -> BoardView:
 
             # Count direct children: footprints + submodules
             direct_footprints = [
-                fp_id
-                for fp_id in footprints.keys()
-                if fp_id.path.parent() == entity_path
+                fp_id for fp_id in footprints if fp_id.path.parent() == entity_path
             ]
             direct_submodules = [
                 sub_path
@@ -170,10 +170,8 @@ def get(netlist: Any) -> BoardView:
 
             # Build member list - include all descendant footprints
             # (not just direct children, since nested component wrappers are skipped)
-            member_ids: List[EntityId] = [
-                fp_id
-                for fp_id in footprints.keys()
-                if entity_path.is_ancestor_of(fp_id.path)
+            member_ids: list[EntityId] = [
+                fp_id for fp_id in footprints if entity_path.is_ancestor_of(fp_id.path)
             ]
 
             groups[entity_id] = GroupView(
@@ -186,7 +184,7 @@ def get(netlist: Any) -> BoardView:
         net_kind = getattr(net, "kind", "Net")
 
         # Normalize nodes to strings. Each node is (refdes, pad_num, pin_name).
-        nodes: List[Tuple[str, str, str]] = [
+        nodes: list[tuple[str, str, str]] = [
             (str(ref), str(pad_num), str(pin_name))
             for ref, pad_num, pin_name in net.nodes
         ]
@@ -194,7 +192,7 @@ def get(netlist: Any) -> BoardView:
         # Compute logical ports (component refdes + pin/port name), independent of pad fanout.
         # The third element in the node tuple is a logical pin/port name.
         logical_ports_set: set[tuple[str, str]] = set()
-        pad_nums_by_logical_port: Dict[Tuple[str, str], set[str]] = {}
+        pad_nums_by_logical_port: dict[tuple[str, str], set[str]] = {}
         for ref, pad_num, pin_name in nodes:
             port = (ref, pin_name)
             logical_ports_set.add(port)
@@ -225,8 +223,8 @@ def get(netlist: Any) -> BoardView:
                     )
                 continue
 
-        connections_list: List[Tuple[EntityId, str]] = []
-        seen_connections: set[Tuple[EntityId, str]] = set()
+        connections_list: list[tuple[EntityId, str]] = []
+        seen_connections: set[tuple[EntityId, str]] = set()
         for ref, pad_num, _pin_name in nodes:
             fp_id = fp_id_by_ref.get(ref)
             if not fp_id:
@@ -266,7 +264,7 @@ def _unconnected_net_name(path: EntityPath, ref: str, pad_num: str) -> str:
     return f"unconnected-({path_str}:{pad_num})"
 
 
-def _unique_net_name(base: str, existing: Dict[str, Any]) -> str:
+def _unique_net_name(base: str, existing: dict[str, Any]) -> str:
     """Return a name that's not already in `existing` (dict keyed by net name)."""
     if base not in existing:
         return base
@@ -289,9 +287,9 @@ def _pad_sort_key(pad_num: str) -> tuple[int, object]:
 def extract(
     board: Any,
     pcbnew: Any,
-    kiid_to_path: Optional[Dict[str, str]] = None,
-    diagnostics: Optional[List[Dict[str, Any]]] = None,
-) -> Tuple[BoardView, BoardComplement]:
+    kiid_to_path: dict[str, str] | None = None,
+    diagnostics: list[dict[str, Any]] | None = None,
+) -> tuple[BoardView, BoardComplement]:
     """
     Extract both View (π_V) and Complement (π_C) from a KiCad board in a single pass.
 
@@ -309,15 +307,15 @@ def extract(
         - complement: BoardComplement with placement data (position, orientation, routing)
     """
     # Footprint data
-    footprint_views: Dict[EntityId, FootprintView] = {}
-    footprint_complements: Dict[EntityId, FootprintComplement] = {}
+    footprint_views: dict[EntityId, FootprintView] = {}
+    footprint_complements: dict[EntityId, FootprintComplement] = {}
 
     # Group data
-    group_views: Dict[EntityId, GroupView] = {}
-    group_complements: Dict[EntityId, GroupComplement] = {}
+    group_views: dict[EntityId, GroupView] = {}
+    group_complements: dict[EntityId, GroupComplement] = {}
 
     # Net data (view only)
-    net_connections: Dict[str, List[Tuple[EntityId, str]]] = {}
+    net_connections: dict[str, list[tuple[EntityId, str]]] = {}
 
     if kiid_to_path is None:
         kiid_to_path = {}
@@ -360,7 +358,7 @@ def extract(
         # ─────────────────────────────────────────────────────────────────────
         # Extract View (SOURCE-authoritative metadata)
         # ─────────────────────────────────────────────────────────────────────
-        fields: Dict[str, str] = {}
+        fields: dict[str, str] = {}
         for field_obj in fp.GetFields():
             field_name = field_obj.GetName()
             if field_name not in {"Reference", "Value", "Footprint"}:
@@ -430,8 +428,8 @@ def extract(
         entity_id = EntityId(path=entity_path)
 
         # Find members (footprints whose path is a descendant)
-        member_ids: List[EntityId] = []
-        for fp_id in footprint_views.keys():
+        member_ids: list[EntityId] = []
+        for fp_id in footprint_views:
             if entity_path.is_ancestor_of(fp_id.path):
                 member_ids.append(fp_id)
 
@@ -442,9 +440,9 @@ def extract(
         )
 
         # Extract group complement (routing within the group)
-        tracks: List[TrackComplement] = []
-        vias: List[ViaComplement] = []
-        zones: List[ZoneComplement] = []
+        tracks: list[TrackComplement] = []
+        vias: list[ViaComplement] = []
+        zones: list[ZoneComplement] = []
 
         for item in get_group_items(group):
             item_class = item.GetClass().upper()
@@ -501,7 +499,7 @@ def extract(
         )
 
     # Build net views
-    net_views: Dict[str, NetView] = {}
+    net_views: dict[str, NetView] = {}
     for net_name, connections in net_connections.items():
         net_views[net_name] = NetView(
             name=net_name,
@@ -524,10 +522,10 @@ def extract(
 
 def build_fragment_net_remap(
     group_path: EntityPath,
-    member_paths: List[EntityPath],
-    fragment_pad_net_map: Dict[Tuple[str, str], str],
-    board_pad_net_map: Dict[Tuple[EntityId, str], str],
-) -> Tuple[Dict[str, str], List[str]]:
+    member_paths: list[EntityPath],
+    fragment_pad_net_map: dict[tuple[str, str], str],
+    board_pad_net_map: dict[tuple[EntityId, str], str],
+) -> tuple[dict[str, str], list[str]]:
     """Build a net remapping from fragment-local nets to board nets.
 
     For each footprint in the group, find what net each pad connects to in the board,
@@ -535,8 +533,8 @@ def build_fragment_net_remap(
 
     Returns (net_remap, warnings) tuple.
     """
-    net_remap: Dict[str, str] = {}
-    warnings: List[str] = []
+    net_remap: dict[str, str] = {}
+    warnings: list[str] = []
     group_path_str = str(group_path)
 
     for member_path in member_paths:
@@ -572,7 +570,7 @@ def build_fragment_net_remap(
 
 def _remap_routing_nets(
     items: tuple,
-    net_remap: Dict[str, str],
+    net_remap: dict[str, str],
     valid_nets: set,
     context: str,
 ) -> tuple:
@@ -580,7 +578,7 @@ def _remap_routing_nets(
     from dataclasses import replace
 
     result = []
-    orphan_nets: List[str] = []
+    orphan_nets: list[str] = []
 
     for item in items:
         net = item.net_name
@@ -628,14 +626,14 @@ def adapt_complement(
 
     Returns the adapted BoardComplement.
     """
-    new_footprints: Dict[EntityId, FootprintComplement] = {}
-    new_groups: Dict[EntityId, GroupComplement] = {}
+    new_footprints: dict[EntityId, FootprintComplement] = {}
+    new_groups: dict[EntityId, GroupComplement] = {}
 
     # ═══════════════════════════════════════════════════════════════════════════
     # Adapt footprint complements
     # EntityId includes fpid, so exact match means same path AND same fpid
     # ═══════════════════════════════════════════════════════════════════════════
-    for entity_id, fp_view in new_view.footprints.items():
+    for entity_id in new_view.footprints:
         existing = old_complement.footprints.get(entity_id)
 
         if existing:
@@ -649,7 +647,7 @@ def adapt_complement(
     # ═══════════════════════════════════════════════════════════════════════════
     # Adapt group complements
     # ═══════════════════════════════════════════════════════════════════════════
-    for entity_id, group_view in new_view.groups.items():
+    for entity_id in new_view.groups:
         existing = old_complement.groups.get(entity_id)
 
         if existing:
@@ -672,7 +670,7 @@ def adapt_complement(
 def check_lens_invariants(
     view: BoardView,
     complement: BoardComplement,
-    diagnostics: Optional[List[Dict[str, Any]]] = None,
+    diagnostics: list[dict[str, Any]] | None = None,
 ) -> None:
     """
     Verify the four lens laws hold for a view/complement pair.
@@ -720,8 +718,8 @@ def check_lens_invariants(
                 f"Extra groups in complement: {extra}",
             )
 
-    fp_paths = {fp_id.path for fp_id in view.footprints.keys()}
-    for group_id in view.groups.keys():
+    fp_paths = {fp_id.path for fp_id in view.footprints}
+    for group_id in view.groups:
         if group_id.path in fp_paths:
             _add_diagnostic(
                 "layout.sync.no_leaf_groups",
@@ -782,10 +780,10 @@ def check_lens_invariants(
 class SyncResult:
     """Result of a sync operation."""
 
-    changeset: "SyncChangeset"
-    diagnostics: List[Dict[str, Any]] = field(default_factory=list)
+    changeset: SyncChangeset
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
     applied: bool = False
-    oplog: Optional["OpLog"] = None
+    oplog: OpLog | None = None
 
 
 def run_lens_sync(
@@ -793,32 +791,33 @@ def run_lens_sync(
     kicad_board: Any,
     pcbnew: Any,
     board_path: Path,
-    footprint_lib_map: Dict[str, str],
-    package_roots: Dict[str, str],
+    footprint_lib_map: dict[str, str],
+    package_roots: dict[str, str],
 ) -> SyncResult:
     """Run the lens-based sync pipeline.
 
     This is the main entry point called by ImportNetlist in update_layout_file.py.
     """
     import time
-    from .kicad_adapter import apply_changeset
+
     from .changeset import (
         build_sync_changeset,
-        log_lens_state,
         log_changeset,
+        log_lens_state,
     )
+    from .kicad_adapter import apply_changeset
 
     start_time = time.time()
     logger.info("Starting lens-based layout sync")
 
-    diagnostics: List[Dict[str, Any]] = []
+    diagnostics: list[dict[str, Any]] = []
 
     new_view = get(netlist)
 
     # Build KIID->path map for old boards without Path field
     # This allows extract() to identify footprints by their KIID_PATH UUID
-    kiid_to_path: Dict[str, str] = {}
-    for entity_id in new_view.footprints.keys():
+    kiid_to_path: dict[str, str] = {}
+    for entity_id in new_view.footprints:
         kiid_to_path[entity_id.kiid_uuid] = str(entity_id.path)
 
     dest_view, old_complement = extract(kicad_board, pcbnew, kiid_to_path, diagnostics)
