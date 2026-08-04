@@ -63,18 +63,7 @@ pub fn execute(args: RouteArgs) -> Result<()> {
 
     match args.engine {
         RouteEngine::Deeppcb => execute_deeppcb(args),
-        RouteEngine::Freerouting => {
-            if args.fr_timeout > 60 {
-                anyhow::bail!("Timeout cannot exceed 60 minutes");
-            }
-            let (board_path, project_path) = resolve_board(&args.file)?;
-            let board_name = board_path
-                .file_stem()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
-            crate::freerouting::execute(&args, &board_path, &project_path, &board_name)
-        }
+        RouteEngine::Freerouting => execute_freerouting(args),
     }
 }
 
@@ -108,6 +97,21 @@ fn resolve_board(zen_path: &Path) -> Result<(PathBuf, PathBuf)> {
     }
 
     Ok((board_path, project_path))
+}
+
+fn execute_freerouting(args: RouteArgs) -> Result<()> {
+    if args.fr_timeout > 60 {
+        anyhow::bail!("Timeout cannot exceed 60 minutes");
+    }
+
+    let (board_path, project_path) = resolve_board(&args.file)?;
+    let board_name = board_path
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    crate::freerouting::execute(&args, &board_path, &project_path, &board_name)
 }
 
 fn execute_deeppcb(args: RouteArgs) -> Result<()> {
