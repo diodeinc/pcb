@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.21] - 2026-08-04
+
 ### Added
 
 - Added AEC-Q200-qualified Vishay D/CRCW e3 parts as 0402 generic resistor matches through 10 MΩ.
@@ -1470,7 +1472,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.20...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.21...HEAD
+[0.4.21]: https://github.com/diodeinc/pcb/compare/v0.4.20...v0.4.21
 [0.4.20]: https://github.com/diodeinc/pcb/compare/v0.4.19...v0.4.20
 [0.4.19]: https://github.com/diodeinc/pcb/compare/v0.4.18...v0.4.19
 [0.4.18]: https://github.com/diodeinc/pcb/compare/v0.4.17...v0.4.18
