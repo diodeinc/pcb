@@ -61,6 +61,8 @@ semver = { workspace = true }
 rayon = { workspace = true }
 ctrlc = { workspace = true }
 reqwest = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 termimad = { workspace = true }
 syntect = { workspace = true }
 thiserror = { workspace = true }
@@ -72,6 +74,7 @@ notify = { workspace = true }
 
 mimalloc = { workspace = true, optional = true }
 uuid = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 httpmock = { workspace = true }
