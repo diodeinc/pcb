@@ -3,9 +3,9 @@ Type: Board (pin-capability model demo)
 Description: Battery window monitor around the LM339 example module. The
 board names three comparator roles (undervoltage, overvoltage,
 overtemperature) and never picks a gate: the solver assigns three of the
-four units, the fourth stays NotConnected and appears as a `spare_units`
-entry of a `rebind = "none"` swap class — a pure copper swap, no firmware
-involved.
+four units, the fourth gets its inputs tied to VCC/GND by the module (no
+floating comparator) and appears as a `spare_units` entry of a
+`rebind = "none"` swap class — a pure copper swap, no firmware involved.
 """
 
 load("./LM339.zen", "Comparator")
