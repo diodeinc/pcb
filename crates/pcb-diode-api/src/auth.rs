@@ -320,6 +320,8 @@ pub fn login() -> Result<()> {
 pub fn logout_with_context(ctx: &WorkspaceContext) -> Result<()> {
     pcb_zen::git::clear_diodehub_credential_cache();
     clear_tokens_with_context(ctx)?;
+    // Bearer tokens left behind by the retired AWS credential exchange.
+    let _ = fs::remove_dir_all(get_auth_dir()?.join("service-auth"));
     println!("✓ Logged out successfully");
     Ok(())
 }
@@ -538,6 +540,19 @@ mod tests {
         let _auth_guard = EnvGuard::set_str("DIODE_API_AUTH", "none");
 
         assert_eq!(get_api_token_with_context(&ctx).unwrap(), None);
+    }
+
+    #[test]
+    #[serial]
+    fn logout_purges_legacy_service_auth_tokens() {
+        let (tempdir, _guard, ctx) = isolated_context();
+        let stale = tempdir.path().join("service-auth/api.toml");
+        fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        fs::write(&stale, "access_token = \"stale-bearer\"\n").unwrap();
+
+        logout_with_context(&ctx).unwrap();
+
+        assert!(!stale.exists());
     }
 
     #[test]
