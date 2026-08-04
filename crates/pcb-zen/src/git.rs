@@ -15,6 +15,7 @@ use tempfile::Builder;
 use url::{Position, Url};
 
 const DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS: u64 = 55 * 60;
+const DEFAULT_DIODEHUB_HOST: &str = "code.diode.computer";
 const LEGACY_DIODEHUB_CREDENTIAL_HELPER: &str = "!pcb auth git";
 const DIODEHUB_CREDENTIAL_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
 const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
@@ -43,19 +44,25 @@ fn make_noninteractive(cmd: &mut Command) {
     cmd.env("GCM_INTERACTIVE", "never");
 }
 
-fn git_network(repo_root: &Path) -> Command {
-    let mut cmd = git_global();
+fn git_network(repo_root: &Path) -> anyhow::Result<Command> {
+    let mut cmd = git_global_network()?;
     make_noninteractive(&mut cmd);
     cmd.arg("-C").arg(repo_root);
-    cmd
+    Ok(cmd)
 }
 
-fn git_global_network_with_prompt(interactive: bool) -> Command {
+fn git_global_network() -> anyhow::Result<Command> {
     let mut cmd = git_global();
+    add_default_diodehub_https_auth_config(&mut cmd, &credential_cache_socket()?)?;
+    Ok(cmd)
+}
+
+fn git_global_network_with_prompt(interactive: bool) -> anyhow::Result<Command> {
+    let mut cmd = git_global_network()?;
     if !interactive {
         make_noninteractive(&mut cmd);
     }
-    cmd
+    Ok(cmd)
 }
 
 fn pcb_config_dir() -> anyhow::Result<PathBuf> {
@@ -102,6 +109,31 @@ fn diodehub_credential_helper(host: &str) -> String {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn add_git_config(cmd: &mut Command, key: &str, value: &str) {
+    cmd.arg("-c").arg(format!("{key}={value}"));
+}
+
+// Preserve automatic authentication for existing Commercial users. Other
+// deployments use the managed Git configuration installed by `configure`.
+fn add_default_diodehub_https_auth_config(
+    cmd: &mut Command,
+    cache_socket: &Path,
+) -> anyhow::Result<()> {
+    add_git_config(cmd, DIODEHUB_CREDENTIAL_HELPER_CONFIG, "");
+    add_git_config(
+        cmd,
+        DIODEHUB_CREDENTIAL_HELPER_CONFIG,
+        &credential_cache_helper(cache_socket)?,
+    );
+    add_git_config(
+        cmd,
+        DIODEHUB_CREDENTIAL_HELPER_CONFIG,
+        &diodehub_credential_helper(DEFAULT_DIODEHUB_HOST),
+    );
+    add_git_config(cmd, DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG, "true");
+    Ok(())
 }
 
 fn run_silent(mut cmd: Command) -> anyhow::Result<()> {
@@ -154,7 +186,7 @@ pub fn run_in(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
 }
 
 fn run_network_in(repo_root: &Path, args: &[&str]) -> anyhow::Result<()> {
-    let mut cmd = git_network(repo_root);
+    let mut cmd = git_network(repo_root)?;
     cmd.args(args);
     run_silent(cmd)
 }
@@ -629,7 +661,7 @@ fn parse_git_timezone_offset(offset: &str) -> Option<i32> {
 }
 
 fn clone(remote_url: &str, dest_dir: &Path, prompt: bool) -> anyhow::Result<()> {
-    let mut cmd = git_global_network_with_prompt(prompt);
+    let mut cmd = git_global_network_with_prompt(prompt)?;
     cmd.arg("clone");
     cmd.args(["--quiet", "--no-checkout", remote_url])
         .arg(dest_dir);
@@ -910,7 +942,7 @@ pub fn ls_remote_with_fallback(
 }
 
 fn ls_remote(url: &str, refspec: &str, interactive: bool) -> anyhow::Result<Option<String>> {
-    let mut cmd = git_global_network_with_prompt(interactive);
+    let mut cmd = git_global_network_with_prompt(interactive)?;
     cmd.args(["ls-remote", url, refspec]);
     let out = run_stdout(cmd)?;
     Ok(out
@@ -1106,7 +1138,7 @@ mod tests {
 
     #[test]
     fn repository_network_commands_are_noninteractive() {
-        let command = git_network(Path::new("."));
+        let command = git_network(Path::new(".")).unwrap();
         let env = |key| {
             command
                 .get_envs()
@@ -1122,5 +1154,19 @@ mod tests {
             env(std::ffi::OsStr::new("GCM_INTERACTIVE")),
             Some(std::ffi::OsStr::new("never"))
         );
+    }
+
+    #[test]
+    fn process_local_auth_preserves_the_commercial_default() {
+        let mut command = git_global();
+        add_default_diodehub_https_auth_config(&mut command, Path::new("/tmp/pcb-cache")).unwrap();
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.iter().any(|arg| {
+            arg == "credential.https://code.diode.computer.helper=!pcb auth git --host=code.diode.computer"
+        }));
     }
 }
