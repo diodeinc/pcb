@@ -106,6 +106,18 @@ pub fn execute(
             work_dir.path().join(format!("{board_name}.kicad_pro")),
         )
         .context("Failed to stage project file copy")?;
+        // Custom design rules live in a sibling .kicad_dru file, not the
+        // project file. Without it, the DRC engine that ZONE_FILLER.Fill()
+        // consults in import_ses falls back to default clearances, so a
+        // routed board's zone fills would silently drop the user's rules.
+        let dru_path = project_path.with_extension("kicad_dru");
+        if dru_path.exists() {
+            std::fs::copy(
+                &dru_path,
+                work_dir.path().join(format!("{board_name}.kicad_dru")),
+            )
+            .context("Failed to stage design rules file copy")?;
+        }
     }
     let dsn_path = work_dir.path().join(format!("{board_name}.dsn"));
     let ses_path = work_dir.path().join(format!("{board_name}.ses"));
