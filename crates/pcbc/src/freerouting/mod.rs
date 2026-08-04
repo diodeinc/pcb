@@ -73,9 +73,19 @@ pub fn execute(
     project_path: &Path,
     board_name: &str,
 ) -> Result<()> {
-    // JAR first so --fr-jar errors surface immediately
-    let fr_jar = find_freerouting_jar(args.fr_jar.as_deref())?;
+    // Explicit --fr-jar/FREEROUTING_JAR errors surface immediately. The
+    // PATH search and auto-download fallback are deferred until after the
+    // Java check below, so a machine without Java doesn't pay for a
+    // multi-megabyte download before being told it can't run the JAR anyway.
+    let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
+    let explicit_jar = resolve_explicit_freerouting_jar(args.fr_jar.as_deref(), &expected_hash)?;
+
     let java_path = resolve_java()?;
+
+    let fr_jar = match explicit_jar {
+        Some(path) => path,
+        None => find_or_download_freerouting_jar(&expected_hash)?,
+    };
 
     println!(
         "Routing {} via FreeRouting",
@@ -121,7 +131,13 @@ pub fn execute(
     }
 
     let start_time = Instant::now();
-    let outcome = run_freerouting(&java_path, &fr_jar, &dsn_path, &ses_path, args.fr_timeout)?;
+    let outcome = run_freerouting(
+        &java_path,
+        &fr_jar,
+        &dsn_path,
+        &ses_path,
+        args.fr_timeout * 60,
+    )?;
 
     if !ses_path.exists() {
         println!("  No routing progress to save. Board left untouched.");
@@ -238,19 +254,19 @@ fn is_java_version_sufficient(java_path: impl AsRef<Path>) -> bool {
 // FreeRouting JAR resolution
 // ---------------------------------------------------------------------------
 
-/// Locate the FreeRouting JAR via (in priority order):
-///   1. `--fr-jar` flag
-///   2. `FREEROUTING_JAR` env var
-///   3. `freerouting.jar` on `$PATH`
-///   4. Auto-download to `~/.cache/pcb/freerouting/freerouting-{FREEROUTING_VERSION}.jar`
-fn find_freerouting_jar(provided: Option<&Path>) -> Result<PathBuf> {
-    let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
-
-    // 1. Explicit --fr-jar flag
+/// Validate an explicitly provided FreeRouting JAR: `--fr-jar` flag (priority
+/// 1) or `FREEROUTING_JAR` env var (priority 2). Returns `Ok(None)` if
+/// neither is set, so the caller can fall back to a PATH search or
+/// auto-download — deferred until after the Java check, since those can
+/// involve a network fetch.
+fn resolve_explicit_freerouting_jar(
+    provided: Option<&Path>,
+    expected_hash: &[u8; 32],
+) -> Result<Option<PathBuf>> {
     if let Some(path) = provided {
         if path.exists() {
-            warn_on_hash_mismatch(path, &expected_hash);
-            return Ok(path.to_path_buf());
+            warn_on_hash_mismatch(path, expected_hash);
+            return Ok(Some(path.to_path_buf()));
         }
         anyhow::bail!(
             "FreeRouting JAR not found at --fr-jar path: {}",
@@ -258,16 +274,25 @@ fn find_freerouting_jar(provided: Option<&Path>) -> Result<PathBuf> {
         );
     }
 
-    // 2. FREEROUTING_JAR environment variable
     if let Ok(path) = std::env::var("FREEROUTING_JAR") {
         let p = PathBuf::from(&path);
         if p.exists() {
-            warn_on_hash_mismatch(&p, &expected_hash);
-            return Ok(p);
+            warn_on_hash_mismatch(&p, expected_hash);
+            return Ok(Some(p));
         }
         anyhow::bail!("FreeRouting JAR not found at FREEROUTING_JAR={}", path);
     }
 
+    Ok(None)
+}
+
+/// Locate the FreeRouting JAR via (in priority order):
+///   3. `freerouting.jar` on `$PATH`
+///   4. Auto-download to `~/.cache/pcb/freerouting/freerouting-{FREEROUTING_VERSION}.jar`
+///
+/// Only called once Java has been confirmed installed, since both steps here
+/// can be expensive (hashing, or a multi-megabyte download).
+fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf> {
     // 3. Search $PATH for freerouting.jar. Unlike --fr-jar/FREEROUTING_JAR
     //    (explicit user overrides, which may intentionally point at a
     //    different build), this candidate is discovered implicitly, so we
@@ -280,7 +305,7 @@ fn find_freerouting_jar(provided: Option<&Path>) -> Result<PathBuf> {
                 continue;
             }
             match sha256_file(&candidate) {
-                Ok(hash) if hash == expected_hash => return Ok(candidate),
+                Ok(hash) if hash == *expected_hash => return Ok(candidate),
                 _ => eprintln!(
                     "  {} {} does not match the pinned FreeRouting v{FREEROUTING_VERSION} SHA-256, ignoring",
                     "!".yellow(),
@@ -300,7 +325,7 @@ fn find_freerouting_jar(provided: Option<&Path>) -> Result<PathBuf> {
 
     if cached.exists() {
         match sha256_file(&cached) {
-            Ok(hash) if hash == expected_hash => return Ok(cached),
+            Ok(hash) if hash == *expected_hash => return Ok(cached),
             _ => {
                 eprintln!("  Cached JAR is corrupted, re-downloading...");
                 let _ = std::fs::remove_file(&cached);
@@ -315,7 +340,7 @@ fn find_freerouting_jar(provided: Option<&Path>) -> Result<PathBuf> {
 
     let actual_hash =
         sha256_file(&tmp_path).context("Failed to hash downloaded FreeRouting JAR")?;
-    if actual_hash != expected_hash {
+    if actual_hash != *expected_hash {
         let _ = std::fs::remove_file(&tmp_path);
         anyhow::bail!(
             "Downloaded FreeRouting JAR has unexpected SHA-256\n\

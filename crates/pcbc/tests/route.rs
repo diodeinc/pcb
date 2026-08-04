@@ -490,7 +490,7 @@ fn test_freerouting_cli() {
             "--fr-jar",
             &jar_path.to_string_lossy(),
             "--fr-timeout",
-            "60",
+            "1",
         ],
     );
 

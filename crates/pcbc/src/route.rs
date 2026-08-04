@@ -53,8 +53,8 @@ pub struct RouteArgs {
     #[arg(long)]
     pub fr_jar: Option<PathBuf>,
 
-    /// [freerouting] FreeRouting timeout in seconds (default: 300)
-    #[arg(long, default_value = "300")]
+    /// [freerouting] FreeRouting timeout in minutes (default: 5, max: 60)
+    #[arg(long, default_value = "5")]
     pub fr_timeout: u64,
 }
 
@@ -64,11 +64,8 @@ pub fn execute(args: RouteArgs) -> Result<()> {
     match args.engine {
         RouteEngine::Deeppcb => execute_deeppcb(args),
         RouteEngine::Freerouting => {
-            if !(1..=3600).contains(&args.fr_timeout) {
-                anyhow::bail!(
-                    "--fr-timeout must be between 1 and 3600 seconds (60 minutes), got {}",
-                    args.fr_timeout
-                );
+            if args.fr_timeout > 60 {
+                anyhow::bail!("Timeout cannot exceed 60 minutes");
             }
             let (board_path, project_path) = resolve_board(&args.file)?;
             let board_name = board_path
