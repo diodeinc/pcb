@@ -15,7 +15,7 @@ use crate::{
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
 use pcb_ir::geom::path::{self as geom_path, ContourBuf, PathCmd};
 use pcb_ir::geom::region::{self, Ring};
-use pcb_ir::geom::{FillRule, Point, Polarity, Segment};
+use pcb_ir::geom::{FillRule, Point, Polarity, Segment, StrokePatternMark};
 
 /// Gerber file-level attributes carried as artwork layer metadata.
 #[derive(Debug, Clone, Default)]
@@ -180,34 +180,35 @@ fn lower_artwork_object(
                 .aperture_function
                 .as_deref()
                 .unwrap_or(default_function.as_slice());
-            let stroke_width = artwork_path.stroke().map_or(0.0, |stroke| stroke.width);
+            let stroke = artwork_path.stroke().ok_or_else(|| {
+                GerberError::InvalidStructure(
+                    "artwork stroke geometry references a path without stroke paint".to_string(),
+                )
+            })?;
+            let stroke_width = stroke.width;
             let aperture = apertures.circle(stroke_width, aperture_function)?;
             for contour in layer.arena.path_contours(artwork_path) {
-                for segment in contour_segments(&contour.cmds) {
-                    objects.push(WriterObject {
-                        kind: match segment {
-                            Segment::Line { start, end } => ObjectKind::Draw {
-                                start: lower_point(start),
-                                end: lower_point(end),
+                let segments = contour_segments(&contour.cmds);
+                for mark in
+                    pcb_ir::geom::stroke_pattern_marks(&segments, stroke.pattern, stroke_width)
+                {
+                    match mark {
+                        StrokePatternMark::Dash(segments) => {
+                            objects.extend(segments.into_iter().map(|segment| WriterObject {
+                                kind: lower_stroke_segment(segment, aperture),
+                                polarity: object.polarity,
+                                attributes: attributes.clone(),
+                            }));
+                        }
+                        StrokePatternMark::Dot(at) => objects.push(WriterObject {
+                            kind: ObjectKind::Flash {
+                                at: lower_point(at),
                                 aperture,
                             },
-                            Segment::Arc(arc) => ObjectKind::Arc {
-                                start: lower_point(arc.start),
-                                end: lower_point(arc.end),
-                                center_offset: lower_point(Point::new(
-                                    arc.center.x - arc.start.x,
-                                    arc.center.y - arc.start.y,
-                                )),
-                                clockwise: arc.clockwise,
-                                aperture,
-                            },
-                            Segment::Cubic { .. } => {
-                                unreachable!("contour_segments flattens cubics")
-                            }
-                        },
-                        polarity: object.polarity,
-                        attributes: attributes.clone(),
-                    });
+                            polarity: object.polarity,
+                            attributes: attributes.clone(),
+                        }),
+                    }
                 }
             }
         }
@@ -243,6 +244,27 @@ fn lower_artwork_object(
         }
     }
     Ok(objects)
+}
+
+fn lower_stroke_segment(segment: Segment, aperture: i32) -> ObjectKind {
+    match segment {
+        Segment::Line { start, end } => ObjectKind::Draw {
+            start: lower_point(start),
+            end: lower_point(end),
+            aperture,
+        },
+        Segment::Arc(arc) => ObjectKind::Arc {
+            start: lower_point(arc.start),
+            end: lower_point(arc.end),
+            center_offset: lower_point(Point::new(
+                arc.center.x - arc.start.x,
+                arc.center.y - arc.start.y,
+            )),
+            clockwise: arc.clockwise,
+            aperture,
+        },
+        Segment::Cubic { .. } => unreachable!("contour_segments flattens cubics"),
+    }
 }
 
 #[derive(Debug, Default)]
