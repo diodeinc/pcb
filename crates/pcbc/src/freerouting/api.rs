@@ -110,10 +110,21 @@ struct JobOutputResponse {
     data: String,
 }
 
+/// Timeout for `get_output`, which is proportional to the board's SES size
+/// (the server serializes and base64-encodes the whole in-progress or final
+/// board), unlike the flat, cheap `DEFAULT_TIMEOUT`-bound status/control
+/// endpoints. A large board's completed output can legitimately take longer
+/// than 20s to serialize, and `get_output` failing on a genuinely completed
+/// job must not be mistaken for "nothing to save" (see poll_job's Completed
+/// handling in mod.rs).
+const GET_OUTPUT_TIMEOUT: Duration = Duration::from_secs(120);
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
+
 impl FreeroutingApiClient {
     pub fn new(base_url: String) -> Result<Self> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(20))
+            .timeout(DEFAULT_TIMEOUT)
             // Every request this client makes targets a FreeRouting process
             // we spawned ourselves on 127.0.0.1 — never an external service.
             // Explicitly bypass any HTTP_PROXY/HTTPS_PROXY the user's
@@ -272,7 +283,8 @@ impl FreeroutingApiClient {
         let resp = self
             .with_headers(
                 self.client
-                    .get(self.url(&format!("/v1/jobs/{job_id}/output"))),
+                    .get(self.url(&format!("/v1/jobs/{job_id}/output")))
+                    .timeout(GET_OUTPUT_TIMEOUT),
             )
             .send()
             .context("Failed to get FreeRouting job output")?;
