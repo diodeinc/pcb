@@ -7,8 +7,10 @@ freedom as a cluster-granularity swap class (`spare_units` included), and
 unused units are tied off per the datasheet (INP to VCC, INN to GND, output
 transistor off) unless the caller opts out with `tie_unused = False`.
 
-NOTE: the pinout below is ILLUSTRATIVE — verify against the LM339 datasheet
-before using this module for a real board.
+Pinout per TI SLCS006 (D/N/PW 14-pin packages): OUT1=1, OUT2=2, VCC=3,
+IN2N=4, IN2P=5, IN1N=6, IN1P=7, IN3N=8, IN3P=9, IN4N=10, IN4P=11, GND=12,
+OUT4=13, OUT3=14. Channels 1 and 2 cross on the die: unit 1 is IN1+/- (7/6)
+to OUT1 (1), unit 2 is IN2+/- (5/4) to OUT2 (2).
 """
 
 Comparator = interface(INP = Net(), INN = Net(), OUT = Net())
@@ -59,7 +61,10 @@ Component(
     symbol = Symbol(library = "./LM339.kicad_sym"),
     footprint = "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm",
     prefix = "U",
-    mpn = "LM339DR",
-    manufacturer = "Texas Instruments",
+    part = Part(
+        mpn = "LM339DR",
+        manufacturer = "Texas Instruments",
+        datasheet = "https://www.ti.com/lit/ds/symlink/lm339.pdf",
+    ),
     pins = pins,
 )
