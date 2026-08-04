@@ -90,7 +90,7 @@ deunicode = "1.6"
 insta = { version = "1.48", features = ["yaml", "filters", "json"] }
 assert_cmd = "2.2"
 assert_fs = "1.1"
-base64 = "0.22"
+base64 = "0.23"
 console_error_panic_hook = "0.1"
 console_log = "1.0.0"
 crossterm = "0.29"

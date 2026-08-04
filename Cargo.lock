@@ -776,6 +776,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9"
+
+[[package]]
 name = "base64-simd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2700,7 +2706,7 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3314d5adb5d94bcdf56771f2e50dbbc80bb4bdf88967526706205ac9eff24eb"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "headers-core",
  "http 1.5.0",
@@ -2844,7 +2850,7 @@ dependencies = [
  "assert-json-diff",
  "async-object-pool",
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "crossbeam-utils",
  "form_urlencoded",
@@ -2922,7 +2928,7 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -3324,7 +3330,7 @@ dependencies = [
 name = "ipc2581"
 version = "0.3.3"
 dependencies = [
- "base64",
+ "base64 0.23.0",
  "hex",
  "md-5",
  "pcb-intern",
@@ -4589,7 +4595,7 @@ name = "pcb-canonical"
 version = "0.4.21"
 dependencies = [
  "anyhow",
- "base64",
+ "base64 0.23.0",
  "blake3",
  "ignore",
  "tar",
@@ -4628,7 +4634,7 @@ dependencies = [
  "aws-credential-types",
  "aws-sigv4",
  "aws-smithy-runtime-api",
- "base64",
+ "base64 0.23.0",
  "chrono",
  "clap",
  "colored",
@@ -4746,7 +4752,7 @@ dependencies = [
 name = "pcb-ir"
 version = "0.3.82"
 dependencies = [
- "base64",
+ "base64 0.23.0",
  "boostvoronoi",
  "i_overlay",
  "kurbo",
@@ -4760,7 +4766,7 @@ version = "0.4.21"
 dependencies = [
  "anyhow",
  "atomicwrites",
- "base64",
+ "base64 0.23.0",
  "dirs",
  "log",
  "pcb-command-runner",
@@ -4835,7 +4841,7 @@ dependencies = [
 name = "pcb-sexpr"
 version = "0.4.21"
 dependencies = [
- "base64",
+ "base64 0.23.0",
  "hex",
  "log",
  "ruzstd",
@@ -5797,7 +5803,7 @@ name = "rectify"
 version = "0.4.21"
 dependencies = [
  "anyhow",
- "base64",
+ "base64 0.23.0",
  "clap",
  "env_logger",
  "glam",
@@ -5904,7 +5910,7 @@ version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "encoding_rs",
  "futures-channel",
@@ -7534,7 +7540,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4676b37242ccbd1aabf56edb093a4827dc49086c0ffd764a5705899e0f35f8f7"
 dependencies = [
  "anyhow",
- "base64",
+ "base64 0.22.1",
  "bitflags 2.13.1",
  "fancy-regex 0.11.0",
  "filedescriptor",
@@ -8181,7 +8187,7 @@ version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "log",
  "percent-encoding",
  "rustls",
@@ -8197,7 +8203,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e994ba84b0bd1b1b0cf92878b7ef898a5c1760108fe7b6010327e274917a808c"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "http 1.5.0",
  "httparse",
  "log",
@@ -8227,7 +8233,7 @@ version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d46cf96c5f498d36b7a9693bc6a7075c0bb9303189d61b2249b0dc3d309c07de"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "data-url",
  "flate2",
  "fontdb",
