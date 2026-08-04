@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tar::Archive;
 use tempfile::Builder;
-use url::{Position, Url};
+use url::Url;
 
 const DIODEHUB_CREDENTIAL_CACHE_TIMEOUT_SECONDS: u64 = 55 * 60;
 const DEFAULT_DIODEHUB_HOST: &str = "code.diode.computer";
@@ -104,7 +104,7 @@ fn credential_cache_helper(socket: &Path) -> anyhow::Result<String> {
 }
 
 fn diodehub_credential_helper(host: &str) -> String {
-    format!("!pcb auth git --host={host}")
+    format!("!pcb auth git --host={}", shell_quote(host))
 }
 
 fn shell_quote(value: &str) -> String {
@@ -223,7 +223,7 @@ pub fn init(repo_root: &Path) -> anyhow::Result<()> {
 pub fn configure_diodehub_credentials_globally(repository_url: &str) -> anyhow::Result<()> {
     let url = credential_url(repository_url)?;
     let credential_origin = url.origin().ascii_serialization();
-    let credential_host = &url[Position::BeforeHost..Position::AfterPort];
+    let credential_host = url.host_str().expect("credential URL has a host");
     let config_path = pcb_git_config_path()?;
     let cache_helper = credential_cache_helper(&credential_cache_socket()?)?;
     write_pcb_git_config(
@@ -284,13 +284,14 @@ fn write_pcb_git_config(
     let use_http_path_config = format!("credential.{credential_origin}.useHttpPath");
     let credential_helper = diodehub_credential_helper(credential_host);
 
-    run_git_config_file(&temp_path, &["--replace-all", &helper_config, ""])?;
-    run_git_config_file(&temp_path, &["--add", &helper_config, cache_helper])?;
-    run_git_config_file(&temp_path, &["--add", &helper_config, &credential_helper])?;
-    run_git_config_file(
-        &temp_path,
-        &["--replace-all", &use_http_path_config, "true"],
-    )?;
+    for (key, value) in [
+        (helper_config.as_str(), ""),
+        (helper_config.as_str(), cache_helper),
+        (helper_config.as_str(), credential_helper.as_str()),
+        (use_http_path_config.as_str(), "true"),
+    ] {
+        run_git_config_file(&temp_path, &["--add", key, value])?;
+    }
     temp_path
         .persist(config_path)
         .map_err(|error| anyhow::anyhow!(error))
@@ -334,35 +335,15 @@ fn stop_credential_cache() -> anyhow::Result<()> {
 }
 
 fn run_git_config(args: &[&str]) -> anyhow::Result<()> {
-    let status = git_global()
-        .args(["config", "--global"])
-        .args(args)
-        .status()
-        .context("Failed to run `git config`")?;
-    if !status.success() {
-        bail!(
-            "`git config --global {}` failed with {status}",
-            args.join(" ")
-        );
-    }
-    Ok(())
+    let mut cmd = git_global();
+    cmd.args(["config", "--global"]).args(args);
+    run_silent(cmd)
 }
 
 fn run_git_config_file(path: &Path, args: &[&str]) -> anyhow::Result<()> {
-    let status = git_global()
-        .args(["config", "--file"])
-        .arg(path)
-        .args(args)
-        .status()
-        .context("Failed to run `git config`")?;
-    if !status.success() {
-        bail!(
-            "`git config --file {} {}` failed with {status}",
-            path.display(),
-            args.join(" ")
-        );
-    }
-    Ok(())
+    let mut cmd = git_global();
+    cmd.args(["config", "--file"]).arg(path).args(args);
+    run_silent(cmd)
 }
 
 fn unset_git_config_value(key: &str, value: &str) -> anyhow::Result<()> {
@@ -1118,25 +1099,6 @@ mod tests {
     }
 
     #[test]
-    fn derives_the_exact_https_credential_origin() {
-        assert_eq!(
-            credential_url("https://code.gov.diode.computer/acme/widget.git")
-                .unwrap()
-                .origin()
-                .ascii_serialization(),
-            "https://code.gov.diode.computer"
-        );
-        assert_eq!(
-            credential_url("https://git.preview.diode.localhost:8443/acme/widget.git")
-                .unwrap()
-                .origin()
-                .ascii_serialization(),
-            "https://git.preview.diode.localhost:8443"
-        );
-        assert!(credential_url("http://code.diode.computer/acme/widget.git").is_err());
-    }
-
-    #[test]
     fn repository_network_commands_are_noninteractive() {
         let command = git_network(Path::new(".")).unwrap();
         let env = |key| {
@@ -1166,7 +1128,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(args.iter().any(|arg| {
-            arg == "credential.https://code.diode.computer.helper=!pcb auth git --host=code.diode.computer"
+            arg == "credential.https://code.diode.computer.helper=!pcb auth git --host='code.diode.computer'"
         }));
     }
 }

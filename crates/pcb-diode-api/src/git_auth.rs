@@ -4,6 +4,7 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use url::Url;
 
 use crate::WorkspaceContext;
 
@@ -113,9 +114,13 @@ fn provide_credential(
     request: CredentialRequest,
     output: &mut impl Write,
 ) -> Result<()> {
-    if request.protocol.as_deref() != Some(b"https")
-        || request.host.as_deref() != Some(configured_host.as_bytes())
-    {
+    if request.protocol.as_deref() != Some(b"https") {
+        return Ok(());
+    }
+    let Some(request_host) = request.host.as_deref() else {
+        return Ok(());
+    };
+    if credential_hostname(request_host)? != configured_host {
         return Ok(());
     }
 
@@ -132,7 +137,7 @@ fn provide_credential(
     }
 
     let path = std::str::from_utf8(path).context("Git credential path is not UTF-8")?;
-    let credential = exchange_credential(ctx, host_without_port(configured_host), path)?;
+    let credential = exchange_credential(ctx, configured_host, path)?;
 
     writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
     writeln!(output, "authtype=Bearer")?;
@@ -144,10 +149,14 @@ fn provide_credential(
     Ok(())
 }
 
-fn host_without_port(host: &str) -> &str {
-    host.rsplit_once(':')
-        .filter(|(hostname, _)| !hostname.ends_with(':'))
-        .map_or(host, |(hostname, _)| hostname)
+fn credential_hostname(authority: &[u8]) -> Result<String> {
+    let authority = std::str::from_utf8(authority).context("Git credential host is not UTF-8")?;
+    let url =
+        Url::parse(&format!("https://{authority}")).context("Git credential host is invalid")?;
+    Ok(url
+        .host_str()
+        .context("Git credential host is invalid")?
+        .to_owned())
 }
 
 fn exchange_credential(
@@ -296,12 +305,14 @@ mod tests {
     }
 
     #[test]
-    fn strips_ports_without_mangling_ipv6_hosts() {
-        assert_eq!(
-            host_without_port("code.example.com:8443"),
-            "code.example.com"
-        );
-        assert_eq!(host_without_port("[::1]:8443"), "[::1]");
-        assert_eq!(host_without_port("[::1]"), "[::1]");
+    fn normalizes_credential_hostnames() {
+        for (authority, hostname) in [
+            ("code.example.com:443", "code.example.com"),
+            ("code.example.com:8443", "code.example.com"),
+            ("[2001:db8::1:2]", "[2001:db8::1:2]"),
+            ("[2001:db8::1:2]:8443", "[2001:db8::1:2]"),
+        ] {
+            assert_eq!(credential_hostname(authority.as_bytes()).unwrap(), hostname);
+        }
     }
 }
