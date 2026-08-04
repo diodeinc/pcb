@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb doc` now renders Markdown list items as styled bullets instead of literal hyphens.
+
 ### Fixed
 
 - Gerber exports now include F.Fab/B.Fab drawings and preserve patterned IPC strokes.

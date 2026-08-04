@@ -7,6 +7,14 @@ dependencies = ["click>=8.0"]
 [dependency-groups]
 dev = ["pytest>=7.0", "hypothesis>=6.0", "ruff>=0.4", "ty>=0.0.65"]
 
+[tool.ruff.lint]
+# ruff 0.16 widened its default rule selection well beyond the pre-0.16 default
+# of E4/E7/E9/F. Pinning it here keeps the ruff 0.15 -> 0.16 bump
+# behaviour-preserving. Adopting 0.16's defaults is a separate decision: it
+# reports 420 findings on this tree (369 auto-fixable), mostly UP006
+# non-pep585-annotation, UP045, and I001 unsorted-imports.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.ty.src]
 exclude = ["**/tests/"]
 
