@@ -4962,7 +4962,6 @@ dependencies = [
  "r2d2",
  "r2d2_sqlite",
  "regex",
- "reqwest",
  "rusqlite",
  "semver",
  "serde",
@@ -4977,7 +4976,6 @@ dependencies = [
  "toml",
  "tracing",
  "url",
- "zstd",
 ]
 
 [[package]]
