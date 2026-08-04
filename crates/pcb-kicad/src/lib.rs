@@ -396,6 +396,12 @@ impl PcbnewSession {
             .try_wait()
             .context("Failed while checking KiCad PCB Editor status")
     }
+
+    pub fn wait(&mut self) -> Result<std::process::ExitStatus> {
+        self.child
+            .wait()
+            .context("Failed while waiting for KiCad PCB Editor")
+    }
 }
 
 /// Open a KiCad board in a process that can be waited on.

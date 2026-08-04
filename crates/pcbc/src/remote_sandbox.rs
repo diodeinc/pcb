@@ -241,8 +241,13 @@ fn open_layout_and_sync(
                 local.pcb_file.display()
             ));
             // Leave KiCad open so an interrupted sync cannot discard unsaved
-            // edits or close another concurrent editor session.
+            // edits or close another concurrent editor session. Keep this
+            // process alive until the editor exits so Windows browser job
+            // objects cannot tear the session down when the launcher returns,
+            // and treat the open as successful so pcb-launcher does not show
+            // an "Open in KiCad failed" dialog after a recoverable sync stop.
             let release_result = lock.release();
+            let wait_result = session.wait();
             if let Err(release_err) = release_result {
                 return Err(error).with_context(|| {
                     format!(
@@ -251,12 +256,14 @@ fn open_layout_and_sync(
                     )
                 });
             }
-            Err(error).with_context(|| {
+            wait_result.with_context(|| {
                 format!(
-                    "Remote sync stopped. Local recovery file: {}",
+                    "Remote sync stopped. Local recovery file: {}. Failed while waiting for KiCad",
                     local.pcb_file.display()
                 )
-            })
+            })?;
+            let _ = error;
+            Ok(())
         }
     }
 }
