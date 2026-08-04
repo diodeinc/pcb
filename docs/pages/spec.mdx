@@ -295,41 +295,26 @@ Usart = interface(TX = Net, RX = Net, CK = Net, implies = [Uart])
 LpUart = interface(TX = Net, RX = Net, implies = [Uart])
 ```
 
-`implies` forms a DAG (an interface may imply several others), and matching is
-nominal: two structurally identical interfaces remain distinct capabilities.
+An interface may imply several others; matching is nominal — two structurally
+identical interfaces remain distinct capabilities.
 
 An interface may also declare the **attribute vocabulary** its capability
-providers use, as attribute name -> physical value type:
+providers use, as attribute name → physical value type:
 
 ```python
 Uart = interface(TX = Net, RX = Net, attrs = {"baud_max": Frequency})
 ```
 
-A `peripheral()` providing `Uart` (directly or through `implies`) may then
-declare `attrs = {"baud_max": "8MHz"}` — and only that: an undeclared key
-(`baudMax`, `max_baudrate`...) or a value of the wrong dimension (`"3.3V"`
-for a `Frequency`) is an elaboration error naming the declared vocabulary.
-Attribute names, like capability names, are declared once — in the
-interface — not reinvented per component. The stdlib declares a consistent
-rate vocabulary: `clk_max` on clocked buses (`Spi`, `I2c`, `Sdio`, `Jtag`,
-memory buses...), `baud_max` on asynchronous serial (`Uart`, `Rs232`,
-`Rs422`), `bitrate_max` on encoded serial links (`Can`, `Usb2`/`Usb3`,
-`Pcie`, `Ethernet`, display/camera lanes...), plus `freq_max` on `OscPair`
-and `gbw` on `Opamp`. Single-ended logic buses also declare `vio` (Voltage) —
-for blocks whose logic level is **fixed** (level shifters, fixed-rail
-transceivers, memory standards). A VDD-dependent block (an MCU UART runs at
-whatever VDD is) must NOT declare `vio`: the per-design truth is the
-**voltage on the nets**, and net/io voltage contracts — not capability
-attrs — are what reject a 3.3V-to-5V connection between components.
-
 ## Pin capabilities and assignment
 
 Multi-function components (MCUs, multi-unit analog/logic parts) can declare
 what each pin *can do* and let elaboration solve the assignment. This covers
-fixed-function pinouts (AVR), alternate-function matrices (STM32), near-total
-GPIO matrices (ESP32), and classic gate/pin swap, with one model.
+GPIO matrices and classic gate/pin swap.
 
 ```python
+UartFlow = interface(TX = Net, RX = Net, RTS = Net, CTS = Net, implies = [Uart])
+GpioPin = interface(PIN = Net)   # stdlib `Gpio` is a net type, not a capability
+
 USART1 = peripheral(
     "USART1",
     provides = [Usart, UartFlow],       # interface types, closed over implies=
@@ -343,97 +328,105 @@ USART1 = peripheral(
     },
     attrs = {"baud_max": "8MHz"},       # unit strings parse to physical values
 )
-GPIOS = pool("GPIO", provides = [Gpio], pins = ["PB4", "PB5", "PD6"])
+GPIOS = pool("GPIO", provides = [GpioPin], pins = ["PB4", "PB5", "PD6"])
 
 result = pin_solve(
     [USART1, GPIOS],
     [
         pin_request("DEBUG", Uart),                       # any provider of Uart
-        pin_request("LED", Gpio, prefer = ["PB4"]),
+        pin_request("LED", GpioPin, prefer = ["PB4"]),
         pin_request("SC", Usart),                         # needs CK: USART-class only
     ],
 )
 ```
 
-- **`pin(name, data=, cost=, input_only=, strap=)`** — one candidate physical
-  pin. `data` is opaque *realization* information — whatever downstream
-  tooling needs to realize this candidate (an STM32 AF index `{"af": 1}`, an
-  ESP32 IOMUX FUNC number `{"iomux_func": 0}`) — never consulted by the
-  solver, splatted verbatim next to `"pin"` in the solved assignment.
-  `cost` biases the solver (e.g. ESP32 IOMUX-direct = 0, matrix = 1);
-  `strap` pins are penalized and warn when chosen; `input_only` pins are
-  excluded from `direction = "output"` requests.
-- **`peripheral(name, provides=, signals=, rebind=, attrs=, symmetric=, unless=)`**
-  — a resource cluster. Every signal of every provided interface (closure
-  included) must have a non-empty candidate list — a declaration cannot
-  overstate the datasheet. `unless = "axis"` disables the peripheral when that
-  key is truthy in `pin_solve(config=...)` (e.g. ESP32 ADC2 vs. WiFi).
-  `rebind` records what a later swap costs: `"none"` (gate swap, no firmware),
-  `"firmware"` (a constant to regenerate), `"fixed"` (never movable).
-- **`pool(name, provides=, pins=, rebind=)`** — sugar for N interchangeable
-  single-signal units (GPIO pools).
-- **`pin_request(name, Iface, uses=, instance=, prefer=, lock=, where=, direction=, if_connected=, bind=)`**
-  — a demand: the interface type *is* the request. Only `uses=` signals
-  consume pins (default: all of the interface's signals). `where=` is a
-  predicate over the peripheral's `attrs` (`lambda a: a["baud_max"] >= "1MHz"`
-  works — unit strings coerce in physical-value comparisons). Attr keys and
-  dimensions are reliable: they are validated against the vocabulary the
-  provided interfaces declare (see `interface(attrs=...)` above). `instance=`,
-  `prefer=`, `lock=` are caller-side overrides. With `if_connected = True`
-  the request is served only when the caller actually connected the module
-  input of the same name — pair it with `io(Iface, optional = True)` to
-  pre-declare capability slots that consume resources only when used.
-- **`pin_solve(peripherals, requests, config=, previous=)`** — deterministic
-  joint instance × pin matching by branch-and-bound: the returned assignment
-  minimizes total cost, not merely the first feasible one. Exclusivity is
-  structural at both tiers: a pin carries at most one function, and an
-  instance serves at most one request (two `Uart` requests can never share
-  USART1, even on disjoint pin sets). `previous=` (a prior assignment) acts
-  as a stability seed so adding a request does not reshuffle an already-routed
-  design. Infeasibility is a build error with per-candidate rejection reasons.
-  The cost of a candidate combines, in dominance order: surplus capability
-  traits of the instance (+100 each — prefer the poorest sufficient
-  instance), strapping pins (+50 each), per-pin `cost`, `prefer=` hits
-  (−10 each), and previous-assignment matches (−20 instance, −5 per pin).
-  Absolute values are arbitrary; only the relative order is contractual.
-- **`at(value, pins, soft=)`** — constrain which physical pin(s) a
-  connection may use, on the connection itself:
-  `Mcu(gpio = {"LED": at(led_net, "PA8")})` or `Mcu(DEBUG = at(uart, ["PB6", "PB7"]))`.
-  The wrapper is transparent — `io()` (or `pin_request(bind=)`) unwraps it,
-  the inner value flows as if passed directly, and the constraint reaches
-  `pin_solve`.
-  Hard by default (unsatisfiable → build error, and the pin leaves the swap
-  classes); `soft = True` is a preference the solver may fall back from.
-- **`pin_map(assignment, ifaces)`** — turn `pin_solve`'s `assignment` into a
-  `Component(pins=...)`-ready dict mapping each physical pin to the net
-  carried by the matching interface field (`{"COM": uart_io, "LED": led_net}`;
-  a bare `Net` is accepted for single-signal requests). Requests absent from
-  the assignment — e.g. dropped by `if_connected` — are skipped, so both
-  dicts can be declared unconditionally.
+**`pin(name, data={}, cost=0, input_only=False, strap=False)`** — one
+candidate physical pin for a signal.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | yes | Physical pin name (`"PA9"`) |
+| `data` | no | Realization info (an STM32 AF index, an ESP32 IOMUX FUNC number), passed through unchanged into the solved assignment |
+| `cost` | no | The solver prefers lower-cost candidates |
+| `input_only` | no | Pin has no output driver: excluded from `direction = "output"` requests |
+| `strap` | no | Boot-strapping pin: chosen only as a last resort, warns when used |
+
+**`peripheral(name, provides, signals, rebind, attrs={}, unless=None)`** — a
+resource cluster (an MCU USART, one comparator of a dual package).
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | yes | Instance name (`"USART1"`) |
+| `provides` | yes | Interface types this cluster can serve, including implied ones |
+| `signals` | yes | Signal name → list of `pin()` candidates (bare strings allowed); every signal of every provided interface needs at least one candidate |
+| `rebind` | yes | What a later swap costs: `"none"` (gate swap), `"firmware"` (a constant to regenerate), `"fixed"` (never movable) |
+| `attrs` | no | Capability attributes, validated against the interfaces' vocabulary |
+| `unless` | no | The peripheral is unavailable when this key is truthy in `pin_solve(config=...)` |
+
+**`pool(name, provides, pins, rebind="firmware")`** — sugar for N
+interchangeable single-signal units (GPIO pools): one unit per pin, all
+providing the same single-signal interface.
+
+**`pin_request(name, Iface, uses=None, instance=None, prefer=[], lock=False, where=None, direction=None, if_connected=False, bind=None)`** — a capability
+demand: the interface type *is* the request.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | yes | Request name; keys the result and the `if_connected` pairing |
+| `Iface` | yes | Requested interface type; any provider, direct or through `implies`, can serve it |
+| `uses` | no | Signals that consume pins (default: all of the interface's signals) |
+| `where` | no | Predicate over the provider's attrs: `lambda a: a["baud_max"] >= "1MHz"` |
+| `instance` | no | Restrict to a named peripheral or pool |
+| `prefer` | no | Pins the solver favors when choosing |
+| `lock` | no | Make `prefer` mandatory instead of preferred |
+| `direction` | no | `"input"` or `"output"`; `"output"` excludes `input_only` pins |
+| `if_connected` | no | Serve the request only when the caller connected the module input of the same name; pair with `io(Iface, optional = True)` |
+| `bind` | no | The connected value, carried on the request itself (dict-of-roles pattern) |
+
+**`pin_solve(peripherals, requests, config={}, previous=None)`** — solve the
+joint instance × pin assignment. A pin carries at most one function and an
+instance serves at most one request (even on disjoint pin sets); when no
+assignment satisfies every request, the build fails with per-candidate
+rejection reasons. The result is deterministic and globally optimized: the
+solver prefers the least-capable sufficient instance, avoids strapping pins,
+honors per-pin `cost` and `prefer=`, and sticks to `previous=` (a prior
+assignment passed as a stability seed) so adding a request does not reshuffle
+a routed design.
+
+**`at(value, pins, soft=False)`** — constrain the physical pin(s) on the
+connection itself: `Mcu(IO0 = at(led_net, "PA8"))`. The wrapper is
+transparent: the inner value flows as if passed directly and the constraint
+reaches `pin_solve`. Hard by default (unsatisfiable → build error);
+`soft = True` is a preference the solver may fall back from.
+
+**`pin_map(assignment, ifaces)`** — turn `pin_solve`'s `assignment` into a
+`Component(pins=...)`-ready dict (physical pin → net of the matching
+interface field; a bare `Net` works for single-signal requests). Requests
+absent from the assignment (e.g. dropped by `if_connected`) are skipped.
 
 Two conventions keep the model sound. **Capabilities name hardware
-peripherals** — `Gpio`, `AdcIn`, `Uart` are facts about the silicon;
-application roles (LED, buzzer, button) are design-side labels and must never
-become capability interfaces. And **pooled capabilities are demanded through
-dicts, not numbered slots**: the component takes `gpio = config(dict,
-default = {})` and fans each entry into a request
-(`[pin_request(n, Gpio, bind = gpio[n]) for n in gpio]`), so the design names
-its roles (`Mcu(gpio = {"LED": at(led_net, "PA8")})`) in whatever number it
-needs. `bind=` carries the connected value on the request itself — an `at()`
-wrapper contributes its pin constraint and the inner net flows to `pin_map`.
-Named `io()` slots remain for singular ports (`SWD`, a debug `Uart`) where
-the name is meaningful.
+peripherals** — `GpioPin`, `AdcIn`, `Uart` are facts about the silicon;
+application roles (LED, buzzer) are design-side labels, never capability
+interfaces. And **pooled capabilities are demanded through dicts, not
+numbered slots**: the component takes `gpio = config(dict, default = {})`
+and fans each entry into `pin_request(n, GpioPin, bind = gpio[n])`, so the
+design names its roles (`Mcu(gpio = {"LED": at(led_net, "PA8")})`) in
+whatever number it needs. Named `io()` slots remain for singular ports
+(`SWD`, a debug `Uart`).
 
-`pin_solve` returns `{"assignment": ..., "swap_classes": ..., "free_pins": [...]}`
-— `free_pins` lists every candidate pin no served request claimed, so a
-component wires its unused mux pins (`{p: NotConnected() for p in
-res["free_pins"]}`) without maintaining a separate pin list. It stores the
-first two
-as the module properties `pin_assignment` and `swap_classes` (JSON), which
-flow through the netlist into schematic fields: the chosen assignment
-(including per-pin realization `data`, sufficient for firmware pin-init generation) and the
-residual swap freedom (pool classes with spare pins, `rebind = "none"`
-clusters for gate swap) reach layout tools with no side files.
+`pin_solve` returns a dict:
+
+| Key | Content |
+|-----|---------|
+| `assignment` | Per request: the chosen instance and pin per signal (with each pin's realization `data`), plus free alternates |
+| `swap_classes` | Residual swap freedom: pool classes with spare pins, gate-swap clusters |
+| `free_pins` | Candidate pins no request claimed — wire them with `{p: NotConnected() for p in res["free_pins"]}` |
+
+`assignment` and `swap_classes` are also stored as module properties (JSON)
+and flow through the netlist into schematic fields, so the assignment and the
+remaining swap freedom reach layout tools with no side files.
+
+## Components and symbols
 
 ### Component
 
