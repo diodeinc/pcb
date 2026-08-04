@@ -140,6 +140,8 @@ enum GerberLayerRole {
     Paste,
     Soldermask,
     Legend,
+    AssemblyDrawing,
+    FabricationDrawing,
     Profile,
     Vcut,
     Score,
@@ -158,8 +160,15 @@ fn export_layer_plans<'a>(ipc: &Ipc2581, layers: &'a [Layer]) -> Vec<ExportLayer
         if role == GerberLayerRole::Copper {
             copper_index += 1;
         }
-        let (filename, file_function) = layer_output(role, layer.side, copper_index, copper_count);
-        let filename = allocate_filename(&mut used_filenames, &filename, ipc.resolve(layer.name));
+        let source_layer_name = ipc.resolve(layer.name);
+        let (filename, file_function) = layer_output(
+            role,
+            layer.side,
+            copper_index,
+            copper_count,
+            source_layer_name,
+        );
+        let filename = allocate_filename(&mut used_filenames, &filename, source_layer_name);
         plans.push(ExportLayerPlan {
             layer,
             role,
@@ -242,6 +251,8 @@ fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
         LayerFunction::Solderpaste | LayerFunction::Pastemask => Some(GerberLayerRole::Paste),
         LayerFunction::Soldermask => Some(GerberLayerRole::Soldermask),
         LayerFunction::Silkscreen | LayerFunction::Legend => Some(GerberLayerRole::Legend),
+        LayerFunction::Assembly => Some(GerberLayerRole::AssemblyDrawing),
+        LayerFunction::BoardFab => Some(GerberLayerRole::FabricationDrawing),
         LayerFunction::Drill | LayerFunction::Rout => None,
         LayerFunction::BoardOutline => Some(GerberLayerRole::Profile),
         LayerFunction::VCut => Some(GerberLayerRole::Vcut),
@@ -257,6 +268,9 @@ impl GerberLayerRole {
             GerberLayerRole::Paste => LayerRole::Paste,
             GerberLayerRole::Soldermask => LayerRole::Soldermask,
             GerberLayerRole::Legend => LayerRole::Legend,
+            GerberLayerRole::AssemblyDrawing | GerberLayerRole::FabricationDrawing => {
+                LayerRole::Mechanical
+            }
             GerberLayerRole::Profile | GerberLayerRole::Vcut | GerberLayerRole::Score => {
                 LayerRole::Profile
             }
@@ -269,6 +283,7 @@ fn layer_output(
     side: Option<IpcSide>,
     copper_index: usize,
     copper_count: usize,
+    source_layer_name: &str,
 ) -> (String, Vec<String>) {
     match role {
         GerberLayerRole::Copper => copper_layer_output(side, copper_index, copper_count),
@@ -302,6 +317,11 @@ fn layer_output(
                 vec!["Legend".into(), "Top".into()],
             ),
         },
+        GerberLayerRole::AssemblyDrawing => assembly_drawing_layer_output(source_layer_name, side),
+        GerberLayerRole::FabricationDrawing => (
+            drawing_filename(source_layer_name, "Fabrication_Drawing"),
+            vec!["FabricationDrawing".into()],
+        ),
         GerberLayerRole::Profile => (
             "Edge_Cuts.gm1".to_string(),
             vec!["Profile".into(), "NP".into()],
@@ -311,6 +331,36 @@ fn layer_output(
             fabrication_line_layer_output("Score.gbr", &["Other", "Score"], side)
         }
     }
+}
+
+fn assembly_drawing_layer_output(
+    source_layer_name: &str,
+    side: Option<IpcSide>,
+) -> (String, Vec<String>) {
+    let fallback_stem = match side {
+        Some(IpcSide::Top) => "F_Fab",
+        Some(IpcSide::Bottom) => "B_Fab",
+        _ => "Assembly",
+    };
+    let filename = drawing_filename(source_layer_name, fallback_stem);
+    let file_function = match side {
+        Some(IpcSide::Top) => vec!["AssemblyDrawing".into(), "Top".into()],
+        Some(IpcSide::Bottom) => vec!["AssemblyDrawing".into(), "Bot".into()],
+        _ => vec!["OtherDrawing".into(), "Assembly".into()],
+    };
+    (filename, file_function)
+}
+
+fn drawing_filename(source_layer_name: &str, fallback_stem: &str) -> String {
+    let source_stem = sanitize_filename_stem(source_layer_name);
+    format!(
+        "{}.gbr",
+        if source_stem.is_empty() {
+            fallback_stem
+        } else {
+            &source_stem
+        }
+    )
 }
 
 fn fabrication_line_layer_output(
@@ -1319,6 +1369,127 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(filenames, ["Edge_Cuts.gm1"]);
+    }
+
+    #[test]
+    fn assembly_layers_use_source_names_and_valid_gerber_x2_functions() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Fab" layerFunction="ASSEMBLY" side="TOP"/>
+      <Layer name="B.Fab" layerFunction="ASSEMBLY" side="BOTTOM"/>
+      <Layer name="Assembly Notes" layerFunction="ASSEMBLY" side="NONE"/>
+      <Layer name="Board Fab" layerFunction="BOARD_FAB" side="ALL"/>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let plans = export_layer_plans(&ipc, &ipc.ecad().unwrap().cad_data.layers);
+        let outputs = plans
+            .iter()
+            .map(|plan| (plan.filename.as_str(), plan.file_function.as_slice()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            outputs,
+            [
+                (
+                    "F_Fab.gbr",
+                    ["AssemblyDrawing".to_string(), "Top".to_string()].as_slice()
+                ),
+                (
+                    "B_Fab.gbr",
+                    ["AssemblyDrawing".to_string(), "Bot".to_string()].as_slice()
+                ),
+                (
+                    "Assembly_Notes.gbr",
+                    ["OtherDrawing".to_string(), "Assembly".to_string()].as_slice()
+                ),
+                (
+                    "Board_Fab.gbr",
+                    ["FabricationDrawing".to_string()].as_slice()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn assembly_gerbers_preserve_phantom_patterns_for_boards_and_arrays() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    <LayerRef name="F.Fab"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Fab" layerFunction="ASSEMBLY" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="F.Fab">
+          <Set>
+            <Features>
+              <Line startX="0" startY="0" endX="20" endY="0">
+                <LineDesc lineWidth="1" lineEnd="ROUND" lineProperty="PHANTOM"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <StepRepeat stepRef="board" x="0" y="0" nx="2" ny="1" dx="30" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let board_files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let board_fab = board_files
+            .iter()
+            .find(|file| file.filename == "F_Fab.gbr")
+            .unwrap();
+        assert!(
+            board_fab
+                .contents
+                .contains("%TF.FileFunction,AssemblyDrawing,Top*%")
+        );
+        assert!(board_fab.contents.contains("%TF.Part,Single*%"));
+        let parsed = gerberx2::GerberX2::parse(&board_fab.contents).unwrap();
+        assert_eq!(
+            parsed
+                .objects()
+                .iter()
+                .filter(|object| matches!(object.kind, gerberx2::ObjectKind::Draw { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            parsed
+                .objects()
+                .iter()
+                .filter(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
+                .count(),
+            2
+        );
+
+        let array_files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
+        let array_fab = array_files
+            .iter()
+            .find(|file| file.filename == "F_Fab.gbr")
+            .unwrap();
+        assert!(array_fab.contents.contains("%TF.Part,Array*%"));
+        let parsed = gerberx2::GerberX2::parse(&array_fab.contents).unwrap();
+        assert_eq!(parsed.objects().len(), 8);
     }
 
     #[test]

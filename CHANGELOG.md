@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Gerber exports now include F.Fab/B.Fab drawings and preserve patterned IPC strokes.
+
 ## [0.4.21] - 2026-08-04
 
 ### Added
