@@ -1,0 +1,50 @@
+"""
+Type: Quad comparator (pin-capability model demo)
+Description: LM339-style quad comparator showing pure gate swap: four
+identical units declared as `peripheral(rebind = "none")`, demanded through a
+dict of design roles. The solver assigns units, publishes the residual
+freedom as a cluster-granularity swap class (`spare_units` included), and
+unused units end up NotConnected via `free_pins`.
+
+NOTE: the pinout below is ILLUSTRATIVE — verify against the LM339 datasheet
+before using this module for a real board.
+"""
+
+Comparator = interface(INP = Net(), INN = Net(), OUT = Net())
+
+def _unit(name, inp, inn, out):
+    return peripheral(
+        name,
+        provides = [Comparator],
+        rebind = "none",
+        signals = {"INP": [pin(inp)], "INN": [pin(inn)], "OUT": [pin(out)]},
+    )
+
+UNITS = [
+    _unit("A", "IN1P", "IN1N", "OUT1"),
+    _unit("B", "IN2P", "IN2N", "OUT2"),
+    _unit("C", "IN3P", "IN3N", "OUT3"),
+    _unit("D", "IN4P", "IN4N", "OUT4"),
+]
+
+VCC = io(Power)
+GND = io(Ground)
+comp = config(dict, default = {})  # role name -> Comparator
+
+res = pin_solve(UNITS, [pin_request(n, Comparator, bind = comp[n]) for n in comp])
+
+m = pin_map(res["assignment"], comp)
+
+pins = {"VCC": VCC, "GND": GND}
+pins.update({p: NotConnected() for p in res["free_pins"]})
+pins.update(m)
+
+Component(
+    name = "CMP",
+    symbol = Symbol(library = "./LM339.kicad_sym"),
+    footprint = "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm",
+    prefix = "U",
+    mpn = "LM339DR",
+    manufacturer = "Texas Instruments",
+    pins = pins,
+)
