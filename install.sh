@@ -57,7 +57,7 @@ EOF
 
 register_url_launcher() {
   if ! "$install_dir/pcb-launcher" --install; then
-    echo "Warning: installed pcb, but could not register the Diode URL launcher" >&2
+    echo "Warning: installed pcb, but could not register the Diode URL launcher; see $HOME/.pcb/pcb-launcher.log" >&2
   fi
 }
 

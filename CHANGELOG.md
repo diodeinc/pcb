@@ -17,6 +17,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Launcher installation and updates now remain recoverable when release artifacts or desktop registration are unavailable.
 - Browser-launched KiCad opens now report failures, retain a bounded diagnostic log, and reject untrusted API hosts.
+- Remote sandbox layouts now open in the KiCad PCB Editor on Linux and Windows.
+- Interrupted remote sandbox syncs now leave KiCad open so unsaved edits are preserved.
 
 ## [0.4.20] - 2026-08-03
 
