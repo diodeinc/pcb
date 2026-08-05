@@ -46,6 +46,8 @@ pub struct BoardIdentity {
 ///
 /// Returns `None` when the string does not describe a board repository.
 pub fn parse_board_repository(repository: &str) -> Option<(String, String)> {
+    let repository = pcb_zen::git::parse_remote_url(repository)
+        .unwrap_or_else(|_| repository.trim().to_string());
     let segments: Vec<&str> = repository.split('/').filter(|s| !s.is_empty()).collect();
     let b_idx = segments.iter().position(|s| *s == "b")?;
     // Need a segment before ("workspace") and after ("board") the `b` marker.
@@ -53,7 +55,10 @@ pub fn parse_board_repository(repository: &str) -> Option<(String, String)> {
         return None;
     }
     let workspace = *segments.get(b_idx - 1)?;
-    let board = *segments.get(b_idx + 1)?;
+    let board = segments
+        .get(b_idx + 1)?
+        .strip_suffix(".git")
+        .unwrap_or(segments[b_idx + 1]);
     if workspace.is_empty() || board.is_empty() {
         return None;
     }

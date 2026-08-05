@@ -22,6 +22,23 @@ fn parses_repository_with_extra_host_segments() {
 }
 
 #[test]
+fn parses_git_remote_url_forms() {
+    let expected = Some(("demo".to_string(), "DM0002".to_string()));
+    assert_eq!(
+        parse_board_repository("https://code.diode.computer/demo/b/DM0002.git"),
+        expected
+    );
+    assert_eq!(
+        parse_board_repository("git@code.diode.computer:demo/b/DM0002.git"),
+        expected
+    );
+    assert_eq!(
+        parse_board_repository("code.diode.computer/demo/b/DM0002.git"),
+        expected
+    );
+}
+
+#[test]
 fn rejects_repository_without_board_marker() {
     assert_eq!(parse_board_repository("github.com/diodeinc/registry"), None);
     assert_eq!(parse_board_repository("b/DM0002"), None); // no workspace before `b`
