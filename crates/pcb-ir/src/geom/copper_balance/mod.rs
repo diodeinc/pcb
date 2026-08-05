@@ -19,8 +19,7 @@ use lattice::{
 };
 use spatial::{
     CoupledBand, LatticeDensityKernel, density_evaluation_points, lattice_cell_coverage,
-    normalized_stack_weights, project_box_sum, project_coupled_bands,
-    spatial_result_from_squared_radii,
+    normalized_stack_weights, project_coupled_bands, spatial_result_from_squared_radii,
 };
 
 const NUMERIC_EPSILON: f64 = 1e-9;
@@ -523,39 +522,25 @@ pub fn generate_spatial_dense_copper_balance(
             (join_all(fixed), join_all(available), join_all(partial))
         });
 
-    let lower = active_sites
-        .iter()
-        .map(|active| vec![profile.min_void_radius_mm.powi(2); active.len()])
-        .collect::<Vec<_>>();
-    let upper = active_sites
-        .iter()
-        .map(|active| vec![profile.max_void_radius_mm.powi(2); active.len()])
-        .collect::<Vec<_>>();
-    // The uniform solve already selected each layer's full-void area; its
-    // radius is within the profile bounds, so the sum is directly feasible.
-    let squared_radius_sums = uniform
-        .iter()
-        .enumerate()
-        .map(|(layer_index, result)| match result.solution.mode {
-            DenseCopperBalanceMode::Perforated { void_radius_mm } => {
-                active_sites[layer_index].len() as f64 * void_radius_mm.powi(2)
-            }
-            DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => 0.0,
-        })
-        .collect::<Vec<_>>();
+    let lower = profile.min_void_radius_mm.powi(2);
+    let upper = profile.max_void_radius_mm.powi(2);
+    // The uniform solve already selected each layer's full-void area at one
+    // radius within the profile bounds, so the equal-radius field it implies
+    // is already feasible and needs no projection.
     let mut squared_radii = uniform
         .iter()
         .enumerate()
         .map(|(layer_index, result)| match result.solution.mode {
-            DenseCopperBalanceMode::Perforated { void_radius_mm } => project_box_sum(
-                &vec![void_radius_mm.powi(2); active_sites[layer_index].len()],
-                &lower[layer_index],
-                &upper[layer_index],
-                squared_radius_sums[layer_index],
-            ),
+            DenseCopperBalanceMode::Perforated { void_radius_mm } => {
+                vec![void_radius_mm.powi(2); active_sites[layer_index].len()]
+            }
             DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => Vec::new(),
         })
         .collect::<Vec<Vec<f64>>>();
+    let squared_radius_sums = squared_radii
+        .iter()
+        .map(|radii| radii.iter().sum::<f64>())
+        .collect::<Vec<_>>();
     // Void area moves opposite to copper area, so a symmetric copper band is a
     // symmetric band on the squared-radius sum. Clamping to the range the box
     // itself can reach keeps the feasible set nonempty, and since each uniform
@@ -571,8 +556,8 @@ pub fn generate_spatial_dense_copper_balance(
             // would put the band above a sum that is fixed at zero.
             let site_count = squared_radii[layer_index].len() as f64;
             (
-                (sum - slack).max(site_count * profile.min_void_radius_mm.powi(2)),
-                (sum + slack).min(site_count * profile.max_void_radius_mm.powi(2)),
+                (sum - slack).max(site_count * lower),
+                (sum + slack).min(site_count * upper),
             )
         })
         .collect::<Vec<_>>();
@@ -710,8 +695,6 @@ pub fn generate_spatial_dense_copper_balance(
             .enumerate()
             .map(|(layer_index, proposal)| CoupledBand {
                 proposal,
-                lower: &lower[layer_index],
-                upper: &upper[layer_index],
                 sum_bounds: squared_radius_bands[layer_index],
                 center: squared_radius_sums[layer_index],
                 domain_area_mm2: density_domain_areas[layer_index],
@@ -719,7 +702,7 @@ pub fn generate_spatial_dense_copper_balance(
             .collect::<Vec<_>>();
         let update = squared_radii
             .iter_mut()
-            .zip(project_coupled_bands(&bands))
+            .zip(project_coupled_bands(&bands, lower, upper))
             .map(|(radii, projected)| {
                 let update = radii
                     .iter()

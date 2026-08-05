@@ -275,8 +275,6 @@ fn scanline_indicator(points: &[Point], region: &ContourSet) -> Vec<f64> {
 pub(super) struct CoupledBand<'a> {
     /// Gradient proposal, one squared radius per active site.
     pub proposal: &'a [f64],
-    pub lower: &'a [f64],
-    pub upper: &'a [f64],
     /// Bounds on this layer's squared-radius sum.
     pub sum_bounds: (f64, f64),
     /// Sum those bounds surround: the layer's selected copper area.
@@ -300,7 +298,11 @@ pub(super) struct CoupledBand<'a> {
 /// commonly shifted proposal and the multiplier follows by bisection. Shifting
 /// harder only lowers each sum, and a layer whose band binds stops responding
 /// altogether, so the deviation falls monotonically and brackets cleanly.
-pub(super) fn project_coupled_bands(layers: &[CoupledBand<'_>]) -> Vec<Vec<f64>> {
+pub(super) fn project_coupled_bands(
+    layers: &[CoupledBand<'_>],
+    lower: f64,
+    upper: f64,
+) -> Vec<Vec<f64>> {
     // A layer pinned at a band edge takes the same value for every multiplier
     // past that point, so scoring a trial needs one clamped sum per layer
     // rather than a nested projection.
@@ -312,9 +314,7 @@ pub(super) fn project_coupled_bands(layers: &[CoupledBand<'_>]) -> Vec<Vec<f64>>
                 let sum = layer
                     .proposal
                     .iter()
-                    .zip(layer.lower)
-                    .zip(layer.upper)
-                    .map(|((value, lower), upper)| (value - shift).clamp(*lower, *upper))
+                    .map(|value| (value - shift).clamp(lower, upper))
                     .sum::<f64>()
                     .clamp(layer.sum_bounds.0, layer.sum_bounds.1);
                 (sum - layer.center) / layer.domain_area_mm2
@@ -325,14 +325,8 @@ pub(super) fn project_coupled_bands(layers: &[CoupledBand<'_>]) -> Vec<Vec<f64>>
     // Past this shift every site clamps, so both ends saturate their bands.
     let span = layers
         .iter()
-        .flat_map(|layer| {
-            layer
-                .proposal
-                .iter()
-                .zip(layer.lower)
-                .zip(layer.upper)
-                .map(|((value, lower), upper)| (value - lower).abs().max((upper - value).abs()))
-        })
+        .flat_map(|layer| layer.proposal.iter())
+        .map(|value| (value - lower).abs().max((upper - value).abs()))
         .fold(0.0_f64, f64::max);
     let widest_domain = layers
         .iter()
@@ -361,8 +355,8 @@ pub(super) fn project_coupled_bands(layers: &[CoupledBand<'_>]) -> Vec<Vec<f64>>
                 .collect::<Vec<_>>();
             project_box_interval(
                 &shifted,
-                layer.lower,
-                layer.upper,
+                lower,
+                upper,
                 layer.sum_bounds.0,
                 layer.sum_bounds.1,
             )
@@ -378,17 +372,15 @@ pub(super) fn project_coupled_bands(layers: &[CoupledBand<'_>]) -> Vec<Vec<f64>>
 /// `sum_min == sum_max` recovers that fixed-sum projection unchanged.
 pub(super) fn project_box_interval(
     values: &[f64],
-    lower: &[f64],
-    upper: &[f64],
+    lower: f64,
+    upper: f64,
     sum_min: f64,
     sum_max: f64,
 ) -> Vec<f64> {
     debug_assert!(sum_min <= sum_max);
     let clamped = values
         .iter()
-        .zip(lower)
-        .zip(upper)
-        .map(|((value, lower), upper)| value.clamp(*lower, *upper))
+        .map(|value| value.clamp(lower, upper))
         .collect::<Vec<_>>();
     let total = clamped.iter().sum::<f64>();
     if total < sum_min {
@@ -400,33 +392,22 @@ pub(super) fn project_box_interval(
     }
 }
 
-pub(super) fn project_box_sum(
-    values: &[f64],
-    lower: &[f64],
-    upper: &[f64],
-    target: f64,
-) -> Vec<f64> {
-    debug_assert_eq!(values.len(), lower.len());
-    debug_assert_eq!(values.len(), upper.len());
+fn project_box_sum(values: &[f64], lower: f64, upper: f64, target: f64) -> Vec<f64> {
     let mut low_shift = values
         .iter()
-        .zip(upper)
-        .map(|(value, bound)| value - bound)
+        .map(|value| value - upper)
         .min_by(f64::total_cmp)
         .unwrap_or(0.0);
     let mut high_shift = values
         .iter()
-        .zip(lower)
-        .map(|(value, bound)| value - bound)
+        .map(|value| value - lower)
         .max_by(f64::total_cmp)
         .unwrap_or(0.0);
     for _ in 0..44 {
         let shift = (low_shift + high_shift) / 2.0;
         let sum = values
             .iter()
-            .zip(lower)
-            .zip(upper)
-            .map(|((value, lower), upper)| (value - shift).clamp(*lower, *upper))
+            .map(|value| (value - shift).clamp(lower, upper))
             .sum::<f64>();
         if sum > target {
             low_shift = shift;
@@ -437,9 +418,7 @@ pub(super) fn project_box_sum(
     let shift = (low_shift + high_shift) / 2.0;
     values
         .iter()
-        .zip(lower)
-        .zip(upper)
-        .map(|((value, lower), upper)| (value - shift).clamp(*lower, *upper))
+        .map(|value| (value - shift).clamp(lower, upper))
         .collect()
 }
 
@@ -513,34 +492,26 @@ mod tests {
     #[test]
     fn box_interval_projection_binds_only_at_its_edges() {
         let values: [f64; 5] = [0.10, 0.42, -0.30, 0.25, 0.61];
-        let lower = [0.04_f64; 5];
-        let upper = [0.42_f64; 5];
+        let (lower, upper) = (0.04_f64, 0.42_f64);
         let clamped = values
             .iter()
-            .zip(&lower)
-            .zip(&upper)
-            .map(|((value, lower), upper)| value.clamp(*lower, *upper))
+            .map(|value| value.clamp(lower, upper))
             .collect::<Vec<_>>();
         let clamped_sum = clamped.iter().sum::<f64>();
 
         // Band straddling the clamped sum: the clamp already satisfies it.
-        let inside = project_box_interval(
-            &values,
-            &lower,
-            &upper,
-            clamped_sum - 0.2,
-            clamped_sum + 0.2,
-        );
+        let inside =
+            project_box_interval(&values, lower, upper, clamped_sum - 0.2, clamped_sum + 0.2);
         assert_eq!(inside, clamped);
 
         // Band entirely below or above it: the near edge holds with equality.
         for target in [clamped_sum - 0.3, clamped_sum + 0.15] {
             let band = if target < clamped_sum {
-                project_box_interval(&values, &lower, &upper, target - 0.5, target)
+                project_box_interval(&values, lower, upper, target - 0.5, target)
             } else {
-                project_box_interval(&values, &lower, &upper, target, target + 0.5)
+                project_box_interval(&values, lower, upper, target, target + 0.5)
             };
-            let fixed = project_box_sum(&values, &lower, &upper, target);
+            let fixed = project_box_sum(&values, lower, upper, target);
             assert!(
                 band.iter().zip(&fixed).all(|(l, r)| (l - r).abs() <= 1e-12),
                 "{band:?} != {fixed:?}"
@@ -549,8 +520,8 @@ mod tests {
         }
 
         // A degenerate band is the fixed-sum projection exactly.
-        let pinned = project_box_interval(&values, &lower, &upper, 1.0, 1.0);
-        let fixed = project_box_sum(&values, &lower, &upper, 1.0);
+        let pinned = project_box_interval(&values, lower, upper, 1.0, 1.0);
+        let fixed = project_box_sum(&values, lower, upper, 1.0);
         assert!(
             pinned
                 .iter()
