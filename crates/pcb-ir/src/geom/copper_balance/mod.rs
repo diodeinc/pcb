@@ -245,6 +245,29 @@ pub struct DenseCopperVoid {
     pub radius_mm: f64,
 }
 
+/// What the panel's copper-moment field measured before the spatial solve
+/// redistributed anything, and after it settled.
+///
+/// The field's mean is the panel's bow and its variation is twist, so an RMS
+/// carries both: a falling RMS means the field flattened, not merely that a
+/// positive lobe found a negative one to cancel against. Comparing it against
+/// the mean alone separates the two — a mean that drops while the RMS holds
+/// has moved bow into twist.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StackMomentField {
+    pub initial_rms: f64,
+    pub achieved_rms: f64,
+}
+
+/// Every layer's solved geometry, plus what the solve did to the stack.
+#[derive(Debug, Clone)]
+pub struct SpatialCopperBalance {
+    pub layers: Vec<DenseCopperBalanceResult>,
+    /// `None` when the stackup supplied no weights, and so nothing was
+    /// measured, or when no layer took a lattice and no solve ran.
+    pub moment_field: Option<StackMomentField>,
+}
+
 /// Selected density solution plus its canonical copper geometry.
 #[derive(Debug, Clone)]
 pub struct DenseCopperBalanceResult {
@@ -398,7 +421,7 @@ fn generate_dense_copper_balance_with_lattice(
 pub fn generate_spatial_dense_copper_balance(
     profile: DenseCopperBalanceProfile,
     request: SpatialCopperBalanceRequest<'_>,
-) -> Result<Vec<DenseCopperBalanceResult>, DenseCopperBalanceError> {
+) -> Result<SpatialCopperBalance, DenseCopperBalanceError> {
     profile.validate()?;
     validate_spatial_request(request)?;
     let density_domain_areas = request
@@ -502,7 +525,10 @@ pub fn generate_spatial_dense_copper_balance(
         })
         .collect::<Vec<_>>();
     if active_sites.iter().all(Vec::is_empty) {
-        return Ok(uniform);
+        return Ok(SpatialCopperBalance {
+            layers: uniform,
+            moment_field: None,
+        });
     }
 
     // The objective lives on one coarse subset of the panel lattice. Every
@@ -604,6 +630,11 @@ pub fn generate_spatial_dense_copper_balance(
         .map(|_| vec![0.0; panel_samples.len()])
         .collect::<Vec<_>>();
     let mut influence_scratch = void_scratch.clone();
+    // The moment field is already built every iteration, so its RMS costs a
+    // reduction. The first reading is the field the uniform selection left
+    // behind; the last trails the emitted radii by one gradient step, which at
+    // convergence is smaller than the radius quantization.
+    let mut moment_rms: Option<(f64, f64)> = None;
     for _ in 0..SPATIAL_SOLVE_ITERATIONS {
         // The modeled final copper fraction of each layer, not its distance
         // from target: the moment below is the copper the panel carries, and
@@ -677,6 +708,14 @@ pub fn generate_spatial_dense_copper_balance(
                     .sum::<f64>()
             })
             .collect::<Vec<_>>();
+        let rms = (stack_moment
+            .iter()
+            .map(|moment| moment * moment)
+            .sum::<f64>()
+            / stack_moment.len() as f64)
+            .sqrt();
+        let initial_rms = moment_rms.map_or(rms, |(initial, _)| initial);
+        moment_rms = Some((initial_rms, rms));
 
         let proposals = std::thread::scope(|scope| {
             let active_sites = &active_sites;
@@ -756,23 +795,34 @@ pub fn generate_spatial_dense_copper_balance(
         }
     }
 
-    Ok(uniform
-        .into_iter()
-        .enumerate()
-        .map(|(layer_index, baseline)| {
-            if squared_radii[layer_index].is_empty() {
-                return baseline;
-            }
-            spatial_result_from_squared_radii(
-                &region_lattices[layer_regions[layer_index]].full_centers,
-                &squared_radii[layer_index],
-                baseline,
-                request.layers[layer_index],
-                density_domain_areas[layer_index],
-                profile,
-            )
-        })
-        .collect())
+    // A stackup that supplied no weights leaves the field identically zero,
+    // which is an absence of measurement rather than a flat panel.
+    let weights_measured = normalized_stack_weights.iter().any(|weight| *weight != 0.0);
+    Ok(SpatialCopperBalance {
+        layers: uniform
+            .into_iter()
+            .enumerate()
+            .map(|(layer_index, baseline)| {
+                if squared_radii[layer_index].is_empty() {
+                    return baseline;
+                }
+                spatial_result_from_squared_radii(
+                    &region_lattices[layer_regions[layer_index]].full_centers,
+                    &squared_radii[layer_index],
+                    baseline,
+                    request.layers[layer_index],
+                    density_domain_areas[layer_index],
+                    profile,
+                )
+            })
+            .collect(),
+        moment_field: moment_rms
+            .filter(|_| weights_measured)
+            .map(|(initial_rms, achieved_rms)| StackMomentField {
+                initial_rms,
+                achieved_rms,
+            }),
+    })
 }
 
 /// Whether `outer` contains `inner`, ignoring boolean sliver artifacts.
@@ -1185,7 +1235,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.is_empty());
+        assert!(result.layers.is_empty());
     }
 
     #[test]
@@ -1321,6 +1371,7 @@ mod tests {
             },
         )
         .unwrap()
+        .layers
         .pop()
         .unwrap();
 
@@ -1359,6 +1410,7 @@ mod tests {
             },
         )
         .unwrap()
+        .layers
         .pop()
         .unwrap();
 
@@ -1413,6 +1465,7 @@ mod tests {
             },
         )
         .unwrap()
+        .layers
         .pop()
         .unwrap();
 
@@ -1479,7 +1532,8 @@ mod tests {
                 layers: &layers,
             },
         )
-        .unwrap();
+        .unwrap()
+        .layers;
 
         assert_eq!(results.len(), 2);
         assert!(results[0].usable.difference(&left).is_empty());
@@ -1543,6 +1597,7 @@ mod tests {
             },
         )
         .unwrap()
+        .layers
         .pop()
         .unwrap();
         let mean_radius = |minimum_x: f64, maximum_x: f64| {
@@ -1601,7 +1656,8 @@ mod tests {
                 ],
             },
         )
-        .unwrap();
+        .unwrap()
+        .layers;
 
         assert_eq!(results[0].solution.mode, DenseCopperBalanceMode::Solid);
         assert!(matches!(
@@ -1616,6 +1672,52 @@ mod tests {
             "{:?}",
             results[1].solution
         );
+    }
+
+    /// The field metric reports what the solve did to the moment, and reports
+    /// nothing at all when the stackup gave it no weights to measure with —
+    /// an absence of measurement rather than a flat panel.
+    #[test]
+    fn moment_field_is_measured_only_when_the_stackup_weighs_the_layers() {
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
+            tol::REGION_MM,
+        );
+        let empty = ContourSet::empty(tol::REGION_MM);
+        let solve = |stack_weight_mm2: f64| {
+            generate_spatial_dense_copper_balance(
+                DenseCopperBalanceProfile::V1,
+                SpatialCopperBalanceRequest {
+                    panel_region: &panel,
+                    lattice_origin: Point::ZERO,
+                    layers: &[
+                        SpatialCopperBalanceLayerRequest {
+                            safe_region: &panel,
+                            existing_copper: &empty,
+                            density_domain: &panel,
+                            target_density: 0.70,
+                            stack_weight_mm2,
+                        },
+                        SpatialCopperBalanceLayerRequest {
+                            safe_region: &panel,
+                            existing_copper: &empty,
+                            density_domain: &panel,
+                            target_density: 0.40,
+                            stack_weight_mm2: -stack_weight_mm2,
+                        },
+                    ],
+                },
+            )
+            .unwrap()
+        };
+
+        assert_eq!(solve(0.0).moment_field, None);
+
+        let weighed = solve(1.0).moment_field.expect("weights were supplied");
+        // These layers are asked for markedly different densities, so the
+        // field starts well away from zero and the solve flattens it.
+        assert!(weighed.initial_rms > 0.0, "{weighed:?}");
+        assert!(weighed.achieved_rms < weighed.initial_rms, "{weighed:?}");
     }
 
     /// Two layers that both sit exactly on their targets can still carry a
@@ -1661,6 +1763,7 @@ mod tests {
                 },
             )
             .unwrap()
+            .layers
         };
         // Mirrored weights normalize to +/- 0.5, so this is the moment.
         let moment = |results: &[DenseCopperBalanceResult]| {
@@ -1753,6 +1856,7 @@ mod tests {
                 },
             )
             .unwrap()
+            .layers
         };
         // Radius quantization alone moves the achieved density this far.
         let quantization = 5e-3;
@@ -1844,6 +1948,7 @@ mod tests {
                 },
             )
             .unwrap()
+            .layers
         };
         let independent = solve(0.0);
         let stack_aware = solve(1.0);
