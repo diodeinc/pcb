@@ -1,0 +1,41 @@
+---
+source: crates/pcb-diode-api/src/order/tests.rs
+expression: order
+---
+{
+  "id": "ord_abc123",
+  "name": "Prototype run",
+  "status": "in_production",
+  "quantity": 10,
+  "provider": "jlcpcb",
+  "createdAt": "2024-05-01T12:30:00Z",
+  "releaseId": "rel_789",
+  "releaseVersion": "v1.2.3",
+  "bomId": "bom_555",
+  "quote": {
+    "id": "quote_1",
+    "status": "accepted",
+    "currency": "USD",
+    "unitPrice": 12.34,
+    "total": 123.4,
+    "leadTimeDays": 14
+  },
+  "timeline": [
+    {
+      "status": "created",
+      "timestamp": "2024-05-01T12:30:00Z",
+      "note": null
+    },
+    {
+      "status": "quoted",
+      "timestamp": "2024-05-02T08:00:00Z",
+      "note": "auto-quoted"
+    },
+    {
+      "status": "in_production",
+      "timestamp": "2024-05-03T10:15:00Z",
+      "note": null
+    }
+  ],
+  "shippingLocationId": "loc_42"
+}

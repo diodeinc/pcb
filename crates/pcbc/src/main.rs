@@ -141,6 +141,9 @@ enum Commands {
     /// Build and upload a preview release for a board
     Preview(preview::PreviewArgs),
 
+    /// Inspect fabrication orders for a board (read-only)
+    Order(pcb_diode_api::OrderArgs),
+
     /// Vendor external dependencies
     Vendor(vendor::VendorArgs),
 
@@ -237,6 +240,10 @@ fn run() -> anyhow::Result<()> {
         Commands::Open(args) => open::execute(args),
         Commands::Publish(args) => publish::execute(args),
         Commands::Preview(args) => preview::execute(args),
+        Commands::Order(args) => {
+            let ctx = pcb_diode_api::WorkspaceContext::from_cwd()?;
+            pcb_diode_api::execute_order(args, &ctx)
+        }
         Commands::Vendor(args) => vendor::execute(args),
         Commands::Fork => {
             println!("`pcb fork` is a reserved subcommand for future use.");

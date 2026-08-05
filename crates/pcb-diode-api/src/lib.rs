@@ -11,6 +11,7 @@ mod download_support;
 mod endpoint;
 mod git_auth;
 pub mod kicad_symbols;
+pub mod order;
 pub mod registry;
 pub mod release;
 pub mod routing;
@@ -29,6 +30,7 @@ pub use component_api::{ComponentArgs, execute_component};
 pub use diode_uri::{DiodeUri, DiodeUriParseError, SandboxFileUri, is_diode_uri};
 pub use endpoint::WorkspaceContext;
 pub use kicad_symbols::KicadSymbolsClient;
+pub use order::{OrderArgs, OrderCommand, execute as execute_order};
 pub use registry::{
     DigikeyClassifications, DigikeyData, DigikeyPriceBreak, ModuleRelations, ParsedQuery,
     RegistryClient, RegistryInfo, RegistryModule, RegistryModuleDependency,

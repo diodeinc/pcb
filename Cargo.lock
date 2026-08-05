@@ -4171,6 +4171,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "comfy-table",
  "crossterm",
  "dirs",
  "fslock",
