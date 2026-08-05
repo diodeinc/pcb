@@ -1178,21 +1178,40 @@ fn nearly_equal(left: f64, right: f64) -> bool {
 /// keep their clear voids native: the voids are certified clear of all other
 /// copper.
 fn clear_polarity_needs_resolution(doc: &IpcGeometryDocument) -> bool {
+    let is_clear = |feature: &Feature<ipc2581::Symbol>| {
+        feature.bucket != FeatureBucket::Cutout
+            && feature.polarity == Polarity::Clear
+            && !feature.flags.clears_previous_in_set
+    };
     doc.layers.iter().any(|layer| {
         let features = layer.features.slice(&doc.features);
-        let clear_bounds = ClearBoundsGrid::new(features.iter().filter_map(|feature| {
-            (feature.bucket != FeatureBucket::Cutout
-                && feature.polarity == Polarity::Clear
-                && !feature.flags.clears_previous_in_set)
-                .then_some(feature.bbox)
-        }));
-        if clear_bounds.is_empty() {
+        let all_clears = ClearBoundsGrid::new(
+            features
+                .iter()
+                .filter_map(|feature| is_clear(feature).then_some(feature.bbox)),
+        );
+        if all_clears.is_empty() {
             return false;
         }
+        // Base-stage darks paint before only the clears that follow them in
+        // source order; every other stage paints after all base-stage
+        // clears. A dark feature that a clear could erase under layer-wide
+        // semantics but that paints after it natively needs resolution.
+        let mut preceding_clears = ClearBoundsGrid::default();
         features.iter().any(|feature| {
-            feature.polarity == Polarity::Dark
-                && paint_order(feature).stage == PaintStage::Overlay
-                && clear_bounds.intersects(feature.bbox)
+            if is_clear(feature) {
+                preceding_clears.insert(feature.bbox);
+                return false;
+            }
+            if feature.polarity != Polarity::Dark {
+                return false;
+            }
+            match paint_order(feature).stage {
+                PaintStage::Base => preceding_clears.intersects(feature.bbox),
+                PaintStage::Overlay | PaintStage::FinalCutout => {
+                    all_clears.intersects(feature.bbox)
+                }
+            }
         })
     })
 }
@@ -1201,6 +1220,7 @@ fn clear_polarity_needs_resolution(doc: &IpcGeometryDocument) -> bool {
 /// millimeter-scale voids and pads that dominate them. Both insertion and
 /// queries touch only the handful of cells a bounding box covers, keeping
 /// the clear-versus-overlay reachability check linear in feature count.
+#[derive(Default)]
 struct ClearBoundsGrid {
     cells: HashMap<(i64, i64), Vec<pcb_ir::geom::BBox>>,
 }
@@ -1209,13 +1229,17 @@ impl ClearBoundsGrid {
     const CELL_MM: f64 = 4.0;
 
     fn new(bounds: impl Iterator<Item = pcb_ir::geom::BBox>) -> Self {
-        let mut cells: HashMap<(i64, i64), Vec<pcb_ir::geom::BBox>> = HashMap::new();
+        let mut grid = Self::default();
         for bbox in bounds {
-            for cell in Self::covered_cells(bbox) {
-                cells.entry(cell).or_default().push(bbox);
-            }
+            grid.insert(bbox);
         }
-        Self { cells }
+        grid
+    }
+
+    fn insert(&mut self, bbox: pcb_ir::geom::BBox) {
+        for cell in Self::covered_cells(bbox) {
+            self.cells.entry(cell).or_default().push(bbox);
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -1417,6 +1441,111 @@ mod tests {
         export_manufacturing_package,
     };
     use std::io::{Cursor, Read};
+
+    #[test]
+    fn negative_set_before_a_later_fill_resolves_geometrically() {
+        // Layer-wide negative semantics erase every dark feature on the
+        // layer, including fills written after the clear; the sequential
+        // paint order would instead paint the later fill over the clear.
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="TOP">
+          <Set polarity="NEGATIVE">
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="4" y="4"/>
+                    <PolyStepSegment x="6" y="4"/>
+                    <PolyStepSegment x="6" y="6"/>
+                    <PolyStepSegment x="4" y="6"/>
+                    <PolyStepSegment x="4" y="4"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>
+          <Set>
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="2" y="2"/>
+                    <PolyStepSegment x="8" y="2"/>
+                    <PolyStepSegment x="8" y="8"/>
+                    <PolyStepSegment x="2" y="8"/>
+                    <PolyStepSegment x="2" y="2"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let copper = files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
+        assert!(
+            parsed
+                .objects()
+                .iter()
+                .all(|object| object.polarity == Polarity::Dark),
+            "clear preceding a later fill should be resolved geometrically"
+        );
+
+        let mask = pcb_ir::dialects::artwork::compose_to_mask(
+            &gerberx2::geometry::extract_document(&parsed),
+        );
+        let mut rings = Vec::new();
+        for layer in &mask.layers {
+            for shape in mask.shapes(layer) {
+                rings.extend(pcb_ir::geom::region::rings_from_contours(
+                    &mask.arena.path_contours(shape),
+                ));
+            }
+        }
+        let copper_area = pcb_ir::geom::ContourSet::new(
+            rings,
+            pcb_ir::geom::FillRule::NonZero,
+            pcb_ir::geom::tol::REGION_MM,
+        )
+        .area();
+        // 6x6 fill minus the 2x2 clear it overlaps.
+        let expected = 36.0 - 4.0;
+        assert!(
+            (copper_area - expected).abs() <= expected * 0.01,
+            "expected cleared fill area {expected:.2}, got {copper_area:.2}"
+        );
+    }
 
     #[test]
     fn negative_set_over_overlay_pad_resolves_geometrically() {
