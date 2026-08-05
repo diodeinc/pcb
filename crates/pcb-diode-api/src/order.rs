@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::auth::get_valid_token;
-use crate::get_api_base_url;
+use crate::WorkspaceContext;
+use crate::auth::{apply_bearer_auth, get_api_token_with_context};
 
 // ---------------------------------------------------------------------------
 // Board identity resolution
@@ -89,14 +89,14 @@ pub fn resolve_board_identity(
     }
 }
 
-/// Read the current workspace repository (if any) starting from the CWD.
+/// Read the selected workspace's repository (if any).
 ///
 /// Any discovery error is swallowed to `None` so that explicit
 /// `--workspace`/`--board` flags keep working outside a workspace.
-fn current_workspace_repository() -> Option<String> {
-    let cwd = std::env::current_dir().ok()?;
+fn current_workspace_repository(ctx: &WorkspaceContext) -> Option<String> {
+    let workspace_root = ctx.workspace_root()?;
     let file_provider = pcb_zen_core::DefaultFileProvider::new();
-    let ws = pcb_zen::get_workspace_info(&file_provider, &cwd).ok()?;
+    let ws = pcb_zen::get_workspace_info(&file_provider, workspace_root).ok()?;
     ws.repository().map(|s| s.to_string())
 }
 
@@ -468,10 +468,13 @@ fn map_error_response(resp: Response, target: &RequestTarget) -> anyhow::Error {
 }
 
 /// Perform a GET request and return the response body as text, mapping errors.
-fn get_text(client: &Client, token: &str, url: &str, target: &RequestTarget) -> Result<String> {
-    let resp = client
-        .get(url)
-        .bearer_auth(token)
+fn get_text(
+    client: &Client,
+    token: Option<&str>,
+    url: &str,
+    target: &RequestTarget,
+) -> Result<String> {
+    let resp = apply_bearer_auth(client.get(url), token)
         .send()
         .map_err(|e| anyhow!("Network error contacting Diode API: {e}"))?;
 
@@ -486,12 +489,13 @@ fn get_text(client: &Client, token: &str, url: &str, target: &RequestTarget) -> 
 /// Fetch the orders list for a board.
 pub fn fetch_orders(
     client: &Client,
-    token: &str,
+    token: Option<&str>,
+    api_base_url: &str,
     identity: &BoardIdentity,
 ) -> Result<Vec<OrderSummary>> {
     let url = format!(
         "{}/api/boards/{}/{}/orders",
-        get_api_base_url(),
+        api_base_url,
         urlencoding::encode(&identity.workspace),
         urlencoding::encode(&identity.board),
     );
@@ -508,13 +512,14 @@ pub fn fetch_orders(
 /// Fetch a single order's detail.
 pub fn fetch_order(
     client: &Client,
-    token: &str,
+    token: Option<&str>,
+    api_base_url: &str,
     identity: &BoardIdentity,
     order_id: &str,
 ) -> Result<OrderDetail> {
     let url = format!(
         "{}/api/boards/{}/{}/orders/{}",
-        get_api_base_url(),
+        api_base_url,
         urlencoding::encode(&identity.workspace),
         urlencoding::encode(&identity.board),
         urlencoding::encode(order_id),
@@ -532,16 +537,13 @@ pub fn fetch_order(
 /// Fetch a BOM document by id.
 pub fn fetch_bom(
     client: &Client,
-    token: &str,
+    token: Option<&str>,
+    api_base_url: &str,
     identity: &BoardIdentity,
     order_id: &str,
     bom_id: &str,
 ) -> Result<Bom> {
-    let url = format!(
-        "{}/api/boms/{}",
-        get_api_base_url(),
-        urlencoding::encode(bom_id),
-    );
+    let url = format!("{}/api/boms/{}", api_base_url, urlencoding::encode(bom_id),);
     let target = RequestTarget {
         workspace: &identity.workspace,
         board: &identity.board,
@@ -555,13 +557,14 @@ pub fn fetch_bom(
 /// Fetch the order's selections map (`{bomLineId -> offerId}`).
 pub fn fetch_selections(
     client: &Client,
-    token: &str,
+    token: Option<&str>,
+    api_base_url: &str,
     identity: &BoardIdentity,
     order_id: &str,
 ) -> Result<BTreeMap<String, String>> {
     let url = format!(
         "{}/api/boards/{}/{}/orders/{}/selections",
-        get_api_base_url(),
+        api_base_url,
         urlencoding::encode(&identity.workspace),
         urlencoding::encode(&identity.board),
         urlencoding::encode(order_id),
@@ -841,8 +844,8 @@ pub struct BoardSelector {
 }
 
 impl BoardSelector {
-    fn resolve(&self) -> Result<BoardIdentity> {
-        let repository = current_workspace_repository();
+    fn resolve(&self, ctx: &WorkspaceContext) -> Result<BoardIdentity> {
+        let repository = current_workspace_repository(ctx);
         resolve_board_identity(
             repository.as_deref(),
             self.workspace.as_deref(),
@@ -914,20 +917,20 @@ pub struct OrderBomArgs {
 // Command entry points
 // ---------------------------------------------------------------------------
 
-pub fn execute(args: OrderArgs) -> Result<()> {
+pub fn execute(args: OrderArgs, ctx: &WorkspaceContext) -> Result<()> {
     match args.command {
-        OrderCommand::List(args) => execute_list(args),
-        OrderCommand::Show(args) => execute_show(args),
-        OrderCommand::Bom(args) => execute_bom(args),
+        OrderCommand::List(args) => execute_list(args, ctx),
+        OrderCommand::Show(args) => execute_show(args, ctx),
+        OrderCommand::Bom(args) => execute_bom(args, ctx),
     }
 }
 
-fn execute_list(args: OrderListArgs) -> Result<()> {
-    let identity = args.board.resolve()?;
-    let token = get_valid_token()?;
+fn execute_list(args: OrderListArgs, ctx: &WorkspaceContext) -> Result<()> {
+    let identity = args.board.resolve(ctx)?;
+    let token = get_api_token_with_context(ctx)?;
     let client = create_client()?;
 
-    let orders = fetch_orders(&client, &token, &identity)?;
+    let orders = fetch_orders(&client, token.as_deref(), ctx.api_base_url(), &identity)?;
 
     match args.format {
         OrderFormat::Table => render_orders_table(&orders),
@@ -936,12 +939,18 @@ fn execute_list(args: OrderListArgs) -> Result<()> {
     Ok(())
 }
 
-fn execute_show(args: OrderShowArgs) -> Result<()> {
-    let identity = args.board.resolve()?;
-    let token = get_valid_token()?;
+fn execute_show(args: OrderShowArgs, ctx: &WorkspaceContext) -> Result<()> {
+    let identity = args.board.resolve(ctx)?;
+    let token = get_api_token_with_context(ctx)?;
     let client = create_client()?;
 
-    let order = fetch_order(&client, &token, &identity, &args.order_id)?;
+    let order = fetch_order(
+        &client,
+        token.as_deref(),
+        ctx.api_base_url(),
+        &identity,
+        &args.order_id,
+    )?;
 
     match args.format {
         OrderFormat::Table => render_order_detail(&order),
@@ -950,16 +959,35 @@ fn execute_show(args: OrderShowArgs) -> Result<()> {
     Ok(())
 }
 
-fn execute_bom(args: OrderBomArgs) -> Result<()> {
-    let identity = args.board.resolve()?;
-    let token = get_valid_token()?;
+fn execute_bom(args: OrderBomArgs, ctx: &WorkspaceContext) -> Result<()> {
+    let identity = args.board.resolve(ctx)?;
+    let token = get_api_token_with_context(ctx)?;
     let client = create_client()?;
 
-    let order = fetch_order(&client, &token, &identity, &args.order_id)?;
+    let order = fetch_order(
+        &client,
+        token.as_deref(),
+        ctx.api_base_url(),
+        &identity,
+        &args.order_id,
+    )?;
     let bom_id = resolve_order_bom_id(&order)?;
 
-    let bom = fetch_bom(&client, &token, &identity, &args.order_id, bom_id)?;
-    let selections = fetch_selections(&client, &token, &identity, &args.order_id)?;
+    let bom = fetch_bom(
+        &client,
+        token.as_deref(),
+        ctx.api_base_url(),
+        &identity,
+        &args.order_id,
+        bom_id,
+    )?;
+    let selections = fetch_selections(
+        &client,
+        token.as_deref(),
+        ctx.api_base_url(),
+        &identity,
+        &args.order_id,
+    )?;
 
     let mut rows = build_order_bom_rows(&bom, &selections);
     if args.mismatches_only {
