@@ -120,16 +120,26 @@ pub(crate) fn user_dictionary_edit(
     if templates.is_empty() {
         return Ok(None);
     }
-    let mut writer = XmlWriter::new();
-    write_user_dictionary_entries(&mut writer, units, templates);
-    let entries = writer.into_string();
     let root = doc.root()?;
     let content = doc
         .child(root, "Content")
         .ok_or_else(|| anyhow::anyhow!("IPC-2581 document has no Content section"))?;
     if let Some(dictionary) = doc.child(content, "DictionaryUser") {
-        return Ok(Some(doc.append_inside(dictionary, entries)));
+        // An existing dictionary's declared units govern its entries; the
+        // parser defaults an absent attribute to millimeters.
+        let dictionary_units = match doc.attr(dictionary, "units") {
+            Some("INCH") => Units::Inch,
+            Some("MICRON") => Units::Micron,
+            Some("MILS") => Units::Mils,
+            _ => Units::Millimeter,
+        };
+        let mut writer = XmlWriter::new();
+        write_user_dictionary_entries(&mut writer, dictionary_units, templates);
+        return Ok(Some(doc.append_inside(dictionary, writer.into_string())));
     }
+    let mut writer = XmlWriter::new();
+    write_user_dictionary_entries(&mut writer, units, templates);
+    let entries = writer.into_string();
     let mut container = XmlWriter::new();
     container.start_element("DictionaryUser", &[("units", units_attr(units))]);
     container.raw(&entries);

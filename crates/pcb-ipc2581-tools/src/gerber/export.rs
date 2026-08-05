@@ -84,6 +84,11 @@ pub fn build_gerber_x2_files_with_options(
         let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
+        if clear_polarity_needs_resolution(&doc) {
+            pcb_ir::dialects::ipc::process::resolve_negative_polarity(&mut doc);
+            pcb_ir::dialects::ipc::process::compact(&mut doc);
+            pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
+        }
         if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
             bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
         }
@@ -1165,6 +1170,38 @@ fn nearly_equal(left: f64, right: f64) -> bool {
     (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
 }
 
+/// Ordered artwork paints clear features in source order within their paint
+/// stage, but overlay-stage dark geometry always lands after the base stage.
+/// When a clear feature can reach overlay geometry that sequential model
+/// diverges from IPC's layer-wide negative semantics, so those documents fall
+/// back to resolving the polarity geometrically. Generated balance planes
+/// keep their clear voids native: the voids are certified clear of all other
+/// copper.
+fn clear_polarity_needs_resolution(doc: &IpcGeometryDocument) -> bool {
+    doc.layers.iter().any(|layer| {
+        let features = layer.features.slice(&doc.features);
+        let clear_bounds = features
+            .iter()
+            .filter(|feature| {
+                feature.bucket != FeatureBucket::Cutout
+                    && feature.polarity == Polarity::Clear
+                    && !feature.flags.clears_previous_in_set
+            })
+            .map(|feature| feature.bbox)
+            .collect::<Vec<_>>();
+        if clear_bounds.is_empty() {
+            return false;
+        }
+        features.iter().any(|feature| {
+            feature.polarity == Polarity::Dark
+                && paint_order(feature).stage == PaintStage::Overlay
+                && clear_bounds
+                    .iter()
+                    .any(|bounds| bounds.intersects(feature.bbox))
+        })
+    })
+}
+
 fn paint_order(feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
     let stage = if feature.intent.role == FeatureRole::Cutout || feature.is_drill_like() {
         PaintStage::FinalCutout
@@ -1343,6 +1380,109 @@ mod tests {
         export_manufacturing_package,
     };
     use std::io::{Cursor, Read};
+
+    #[test]
+    fn negative_set_over_overlay_pad_resolves_geometrically() {
+        // A clear set that reaches overlay-stage dark geometry must fall back
+        // to layer-wide geometric resolution: the stage scheduler would
+        // otherwise paint the pad after the clear and never erase it.
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad"><Circle diameter="2"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set net="N1">
+            <Pad padstackDefRef="padstack">
+              <Location x="5" y="5"/>
+              <StandardPrimitiveRef id="pad"/>
+            </Pad>
+          </Set>
+          <Set polarity="NEGATIVE">
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="4" y="4"/>
+                    <PolyStepSegment x="5" y="4"/>
+                    <PolyStepSegment x="5" y="5"/>
+                    <PolyStepSegment x="4" y="5"/>
+                    <PolyStepSegment x="4" y="4"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let copper = files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
+        assert!(
+            parsed
+                .objects()
+                .iter()
+                .all(|object| object.polarity == Polarity::Dark),
+            "clear set reaching an overlay pad should be resolved geometrically"
+        );
+
+        let mask = pcb_ir::dialects::artwork::compose_to_mask(
+            &gerberx2::geometry::extract_document(&parsed),
+        );
+        let mut rings = Vec::new();
+        for layer in &mask.layers {
+            for shape in mask.shapes(layer) {
+                rings.extend(pcb_ir::geom::region::rings_from_contours(
+                    &mask.arena.path_contours(shape),
+                ));
+            }
+        }
+        let copper_area = pcb_ir::geom::ContourSet::new(
+            rings,
+            pcb_ir::geom::FillRule::NonZero,
+            pcb_ir::geom::tol::REGION_MM,
+        )
+        .area();
+        let expected = std::f64::consts::PI * (1.0 - 0.25);
+        assert!(
+            (copper_area - expected).abs() <= expected * 0.02,
+            "expected quarter-cleared pad area {expected:.4}, got {copper_area:.4}"
+        );
+    }
 
     #[test]
     fn drill_and_route_layers_are_not_exported_as_gerber_layers() {

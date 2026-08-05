@@ -5,7 +5,7 @@
 //! can be emitted as a Gerber file, regardless of which source dialect
 //! produced it.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::{
     AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
@@ -194,8 +194,9 @@ fn plan_repeated_clear_flashes(
     layer: &ArtworkDocument,
     apertures: &mut ApertureTable,
 ) -> Result<HashMap<usize, PlannedClearFlash>> {
+    // Ordered so macro names and aperture codes are stable across runs.
     type Signature = (Vec<String>, Vec<(u8, i64, i64, i64, i64, bool)>);
-    let mut groups: HashMap<Signature, Vec<(usize, Point)>> = HashMap::new();
+    let mut groups: BTreeMap<Signature, Vec<(usize, Point)>> = BTreeMap::new();
     for (index, object) in layer.objects.iter().enumerate() {
         if object.polarity != Polarity::Clear {
             continue;

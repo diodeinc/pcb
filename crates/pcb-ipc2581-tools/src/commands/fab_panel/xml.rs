@@ -254,6 +254,8 @@ pub(super) fn write_fab_panel_xml(
         edit::apply(provisional, edits)?
     };
     let xml = crate::utils::format::reformat_xml(&xml)?;
+    Ipc2581::validate(&xml)
+        .context("Generated IPC-2581 fabrication panel XML failed schema validation")?;
     Ipc2581::parse(&xml).context("Generated IPC-2581 fabrication panel XML did not parse")?;
     Ok(xml)
 }
