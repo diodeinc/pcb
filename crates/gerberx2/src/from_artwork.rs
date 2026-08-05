@@ -231,7 +231,7 @@ fn lower_artwork_object(
             if !transform_is_translation(transform) {
                 // Contour apertures absorb a rotated basis by rotating their
                 // outline; the aperture table dedups per rotated shape.
-                let ApertureShape::Contour(contour) = &artwork_aperture.shape else {
+                let ApertureShape::Contour { outline, fill_rule } = &artwork_aperture.shape else {
                     return Err(GerberError::InvalidStructure(
                         "cannot lower transformed artwork flash to Gerber".to_string(),
                     ));
@@ -241,9 +241,10 @@ fn lower_artwork_object(
                     m12: 0.0,
                     ..transform
                 };
-                artwork_aperture = Aperture::solid(ApertureShape::Contour(
-                    geom_path::transform_cmds(contour.cmds.iter().copied(), basis),
-                ));
+                artwork_aperture = Aperture::solid(ApertureShape::Contour {
+                    outline: geom_path::transform_cmds(outline.cmds.iter().copied(), basis),
+                    fill_rule: *fill_rule,
+                });
             }
             let default_function = vec!["Conductor".to_string()];
             let aperture_function = object
@@ -407,15 +408,14 @@ impl ApertureTable {
 
     fn artwork_aperture(&mut self, aperture: Aperture, function: &[String]) -> Result<i32> {
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
-        let fill_rule = aperture.fill_rule();
         match aperture.shape {
-            ApertureShape::Contour(contour) => {
+            ApertureShape::Contour { outline, fill_rule } => {
                 // Resolve the buffer's raw loops under the aperture's fill
                 // rule so winding is canonical: each shape is an outer ring
                 // followed by its holes, wound opposite. Larger shapes paint
                 // first so an island inside a hole survives the hole's erase.
                 let mut shapes = region::simplify_shapes(
-                    region::rings_from_contours(std::slice::from_ref(&contour)),
+                    region::rings_from_contours(std::slice::from_ref(&outline)),
                     fill_rule,
                 );
                 shapes.sort_by(|a, b| {
@@ -978,7 +978,10 @@ mod tests {
         }
         let contour = ContourBuf::from_parts(bbox, cmds);
 
-        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour(contour)));
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+            outline: contour,
+            fill_rule: FillRule::NonZero,
+        }));
         artwork.push_object(
             layer_id,
             ArtworkObject {
@@ -1006,6 +1009,63 @@ mod tests {
         assert!(
             (summary.area_mm2 - 64.0).abs() < 0.01,
             "the hole ring must survive as an exposure-off outline: {}",
+            summary.area_mm2
+        );
+    }
+
+    #[test]
+    fn contour_apertures_honor_even_odd_fill() {
+        // Two same-winding nested loops: NonZero fills solid, EvenOdd carves
+        // the inner loop out. The aperture's fill rule must decide.
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+
+        let outer = rect_payload(0.0, 0.0, 10.0, 10.0);
+        let inner = rect_payload(2.0, 2.0, 8.0, 8.0);
+        let mut bbox = outer.bbox;
+        bbox.include_point(inner.bbox.min);
+        bbox.include_point(inner.bbox.max);
+        let mut cmds = outer.cmds.clone();
+        cmds.extend(inner.cmds.iter().copied());
+        let contour = ContourBuf::from_parts(bbox, cmds);
+
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+            outline: contour,
+            fill_rule: FillRule::EvenOdd,
+        }));
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                polarity: Polarity::Dark,
+                order: Default::default(),
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: pcb_ir::geom::Affine2::translation(Point::new(20.0, 5.0)),
+                },
+                bbox: BBox {
+                    min: Point::new(20.0, 5.0),
+                    max: Point::new(30.0, 15.0),
+                },
+                meta: ObjectAttributes::default(),
+            },
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let contents = crate::write_layer(&gerber).expect("write Gerber");
+        assert_external_parser_accepts(&contents);
+        let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
+        let geometry = crate::geometry::extract_document(&parsed);
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        assert!(
+            (summary.area_mm2 - 64.0).abs() < 0.01,
+            "even-odd fill must carve the nested loop out: {}",
             summary.area_mm2
         );
     }
@@ -1043,7 +1103,10 @@ mod tests {
         cmds.push(PathCmd::close());
         let contour = ContourBuf::from_parts(bbox, cmds);
 
-        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour(contour)));
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+            outline: contour,
+            fill_rule: FillRule::NonZero,
+        }));
         artwork.push_object(
             layer_id,
             ArtworkObject {
@@ -1108,7 +1171,10 @@ mod tests {
         cmds.push(PathCmd::close());
         let contour = ContourBuf::from_parts(bbox, cmds);
 
-        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour(contour)));
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+            outline: contour,
+            fill_rule: FillRule::NonZero,
+        }));
         artwork.push_object(
             layer_id,
             ArtworkObject {
