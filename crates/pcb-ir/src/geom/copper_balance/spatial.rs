@@ -32,11 +32,15 @@ pub(super) fn normalized_stack_weights(
 }
 
 /// Sparse row-normalized convolution from panel-lattice samples to a shared
-/// evaluation field. `smooth_adjoint` is the exact transpose of `smooth`, so
-/// projected gradient follows the same density model used by the objective.
+/// evaluation field, stored CSR (row offsets over flat index/weight arrays)
+/// so the per-iteration passes stream contiguously. `smooth_adjoint` is the
+/// exact transpose of `smooth`, so projected gradient follows the same
+/// density model used by the objective.
 pub(super) struct LatticeDensityKernel {
     sample_count: usize,
-    rows: Vec<Vec<(usize, f64)>>,
+    row_offsets: Vec<u32>,
+    sample_indices: Vec<u32>,
+    weights: Vec<f64>,
 }
 
 impl LatticeDensityKernel {
@@ -80,53 +84,79 @@ impl LatticeDensityKernel {
                 })
                 .collect::<Vec<(i64, i64, f64)>>()
         });
-        let rows = evaluation_sites
-            .iter()
-            .map(|&(column, row)| {
-                let mut neighbors = offsets[column.rem_euclid(2) as usize]
-                    .iter()
-                    .filter_map(|&(column_offset, row_offset, weight)| {
-                        let sample_index =
-                            sample_indices.get(&(column + column_offset, row + row_offset))?;
-                        Some((*sample_index, weight))
-                    })
-                    .collect::<Vec<_>>();
-                let weight_sum = neighbors.iter().map(|(_, weight)| weight).sum::<f64>();
-                if weight_sum > 0.0 {
-                    for (_, weight) in &mut neighbors {
-                        *weight /= weight_sum;
-                    }
+        let mut row_offsets = Vec::with_capacity(evaluation_sites.len() + 1);
+        let mut csr_sample_indices = Vec::new();
+        let mut weights = Vec::new();
+        row_offsets.push(0_u32);
+        for &(column, row) in &evaluation_sites {
+            let row_start = weights.len();
+            for &(column_offset, row_offset, weight) in &offsets[column.rem_euclid(2) as usize] {
+                if let Some(sample_index) =
+                    sample_indices.get(&(column + column_offset, row + row_offset))
+                {
+                    csr_sample_indices.push(*sample_index as u32);
+                    weights.push(weight);
                 }
-                neighbors
-            })
-            .collect();
+            }
+            let weight_sum = weights[row_start..].iter().sum::<f64>();
+            if weight_sum > 0.0 {
+                for weight in &mut weights[row_start..] {
+                    *weight /= weight_sum;
+                }
+            }
+            row_offsets.push(weights.len() as u32);
+        }
         Self {
             sample_count: samples.len(),
-            rows,
+            row_offsets,
+            sample_indices: csr_sample_indices,
+            weights,
         }
+    }
+
+    pub(super) fn row_count(&self) -> usize {
+        self.row_offsets.len() - 1
     }
 
     pub(super) fn smooth(&self, values: &[f64]) -> Vec<f64> {
-        debug_assert_eq!(values.len(), self.sample_count);
-        self.rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(sample_index, weight)| weight * values[*sample_index])
-                    .sum()
-            })
-            .collect()
+        let mut result = vec![0.0; self.row_count()];
+        self.smooth_into(values, &mut result);
+        result
     }
 
+    pub(super) fn smooth_into(&self, values: &[f64], result: &mut [f64]) {
+        debug_assert_eq!(values.len(), self.sample_count);
+        debug_assert_eq!(result.len(), self.row_count());
+        for (row, result) in result.iter_mut().enumerate() {
+            let span = self.row_offsets[row] as usize..self.row_offsets[row + 1] as usize;
+            *result = self.sample_indices[span.clone()]
+                .iter()
+                .zip(&self.weights[span])
+                .map(|(sample_index, weight)| weight * values[*sample_index as usize])
+                .sum();
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn smooth_adjoint(&self, values: &[f64]) -> Vec<f64> {
-        debug_assert_eq!(values.len(), self.rows.len());
         let mut result = vec![0.0; self.sample_count];
-        for (value, row) in values.iter().zip(&self.rows) {
-            for (sample_index, weight) in row {
-                result[*sample_index] += weight * value;
+        self.smooth_adjoint_into(values, &mut result);
+        result
+    }
+
+    pub(super) fn smooth_adjoint_into(&self, values: &[f64], result: &mut [f64]) {
+        debug_assert_eq!(values.len(), self.row_count());
+        debug_assert_eq!(result.len(), self.sample_count);
+        result.fill(0.0);
+        for (row, value) in values.iter().enumerate() {
+            let span = self.row_offsets[row] as usize..self.row_offsets[row + 1] as usize;
+            for (sample_index, weight) in self.sample_indices[span.clone()]
+                .iter()
+                .zip(&self.weights[span])
+            {
+                result[*sample_index as usize] += weight * value;
             }
         }
-        result
     }
 }
 
@@ -261,7 +291,7 @@ pub(super) fn project_box_sum(
         .map(|(value, bound)| value - bound)
         .max_by(f64::total_cmp)
         .unwrap_or(0.0);
-    for _ in 0..64 {
+    for _ in 0..44 {
         let shift = (low_shift + high_shift) / 2.0;
         let sum = values
             .iter()

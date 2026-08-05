@@ -536,47 +536,77 @@ pub fn generate_spatial_dense_copper_balance(
     let normalized_stack_weights = normalized_stack_weights(request.layers);
     let step = 0.25 / void_fraction_per_radius_squared.powi(2);
 
+    // Updates below this leave every radius well inside half a quantization
+    // step of its converged value, so the emitted lattice is already final.
+    let convergence_mm2 = 1e-6;
+    // Per-layer scratch reused across iterations: the void-fraction field is
+    // written only at active sites (the rest stays zero), and the adjoint
+    // fills its buffer, so neither needs re-zeroing per pass.
+    let mut void_scratch = request
+        .layers
+        .iter()
+        .map(|_| vec![0.0; panel_samples.len()])
+        .collect::<Vec<_>>();
+    let mut influence_scratch = void_scratch.clone();
     for _ in 0..SPATIAL_SOLVE_ITERATIONS {
-        let error = request
-            .layers
-            .iter()
-            .enumerate()
-            .map(|(layer_index, layer)| {
-                let void_density = match uniform[layer_index].solution.mode {
-                    DenseCopperBalanceMode::Perforated { .. } => {
-                        let mut void_fraction = vec![0.0; panel_samples.len()];
-                        for (sample_index, radius_squared) in active_sites[layer_index]
-                            .iter()
-                            .zip(&squared_radii[layer_index])
-                        {
-                            void_fraction[*sample_index] =
-                                void_fraction_per_radius_squared * radius_squared;
-                        }
-                        density_kernel.smooth(&void_fraction)
-                    }
-                    DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => {
-                        vec![0.0; evaluation_points.len()]
-                    }
-                };
-                fixed_density[layer_index]
-                    .iter()
-                    .enumerate()
-                    .map(|(site_index, fixed)| {
-                        let available = &region_available_density[layer_regions[layer_index]];
-                        let generated_density = match uniform[layer_index].solution.mode {
-                            DenseCopperBalanceMode::None => 0.0,
-                            DenseCopperBalanceMode::Solid => available[site_index],
+        let error = std::thread::scope(|scope| {
+            let uniform = &uniform;
+            let active_sites = &active_sites;
+            let fixed_density = &fixed_density;
+            let region_available_density = &region_available_density;
+            let layer_regions = &layer_regions;
+            let partial_void_density = &partial_void_density;
+            let density_kernel = &density_kernel;
+            let evaluation_points = &evaluation_points;
+            let handles = request
+                .layers
+                .iter()
+                .zip(void_scratch.iter_mut())
+                .enumerate()
+                .map(|(layer_index, (layer, void_fraction))| {
+                    let squared_radii = &squared_radii;
+                    scope.spawn(move || {
+                        let void_density = match uniform[layer_index].solution.mode {
                             DenseCopperBalanceMode::Perforated { .. } => {
-                                available[site_index]
-                                    - partial_void_density[layer_index][site_index]
-                                    - void_density[site_index]
+                                for (sample_index, radius_squared) in active_sites[layer_index]
+                                    .iter()
+                                    .zip(&squared_radii[layer_index])
+                                {
+                                    void_fraction[*sample_index] =
+                                        void_fraction_per_radius_squared * radius_squared;
+                                }
+                                density_kernel.smooth(void_fraction)
+                            }
+                            DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => {
+                                vec![0.0; evaluation_points.len()]
                             }
                         };
-                        fixed + generated_density - layer.target_density
+                        fixed_density[layer_index]
+                            .iter()
+                            .enumerate()
+                            .map(|(site_index, fixed)| {
+                                let available =
+                                    &region_available_density[layer_regions[layer_index]];
+                                let generated_density = match uniform[layer_index].solution.mode {
+                                    DenseCopperBalanceMode::None => 0.0,
+                                    DenseCopperBalanceMode::Solid => available[site_index],
+                                    DenseCopperBalanceMode::Perforated { .. } => {
+                                        available[site_index]
+                                            - partial_void_density[layer_index][site_index]
+                                            - void_density[site_index]
+                                    }
+                                };
+                                fixed + generated_density - layer.target_density
+                            })
+                            .collect::<Vec<_>>()
                     })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("spatial error pass panicked"))
+                .collect::<Vec<_>>()
+        });
         let stack_error = (0..evaluation_points.len())
             .map(|site_index| {
                 normalized_stack_weights
@@ -587,32 +617,65 @@ pub fn generate_spatial_dense_copper_balance(
             })
             .collect::<Vec<_>>();
 
-        for layer_index in 0..request.layers.len() {
-            if squared_radii[layer_index].is_empty() {
-                continue;
-            }
-            let residual = error[layer_index]
-                .iter()
-                .zip(&stack_error)
-                .map(|(local, stack)| local + normalized_stack_weights[layer_index] * stack)
-                .collect::<Vec<_>>();
-            let influence = density_kernel.smooth_adjoint(&residual);
-            let proposed = squared_radii[layer_index]
-                .iter()
+        let update = std::thread::scope(|scope| {
+            let active_sites = &active_sites;
+            let density_kernel = &density_kernel;
+            let lower = &lower;
+            let upper = &upper;
+            let squared_radius_sums = &squared_radius_sums;
+            let normalized_stack_weights = &normalized_stack_weights;
+            let handles = squared_radii
+                .iter_mut()
+                .zip(influence_scratch.iter_mut())
                 .enumerate()
-                .map(|(local_index, radius_squared)| {
-                    radius_squared
-                        + step
-                            * void_fraction_per_radius_squared
-                            * influence[active_sites[layer_index][local_index]]
+                .map(|(layer_index, (radii, influence))| {
+                    let error = &error;
+                    let stack_error = &stack_error;
+                    scope.spawn(move || {
+                        if radii.is_empty() {
+                            return 0.0_f64;
+                        }
+                        let residual = error[layer_index]
+                            .iter()
+                            .zip(stack_error)
+                            .map(|(local, stack)| {
+                                local + normalized_stack_weights[layer_index] * stack
+                            })
+                            .collect::<Vec<_>>();
+                        density_kernel.smooth_adjoint_into(&residual, influence);
+                        let proposed = radii
+                            .iter()
+                            .enumerate()
+                            .map(|(local_index, radius_squared)| {
+                                radius_squared
+                                    + step
+                                        * void_fraction_per_radius_squared
+                                        * influence[active_sites[layer_index][local_index]]
+                            })
+                            .collect::<Vec<_>>();
+                        let projected = project_box_sum(
+                            &proposed,
+                            &lower[layer_index],
+                            &upper[layer_index],
+                            squared_radius_sums[layer_index],
+                        );
+                        let update = radii
+                            .iter()
+                            .zip(&projected)
+                            .map(|(before, after)| (before - after).abs())
+                            .fold(0.0_f64, f64::max);
+                        *radii = projected;
+                        update
+                    })
                 })
                 .collect::<Vec<_>>();
-            squared_radii[layer_index] = project_box_sum(
-                &proposed,
-                &lower[layer_index],
-                &upper[layer_index],
-                squared_radius_sums[layer_index],
-            );
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("spatial update pass panicked"))
+                .fold(0.0_f64, f64::max)
+        });
+        if update < convergence_mm2 {
+            break;
         }
     }
 
