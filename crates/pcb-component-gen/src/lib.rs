@@ -57,7 +57,9 @@ pub fn sanitize_mpn_for_path(mpn: &str) -> String {
 /// - `~` or `!` at start: becomes `N_` prefix (e.g., `~CS` → `N_CS`)
 /// - `+` at end: becomes `_POS` suffix (e.g., `V+` → `V_POS`)
 /// - `-` at end: becomes `_NEG` suffix (e.g., `V-` → `V_NEG`)
-/// - `+` or `-` elsewhere: becomes `_` (e.g., `A+B` → `A_B`)
+/// - `+` elsewhere: becomes `_POS_` (e.g., `A+B` → `A_POS_B`)
+/// - `-` elsewhere: becomes `_NEG_` (e.g., `A-B` → `A_NEG_B`)
+/// - `'` or `′`: becomes `_PRIME` (e.g., `QH'` → `QH_PRIME`)
 /// - `#`: becomes `H` (e.g., `CS#` → `CSH`)
 /// - All alphanumeric chars: uppercased
 pub fn sanitize_pin_name(name: &str) -> String {
@@ -71,7 +73,9 @@ pub fn sanitize_pin_name(name: &str) -> String {
         match c {
             '+' if is_last => result.push_str("_POS"),
             '-' if is_last => result.push_str("_NEG"),
-            '+' | '-' => result.push('_'),
+            '+' => result.push_str("_POS_"),
+            '-' => result.push_str("_NEG_"),
+            '\'' | '′' => result.push_str("_PRIME"),
             '~' | '!' => result.push_str("N_"), // NOT prefix
             '#' => result.push('H'),
             c if c.is_alphanumeric() => result.push(c.to_ascii_uppercase()),
@@ -148,13 +152,25 @@ pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
             .push(pin);
     }
 
+    let mut used_io_names = BTreeSet::new();
     signals
         .into_iter()
         .filter_map(|(signal_name, pins)| {
-            (!pins_are_only_no_connect(pins)).then(|| {
-                let sanitized_name = sanitize_pin_name(&signal_name);
-                (signal_name, sanitized_name)
-            })
+            if pins_are_only_no_connect(pins) {
+                return None;
+            }
+
+            let mut base = sanitize_pin_name(&signal_name);
+            if base.is_empty() {
+                base = "PIN".to_string();
+            }
+            let mut io_name = base.clone();
+            let mut suffix = 2;
+            while !used_io_names.insert(io_name.clone()) {
+                io_name = format!("{base}_{suffix}");
+                suffix += 1;
+            }
+            Some((signal_name, io_name))
         })
         .collect()
 }
@@ -261,9 +277,35 @@ mod tests {
         assert_eq!(sanitize_pin_name("~CS"), "N_CS");
         assert_eq!(sanitize_pin_name("V+"), "V_POS");
         assert_eq!(sanitize_pin_name("V-"), "V_NEG");
-        assert_eq!(sanitize_pin_name("A+B"), "A_B");
+        assert_eq!(sanitize_pin_name("A+B"), "A_POS_B");
+        assert_eq!(sanitize_pin_name("A-B"), "A_NEG_B");
+        assert_eq!(sanitize_pin_name("QH'"), "QH_PRIME");
+        assert_eq!(sanitize_pin_name("QH′"), "QH_PRIME");
         assert_eq!(sanitize_pin_name("CS#"), "CSH");
         assert_eq!(sanitize_pin_name("1V8"), "P1V8");
+    }
+
+    #[test]
+    fn generated_signal_io_names_disambiguates_remaining_sanitizer_collisions() {
+        let symbol = Symbol {
+            pins: vec![
+                Pin {
+                    name: "A/B".to_string(),
+                    number: "1".to_string(),
+                    ..Default::default()
+                },
+                Pin {
+                    name: "A.B".to_string(),
+                    number: "2".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let names = generated_signal_io_names(&symbol);
+        assert_eq!(names["A.B"], "A_B");
+        assert_eq!(names["A/B"], "A_B_2");
     }
 
     #[test]

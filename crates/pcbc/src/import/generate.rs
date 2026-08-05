@@ -169,13 +169,15 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
                 layout_kicad_pcb.display()
             )
         })?;
-        match try_extract_stackup(&pcb_text, layout_kicad_pcb) {
-            Ok((layers, extracted_stackup)) => {
-                copper_layers = layers;
-                stackup = extracted_stackup;
-            }
-            Err(e) => debug!("{e:#}"),
-        }
+        let (layers, extracted_stackup) = try_extract_stackup(&pcb_text, layout_kicad_pcb)
+            .with_context(|| {
+                format!(
+                    "Failed to determine the copper layer count from {}",
+                    layout_kicad_pcb.display()
+                )
+            })?;
+        copper_layers = layers;
+        stackup = extracted_stackup;
         if let Some(layout_kicad_pro) = args.layout_kicad_pro {
             design_rules = pcb_layout::extract_design_rules_from_kicad_pro(layout_kicad_pro)
                 .ok()
@@ -599,6 +601,20 @@ mod stackup_fallback_tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("missing (layers"));
+    }
+
+    #[test]
+    fn unsupported_layer_count_is_an_error() {
+        let mut layers = vec!["(0 \"F.Cu\" signal)".to_string()];
+        layers.extend((1..=10).map(|index| format!("({index} \"In{index}.Cu\" signal)")));
+        layers.push("(31 \"B.Cu\" signal)".to_string());
+        let pcb_text = format!("(kicad_pcb (layers {}))", layers.join(" "));
+
+        let error = try_extract_stackup(&pcb_text, Path::new("twelve-layer.kicad_pcb"))
+            .expect_err("a 12-layer board must not fall back to four layers")
+            .to_string();
+        assert!(error.contains("Unsupported copper layer count"));
+        assert!(error.contains("12"));
     }
 }
 
@@ -2937,13 +2953,66 @@ mod tests {
         assert_eq!(by_pad["3"].io_name.as_deref(), Some("D_POS_3_2"));
         assert_eq!(by_pad["4"].io_name.as_deref(), Some("D_POS_4"));
         assert_eq!(by_pad["5"].io_name.as_deref(), Some("D_POS_3"));
-        assert_eq!(by_pad["6"].io_name.as_deref(), Some("A_B"));
-        assert_eq!(by_pad["7"].io_name.as_deref(), Some("A_B_2"));
+        assert_eq!(by_pad["6"].io_name.as_deref(), Some("A_POS_B"));
+        assert_eq!(by_pad["7"].io_name.as_deref(), Some("A_NEG_B"));
         assert_eq!(by_pad["10"].logical_name, "NC__10");
         assert_eq!(by_pad["11"].logical_name, "NC__11");
         assert_eq!(by_pad["10"].io_name, None);
         assert_eq!(by_pad["11"].io_name, None);
     }
+
+    fn assert_physical_pin_io_names(pins: &[(&str, &str, &str)]) {
+        let symbol = pcb_eda::Symbol {
+            pins: pins
+                .iter()
+                .map(|(name, number, _)| make_pin(name, number, Some("bidirectional")))
+                .collect(),
+            ..Default::default()
+        };
+        let plan = build_physical_pin_plan(
+            &symbol,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let by_pad = plan
+            .bindings
+            .iter()
+            .map(|binding| (binding.pad_number.as_str(), binding))
+            .collect::<BTreeMap<_, _>>();
+
+        for (_, pad, expected_io) in pins {
+            assert_eq!(by_pad[pad].io_name.as_deref(), Some(*expected_io));
+        }
+        assert_eq!(plan.io_pins.len(), pins.len());
+    }
+
+    #[test]
+    fn physical_pin_plan_preserves_prime_names() {
+        assert_physical_pin_io_names(&[("QH", "7", "QH"), ("QH'", "9", "QH_PRIME")]);
+    }
+
+    #[test]
+    fn physical_pin_plan_preserves_interior_signs() {
+        assert_physical_pin_io_names(&[("D0+A", "38", "D0_POS_A"), ("D0-A", "37", "D0_NEG_A")]);
+    }
+
+    #[test]
+    fn physical_pin_plan_preserves_interior_signs_next_to_other_separators() {
+        assert_physical_pin_io_names(&[
+            ("SDA/AUX-", "4", "SDA_AUX_NEG"),
+            ("SDA/AUX-_B", "39", "SDA_AUX_NEG_B"),
+        ]);
+    }
+
+    #[test]
+    fn physical_pin_plan_preserves_bar_notation() {
+        assert_physical_pin_io_names(&[("Q", "1", "Q"), ("~{Q}", "2", "N_Q")]);
+    }
+
     #[test]
     fn connected_electrical_no_connect_pin_is_exposed() {
         let anchor = make_anchor("u1");

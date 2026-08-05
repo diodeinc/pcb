@@ -2317,10 +2317,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_pin_name_plus_minus_in_middle() {
-        // + and - in middle become underscores
-        assert_eq!(pcb_component_gen::sanitize_pin_name("A+B"), "A_B");
-        assert_eq!(pcb_component_gen::sanitize_pin_name("IN-OUT"), "IN_OUT");
-        assert_eq!(pcb_component_gen::sanitize_pin_name("V+REF"), "V_REF");
+        // Preserve the polarity of + and - in the middle of a name.
+        assert_eq!(pcb_component_gen::sanitize_pin_name("A+B"), "A_POS_B");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("IN-OUT"), "IN_NEG_OUT");
+        assert_eq!(pcb_component_gen::sanitize_pin_name("V+REF"), "V_POS_REF");
     }
 
     #[test]
