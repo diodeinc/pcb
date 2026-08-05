@@ -337,11 +337,21 @@ fn create_fab_panel(
     let balance_features = balance
         .layers
         .into_iter()
-        .map(|layer| GeneratedLayerFeature {
-            layer_name: layer.layer_name,
-            polarity: Polarity::Positive,
-            spec_refs: Vec::new(),
-            features: layer.features,
+        .flat_map(|layer| {
+            [
+                GeneratedLayerFeature {
+                    layer_name: layer.layer_name.clone(),
+                    polarity: Polarity::Positive,
+                    spec_refs: Vec::new(),
+                    features: layer.features.positive,
+                },
+                GeneratedLayerFeature {
+                    layer_name: layer.layer_name,
+                    polarity: Polarity::Negative,
+                    spec_refs: Vec::new(),
+                    features: layer.features.negative,
+                },
+            ]
         })
         .collect::<Vec<_>>();
 

@@ -263,7 +263,8 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
         );
     }
     let xml = creation.xml;
-    assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
+    // Perforated balance planes carry their voids as a negative instance set.
+    assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
     assert!(xml.matches("<Contour>").count() > 0);
 }
 
@@ -844,7 +845,7 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
 }
 
 #[test]
-fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
+fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     let input = board_fixture_with_top_line_mm();
     let ipc = Ipc2581::parse(input).unwrap();
     let options = BoardArrayCreateOptions {
@@ -888,35 +889,47 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
     .pop()
     .unwrap();
     let features = balance_features(&balance).unwrap();
+    let void_count = features.negative.len();
     spec.generated_geometry.add_layer_feature(
         GeneratedFeatureScope::Array,
         "TOP",
         Polarity::Positive,
-        features,
+        features.positive,
+    );
+    spec.generated_geometry.add_layer_feature(
+        GeneratedFeatureScope::Array,
+        "TOP",
+        Polarity::Negative,
+        features.negative,
     );
     assert!(matches!(
         balance.solution.mode,
         DenseCopperBalanceMode::Perforated { .. }
     ));
+    assert!(void_count > 0);
 
     let xml = write_board_array_xml(input, &spec).unwrap();
-    assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
+    assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
 
     let parsed = Ipc2581::parse(&xml).unwrap();
     assert!(xml.matches("<Contour>").count() > 0);
 
     let top = geometry::extract_layer_for_view(&parsed, "TOP", View::ArrayFlattened).unwrap();
-    let paths = top
-        .features
-        .iter()
-        .filter(|feature| {
-            feature.source_step_kind == LayoutStepKind::Panel
-                && feature.kind == FeatureKind::Primitive
-        })
-        .flat_map(|feature| feature.paths.slice(&top.arena.paths))
-        .collect::<Vec<_>>();
-    let round_trip =
-        ContourSet::from_painted_paths(&top.arena, paths.iter().copied(), tol::REGION_MM);
+    let balance_paths = |polarity: pcb_ir::geom::Polarity| {
+        let paths = top
+            .features
+            .iter()
+            .filter(|feature| {
+                feature.source_step_kind == LayoutStepKind::Panel
+                    && feature.kind == FeatureKind::Primitive
+                    && feature.polarity == polarity
+            })
+            .flat_map(|feature| feature.paths.slice(&top.arena.paths))
+            .collect::<Vec<_>>();
+        ContourSet::from_painted_paths(&top.arena, paths, tol::REGION_MM)
+    };
+    let round_trip = balance_paths(pcb_ir::geom::Polarity::Dark)
+        .difference(&balance_paths(pcb_ir::geom::Polarity::Clear));
 
     assert!(!round_trip.is_empty());
     assert!(
@@ -935,6 +948,33 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
         .unwrap();
     assert!(top_gerber.contents.contains("G36*"));
     assert!(top_gerber.contents.contains("G37*"));
+    // The repeated voids share one outline-macro aperture flashed at clear
+    // polarity instead of re-describing each void.
+    assert!(top_gerber.contents.contains("%AMREPEAT0*"));
+    assert!(top_gerber.contents.contains("%LPC*%"));
+    // Groups below the sharing threshold legitimately stay regions.
+    assert!(top_gerber.contents.matches("D03*").count() >= void_count / 2);
+
+    // The composed Gerber image must match the composed IPC image.
+    let ipc_copper = crate::copper_balance::composed_copper_image(&parsed, "TOP").unwrap();
+    let gerber = gerberx2::GerberX2::parse(&top_gerber.contents).unwrap();
+    let mask =
+        pcb_ir::dialects::artwork::compose_to_mask(&gerberx2::geometry::extract_document(&gerber));
+    let mut rings = Vec::new();
+    for layer in &mask.layers {
+        for shape in mask.shapes(layer) {
+            rings.extend(pcb_ir::geom::region::rings_from_contours(
+                &mask.arena.path_contours(shape),
+            ));
+        }
+    }
+    let gerber_copper = ContourSet::new(rings, pcb_ir::geom::FillRule::NonZero, tol::REGION_MM);
+    assert!(
+        (gerber_copper.area() - ipc_copper.area()).abs() <= ipc_copper.area() * 1e-3,
+        "Gerber area {}, IPC area {}",
+        gerber_copper.area(),
+        ipc_copper.area()
+    );
 }
 
 #[test]

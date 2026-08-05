@@ -37,10 +37,13 @@ where
 
 /// Resolve IPC-specific paint semantics while preserving native artwork shapes.
 ///
-/// IPC feature-set voids, negative polarity, and layer cutouts are semantic
-/// operators on source features, not generic ordered artwork objects. Resolve
-/// those before lowering to source-independent artwork, but do not outline
-/// strokes or flatten unrelated positive features.
+/// IPC feature-set voids and layer cutouts are semantic operators on source
+/// features, not generic ordered artwork objects. Resolve those before
+/// lowering to source-independent artwork, but do not outline strokes or
+/// flatten unrelated positive features. Negative-polarity features stay
+/// native: ordered artwork carries per-object polarity with exactly IPC's
+/// sequential paint semantics, so resolving them here would only flatten
+/// repeated clear instances into unshareable boundary geometry.
 pub fn normalize_for_artwork<S, L>(doc: &mut Document<S, L>)
 where
     S: Copy + Eq + Hash,
@@ -48,7 +51,6 @@ where
 {
     normalize_preserving(doc);
     resolve_set_voids(doc);
-    resolve_negative_polarity(doc);
     subtract_layer_cutouts(doc);
     compact(doc);
     normalize_bounds(doc);
@@ -488,8 +490,9 @@ where
                 if feature.flags.clears_previous_in_set {
                     let cutters = feature_filled_rings(doc, &doc.features[feature_index]);
                     if !cutters.is_empty() {
+                        let bounds = ring_bounds(&cutters);
                         for subject_index in previous.iter().copied() {
-                            subtract_rings_from_feature(doc, subject_index, &cutters);
+                            subtract_rings_from_feature(doc, subject_index, &cutters, &bounds);
                         }
                     }
                     clear_feature_paths(doc, feature_index);
@@ -547,10 +550,11 @@ where
             cutters = region::simplify_rings(cutters, FillRule::NonZero);
         }
 
+        let cutter_bounds = ring_bounds(&cutters);
         for feature_index in layer.features.range() {
             let feature = &doc.features[feature_index];
             if feature.bucket != FeatureBucket::Cutout && feature.polarity == Polarity::Dark {
-                subtract_rings_from_feature(doc, feature_index, &cutters);
+                subtract_rings_from_feature(doc, feature_index, &cutters, &cutter_bounds);
             }
         }
 
@@ -593,7 +597,8 @@ where
                 continue;
             }
 
-            subtract_rings_from_feature(doc, feature_index, &cutters);
+            let bounds = ring_bounds(&cutters);
+            subtract_rings_from_feature(doc, feature_index, &cutters, &bounds);
         }
     }
 }
@@ -697,17 +702,52 @@ fn clear_feature_paths<S, L>(doc: &mut Document<S, L>, feature_index: usize) {
     feature.primitive_ref = None;
 }
 
+fn ring_bounds(rings: &[Ring]) -> Vec<BBox> {
+    rings
+        .iter()
+        .map(|ring| rings_bbox(std::slice::from_ref(ring)))
+        .collect()
+}
+
+fn rings_bbox(rings: &[Ring]) -> BBox {
+    rings
+        .iter()
+        .flat_map(|ring| ring.iter())
+        .fold(BBox::empty(), |bbox, &[x, y]| {
+            bbox.union(BBox::new(
+                crate::geom::Point::new(x, y),
+                crate::geom::Point::new(x, y),
+            ))
+        })
+}
+
 fn subtract_rings_from_feature<S, L>(
     doc: &mut Document<S, L>,
     feature_index: usize,
     cutters: &[Ring],
+    cutter_bounds: &[BBox],
 ) {
     let subject = feature_filled_rings(doc, &doc.features[feature_index]);
     if subject.is_empty() {
         return;
     }
 
-    let contours = region::rings_to_contours(region::difference_rings(subject, cutters.to_vec()));
+    // Only cutters that can reach this feature participate; most features on
+    // a layer are nowhere near any of them, and dense generated cutter sets
+    // (balance void lattices) would otherwise make every subtraction sweep
+    // the whole set.
+    let subject_bounds = rings_bbox(&subject);
+    let near = cutters
+        .iter()
+        .zip(cutter_bounds)
+        .filter(|(_, bounds)| bounds.intersects(subject_bounds))
+        .map(|(ring, _)| ring.clone())
+        .collect::<Vec<_>>();
+    if near.is_empty() {
+        return;
+    }
+
+    let contours = region::rings_to_contours(region::difference_rings(subject, near));
     if contours.is_empty() {
         clear_feature_paths(doc, feature_index);
         return;
@@ -1089,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn artwork_ready_validation_rejects_unresolved_negative_polarity() {
+    fn artwork_ready_validation_accepts_clear_polarity() {
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1102,9 +1142,7 @@ mod tests {
             ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
         });
 
-        let error = validate_artwork_ready(&doc).unwrap_err();
-
-        assert!(error.to_string().contains("unresolved negative polarity"));
+        validate_artwork_ready(&doc).unwrap();
     }
 
     #[test]

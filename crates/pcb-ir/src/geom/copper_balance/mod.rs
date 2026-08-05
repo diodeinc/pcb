@@ -42,6 +42,10 @@ pub struct DenseCopperBalanceProfile {
     pub min_copper_web_mm: f64,
     pub boundary_web_mm: f64,
     pub density_sigma_mm: f64,
+    /// Fabrication step the spatially solved void radii snap to. Etching
+    /// cannot hold finer distinctions, and the shared grid keeps the voids a
+    /// small set of repeated templates instead of thousands of unique shapes.
+    pub void_radius_step_mm: f64,
 }
 
 impl DenseCopperBalanceProfile {
@@ -53,6 +57,7 @@ impl DenseCopperBalanceProfile {
         min_copper_web_mm: 0.20,
         boundary_web_mm: 0.20,
         density_sigma_mm: 5.0,
+        void_radius_step_mm: 0.005,
     };
 
     pub fn lattice_column_pitch_mm(self) -> f64 {
@@ -83,6 +88,7 @@ impl DenseCopperBalanceProfile {
             ("minimum copper web", self.min_copper_web_mm),
             ("boundary copper web", self.boundary_web_mm),
             ("density smoothing sigma", self.density_sigma_mm),
+            ("void radius step", self.void_radius_step_mm),
         ] {
             if !value.is_finite() || value <= 0.0 {
                 return Err(DenseCopperBalanceError::InvalidProfile(format!(
@@ -597,6 +603,7 @@ pub fn generate_spatial_dense_copper_balance(
                 baseline,
                 request.layers[layer_index],
                 retained_area_mm2,
+                profile,
             )
         })
         .collect())
@@ -893,6 +900,7 @@ mod tests {
             min_copper_web_mm: 0.05,
             boundary_web_mm: 0.2,
             density_sigma_mm: 5.0,
+            void_radius_step_mm: 0.005,
         };
         profile.validate().unwrap();
         let safe_region = ContourSet::rectangle(
@@ -1262,9 +1270,10 @@ mod tests {
         };
 
         assert!(mean_radius(20.0, 25.0) > mean_radius(35.0, 40.0));
+        let quantization_bound_mm2 = 0.01 * result.full_voids.len() as f64;
         assert!(
             (result.solution.generated_area_mm2 - baseline.solution.generated_area_mm2).abs()
-                <= AREA_SOLVE_TOLERANCE_MM2
+                <= AREA_SOLVE_TOLERANCE_MM2 + quantization_bound_mm2
         );
     }
 
@@ -1328,8 +1337,9 @@ mod tests {
 
         assert!(radius_difference > 0.01);
         assert!(independent.iter().zip(&stack_aware).all(|(left, right)| {
+            let quantization_bound_mm2 = 0.01 * left.full_voids.len() as f64;
             (left.solution.generated_area_mm2 - right.solution.generated_area_mm2).abs()
-                <= AREA_SOLVE_TOLERANCE_MM2
+                <= AREA_SOLVE_TOLERANCE_MM2 + quantization_bound_mm2
         }));
     }
 

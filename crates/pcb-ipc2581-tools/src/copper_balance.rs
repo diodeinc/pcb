@@ -20,9 +20,8 @@ use pcb_ir::geom::copper_balance::{
     SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest,
     generate_spatial_dense_copper_balance, rounded_hexagonal_void,
 };
-use pcb_ir::geom::path::transform_cmds;
 use pcb_ir::geom::region::simplify_shapes;
-use pcb_ir::geom::{Affine2, ContourBuf, ContourSet, FillRule, PathOp, Point, tol};
+use pcb_ir::geom::{ContourBuf, ContourSet, FillRule, PathOp, Point, tol};
 use serde::Serialize;
 
 use crate::geometry;
@@ -44,6 +43,25 @@ pub struct PreparedCopperLayer {
     pub safe_region: ContourSet,
 }
 
+/// Generated IPC features for one balanced layer, split by polarity.
+///
+/// The perforated plane is a positive set covering the whole usable region
+/// (partial edge voids stay cut into its contours), while every full interior
+/// void is a translated instance of one rounded-hex template in a negative
+/// set. Keeping the voids as explicit repeated instances lets downstream
+/// lowerings share their geometry instead of re-describing each void.
+#[derive(Debug, Clone, Default)]
+pub struct BalanceFeatureSets {
+    pub positive: Vec<SetFeature>,
+    pub negative: Vec<SetFeature>,
+}
+
+impl BalanceFeatureSets {
+    pub fn is_empty(&self) -> bool {
+        self.positive.is_empty() && self.negative.is_empty()
+    }
+}
+
 /// One copper layer's balancing plan and generated IPC features.
 #[derive(Debug, Clone)]
 pub struct CopperBalanceLayer {
@@ -52,7 +70,7 @@ pub struct CopperBalanceLayer {
     pub stack_weight_mm2: f64,
     pub existing_copper: ContourSet,
     pub result: DenseCopperBalanceResult,
-    pub features: Vec<SetFeature>,
+    pub features: BalanceFeatureSets,
 }
 
 /// Inspectable result of planning automatic copper balance for a panel.
@@ -253,15 +271,48 @@ pub fn solve_copper_balance(
     })
 }
 
-/// Convert a solved layer to positive IPC features; empty when nothing was
-/// generated.
-pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeature>> {
+/// Convert a solved layer to IPC features; empty when nothing was generated.
+pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeatureSets> {
     match result.solution.mode {
-        DenseCopperBalanceMode::None => Ok(Vec::new()),
-        DenseCopperBalanceMode::Solid | DenseCopperBalanceMode::Perforated { .. } => {
-            ipc_contour_features(result)
-        }
+        DenseCopperBalanceMode::None => Ok(BalanceFeatureSets::default()),
+        DenseCopperBalanceMode::Solid => Ok(BalanceFeatureSets {
+            positive: ipc_contour_features(result)?,
+            negative: Vec::new(),
+        }),
+        DenseCopperBalanceMode::Perforated { .. } => Ok(BalanceFeatureSets {
+            positive: ipc_contour_features(result)?,
+            negative: hex_void_features(result)?,
+        }),
     }
+}
+
+/// One negative rounded-hex instance per full interior void, each carrying
+/// the origin-centered template translated to its lattice site.
+fn hex_void_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeature>> {
+    result
+        .full_voids
+        .iter()
+        .map(|void| {
+            let template = rounded_hexagonal_void(void.radius_mm)
+                .context("generated copper balance has an invalid rounded-hex void radius")?;
+            let polygon = ipc_polygon_from_contour(&template)?;
+            Ok(SetFeature::UserPrimitive(FeatureUserPrimitive {
+                primitive: UserPrimitive::UserSpecial(UserSpecial {
+                    shapes: vec![UserShape {
+                        shape: UserShapeType::Contour(IpcContour {
+                            polygon,
+                            cutouts: Vec::new(),
+                        }),
+                        line_desc: None,
+                        line_desc_ref: None,
+                        fill_desc: None,
+                    }],
+                }),
+                x: void.center.x,
+                y: void.center.y,
+            }))
+        })
+        .collect()
 }
 
 /// Extract one layer's flattened, composed copper image.
@@ -336,6 +387,9 @@ struct IpcCopperComponent {
     cutouts: Vec<ContourBuf>,
 }
 
+/// The positive plane: usable-region components with partial edge voids cut
+/// in. Full interior voids are not cut here — they subtract via the negative
+/// instance set.
 fn ipc_contour_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeature>> {
     let mut components = simplify_shapes(result.usable.rings.clone(), FillRule::NonZero)
         .into_iter()
@@ -349,22 +403,6 @@ fn ipc_contour_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeat
                 .collect(),
         })
         .collect::<Vec<_>>();
-
-    if matches!(
-        result.solution.mode,
-        DenseCopperBalanceMode::Perforated { .. }
-    ) {
-        for void in &result.full_voids {
-            let template = rounded_hexagonal_void(void.radius_mm)
-                .context("generated copper balance has an invalid rounded-hex void radius")?;
-            let component = containing_component(&mut components, void.center)
-                .context("generated full copper void lies outside the usable region")?;
-            component.cutouts.push(transform_cmds(
-                template.cmds.iter().copied(),
-                Affine2::translation(void.center),
-            ));
-        }
-    }
 
     let mut islands = Vec::new();
     for shape in simplify_shapes(result.partial_voids.rings.clone(), FillRule::NonZero) {
@@ -518,40 +556,48 @@ mod tests {
         assert!(result.solution.generated_area_mm2 > 0.0);
         assert!(!result.full_voids.is_empty());
         assert!(!result.partial_voids.is_empty());
-        assert!(
-            features
-                .iter()
-                .all(|feature| matches!(feature, SetFeature::UserPrimitive(_)))
-        );
-        let contours = features
+        let contour = |feature: &SetFeature| match feature {
+            SetFeature::UserPrimitive(feature) => {
+                let UserPrimitive::UserSpecial(user_special) = &feature.primitive;
+                let UserShapeType::Contour(contour) = &user_special.shapes[0].shape else {
+                    return None;
+                };
+                Some(contour.clone())
+            }
+            _ => None,
+        };
+
+        // The positive plane carries only the clipped edge voids as cutouts.
+        let positive_contours = features
+            .positive
             .iter()
-            .filter_map(|feature| match feature {
-                SetFeature::UserPrimitive(feature) => {
-                    let UserPrimitive::UserSpecial(user_special) = &feature.primitive;
-                    let UserShapeType::Contour(contour) = &user_special.shapes[0].shape else {
-                        return None;
-                    };
-                    Some(contour)
-                }
-                _ => None,
-            })
+            .map(|feature| contour(feature).expect("positive balance feature is a contour"))
             .collect::<Vec<_>>();
         assert_eq!(
-            contours
+            positive_contours
                 .iter()
                 .map(|contour| contour.cutouts.len())
                 .sum::<usize>(),
-            result.void_count()
+            result.partial_voids.connected_components().len()
         );
-        assert!(
-            contours
-                .iter()
-                .flat_map(|contour| {
-                    std::iter::once(&contour.polygon).chain(contour.cutouts.iter())
-                })
-                .flat_map(|polygon| &polygon.steps)
-                .any(|step| matches!(step, PolyStep::Curve(_)))
-        );
+
+        // Every full void is one translated instance of the hex template.
+        assert_eq!(features.negative.len(), result.full_voids.len());
+        for (feature, void) in features.negative.iter().zip(&result.full_voids) {
+            let SetFeature::UserPrimitive(primitive) = feature else {
+                panic!("negative balance feature is not a user primitive");
+            };
+            assert_eq!((primitive.x, primitive.y), (void.center.x, void.center.y));
+            let template = contour(feature).unwrap();
+            assert!(template.cutouts.is_empty());
+            assert!(
+                template
+                    .polygon
+                    .steps
+                    .iter()
+                    .any(|step| matches!(step, PolyStep::Curve(_)))
+            );
+        }
     }
 
     #[test]

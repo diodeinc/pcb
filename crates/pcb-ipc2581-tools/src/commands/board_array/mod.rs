@@ -599,14 +599,17 @@ fn write_balanced_board_array_xml(
     let copper_balance = balance.report();
 
     for layer in balance.layers {
-        if layer.features.is_empty() {
-            continue;
-        }
+        spec.generated_geometry.add_layer_feature(
+            GeneratedFeatureScope::Array,
+            layer.layer_name.clone(),
+            Polarity::Positive,
+            layer.features.positive,
+        );
         spec.generated_geometry.add_layer_feature(
             GeneratedFeatureScope::Array,
             layer.layer_name,
-            Polarity::Positive,
-            layer.features,
+            Polarity::Negative,
+            layer.features.negative,
         );
     }
 

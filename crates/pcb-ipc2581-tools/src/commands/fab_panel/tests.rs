@@ -746,8 +746,8 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
             .xml
             .matches(r#"<LayerFeature layerRef="TOP">"#)
             .count(),
-        3,
-        "both sources plus the fab step should carry TOP copper"
+        4,
+        "both sources plus the fab step's positive and negative balance sets should carry TOP copper"
     );
 
     let parsed = Ipc2581::parse(&creation.xml).unwrap();
