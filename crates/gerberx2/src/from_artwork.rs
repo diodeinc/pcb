@@ -218,12 +218,7 @@ fn lower_artwork_object(
             aperture,
             transform,
         } => {
-            if !transform_is_translation(transform) {
-                return Err(GerberError::InvalidStructure(
-                    "cannot lower transformed artwork flash to Gerber".to_string(),
-                ));
-            }
-            let artwork_aperture =
+            let mut artwork_aperture =
                 layer
                     .apertures
                     .get(aperture as usize)
@@ -233,6 +228,23 @@ fn lower_artwork_object(
                             "artwork flash references missing aperture {aperture}"
                         ))
                     })?;
+            if !transform_is_translation(transform) {
+                // Contour apertures absorb a rotated basis by rotating their
+                // outline; the aperture table dedups per rotated shape.
+                let ApertureShape::Contour(contour) = &artwork_aperture.shape else {
+                    return Err(GerberError::InvalidStructure(
+                        "cannot lower transformed artwork flash to Gerber".to_string(),
+                    ));
+                };
+                let basis = pcb_ir::geom::Affine2 {
+                    m02: 0.0,
+                    m12: 0.0,
+                    ..transform
+                };
+                artwork_aperture = Aperture::solid(ApertureShape::Contour(
+                    geom_path::transform_cmds(contour.cmds.iter().copied(), basis),
+                ));
+            }
             let default_function = vec!["Conductor".to_string()];
             let aperture_function = object
                 .meta

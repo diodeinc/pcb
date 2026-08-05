@@ -996,10 +996,9 @@ fn instance_flash(
     doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
     apertures: &mut InstanceApertures,
-) -> Option<(u32, Point)> {
+) -> Option<(u32, Affine2)> {
     let primitive = feature.primitive_ref?;
-    if feature.kind != pcb_ir::dialects::ipc::FeatureKind::Primitive
-        || !is_translation(feature.transform)
+    if feature.kind != pcb_ir::dialects::ipc::FeatureKind::Primitive || !is_rigid(feature.transform)
     {
         return None;
     }
@@ -1009,21 +1008,17 @@ fn instance_flash(
     if !path.is_filled() {
         return None;
     }
-    let at = Point::new(feature.transform.m02, feature.transform.m12);
     if let Some(&aperture) = apertures.by_primitive.get(&primitive) {
-        return Some((aperture, at));
+        return Some((aperture, feature.transform));
     }
-    // Derive the origin-local template from this first instance.
+    // Derive the origin-local template from this first instance; every
+    // sibling shares the aperture and differs only by its rigid transform.
+    let inverse = feature.transform.inverse()?;
     let local = doc
         .arena
         .path_contours(path)
         .iter()
-        .map(|contour| {
-            pcb_ir::geom::path::transform_cmds(
-                contour.cmds.iter().copied(),
-                Affine2::translation(Point::new(-at.x, -at.y)),
-            )
-        })
+        .map(|contour| pcb_ir::geom::path::transform_cmds(contour.cmds.iter().copied(), inverse))
         .collect::<Vec<_>>();
     let [local] = local.as_slice() else {
         return None;
@@ -1032,14 +1027,15 @@ fn instance_flash(
         pcb_ir::dialects::artwork::ApertureShape::Contour(local.clone()),
     ));
     apertures.by_primitive.insert(primitive, aperture);
-    Some((aperture, at))
+    Some((aperture, feature.transform))
 }
 
-fn is_translation(transform: Affine2) -> bool {
-    (transform.m00 - 1.0).abs() <= GEOMETRY_EPSILON
-        && transform.m01.abs() <= GEOMETRY_EPSILON
-        && transform.m10.abs() <= GEOMETRY_EPSILON
-        && (transform.m11 - 1.0).abs() <= GEOMETRY_EPSILON
+/// Rotation plus translation, without mirroring or scaling.
+fn is_rigid(transform: Affine2) -> bool {
+    let determinant = transform.m00 * transform.m11 - transform.m01 * transform.m10;
+    (determinant - 1.0).abs() <= GEOMETRY_EPSILON
+        && (transform.m00 * transform.m00 + transform.m10 * transform.m10 - 1.0).abs()
+            <= GEOMETRY_EPSILON
 }
 
 fn push_artwork_feature(
@@ -1051,7 +1047,7 @@ fn push_artwork_feature(
     layer_name: &str,
     instance_apertures: &mut InstanceApertures,
 ) -> Result<()> {
-    if let Some((aperture, at)) = instance_flash(artwork, doc, feature, instance_apertures) {
+    if let Some((aperture, transform)) = instance_flash(artwork, doc, feature, instance_apertures) {
         artwork.push_object(
             artwork_layer,
             ArtworkObject {
@@ -1059,7 +1055,7 @@ fn push_artwork_feature(
                 order: paint_order(feature),
                 geometry: ArtworkGeometry::Flash {
                     aperture,
-                    transform: Affine2::translation(at),
+                    transform,
                 },
                 bbox: feature.bbox,
                 meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
