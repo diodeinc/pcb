@@ -238,9 +238,13 @@ pub enum ApertureShape {
         rotation_degrees: f64,
     },
     /// An arbitrary origin-local filled contour, shared by every flash of
-    /// this aperture. This is how repeated dictionary instances stay
-    /// instances all the way to the output.
-    Contour(ContourBuf),
+    /// this aperture, painted under its source path's fill rule. This is
+    /// how repeated dictionary instances stay instances all the way to the
+    /// output.
+    Contour {
+        outline: ContourBuf,
+        fill_rule: FillRule,
+    },
 }
 
 impl Aperture {
@@ -267,7 +271,7 @@ impl Aperture {
                 vertices,
                 rotation_degrees,
             } => shapes::regular_polygon(*diameter, *vertices, *rotation_degrees),
-            ApertureShape::Contour(contour) => return vec![contour.clone()],
+            ApertureShape::Contour { outline, .. } => return vec![outline.clone()],
         };
         let mut contours: Vec<ContourBuf> = outer.into_iter().collect();
         if !contours.is_empty() && self.hole_diameter > 0.0 {
@@ -277,10 +281,10 @@ impl Aperture {
     }
 
     pub fn fill_rule(&self) -> FillRule {
-        if self.hole_diameter > 0.0 {
-            FillRule::EvenOdd
-        } else {
-            FillRule::NonZero
+        match &self.shape {
+            ApertureShape::Contour { fill_rule, .. } => *fill_rule,
+            _ if self.hole_diameter > 0.0 => FillRule::EvenOdd,
+            _ => FillRule::NonZero,
         }
     }
 
@@ -297,7 +301,7 @@ impl Aperture {
             ApertureShape::Polygon { diameter, .. } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
-            ApertureShape::Contour(contour) => contour.bbox,
+            ApertureShape::Contour { outline, .. } => outline.bbox,
         }
     }
 }

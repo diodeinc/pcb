@@ -24,7 +24,8 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
 use pcb_ir::geom::{
-    Affine2, Arc, BBox, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span, StrokeStyle,
+    Affine2, Arc, BBox, FillRule, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span,
+    StrokeStyle,
 };
 
 type IpcGeometryDocument = pcb_ir::dialects::ipc::Document<ipc2581::Symbol, LayerFunction>;
@@ -1027,7 +1028,10 @@ fn instance_flash(
         return None;
     };
     let aperture = artwork.push_aperture(Aperture::solid(
-        pcb_ir::dialects::artwork::ApertureShape::Contour(local.clone()),
+        pcb_ir::dialects::artwork::ApertureShape::Contour {
+            outline: local.clone(),
+            fill_rule: path.fill_rule().unwrap_or(FillRule::NonZero),
+        },
     ));
     apertures.by_primitive.insert(primitive, aperture);
     Some((aperture, feature.transform))
