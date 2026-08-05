@@ -373,7 +373,7 @@ enum ApertureTemplateKey {
         rotation_microdeg: i64,
         hole_nm: i64,
     },
-    Contour(Vec<(i64, i64)>),
+    Contour(Vec<Vec<(i64, i64)>>),
 }
 
 impl ApertureTable {
@@ -409,17 +409,26 @@ impl ApertureTable {
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
         match aperture.shape {
             ApertureShape::Contour(contour) => {
-                let Some(ring) = region::rings_from_contours(std::slice::from_ref(&contour))
-                    .into_iter()
-                    .next()
-                else {
+                let mut rings = region::rings_from_contours(std::slice::from_ref(&contour));
+                if rings.is_empty() {
                     return Err(GerberError::InvalidStructure(
                         "cannot export an empty contour aperture".to_string(),
                     ));
-                };
-                let key = ring
+                }
+                // Paint larger loops before the loops they contain, so a
+                // hole's exposure-off outline erases the material under it.
+                rings.sort_by(|a, b| {
+                    region::ring_signed_area(b)
+                        .abs()
+                        .total_cmp(&region::ring_signed_area(a).abs())
+                });
+                let key = rings
                     .iter()
-                    .map(|[x, y]| (quantize_mm(*x), quantize_mm(*y)))
+                    .map(|ring| {
+                        ring.iter()
+                            .map(|[x, y]| (quantize_mm(*x), quantize_mm(*y)))
+                            .collect::<Vec<_>>()
+                    })
                     .collect::<Vec<_>>();
                 if let Some(code) = self.by_key.get(&ApertureKey {
                     template: ApertureTemplateKey::Contour(key.clone()),
@@ -427,7 +436,7 @@ impl ApertureTable {
                 }) {
                     return Ok(*code);
                 }
-                let code = self.outline_macro(&ring, function)?;
+                let code = self.outline_macro(&rings, function)?;
                 self.by_key.insert(
                     ApertureKey {
                         template: ApertureTemplateKey::Contour(key),
@@ -511,27 +520,39 @@ impl ApertureTable {
 
     /// Define a one-off macro aperture filling the given closed outline,
     /// expressed relative to the flash origin.
-    fn outline_macro(&mut self, outline: &[[f64; 2]], function: &[String]) -> Result<i32> {
-        if outline.len() < 3 {
-            return Err(GerberError::InvalidStructure(
-                "cannot export a Gerber outline macro with fewer than three vertices".to_string(),
-            ));
-        }
+    /// One code-4 outline primitive per ring: material rings expose, hole
+    /// rings (negative winding) erase what earlier primitives painted.
+    fn outline_macro(&mut self, rings: &[Ring], function: &[String]) -> Result<i32> {
         let name = format!("REPEAT{}", self.aperture_macros.len());
-        let mut parameters = Vec::with_capacity(2 * outline.len() + 5);
-        parameters.push(WriterMacroExpression::Number(1.0));
-        parameters.push(WriterMacroExpression::Number(outline.len() as f64));
-        for [x, y] in outline.iter().chain(std::iter::once(&outline[0])) {
-            parameters.push(WriterMacroExpression::Number(*x));
-            parameters.push(WriterMacroExpression::Number(*y));
-        }
-        parameters.push(WriterMacroExpression::Number(0.0));
-        self.aperture_macros.push(WriterApertureMacro {
-            name: name.clone(),
-            primitives: vec![WriterMacroPrimitive::Shape {
+        let mut primitives = Vec::with_capacity(rings.len());
+        for outline in rings {
+            if outline.len() < 3 {
+                return Err(GerberError::InvalidStructure(
+                    "cannot export a Gerber outline macro with fewer than three vertices"
+                        .to_string(),
+                ));
+            }
+            let exposure = if region::ring_signed_area(outline) < 0.0 {
+                0.0
+            } else {
+                1.0
+            };
+            let mut parameters = Vec::with_capacity(2 * outline.len() + 5);
+            parameters.push(WriterMacroExpression::Number(exposure));
+            parameters.push(WriterMacroExpression::Number(outline.len() as f64));
+            for [x, y] in outline.iter().chain(std::iter::once(&outline[0])) {
+                parameters.push(WriterMacroExpression::Number(*x));
+                parameters.push(WriterMacroExpression::Number(*y));
+            }
+            parameters.push(WriterMacroExpression::Number(0.0));
+            primitives.push(WriterMacroPrimitive::Shape {
                 code: 4,
                 parameters,
-            }],
+            });
+        }
+        self.aperture_macros.push(WriterApertureMacro {
+            name: name.clone(),
+            primitives,
         });
         let code = self.allocate_code();
         self.apertures.push(WriterAperture {
@@ -903,6 +924,78 @@ mod tests {
         assert!(
             (summary.area_mm2 - 56.0).abs() < 0.001,
             "deep even-odd topology exported wrong area: {}",
+            summary.area_mm2
+        );
+    }
+
+    #[test]
+    fn contour_apertures_keep_hole_rings_as_exposure_off_outlines() {
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+
+        // One contour buffer with a material loop and a reverse-wound hole.
+        let outer = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+        ];
+        let hole = [
+            Point::new(2.0, 2.0),
+            Point::new(2.0, 8.0),
+            Point::new(8.0, 8.0),
+            Point::new(8.0, 2.0),
+        ];
+        let mut bbox = BBox::empty();
+        let mut cmds = Vec::new();
+        for ring in [outer, hole] {
+            for (index, point) in ring.into_iter().enumerate() {
+                bbox.include_point(point);
+                cmds.push(if index == 0 {
+                    PathCmd::move_to(point)
+                } else {
+                    PathCmd::line_to(point)
+                });
+            }
+            cmds.push(PathCmd::close());
+        }
+        let contour = ContourBuf::from_parts(bbox, cmds);
+
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour(contour)));
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                polarity: Polarity::Dark,
+                order: Default::default(),
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: pcb_ir::geom::Affine2::translation(Point::new(20.0, 5.0)),
+                },
+                bbox: BBox {
+                    min: Point::new(20.0, 5.0),
+                    max: Point::new(30.0, 15.0),
+                },
+                meta: ObjectAttributes::default(),
+            },
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let contents = crate::write_layer(&gerber).expect("write Gerber");
+        assert_external_parser_accepts(&contents);
+        assert_eq!(contents.matches("%AM").count(), 1);
+        let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
+        let geometry = crate::geometry::extract_document(&parsed);
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        assert!(
+            (summary.area_mm2 - 64.0).abs() < 0.01,
+            "the hole ring must survive as an exposure-off outline: {}",
             summary.area_mm2
         );
     }
