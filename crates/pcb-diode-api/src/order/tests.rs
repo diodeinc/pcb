@@ -30,7 +30,8 @@ fn rejects_repository_without_board_marker() {
 
 #[test]
 fn resolves_identity_from_repository() {
-    let id = resolve_board_identity(Some("code.diode.computer/demo/b/DM0002"), None, None).unwrap();
+    let id = resolve_board_identity(Some("code.diode.computer/demo/b/DM0002"), None, None, None)
+        .unwrap();
     assert_eq!(id.workspace, "demo");
     assert_eq!(id.board, "DM0002");
 }
@@ -39,6 +40,7 @@ fn resolves_identity_from_repository() {
 fn flags_override_repository() {
     let id = resolve_board_identity(
         Some("code.diode.computer/demo/b/DM0002"),
+        None,
         Some("other-ws"),
         Some("DM1234"),
     )
@@ -52,6 +54,7 @@ fn single_flag_overrides_only_that_field() {
     let id = resolve_board_identity(
         Some("code.diode.computer/demo/b/DM0002"),
         None,
+        None,
         Some("DM1234"),
     )
     .unwrap();
@@ -60,15 +63,65 @@ fn single_flag_overrides_only_that_field() {
 }
 
 #[test]
+fn configured_workspace_name_overrides_repository() {
+    let id = resolve_board_identity(
+        Some("code.diode.computer/demo/b/DM0002"),
+        Some("custom"),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(id.workspace, "custom");
+    assert_eq!(id.board, "DM0002");
+}
+
+#[test]
+fn workspace_flag_overrides_configured_workspace_name() {
+    let id = resolve_board_identity(
+        Some("code.diode.computer/demo/b/DM0002"),
+        Some("custom"),
+        Some("flagged"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(id.workspace, "flagged");
+    assert_eq!(id.board, "DM0002");
+}
+
+#[test]
+fn reads_workspace_name_and_repository_from_workspace_context() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("pcb.toml"),
+        r#"
+[workspace]
+name = "custom"
+repository = "code.diode.computer/demo/b/DM0002"
+pcb-version = "0.4"
+"#,
+    )
+    .unwrap();
+
+    let ctx = WorkspaceContext::from_workspace_root(dir.path());
+    assert_eq!(
+        current_workspace_identity(&ctx),
+        (
+            Some("custom".to_string()),
+            Some("code.diode.computer/demo/b/DM0002".to_string())
+        )
+    );
+}
+
+#[test]
 fn both_flags_work_without_a_repository() {
-    let id = resolve_board_identity(None, Some("demo"), Some("DM0002")).unwrap();
+    let id = resolve_board_identity(None, None, Some("demo"), Some("DM0002")).unwrap();
     assert_eq!(id.workspace, "demo");
     assert_eq!(id.board, "DM0002");
 }
 
 #[test]
 fn errors_outside_workspace_with_no_flags() {
-    let err = resolve_board_identity(None, None, None).unwrap_err();
+    let err = resolve_board_identity(None, None, None, None).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("--workspace"), "message was: {msg}");
     assert!(msg.contains("--board"), "message was: {msg}");
@@ -77,9 +130,9 @@ fn errors_outside_workspace_with_no_flags() {
 #[test]
 fn errors_when_partial_flag_cannot_be_completed() {
     // Only workspace flag, no repository to supply the board.
-    assert!(resolve_board_identity(None, Some("demo"), None).is_err());
+    assert!(resolve_board_identity(None, None, Some("demo"), None).is_err());
     // Only board flag, no repository to supply the workspace.
-    assert!(resolve_board_identity(None, None, Some("DM0002")).is_err());
+    assert!(resolve_board_identity(None, None, None, Some("DM0002")).is_err());
 }
 
 // ---------------------------------------------------------------------------

@@ -186,8 +186,9 @@ pcb import <KICAD_SCH|KICAD_PRO> <OUTPUT_DIR> # Import a KiCad schematic or proj
 ### Orders (read-only)
 
 Inspect fabrication orders for a board. The board identity is resolved from
-`workspace.repository` and can be overridden with `--workspace <slug>` and
-`--board <name>`. All subcommands accept `-f table|json` (default `table`).
+`workspace.name` (when set) and `workspace.repository`, and can be overridden
+with `--workspace <slug>` and `--board <name>`. All subcommands accept
+`-f table|json` (default `table`).
 
 ```bash
 pcb order list

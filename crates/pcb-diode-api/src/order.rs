@@ -7,9 +7,9 @@
 //! * `pcb order bom  <id>`       -> `GET /api/boms/:bomId` joined with
 //!   `GET /api/boards/:workspace/:name/orders/:orderId/selections`
 //!
-//! Board identity is resolved from the workspace config (`workspace.repository`,
-//! e.g. `code.diode.computer/demo/b/DM0002` -> workspace `demo`, board `DM0002`),
-//! and can be overridden with `--workspace`/`--board`.
+//! Board identity is resolved from the workspace config (`workspace.name` and
+//! `workspace.repository`, e.g. `code.diode.computer/demo/b/DM0002` -> workspace
+//! `demo`, board `DM0002`) and can be overridden with `--workspace`/`--board`.
 //!
 //! All subcommands are strictly read-only. Order-mutating flows (create, select)
 //! deliberately live in a separate change.
@@ -60,13 +60,15 @@ pub fn parse_board_repository(repository: &str) -> Option<(String, String)> {
     Some((workspace.to_string(), board.to_string()))
 }
 
-/// Resolve the board identity from the workspace repository plus optional
+/// Resolve the board identity from workspace configuration plus optional
 /// `--workspace`/`--board` overrides.
 ///
-/// Flags take precedence over the inferred values. When neither flags nor the
-/// workspace repository provide a value, we fail with a clear, actionable error.
+/// The workspace flag takes precedence over `[workspace].name`, which takes
+/// precedence over the repository-derived workspace. The board flag takes
+/// precedence over the repository-derived board.
 pub fn resolve_board_identity(
     repository: Option<&str>,
+    configured_workspace: Option<&str>,
     workspace_flag: Option<&str>,
     board_flag: Option<&str>,
 ) -> Result<BoardIdentity> {
@@ -74,6 +76,12 @@ pub fn resolve_board_identity(
 
     let workspace = workspace_flag
         .map(str::to_string)
+        .or_else(|| {
+            configured_workspace
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        })
         .or_else(|| parsed.as_ref().map(|(w, _)| w.clone()));
     let board = board_flag
         .map(str::to_string)
@@ -89,15 +97,25 @@ pub fn resolve_board_identity(
     }
 }
 
-/// Read the selected workspace's repository (if any).
+/// Read the selected workspace's configured name and repository, if available.
 ///
 /// Any discovery error is swallowed to `None` so that explicit
 /// `--workspace`/`--board` flags keep working outside a workspace.
-fn current_workspace_repository(ctx: &WorkspaceContext) -> Option<String> {
-    let workspace_root = ctx.workspace_root()?;
+fn current_workspace_identity(ctx: &WorkspaceContext) -> (Option<String>, Option<String>) {
+    let Some(workspace_root) = ctx.workspace_root() else {
+        return (None, None);
+    };
     let file_provider = pcb_zen_core::DefaultFileProvider::new();
-    let ws = pcb_zen::get_workspace_info(&file_provider, workspace_root).ok()?;
-    ws.repository().map(|s| s.to_string())
+    let Ok(ws) = pcb_zen::get_workspace_info(&file_provider, workspace_root) else {
+        return (None, None);
+    };
+    let configured_workspace = ws
+        .config
+        .as_ref()
+        .and_then(|config| config.workspace.as_ref())
+        .and_then(|workspace| workspace.name.clone());
+    let repository = ws.repository().map(str::to_string);
+    (configured_workspace, repository)
 }
 
 // ---------------------------------------------------------------------------
@@ -761,9 +779,13 @@ fn render_order_detail(order: &OrderDetail) {
     }
 }
 
-fn render_order_bom_table(report: &OrderBomReport) {
+fn render_order_bom_table(report: &OrderBomReport, mismatches_only: bool) {
     if report.rows.is_empty() {
-        println!("No BOM lines found.");
+        if mismatches_only {
+            println!("No mismatched BOM lines found.");
+        } else {
+            println!("No BOM lines found.");
+        }
         return;
     }
 
@@ -845,9 +867,10 @@ pub struct BoardSelector {
 
 impl BoardSelector {
     fn resolve(&self, ctx: &WorkspaceContext) -> Result<BoardIdentity> {
-        let repository = current_workspace_repository(ctx);
+        let (configured_workspace, repository) = current_workspace_identity(ctx);
         resolve_board_identity(
             repository.as_deref(),
+            configured_workspace.as_deref(),
             self.workspace.as_deref(),
             self.board.as_deref(),
         )
@@ -1001,7 +1024,7 @@ fn execute_bom(args: OrderBomArgs, ctx: &WorkspaceContext) -> Result<()> {
     };
 
     match args.format {
-        OrderFormat::Table => render_order_bom_table(&report),
+        OrderFormat::Table => render_order_bom_table(&report, args.mismatches_only),
         OrderFormat::Json => print_json(&report)?,
     }
     Ok(())
