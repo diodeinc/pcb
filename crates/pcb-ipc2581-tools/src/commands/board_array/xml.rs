@@ -84,6 +84,11 @@ pub(super) fn board_array_edits(
     }
 
     edits.push(doc.append_inside(cad_data, array_step_xml));
+    edits.extend(crate::generated::user_dictionary_edit(
+        doc,
+        spec.units,
+        &spec.generated_geometry.user_entries,
+    )?);
 
     Ok(edits)
 }

@@ -185,7 +185,6 @@ pub(super) fn render_fab_panel_xml(
     placements: &[Placement],
     shared_stackup_layers: &HashSet<String>,
     spec: FabPanelSpec,
-    balance_features: &[GeneratedLayerFeature],
 ) -> Result<String> {
     let docs = sources
         .iter()
@@ -214,29 +213,46 @@ pub(super) fn render_fab_panel_xml(
         placements,
         shared_stackup_layers,
         spec,
-        balance_features,
     )?;
     writer.end_element("IPC-2581");
 
     Ok(writer.into_string())
 }
 
+/// Finalize the provisional document: splice the balance layer features into
+/// the fabrication-panel step, then reformat and re-parse. Splicing avoids a
+/// second full composition of the source documents.
 pub(super) fn write_fab_panel_xml(
-    sources: &[SourcePanel],
-    occurrences: &[usize],
-    placements: &[Placement],
-    shared_stackup_layers: &HashSet<String>,
-    spec: FabPanelSpec,
+    provisional: &str,
+    units: Units,
     balance_features: &[GeneratedLayerFeature],
+    templates: &[crate::copper_balance::BalanceVoidTemplate],
 ) -> Result<String> {
-    let xml = render_fab_panel_xml(
-        sources,
-        occurrences,
-        placements,
-        shared_stackup_layers,
-        spec,
-        balance_features,
-    )?;
+    let mut features_xml = XmlWriter::new();
+    let mut names = GeneratedNameState::default();
+    for layer_feature in balance_features {
+        write_generated_layer_feature(&mut features_xml, units, layer_feature, &mut names)?;
+    }
+    let features_xml = features_xml.into_string();
+
+    let xml = if features_xml.is_empty() && templates.is_empty() {
+        provisional.to_string()
+    } else {
+        let doc = Doc::parse(provisional)?;
+        let mut edits = Vec::new();
+        if !features_xml.is_empty() {
+            let fab_step = doc
+                .find_all("Step")
+                .into_iter()
+                .find(|step| doc.attr(*step, "name") == Some(FAB_PANEL_STEP_NAME))
+                .context("provisional fabrication panel has no fab step")?;
+            edits.push(doc.append_inside(fab_step, features_xml));
+        }
+        edits.extend(crate::generated::user_dictionary_edit(
+            &doc, units, templates,
+        )?);
+        edit::apply(provisional, edits)?
+    };
     let xml = crate::utils::format::reformat_xml(&xml)?;
     Ipc2581::parse(&xml).context("Generated IPC-2581 fabrication panel XML did not parse")?;
     Ok(xml)
@@ -386,7 +402,6 @@ fn write_history_record(writer: &mut XmlWriter) {
     writer.end_element("HistoryRecord");
 }
 
-#[expect(clippy::too_many_arguments)]
 fn write_ecad(
     writer: &mut XmlWriter,
     sources: &[SourcePanel],
@@ -395,7 +410,6 @@ fn write_ecad(
     placements: &[Placement],
     shared_stackup_layers: &HashSet<String>,
     spec: FabPanelSpec,
-    balance_features: &[GeneratedLayerFeature],
 ) -> Result<()> {
     let units = sources
         .first()
@@ -437,15 +451,7 @@ fn write_ecad(
             writer.raw(doc.source(step));
         }
     }
-    write_fab_step(
-        writer,
-        sources,
-        occurrences,
-        placements,
-        units,
-        spec,
-        balance_features,
-    )?;
+    write_fab_step(writer, sources, occurrences, placements, units, spec)?;
     writer.end_element("CadData");
     writer.end_element("Ecad");
     Ok(())
@@ -458,7 +464,6 @@ fn write_fab_step(
     placements: &[Placement],
     units: Units,
     spec: FabPanelSpec,
-    balance_features: &[GeneratedLayerFeature],
 ) -> Result<()> {
     let usable = spec.usable_bbox()?;
     writer.start_element("Step", &[("name", FAB_PANEL_STEP_NAME), ("type", "PALLET")]);
@@ -570,10 +575,6 @@ fn write_fab_step(
                 ("mirror", "false"),
             ],
         );
-    }
-    let mut names = GeneratedNameState::default();
-    for layer_feature in balance_features {
-        write_generated_layer_feature(writer, units, layer_feature, &mut names)?;
     }
     writer.end_element("Step");
     Ok(())

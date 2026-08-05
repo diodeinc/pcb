@@ -293,6 +293,7 @@ impl BoardArrayPanelizationMode {
 struct BoardArrayGeneratedGeometry {
     layers: Vec<GeneratedLayer>,
     layer_features: Vec<(GeneratedFeatureScope, GeneratedLayerFeature)>,
+    user_entries: Vec<crate::copper_balance::BalanceVoidTemplate>,
 }
 
 impl BoardArrayGeneratedGeometry {
@@ -325,8 +326,39 @@ impl BoardArrayGeneratedGeometry {
                 polarity,
                 spec_refs,
                 features,
+                instance_refs: Vec::new(),
             },
         ));
+    }
+
+    /// Attach one balanced layer: its positive plane set, its negative
+    /// instance set, and the shared templates the instances reference.
+    fn add_balance_layer(
+        &mut self,
+        scope: GeneratedFeatureScope,
+        layer_name: &str,
+        sets: crate::copper_balance::BalanceFeatureSets,
+    ) {
+        self.add_layer_feature(scope, layer_name, Polarity::Positive, sets.positive);
+        self.layer_features.push((
+            scope,
+            GeneratedLayerFeature {
+                layer_name: layer_name.to_string(),
+                polarity: Polarity::Negative,
+                spec_refs: Vec::new(),
+                features: Vec::new(),
+                instance_refs: sets.instances,
+            },
+        ));
+        for template in sets.templates {
+            if !self
+                .user_entries
+                .iter()
+                .any(|entry| entry.id == template.id)
+            {
+                self.user_entries.push(template);
+            }
+        }
     }
 
     fn referenced_layer_names(&self) -> impl Iterator<Item = &str> {
@@ -599,17 +631,10 @@ fn write_balanced_board_array_xml(
     let copper_balance = balance.report();
 
     for layer in balance.layers {
-        spec.generated_geometry.add_layer_feature(
+        spec.generated_geometry.add_balance_layer(
             GeneratedFeatureScope::Array,
-            layer.layer_name.clone(),
-            Polarity::Positive,
-            layer.features.positive,
-        );
-        spec.generated_geometry.add_layer_feature(
-            GeneratedFeatureScope::Array,
-            layer.layer_name,
-            Polarity::Negative,
-            layer.features.negative,
+            &layer.layer_name,
+            layer.features,
         );
     }
 

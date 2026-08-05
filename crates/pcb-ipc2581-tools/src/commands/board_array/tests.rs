@@ -889,19 +889,9 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     .pop()
     .unwrap();
     let features = balance_features(&balance).unwrap();
-    let void_count = features.negative.len();
-    spec.generated_geometry.add_layer_feature(
-        GeneratedFeatureScope::Array,
-        "TOP",
-        Polarity::Positive,
-        features.positive,
-    );
-    spec.generated_geometry.add_layer_feature(
-        GeneratedFeatureScope::Array,
-        "TOP",
-        Polarity::Negative,
-        features.negative,
-    );
+    let void_count = features.instances.len();
+    spec.generated_geometry
+        .add_balance_layer(GeneratedFeatureScope::Array, "TOP", features);
     assert!(matches!(
         balance.solution.mode,
         DenseCopperBalanceMode::Perforated { .. }
@@ -913,6 +903,8 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
 
     let parsed = Ipc2581::parse(&xml).unwrap();
     assert!(xml.matches("<Contour>").count() > 0);
+    assert!(xml.matches("<EntryUser").count() > 0);
+    assert!(xml.matches("<UserPrimitiveRef").count() >= void_count);
 
     let top = geometry::extract_layer_for_view(&parsed, "TOP", View::ArrayFlattened).unwrap();
     let balance_paths = |polarity: pcb_ir::geom::Polarity| {

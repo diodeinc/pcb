@@ -6,9 +6,11 @@ use ipc2581::XmlWriter;
 use ipc2581::types::{
     Units,
     ecad::{FeatureUserPrimitive, Polarity, SetFeature},
-    primitives::{UserPrimitive, UserShapeType},
+    primitives::{Contour, UserPrimitive, UserShapeType},
 };
 use ipc2581::write;
+
+use crate::copper_balance::{BalanceVoidInstance, BalanceVoidTemplate};
 
 /// Only board-array tooling generates named holes today; the prefix stays
 /// stable so re-panelization produces identical names.
@@ -22,6 +24,8 @@ pub(crate) struct GeneratedLayerFeature {
     pub polarity: Polarity,
     pub spec_refs: Vec<String>,
     pub features: Vec<SetFeature>,
+    /// Flashed dictionary-instance references, emitted after `features`.
+    pub instance_refs: Vec<BalanceVoidInstance>,
 }
 
 /// Sequential names for generated holes, unique within one Step.
@@ -44,7 +48,7 @@ pub(crate) fn write_generated_layer_feature(
     layer_feature: &GeneratedLayerFeature,
     names: &mut GeneratedNameState,
 ) -> Result<()> {
-    if layer_feature.features.is_empty() {
+    if layer_feature.features.is_empty() && layer_feature.instance_refs.is_empty() {
         return Ok(());
     }
 
@@ -60,6 +64,12 @@ pub(crate) fn write_generated_layer_feature(
         write::spec_ref(writer, spec_ref);
     }
     write_set_features(writer, units, &layer_feature.features, names)?;
+    for instance in &layer_feature.instance_refs {
+        writer.start_element("Features", &[]);
+        write::location(writer, "Location", instance.x, instance.y, units);
+        writer.empty_element("UserPrimitiveRef", &[("id", instance.template.as_str())]);
+        writer.end_element("Features");
+    }
     writer.end_element("Set");
     writer.end_element("LayerFeature");
     Ok(())
@@ -98,6 +108,74 @@ fn write_set_features(
         }
     }
     Ok(())
+}
+
+/// Splice shared void templates into the document's `DictionaryUser`,
+/// creating the dictionary in schema position when absent.
+pub(crate) fn user_dictionary_edit(
+    doc: &ipc2581::edit::Doc<'_>,
+    units: Units,
+    templates: &[BalanceVoidTemplate],
+) -> Result<Option<ipc2581::edit::Edit>> {
+    if templates.is_empty() {
+        return Ok(None);
+    }
+    let mut writer = XmlWriter::new();
+    write_user_dictionary_entries(&mut writer, units, templates);
+    let entries = writer.into_string();
+    let root = doc.root()?;
+    let content = doc
+        .child(root, "Content")
+        .ok_or_else(|| anyhow::anyhow!("IPC-2581 document has no Content section"))?;
+    if let Some(dictionary) = doc.child(content, "DictionaryUser") {
+        return Ok(Some(doc.append_inside(dictionary, entries)));
+    }
+    let mut container = XmlWriter::new();
+    container.start_element("DictionaryUser", &[("units", units_attr(units))]);
+    container.raw(&entries);
+    container.end_element("DictionaryUser");
+    let xml = container.into_string();
+    Ok(Some(
+        match doc
+            .children(content)
+            .into_iter()
+            .find(|child| doc.name(*child) == "DictionaryFirmware")
+        {
+            Some(firmware) => doc.insert_before(firmware, xml),
+            None => doc.append_inside(content, xml),
+        },
+    ))
+}
+
+fn units_attr(units: Units) -> &'static str {
+    match units {
+        Units::Millimeter => "MILLIMETER",
+        Units::Inch => "INCH",
+        Units::Micron => "MICRON",
+        Units::Mils => "MILS",
+    }
+}
+
+/// Serialize shared void templates as `DictionaryUser` entries.
+fn write_user_dictionary_entries(
+    writer: &mut XmlWriter,
+    units: Units,
+    templates: &[BalanceVoidTemplate],
+) {
+    for template in templates {
+        writer.start_element("EntryUser", &[("id", template.id.as_str())]);
+        writer.start_element("UserSpecial", &[]);
+        write::contour(
+            writer,
+            units,
+            &Contour {
+                polygon: template.polygon.clone(),
+                cutouts: Vec::new(),
+            },
+        );
+        writer.end_element("UserSpecial");
+        writer.end_element("EntryUser");
+    }
 }
 
 fn write_generated_user_primitive(

@@ -750,6 +750,7 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
         "both sources plus the fab step's positive and negative balance sets should carry TOP copper"
     );
 
+    Ipc2581::validate(&creation.xml).unwrap();
     let parsed = Ipc2581::parse(&creation.xml).unwrap();
     let layout = geometry::extract_layout(&parsed).unwrap();
     // The 200 mm panel exceeds the 120 mm usable width, so packing must

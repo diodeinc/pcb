@@ -327,42 +327,51 @@ fn create_fab_panel(
         &placements,
         &shared_stackup_layers,
         spec,
-        &[],
     )?;
     let parsed = Ipc2581::parse(&provisional)
         .context("Failed to parse provisional IPC-2581 fabrication panel")?;
     let balance =
         balance::generate_automatic_fab_panel_copper_balance(&parsed, spec.usable_bbox()?)?;
     let copper_balance = balance.report();
+    let mut templates = Vec::new();
     let balance_features = balance
         .layers
         .into_iter()
         .flat_map(|layer| {
+            for template in layer.features.templates {
+                if !templates
+                    .iter()
+                    .any(|entry: &crate::copper_balance::BalanceVoidTemplate| {
+                        entry.id == template.id
+                    })
+                {
+                    templates.push(template);
+                }
+            }
             [
                 GeneratedLayerFeature {
                     layer_name: layer.layer_name.clone(),
                     polarity: Polarity::Positive,
                     spec_refs: Vec::new(),
                     features: layer.features.positive,
+                    instance_refs: Vec::new(),
                 },
                 GeneratedLayerFeature {
                     layer_name: layer.layer_name,
                     polarity: Polarity::Negative,
                     spec_refs: Vec::new(),
-                    features: layer.features.negative,
+                    features: Vec::new(),
+                    instance_refs: layer.features.instances,
                 },
             ]
         })
         .collect::<Vec<_>>();
 
-    let xml = xml::write_fab_panel_xml(
-        &sources,
-        occurrences,
-        &placements,
-        &shared_stackup_layers,
-        spec,
-        &balance_features,
-    )?;
+    let units = sources
+        .first()
+        .context("at least one assembly panel source is required")?
+        .units;
+    let xml = xml::write_fab_panel_xml(&provisional, units, &balance_features, &templates)?;
     Ok(FabPanelCreation {
         xml,
         copper_balance,

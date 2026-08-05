@@ -43,22 +43,39 @@ pub struct PreparedCopperLayer {
     pub safe_region: ContourSet,
 }
 
+/// One origin-centered rounded-hex dictionary entry, shared by every void of
+/// its radius.
+#[derive(Debug, Clone)]
+pub struct BalanceVoidTemplate {
+    pub id: String,
+    pub polygon: Polygon,
+}
+
+/// One translated instance of a [`BalanceVoidTemplate`].
+#[derive(Debug, Clone)]
+pub struct BalanceVoidInstance {
+    pub template: String,
+    pub x: f64,
+    pub y: f64,
+}
+
 /// Generated IPC features for one balanced layer, split by polarity.
 ///
 /// The perforated plane is a positive set covering the whole usable region
 /// (partial edge voids stay cut into its contours), while every full interior
-/// void is a translated instance of one rounded-hex template in a negative
-/// set. Keeping the voids as explicit repeated instances lets downstream
-/// lowerings share their geometry instead of re-describing each void.
+/// void is a negative dictionary-instance reference. The solver's radius grid
+/// keeps the template set small, so each void costs one reference instead of
+/// one inline contour.
 #[derive(Debug, Clone, Default)]
 pub struct BalanceFeatureSets {
     pub positive: Vec<SetFeature>,
-    pub negative: Vec<SetFeature>,
+    pub templates: Vec<BalanceVoidTemplate>,
+    pub instances: Vec<BalanceVoidInstance>,
 }
 
 impl BalanceFeatureSets {
     pub fn is_empty(&self) -> bool {
-        self.positive.is_empty() && self.negative.is_empty()
+        self.positive.is_empty() && self.instances.is_empty()
     }
 }
 
@@ -277,42 +294,46 @@ pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeat
         DenseCopperBalanceMode::None => Ok(BalanceFeatureSets::default()),
         DenseCopperBalanceMode::Solid => Ok(BalanceFeatureSets {
             positive: ipc_contour_features(result)?,
-            negative: Vec::new(),
+            ..BalanceFeatureSets::default()
         }),
-        DenseCopperBalanceMode::Perforated { .. } => Ok(BalanceFeatureSets {
-            positive: ipc_contour_features(result)?,
-            negative: hex_void_features(result)?,
-        }),
+        DenseCopperBalanceMode::Perforated { .. } => {
+            let (templates, instances) = hex_void_instances(result)?;
+            Ok(BalanceFeatureSets {
+                positive: ipc_contour_features(result)?,
+                templates,
+                instances,
+            })
+        }
     }
 }
 
-/// One negative rounded-hex instance per full interior void, each carrying
-/// the origin-centered template translated to its lattice site.
-fn hex_void_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeature>> {
-    result
+/// One shared template per distinct void radius plus one translated instance
+/// reference per full interior void.
+fn hex_void_instances(
+    result: &DenseCopperBalanceResult,
+) -> Result<(Vec<BalanceVoidTemplate>, Vec<BalanceVoidInstance>)> {
+    let mut templates: Vec<BalanceVoidTemplate> = Vec::new();
+    let instances = result
         .full_voids
         .iter()
         .map(|void| {
-            let template = rounded_hexagonal_void(void.radius_mm)
-                .context("generated copper balance has an invalid rounded-hex void radius")?;
-            let polygon = ipc_polygon_from_contour(&template)?;
-            Ok(SetFeature::UserPrimitive(FeatureUserPrimitive {
-                primitive: UserPrimitive::UserSpecial(UserSpecial {
-                    shapes: vec![UserShape {
-                        shape: UserShapeType::Contour(IpcContour {
-                            polygon,
-                            cutouts: Vec::new(),
-                        }),
-                        line_desc: None,
-                        line_desc_ref: None,
-                        fill_desc: None,
-                    }],
-                }),
+            let id = format!("balance_hex_{}nm", (void.radius_mm * 1e6).round() as i64);
+            if !templates.iter().any(|template| template.id == id) {
+                let contour = rounded_hexagonal_void(void.radius_mm)
+                    .context("generated copper balance has an invalid rounded-hex void radius")?;
+                templates.push(BalanceVoidTemplate {
+                    id: id.clone(),
+                    polygon: ipc_polygon_from_contour(&contour)?,
+                });
+            }
+            Ok(BalanceVoidInstance {
+                template: id,
                 x: void.center.x,
                 y: void.center.y,
-            }))
+            })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok((templates, instances))
 }
 
 /// Extract one layer's flattened, composed copper image.
@@ -581,23 +602,25 @@ mod tests {
             result.partial_voids.connected_components().len()
         );
 
-        // Every full void is one translated instance of the hex template.
-        assert_eq!(features.negative.len(), result.full_voids.len());
-        for (feature, void) in features.negative.iter().zip(&result.full_voids) {
-            let SetFeature::UserPrimitive(primitive) = feature else {
-                panic!("negative balance feature is not a user primitive");
-            };
-            assert_eq!((primitive.x, primitive.y), (void.center.x, void.center.y));
-            let template = contour(feature).unwrap();
-            assert!(template.cutouts.is_empty());
+        // Every full void is one translated reference to a shared template.
+        assert_eq!(features.instances.len(), result.full_voids.len());
+        for (instance, void) in features.instances.iter().zip(&result.full_voids) {
+            assert_eq!((instance.x, instance.y), (void.center.x, void.center.y));
             assert!(
-                template
-                    .polygon
-                    .steps
+                features
+                    .templates
                     .iter()
-                    .any(|step| matches!(step, PolyStep::Curve(_)))
+                    .any(|template| template.id == instance.template)
             );
         }
+        assert!(features.templates.len() < features.instances.len());
+        assert!(features.templates.iter().all(|template| {
+            template
+                .polygon
+                .steps
+                .iter()
+                .any(|step| matches!(step, PolyStep::Curve(_)))
+        }));
     }
 
     #[test]
