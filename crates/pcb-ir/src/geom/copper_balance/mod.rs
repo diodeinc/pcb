@@ -844,9 +844,15 @@ fn validate_request(request: DenseCopperBalanceRequest<'_>) -> Result<(), DenseC
             "density domain area must be finite and greater than zero".to_string(),
         ));
     }
+    // These three bounds are the scalar shadow of the geometric containments
+    // `C subset D`, `S subset D`, and `C disjoint S`, so they tolerate the same
+    // sliver area those predicates do. Holding them to NUMERIC_EPSILON would
+    // reject a request whose geometry passed containment, and the slack only
+    // vanishes when the footprints are fully poured.
     if !request.existing_copper_area_mm2.is_finite()
         || request.existing_copper_area_mm2 < 0.0
-        || request.existing_copper_area_mm2 > request.density_domain_area_mm2 + NUMERIC_EPSILON
+        || request.existing_copper_area_mm2
+            > request.density_domain_area_mm2 + CONTAINMENT_AREA_TOLERANCE_MM2
     {
         return Err(DenseCopperBalanceError::InvalidInput(
             "existing copper area must be between zero and the density domain area".to_string(),
@@ -860,14 +866,14 @@ fn validate_request(request: DenseCopperBalanceRequest<'_>) -> Result<(), DenseC
     let usable_area_mm2 = request.safe_region.area();
     if !usable_area_mm2.is_finite()
         || usable_area_mm2 < 0.0
-        || usable_area_mm2 > request.density_domain_area_mm2 + NUMERIC_EPSILON
+        || usable_area_mm2 > request.density_domain_area_mm2 + CONTAINMENT_AREA_TOLERANCE_MM2
     {
         return Err(DenseCopperBalanceError::InvalidInput(
             "usable area must be between zero and the density domain area".to_string(),
         ));
     }
     if request.existing_copper_area_mm2 + usable_area_mm2
-        > request.density_domain_area_mm2 + NUMERIC_EPSILON
+        > request.density_domain_area_mm2 + CONTAINMENT_AREA_TOLERANCE_MM2
     {
         return Err(DenseCopperBalanceError::InvalidInput(
             "existing copper and usable areas together exceed the density domain area".to_string(),
@@ -1486,6 +1492,36 @@ mod tests {
             (left.solution.generated_area_mm2 - right.solution.generated_area_mm2).abs()
                 <= AREA_SOLVE_TOLERANCE_MM2 + quantization_bound_mm2
         }));
+    }
+
+    /// The scalar area bounds must tolerate what `contains` tolerates.
+    ///
+    /// Fixed copper, fillable region, and permanently bare area partition the
+    /// density domain, so a domain whose measured area is short by a boolean
+    /// sliver breaks the sum bound. There is no slack to absorb it once the
+    /// footprints are fully poured, and rejecting then would fail a request
+    /// whose geometry passed every containment check.
+    #[test]
+    fn area_bounds_tolerate_the_same_slivers_as_containment() {
+        let safe_region = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
+            tol::REGION_MM,
+        );
+        let existing_copper_area_mm2 = 100.0;
+        let exact_domain_area_mm2 = existing_copper_area_mm2 + safe_region.area();
+        let result = generate_dense_copper_balance(
+            DenseCopperBalanceProfile::V1,
+            DenseCopperBalanceRequest {
+                safe_region: &safe_region,
+                density_domain_area_mm2: exact_domain_area_mm2
+                    - CONTAINMENT_AREA_TOLERANCE_MM2 / 2.0,
+                existing_copper_area_mm2,
+                target_density: 0.9,
+                lattice_origin: Point::ZERO,
+            },
+        );
+
+        assert!(result.is_ok(), "{:?}", result.err());
     }
 
     #[test]
