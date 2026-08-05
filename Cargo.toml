@@ -168,3 +168,4 @@ lto = "fat"           # Maximum link-time optimization
 codegen-units = 1     # Better optimization
 strip = "symbols"     # Strip symbols from published binaries
 panic = "abort"       # Published binaries should not carry unwinding machinery.
+
