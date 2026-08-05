@@ -169,13 +169,15 @@ fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
                 layout_kicad_pcb.display()
             )
         })?;
-        match try_extract_stackup(&pcb_text, layout_kicad_pcb) {
-            Ok((layers, extracted_stackup)) => {
-                copper_layers = layers;
-                stackup = extracted_stackup;
-            }
-            Err(e) => debug!("{e:#}"),
-        }
+        let (layers, extracted_stackup) = try_extract_stackup(&pcb_text, layout_kicad_pcb)
+            .with_context(|| {
+                format!(
+                    "Failed to determine the copper layer count from {}",
+                    layout_kicad_pcb.display()
+                )
+            })?;
+        copper_layers = layers;
+        stackup = extracted_stackup;
         if let Some(layout_kicad_pro) = args.layout_kicad_pro {
             design_rules = pcb_layout::extract_design_rules_from_kicad_pro(layout_kicad_pro)
                 .ok()
@@ -503,36 +505,60 @@ fn try_extract_stackup(
     layout_kicad_pcb: &Path,
 ) -> Result<(usize, Option<zen_stackup::Stackup>)> {
     let fallback_layers = infer_copper_layers_from_layers_section(pcb_text)?;
+    let has_default_stackup = matches!(fallback_layers, 2 | 4 | 6 | 8 | 10);
 
     let stackup = match zen_stackup::Stackup::from_kicad_pcb(pcb_text) {
-        Ok(Some(s)) => s,
+        Ok(Some(stackup)) => stackup,
+        Ok(None) if has_default_stackup => return Ok((fallback_layers, None)),
         Ok(None) => {
-            return Ok((fallback_layers, None));
+            anyhow::bail!(
+                "{} has {fallback_layers} copper layers but no explicit KiCad stackup; imports above 10 layers require a complete stackup",
+                layout_kicad_pcb.display()
+            );
         }
-        Err(e) => {
+        Err(error) if has_default_stackup => {
             debug!(
                 "Skipping stackup extraction (failed to parse stackup from {}): {}",
                 layout_kicad_pcb.display(),
-                e
+                error
             );
             return Ok((fallback_layers, None));
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to parse the required {fallback_layers}-layer stackup from {}",
+                    layout_kicad_pcb.display()
+                )
+            });
         }
     };
 
     let Some(layers) = stackup.layers.as_deref() else {
-        return Ok((fallback_layers, None));
+        if has_default_stackup {
+            return Ok((fallback_layers, None));
+        }
+        anyhow::bail!(
+            "{} has {fallback_layers} copper layers but its KiCad stackup has no layers",
+            layout_kicad_pcb.display()
+        );
     };
     if layers.is_empty() {
-        return Ok((fallback_layers, None));
+        if has_default_stackup {
+            return Ok((fallback_layers, None));
+        }
+        anyhow::bail!(
+            "{} has {fallback_layers} copper layers but its KiCad stackup is empty",
+            layout_kicad_pcb.display()
+        );
     }
 
     let copper_layers = stackup.copper_layer_count();
-    if !matches!(copper_layers, 2 | 4 | 6 | 8 | 10) {
-        debug!(
-            "Skipping stackup extraction (unexpected copper layer count {copper_layers} in {}); using layer count inferred from (layers ...) section ({fallback_layers}).",
+    if copper_layers != fallback_layers {
+        anyhow::bail!(
+            "KiCad stackup in {} has {copper_layers} copper layers, but its (layers ...) section has {fallback_layers}",
             layout_kicad_pcb.display()
         );
-        return Ok((fallback_layers, None));
     }
 
     Ok((copper_layers, Some(stackup)))
@@ -560,9 +586,9 @@ fn infer_copper_layers_from_layers_section(pcb_text: &str) -> Result<usize> {
     }
 
     let count = copper_layer_names.len();
-    if !matches!(count, 2 | 4 | 6 | 8 | 10) {
+    if !(2..=32).contains(&count) || !count.is_multiple_of(2) {
         anyhow::bail!(
-            "Unsupported copper layer count inferred from KiCad (layers ...) section: {count}"
+            "Unsupported copper layer count inferred from KiCad (layers ...) section: {count}; expected an even count from 2 through 32"
         );
     }
     Ok(count)
@@ -599,6 +625,78 @@ mod stackup_fallback_tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("missing (layers"));
+    }
+
+    #[test]
+    fn preserves_twelve_layer_stackup() {
+        let pcb_text = twelve_layer_pcb(true);
+        let (layers, stackup) =
+            try_extract_stackup(&pcb_text, Path::new("twelve-layer.kicad_pcb")).unwrap();
+
+        assert_eq!(layers, 12);
+        let stackup = stackup.unwrap();
+        assert_eq!(stackup.copper_layer_count(), 12);
+
+        let rendered = crate::codegen::board::render_imported_board(
+            crate::codegen::board::RenderImportedBoardArgs {
+                board_name: "TwelveLayer",
+                copper_layers: layers,
+                design_rules: None,
+                stackup: Some(&stackup),
+                net_decls: &[],
+                module_decls: &[],
+                instance_calls: &[],
+            },
+        );
+        assert!(rendered.contains("    layers = 12,"));
+        assert_eq!(rendered.matches("CopperLayer(").count(), 12);
+    }
+
+    #[test]
+    fn twelve_layers_require_an_explicit_stackup() {
+        let pcb_text = twelve_layer_pcb(false);
+        let error = try_extract_stackup(&pcb_text, Path::new("twelve-layer.kicad_pcb"))
+            .expect_err("a 12-layer board without a stackup must not use a default")
+            .to_string();
+
+        assert!(error.contains("required 12-layer stackup"), "{error}");
+    }
+
+    fn twelve_layer_pcb(include_stackup: bool) -> String {
+        let mut copper_names = vec!["F.Cu".to_string()];
+        copper_names.extend((1..=10).map(|index| format!("In{index}.Cu")));
+        copper_names.push("B.Cu".to_string());
+
+        let layer_table = copper_names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| format!("({index} \"{name}\" signal)"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let setup = if include_stackup {
+            let stackup_layers = copper_names
+                .iter()
+                .enumerate()
+                .flat_map(|(index, name)| {
+                    let mut layers = vec![format!(
+                        "(layer \"{name}\" (type \"copper\") (thickness 0.035))"
+                    )];
+                    if index + 1 < copper_names.len() {
+                        layers.push(format!(
+                            "(layer \"dielectric {}\" (type \"core\") (thickness 0.1) (material \"FR4\"))",
+                            index + 1
+                        ));
+                    }
+                    layers
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("(setup (stackup {stackup_layers}))")
+        } else {
+            String::new()
+        };
+
+        format!("(kicad_pcb (layers {layer_table}) {setup})")
     }
 }
 
@@ -2937,13 +3035,66 @@ mod tests {
         assert_eq!(by_pad["3"].io_name.as_deref(), Some("D_POS_3_2"));
         assert_eq!(by_pad["4"].io_name.as_deref(), Some("D_POS_4"));
         assert_eq!(by_pad["5"].io_name.as_deref(), Some("D_POS_3"));
-        assert_eq!(by_pad["6"].io_name.as_deref(), Some("A_B"));
-        assert_eq!(by_pad["7"].io_name.as_deref(), Some("A_B_2"));
+        assert_eq!(by_pad["6"].io_name.as_deref(), Some("A_POS_B"));
+        assert_eq!(by_pad["7"].io_name.as_deref(), Some("A_NEG_B"));
         assert_eq!(by_pad["10"].logical_name, "NC__10");
         assert_eq!(by_pad["11"].logical_name, "NC__11");
         assert_eq!(by_pad["10"].io_name, None);
         assert_eq!(by_pad["11"].io_name, None);
     }
+
+    fn assert_physical_pin_io_names(pins: &[(&str, &str, &str)]) {
+        let symbol = pcb_eda::Symbol {
+            pins: pins
+                .iter()
+                .map(|(name, number, _)| make_pin(name, number, Some("bidirectional")))
+                .collect(),
+            ..Default::default()
+        };
+        let plan = build_physical_pin_plan(
+            &symbol,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let by_pad = plan
+            .bindings
+            .iter()
+            .map(|binding| (binding.pad_number.as_str(), binding))
+            .collect::<BTreeMap<_, _>>();
+
+        for (_, pad, expected_io) in pins {
+            assert_eq!(by_pad[pad].io_name.as_deref(), Some(*expected_io));
+        }
+        assert_eq!(plan.io_pins.len(), pins.len());
+    }
+
+    #[test]
+    fn physical_pin_plan_preserves_prime_names() {
+        assert_physical_pin_io_names(&[("QH", "7", "QH"), ("QH'", "9", "QH_PRIME")]);
+    }
+
+    #[test]
+    fn physical_pin_plan_preserves_interior_signs() {
+        assert_physical_pin_io_names(&[("D0+A", "38", "D0_POS_A"), ("D0-A", "37", "D0_NEG_A")]);
+    }
+
+    #[test]
+    fn physical_pin_plan_preserves_interior_signs_next_to_other_separators() {
+        assert_physical_pin_io_names(&[
+            ("SDA/AUX-", "4", "SDA_AUX_NEG"),
+            ("SDA/AUX-_B", "39", "SDA_AUX_NEG_B"),
+        ]);
+    }
+
+    #[test]
+    fn physical_pin_plan_preserves_bar_notation() {
+        assert_physical_pin_io_names(&[("Q", "1", "Q"), ("~{Q}", "2", "N_Q")]);
+    }
+
     #[test]
     fn connected_electrical_no_connect_pin_is_exposed() {
         let anchor = make_anchor("u1");

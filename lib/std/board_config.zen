@@ -358,7 +358,7 @@ def DefaultBoardConfig(
     }.get(outer_copper_weight)
 
     if stackup == None:
-        print("Unsupported default stackup for layers: " + str(layers))
+        # Board() accepts layer counts without a default when the caller supplies an explicit config.
         return None
     if netclasses == None:
         print("Unsupported default netclasses for layers: " + str(layers))
@@ -411,7 +411,7 @@ def Board(
         layout_path: Path to the board layout file (e.g., PCB file)
         config: Optional BoardConfig overrides to merge with a layers-derived default.
                 If layers is not provided, this is used directly.
-        layers: Number of PCB layers (2, 4, 6, 8, or 10). Optional helper for deriving a default BoardConfig.
+        layers: Number of PCB layers. Counts 2, 4, 6, 8, and 10 have default configurations; other counts require an explicit config.
         outer_copper_weight: Outer copper weight ("1oz" or "2oz"). Default is "1oz".
                             Currently only 4-layer boards support 2oz outer copper.
         track_widths: Additional track widths (in mm) to append to the base configuration.
