@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.23] - 2026-08-05
+
 ### Added
 
 - `fab-panel create` now automatically balances copper in the gutters between placed assembly panels.
@@ -1495,7 +1497,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.22...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.23...HEAD
+[0.4.23]: https://github.com/diodeinc/pcb/compare/v0.4.22...v0.4.23
 [0.4.22]: https://github.com/diodeinc/pcb/compare/v0.4.21...v0.4.22
 [0.4.21]: https://github.com/diodeinc/pcb/compare/v0.4.20...v0.4.21
 [0.4.20]: https://github.com/diodeinc/pcb/compare/v0.4.19...v0.4.20
