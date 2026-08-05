@@ -591,6 +591,80 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
 }
 
 #[test]
+fn laser_cut_lines_trace_board_perimeters_and_merge_when_butted() {
+    let spaced = laser_cut_lines(LaserCutLineSpec {
+        columns: 2,
+        rows: 2,
+        board_width_mm: 10.0,
+        board_height_mm: 20.0,
+        margin_x_mm: 5.0,
+        margin_y_mm: 5.0,
+        pitch_x_mm: 15.0,
+        pitch_y_mm: 25.0,
+    });
+    // Four separate boards, four edges each, nothing shared.
+    assert_eq!(spaced.len(), 16);
+    assert_eq!(total_line_length_mm(&spaced), 4.0 * 2.0 * (10.0 + 20.0));
+
+    let butted = laser_cut_lines(LaserCutLineSpec {
+        columns: 2,
+        rows: 2,
+        board_width_mm: 10.0,
+        board_height_mm: 20.0,
+        margin_x_mm: 5.0,
+        margin_y_mm: 5.0,
+        pitch_x_mm: 10.0,
+        pitch_y_mm: 20.0,
+    });
+    // Touching boards collapse to a 3x3 grid of full-length shared cuts.
+    assert_eq!(butted.len(), 6);
+    assert_eq!(total_line_length_mm(&butted), 3.0 * 40.0 + 3.0 * 20.0);
+}
+
+#[test]
+fn created_board_array_laser_cuts_flow_to_gerber() {
+    let xml = create_board_array_xml(
+        board_fixture_mm(),
+        &BoardArrayCreateOptions {
+            columns: 6,
+            rows: 6,
+            board_margin_mm: board_margin(5.0, 5.0),
+            edge_rail_mm: BoardMarginMm::all(5.0),
+        },
+    )
+    .unwrap();
+    assert!(xml.contains(
+        r#"<Layer name="Laser-Cut" layerFunction="ROUT" side="NONE" polarity="POSITIVE"/>"#
+    ));
+
+    let ipc = Ipc2581::parse(&xml).unwrap();
+    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let laser = package
+        .files
+        .iter()
+        .find(|file| file.filename == "Laser_Cut.gbr")
+        .unwrap();
+    assert!(
+        laser
+            .contents
+            .contains("%TF.FileFunction,Other,LaserCut,Top/Bot*%")
+    );
+    assert!(laser.contents.contains("%TF.Part,Array*%"));
+    assert!(laser.contents.contains("%TA.AperFunction,Profile*%"));
+    assert!(!laser.contents.contains("G36*"));
+    // One perimeter per board: 36 boards, four unshared edges each.
+    assert_eq!(laser.contents.matches("D01*").count(), 4 * 36);
+
+    let board_package = build_manufacturing_package(&ipc, View::Board).unwrap();
+    assert!(
+        board_package
+            .files
+            .iter()
+            .all(|file| file.filename != "Laser_Cut.gbr")
+    );
+}
+
+#[test]
 fn created_board_array_profile_gerber_derives_vscore_reliefs() {
     let xml = create_board_array_xml(
         rounded_corner_board_fixture_mm(),
@@ -1527,6 +1601,13 @@ fn rejects_array_dimensions_outside_limits() {
             .to_string()
             .contains("array height must be at most 297 mm; got 400 mm")
     );
+}
+
+fn total_line_length_mm(lines: &[VcutLine]) -> f64 {
+    lines
+        .iter()
+        .map(|line| (line.end_x_mm - line.start_x_mm).hypot(line.end_y_mm - line.start_y_mm))
+        .sum()
 }
 
 fn board_margin(horizontal_gap_mm: f64, vertical_gap_mm: f64) -> BoardMarginMm {

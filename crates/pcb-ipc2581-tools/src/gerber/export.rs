@@ -87,8 +87,10 @@ pub fn build_gerber_x2_files_with_options(
         if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
             bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
         }
-        if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
-            && doc.layers[0].features.is_empty()
+        if matches!(
+            plan.role,
+            GerberLayerRole::Vcut | GerberLayerRole::Score | GerberLayerRole::LaserCut
+        ) && doc.layers[0].features.is_empty()
         {
             continue;
         }
@@ -145,6 +147,7 @@ enum GerberLayerRole {
     Profile,
     Vcut,
     Score,
+    LaserCut,
 }
 
 fn export_layer_plans<'a>(ipc: &Ipc2581, layers: &'a [Layer]) -> Vec<ExportLayerPlan<'a>> {
@@ -154,13 +157,13 @@ fn export_layer_plans<'a>(ipc: &Ipc2581, layers: &'a [Layer]) -> Vec<ExportLayer
     let mut used_filenames = HashSet::new();
 
     for layer in layers {
-        let Some(role) = gerber_layer_role(layer.layer_function) else {
+        let source_layer_name = ipc.resolve(layer.name);
+        let Some(role) = gerber_layer_role(layer.layer_function, source_layer_name) else {
             continue;
         };
         if role == GerberLayerRole::Copper {
             copper_index += 1;
         }
-        let source_layer_name = ipc.resolve(layer.name);
         let (filename, file_function) = layer_output(
             role,
             layer.side,
@@ -183,7 +186,7 @@ fn export_layer_plans<'a>(ipc: &Ipc2581, layers: &'a [Layer]) -> Vec<ExportLayer
 fn copper_layer_count(layers: &[Layer]) -> usize {
     layers
         .iter()
-        .filter(|layer| gerber_layer_role(layer.layer_function) == Some(GerberLayerRole::Copper))
+        .filter(|layer| crate::layers::is_copper(layer.layer_function))
         .count()
 }
 
@@ -243,9 +246,12 @@ fn sanitize_filename_stem(name: &str) -> String {
     stem.trim_matches('_').to_string()
 }
 
-fn gerber_layer_role(function: LayerFunction) -> Option<GerberLayerRole> {
+fn gerber_layer_role(function: LayerFunction, name: &str) -> Option<GerberLayerRole> {
     if crate::layers::is_copper(function) {
         return Some(GerberLayerRole::Copper);
+    }
+    if crate::layers::is_laser_cut(function, name) {
+        return Some(GerberLayerRole::LaserCut);
     }
     match function {
         LayerFunction::Solderpaste | LayerFunction::Pastemask => Some(GerberLayerRole::Paste),
@@ -271,9 +277,10 @@ impl GerberLayerRole {
             GerberLayerRole::AssemblyDrawing | GerberLayerRole::FabricationDrawing => {
                 LayerRole::Mechanical
             }
-            GerberLayerRole::Profile | GerberLayerRole::Vcut | GerberLayerRole::Score => {
-                LayerRole::Profile
-            }
+            GerberLayerRole::Profile
+            | GerberLayerRole::Vcut
+            | GerberLayerRole::Score
+            | GerberLayerRole::LaserCut => LayerRole::Profile,
         }
     }
 }
@@ -329,6 +336,9 @@ fn layer_output(
         GerberLayerRole::Vcut => fabrication_line_layer_output("V_Cut.gbr", &["Vcut"], side),
         GerberLayerRole::Score => {
             fabrication_line_layer_output("Score.gbr", &["Other", "Score"], side)
+        }
+        GerberLayerRole::LaserCut => {
+            fabrication_line_layer_output("Laser_Cut.gbr", &["Other", "LaserCut"], side)
         }
     }
 }

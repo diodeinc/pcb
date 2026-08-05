@@ -40,6 +40,8 @@ const MAX_MANUAL_EDGE_RAIL_WIDTH_MM: f64 = 30.0;
 const VCUT_LAYER_BASE_NAME: &str = "V-Score";
 const VCUT_SPEC_BASE_NAME: &str = "Board_Array_VCut";
 const VCUT_MARKER_STROKE_MM: f64 = 0.10;
+use crate::layers::LASER_CUT_LAYER_BASE_NAME;
+const LASER_CUT_STROKE_MM: f64 = 0.10;
 const VCUT_CALLOUT_ARROW_LENGTH_MM: f64 = 2.5;
 const VCUT_CALLOUT_ARROW_CLEARANCE_MM: f64 = 0.8;
 const VCUT_CALLOUT_ARROW_HEAD_MM: f64 = 0.45;
@@ -732,6 +734,20 @@ fn build_board_array_spec(
             array_height_mm: array_height,
         })?,
     );
+    add_laser_cut_lines(
+        &mut generated_geometry,
+        &mut used_layer_names,
+        laser_cut_lines(LaserCutLineSpec {
+            columns,
+            rows,
+            board_width_mm: board_width,
+            board_height_mm: board_height,
+            margin_x_mm: margin_x,
+            margin_y_mm: margin_y,
+            pitch_x_mm: pitch_x,
+            pitch_y_mm: pitch_y,
+        }),
+    );
     add_board_array_corner_tooling(
         &mut generated_geometry,
         &mut used_layer_names,
@@ -1035,6 +1051,7 @@ fn reserve_unique_name(used_names: &mut HashSet<String>, base: &str) -> String {
 }
 
 pub mod balance;
+mod laser;
 mod tooling;
 mod vcut;
 mod xml;
@@ -1042,6 +1059,7 @@ mod xml;
 #[cfg(test)]
 mod tests;
 
+use laser::*;
 use tooling::*;
 use vcut::*;
 use xml::*;

@@ -10,6 +10,23 @@ use pcb_ir::dialects::ipc::{
 };
 use pcb_ir::dialects::{LayerRole, Side};
 
+/// Layer name the board-array panelizer gives its generated laser depaneling cuts.
+pub const LASER_CUT_LAYER_BASE_NAME: &str = "Laser-Cut";
+
+/// True for the panelizer's generated laser depaneling layer.
+///
+/// Rout layers are otherwise routing data rather than artwork, so only this one
+/// well-known name is promoted to a Gerber layer.
+pub fn is_laser_cut(function: LayerFunction, name: &str) -> bool {
+    function == LayerFunction::Rout
+        && name
+            .strip_prefix(LASER_CUT_LAYER_BASE_NAME)
+            .is_some_and(|suffix| match suffix.strip_prefix('_') {
+                Some(index) => !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()),
+                None => suffix.is_empty(),
+            })
+}
+
 /// True for layer functions that carry copper imagery.
 pub fn is_copper(function: LayerFunction) -> bool {
     matches!(

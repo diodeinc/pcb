@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `fab-panel create` now automatically balances copper in the gutters between placed assembly panels.
+- `board-array create` now generates a `Laser-Cut` layer with the minimum cuts needed to depanel the boards, exported as `Laser_Cut.gbr`.
 
 ## [0.4.22] - 2026-08-04
 
