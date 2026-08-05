@@ -3,7 +3,7 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::ipc::{LayoutStep, LayoutStepKind, View};
+use pcb_ir::dialects::ipc::{ArtworkScope, LayoutStep, LayoutStepKind};
 use pcb_ir::geom::path::{PathCmd, PathOp};
 use pcb_ir::geom::{Affine2, Arc, BBox, ContourBuf, Point};
 
@@ -176,7 +176,7 @@ fn board_array_layer_overlays(
             let Ok(doc) = crate::geometry::extract_layer_for_view(
                 accessor.ipc(),
                 layer_name,
-                View::ArraySupport,
+                ArtworkScope::ArraySupport,
             ) else {
                 return None;
             };

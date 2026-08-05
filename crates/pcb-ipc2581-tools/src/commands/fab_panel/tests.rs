@@ -1,5 +1,5 @@
 use ipc2581::edit::Doc;
-use pcb_ir::dialects::ipc::{View, root_step};
+use pcb_ir::dialects::ipc::{ArtworkScope, root_step};
 use pcb_ir::geom::{BBox, ContourSet, tol};
 
 use crate::copper_balance::{CopperBalanceMode, composed_copper_image};
@@ -284,7 +284,8 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
     let expected_cutout_bbox =
         contour_bbox(profile.material_removal.iter()).expand(profile_stroke_radius);
     let package =
-        crate::manufacturing::build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
+        crate::manufacturing::build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened)
+            .unwrap();
     for (filename, expected_bbox) in [
         ("Fab_Panel_Outline.gm1", expected_fab_bbox),
         ("Assembly_Panel_Outlines.gm1", expected_assembly_bbox),
@@ -601,8 +602,9 @@ fn strips_non_manufacturing_data_and_preserves_manufacturing_exports() {
 
     Ipc2581::validate(&generated).expect("fabrication panel should validate against IPC-2581C");
     let parsed = Ipc2581::parse(&generated).expect("fabrication panel should parse");
-    let package = crate::manufacturing::build_manufacturing_package(&parsed, View::ArrayFlattened)
-        .expect("fabrication panel should export manufacturing files");
+    let package =
+        crate::manufacturing::build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened)
+            .expect("fabrication panel should export manufacturing files");
     assert!(package.files.iter().any(|file| file.filename == "F_Cu.gtl"));
     assert!(package.files.iter().any(|file| file.filename == "PTH.drl"));
     assert!(

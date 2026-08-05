@@ -411,13 +411,13 @@ fn plating_kind(status: PlatingStatus) -> PlatingKind {
 }
 
 pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
-    extract_layer_for_view(ipc, layer_name, View::ArrayFlattened)
+    extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
 }
 
 pub fn extract_layer_for_view(
     ipc: &Ipc2581,
     layer_name: &str,
-    view: View,
+    view: ArtworkScope,
 ) -> Result<GeometryDocument> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let layer = ecad
@@ -430,42 +430,36 @@ pub fn extract_layer_for_view(
         .context("IPC-2581 ECAD section has no Step")?;
 
     let step = match view {
-        View::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
-        View::ArrayLocal | View::ArraySupport | View::ArrayFlattened | View::LayoutSymbolic => {
+        ArtworkScope::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
+        ArtworkScope::ArrayLocal | ArtworkScope::ArraySupport | ArtworkScope::ArrayFlattened => {
             primary_step
         }
     };
 
-    let mut doc = match view {
-        View::Board => extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
-        View::ArraySupport if is_panel_step(step) => extract_panel_layer(
+    let panel_mode = match view {
+        ArtworkScope::ArraySupport => Some(PanelLayerMode::SupportOnly),
+        ArtworkScope::ArrayFlattened => Some(PanelLayerMode::Flattened),
+        ArtworkScope::Board | ArtworkScope::ArrayLocal => None,
+    };
+
+    let mut doc = match panel_mode.filter(|_| is_panel_step(step)) {
+        Some(mode) => extract_panel_layer(
             ipc,
             &ecad.cad_data.steps,
             &ecad.cad_data.layers,
             step,
             layer,
             layer_name,
-            PanelLayerMode::SupportOnly,
+            mode,
         )?,
-        View::ArrayFlattened if is_panel_step(step) => extract_panel_layer(
-            ipc,
-            &ecad.cad_data.steps,
-            &ecad.cad_data.layers,
-            step,
-            layer,
-            layer_name,
-            PanelLayerMode::Flattened,
-        )?,
-        View::ArrayLocal | View::ArraySupport | View::ArrayFlattened | View::LayoutSymbolic => {
-            extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
-        }
+        None => extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
     };
 
     match view {
-        View::Board | View::ArrayLocal | View::ArraySupport => {
+        ArtworkScope::Board | ArtworkScope::ArrayLocal | ArtworkScope::ArraySupport => {
             append_step_only_layout_geometry(&mut doc, step)
         }
-        View::ArrayFlattened | View::LayoutSymbolic => {
+        ArtworkScope::ArrayFlattened => {
             append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
         }
     }
@@ -3374,7 +3368,7 @@ mod tests {
         )
         .unwrap();
 
-        let layer = extract_layer_for_view(&ipc, "TOP", View::Board).unwrap();
+        let layer = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board).unwrap();
         let path = &layer.arena.paths[layer.features[0].paths.start as usize];
 
         assert_eq!(path.stroke().unwrap().pattern, LinePattern::Phantom);
@@ -3434,7 +3428,7 @@ mod tests {
         )
         .unwrap();
 
-        let top = extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened).unwrap();
+        let top = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened).unwrap();
         assert_eq!(top.specs.len(), 1);
         assert_eq!(top.layers[0].spec_refs.count, 1);
         assert_eq!(top.feature_sets.len(), 1);
@@ -3453,7 +3447,7 @@ mod tests {
         assert_eq!(top.features[0].pin_refs.count, 1);
         assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
-        let vcut = extract_layer_for_view(&ipc, "VCUT", View::ArrayFlattened).unwrap();
+        let vcut = extract_layer_for_view(&ipc, "VCUT", ArtworkScope::ArrayFlattened).unwrap();
         assert_eq!(vcut.layers[0].spec_refs.count, 1);
         assert_eq!(vcut.feature_sets[0].spec_refs.count, 1);
         assert_eq!(vcut.features[0].intent.domain, FeatureDomain::VCut);
@@ -4029,8 +4023,8 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
 
-        let board =
-            extract_layer_for_view(&ipc, "TOP", View::Board).expect("board layer should extract");
+        let board = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board)
+            .expect("board layer should extract");
         let board_layer = &board.layers[0];
         let board_features = board_layer.features.slice(&board.features);
 
@@ -4045,7 +4039,7 @@ mod tests {
             1
         );
 
-        let panel = extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened)
+        let panel = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
             .expect("panel layer should extract");
         let panel_layer = &panel.layers[0];
         let panel_features = panel_layer.features.slice(&panel.features);
@@ -4063,27 +4057,10 @@ mod tests {
     }
 
     #[test]
-    fn symbolic_panel_extraction_carries_repeats_without_child_features() {
-        let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
-            .expect("synthetic panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", View::LayoutSymbolic)
-            .expect("panel layer should extract");
-        let layer = &doc.layers[0];
-        let features = layer.features.slice(&doc.features);
-
-        assert_eq!(features.len(), 1);
-        assert_eq!(features[0].center, Point::new(40.0, 5.0));
-        assert_eq!(doc.layout.steps.len(), 2);
-        assert_eq!(doc.layout.repeats.len(), 1);
-        assert_eq!(doc.layout.instances.len(), 2);
-        assert_eq!(board_instance_count(&doc), 2);
-    }
-
-    #[test]
     fn step_only_panel_extraction_omits_repeat_graph_expansion() {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", View::ArrayLocal)
+        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayLocal)
             .expect("panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
@@ -4170,7 +4147,7 @@ mod tests {
     fn nested_panel_layer_extraction_materializes_descendant_board_features() {
         let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
             .expect("synthetic nested panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened)
+        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
             .expect("nested panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
@@ -4189,6 +4166,27 @@ mod tests {
             ]
         );
         assert_eq!(board_instance_count(&doc), 4);
+    }
+
+    /// The reported fabrication-panel bug: a render of a nested panel has to
+    /// carry every descendant board's copper, not just the root step's own
+    /// support geometry.
+    #[test]
+    fn nested_panel_render_draws_every_descendant_board_instance() {
+        let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
+            .expect("synthetic nested panel fixture should parse");
+        let mut doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
+            .expect("nested panel layer should extract");
+        pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
+
+        let svg = crate::geometry::render::render_layer_svg(
+            &doc,
+            false,
+            ArtworkScope::ArrayFlattened.profile_set(),
+        );
+
+        // One drawn pad per board across both nested repeat levels.
+        assert_eq!(svg.matches("<path d=").count(), 4, "{svg}");
     }
 
     #[test]

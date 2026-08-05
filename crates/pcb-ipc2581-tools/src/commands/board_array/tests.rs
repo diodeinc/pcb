@@ -6,9 +6,9 @@ use crate::accessors::IpcAccessor;
 use crate::ipc2581::types::LayerFunction;
 use crate::manufacturing::{ManufacturingPackage, build_manufacturing_package};
 use pcb_ir::dialects::ipc::{
-    BalancingRegionOptions, BoardArraySupportDocument, FeatureBucket, FeatureDomain, FeatureIntent,
-    FeatureKind, FeatureOperation, FeatureRole, FeatureSpan, FiducialKind, LayoutStepKind,
-    PlatingKind, View, board_array_balancing_region, collect_board_array_balancing_input,
+    ArtworkScope, BalancingRegionOptions, BoardArraySupportDocument, FeatureBucket, FeatureDomain,
+    FeatureIntent, FeatureKind, FeatureOperation, FeatureRole, FeatureSpan, FiducialKind,
+    LayoutStepKind, PlatingKind, board_array_balancing_region, collect_board_array_balancing_input,
 };
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, SpatialCopperBalanceLayerRequest,
@@ -130,7 +130,8 @@ fn creates_rounded_panel_step_from_board_bbox() {
     assert_point_close(first_instance.bbox.min, Point::new(7.5, 7.5));
     assert_point_close(first_instance.bbox.max, Point::new(17.5, 17.5));
 
-    let vcut = geometry::extract_layer_for_view(&ipc, "V-Score", View::ArrayFlattened).unwrap();
+    let vcut =
+        geometry::extract_layer_for_view(&ipc, "V-Score", ArtworkScope::ArrayFlattened).unwrap();
     assert!(vcut.features.len() > 24);
     assert!(
         vcut.features
@@ -573,7 +574,7 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     assert!(viewbox.1 + viewbox.3 > 100.0);
     assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
 
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
 
     let vcut = package
         .files
@@ -586,7 +587,7 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     assert!(!vcut.contents.contains("G36*"));
     assert!(vcut.contents.matches("D01*").count() > 24);
 
-    let board_package = build_manufacturing_package(&ipc, View::Board).unwrap();
+    let board_package = build_manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
     assert!(
         board_package
             .files
@@ -624,7 +625,7 @@ fn created_board_array_profile_gerber_derives_vscore_reliefs() {
     );
     assert!(fabrication_profile.assembly_panel_outlines.is_empty());
 
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     let vcut = package
         .files
         .iter()
@@ -675,7 +676,7 @@ fn board_array_creation_drops_source_board_outline_layer_features() {
     assert!(!xml.contains(r#"<LayerFeature layerRef="Edge.Cuts">"#));
 
     let ipc = Ipc2581::parse(&xml).unwrap();
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     assert!(
         package
             .files
@@ -694,7 +695,7 @@ fn board_array_creation_drops_source_board_outline_layer_features() {
 fn board_array_creation_preserves_board_target_geometry() {
     let input = board_fixture_with_top_line_mm();
     let before_ipc = Ipc2581::parse(input).unwrap();
-    let before = geometry::extract_layer_for_view(&before_ipc, "TOP", View::Board).unwrap();
+    let before = geometry::extract_layer_for_view(&before_ipc, "TOP", ArtworkScope::Board).unwrap();
 
     let xml = create_board_array_xml(
         input,
@@ -707,7 +708,7 @@ fn board_array_creation_preserves_board_target_geometry() {
     )
     .unwrap();
     let after_ipc = Ipc2581::parse(&xml).unwrap();
-    let after = geometry::extract_layer_for_view(&after_ipc, "TOP", View::Board).unwrap();
+    let after = geometry::extract_layer_for_view(&after_ipc, "TOP", ArtworkScope::Board).unwrap();
 
     assert_eq!(before.features.len(), after.features.len());
     assert_eq!(before.arena.paths.len(), after.arena.paths.len());
@@ -796,14 +797,16 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     assert!(xml.contains(r#"x="20" y="20""#));
 
     let parsed = Ipc2581::parse(&xml).unwrap();
-    let top = geometry::extract_layer_for_view(&parsed, "TOP", View::ArrayFlattened).unwrap();
+    let top =
+        geometry::extract_layer_for_view(&parsed, "TOP", ArtworkScope::ArrayFlattened).unwrap();
     assert!(top.features.iter().any(|feature| {
         feature.intent.role == FeatureRole::Fiducial
             && feature.fiducial_kind == FiducialKind::Global
     }));
 
     let drill =
-        geometry::extract_layer_for_view(&parsed, "Array_Drill", View::ArrayFlattened).unwrap();
+        geometry::extract_layer_for_view(&parsed, "Array_Drill", ArtworkScope::ArrayFlattened)
+            .unwrap();
     assert_eq!(drill.features.len(), 1);
     assert_eq!(drill.features[0].kind, FeatureKind::Hole);
     assert_eq!(drill.features[0].bucket, FeatureBucket::Cutout);
@@ -812,7 +815,7 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     assert_eq!(drill.features[0].intent.operation, FeatureOperation::Drill);
     assert_eq!(drill.features[0].intent.plating, PlatingKind::NonPlated);
 
-    let package = build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
     let top = package
         .files
         .iter()
@@ -911,7 +914,8 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     assert!(xml.matches("<EntryUser").count() > 0);
     assert!(xml.matches("<UserPrimitiveRef").count() >= void_count);
 
-    let top = geometry::extract_layer_for_view(&parsed, "TOP", View::ArrayFlattened).unwrap();
+    let top =
+        geometry::extract_layer_for_view(&parsed, "TOP", ArtworkScope::ArrayFlattened).unwrap();
     let balance_paths = |polarity: pcb_ir::geom::Polarity| {
         let paths = top
             .features
@@ -937,7 +941,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         balance.solution.generated_area_mm2
     );
 
-    let package = build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
     let top_gerber = package
         .files
         .iter()
@@ -1013,7 +1017,7 @@ fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
         vec![(23.5, 67.5), (46.5, 67.5), (27.5, 2.5), (42.5, 2.5)],
     );
 
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     assert_fiducial_gerbers(&package, "Global");
 }
 
@@ -1220,7 +1224,7 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
         &[(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
     );
 
-    let top = geometry::extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened).unwrap();
+    let top = geometry::extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened).unwrap();
     assert_eq!(
         top.features
             .iter()
@@ -1229,7 +1233,7 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
         8
     );
 
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     assert_fiducial_gerbers(&package, "Local");
 }
 

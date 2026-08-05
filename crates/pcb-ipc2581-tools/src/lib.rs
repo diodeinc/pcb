@@ -38,20 +38,25 @@ pub enum UnitFormat {
     Inch,
 }
 
+/// What a command materializes from an IPC-2581 file.
+///
+/// One vocabulary, one default, for every command that produces artwork or
+/// outlines. `board-array` is the root step of the file with every repeat
+/// materialized, and is identical to `board` for a plain board file.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutTarget {
+    /// The canonical source board, as if it were fabricated alone.
     Board,
+    /// The file's root step with every nested repeat materialized.
     #[value(name = "board-array", alias = "panel")]
     BoardArray,
-    Layout,
 }
 
 impl LayoutTarget {
-    pub fn geometry_view(self) -> pcb_ir::dialects::ipc::View {
+    pub fn artwork_scope(self) -> pcb_ir::dialects::ipc::ArtworkScope {
         match self {
-            Self::Board => pcb_ir::dialects::ipc::View::Board,
-            Self::BoardArray => pcb_ir::dialects::ipc::View::ArrayFlattened,
-            Self::Layout => pcb_ir::dialects::ipc::View::LayoutSymbolic,
+            Self::Board => pcb_ir::dialects::ipc::ArtworkScope::Board,
+            Self::BoardArray => pcb_ir::dialects::ipc::ArtworkScope::ArrayFlattened,
         }
     }
 }

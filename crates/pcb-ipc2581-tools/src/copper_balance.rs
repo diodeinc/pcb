@@ -14,7 +14,7 @@ use ipc2581::types::{
         Polygon, UserPrimitive, UserShape, UserShapeType, UserSpecial,
     },
 };
-use pcb_ir::dialects::ipc::View;
+use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult,
     SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest,
@@ -362,10 +362,11 @@ fn hex_void_instances(
 /// Composition goes through the artwork mask fold so clear-polarity
 /// features subtract in paint order instead of being unioned as copper.
 pub fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourSet> {
-    let mut document = geometry::extract_layer_for_view(ipc, layer_name, View::ArrayFlattened)
-        .with_context(|| {
-            format!("failed to extract flattened IPC-2581 copper layer '{layer_name}'")
-        })?;
+    let mut document =
+        geometry::extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
+            .with_context(|| {
+                format!("failed to extract flattened IPC-2581 copper layer '{layer_name}'")
+            })?;
     pcb_ir::dialects::ipc::process::compose_for_rendering(&mut document);
     let artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
         &document,

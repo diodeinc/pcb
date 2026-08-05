@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,14 +18,14 @@ use pcb_ir::dialects::artwork::{
     PaintStage,
 };
 use pcb_ir::dialects::ipc::{
-    Feature, FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind,
-    LayoutPurpose, PlatingKind, PrimitiveRef, ProfileSet, View, profile_occurrences_for, relief,
+    ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureBucket, FeatureDomain,
+    FeatureOperation, FeatureRole, FiducialKind, LayoutPurpose, PlatingKind, PrimitiveRef,
+    ProfileSet, lower_layer_to_artwork_with, profile_occurrences_for, relief,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
 use pcb_ir::geom::{
-    Affine2, Arc, BBox, FillRule, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span,
-    StrokeStyle,
+    Affine2, Arc, BBox, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span, StrokeStyle,
 };
 
 type IpcGeometryDocument = pcb_ir::dialects::ipc::Document<ipc2581::Symbol, LayerFunction>;
@@ -59,19 +59,15 @@ impl Default for ProfileGerberStyle {
     }
 }
 
-pub fn build_gerber_x2_files(ipc: &Ipc2581, view: View) -> Result<Vec<GerberX2File>> {
+pub fn build_gerber_x2_files(ipc: &Ipc2581, view: ArtworkScope) -> Result<Vec<GerberX2File>> {
     build_gerber_x2_files_with_options(ipc, view, &GerberExportOptions::default())
 }
 
 pub fn build_gerber_x2_files_with_options(
     ipc: &Ipc2581,
-    view: View,
+    view: ArtworkScope,
     options: &GerberExportOptions,
 ) -> Result<Vec<GerberX2File>> {
-    if view == View::LayoutSymbolic {
-        bail!("Gerber export does not support symbolic layout view; use board or board-array");
-    }
-
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut files = Vec::new();
     let plans = export_layer_plans(ipc, &ecad.cad_data.layers);
@@ -116,7 +112,7 @@ pub fn build_gerber_x2_files_with_options(
             contents,
         });
     }
-    if view == View::ArrayFlattened {
+    if view == ArtworkScope::ArrayFlattened {
         files.extend(board_array_profile_gerber_files(
             ipc,
             options.relief_debug_dir.as_deref(),
@@ -452,34 +448,24 @@ fn artwork_from_ipc_layer(
     spec: GerberArtworkSpec,
 ) -> Result<GerberArtwork> {
     let layer = &doc.layers[layer_index];
-    let mut artwork = GerberArtwork::new();
-    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
+    let header = pcb_ir::dialects::artwork::Layer {
         name: layer.name.clone(),
         role: spec.role.ir_role(),
         side: spec.side,
         objects: Span::EMPTY,
         bbox: layer.bbox,
         meta: spec.meta,
-    });
-    let mut instance_apertures = InstanceApertures::default();
-    for feature in layer.features.slice(&doc.features) {
-        push_artwork_feature(
-            &mut artwork,
-            artwork_layer,
-            ipc,
-            doc,
-            feature,
-            &layer.name,
-            &mut instance_apertures,
-        )?;
-    }
+    };
+    let mut lowering = GerberLowering { ipc, doc };
+    let mut artwork = lower_layer_to_artwork_with(doc, layer_index, header, &mut lowering);
+
     if spec.role == GerberLayerRole::Profile
-        && spec.view != View::ArrayFlattened
-        && artwork.layers[artwork_layer as usize].objects.is_empty()
+        && spec.view != ArtworkScope::ArrayFlattened
+        && artwork.layers[0].objects.is_empty()
     {
         append_profile_occurrences(
             &mut artwork,
-            artwork_layer,
+            0,
             doc,
             spec.view.profile_set(),
             ProfileGerberStyle::default(),
@@ -488,14 +474,68 @@ fn artwork_from_ipc_layer(
     Ok(artwork)
 }
 
+/// Gerber's source-specific half of IPC artwork lowering: standard-dictionary
+/// primitives flash through standard apertures, traces are round-joined, and
+/// every object carries X2 attributes.
+struct GerberLowering<'a> {
+    ipc: &'a Ipc2581,
+    doc: &'a IpcGeometryDocument,
+}
+
+impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
+    fn source_aperture(
+        &mut self,
+        feature: &Feature<ipc2581::Symbol>,
+    ) -> Option<(Aperture, Affine2, BBox)> {
+        let (aperture, at, bbox) = standard_flash_aperture(self.ipc, feature)?;
+        Some((aperture, Affine2::translation(at), bbox))
+    }
+
+    fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
+        StrokeStyle {
+            join: LineJoin::Round,
+            ..stroke
+        }
+    }
+
+    /// Gerber orders removals rather than imaging them as clears, so every
+    /// drilled or routed feature stages last regardless of its bucket.
+    fn paint_order(&mut self, feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
+        let stage = if feature.intent.role == FeatureRole::Cutout || feature.is_drill_like() {
+            PaintStage::FinalCutout
+        } else if feature.polarity == Polarity::Clear
+            || feature.flags.clears_previous_in_set
+            || feature.bucket == FeatureBucket::Fill
+        {
+            PaintStage::Base
+        } else {
+            PaintStage::Overlay
+        };
+        PaintOrder { stage }
+    }
+
+    fn object_meta(
+        &mut self,
+        feature: &Feature<ipc2581::Symbol>,
+        kind: ArtworkObjectKind,
+    ) -> ObjectAttributes {
+        let aperture_function =
+            (kind != ArtworkObjectKind::Region).then(|| aperture_function(feature));
+        object_attributes(self.ipc, self.doc, feature, aperture_function)
+    }
+}
+
 struct GerberArtworkSpec {
     role: GerberLayerRole,
     side: IrSide,
     meta: LayerAttributes,
-    view: View,
+    view: ArtworkScope,
 }
 
-fn synthetic_profile_gerber_file(ipc: &Ipc2581, view: View) -> Result<Option<GerberX2File>> {
+fn synthetic_profile_gerber_file(
+    ipc: &Ipc2581,
+    view: ArtworkScope,
+) -> Result<Option<GerberX2File>> {
     let doc = geometry::extract_layout(ipc)?;
     let mut artwork = GerberArtwork::new();
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
@@ -876,8 +916,8 @@ fn debug_num(value: f64) -> String {
     if text == "-0" { "0".to_string() } else { text }
 }
 
-fn gerber_part_for_view(doc: &IpcGeometryDocument, view: View) -> GerberPart {
-    if view == View::Board {
+fn gerber_part_for_view(doc: &IpcGeometryDocument, view: ArtworkScope) -> GerberPart {
+    if view == ArtworkScope::Board {
         GerberPart::Single
     } else {
         gerber_part_for_doc(doc)
@@ -979,148 +1019,6 @@ fn ir_side(side: Option<IpcSide>) -> IrSide {
         Some(IpcSide::Bottom) => IrSide::Bottom,
         _ => IrSide::None,
     }
-}
-
-/// Shared contour apertures for repeated primitive instances, one per
-/// referenced dictionary entry.
-#[derive(Default)]
-struct InstanceApertures {
-    by_primitive: HashMap<ipc2581::Symbol, u32>,
-}
-
-/// A user-dictionary instance feature: a placed reference whose local shape
-/// is shared by every sibling instance. The shape flashes through one
-/// contour aperture per dictionary entry, keeping repeated geometry
-/// repeated in the output. Standard-dictionary references stay out: those
-/// are exact catalogue primitives and flash through standard apertures.
-fn instance_flash(
-    artwork: &mut GerberArtwork,
-    doc: &IpcGeometryDocument,
-    feature: &Feature<ipc2581::Symbol>,
-    apertures: &mut InstanceApertures,
-) -> Option<(u32, Affine2)> {
-    let Some(PrimitiveRef::User(primitive)) = feature.primitive_ref else {
-        return None;
-    };
-    if feature.kind != pcb_ir::dialects::ipc::FeatureKind::Primitive || !is_rigid(feature.transform)
-    {
-        return None;
-    }
-    let [path] = feature.paths.slice(&doc.arena.paths) else {
-        return None;
-    };
-    if !path.is_filled() {
-        return None;
-    }
-    if let Some(&aperture) = apertures.by_primitive.get(&primitive) {
-        return Some((aperture, feature.transform));
-    }
-    // Derive the origin-local template from this first instance; every
-    // sibling shares the aperture and differs only by its rigid transform.
-    let inverse = feature.transform.inverse()?;
-    let local = doc
-        .arena
-        .path_contours(path)
-        .iter()
-        .map(|contour| pcb_ir::geom::path::transform_cmds(contour.cmds.iter().copied(), inverse))
-        .collect::<Vec<_>>();
-    let [local] = local.as_slice() else {
-        return None;
-    };
-    let aperture = artwork.push_aperture(Aperture::solid(
-        pcb_ir::dialects::artwork::ApertureShape::Contour {
-            outline: local.clone(),
-            fill_rule: path.fill_rule().unwrap_or(FillRule::NonZero),
-        },
-    ));
-    apertures.by_primitive.insert(primitive, aperture);
-    Some((aperture, feature.transform))
-}
-
-/// Rotation plus translation, without mirroring or scaling.
-fn is_rigid(transform: Affine2) -> bool {
-    let determinant = transform.m00 * transform.m11 - transform.m01 * transform.m10;
-    (determinant - 1.0).abs() <= GEOMETRY_EPSILON
-        && (transform.m00 * transform.m00 + transform.m10 * transform.m10 - 1.0).abs()
-            <= GEOMETRY_EPSILON
-}
-
-fn push_artwork_feature(
-    artwork: &mut GerberArtwork,
-    artwork_layer: u32,
-    ipc: &Ipc2581,
-    doc: &IpcGeometryDocument,
-    feature: &Feature<ipc2581::Symbol>,
-    layer_name: &str,
-    instance_apertures: &mut InstanceApertures,
-) -> Result<()> {
-    if let Some((aperture, transform)) = instance_flash(artwork, doc, feature, instance_apertures) {
-        artwork.push_object(
-            artwork_layer,
-            ArtworkObject {
-                polarity: feature.polarity,
-                order: paint_order(feature),
-                geometry: ArtworkGeometry::Flash {
-                    aperture,
-                    transform,
-                },
-                bbox: feature.bbox,
-                meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
-            },
-        );
-        return Ok(());
-    }
-
-    if let Some((aperture, at, bbox)) = standard_flash_aperture(ipc, feature) {
-        let aperture = artwork.push_aperture(aperture);
-        artwork.push_object(
-            artwork_layer,
-            ArtworkObject {
-                polarity: feature.polarity,
-                order: paint_order(feature),
-                geometry: ArtworkGeometry::Flash {
-                    aperture,
-                    transform: Affine2::translation(at),
-                },
-                bbox,
-                meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
-            },
-        );
-        return Ok(());
-    }
-
-    if let Some((at, diameter)) = circle_flash(doc, feature) {
-        let aperture = artwork.push_aperture(Aperture::circle(diameter));
-        artwork.push_object(
-            artwork_layer,
-            ArtworkObject {
-                polarity: feature.polarity,
-                order: paint_order(feature),
-                geometry: ArtworkGeometry::Flash {
-                    aperture,
-                    transform: Affine2::translation(at),
-                },
-                bbox: BBox::from_point(at).expand(diameter / 2.0),
-                meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
-            },
-        );
-        return Ok(());
-    }
-
-    for path in feature.paths.slice(&doc.arena.paths) {
-        let aperture_function = path.is_stroked().then(|| aperture_function(feature));
-        push_artwork_object(
-            artwork,
-            artwork_layer,
-            doc,
-            feature,
-            path,
-            object_attributes(ipc, doc, feature, aperture_function),
-            layer_name,
-        )?;
-    }
-
-    Ok(())
 }
 
 fn standard_flash_aperture(
@@ -1259,43 +1157,6 @@ fn nearly_equal(left: f64, right: f64) -> bool {
     (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
 }
 
-fn paint_order(feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
-    let stage = if feature.intent.role == FeatureRole::Cutout || feature.is_drill_like() {
-        PaintStage::FinalCutout
-    } else if feature.polarity == Polarity::Clear
-        || feature.flags.clears_previous_in_set
-        || feature.bucket == FeatureBucket::Fill
-    {
-        PaintStage::Base
-    } else {
-        PaintStage::Overlay
-    };
-    PaintOrder { stage }
-}
-
-fn circle_flash(
-    doc: &IpcGeometryDocument,
-    feature: &Feature<ipc2581::Symbol>,
-) -> Option<(Point, f64)> {
-    if feature.outer_diameter <= 0.0 || feature.paths.len() != 1 {
-        return None;
-    }
-
-    let path = &feature.paths.slice(&doc.arena.paths)[0];
-    if !path.is_filled() {
-        return None;
-    }
-
-    if feature.is_fiducial()
-        || feature.intent.role == FeatureRole::Hole
-        || feature.intent.operation == FeatureOperation::Drill
-    {
-        Some((feature.center, feature.outer_diameter))
-    } else {
-        None
-    }
-}
-
 fn object_attributes(
     ipc: &Ipc2581,
     doc: &IpcGeometryDocument,
@@ -1378,56 +1239,6 @@ fn fiducial_aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String>
     vec!["FiducialPad".to_string(), kind.to_string()]
 }
 
-fn push_artwork_path(
-    artwork: &mut GerberArtwork,
-    paint: Paint,
-    doc: &IpcGeometryDocument,
-    path: &pcb_ir::geom::Path,
-) -> u32 {
-    artwork.push_path(paint, doc.arena.path_contours(path))
-}
-
-fn push_artwork_object(
-    artwork: &mut GerberArtwork,
-    artwork_layer: u32,
-    doc: &IpcGeometryDocument,
-    feature: &Feature<ipc2581::Symbol>,
-    path: &pcb_ir::geom::Path,
-    meta: ObjectAttributes,
-    layer_name: &str,
-) -> Result<()> {
-    let (geometry, path_id) = match path.paint {
-        Paint::Fill { rule } => {
-            let path = push_artwork_path(artwork, Paint::Fill { rule }, doc, path);
-            (ArtworkGeometry::Region { path }, path)
-        }
-        Paint::Stroke(stroke) => {
-            let paint = Paint::Stroke(StrokeStyle {
-                join: LineJoin::Round,
-                ..stroke
-            });
-            let path = push_artwork_path(artwork, paint, doc, path);
-            (ArtworkGeometry::Stroke { path }, path)
-        }
-        Paint::None => {
-            bail!(
-                "processed IPC geometry path is neither filled nor stroked on layer '{layer_name}'"
-            );
-        }
-    };
-    artwork.push_object(
-        artwork_layer,
-        ArtworkObject {
-            polarity: feature.polarity,
-            order: paint_order(feature),
-            geometry,
-            bbox: artwork.path_bbox(path_id),
-            meta,
-        },
-    );
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1503,7 +1314,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
         let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
@@ -1599,7 +1410,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
         let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
@@ -1686,7 +1497,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
         let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
@@ -1810,7 +1621,7 @@ mod tests {
         )
         .unwrap();
 
-        let board_files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let board_files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
         let board_fab = board_files
             .iter()
             .find(|file| file.filename == "F_Fab.gbr")
@@ -1839,7 +1650,7 @@ mod tests {
             2
         );
 
-        let array_files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
+        let array_files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
         let array_fab = array_files
             .iter()
             .find(|file| file.filename == "F_Fab.gbr")
@@ -1915,7 +1726,7 @@ mod tests {
         )
         .unwrap();
 
-        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
         let edge_cuts = files
             .iter()
             .find(|file| file.filename == "Edge_Cuts.gm1")
@@ -1973,7 +1784,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
 
         assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));
         for file in &files {
@@ -1997,7 +1808,7 @@ mod tests {
                 .any(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
         );
 
-        let panel_target_files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
+        let panel_target_files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
 
         let panel_target_copper = panel_target_files
             .iter()
@@ -2066,7 +1877,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
 
         let copper = files
             .iter()
@@ -2163,7 +1974,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
 
         let copper = files
             .iter()
@@ -2241,7 +2052,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let package = build_manufacturing_package(&ipc, View::Board).unwrap();
+        let package = build_manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
 
         assert!(
             !package
@@ -2339,7 +2150,7 @@ mod tests {
             &ipc,
             &ManufacturingExportOptions {
                 output: output_zip.clone(),
-                view: View::Board,
+                view: ArtworkScope::Board,
                 relief_debug_dir: None,
             },
         )
@@ -2363,26 +2174,6 @@ mod tests {
             .unwrap();
         assert!(top_copper.contains("%TF.FileFunction,Copper,L1,Top*%"));
         let _ = std::fs::remove_file(output_zip);
-    }
-
-    #[test]
-    fn gerber_export_rejects_symbolic_layout_view() {
-        let ipc = ipc::Ipc2581::parse(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
-  <Content roleRef="owner">
-    <FunctionMode mode="FABRICATION"/>
-  </Content>
-</IPC-2581>"#,
-        )
-        .unwrap();
-        let error = build_manufacturing_package(&ipc, View::LayoutSymbolic).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("manufacturing export does not support symbolic layout view")
-        );
     }
 
     #[test]
@@ -2432,7 +2223,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
 
         let silk = files
             .iter()
@@ -2505,7 +2296,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
 
         let top = files
             .iter()
@@ -2560,7 +2351,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
 
         assert!(files.iter().all(|file| file.filename != "V_Cut.gbr"));
         let profile = files
@@ -2641,7 +2432,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, View::ArrayFlattened).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
 
         let top = files
             .iter()
@@ -2682,7 +2473,7 @@ mod tests {
         let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
         let content = zstd::decode_all(Cursor::new(compressed)).unwrap();
         let ipc = ipc::Ipc2581::parse(std::str::from_utf8(&content).unwrap()).unwrap();
-        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
 
         assert!(files.len() >= 10);
         assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));

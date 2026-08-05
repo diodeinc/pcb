@@ -17,8 +17,26 @@ pub fn render_layer_svg(
     include_profiles: bool,
     profile_set: ProfileSet,
 ) -> String {
-    let mask = layer_mask(geometry, include_profiles, profile_set);
-    pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default())
+    let artwork = layer_artwork(geometry, include_profiles, profile_set);
+    pcb_ir::render::artwork_svg(&artwork, &pcb_ir::render::RenderOptions::default())
+}
+
+pub fn render_layer_png(
+    geometry: &GeometryDocument,
+    include_profiles: bool,
+    profile_set: ProfileSet,
+) -> Result<Vec<u8>, String> {
+    let artwork = layer_artwork(geometry, include_profiles, profile_set);
+    pcb_ir::render::artwork_png(&artwork, &pcb_ir::render::RenderOptions::default())
+}
+
+pub fn render_layer_terminal(
+    geometry: &GeometryDocument,
+    include_profiles: bool,
+    profile_set: ProfileSet,
+) -> Result<(), String> {
+    let artwork = layer_artwork(geometry, include_profiles, profile_set);
+    pcb_ir::render::artwork_to_terminal(&artwork, &pcb_ir::render::RenderOptions::default())
 }
 
 fn layer_has_content(geometry: &GeometryDocument) -> bool {
@@ -60,11 +78,13 @@ pub fn native_layer_document(geometry: &GeometryDocument) -> Option<GeometryDocu
     Some(native)
 }
 
-pub fn layer_mask(
+/// Lower a single-layer geometry document to artwork, with the display
+/// profile outlines a viewer expects overlaid.
+pub fn layer_artwork(
     geometry: &GeometryDocument,
     include_profiles: bool,
     profile_set: ProfileSet,
-) -> mask::Document<LayerFunction> {
+) -> ArtworkDocument {
     let layer = &geometry.layers[0];
     let mut artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
         geometry,
@@ -75,7 +95,19 @@ pub fn layer_mask(
     if include_profiles {
         append_display_profiles(&mut artwork, geometry, profile_set, layer.layer_function);
     }
-    pcb_ir::dialects::artwork::compose_to_mask(&artwork)
+    artwork
+}
+
+pub fn layer_mask(
+    geometry: &GeometryDocument,
+    include_profiles: bool,
+    profile_set: ProfileSet,
+) -> mask::Document<LayerFunction> {
+    pcb_ir::dialects::artwork::compose_to_mask(&layer_artwork(
+        geometry,
+        include_profiles,
+        profile_set,
+    ))
 }
 
 fn append_display_profiles(

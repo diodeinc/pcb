@@ -92,9 +92,12 @@ enum Commands {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to export
-        #[arg(long, default_value = "board")]
+        /// What to export: the canonical board, or the file's root step with every repeat materialized.
+        #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
+        /// Also draw nested assembly-panel boundaries, not just the fabrication outlines.
+        #[arg(long)]
+        nested_outlines: bool,
         /// Output DXF file path
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
@@ -113,21 +116,18 @@ enum Commands {
         /// Render format. Auto infers SVG/PNG from the output extension or uses terminal graphics.
         #[arg(short, long, default_value = "auto")]
         format: RenderFormat,
-        /// Layout target to render
-        #[arg(long, default_value = "layout")]
+        /// What to render: the canonical board, or the file's root step with every repeat materialized.
+        #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
-        /// Flatten the layer into a single Gerber-style mask before rendering.
-        #[arg(long)]
-        flat: bool,
     },
     /// Check exported Gerber geometry for manufacturability slivers
     Dfm {
         /// IPC-2581 XML file to check
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to check. Supports board or board-array.
-        #[arg(long, default_value = "board")]
-        layout_target: GerberLayoutTarget,
+        /// What to check: the canonical board, or the file's root step with every repeat materialized.
+        #[arg(long, default_value = "board-array")]
+        layout_target: LayoutTarget,
         /// Minimum feature and gap width in millimeters
         #[arg(long, default_value_t = 0.09)]
         min_width_mm: f64,
@@ -137,9 +137,9 @@ enum Commands {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to export. Manufacturing export supports board or board-array.
-        #[arg(long, default_value = "board")]
-        layout_target: GerberLayoutTarget,
+        /// What to export: the canonical board, or the file's root step with every repeat materialized.
+        #[arg(long, default_value = "board-array")]
+        layout_target: LayoutTarget,
         /// Output directory, or a .zip file for an archived manufacturing package
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
@@ -265,22 +265,6 @@ impl FabPanelSize {
             Self::Inches16x18 => commands::fab_panel::FabPanelSpec::INCHES_16_X_18,
             Self::Inches18x24 => commands::fab_panel::FabPanelSpec::INCHES_18_X_24,
             Self::Inches21x24 => commands::fab_panel::FabPanelSpec::INCHES_21_X_24,
-        }
-    }
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy)]
-enum GerberLayoutTarget {
-    Board,
-    #[value(name = "board-array", alias = "panel")]
-    BoardArray,
-}
-
-impl From<GerberLayoutTarget> for pcb_ir::dialects::ipc::View {
-    fn from(target: GerberLayoutTarget) -> Self {
-        match target {
-            GerberLayoutTarget::Board => Self::Board,
-            GerberLayoutTarget::BoardArray => Self::ArrayFlattened,
         }
     }
 }
@@ -418,12 +402,14 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
         Commands::Outline {
             file,
             layout_target,
+            nested_outlines,
             output,
         } => commands::outline::execute(
             &file,
             &commands::outline::OutlineOptions {
                 output,
                 layout_target,
+                nested_outlines,
             },
         ),
         Commands::Render {
@@ -432,7 +418,6 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             output,
             format,
             layout_target,
-            flat,
         } => commands::render::execute(
             &file,
             &commands::render::RenderOptions {
@@ -440,14 +425,13 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 output,
                 format,
                 layout_target,
-                flat,
             },
         ),
         Commands::Dfm {
             file,
             layout_target,
             min_width_mm,
-        } => commands::dfm::execute(&file, layout_target.into(), min_width_mm),
+        } => commands::dfm::execute(&file, layout_target.artwork_scope(), min_width_mm),
         Commands::Gerber {
             file,
             layout_target,
@@ -458,7 +442,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 &file,
                 &manufacturing::ManufacturingExportOptions {
                     output: output.clone(),
-                    view: layout_target.into(),
+                    view: layout_target.artwork_scope(),
                     relief_debug_dir: debug_reliefs,
                 },
             )?;

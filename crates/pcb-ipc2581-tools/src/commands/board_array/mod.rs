@@ -571,11 +571,12 @@ fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
         .filter(|layer| layer.layer_function == LayerFunction::Courtyard)
     {
         let layer_name = ipc.resolve(layer.name);
-        let doc =
-            geometry::extract_layer_for_view(ipc, layer_name, pcb_ir::dialects::ipc::View::Board)
-                .with_context(|| {
-                format!("failed to extract IPC-2581 courtyard layer '{layer_name}'")
-            })?;
+        let doc = geometry::extract_layer_for_view(
+            ipc,
+            layer_name,
+            pcb_ir::dialects::ipc::ArtworkScope::Board,
+        )
+        .with_context(|| format!("failed to extract IPC-2581 courtyard layer '{layer_name}'"))?;
         for feature in doc
             .features
             .iter()
