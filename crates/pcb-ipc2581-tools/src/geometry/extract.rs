@@ -93,6 +93,36 @@ fn ipc_placement(location: Point, xform: Option<Xform>) -> IpcPlacement {
     }
 }
 
+impl IpcPlacement {
+    /// Re-pivot the placement for a padstack shape carried at `offset` from
+    /// the padstack origin.
+    ///
+    /// A pad's `Location` is the shape's unrotated position — origin plus
+    /// offset — while its `Xform` rotates the padstack about the origin. The
+    /// final center therefore moves by the rotated offset minus the raw one:
+    /// `center + (R - I) * offset`. Unrotated pads keep their location
+    /// unchanged. This composition reproduces both the drill origins and the
+    /// rendered shape centers of KiCad's own Gerber exports for offset
+    /// padstacks.
+    fn with_shape_offset(self, offset: Point) -> Self {
+        let rotated = self.transform.transform_vector(offset);
+        let center = Point::new(
+            self.center.x + rotated.x - offset.x,
+            self.center.y + rotated.y - offset.y,
+        );
+        IpcPlacement {
+            center,
+            xform: self.xform,
+            transform: Affine2::placement(
+                center,
+                self.xform.rotation,
+                Mirror::across_y(self.xform.mirror),
+                self.xform.scale,
+            ),
+        }
+    }
+}
+
 fn apply_ipc_placement(feature: &mut GeometryFeature, placement: IpcPlacement) {
     feature.transform = placement.transform;
     feature.center = placement.center;
@@ -1336,10 +1366,7 @@ fn extract_pad(
         _ => FeatureRole::Pad,
     };
 
-    let placement = ipc_placement(Point::new(x, y), pad.xform);
-
-    let primitive_ref = pad_primitive_ref(pad, padstack, layer_ref);
-    let Some(primitive_ref) = primitive_ref else {
+    let Some(shape) = pad_shape(pad, padstack, layer_ref) else {
         doc.warn(format!(
             "Skipping padstack '{}' because it has no regular primitive for layer '{}'",
             context.ipc.resolve(padstack.name),
@@ -1347,6 +1374,8 @@ fn extract_pad(
         ));
         return Ok(None);
     };
+    let placement = ipc_placement(Point::new(x, y), pad.xform).with_shape_offset(shape.offset);
+    let primitive_ref = shape.primitive;
 
     let path_start = doc.arena.paths.len() as u32;
     let paint = match primitive_ref {
@@ -1420,22 +1449,22 @@ fn extract_pad(
     Ok(Some(feature))
 }
 
-fn pad_primitive_ref(
+/// The shape a pad paints on one layer: its primitive plus the layer
+/// definition's offset from the padstack origin.
+///
+/// The layer's `PadstackPadDef` is the sole authority for the offset, even
+/// when the pad-level inline primitive reference wins the primitive choice.
+struct PadShape {
+    primitive: PadPrimitiveRef,
+    offset: Point,
+}
+
+fn pad_shape(
     pad: &ipc2581::types::Pad,
     padstack: &ipc2581::types::PadStackDef,
     layer_ref: Symbol,
-) -> Option<PadPrimitiveRef> {
-    pad.standard_primitive_ref
-        .map(PadPrimitiveRef::Standard)
-        .or_else(|| pad.user_primitive_ref.map(PadPrimitiveRef::User))
-        .or_else(|| find_pad_primitive_ref(padstack, layer_ref))
-}
-
-fn find_pad_primitive_ref(
-    padstack: &ipc2581::types::PadStackDef,
-    layer_ref: Symbol,
-) -> Option<PadPrimitiveRef> {
-    padstack
+) -> Option<PadShape> {
+    let pad_def = padstack
         .pad_defs
         .iter()
         .find(|pad_def| pad_def.layer_ref == layer_ref && pad_def.pad_use == PadUse::Regular)
@@ -1443,13 +1472,21 @@ fn find_pad_primitive_ref(
             padstack.pad_defs.iter().find(|pad_def| {
                 pad_def.layer_ref == layer_ref && pad_def.pad_use == PadUse::Thermal
             })
-        })
-        .and_then(|pad_def| {
-            pad_def
-                .standard_primitive_ref
-                .map(PadPrimitiveRef::Standard)
-                .or_else(|| pad_def.user_primitive_ref.map(PadPrimitiveRef::User))
-        })
+        });
+    let primitive = pad
+        .standard_primitive_ref
+        .map(PadPrimitiveRef::Standard)
+        .or_else(|| pad.user_primitive_ref.map(PadPrimitiveRef::User))
+        .or_else(|| {
+            pad_def.and_then(|pad_def| {
+                pad_def
+                    .standard_primitive_ref
+                    .map(PadPrimitiveRef::Standard)
+                    .or_else(|| pad_def.user_primitive_ref.map(PadPrimitiveRef::User))
+            })
+        })?;
+    let offset = pad_def.map_or(Point::default(), |pad_def| Point::new(pad_def.x, pad_def.y));
+    Some(PadShape { primitive, offset })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4385,6 +4422,70 @@ mod tests {
         );
         assert!((slot.bbox.width() - 0.60).abs() < 1e-6);
         assert!((slot.bbox.height() - 1.70).abs() < 1e-6);
+    }
+
+    #[test]
+    fn padstack_shape_offsets_pivot_about_the_recovered_origin() {
+        // A pad's Location is the shape's unrotated position (origin plus
+        // the PadstackPadDef offset); Xform rotation pivots about the
+        // origin. An unrotated pad stays at its Location; a 270-degree pad
+        // moves by (R - I) * offset. This matches KiCad's own Gerber and
+        // drill output for offset padstacks.
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="square">
+        <RectCenter width="8" height="8"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="offset_pad">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <Location x="-2.0" y="-2.0"/>
+            <StandardPrimitiveRef id="square"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Pad padstackDefRef="offset_pad">
+              <Location x="10" y="10"/>
+              <StandardPrimitiveRef id="square"/>
+            </Pad>
+            <Pad padstackDefRef="offset_pad">
+              <Xform rotation="270.0"/>
+              <Location x="40" y="10"/>
+              <StandardPrimitiveRef id="square"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let doc = extract_layer(&ipc, "TOP").unwrap();
+        assert_eq!(doc.features.len(), 2);
+
+        let unrotated = doc.features[0].bbox;
+        assert!((unrotated.center().x - 10.0).abs() < 1e-9);
+        assert!((unrotated.center().y - 10.0).abs() < 1e-9);
+
+        // (R270 - I) * (-2, -2) = (-2, 2) - (-2, -2) = (0, 4).
+        let rotated = doc.features[1].bbox;
+        assert!((rotated.center().x - 40.0).abs() < 1e-9);
+        assert!((rotated.center().y - 14.0).abs() < 1e-9);
     }
 
     #[test]
