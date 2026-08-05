@@ -79,7 +79,7 @@ impl DenseCopperBalanceProfile {
         boundary_web_mm: 0.20,
         density_sigma_mm: 5.0,
         void_radius_step_mm: 0.005,
-        stack_flex_density: 0.0,
+        stack_flex_density: 0.01,
     };
 
     pub fn lattice_column_pitch_mm(self) -> f64 {
