@@ -242,8 +242,7 @@ fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayer
         .collect::<Vec<_>>();
     if !image_features.is_empty() {
         let mut image = doc.clone();
-        image.layers[0].features =
-            pcb_ir::geom::Span::new(0, image_features.len() as u32);
+        image.layers[0].features = pcb_ir::geom::Span::new(0, image_features.len() as u32);
         image.features = image_features;
         let mask = crate::geometry::render::layer_mask(
             &image,
