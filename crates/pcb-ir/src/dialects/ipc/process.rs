@@ -603,6 +603,14 @@ pub fn split_primitive_feature_path_runs<S: Clone, L>(
         );
     }
 
+    // A fragment of a dictionary entry is not the entry: only a feature
+    // carrying the entry's entire geometry keeps its primitive identity.
+    if features.len() != 1 || features[0].paths != feature.paths {
+        for fragment in &mut features {
+            fragment.primitive_ref = None;
+        }
+    }
+
     Ok(features)
 }
 
@@ -803,7 +811,7 @@ fn feature_set_bbox<S, L>(doc: &Document<S, L>, set_index: usize) -> BBox {
 mod tests {
     use super::*;
     use crate::dialects::ipc::feature::{
-        FeatureDomain, FeatureMaterial, FeatureOperation, FeatureRole, SourceRef,
+        FeatureDomain, FeatureMaterial, FeatureOperation, FeatureRole, PrimitiveRef, SourceRef,
     };
     use crate::dialects::ipc::validate::validate_artwork_ready;
     use crate::geom::path::PathCmd;
@@ -1340,5 +1348,41 @@ mod tests {
             PathCmd::line_to(Point::new(x0, y1)),
             PathCmd::close(),
         ])
+    }
+
+    #[test]
+    fn split_path_runs_keep_primitive_identity_only_for_whole_entries() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rect_contour(0.0, 0.0, 1.0, 1.0)],
+        );
+        doc.push_path(
+            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 2.0)),
+                PathCmd::line_to(Point::new(1.0, 2.0)),
+            ])],
+        );
+
+        let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
+        feature.primitive_ref = Some(PrimitiveRef::User(7));
+        feature.paths = Span::new(0, 2);
+
+        let fragments = split_primitive_feature_path_runs(&doc, feature.clone()).unwrap();
+        assert_eq!(fragments.len(), 2);
+        assert!(
+            fragments
+                .iter()
+                .all(|fragment| fragment.primitive_ref.is_none()),
+            "fragments must not claim the dictionary entry's identity"
+        );
+
+        feature.paths = Span::new(0, 1);
+        let whole = split_primitive_feature_path_runs(&doc, feature).unwrap();
+        assert_eq!(whole.len(), 1);
+        assert_eq!(whole[0].primitive_ref, Some(PrimitiveRef::User(7)));
     }
 }
