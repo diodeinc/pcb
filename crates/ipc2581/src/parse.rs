@@ -2965,6 +2965,23 @@ impl<'a> Parser<'a> {
         let pad_use_str = self.required_attr(node, "padUse", "PadstackPadDef")?;
         let pad_use = self.parse_pad_use(self.interner.resolve(pad_use_str))?;
 
+        // The optional Location is the layer shape's offset from the
+        // padstack origin.
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        let location = self
+            .element_children(node)
+            .find(|n| self.name(n) == "Location");
+        let coordinate = |axis: &str| {
+            location
+                .as_ref()
+                .and_then(|n| self.attr(n, axis))
+                .and_then(|value| value.parse::<f64>().ok())
+                .map(|value| crate::units::to_mm(value, units))
+                .unwrap_or(0.0)
+        };
+        let x = coordinate("x");
+        let y = coordinate("y");
+
         // Parse StandardPrimitiveRef if present
         let standard_primitive_ref = self
             .element_children(node)
@@ -2982,6 +2999,8 @@ impl<'a> Parser<'a> {
         Ok(PadstackPadDef {
             layer_ref,
             pad_use,
+            x,
+            y,
             standard_primitive_ref,
             user_primitive_ref,
         })

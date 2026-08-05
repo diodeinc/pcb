@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Pad shapes with padstack offsets now land at the correct position on rotated pads across all IPC-2581 outputs.
+
 ## [0.4.22] - 2026-08-04
 
 ### Changed

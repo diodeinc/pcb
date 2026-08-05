@@ -184,6 +184,10 @@ pub struct PadstackHoleDef {
 pub struct PadstackPadDef {
     pub layer_ref: Symbol,
     pub pad_use: PadUse,
+    /// Shape offset from the padstack origin, in millimeters. The pad's
+    /// `Xform` rotates and mirrors this offset together with the shape.
+    pub x: f64,
+    pub y: f64,
     pub standard_primitive_ref: Option<Symbol>,
     pub user_primitive_ref: Option<Symbol>,
 }
