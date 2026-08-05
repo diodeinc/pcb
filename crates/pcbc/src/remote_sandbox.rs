@@ -764,11 +764,10 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
 }
 
 fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> Result<bool> {
+    // Browser launches via pcb-launcher redirect stdio, so there is no TTY for
+    // inquire. Match the interactive Confirm default and restore automatically.
     if !crate::tty::is_interactive() {
-        bail!(
-            "Found a local recovery file for this remote layout at {}. Re-run `pcb open` interactively to choose whether to restore it.",
-            session.manifest.layout_file.display(),
-        );
+        return Ok(true);
     }
     let prompt = format!(
         "Restore previous local KiCad recovery file from {}?",
