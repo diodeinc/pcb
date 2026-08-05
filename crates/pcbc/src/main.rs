@@ -38,6 +38,7 @@ mod open;
 mod pcb_mod;
 mod preview;
 mod publish;
+mod recovery_dialog;
 mod release;
 mod remote_sandbox;
 mod route;
