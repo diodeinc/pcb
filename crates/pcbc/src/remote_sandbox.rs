@@ -240,16 +240,9 @@ fn open_layout_and_sync(
                 "Remote sync stopped; local recovery file is {}",
                 local.pcb_file.display()
             ));
-            let terminate_result = session.terminate();
+            // Leave KiCad open so an interrupted sync cannot discard unsaved
+            // edits or close another concurrent editor session.
             let release_result = lock.release();
-            if let Err(terminate_err) = terminate_result {
-                return Err(error).with_context(|| {
-                    format!(
-                        "Remote sync stopped. Local recovery file: {}. Also failed to quit KiCad: {terminate_err:#}",
-                        local.pcb_file.display()
-                    )
-                });
-            }
             if let Err(release_err) = release_result {
                 return Err(error).with_context(|| {
                     format!(
@@ -470,8 +463,8 @@ fn sync_layout_down(
     let mut recovered_session = None;
     if let Some(status) = restore_status
         && let Some(session) = latest_recoverable_session(&cache_root)?
-        && let Some(restore) = prompt_restore_recovery(status, &session)
     {
+        let restore = prompt_restore_recovery(status, &session);
         mark_recoverable_sessions_prompt_seen(&cache_root);
         if restore {
             recovered_session = Some(session);
@@ -770,13 +763,9 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
     Ok(latest)
 }
 
-fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> Option<bool> {
+fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> bool {
     if !crate::tty::is_interactive() {
-        eprintln!(
-            "Found local recovery file for this remote layout at {}. Re-run interactively to restore it.",
-            session.manifest.layout_file.display()
-        );
-        return None;
+        return true;
     }
     let prompt = format!(
         "Restore previous local KiCad recovery file from {}?",
@@ -788,7 +777,7 @@ fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> O
             .prompt()
             .unwrap_or(false)
     };
-    Some(status.suspend(ask))
+    status.suspend(ask)
 }
 
 fn mark_recoverable_sessions_prompt_seen(cache_root: &Path) {
