@@ -1075,6 +1075,78 @@ mod tests {
     }
 
     #[test]
+    fn contour_apertures_survive_mirrored_bases() {
+        // A mirrored basis reverses ring winding when it is baked into the
+        // aperture outline; normalization happens after baking, so the
+        // material must survive with its full area.
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+
+        let counter_clockwise = [
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+        ];
+        let mut bbox = BBox::empty();
+        let mut cmds = Vec::new();
+        for (index, point) in counter_clockwise.into_iter().enumerate() {
+            bbox.include_point(point);
+            cmds.push(if index == 0 {
+                PathCmd::move_to(point)
+            } else {
+                PathCmd::line_to(point)
+            });
+        }
+        cmds.push(PathCmd::close());
+        let contour = ContourBuf::from_parts(bbox, cmds);
+
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour(contour)));
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                polarity: Polarity::Dark,
+                order: Default::default(),
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: pcb_ir::geom::Affine2 {
+                        m00: -1.0,
+                        m01: 0.0,
+                        m02: 30.0,
+                        m10: 0.0,
+                        m11: 1.0,
+                        m12: 5.0,
+                    },
+                },
+                bbox: BBox {
+                    min: Point::new(20.0, 5.0),
+                    max: Point::new(30.0, 15.0),
+                },
+                meta: ObjectAttributes::default(),
+            },
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let contents = crate::write_layer(&gerber).expect("write Gerber");
+        assert_external_parser_accepts(&contents);
+        let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
+        let geometry = crate::geometry::extract_document(&parsed);
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        assert!(
+            (summary.area_mm2 - 100.0).abs() < 0.01,
+            "a mirrored basis must not invert the loop into a hole: {}",
+            summary.area_mm2
+        );
+    }
+
+    #[test]
     fn lowers_single_self_cut_even_odd_region_before_emitting_gerber() {
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
