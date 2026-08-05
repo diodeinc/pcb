@@ -566,7 +566,10 @@ pub fn generate_spatial_dense_copper_balance(
         .map(|(layer_index, sum)| {
             let slack = profile.stack_flex_density * density_domain_areas[layer_index]
                 / ROUNDED_HEXAGON_AREA_FACTOR;
-            let site_count = active_sites[layer_index].len() as f64;
+            // A layer that took no lattice has no radii to trade with, and its
+            // sites are not its own to spend: sizing the box range from them
+            // would put the band above a sum that is fixed at zero.
+            let site_count = squared_radii[layer_index].len() as f64;
             (
                 (sum - slack).max(site_count * profile.min_void_radius_mm.powi(2)),
                 (sum + slack).min(site_count * profile.max_void_radius_mm.powi(2)),
@@ -1535,6 +1538,61 @@ mod tests {
         assert!(
             (result.solution.generated_area_mm2 - baseline.solution.generated_area_mm2).abs()
                 <= AREA_SOLVE_TOLERANCE_MM2 + quantization_bound_mm2
+        );
+    }
+
+    /// A layer that takes no lattice still sits in the joint solve, and its
+    /// band has to describe a sum that cannot move. Sizing that band from the
+    /// sites it declined would place it above zero and invert it.
+    #[test]
+    fn a_layer_without_a_lattice_keeps_a_degenerate_band() {
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(30.0, 20.0)),
+            tol::REGION_MM,
+        );
+        let empty = ContourSet::empty(tol::REGION_MM);
+        // A target its whole safe region cannot reach saturates this layer to
+        // a solid pour, leaving it no radii while its sites still exist.
+        let results = generate_spatial_dense_copper_balance(
+            DenseCopperBalanceProfile {
+                stack_flex_density: 0.01,
+                ..DenseCopperBalanceProfile::V1
+            },
+            SpatialCopperBalanceRequest {
+                panel_region: &panel,
+                lattice_origin: Point::ZERO,
+                layers: &[
+                    SpatialCopperBalanceLayerRequest {
+                        safe_region: &panel,
+                        existing_copper: &empty,
+                        density_domain: &panel,
+                        target_density: 1.0,
+                        stack_weight_mm2: 1.0,
+                    },
+                    SpatialCopperBalanceLayerRequest {
+                        safe_region: &panel,
+                        existing_copper: &empty,
+                        density_domain: &panel,
+                        target_density: 0.5,
+                        stack_weight_mm2: -1.0,
+                    },
+                ],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(results[0].solution.mode, DenseCopperBalanceMode::Solid);
+        assert!(matches!(
+            results[1].solution.mode,
+            DenseCopperBalanceMode::Perforated { .. }
+        ));
+        // The saturated layer cannot trade, so the free layer has no partner
+        // and stays on its own target.
+        assert!(
+            (results[1].solution.achieved_density - results[1].solution.target_density).abs()
+                <= 5e-3,
+            "{:?}",
+            results[1].solution
         );
     }
 
