@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -460,8 +460,17 @@ fn artwork_from_ipc_layer(
         bbox: layer.bbox,
         meta: spec.meta,
     });
+    let mut instance_apertures = InstanceApertures::default();
     for feature in layer.features.slice(&doc.features) {
-        push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
+        push_artwork_feature(
+            &mut artwork,
+            artwork_layer,
+            ipc,
+            doc,
+            feature,
+            &layer.name,
+            &mut instance_apertures,
+        )?;
     }
     if spec.role == GerberLayerRole::Profile
         && spec.view != View::ArrayFlattened
@@ -971,6 +980,68 @@ fn ir_side(side: Option<IpcSide>) -> IrSide {
     }
 }
 
+/// Shared contour apertures for repeated primitive instances, one per
+/// referenced dictionary entry.
+#[derive(Default)]
+struct InstanceApertures {
+    by_primitive: HashMap<ipc2581::Symbol, u32>,
+}
+
+/// A dictionary-instance feature: a translated reference whose local shape
+/// is shared by every sibling instance. The shape flashes through one
+/// contour aperture per dictionary entry, keeping repeated geometry
+/// repeated in the output.
+fn instance_flash(
+    artwork: &mut GerberArtwork,
+    doc: &IpcGeometryDocument,
+    feature: &Feature<ipc2581::Symbol>,
+    apertures: &mut InstanceApertures,
+) -> Option<(u32, Point)> {
+    let primitive = feature.primitive_ref?;
+    if feature.kind != pcb_ir::dialects::ipc::FeatureKind::Primitive
+        || !is_translation(feature.transform)
+    {
+        return None;
+    }
+    let [path] = feature.paths.slice(&doc.arena.paths) else {
+        return None;
+    };
+    if !path.is_filled() {
+        return None;
+    }
+    let at = Point::new(feature.transform.m02, feature.transform.m12);
+    if let Some(&aperture) = apertures.by_primitive.get(&primitive) {
+        return Some((aperture, at));
+    }
+    // Derive the origin-local template from this first instance.
+    let local = doc
+        .arena
+        .path_contours(path)
+        .iter()
+        .map(|contour| {
+            pcb_ir::geom::path::transform_cmds(
+                contour.cmds.iter().copied(),
+                Affine2::translation(Point::new(-at.x, -at.y)),
+            )
+        })
+        .collect::<Vec<_>>();
+    let [local] = local.as_slice() else {
+        return None;
+    };
+    let aperture = artwork.push_aperture(Aperture::solid(
+        pcb_ir::dialects::artwork::ApertureShape::Contour(local.clone()),
+    ));
+    apertures.by_primitive.insert(primitive, aperture);
+    Some((aperture, at))
+}
+
+fn is_translation(transform: Affine2) -> bool {
+    (transform.m00 - 1.0).abs() <= GEOMETRY_EPSILON
+        && transform.m01.abs() <= GEOMETRY_EPSILON
+        && transform.m10.abs() <= GEOMETRY_EPSILON
+        && (transform.m11 - 1.0).abs() <= GEOMETRY_EPSILON
+}
+
 fn push_artwork_feature(
     artwork: &mut GerberArtwork,
     artwork_layer: u32,
@@ -978,7 +1049,25 @@ fn push_artwork_feature(
     doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
     layer_name: &str,
+    instance_apertures: &mut InstanceApertures,
 ) -> Result<()> {
+    if let Some((aperture, at)) = instance_flash(artwork, doc, feature, instance_apertures) {
+        artwork.push_object(
+            artwork_layer,
+            ArtworkObject {
+                polarity: feature.polarity,
+                order: paint_order(feature),
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: Affine2::translation(at),
+                },
+                bbox: feature.bbox,
+                meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
+            },
+        );
+        return Ok(());
+    }
+
     if let Some((aperture, at, bbox)) = standard_flash_aperture(ipc, feature) {
         let aperture = artwork.push_aperture(aperture);
         artwork.push_object(
@@ -1071,7 +1160,7 @@ fn standard_flash_aperture(
     };
 
     let at = feature.center;
-    let bbox = flash_bbox(at, aperture);
+    let bbox = flash_bbox(at, &aperture);
     Some((aperture, at, bbox))
 }
 
@@ -1154,7 +1243,7 @@ fn axis_aligned_size(transform: Affine2, width: f64, height: f64) -> Option<(f64
     None
 }
 
-fn flash_bbox(at: Point, aperture: Aperture) -> BBox {
+fn flash_bbox(at: Point, aperture: &Aperture) -> BBox {
     let local = aperture.bbox();
     BBox::new(at + local.min, at + local.max)
 }

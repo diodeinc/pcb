@@ -210,14 +210,14 @@ impl Geometry {
 }
 
 /// A standard aperture: a primitive shape with an optional round hole.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Aperture {
     pub shape: ApertureShape,
     /// Diameter of the round hole through the aperture; `0.0` means solid.
     pub hole_diameter: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ApertureShape {
     Circle {
         diameter: f64,
@@ -237,6 +237,10 @@ pub enum ApertureShape {
         vertices: u32,
         rotation_degrees: f64,
     },
+    /// An arbitrary origin-local filled contour, shared by every flash of
+    /// this aperture. This is how repeated dictionary instances stay
+    /// instances all the way to the output.
+    Contour(ContourBuf),
 }
 
 impl Aperture {
@@ -254,15 +258,16 @@ impl Aperture {
     /// Flatten to local-space contours. With a hole, the result is the outer
     /// shape plus the hole contour and must be filled with `EvenOdd`.
     pub fn contours(&self) -> Vec<ContourBuf> {
-        let outer = match self.shape {
-            ApertureShape::Circle { diameter } => shapes::circle(diameter),
-            ApertureShape::Rectangle { width, height } => shapes::rect(width, height),
-            ApertureShape::Obround { width, height } => shapes::obround(width, height, true),
+        let outer = match &self.shape {
+            ApertureShape::Circle { diameter } => shapes::circle(*diameter),
+            ApertureShape::Rectangle { width, height } => shapes::rect(*width, *height),
+            ApertureShape::Obround { width, height } => shapes::obround(*width, *height, true),
             ApertureShape::Polygon {
                 diameter,
                 vertices,
                 rotation_degrees,
-            } => shapes::regular_polygon(diameter, vertices, rotation_degrees),
+            } => shapes::regular_polygon(*diameter, *vertices, *rotation_degrees),
+            ApertureShape::Contour(contour) => return vec![contour.clone()],
         };
         let mut contours: Vec<ContourBuf> = outer.into_iter().collect();
         if !contours.is_empty() && self.hole_diameter > 0.0 {
@@ -280,7 +285,7 @@ impl Aperture {
     }
 
     pub fn bbox(&self) -> BBox {
-        match self.shape {
+        match &self.shape {
             ApertureShape::Circle { diameter } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
@@ -292,6 +297,7 @@ impl Aperture {
             ApertureShape::Polygon { diameter, .. } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
+            ApertureShape::Contour(contour) => contour.bbox,
         }
     }
 }
@@ -437,7 +443,7 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
         else {
             continue;
         };
-        let Some(aperture) = doc.apertures.get(aperture as usize).copied() else {
+        let Some(aperture) = doc.apertures.get(aperture as usize).cloned() else {
             doc.warn("Skipping artwork flash with invalid aperture reference");
             continue;
         };

@@ -5,7 +5,7 @@
 //! can be emitted as a Gerber file, regardless of which source dialect
 //! produced it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use crate::{
     AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
@@ -142,20 +142,8 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
         .map(|layer| layer.meta.clone())
         .unwrap_or_default();
 
-    let flashes = plan_repeated_clear_flashes(layer, &mut apertures)?;
-    for (source_index, object) in layer.objects.iter().enumerate() {
-        let objects = if let Some(flash) = flashes.get(&source_index) {
-            vec![WriterObject {
-                kind: ObjectKind::Flash {
-                    at: lower_point(flash.at),
-                    aperture: flash.aperture,
-                },
-                polarity: object.polarity,
-                attributes: lower_object_attributes(&object.meta),
-            }]
-        } else {
-            lower_artwork_object(layer, object, &mut apertures)?
-        };
+    for object in layer.objects.iter() {
+        let objects = lower_artwork_object(layer, object, &mut apertures)?;
         plan.push_group(object.order.stage, object.polarity, objects);
     }
     let objects = plan.into_ordered_objects();
@@ -168,131 +156,6 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
         objects,
         ..GerberLayer::default()
     })
-}
-
-/// Minimum congruent clear regions before sharing their outline as a macro
-/// aperture pays for the definition.
-const MIN_REPEATED_CLEAR_FLASHES: usize = 16;
-
-/// Congruence quantum for translated-copy detection, in millimeters.
-const CLEAR_FLASH_QUANTUM_MM: f64 = 1e-6;
-
-struct PlannedClearFlash {
-    at: Point,
-    aperture: i32,
-}
-
-/// Plan translation-congruent single-contour clear regions as flashes of one
-/// shared outline-macro aperture.
-///
-/// Each flash replaces its region at the same position in the object order
-/// with identical geometry and polarity, so the painted image is unchanged
-/// and no polarity reasoning is required. Dense generated patterns — copper
-/// balance void lattices above all — collapse from hundreds of bytes per
-/// instance to one flash each.
-fn plan_repeated_clear_flashes(
-    layer: &ArtworkDocument,
-    apertures: &mut ApertureTable,
-) -> Result<HashMap<usize, PlannedClearFlash>> {
-    // Ordered so macro names and aperture codes are stable across runs.
-    type Signature = (Vec<String>, Vec<CommandSignature>);
-    let mut groups: BTreeMap<Signature, Vec<(usize, Point)>> = BTreeMap::new();
-    for (index, object) in layer.objects.iter().enumerate() {
-        if object.polarity != Polarity::Clear {
-            continue;
-        }
-        let ArtworkGeometry::Region { path } = object.geometry else {
-            continue;
-        };
-        let contours = layer.arena.path_contours(&layer.arena.paths[path as usize]);
-        let [contour] = contours.as_slice() else {
-            continue;
-        };
-        let Some(anchor) = contour_anchor(contour) else {
-            continue;
-        };
-        if contour.cmds.len() > 256 {
-            continue;
-        }
-        let function = object
-            .meta
-            .aperture_function
-            .clone()
-            .unwrap_or_else(|| vec!["Conductor".to_string()]);
-        groups
-            .entry((function, contour_signature(contour, anchor)))
-            .or_default()
-            .push((index, anchor));
-    }
-
-    let mut plan = HashMap::new();
-    for ((function, _), members) in groups {
-        if members.len() < MIN_REPEATED_CLEAR_FLASHES {
-            continue;
-        }
-        let (template_index, template_anchor) = members[0];
-        let ArtworkGeometry::Region { path } = layer.objects[template_index].geometry else {
-            continue;
-        };
-        let contours = layer.arena.path_contours(&layer.arena.paths[path as usize]);
-        let Some(ring) = region::rings_from_contours(&contours).into_iter().next() else {
-            continue;
-        };
-        let outline = ring
-            .iter()
-            .map(|[x, y]| [x - template_anchor.x, y - template_anchor.y])
-            .collect::<Vec<_>>();
-        let aperture = apertures.outline_macro(&outline, &function)?;
-        for (index, anchor) in members {
-            plan.insert(
-                index,
-                PlannedClearFlash {
-                    at: anchor,
-                    aperture,
-                },
-            );
-        }
-    }
-    Ok(plan)
-}
-
-fn contour_anchor(contour: &ContourBuf) -> Option<Point> {
-    let first = contour.cmds.first()?;
-    matches!(first.op, geom_path::PathOp::MoveTo).then(|| first.p0)
-}
-
-type CommandSignature = (u8, i64, i64, i64, i64, i64, i64, bool);
-
-/// Translation-invariant shape identity: command opcodes plus every control
-/// point relative to the contour anchor, quantized to the congruence
-/// quantum.
-fn contour_signature(contour: &ContourBuf, anchor: Point) -> Vec<CommandSignature> {
-    let quantize = |value: f64| (value / CLEAR_FLASH_QUANTUM_MM).round() as i64;
-    contour
-        .cmds
-        .iter()
-        .map(|cmd| {
-            let (p0, p1, p2, clockwise) = match cmd.op {
-                geom_path::PathOp::ArcTo => (cmd.p0, cmd.p1, anchor, cmd.clockwise),
-                geom_path::PathOp::CubicTo => (cmd.p0, cmd.p1, cmd.p2, false),
-                geom_path::PathOp::MoveTo | geom_path::PathOp::LineTo => {
-                    (cmd.p0, anchor, anchor, false)
-                }
-                // Close carries no control points of its own.
-                geom_path::PathOp::Close => (anchor, anchor, anchor, false),
-            };
-            (
-                cmd.op as u8,
-                quantize(p0.x - anchor.x),
-                quantize(p0.y - anchor.y),
-                quantize(p1.x - anchor.x),
-                quantize(p1.y - anchor.y),
-                quantize(p2.x - anchor.x),
-                quantize(p2.y - anchor.y),
-                clockwise,
-            )
-        })
-        .collect()
 }
 
 fn lower_artwork_object(
@@ -360,11 +223,16 @@ fn lower_artwork_object(
                     "cannot lower transformed artwork flash to Gerber".to_string(),
                 ));
             }
-            let artwork_aperture = *layer.apertures.get(aperture as usize).ok_or_else(|| {
-                GerberError::InvalidStructure(format!(
-                    "artwork flash references missing aperture {aperture}"
-                ))
-            })?;
+            let artwork_aperture =
+                layer
+                    .apertures
+                    .get(aperture as usize)
+                    .cloned()
+                    .ok_or_else(|| {
+                        GerberError::InvalidStructure(format!(
+                            "artwork flash references missing aperture {aperture}"
+                        ))
+                    })?;
             let default_function = vec!["Conductor".to_string()];
             let aperture_function = object
                 .meta
@@ -493,6 +361,7 @@ enum ApertureTemplateKey {
         rotation_microdeg: i64,
         hole_nm: i64,
     },
+    Contour(Vec<(i64, i64)>),
 }
 
 impl ApertureTable {
@@ -527,6 +396,35 @@ impl ApertureTable {
     fn artwork_aperture(&mut self, aperture: Aperture, function: &[String]) -> Result<i32> {
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
         match aperture.shape {
+            ApertureShape::Contour(contour) => {
+                let Some(ring) = region::rings_from_contours(std::slice::from_ref(&contour))
+                    .into_iter()
+                    .next()
+                else {
+                    return Err(GerberError::InvalidStructure(
+                        "cannot export an empty contour aperture".to_string(),
+                    ));
+                };
+                let key = ring
+                    .iter()
+                    .map(|[x, y]| (quantize_mm(*x), quantize_mm(*y)))
+                    .collect::<Vec<_>>();
+                if let Some(code) = self.by_key.get(&ApertureKey {
+                    template: ApertureTemplateKey::Contour(key.clone()),
+                    function: function.to_vec(),
+                }) {
+                    return Ok(*code);
+                }
+                let code = self.outline_macro(&ring, function)?;
+                self.by_key.insert(
+                    ApertureKey {
+                        template: ApertureTemplateKey::Contour(key),
+                        function: function.to_vec(),
+                    },
+                    code,
+                );
+                Ok(code)
+            }
             ApertureShape::Circle { diameter } => {
                 self.circle_with_hole(diameter, hole_diameter, function)
             }
