@@ -4346,6 +4346,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-launcher"
+version = "0.4.37"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "url",
+]
+
+[[package]]
 name = "pcb-layout"
 version = "0.4.37"
 dependencies = [

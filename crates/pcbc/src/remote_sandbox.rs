@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::layout::{LayoutArgs, LayoutOutputFormat};
 use crate::open::OpenArgs;
+use crate::recovery_dialog::{RecoveryChoice, URL_LAUNCHER_ENV};
 
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -51,7 +52,11 @@ pub fn execute_layout(uri: SandboxFileUri, args: LayoutArgs) -> Result<()> {
     let result = run_remote_layout(&client, &uri, &args)?;
     status.set_message("Downloading layout from sandbox...");
     let restore_status = should_open.then_some(&status);
-    let local = sync_layout_down(&client, &uri, &result, restore_status)?;
+    let Some(local) = sync_layout_down(&client, &uri, &result, restore_status)? else {
+        lock.release()?;
+        status.finish();
+        return Ok(());
+    };
     if should_open {
         return open_layout_and_sync(&client, &uri, &local, lock, status);
     }
@@ -91,11 +96,17 @@ pub fn execute_open(uri: SandboxFileUri, args: OpenArgs) -> Result<()> {
         status.set_message("Downloading layout from sandbox...");
         sync_layout_down(&client, &uri, &result, Some(&status))?
     };
+    let Some(local) = local else {
+        lock.release()?;
+        status.finish();
+        return Ok(());
+    };
 
     open_layout_and_sync(&client, &uri, &local, lock, status)
 }
 
 struct LocalLayout {
+    cache_root: PathBuf,
     remote_layout_dir: String,
     local_layout_dir: PathBuf,
     pcb_file: PathBuf,
@@ -188,12 +199,13 @@ fn open_layout_and_sync(
         .sync_session
         .clone()
         .context("Remote sync session was not initialized")?;
-    restore_recovered_layout_if_needed(client, uri, local, &status).with_context(|| {
-        format!(
-            "Failed to restore local recovery file {}",
-            local.pcb_file.display()
-        )
-    })?;
+    restore_recovered_layout_if_needed(client, uri, local, &mut sync_session, &status)
+        .with_context(|| {
+            format!(
+                "Failed to restore local recovery file {}",
+                local.pcb_file.display()
+            )
+        })?;
     sync_session.mark_active()?;
     let running = install_shutdown_flag()?;
     status.set_message(format!("Opening {}...", local.pcb_file.display()));
@@ -237,16 +249,9 @@ fn open_layout_and_sync(
                 "Remote sync stopped; local recovery file is {}",
                 local.pcb_file.display()
             ));
-            let terminate_result = session.terminate();
+            // Leave KiCad open so an interrupted sync cannot discard unsaved
+            // edits or close another concurrent editor session.
             let release_result = lock.release();
-            if let Err(terminate_err) = terminate_result {
-                return Err(error).with_context(|| {
-                    format!(
-                        "Remote sync stopped. Local recovery file: {}. Also failed to quit KiCad: {terminate_err:#}",
-                        local.pcb_file.display()
-                    )
-                });
-            }
             if let Err(release_err) = release_result {
                 return Err(error).with_context(|| {
                     format!(
@@ -440,7 +445,7 @@ fn sync_remote_pcb_file_down(
     client: &SandboxClient,
     uri: &SandboxFileUri,
     status: Option<&pcb_ui::Spinner>,
-) -> Result<LocalLayout> {
+) -> Result<Option<LocalLayout>> {
     let result = RemoteLayoutResult {
         layout_dir: Some(remote_parent_dir(&uri.sandbox_path)?),
         pcb_file: Some(uri.sandbox_path.clone()),
@@ -453,7 +458,7 @@ fn sync_layout_down(
     uri: &SandboxFileUri,
     result: &RemoteLayoutResult,
     restore_status: Option<&pcb_ui::Spinner>,
-) -> Result<LocalLayout> {
+) -> Result<Option<LocalLayout>> {
     let remote_layout_dir = result
         .layout_dir
         .as_ref()
@@ -470,11 +475,11 @@ fn sync_layout_down(
     let mut recovered_session = None;
     if let Some(status) = restore_status
         && let Some(session) = latest_recoverable_session(&cache_root)?
-        && let Some(restore) = prompt_restore_recovery(status, &session)
     {
-        mark_recoverable_sessions_prompt_seen(&cache_root);
-        if restore {
-            recovered_session = Some(session);
+        match prompt_restore_recovery(status, &session)? {
+            RecoveryChoice::Restore => recovered_session = Some(session),
+            RecoveryChoice::Discard => mark_recoverable_sessions_prompt_seen(&cache_root),
+            RecoveryChoice::Cancel => return Ok(None),
         }
     }
 
@@ -506,19 +511,21 @@ fn sync_layout_down(
             (local_layout_dir, pcb_file, sync_session, false)
         };
 
-    Ok(LocalLayout {
+    Ok(Some(LocalLayout {
+        cache_root,
         remote_layout_dir,
         local_layout_dir,
         pcb_file,
         sync_session,
         restored_from_recovery,
-    })
+    }))
 }
 
 fn restore_recovered_layout_if_needed(
     client: &SandboxClient,
     uri: &SandboxFileUri,
     local: &LocalLayout,
+    sync_session: &mut SyncSession,
     status: &pcb_ui::Spinner,
 ) -> Result<()> {
     if !local.restored_from_recovery {
@@ -529,6 +536,8 @@ fn restore_recovered_layout_if_needed(
         local.pcb_file.display()
     ));
     let stats = sync_layout_up_with_retry(client, uri, local)?;
+    mark_recoverable_sessions_prompt_seen(&local.cache_root);
+    sync_session.mark_prompt_seen()?;
     status.set_message(format!(
         "Restored recovery file ({} uploaded, {} removed).",
         stats.uploaded, stats.removed
@@ -770,13 +779,20 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
     Ok(latest)
 }
 
-fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> Option<bool> {
+fn prompt_restore_recovery(
+    status: &pcb_ui::Spinner,
+    session: &SyncSession,
+) -> Result<RecoveryChoice> {
     if !crate::tty::is_interactive() {
-        eprintln!(
-            "Found local recovery file for this remote layout at {}. Re-run interactively to restore it.",
-            session.manifest.layout_file.display()
-        );
-        return None;
+        if std::env::var_os(URL_LAUNCHER_ENV).is_some() {
+            return status.suspend(|| {
+                crate::recovery_dialog::choose(
+                    &session.manifest.layout_file,
+                    session.manifest.updated_at,
+                )
+            });
+        }
+        return Ok(RecoveryChoice::Restore);
     }
     let prompt = format!(
         "Restore previous local KiCad recovery file from {}?",
@@ -788,7 +804,11 @@ fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> O
             .prompt()
             .unwrap_or(false)
     };
-    Some(status.suspend(ask))
+    Ok(if status.suspend(ask) {
+        RecoveryChoice::Restore
+    } else {
+        RecoveryChoice::Discard
+    })
 }
 
 fn mark_recoverable_sessions_prompt_seen(cache_root: &Path) {

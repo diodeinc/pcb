@@ -40,6 +40,7 @@ mod open;
 #[path = "mod/mod.rs"]
 mod pcb_mod;
 mod publish;
+mod recovery_dialog;
 mod release;
 mod remote_sandbox;
 mod route;
