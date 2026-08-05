@@ -345,7 +345,7 @@ pub fn expand_native_geometry_to_regions<LayerMeta, ObjectMeta>(
 /// a polarity change, so stage ordering may only permute objects within each
 /// maximal same-polarity run. Final cutouts are terminal by definition and
 /// paint after everything.
-fn paint_ordered<ObjectMeta>(objects: &[Object<ObjectMeta>]) -> Vec<&Object<ObjectMeta>> {
+pub fn paint_ordered<ObjectMeta>(objects: &[Object<ObjectMeta>]) -> Vec<&Object<ObjectMeta>> {
     let (cutouts, mut painted): (Vec<_>, Vec<_>) = objects
         .iter()
         .partition(|object| object.order.stage == PaintStage::FinalCutout);

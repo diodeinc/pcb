@@ -19,10 +19,11 @@ pub mod surface_layers;
 pub mod validate;
 
 pub use analysis::{
-    ProfileOccurrence, ProfileOccurrenceRole, ProfileSet, SimpleBoardArrayLayout, View, board_bbox,
-    board_instance_count, board_step_count, layout_child_repeats, layout_instances_by_kind,
-    layout_repeat_instances, layout_steps_by_kind, panel_bbox, panel_step_count,
-    profile_occurrences_for, root_panel_step, root_step, simple_board_array_layout,
+    ArtworkScope, ProfileOccurrence, ProfileOccurrenceRole, ProfileSet, SimpleBoardArrayLayout,
+    board_bbox, board_instance_count, board_step_count, layout_child_repeats,
+    layout_instances_by_kind, layout_repeat_instances, layout_steps_by_kind, panel_bbox,
+    panel_step_count, profile_occurrences_for, root_panel_step, root_step,
+    simple_board_array_layout,
 };
 pub use balancing_region::{
     BalancingRegionError, BalancingRegionOptions, BoardArrayBalancingCollection,
@@ -45,8 +46,9 @@ pub use layout::{
     LayoutStepKind, StepProfile, StepProfileCutout,
 };
 pub use lower::{
-    BoardArrayFabricationProfile, BoardArrayReliefFeatures, FabricationProfileOptions,
-    board_array_fabrication_profile, lower_layer_to_artwork, lower_to_nc,
+    ArtworkLowering, ArtworkObjectKind, BoardArrayFabricationProfile, BoardArrayReliefFeatures,
+    FabricationProfileOptions, board_array_fabrication_profile, lower_layer_to_artwork,
+    lower_layer_to_artwork_with, lower_to_nc,
 };
 pub use spec::{Spec, SpecItem, SpecItemKind, SpecProperty, SpecRef};
 pub use surface_layers::{

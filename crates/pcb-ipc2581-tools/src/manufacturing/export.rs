@@ -2,10 +2,10 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use gerberx2::GerberLayer;
 use ipc2581::Ipc2581;
-use pcb_ir::dialects::ipc::View;
+use pcb_ir::dialects::ipc::ArtworkScope;
 use zip::{ZipWriter, write::FileOptions};
 
 use crate::{gerber, ipc2581 as ipc};
@@ -13,7 +13,7 @@ use crate::{gerber, ipc2581 as ipc};
 #[derive(Debug, Clone)]
 pub struct ManufacturingExportOptions {
     pub output: PathBuf,
-    pub view: View,
+    pub view: ArtworkScope,
     pub relief_debug_dir: Option<PathBuf>,
 }
 
@@ -44,7 +44,10 @@ pub fn export_manufacturing_package(
     Ok(package)
 }
 
-pub fn build_manufacturing_package(ipc: &Ipc2581, view: View) -> Result<ManufacturingPackage> {
+pub fn build_manufacturing_package(
+    ipc: &Ipc2581,
+    view: ArtworkScope,
+) -> Result<ManufacturingPackage> {
     build_manufacturing_package_inner(ipc, view, None)
 }
 
@@ -57,15 +60,9 @@ pub fn build_manufacturing_package_with_options(
 
 fn build_manufacturing_package_inner(
     ipc: &Ipc2581,
-    view: View,
+    view: ArtworkScope,
     relief_debug_dir: Option<&Path>,
 ) -> Result<ManufacturingPackage> {
-    if view == View::LayoutSymbolic {
-        bail!(
-            "manufacturing export does not support symbolic layout view; use board or board-array"
-        );
-    }
-
     let mut files = gerber::build_gerber_x2_files_with_options(
         ipc,
         view,

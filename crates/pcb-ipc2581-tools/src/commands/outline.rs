@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use pcb_ir::dialects::ipc::profile_occurrences_for;
+use pcb_ir::dialects::ipc::{ProfileSet, profile_occurrences_for};
 
 use crate::LayoutTarget;
 use crate::geometry;
@@ -13,6 +13,9 @@ use crate::utils::file as file_utils;
 pub struct OutlineOptions {
     pub output: PathBuf,
     pub layout_target: LayoutTarget,
+    /// Draw every placed boundary in the layout graph, including nested
+    /// assembly-panel boundaries, instead of the fabrication outlines alone.
+    pub nested_outlines: bool,
 }
 
 /// Export Step/Profile outlines as a DXF file.
@@ -20,7 +23,11 @@ pub fn execute(input_file: &Path, options: &OutlineOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = Ipc2581::parse(&content)?;
     let layout = geometry::extract_layout(&ipc)?;
-    let profile_set = options.layout_target.geometry_view().profile_set();
+    let profile_set = if options.nested_outlines {
+        ProfileSet::LayoutBoundaries
+    } else {
+        options.layout_target.artwork_scope().profile_set()
+    };
     if profile_occurrences_for(&layout, profile_set).is_empty() {
         bail!("IPC-2581 primary step and repeated child steps have no board Profile outline");
     }
@@ -79,7 +86,7 @@ mod tests {
         assert_eq!(
             profile_occurrences_for(
                 &layout,
-                LayoutTarget::BoardArray.geometry_view().profile_set()
+                LayoutTarget::BoardArray.artwork_scope().profile_set()
             )
             .len(),
             1

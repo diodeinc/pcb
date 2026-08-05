@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use ipc2581::types::ecad::Layer;
 use minijinja::{Environment, context};
-use pcb_ir::dialects::ipc::{ProfileSet, View};
+use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet};
 use serde::Serialize;
 
 use crate::UnitFormat;
@@ -389,8 +389,10 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    match geometry::extract_layer_for_view(ipc, &name, View::Board) {
-        Ok(geometry) => render_extracted_layer(&mut rendered, geometry, View::Board.profile_set()),
+    match geometry::extract_layer_for_view(ipc, &name, ArtworkScope::Board) {
+        Ok(geometry) => {
+            render_extracted_layer(&mut rendered, geometry, ArtworkScope::Board.profile_set())
+        }
         Err(error) => {
             rendered.warning = Some(format!("Render unavailable: {error}"));
         }
@@ -405,7 +407,7 @@ fn render_extracted_layer(
     profile_set: ProfileSet,
 ) {
     rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
-    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut geometry);
+    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut geometry);
     rendered.svg = Some(geometry::render::render_layer_svg(
         &geometry,
         true,

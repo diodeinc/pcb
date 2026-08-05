@@ -7,7 +7,7 @@
 use anyhow::{Context, Result, bail};
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{
-    BalancingRegionOptions, BoardArraySupportDocument, BoardArraySupportLayerPolicy, View,
+    ArtworkScope, BalancingRegionOptions, BoardArraySupportDocument, BoardArraySupportLayerPolicy,
     board_array_balancing_region, collect_board_array_balancing_input,
 };
 
@@ -149,7 +149,7 @@ pub fn extract_array_support_layers(ipc: &Ipc2581) -> Result<Vec<ArraySupportLay
         .iter()
         .map(|layer| {
             let name = ipc.resolve(layer.name).to_string();
-            let document = geometry::extract_layer_for_view(ipc, &name, View::ArraySupport)
+            let document = geometry::extract_layer_for_view(ipc, &name, ArtworkScope::ArraySupport)
                 .with_context(|| {
                     format!("failed to extract IPC-2581 array-support layer '{name}'")
                 })?;

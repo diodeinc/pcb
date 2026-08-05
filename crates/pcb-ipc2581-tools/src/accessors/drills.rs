@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::ipc::{FeatureKind, PlatingKind, View};
+use pcb_ir::dialects::ipc::{ArtworkScope, FeatureKind, PlatingKind};
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
@@ -56,21 +56,21 @@ pub struct DrillSize {
 impl<'a> IpcAccessor<'a> {
     /// Get board-local drill hole statistics with per-type distribution.
     pub fn board_drill_stats(&self) -> Option<DrillStats> {
-        self.drill_stats_for_view(View::Board)
+        self.drill_stats_for_view(ArtworkScope::Board)
     }
 
     /// Get array-local drill hole statistics, excluding repeated board drills.
     pub fn board_array_drill_stats(&self) -> Option<DrillStats> {
-        self.drill_stats_for_view(View::ArrayLocal)
+        self.drill_stats_for_view(ArtworkScope::ArrayLocal)
     }
 
     /// Get flattened board-array drill statistics, including repeated board drills
     /// and array-local drill features.
     pub fn board_array_flattened_drill_stats(&self) -> Option<DrillStats> {
-        self.drill_stats_for_view(View::ArrayFlattened)
+        self.drill_stats_for_view(ArtworkScope::ArrayFlattened)
     }
 
-    fn drill_stats_for_view(&self, view: View) -> Option<DrillStats> {
+    fn drill_stats_for_view(&self, view: ArtworkScope) -> Option<DrillStats> {
         let ecad = self.ecad()?;
         let mut collector = DrillStatsCollector::default();
         let mut has_drill_layer = false;
