@@ -25,17 +25,34 @@ area.
 
 For copper layer `l`, let:
 
-- `P` be the retained assembly-panel region with area `A_P`;
+- `P` be the retained assembly-panel region;
 - `B` be the union of repeated board footprints with area `A_B`;
 - `C_l` be the fixed copper region;
 - `S_l` be the initially empty safe region; and
 - `d_l = area(C_l intersect B) / A_B` be the board-density target.
 
+The density domain `D_l` is the part of `P` that holds copper or could hold
+copper, and `A_Dl` is its area:
+
+```text
+D_l = B union S_l union C_l
+```
+
 The requested generated area is:
 
 ```text
-A*_l = d_l A_P - area(C_l)
+A*_l = d_l A_Dl - area(C_l)
 ```
+
+Panel material that is permanently bare — board clearance, rails, V-score
+relief, tooling holes, gaps too narrow to hold a void — is excluded from `D_l`
+and so from both sides of the ratio. Charging the request against all of `P`
+instead would ask for `d_l` times that bare area on top of the real request,
+and the solver could only spend it by over-filling the region it can reach:
+a thin frame saturates to a solid pour whose local density far exceeds the
+board density it exists to match. Excluding it makes `A*_l` reduce to
+`d_l area(S_l)` whenever `C_l` lies inside `B` — fill the fillable at the
+board's own density.
 
 `S_l` is certified independently from board geometry, through-stack
 operations, and panel features whose existing IR span reaches layer `l`.

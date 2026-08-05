@@ -92,6 +92,12 @@ pub fn generate_automatic_board_array_copper_balance(ipc: &Ipc2581) -> Result<Co
             }
             balancing_region.safe_region
         };
+        // The panel material the solver may fill, plus the boards whose
+        // density set the target and any frame copper already present.
+        // Everything else inside the array — board clearance, rails, V-score
+        // relief, tooling holes — can never hold generated copper and so
+        // stays out of the density denominator.
+        let density_domain = board_footprints.union(&frame_copper).union(&safe_region);
         prepared.push(PreparedLayerBalance {
             layer: layer.name,
             frame_copper_empty,
@@ -101,6 +107,7 @@ pub fn generate_automatic_board_array_copper_balance(ipc: &Ipc2581) -> Result<Co
                 stack_weight_mm2,
                 existing_copper,
                 safe_region,
+                density_domain,
             },
         });
     }

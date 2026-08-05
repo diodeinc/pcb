@@ -41,6 +41,12 @@ pub struct PreparedCopperLayer {
     pub existing_copper: ContourSet,
     /// Certified, initially empty region available for generated copper.
     pub safe_region: ContourSet,
+    /// Region the target density is measured and applied over: the immutable
+    /// footprints, this layer's safe region, and any copper outside both.
+    /// Permanently bare area is excluded, so the solve never budgets copper it
+    /// has nowhere to put. See
+    /// [`SpatialCopperBalanceLayerRequest::density_domain`].
+    pub density_domain: ContourSet,
 }
 
 /// One origin-centered rounded-hex dictionary entry, shared by every void of
@@ -86,6 +92,9 @@ pub struct CopperBalanceLayer {
     pub target_density: f64,
     pub stack_weight_mm2: f64,
     pub existing_copper: ContourSet,
+    /// Area of this layer's density domain, the denominator behind every
+    /// density in [`CopperBalanceLayer::result`].
+    pub density_domain_area_mm2: f64,
     pub result: DenseCopperBalanceResult,
     pub features: BalanceFeatureSets,
 }
@@ -95,7 +104,9 @@ pub struct CopperBalanceLayer {
 pub struct CopperBalancePlan {
     /// Immutable placed footprints whose density the generated copper extends.
     pub footprints: ContourSet,
-    pub retained_area_mm2: f64,
+    /// Area of the whole panel region the solve ran over. Context only — each
+    /// layer's densities are relative to its own density domain.
+    pub panel_area_mm2: f64,
     /// Whether the physical stackup supplied signed stack weights. When false,
     /// every layer balances independently with zero through-stack coupling.
     pub stack_weights_available: bool,
@@ -119,6 +130,12 @@ pub struct CopperBalanceLayerReport {
     pub desired_added_area_mm2: f64,
     pub generated_area_mm2: f64,
     pub usable_area_mm2: f64,
+    /// Denominator behind every density on this layer.
+    pub density_domain_area_mm2: f64,
+    /// Domain area that holds no copper and can take none: the footprints'
+    /// own empty space. Permanently bare area outside the domain — process
+    /// margins, clearance rings, material removal — is not counted here
+    /// because it never enters the density calculation.
     pub fixed_empty_area_mm2: f64,
     pub void_count: usize,
 }
@@ -135,7 +152,7 @@ pub enum CopperBalanceMode {
 /// Compact, serializable accounting for a completed automatic balance plan.
 #[derive(Debug, Clone, Serialize)]
 pub struct CopperBalanceReport {
-    pub retained_area_mm2: f64,
+    pub panel_area_mm2: f64,
     pub footprint_area_mm2: f64,
     pub stack_weights_available: bool,
     pub layers: Vec<CopperBalanceLayerReport>,
@@ -186,7 +203,7 @@ impl CopperBalancePlan {
     /// Discard heavy geometry while retaining enough data to audit the result.
     pub fn report(&self) -> CopperBalanceReport {
         CopperBalanceReport {
-            retained_area_mm2: self.retained_area_mm2,
+            panel_area_mm2: self.panel_area_mm2,
             footprint_area_mm2: self.footprints.area(),
             stack_weights_available: self.stack_weights_available,
             layers: self
@@ -196,9 +213,10 @@ impl CopperBalancePlan {
                     let solution = layer.result.solution;
                     let existing_copper_area_mm2 = layer.existing_copper.area();
                     let usable_area_mm2 = layer.result.usable.area();
-                    let fixed_empty_area_mm2 =
-                        (self.retained_area_mm2 - existing_copper_area_mm2 - usable_area_mm2)
-                            .max(0.0);
+                    let fixed_empty_area_mm2 = (layer.density_domain_area_mm2
+                        - existing_copper_area_mm2
+                        - usable_area_mm2)
+                        .max(0.0);
                     let (mode, void_radius_mm) = match solution.mode {
                         DenseCopperBalanceMode::None => (CopperBalanceMode::None, None),
                         DenseCopperBalanceMode::Solid => (CopperBalanceMode::Solid, None),
@@ -225,6 +243,7 @@ impl CopperBalancePlan {
                         desired_added_area_mm2: solution.desired_added_area_mm2,
                         generated_area_mm2: solution.generated_area_mm2,
                         usable_area_mm2,
+                        density_domain_area_mm2: layer.density_domain_area_mm2,
                         fixed_empty_area_mm2,
                         void_count: layer.result.void_count(),
                     }
@@ -250,6 +269,7 @@ pub fn solve_copper_balance(
         .map(|layer| SpatialCopperBalanceLayerRequest {
             safe_region: &layer.safe_region,
             existing_copper: &layer.existing_copper,
+            density_domain: &layer.density_domain,
             target_density: layer.target_density,
             stack_weight_mm2: layer.stack_weight_mm2,
         })
@@ -274,6 +294,7 @@ pub fn solve_copper_balance(
                 target_density: layer.target_density,
                 stack_weight_mm2: layer.stack_weight_mm2,
                 existing_copper: layer.existing_copper,
+                density_domain_area_mm2: layer.density_domain.area(),
                 result,
                 features,
             })
@@ -282,7 +303,7 @@ pub fn solve_copper_balance(
 
     Ok(CopperBalancePlan {
         footprints,
-        retained_area_mm2: panel_region.area(),
+        panel_area_mm2: panel_region.area(),
         stack_weights_available,
         layers,
     })
@@ -561,6 +582,7 @@ mod tests {
         let layers = [SpatialCopperBalanceLayerRequest {
             safe_region: &safe_region,
             existing_copper: &existing,
+            density_domain: &safe_region,
             target_density: 0.75,
             stack_weight_mm2: 0.0,
         }];
