@@ -17,8 +17,7 @@ use crate::dialects::{LayerRole, Side};
 use crate::dialects::{artwork, nc};
 use crate::geom::path::{ContourBuf, transform_cmds};
 use crate::geom::{
-    Affine2, BBox, ContourSet, Diagnostic, FillRule, Paint, PaintKind, Point, Polarity, Span,
-    StrokeStyle, tol,
+    Affine2, BBox, ContourSet, FillRule, Paint, Point, Polarity, Span, StrokeStyle, tol,
 };
 
 /// How one artwork object was expressed.
@@ -128,7 +127,6 @@ where
 {
     let mut out = artwork::Document::new();
     let layer = &doc.layers[layer_index];
-    let layer_name = layer.name.clone();
     let artwork_layer = out.push_layer(header);
     let mut instance_apertures = HashMap::<Symbol, u32>::new();
 
@@ -177,25 +175,19 @@ where
         }
 
         for path in feature.paths.slice(&doc.arena.paths) {
-            let (paint, kind, make_geometry): (_, _, fn(u32) -> artwork::Geometry) =
-                match path.paint {
-                    Paint::Stroke(stroke) => (
-                        Paint::Stroke(lowering.stroke_style(stroke)),
-                        ArtworkObjectKind::Stroke,
-                        |path| artwork::Geometry::Stroke { path },
-                    ),
-                    paint if paint.kind() == PaintKind::Fill => {
-                        (paint, ArtworkObjectKind::Region, |path| {
-                            artwork::Geometry::Region { path }
-                        })
-                    }
-                    _ => {
-                        out.diagnostics.push(Diagnostic::warning(format!(
-                            "dropped unpainted path on layer '{layer_name}'"
-                        )));
-                        continue;
-                    }
-                };
+            let (paint, kind, make_geometry): (_, _, fn(u32) -> artwork::Geometry) = match path
+                .paint
+            {
+                Paint::Fill { rule } => (Paint::Fill { rule }, ArtworkObjectKind::Region, |path| {
+                    artwork::Geometry::Region { path }
+                }),
+                Paint::Stroke(stroke) => (
+                    Paint::Stroke(lowering.stroke_style(stroke)),
+                    ArtworkObjectKind::Stroke,
+                    |path| artwork::Geometry::Stroke { path },
+                ),
+                Paint::None => continue,
+            };
             let path_id = out.push_path(paint, doc.arena.path_contours(path));
             let bbox = out.path_bbox(path_id);
             let meta = lowering.object_meta(feature, kind);

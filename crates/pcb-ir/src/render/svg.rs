@@ -5,7 +5,9 @@ use crate::dialects::artwork::{self, Geometry, PaintStage};
 use crate::dialects::mask;
 use crate::geom::path::{PathCmd, PathOp};
 
-use crate::geom::{Affine2, Arc, BBox, FillRule, Paint, Path, PathArena, Point, Polarity};
+use crate::geom::{
+    Affine2, Arc, BBox, FillRule, LineCap, LineJoin, Path, PathArena, Point, Polarity,
+};
 use crate::render::{RenderOptions, SizeConstraint};
 
 const POINT_EPSILON_MM: f64 = 1e-9;
@@ -51,16 +53,13 @@ pub fn artwork_svg<LayerMeta, ObjectMeta>(
     let mut body = String::new();
 
     for (aperture_index, aperture) in doc.apertures.iter().enumerate() {
-        let d = contours_data(&aperture.contours());
-        if d.is_empty() {
-            continue;
-        }
         // Colour is inherited from the referencing group so one aperture can
         // serve both a dark run and a clear run's mask; `stroke` is not, or
         // every filled shape would gain the default one-unit outline.
         writeln!(
             defs,
-            "    <path id='a{aperture_index}' d='{d}' fill-rule='{}' stroke='none'/>",
+            "    <path id='a{aperture_index}' d='{}' fill-rule='{}' stroke='none'/>",
+            contours_data(&aperture.contours()),
             fill_rule_name(aperture.fill_rule())
         )
         .unwrap();
@@ -80,9 +79,7 @@ pub fn artwork_svg<LayerMeta, ObjectMeta>(
             .map(|layer| layer.name.as_str())
             .unwrap_or("artwork"),
     );
-    if !defs.is_empty() {
-        writeln!(svg, "  <defs>\n{defs}  </defs>").unwrap();
-    }
+    writeln!(svg, "  <defs>\n{defs}  </defs>").unwrap();
     svg.push_str(&body);
     close_svg(svg)
 }
@@ -102,16 +99,16 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
     // into a mask over everything painted before it.
     let mut painted = String::new();
     let mut run = String::new();
-    let mut run_polarity = None;
+    let mut run_polarity = Polarity::Dark;
     for object in objects {
         let polarity = if object.order.stage == PaintStage::FinalCutout && has_material {
             Polarity::Clear
         } else {
             object.polarity
         };
-        if run_polarity != Some(polarity) {
+        if polarity != run_polarity {
             flush_run(&mut painted, defs, &mut run, run_polarity, layer);
-            run_polarity = Some(polarity);
+            run_polarity = polarity;
         }
         write_artwork_object(&mut run, doc, layer.role, object);
     }
@@ -135,35 +132,27 @@ fn flush_run<LayerMeta>(
     painted: &mut String,
     defs: &mut String,
     run: &mut String,
-    polarity: Option<Polarity>,
+    polarity: Polarity,
     layer: &artwork::Layer<LayerMeta>,
 ) {
     let run = std::mem::take(run);
-    if run.is_empty() {
-        return;
-    }
     match polarity {
-        Some(Polarity::Clear) if !painted.is_empty() => {
+        Polarity::Dark => painted.push_str(&run),
+        // A clear run removes from what is already painted, so with nothing
+        // under it there is nothing to remove.
+        Polarity::Clear if painted.is_empty() || run.is_empty() => {}
+        Polarity::Clear => {
             let mask_id = format!("m{}", defs.matches("<mask ").count());
             let bounds = layer.bbox.expand(1.0);
+            let (x, y) = (fmt_num(bounds.min.x), fmt_num(bounds.min.y));
+            let (width, height) = (fmt_num(bounds.width()), fmt_num(bounds.height()));
             writeln!(
                 defs,
-                "    <mask id='{mask_id}' maskUnits='userSpaceOnUse' x='{}' y='{}' width='{}' height='{}'>\n      <rect x='{}' y='{}' width='{}' height='{}' fill='#ffffff'/>\n      <g fill='#000000' stroke='#000000'>\n{run}      </g>\n    </mask>",
-                fmt_num(bounds.min.x),
-                fmt_num(bounds.min.y),
-                fmt_num(bounds.width()),
-                fmt_num(bounds.height()),
-                fmt_num(bounds.min.x),
-                fmt_num(bounds.min.y),
-                fmt_num(bounds.width()),
-                fmt_num(bounds.height()),
+                "    <mask id='{mask_id}' maskUnits='userSpaceOnUse' x='{x}' y='{y}' width='{width}' height='{height}'>\n      <rect x='{x}' y='{y}' width='{width}' height='{height}' fill='#ffffff'/>\n      <g fill='#000000' stroke='#000000'>\n{run}      </g>\n    </mask>",
             )
             .unwrap();
             *painted = format!("      <g mask='url(#{mask_id})'>\n{painted}      </g>\n");
         }
-        // A clear run with nothing under it removes nothing.
-        Some(Polarity::Clear) | None => {}
-        Some(Polarity::Dark) => painted.push_str(&run),
     }
 }
 
@@ -187,46 +176,50 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
         }
         Geometry::Region { path } => {
             let path = doc.arena.path(path);
-            let d = path_data(&doc.arena, path);
-            if d.is_empty() {
-                return;
-            }
             writeln!(
                 out,
-                "      <path d='{d}' fill-rule='{}' stroke='none'/>",
+                "      <path d='{}' fill-rule='{}' stroke='none'/>",
+                path_data(&doc.arena, path),
                 fill_rule_name(path.fill_rule().unwrap_or(FillRule::NonZero))
             )
             .unwrap();
         }
         Geometry::Stroke { path } => {
             let path = doc.arena.path(path);
-            let d = path_data(&doc.arena, path);
-            if d.is_empty() {
-                return;
-            }
-            let Paint::Stroke(stroke) = path.paint else {
-                return;
+            let stroke = path
+                .stroke()
+                .expect("stroke geometry carries a stroke paint");
+            let outline = if role == LayerRole::Profile {
+                " data-board-outline='true'"
+            } else {
+                ""
             };
-            let outline = (role == LayerRole::Profile)
-                .then_some(" data-board-outline='true'")
-                .unwrap_or_default();
             writeln!(
                 out,
-                "      <path d='{d}' fill='none' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='{}'{outline}/>",
+                "      <path d='{}' fill='none' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='{}'{outline}/>",
+                path_data(&doc.arena, path),
                 fmt_num(stroke.width),
-                match stroke.cap {
-                    crate::geom::LineCap::Round => "round",
-                    crate::geom::LineCap::Square => "square",
-                    crate::geom::LineCap::Butt => "butt",
-                },
-                match stroke.join {
-                    crate::geom::LineJoin::Round => "round",
-                    crate::geom::LineJoin::Bevel => "bevel",
-                    crate::geom::LineJoin::Miter => "miter",
-                },
+                line_cap_name(stroke.cap),
+                line_join_name(stroke.join),
             )
             .unwrap();
         }
+    }
+}
+
+fn line_cap_name(cap: LineCap) -> &'static str {
+    match cap {
+        LineCap::Round => "round",
+        LineCap::Square => "square",
+        LineCap::Butt => "butt",
+    }
+}
+
+fn line_join_name(join: LineJoin) -> &'static str {
+    match join {
+        LineJoin::Round => "round",
+        LineJoin::Bevel => "bevel",
+        LineJoin::Miter => "miter",
     }
 }
 
@@ -433,8 +426,8 @@ pub(crate) fn fmt_num(value: f64) -> String {
 mod tests {
     use super::*;
     use crate::dialects::{Side, mask::Layer};
-    use crate::geom::BBox;
     use crate::geom::path::ContourBuf;
+    use crate::geom::{BBox, Paint};
 
     fn square(size: f64) -> ContourBuf {
         ContourBuf::new(vec![
