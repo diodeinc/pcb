@@ -464,7 +464,7 @@ fn sync_layout_down(
     if let Some(status) = restore_status
         && let Some(session) = latest_recoverable_session(&cache_root)?
     {
-        let restore = prompt_restore_recovery(status, &session);
+        let restore = prompt_restore_recovery(status, &session)?;
         mark_recoverable_sessions_prompt_seen(&cache_root);
         if restore {
             recovered_session = Some(session);
@@ -763,9 +763,12 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
     Ok(latest)
 }
 
-fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> bool {
+fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> Result<bool> {
     if !crate::tty::is_interactive() {
-        return true;
+        bail!(
+            "Found a local recovery file for this remote layout at {}. Re-run `pcb open` interactively to choose whether to restore it.",
+            session.manifest.layout_file.display(),
+        );
     }
     let prompt = format!(
         "Restore previous local KiCad recovery file from {}?",
@@ -777,7 +780,7 @@ fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> b
             .prompt()
             .unwrap_or(false)
     };
-    status.suspend(ask)
+    Ok(status.suspend(ask))
 }
 
 fn mark_recoverable_sessions_prompt_seen(cache_root: &Path) {
