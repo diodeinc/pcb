@@ -18,8 +18,8 @@ use lattice::{
     LatticeCandidates, ROUNDED_HEXAGON_AREA_FACTOR, hex_aligned_lattice_centers, lattice_index,
 };
 use spatial::{
-    LatticeDensityKernel, density_evaluation_points, lattice_cell_coverage,
-    normalized_stack_weights, project_box_interval, project_box_sum,
+    CoupledBand, LatticeDensityKernel, density_evaluation_points, lattice_cell_coverage,
+    normalized_stack_weights, project_box_sum, project_coupled_bands,
     spatial_result_from_squared_radii,
 };
 
@@ -659,15 +659,12 @@ pub fn generate_spatial_dense_copper_balance(
             })
             .collect::<Vec<_>>();
 
-        let update = std::thread::scope(|scope| {
+        let proposals = std::thread::scope(|scope| {
             let active_sites = &active_sites;
             let density_kernel = &density_kernel;
-            let lower = &lower;
-            let upper = &upper;
-            let squared_radius_bands = &squared_radius_bands;
             let normalized_stack_weights = &normalized_stack_weights;
             let handles = squared_radii
-                .iter_mut()
+                .iter()
                 .zip(influence_scratch.iter_mut())
                 .enumerate()
                 .map(|(layer_index, (radii, influence))| {
@@ -675,7 +672,7 @@ pub fn generate_spatial_dense_copper_balance(
                     let stack_error = &stack_error;
                     scope.spawn(move || {
                         if radii.is_empty() {
-                            return 0.0_f64;
+                            return Vec::new();
                         }
                         let residual = error[layer_index]
                             .iter()
@@ -685,7 +682,7 @@ pub fn generate_spatial_dense_copper_balance(
                             })
                             .collect::<Vec<_>>();
                         density_kernel.smooth_adjoint_into(&residual, influence);
-                        let proposed = radii
+                        radii
                             .iter()
                             .enumerate()
                             .map(|(local_index, radius_squared)| {
@@ -694,30 +691,42 @@ pub fn generate_spatial_dense_copper_balance(
                                         * void_fraction_per_radius_squared
                                         * influence[active_sites[layer_index][local_index]]
                             })
-                            .collect::<Vec<_>>();
-                        let (sum_min, sum_max) = squared_radius_bands[layer_index];
-                        let projected = project_box_interval(
-                            &proposed,
-                            &lower[layer_index],
-                            &upper[layer_index],
-                            sum_min,
-                            sum_max,
-                        );
-                        let update = radii
-                            .iter()
-                            .zip(&projected)
-                            .map(|(before, after)| (before - after).abs())
-                            .fold(0.0_f64, f64::max);
-                        *radii = projected;
-                        update
+                            .collect::<Vec<_>>()
                     })
                 })
                 .collect::<Vec<_>>();
             handles
                 .into_iter()
                 .map(|handle| handle.join().expect("spatial update pass panicked"))
-                .fold(0.0_f64, f64::max)
+                .collect::<Vec<_>>()
         });
+        // The layers meet here: their bands are only useful against each other,
+        // so the trade between them is settled before any radius is committed.
+        let bands = proposals
+            .iter()
+            .enumerate()
+            .map(|(layer_index, proposal)| CoupledBand {
+                proposal,
+                lower: &lower[layer_index],
+                upper: &upper[layer_index],
+                sum_bounds: squared_radius_bands[layer_index],
+                center: squared_radius_sums[layer_index],
+                domain_area_mm2: density_domain_areas[layer_index],
+            })
+            .collect::<Vec<_>>();
+        let update = squared_radii
+            .iter_mut()
+            .zip(project_coupled_bands(&bands))
+            .map(|(radii, projected)| {
+                let update = radii
+                    .iter()
+                    .zip(&projected)
+                    .map(|(before, after)| (before - after).abs())
+                    .fold(0.0_f64, f64::max);
+                *radii = projected;
+                update
+            })
+            .fold(0.0_f64, f64::max);
         if update < convergence_mm2 {
             break;
         }
@@ -1529,22 +1538,24 @@ mod tests {
         );
     }
 
-    /// A layer with nowhere to generate leaves a moment that redistribution
-    /// cannot touch. Its mirror sits exactly on its own target, so the only
-    /// force acting on it is the stack term, and the only way it can answer is
-    /// to leave that target. The band both permits and bounds that move.
+    /// Fixed copper on one side of one layer tilts the stack in a way no
+    /// redistribution can answer. The band lets that layer take copper on and
+    /// its mirror give the same density back, bounded on both sides, and the
+    /// trade nets to zero so the stack gains no copper overall.
     #[test]
-    fn stack_flex_moves_a_layer_off_target_to_counterweight_its_mirror() {
+    fn stack_flex_trades_density_between_mirrored_layers() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
             tol::REGION_MM,
         );
-        // The immutable layer is poured solid and has no safe region, so its
-        // surplus is uniform across the panel. A uniform moment is exactly
-        // what redistribution cannot answer: every site sees the same
-        // residual, leaving the layer's total as the only remaining lever.
-        let solid = panel.clone();
-        let safe = panel.clone();
+        let left_copper = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 20.0)),
+            tol::REGION_MM,
+        );
+        let safe = ContourSet::rectangle(
+            BBox::new(Point::new(20.0, 0.0), Point::new(40.0, 20.0)),
+            tol::REGION_MM,
+        );
         let empty = ContourSet::empty(tol::REGION_MM);
         let solve = |stack_flex_density: f64| {
             generate_spatial_dense_copper_balance(
@@ -1557,10 +1568,10 @@ mod tests {
                     lattice_origin: Point::ZERO,
                     layers: &[
                         SpatialCopperBalanceLayerRequest {
-                            safe_region: &empty,
-                            existing_copper: &solid,
-                            density_domain: &solid,
-                            target_density: 0.5,
+                            safe_region: &safe,
+                            existing_copper: &left_copper,
+                            density_domain: &panel,
+                            target_density: 0.75,
                             stack_weight_mm2: 1.0,
                         },
                         SpatialCopperBalanceLayerRequest {
@@ -1582,24 +1593,31 @@ mod tests {
         let pinned = solve(0.0);
         let flexed = solve(flex);
 
-        // The immutable layer generates nothing either way.
-        for results in [&pinned, &flexed] {
-            assert_eq!(results[0].solution.mode, DenseCopperBalanceMode::None);
-            assert_eq!(results[0].solution.generated_area_mm2, 0.0);
+        // Pinned, both layers are held on their own targets.
+        for result in &pinned {
+            assert!(
+                (result.solution.achieved_density - result.solution.target_density).abs()
+                    <= quantization,
+                "{:?}",
+                result.solution
+            );
         }
-        // Pinned, the free layer is held on its target and the moment stands.
+
+        let deviations = flexed
+            .iter()
+            .map(|result| result.solution.achieved_density - result.solution.target_density)
+            .collect::<Vec<_>>();
+        // One layer takes density on, the other gives it back.
+        assert!(deviations[0] > quantization, "{deviations:?}");
+        assert!(deviations[1] < -quantization, "{deviations:?}");
+        // Neither leaves its band, and the stack gains nothing overall.
+        for deviation in &deviations {
+            assert!(deviation.abs() <= flex + quantization, "{deviations:?}");
+        }
         assert!(
-            (pinned[1].solution.achieved_density - pinned[1].solution.target_density).abs()
-                <= quantization,
-            "{:?}",
-            pinned[1].solution
+            deviations.iter().sum::<f64>().abs() <= 2.0 * quantization,
+            "{deviations:?}"
         );
-        // Flexed, it takes on copper to answer the surplus opposite it, and
-        // stops at the edge of its band rather than chasing the moment all the
-        // way down.
-        let deviation = flexed[1].solution.achieved_density - pinned[1].solution.target_density;
-        assert!(deviation > quantization, "{:?}", flexed[1].solution);
-        assert!(deviation <= flex + quantization, "{:?}", flexed[1].solution);
     }
 
     #[test]

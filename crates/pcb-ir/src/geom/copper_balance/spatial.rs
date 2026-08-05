@@ -271,6 +271,105 @@ fn scanline_indicator(points: &[Point], region: &ContourSet) -> Vec<f64> {
     result
 }
 
+/// One layer's share of a coupled band projection.
+pub(super) struct CoupledBand<'a> {
+    /// Gradient proposal, one squared radius per active site.
+    pub proposal: &'a [f64],
+    pub lower: &'a [f64],
+    pub upper: &'a [f64],
+    /// Bounds on this layer's squared-radius sum.
+    pub sum_bounds: (f64, f64),
+    /// Sum those bounds surround: the layer's selected copper area.
+    pub center: f64,
+    /// Density denominator, turning a squared-radius change into the density
+    /// change the stack conserves.
+    pub domain_area_mm2: f64,
+}
+
+/// Project every layer onto its box and band, jointly constrained so the
+/// stack's density deviations cancel: `sum_l (sum(x_l) - center_l) / area_l == 0`.
+///
+/// The joint constraint says copper moves between layers rather than being
+/// created. Without it the bands free a direction the stack cannot see — every
+/// layer drifting the same way leaves the moment untouched, because a
+/// symmetric stackup's weights sum to zero — and that common drift is what the
+/// local density error spends them on.
+///
+/// One linear equality over separable convex sets dualizes to a single
+/// multiplier, so the solution is each layer's own band projection of a
+/// commonly shifted proposal and the multiplier follows by bisection. Shifting
+/// harder only lowers each sum, and a layer whose band binds stops responding
+/// altogether, so the deviation falls monotonically and brackets cleanly.
+pub(super) fn project_coupled_bands(layers: &[CoupledBand<'_>]) -> Vec<Vec<f64>> {
+    // A layer pinned at a band edge takes the same value for every multiplier
+    // past that point, so scoring a trial needs one clamped sum per layer
+    // rather than a nested projection.
+    let deviation = |multiplier: f64| {
+        layers
+            .iter()
+            .map(|layer| {
+                let shift = multiplier / layer.domain_area_mm2;
+                let sum = layer
+                    .proposal
+                    .iter()
+                    .zip(layer.lower)
+                    .zip(layer.upper)
+                    .map(|((value, lower), upper)| (value - shift).clamp(*lower, *upper))
+                    .sum::<f64>()
+                    .clamp(layer.sum_bounds.0, layer.sum_bounds.1);
+                (sum - layer.center) / layer.domain_area_mm2
+            })
+            .sum::<f64>()
+    };
+
+    // Past this shift every site clamps, so both ends saturate their bands.
+    let span = layers
+        .iter()
+        .flat_map(|layer| {
+            layer
+                .proposal
+                .iter()
+                .zip(layer.lower)
+                .zip(layer.upper)
+                .map(|((value, lower), upper)| (value - lower).abs().max((upper - value).abs()))
+        })
+        .fold(0.0_f64, f64::max);
+    let widest_domain = layers
+        .iter()
+        .map(|layer| layer.domain_area_mm2)
+        .fold(0.0_f64, f64::max);
+    let bound = span * widest_domain + 1.0;
+    let (mut low, mut high) = (-bound, bound);
+    for _ in 0..64 {
+        let multiplier = (low + high) / 2.0;
+        if deviation(multiplier) > 0.0 {
+            low = multiplier;
+        } else {
+            high = multiplier;
+        }
+    }
+    let multiplier = (low + high) / 2.0;
+
+    layers
+        .iter()
+        .map(|layer| {
+            let shift = multiplier / layer.domain_area_mm2;
+            let shifted = layer
+                .proposal
+                .iter()
+                .map(|value| value - shift)
+                .collect::<Vec<_>>();
+            project_box_interval(
+                &shifted,
+                layer.lower,
+                layer.upper,
+                layer.sum_bounds.0,
+                layer.sum_bounds.1,
+            )
+        })
+        .collect()
+}
+
 /// Euclidean projection onto `{x : lower <= x <= upper, sum_min <= sum(x) <= sum_max}`.
 ///
 /// The band is two halfspaces and at most one can bind, so clamping to the box
