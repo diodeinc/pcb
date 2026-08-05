@@ -209,7 +209,7 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
 
-    assert!(balance.retained_area_mm2 > 0.0);
+    assert!(balance.panel_area_mm2 > 0.0);
     assert_eq!(balance.layers.len(), 2);
     assert!(
         balance
@@ -250,14 +250,18 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
     let creation = create_auto_board_array(&input, None).unwrap();
     assert_eq!(creation.copper_balance.layers.len(), 2);
     for report in &creation.copper_balance.layers {
+        // Fixed copper, fillable region, and permanently bare area partition
+        // that layer's density domain exactly.
         assert!(
             (report.existing_copper_area_mm2
                 + report.usable_area_mm2
                 + report.fixed_empty_area_mm2
-                - creation.copper_balance.retained_area_mm2)
+                - report.density_domain_area_mm2)
                 .abs()
                 <= 1e-6
         );
+        // Unfillable panel material stays out of the denominator entirely.
+        assert!(report.density_domain_area_mm2 <= creation.copper_balance.panel_area_mm2 + 1e-6);
         assert!(
             report.residual_error <= (report.initial_density - report.target_density).abs() + 1e-9
         );
@@ -874,6 +878,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     let layers = [SpatialCopperBalanceLayerRequest {
         safe_region: &safe_region,
         existing_copper: &existing,
+        density_domain: &safe_region,
         target_density: 0.70,
         stack_weight_mm2: 0.0,
     }];

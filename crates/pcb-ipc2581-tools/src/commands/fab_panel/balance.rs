@@ -70,9 +70,15 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     })?;
     // Copper found outside the placed panels joins the shared obstacle set,
     // so unexpected overhang shrinks the certified safe region for every
-    // layer instead of failing the solve.
-    for (_, image) in &copper_images {
-        input.support_features = input.support_features.union(&image.difference(&footprints));
+    // layer instead of failing the solve. Each layer keeps its own overhang:
+    // it is real copper and belongs in that layer's density domain even
+    // though no generated copper may be placed there.
+    let stray_copper = copper_images
+        .iter()
+        .map(|(_, image)| image.difference(&footprints))
+        .collect::<Vec<_>>();
+    for stray in &stray_copper {
+        input.support_features = input.support_features.union(stray);
     }
 
     let balancing_region = board_array_balancing_region(&input, BalancingRegionOptions::default())
@@ -85,11 +91,18 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     }
     let safe_region = balancing_region.safe_region;
 
+    // The gutters the solver may fill, plus the panels whose density set the
+    // target. Everything else inside the usable region — clearance around each
+    // placed panel, material removal, gaps too narrow for a void — can never
+    // hold generated copper and so stays out of the density denominator.
+    let panel_domain = footprints.union(&safe_region);
+
     let stack_weights = physical_copper_stack_weights(ipc);
     let stack_weights_available = stack_weights.is_some();
     let prepared = copper_images
         .into_iter()
-        .map(|(layer_name, existing_copper)| {
+        .zip(stray_copper)
+        .map(|((layer_name, existing_copper), stray)| {
             let target_density = (existing_copper.intersection(&footprints).area()
                 / footprint_area_mm2)
                 .clamp(0.0, 1.0);
@@ -103,6 +116,7 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
                 stack_weight_mm2,
                 existing_copper,
                 safe_region: safe_region.clone(),
+                density_domain: panel_domain.union(&stray),
             }
         })
         .collect();

@@ -17,12 +17,15 @@ region serves every copper layer.
 
 The reserved process margins stay bare. They are excluded from the density
 domain entirely — not merely from the safe region — so the solver never
-chases a deficit it cannot fill at the margin boundary.
+chases a deficit it cannot fill at the margin boundary. Every other
+permanently bare area inside the usable region is excluded on the same
+grounds; see [Density targets](#density-targets).
 
 As a defensive measure, any copper found outside the placed panel outlines
 joins the shared obstacle set, shrinking the certified safe region instead of
-failing the solve. A correctly generated fabrication panel has no such
-copper.
+failing the solve. It stays in that layer's density domain, since it is real
+copper even where no generated copper may go. A correctly generated
+fabrication panel has no such copper.
 
 ## Density targets
 
@@ -32,14 +35,20 @@ balanced during board-array creation, this extends their already-uniform
 density into the gutters. Mixed panel types weight the target by their
 footprint areas, since the denominator is the union of all placements.
 
-With domain `U` (the usable region), footprints `F`, and fixed copper `C_l`,
-the requested generated area reduces to filling the gutters at the panel
-density:
+With footprints `F`, safe region `S`, and fixed copper `C_l`, the density
+domain is `D_l = F ∪ S ∪ C_l` and the requested generated area reduces to
+filling the gutters at the panel density:
 
 ```text
 d_l  = area(C_l ∩ F) / area(F)
-A*_l = d_l area(U) - area(C_l) = d_l area(U \ F)
+A*_l = d_l area(D_l) - area(C_l) = d_l area(S)
 ```
+
+The usable region is the solve's spatial extent, not its density denominator.
+Everything inside it that no generated copper could occupy — the clearance
+around each placed panel, material removal, gaps too narrow for a void — is
+excluded from `D_l` exactly as the process margins are, so the request never
+includes copper the gutters have nowhere to put.
 
 ## Through-stack metric
 

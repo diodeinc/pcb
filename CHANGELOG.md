@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Copper balancing no longer over-fills narrow panel frames and gutters, which made board-array frames pour solid instead of matching the board's copper density.
+
 ## [0.4.23] - 2026-08-05
 
 ### Added

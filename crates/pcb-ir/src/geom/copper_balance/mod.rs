@@ -25,6 +25,11 @@ use spatial::{
 const NUMERIC_EPSILON: f64 = 1e-9;
 const RADIUS_SOLVE_TOLERANCE_MM: f64 = 1e-4;
 const AREA_SOLVE_TOLERANCE_MM2: f64 = 1e-3;
+/// Leftover area tolerated when certifying that one region contains another.
+/// Roughly a 30 um square: three orders of magnitude below the smallest void
+/// the profile can place, and above the slivers a regularized difference
+/// leaves where its operands share an edge.
+const CONTAINMENT_AREA_TOLERANCE_MM2: f64 = 1e-3;
 // Gradient information travels about one kernel support per iteration under
 // the fixed conservative step, so the radius field needs a few hundred
 // iterations to equilibrate across a panel; measured objectives plateau by
@@ -141,11 +146,11 @@ pub struct DenseCopperBalanceSolution {
 /// Geometry inputs for the internal single-layer baseline solve.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DenseCopperBalanceRequest<'a> {
-    /// Safe, initially empty subset of the retained board-array area.
+    /// Safe, initially empty subset of the density domain.
     pub safe_region: &'a ContourSet,
-    /// Entire retained board-array area used as the density denominator.
-    pub retained_area_mm2: f64,
-    /// Fixed copper anywhere in that retained area on this layer.
+    /// Area of the density domain, used as the density denominator.
+    pub density_domain_area_mm2: f64,
+    /// Fixed copper anywhere in that density domain on this layer.
     pub existing_copper_area_mm2: f64,
     pub target_density: f64,
     pub lattice_origin: Point,
@@ -158,6 +163,20 @@ pub struct SpatialCopperBalanceLayerRequest<'a> {
     pub safe_region: &'a ContourSet,
     /// Fixed copper within `SpatialCopperBalanceRequest::panel_region`.
     pub existing_copper: &'a ContourSet,
+    /// Region over which `target_density` is both measured and applied.
+    ///
+    /// This is the area that holds copper or could hold copper: the immutable
+    /// footprints whose measured density set the target, this layer's safe
+    /// region, and any fixed copper outside both. Permanently bare area —
+    /// process margins, clearance rings, material removal, gaps narrower than
+    /// the minimum web — must be excluded, so the solver never budgets copper
+    /// for area no generated feature could occupy. Including it would inflate
+    /// the request by `target_density` times that area, which the solver can
+    /// only spend by over-filling the region it can reach.
+    ///
+    /// Must contain `safe_region` and `existing_copper`, and be contained by
+    /// `SpatialCopperBalanceRequest::panel_region`.
+    pub density_domain: &'a ContourSet,
     pub target_density: f64,
     /// Signed first-moment weight `z * thickness` from the physical stackup.
     pub stack_weight_mm2: f64,
@@ -166,7 +185,9 @@ pub struct SpatialCopperBalanceLayerRequest<'a> {
 /// Geometry shared by all layers in a joint spatial copper-balance solve.
 #[derive(Debug, Clone, Copy)]
 pub struct SpatialCopperBalanceRequest<'a> {
-    /// Canonical retained panel geometry and density denominator.
+    /// Canonical panel geometry: the lattice extent and the domain over which
+    /// local density error is evaluated. Each layer's density denominator is
+    /// its own [`SpatialCopperBalanceLayerRequest::density_domain`].
     pub panel_region: &'a ContourSet,
     pub lattice_origin: Point,
     pub layers: &'a [SpatialCopperBalanceLayerRequest<'a>],
@@ -259,8 +280,8 @@ fn generate_dense_copper_balance_with_lattice(
 ) -> DenseCopperBalanceResult {
     let usable_area_mm2 = usable.area();
     let desired_added_area_mm2 =
-        request.target_density * request.retained_area_mm2 - request.existing_copper_area_mm2;
-    let initial_density = request.existing_copper_area_mm2 / request.retained_area_mm2;
+        request.target_density * request.density_domain_area_mm2 - request.existing_copper_area_mm2;
+    let initial_density = request.existing_copper_area_mm2 / request.density_domain_area_mm2;
     let mut best = ProjectedArea::new(DenseCopperBalanceMode::None, 0.0, desired_added_area_mm2);
     best.consider(ProjectedArea::new(
         DenseCopperBalanceMode::Solid,
@@ -295,7 +316,7 @@ fn generate_dense_copper_balance_with_lattice(
         }
     };
     let achieved_density =
-        (request.existing_copper_area_mm2 + best.area_mm2) / request.retained_area_mm2;
+        (request.existing_copper_area_mm2 + best.area_mm2) / request.density_domain_area_mm2;
     let solution = DenseCopperBalanceSolution {
         mode: best.mode,
         desired_added_area_mm2,
@@ -335,7 +356,11 @@ pub fn generate_spatial_dense_copper_balance(
 ) -> Result<Vec<DenseCopperBalanceResult>, DenseCopperBalanceError> {
     profile.validate()?;
     validate_spatial_request(request)?;
-    let retained_area_mm2 = request.panel_region.area();
+    let density_domain_areas = request
+        .layers
+        .iter()
+        .map(|layer| layer.density_domain.area())
+        .collect::<Vec<_>>();
 
     // Layers frequently share one safe region — a fab panel's every copper
     // layer, a board array's layers with equal support scope — so erode and
@@ -369,7 +394,8 @@ pub fn generate_spatial_dense_copper_balance(
             .layers
             .iter()
             .zip(&layer_regions)
-            .map(|(layer, region_index)| {
+            .zip(&density_domain_areas)
+            .map(|((layer, region_index), density_domain_area_mm2)| {
                 let voidable = &region_voidable[*region_index];
                 let lattice = &region_lattices[*region_index];
                 scope.spawn(move || {
@@ -377,7 +403,7 @@ pub fn generate_spatial_dense_copper_balance(
                         profile,
                         DenseCopperBalanceRequest {
                             safe_region: layer.safe_region,
-                            retained_area_mm2,
+                            density_domain_area_mm2: *density_domain_area_mm2,
                             existing_copper_area_mm2: layer.existing_copper.area(),
                             target_density: layer.target_density,
                             lattice_origin: request.lattice_origin,
@@ -602,11 +628,23 @@ pub fn generate_spatial_dense_copper_balance(
                 &squared_radii[layer_index],
                 baseline,
                 request.layers[layer_index],
-                retained_area_mm2,
+                density_domain_areas[layer_index],
                 profile,
             )
         })
         .collect())
+}
+
+/// Whether `outer` contains `inner`, ignoring boolean sliver artifacts.
+///
+/// A regularized difference between operands that share an edge leaves
+/// sub-micron slivers along it, so exact emptiness is not a usable containment
+/// test here. A genuine containment error — a domain that omits real copper or
+/// real fillable material — is orders of magnitude above this bound, which is
+/// itself far below the smallest void the profile can place.
+fn contains(outer: &ContourSet, inner: &ContourSet) -> bool {
+    let leftover = inner.difference(outer);
+    leftover.is_empty() || leftover.area() <= CONTAINMENT_AREA_TOLERANCE_MM2
 }
 
 fn validate_spatial_request(
@@ -617,31 +655,45 @@ fn validate_spatial_request(
             "panel region must be non-empty and have valid bounds".to_string(),
         ));
     }
-    let retained_area_mm2 = request.panel_region.area();
+    // A fab panel gives every copper layer the same domain and safe region,
+    // and a board array shares them across layers of equal support scope, so
+    // certify each distinct pair once rather than repeating identical boolean
+    // work per layer.
+    let mut certified: Vec<(&ContourSet, &ContourSet)> = Vec::new();
     for layer in request.layers {
         if !layer.stack_weight_mm2.is_finite() {
             return Err(DenseCopperBalanceError::InvalidInput(
                 "stack weights must be finite".to_string(),
             ));
         }
-        if !layer
-            .safe_region
-            .difference(request.panel_region)
-            .is_empty()
-        {
+        // The density domain is assembled from the very regions checked
+        // against it, so every containment predicate here compares operands
+        // that share long stretches of boundary. Containment through the
+        // density domain also implies containment by the panel region, so the
+        // safe region and fixed copper need no separate panel-region check.
+        if !certified.iter().any(|(domain, safe_region)| {
+            domain.rings == layer.density_domain.rings
+                && safe_region.rings == layer.safe_region.rings
+        }) {
+            if !contains(request.panel_region, layer.density_domain) {
+                return Err(DenseCopperBalanceError::InvalidInput(
+                    "density domain must be contained by the panel region".to_string(),
+                ));
+            }
+            if !contains(layer.density_domain, layer.safe_region) {
+                return Err(DenseCopperBalanceError::InvalidInput(
+                    "safe region must be contained by the density domain".to_string(),
+                ));
+            }
+            certified.push((layer.density_domain, layer.safe_region));
+        }
+        if !contains(layer.density_domain, layer.existing_copper) {
             return Err(DenseCopperBalanceError::InvalidInput(
-                "safe region must be contained by the panel region".to_string(),
+                "existing copper must be contained by the density domain".to_string(),
             ));
         }
-        if !layer
-            .existing_copper
-            .difference(request.panel_region)
-            .is_empty()
-        {
-            return Err(DenseCopperBalanceError::InvalidInput(
-                "existing copper must be contained by the panel region".to_string(),
-            ));
-        }
+        // Fixed copper and the safe region are separated by a clearance rule
+        // rather than by a shared edge, so their overlap needs no tolerance.
         if !layer
             .safe_region
             .intersection(layer.existing_copper)
@@ -653,7 +705,7 @@ fn validate_spatial_request(
         }
         validate_request(DenseCopperBalanceRequest {
             safe_region: layer.safe_region,
-            retained_area_mm2,
+            density_domain_area_mm2: layer.density_domain.area(),
             existing_copper_area_mm2: layer.existing_copper.area(),
             target_density: layer.target_density,
             lattice_origin: request.lattice_origin,
@@ -787,17 +839,23 @@ fn validate_request(request: DenseCopperBalanceRequest<'_>) -> Result<(), DenseC
             "safe region has invalid bounds".to_string(),
         ));
     }
-    if !request.retained_area_mm2.is_finite() || request.retained_area_mm2 <= 0.0 {
+    if !request.density_domain_area_mm2.is_finite() || request.density_domain_area_mm2 <= 0.0 {
         return Err(DenseCopperBalanceError::InvalidInput(
-            "retained area must be finite and greater than zero".to_string(),
+            "density domain area must be finite and greater than zero".to_string(),
         ));
     }
+    // These three bounds are the scalar shadow of the geometric containments
+    // `C subset D`, `S subset D`, and `C disjoint S`, so they tolerate the same
+    // sliver area those predicates do. Holding them to NUMERIC_EPSILON would
+    // reject a request whose geometry passed containment, and the slack only
+    // vanishes when the footprints are fully poured.
     if !request.existing_copper_area_mm2.is_finite()
         || request.existing_copper_area_mm2 < 0.0
-        || request.existing_copper_area_mm2 > request.retained_area_mm2 + NUMERIC_EPSILON
+        || request.existing_copper_area_mm2
+            > request.density_domain_area_mm2 + CONTAINMENT_AREA_TOLERANCE_MM2
     {
         return Err(DenseCopperBalanceError::InvalidInput(
-            "existing copper area must be between zero and retained area".to_string(),
+            "existing copper area must be between zero and the density domain area".to_string(),
         ));
     }
     if !request.target_density.is_finite() || !(0.0..=1.0).contains(&request.target_density) {
@@ -808,17 +866,17 @@ fn validate_request(request: DenseCopperBalanceRequest<'_>) -> Result<(), DenseC
     let usable_area_mm2 = request.safe_region.area();
     if !usable_area_mm2.is_finite()
         || usable_area_mm2 < 0.0
-        || usable_area_mm2 > request.retained_area_mm2 + NUMERIC_EPSILON
+        || usable_area_mm2 > request.density_domain_area_mm2 + CONTAINMENT_AREA_TOLERANCE_MM2
     {
         return Err(DenseCopperBalanceError::InvalidInput(
-            "usable area must be between zero and retained area".to_string(),
+            "usable area must be between zero and the density domain area".to_string(),
         ));
     }
     if request.existing_copper_area_mm2 + usable_area_mm2
-        > request.retained_area_mm2 + NUMERIC_EPSILON
+        > request.density_domain_area_mm2 + CONTAINMENT_AREA_TOLERANCE_MM2
     {
         return Err(DenseCopperBalanceError::InvalidInput(
-            "existing copper and usable areas together exceed the retained area".to_string(),
+            "existing copper and usable areas together exceed the density domain area".to_string(),
         ));
     }
     Ok(())
@@ -855,7 +913,7 @@ mod tests {
             DenseCopperBalanceProfile::V1,
             DenseCopperBalanceRequest {
                 safe_region: &safe_region,
-                retained_area_mm2: 200.0,
+                density_domain_area_mm2: 200.0,
                 existing_copper_area_mm2: 0.0,
                 target_density: 0.75,
                 lattice_origin: Point::new(10.0, 5.0),
@@ -911,7 +969,7 @@ mod tests {
             profile,
             DenseCopperBalanceRequest {
                 safe_region: &safe_region,
-                retained_area_mm2: 96.0,
+                density_domain_area_mm2: 96.0,
                 existing_copper_area_mm2: 0.0,
                 target_density: 0.15,
                 lattice_origin: Point::new(0.0, 0.0),
@@ -938,7 +996,7 @@ mod tests {
             DenseCopperBalanceProfile::V1,
             DenseCopperBalanceRequest {
                 safe_region: &safe_region,
-                retained_area_mm2: 16.0,
+                density_domain_area_mm2: 16.0,
                 existing_copper_area_mm2: 0.0,
                 target_density: 0.45,
                 lattice_origin: Point::new(0.0, 0.0),
@@ -1005,6 +1063,7 @@ mod tests {
         let layers = [SpatialCopperBalanceLayerRequest {
             safe_region: &safe,
             existing_copper: &existing,
+            density_domain: &panel,
             target_density: 0.5,
             stack_weight_mm2: 0.0,
         }];
@@ -1028,7 +1087,7 @@ mod tests {
     }
 
     #[test]
-    fn spatial_solver_rejects_geometry_outside_the_panel() {
+    fn spatial_solver_rejects_geometry_outside_its_containing_region() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
             tol::REGION_MM,
@@ -1042,10 +1101,11 @@ mod tests {
             tol::REGION_MM,
         );
         let empty = ContourSet::empty(tol::REGION_MM);
-        let solve = |safe_region, existing_copper| {
+        let solve = |safe_region, existing_copper, density_domain| {
             let layers = [SpatialCopperBalanceLayerRequest {
                 safe_region,
                 existing_copper,
+                density_domain,
                 target_density: 0.5,
                 stack_weight_mm2: 0.0,
             }];
@@ -1060,15 +1120,21 @@ mod tests {
         };
 
         assert_eq!(
-            solve(&outside, &empty).unwrap_err(),
+            solve(&inside, &empty, &outside).unwrap_err(),
             DenseCopperBalanceError::InvalidInput(
-                "safe region must be contained by the panel region".to_string()
+                "density domain must be contained by the panel region".to_string()
             )
         );
         assert_eq!(
-            solve(&inside, &outside).unwrap_err(),
+            solve(&outside, &empty, &inside).unwrap_err(),
             DenseCopperBalanceError::InvalidInput(
-                "existing copper must be contained by the panel region".to_string()
+                "safe region must be contained by the density domain".to_string()
+            )
+        );
+        assert_eq!(
+            solve(&inside, &outside, &inside).unwrap_err(),
+            DenseCopperBalanceError::InvalidInput(
+                "existing copper must be contained by the density domain".to_string()
             )
         );
     }
@@ -1089,6 +1155,7 @@ mod tests {
         let layer = SpatialCopperBalanceLayerRequest {
             safe_region: &panel,
             existing_copper: &existing,
+            density_domain: &panel,
             target_density,
             stack_weight_mm2: 0.0,
         };
@@ -1096,7 +1163,7 @@ mod tests {
             profile,
             DenseCopperBalanceRequest {
                 safe_region: &panel,
-                retained_area_mm2: panel.area(),
+                density_domain_area_mm2: panel.area(),
                 existing_copper_area_mm2: 0.0,
                 target_density,
                 lattice_origin: Point::ZERO,
@@ -1137,6 +1204,7 @@ mod tests {
         let layers = [SpatialCopperBalanceLayerRequest {
             safe_region: &panel,
             existing_copper: &existing,
+            density_domain: &panel,
             target_density: 0.5,
             stack_weight_mm2: 0.0,
         }];
@@ -1158,6 +1226,75 @@ mod tests {
         assert!((result.solution.achieved_density - 0.5).abs() <= 5e-3);
     }
 
+    /// Unfillable panel material must not inflate the copper request.
+    ///
+    /// A denominator that spans the whole panel charges the layer for filling
+    /// clearance it may never touch, and the solver can only spend that budget
+    /// by over-filling the gutter it can reach — saturating to a solid pour
+    /// whose local density far exceeds the footprint it is supposed to match.
+    #[test]
+    fn unfillable_clearance_stays_out_of_the_density_denominator() {
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
+            tol::REGION_MM,
+        );
+        // An immutable footprint poured to 80%, a gutter beside it, and a wide
+        // clearance ring in between that no generated copper may enter.
+        let footprint = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 20.0)),
+            tol::REGION_MM,
+        );
+        let existing = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 16.0)),
+            tol::REGION_MM,
+        );
+        let safe = ContourSet::rectangle(
+            BBox::new(Point::new(25.0, 0.0), Point::new(40.0, 20.0)),
+            tol::REGION_MM,
+        );
+        let target_density = existing.area() / footprint.area();
+        let density_domain = footprint.union(&safe);
+        let layers = [SpatialCopperBalanceLayerRequest {
+            safe_region: &safe,
+            existing_copper: &existing,
+            density_domain: &density_domain,
+            target_density,
+            stack_weight_mm2: 0.0,
+        }];
+
+        let result = generate_spatial_dense_copper_balance(
+            DenseCopperBalanceProfile::V1,
+            SpatialCopperBalanceRequest {
+                panel_region: &panel,
+                lattice_origin: Point::ZERO,
+                layers: &layers,
+            },
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+
+        // The gutter is perforated to the footprint's own density, not poured
+        // solid to chase copper the clearance can never hold.
+        assert!(
+            matches!(
+                result.solution.mode,
+                DenseCopperBalanceMode::Perforated { .. }
+            ),
+            "{:?}",
+            result.solution
+        );
+        assert!((result.solution.achieved_density - target_density).abs() <= 5e-3);
+        let gutter_fill = result.solution.generated_area_mm2 / safe.area();
+        assert!(
+            (gutter_fill - target_density).abs() <= 5e-3,
+            "gutter filled to {gutter_fill}, footprint sits at {target_density}"
+        );
+        // Charging the request against the whole panel would have demanded
+        // more copper than the gutter can hold.
+        assert!(target_density * panel.area() - existing.area() > safe.area());
+    }
+
     #[test]
     fn spatial_solver_preserves_each_layers_safe_region() {
         let panel = ContourSet::rectangle(
@@ -1173,16 +1310,20 @@ mod tests {
             tol::REGION_MM,
         );
         let existing = ContourSet::empty(tol::REGION_MM);
+        // Nothing outside each layer's own half can hold copper, so each
+        // layer's density domain is exactly its safe region.
         let layers = [
             SpatialCopperBalanceLayerRequest {
                 safe_region: &left,
                 existing_copper: &existing,
+                density_domain: &left,
                 target_density: 0.25,
                 stack_weight_mm2: 1.0,
             },
             SpatialCopperBalanceLayerRequest {
                 safe_region: &right,
                 existing_copper: &existing,
+                density_domain: &right,
                 target_density: 0.25,
                 stack_weight_mm2: -1.0,
             },
@@ -1231,9 +1372,12 @@ mod tests {
             BBox::new(Point::new(20.0, 0.0), Point::new(40.0, 20.0)),
             tol::REGION_MM,
         );
+        // Fixed copper fills the left half and the right half is fillable, so
+        // the density domain is the whole panel.
         let layer = SpatialCopperBalanceLayerRequest {
             safe_region: &safe,
             existing_copper: &existing,
+            density_domain: &panel,
             target_density: 0.75,
             stack_weight_mm2: 0.0,
         };
@@ -1241,7 +1385,7 @@ mod tests {
             DenseCopperBalanceProfile::V1,
             DenseCopperBalanceRequest {
                 safe_region: &safe,
-                retained_area_mm2: panel.area(),
+                density_domain_area_mm2: panel.area(),
                 existing_copper_area_mm2: existing.area(),
                 target_density: layer.target_density,
                 lattice_origin: Point::ZERO,
@@ -1295,6 +1439,11 @@ mod tests {
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
             tol::REGION_MM,
         );
+        // The layers hold different fixed copper, so their density domains
+        // differ: the bottom layer's upper-left quadrant is bare and
+        // unfillable, and stays out of its denominator.
+        let top_domain = top_copper.union(&safe);
+        let bottom_domain = bottom_copper.union(&safe);
         let solve = |stack_weight_mm2: f64| {
             generate_spatial_dense_copper_balance(
                 DenseCopperBalanceProfile::V1,
@@ -1305,12 +1454,14 @@ mod tests {
                         SpatialCopperBalanceLayerRequest {
                             safe_region: &safe,
                             existing_copper: &top_copper,
+                            density_domain: &top_domain,
                             target_density: 0.75,
                             stack_weight_mm2,
                         },
                         SpatialCopperBalanceLayerRequest {
                             safe_region: &safe,
                             existing_copper: &bottom_copper,
+                            density_domain: &bottom_domain,
                             target_density: 0.50,
                             stack_weight_mm2: -stack_weight_mm2,
                         },
@@ -1343,6 +1494,36 @@ mod tests {
         }));
     }
 
+    /// The scalar area bounds must tolerate what `contains` tolerates.
+    ///
+    /// Fixed copper, fillable region, and permanently bare area partition the
+    /// density domain, so a domain whose measured area is short by a boolean
+    /// sliver breaks the sum bound. There is no slack to absorb it once the
+    /// footprints are fully poured, and rejecting then would fail a request
+    /// whose geometry passed every containment check.
+    #[test]
+    fn area_bounds_tolerate_the_same_slivers_as_containment() {
+        let safe_region = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
+            tol::REGION_MM,
+        );
+        let existing_copper_area_mm2 = 100.0;
+        let exact_domain_area_mm2 = existing_copper_area_mm2 + safe_region.area();
+        let result = generate_dense_copper_balance(
+            DenseCopperBalanceProfile::V1,
+            DenseCopperBalanceRequest {
+                safe_region: &safe_region,
+                density_domain_area_mm2: exact_domain_area_mm2
+                    - CONTAINMENT_AREA_TOLERANCE_MM2 / 2.0,
+                existing_copper_area_mm2,
+                target_density: 0.9,
+                lattice_origin: Point::ZERO,
+            },
+        );
+
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
     #[test]
     fn geometric_projection_never_worsens_target_sweep() {
         let safe_region = ContourSet::rectangle(
@@ -1355,7 +1536,7 @@ mod tests {
                 DenseCopperBalanceProfile::V1,
                 DenseCopperBalanceRequest {
                     safe_region: &safe_region,
-                    retained_area_mm2: 100.0,
+                    density_domain_area_mm2: 100.0,
                     existing_copper_area_mm2: 20.0,
                     target_density,
                     lattice_origin: Point::new(0.0, 0.0),

@@ -289,7 +289,7 @@ pub(super) fn spatial_result_from_squared_radii(
     squared_radii: &[f64],
     baseline: DenseCopperBalanceResult,
     layer: SpatialCopperBalanceLayerRequest<'_>,
-    retained_area_mm2: f64,
+    density_domain_area_mm2: f64,
     profile: DenseCopperBalanceProfile,
 ) -> DenseCopperBalanceResult {
     // Snap the continuous radius field to the fabrication step so the voids
@@ -316,7 +316,8 @@ pub(super) fn spatial_result_from_squared_radii(
     let partial_voids = baseline.partial_voids;
     let void_area_mm2 = full_void_area_mm2 + partial_voids.area();
     let generated_area_mm2 = (baseline.usable.area() - void_area_mm2).max(0.0);
-    let achieved_density = (layer.existing_copper.area() + generated_area_mm2) / retained_area_mm2;
+    let achieved_density =
+        (layer.existing_copper.area() + generated_area_mm2) / density_domain_area_mm2;
     let equivalent_radius_mm = (full_voids
         .iter()
         .map(|void| void.radius_mm * void.radius_mm)
