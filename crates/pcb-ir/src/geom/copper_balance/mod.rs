@@ -1684,9 +1684,16 @@ mod tests {
         // unfillable, and stays out of its denominator.
         let top_domain = top_copper.union(&safe);
         let bottom_domain = bottom_copper.union(&safe);
+        // This is the redistribution the stack weights drive at a fixed copper
+        // area, so the band stays shut: with it open the two solves are free
+        // to trade area as well, and the area assertion below would be
+        // asserting the opposite of what the band exists to allow.
         let solve = |stack_weight_mm2: f64| {
             generate_spatial_dense_copper_balance(
-                DenseCopperBalanceProfile::V1,
+                DenseCopperBalanceProfile {
+                    stack_flex_density: 0.0,
+                    ..DenseCopperBalanceProfile::V1
+                },
                 SpatialCopperBalanceRequest {
                     panel_region: &panel,
                     lattice_origin: Point::ZERO,

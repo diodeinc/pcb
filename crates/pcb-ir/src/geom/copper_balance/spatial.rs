@@ -334,34 +334,50 @@ pub(super) fn project_coupled_bands(
         .fold(0.0_f64, f64::max);
     let bound = span * widest_domain + 1.0;
     let (mut low, mut high) = (-bound, bound);
+    let mut multiplier = 0.0;
     for _ in 0..64 {
-        let multiplier = (low + high) / 2.0;
-        if deviation(multiplier) > 0.0 {
+        multiplier = (low + high) / 2.0;
+        let deviation = deviation(multiplier);
+        // Every trial rescans every site, so stop as soon as the constraint
+        // holds to a density the radius quantization could not express anyway.
+        // A stack whose bands all saturate never gets here and runs the full
+        // bracket down.
+        if deviation.abs() <= NUMERIC_EPSILON {
+            break;
+        }
+        if deviation > 0.0 {
             low = multiplier;
         } else {
             high = multiplier;
         }
     }
-    let multiplier = (low + high) / 2.0;
 
-    layers
-        .iter()
-        .map(|layer| {
-            let shift = multiplier / layer.domain_area_mm2;
-            let shifted = layer
-                .proposal
-                .iter()
-                .map(|value| value - shift)
-                .collect::<Vec<_>>();
-            project_box_interval(
-                &shifted,
-                lower,
-                upper,
-                layer.sum_bounds.0,
-                layer.sum_bounds.1,
-            )
-        })
-        .collect()
+    std::thread::scope(|scope| {
+        let handles = layers
+            .iter()
+            .map(|layer| {
+                scope.spawn(move || {
+                    let shift = multiplier / layer.domain_area_mm2;
+                    let shifted = layer
+                        .proposal
+                        .iter()
+                        .map(|value| value - shift)
+                        .collect::<Vec<_>>();
+                    project_box_interval(
+                        &shifted,
+                        lower,
+                        upper,
+                        layer.sum_bounds.0,
+                        layer.sum_bounds.1,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("coupled band projection panicked"))
+            .collect()
+    })
 }
 
 /// Euclidean projection onto `{x : lower <= x <= upper, sum_min <= sum(x) <= sum_max}`.
