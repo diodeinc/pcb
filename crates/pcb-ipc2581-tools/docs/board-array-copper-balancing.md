@@ -1,7 +1,9 @@
 # Board-array copper balancing
 
 This document defines copper balancing for an assembly panel created by
-`board-array create`. Fabrication-panel balancing is a later, independent pass.
+`board-array create`. Fabrication-panel balancing is a later, independent
+pass, documented in
+[fab-panel-copper-balancing.md](fab-panel-copper-balancing.md).
 
 ## Motivation and scope
 
@@ -229,5 +231,7 @@ Initial verification should cover:
 - clipped edge voids preserve the existing web and minimum-fragment rules; and
 - distinct layer-safe regions never contribute sites to the wrong layer.
 
-Fabrication-panel layout and balancing, electroplating simulation, laminate
-material stiffness, and changes inside a board footprint are out of scope.
+Fabrication-panel layout and balancing (see
+[fab-panel-copper-balancing.md](fab-panel-copper-balancing.md)),
+electroplating simulation, laminate material stiffness, and changes inside a
+board footprint are out of scope.

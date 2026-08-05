@@ -290,22 +290,39 @@ pub(super) fn spatial_result_from_squared_radii(
     baseline: DenseCopperBalanceResult,
     layer: SpatialCopperBalanceLayerRequest<'_>,
     retained_area_mm2: f64,
+    profile: DenseCopperBalanceProfile,
 ) -> DenseCopperBalanceResult {
+    // Snap the continuous radius field to the fabrication step so the voids
+    // form a small set of repeated templates; round-to-nearest keeps the
+    // aggregate area error stochastic and far below the solve tolerance.
+    let quantize = |radius_squared: f64| {
+        ((radius_squared.sqrt() / profile.void_radius_step_mm).round()
+            * profile.void_radius_step_mm)
+            .clamp(profile.min_void_radius_mm, profile.max_void_radius_mm)
+    };
     let full_voids = centers
         .iter()
         .zip(squared_radii)
         .map(|(center, radius_squared)| DenseCopperVoid {
             center: *center,
-            radius_mm: radius_squared.sqrt(),
+            radius_mm: quantize(*radius_squared),
         })
         .collect::<Vec<_>>();
-    let full_void_area_mm2 = ROUNDED_HEXAGON_AREA_FACTOR * squared_radii.iter().sum::<f64>();
+    let full_void_area_mm2 = ROUNDED_HEXAGON_AREA_FACTOR
+        * full_voids
+            .iter()
+            .map(|void| void.radius_mm * void.radius_mm)
+            .sum::<f64>();
     let partial_voids = baseline.partial_voids;
     let void_area_mm2 = full_void_area_mm2 + partial_voids.area();
     let generated_area_mm2 = (baseline.usable.area() - void_area_mm2).max(0.0);
     let achieved_density = (layer.existing_copper.area() + generated_area_mm2) / retained_area_mm2;
-    let equivalent_radius_mm =
-        (squared_radii.iter().sum::<f64>() / squared_radii.len() as f64).sqrt();
+    let equivalent_radius_mm = (full_voids
+        .iter()
+        .map(|void| void.radius_mm * void.radius_mm)
+        .sum::<f64>()
+        / full_voids.len() as f64)
+        .sqrt();
     let solution = DenseCopperBalanceSolution {
         mode: DenseCopperBalanceMode::Perforated {
             void_radius_mm: equivalent_radius_mm,

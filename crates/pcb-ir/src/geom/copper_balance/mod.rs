@@ -25,7 +25,12 @@ use spatial::{
 const NUMERIC_EPSILON: f64 = 1e-9;
 const RADIUS_SOLVE_TOLERANCE_MM: f64 = 1e-4;
 const AREA_SOLVE_TOLERANCE_MM2: f64 = 1e-3;
-const SPATIAL_SOLVE_ITERATIONS: usize = 64;
+// Gradient information travels about one kernel support per iteration under
+// the fixed conservative step, so the radius field needs a few hundred
+// iterations to equilibrate across a panel; measured objectives plateau by
+// roughly 500 at both board-array and fabrication-panel scale. Iterations are
+// cheap next to lattice coverage sampling.
+const SPATIAL_SOLVE_ITERATIONS: usize = 512;
 const SQRT_3: f64 = 1.732_050_807_568_877_2;
 
 /// Fixed geometry constraints for a dense perforated copper plane.
@@ -37,6 +42,10 @@ pub struct DenseCopperBalanceProfile {
     pub min_copper_web_mm: f64,
     pub boundary_web_mm: f64,
     pub density_sigma_mm: f64,
+    /// Fabrication step the spatially solved void radii snap to. Etching
+    /// cannot hold finer distinctions, and the shared grid keeps the voids a
+    /// small set of repeated templates instead of thousands of unique shapes.
+    pub void_radius_step_mm: f64,
 }
 
 impl DenseCopperBalanceProfile {
@@ -48,6 +57,7 @@ impl DenseCopperBalanceProfile {
         min_copper_web_mm: 0.20,
         boundary_web_mm: 0.20,
         density_sigma_mm: 5.0,
+        void_radius_step_mm: 0.005,
     };
 
     pub fn lattice_column_pitch_mm(self) -> f64 {
@@ -78,6 +88,7 @@ impl DenseCopperBalanceProfile {
             ("minimum copper web", self.min_copper_web_mm),
             ("boundary copper web", self.boundary_web_mm),
             ("density smoothing sigma", self.density_sigma_mm),
+            ("void radius step", self.void_radius_step_mm),
         ] {
             if !value.is_finite() || value <= 0.0 {
                 return Err(DenseCopperBalanceError::InvalidProfile(format!(
@@ -326,36 +337,63 @@ pub fn generate_spatial_dense_copper_balance(
     validate_spatial_request(request)?;
     let retained_area_mm2 = request.panel_region.area();
 
-    let voidable = request
+    // Layers frequently share one safe region — a fab panel's every copper
+    // layer, a board array's layers with equal support scope — so erode and
+    // classify each distinct region once.
+    let mut region_sources: Vec<&ContourSet> = Vec::new();
+    let mut region_voidable: Vec<ContourSet> = Vec::new();
+    let mut region_lattices: Vec<LatticeCandidates> = Vec::new();
+    let layer_regions = request
         .layers
         .iter()
-        .map(|layer| layer.safe_region.disk_erode(profile.boundary_web_mm))
-        .collect::<Vec<_>>();
-    let lattices = voidable
-        .iter()
-        .map(|region| LatticeCandidates::new(region, request.lattice_origin, profile))
-        .collect::<Vec<_>>();
-    let uniform = request
-        .layers
-        .iter()
-        .zip(&voidable)
-        .zip(&lattices)
-        .map(|((layer, voidable), lattice)| {
-            generate_dense_copper_balance_with_lattice(
+        .map(|layer| {
+            if let Some(index) = region_sources
+                .iter()
+                .position(|region| region.rings == layer.safe_region.rings)
+            {
+                return index;
+            }
+            let voidable = layer.safe_region.disk_erode(profile.boundary_web_mm);
+            region_lattices.push(LatticeCandidates::new(
+                &voidable,
+                request.lattice_origin,
                 profile,
-                DenseCopperBalanceRequest {
-                    safe_region: layer.safe_region,
-                    retained_area_mm2,
-                    existing_copper_area_mm2: layer.existing_copper.area(),
-                    target_density: layer.target_density,
-                    lattice_origin: request.lattice_origin,
-                },
-                layer.safe_region.clone(),
-                voidable,
-                lattice,
-            )
+            ));
+            region_voidable.push(voidable);
+            region_sources.push(layer.safe_region);
+            region_sources.len() - 1
         })
         .collect::<Vec<_>>();
+    let uniform = std::thread::scope(|scope| {
+        let solves = request
+            .layers
+            .iter()
+            .zip(&layer_regions)
+            .map(|(layer, region_index)| {
+                let voidable = &region_voidable[*region_index];
+                let lattice = &region_lattices[*region_index];
+                scope.spawn(move || {
+                    generate_dense_copper_balance_with_lattice(
+                        profile,
+                        DenseCopperBalanceRequest {
+                            safe_region: layer.safe_region,
+                            retained_area_mm2,
+                            existing_copper_area_mm2: layer.existing_copper.area(),
+                            target_density: layer.target_density,
+                            lattice_origin: request.lattice_origin,
+                        },
+                        layer.safe_region.clone(),
+                        voidable,
+                        lattice,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        solves
+            .into_iter()
+            .map(|solve| solve.join().expect("uniform copper-balance solve panicked"))
+            .collect::<Vec<_>>()
+    });
 
     let mut panel_samples =
         hex_aligned_lattice_centers(request.panel_region.bbox, request.lattice_origin, profile)
@@ -375,10 +413,10 @@ pub fn generate_spatial_dense_copper_balance(
     // Full centers lie in eroded safe regions inside the panel; appending any
     // center the tolerance-bound point test missed keeps sample membership
     // structural rather than tolerance-dependent.
-    let active_sites = lattices
+    let active_sites = layer_regions
         .iter()
-        .map(|lattice| {
-            lattice
+        .map(|region_index| {
+            region_lattices[*region_index]
                 .full_centers
                 .iter()
                 .map(|center| {
@@ -407,38 +445,32 @@ pub fn generate_spatial_dense_copper_balance(
         request.lattice_origin,
         profile,
     );
-    let fixed_density = request
-        .layers
-        .iter()
-        .map(|layer| {
-            density_kernel.smooth(&lattice_cell_coverage(
-                &panel_samples,
-                layer.existing_copper,
-                profile,
-            ))
-        })
-        .collect::<Vec<_>>();
-    let available_density = request
-        .layers
-        .iter()
-        .map(|layer| {
-            density_kernel.smooth(&lattice_cell_coverage(
-                &panel_samples,
-                layer.safe_region,
-                profile,
-            ))
-        })
-        .collect::<Vec<_>>();
-    let partial_void_density = uniform
-        .iter()
-        .map(|result| {
-            density_kernel.smooth(&lattice_cell_coverage(
-                &panel_samples,
-                &result.partial_voids,
-                profile,
-            ))
-        })
-        .collect::<Vec<_>>();
+    let smooth_coverage = |region: &ContourSet| {
+        density_kernel.smooth(&lattice_cell_coverage(&panel_samples, region, profile))
+    };
+    let (fixed_density, region_available_density, partial_void_density) =
+        std::thread::scope(|scope| {
+            let fixed = request
+                .layers
+                .iter()
+                .map(|layer| scope.spawn(|| smooth_coverage(layer.existing_copper)))
+                .collect::<Vec<_>>();
+            let available = region_sources
+                .iter()
+                .map(|region| scope.spawn(|| smooth_coverage(region)))
+                .collect::<Vec<_>>();
+            let partial = uniform
+                .iter()
+                .map(|result| scope.spawn(|| smooth_coverage(&result.partial_voids)))
+                .collect::<Vec<_>>();
+            let join_all = |handles: Vec<std::thread::ScopedJoinHandle<'_, Vec<f64>>>| {
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().expect("coverage sampling panicked"))
+                    .collect::<Vec<_>>()
+            };
+            (join_all(fixed), join_all(available), join_all(partial))
+        });
 
     let lower = active_sites
         .iter()
@@ -504,13 +536,12 @@ pub fn generate_spatial_dense_copper_balance(
                     .iter()
                     .enumerate()
                     .map(|(site_index, fixed)| {
+                        let available = &region_available_density[layer_regions[layer_index]];
                         let generated_density = match uniform[layer_index].solution.mode {
                             DenseCopperBalanceMode::None => 0.0,
-                            DenseCopperBalanceMode::Solid => {
-                                available_density[layer_index][site_index]
-                            }
+                            DenseCopperBalanceMode::Solid => available[site_index],
                             DenseCopperBalanceMode::Perforated { .. } => {
-                                available_density[layer_index][site_index]
+                                available[site_index]
                                     - partial_void_density[layer_index][site_index]
                                     - void_density[site_index]
                             }
@@ -567,11 +598,12 @@ pub fn generate_spatial_dense_copper_balance(
                 return baseline;
             }
             spatial_result_from_squared_radii(
-                &lattices[layer_index].full_centers,
+                &region_lattices[layer_regions[layer_index]].full_centers,
                 &squared_radii[layer_index],
                 baseline,
                 request.layers[layer_index],
                 retained_area_mm2,
+                profile,
             )
         })
         .collect())
@@ -688,10 +720,15 @@ fn project_perforated_geometry(
         return best;
     }
 
+    // Every candidate evaluation clips the boundary voids against the safe
+    // region, so the exit tolerance scales with the region: the absolute
+    // floor governs small solves exactly, while large panels stop once the
+    // area error is negligible relative to their usable area.
+    let area_tolerance_mm2 = AREA_SOLVE_TOLERANCE_MM2.max(1e-6 * usable_area_mm2);
     let mut low_area = low_void_area;
     let mut high_area = high_void_area;
     while high_radius - low_radius > RADIUS_SOLVE_TOLERANCE_MM
-        && best.error_mm2 > AREA_SOLVE_TOLERANCE_MM2
+        && best.error_mm2 > area_tolerance_mm2
     {
         // Interior hex area is linear in r². Interpolate there, with a
         // midpoint fallback that keeps convergence bracketed when clipped
@@ -863,6 +900,7 @@ mod tests {
             min_copper_web_mm: 0.05,
             boundary_web_mm: 0.2,
             density_sigma_mm: 5.0,
+            void_radius_step_mm: 0.005,
         };
         profile.validate().unwrap();
         let safe_region = ContourSet::rectangle(
@@ -1232,9 +1270,10 @@ mod tests {
         };
 
         assert!(mean_radius(20.0, 25.0) > mean_radius(35.0, 40.0));
+        let quantization_bound_mm2 = 0.01 * result.full_voids.len() as f64;
         assert!(
             (result.solution.generated_area_mm2 - baseline.solution.generated_area_mm2).abs()
-                <= AREA_SOLVE_TOLERANCE_MM2
+                <= AREA_SOLVE_TOLERANCE_MM2 + quantization_bound_mm2
         );
     }
 
@@ -1298,8 +1337,9 @@ mod tests {
 
         assert!(radius_difference > 0.01);
         assert!(independent.iter().zip(&stack_aware).all(|(left, right)| {
+            let quantization_bound_mm2 = 0.01 * left.full_voids.len() as f64;
             (left.solution.generated_area_mm2 - right.solution.generated_area_mm2).abs()
-                <= AREA_SOLVE_TOLERANCE_MM2
+                <= AREA_SOLVE_TOLERANCE_MM2 + quantization_bound_mm2
         }));
     }
 

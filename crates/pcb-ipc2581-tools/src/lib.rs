@@ -4,6 +4,8 @@ use ipc2581::Mode;
 pub mod accessors;
 pub mod board_array;
 pub mod commands;
+pub mod copper_balance;
+mod generated;
 pub mod geometry;
 pub mod gerber;
 pub mod layers;

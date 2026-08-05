@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `fab-panel create` now automatically balances copper in the gutters between placed assembly panels.
+
 ### Fixed
 
 - Pad shapes with padstack offsets now land at the correct position on rotated pads across all IPC-2581 outputs.

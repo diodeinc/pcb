@@ -5,14 +5,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use ipc2581::Ipc2581;
 use ipc2581::edit::{Doc, Node};
-use ipc2581::types::{Spec, Units};
+use ipc2581::types::{Spec, Units, ecad::Polarity};
 use pcb_ir::dialects::ipc::{LayoutStepKind, root_step};
 use pcb_ir::geom::{BBox, Point};
 
 use super::EdgeInsetsMm;
+use crate::copper_balance::CopperBalanceReport;
+use crate::generated::GeneratedLayerFeature;
 use crate::geometry;
 use crate::utils::file as file_utils;
 
+mod balance;
 mod packing;
 mod xml;
 
@@ -174,6 +177,14 @@ struct SurfaceFinishSignature {
     products: Vec<(String, Option<String>)>,
 }
 
+/// Generated fabrication-panel IPC plus compact per-layer copper-balance
+/// accounting.
+#[derive(Debug, Clone)]
+pub struct FabPanelCreation {
+    pub xml: String,
+    pub copper_balance: CopperBalanceReport,
+}
+
 pub fn execute(inputs: &[PathBuf], output: &Path, spec: FabPanelSpec) -> Result<()> {
     if inputs.is_empty() {
         bail!("at least one assembly panel IPC-2581 file is required");
@@ -202,12 +213,15 @@ pub fn execute(inputs: &[PathBuf], output: &Path, spec: FabPanelSpec) -> Result<
         occurrences.push(source_index);
     }
 
-    let generated = create_fab_panel_xml_with_spec(&source_xml, &occurrences, spec)?;
+    let creation = create_fab_panel(&source_xml, &occurrences, spec)?;
+    for line in creation.copper_balance.summary_lines() {
+        eprintln!("  {line}");
+    }
     if output.as_os_str() == "-" {
-        io::stdout().lock().write_all(generated.as_bytes())?;
+        io::stdout().lock().write_all(creation.xml.as_bytes())?;
         eprintln!("✓ Created IPC-2581 fabrication panel on stdout");
     } else {
-        file_utils::save_ipc_file(output, &generated)?;
+        file_utils::save_ipc_file(output, &creation.xml)?;
         eprintln!(
             "✓ Created IPC-2581 fabrication panel at {}",
             output.display()
@@ -218,17 +232,42 @@ pub fn execute(inputs: &[PathBuf], output: &Path, spec: FabPanelSpec) -> Result<
 
 #[cfg(test)]
 fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<String> {
-    create_fab_panel_xml_with_spec(source_xml, occurrences, FabPanelSpec::default())
+    create_fab_panel(source_xml, occurrences, FabPanelSpec::default()).map(|creation| creation.xml)
 }
 
-fn create_fab_panel_xml_with_spec(
+fn create_fab_panel(
     source_xml: &[String],
     occurrences: &[usize],
     spec: FabPanelSpec,
-) -> Result<String> {
+) -> Result<FabPanelCreation> {
     if occurrences.is_empty() {
         bail!("at least one assembly panel is required");
     }
+
+    // Reduce every source to manufacturing content once, up front: assembling
+    // already-stripped sources keeps the fabrication panel a pure composition
+    // and avoids stripping the much larger composed document.
+    let source_xml = std::thread::scope(|scope| {
+        let strips = source_xml
+            .iter()
+            .map(|xml| scope.spawn(|| super::fabrication::strip_non_manufacturing(xml)))
+            .collect::<Vec<_>>();
+        strips
+            .into_iter()
+            .enumerate()
+            .map(|(source_index, strip)| {
+                strip
+                    .join()
+                    .expect("assembly panel stripping panicked")
+                    .with_context(|| {
+                        format!(
+                            "failed to reduce assembly panel input {} to manufacturing content",
+                            source_index + 1
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
 
     let stackups = source_xml
         .iter()
@@ -278,13 +317,65 @@ fn create_fab_panel_xml_with_spec(
         .collect::<Result<Vec<_>>>()?;
     let placements = pack(&items, spec.usable_size()?, spacing_um(spec.panel_gap_mm)?)?;
 
-    xml::write_fab_panel_xml(
+    // The provisional panel only feeds copper-balance planning: gutters and
+    // placed-panel copper must exist before balance copper can be derived.
+    // Parsing it below already validates it, so it skips the final document's
+    // reformat and schema-validation passes.
+    let provisional = xml::render_fab_panel_xml(
         &sources,
         occurrences,
         &placements,
         &shared_stackup_layers,
         spec,
-    )
+    )?;
+    let parsed = Ipc2581::parse(&provisional)
+        .context("Failed to parse provisional IPC-2581 fabrication panel")?;
+    let balance =
+        balance::generate_automatic_fab_panel_copper_balance(&parsed, spec.usable_bbox()?)?;
+    let copper_balance = balance.report();
+    let mut templates = Vec::new();
+    let balance_features = balance
+        .layers
+        .into_iter()
+        .flat_map(|layer| {
+            for template in layer.features.templates {
+                if !templates
+                    .iter()
+                    .any(|entry: &crate::copper_balance::BalanceVoidTemplate| {
+                        entry.id == template.id
+                    })
+                {
+                    templates.push(template);
+                }
+            }
+            [
+                GeneratedLayerFeature {
+                    layer_name: layer.layer_name.clone(),
+                    polarity: Polarity::Positive,
+                    spec_refs: Vec::new(),
+                    features: layer.features.positive,
+                    instance_refs: Vec::new(),
+                },
+                GeneratedLayerFeature {
+                    layer_name: layer.layer_name,
+                    polarity: Polarity::Negative,
+                    spec_refs: Vec::new(),
+                    features: Vec::new(),
+                    instance_refs: layer.features.instances,
+                },
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    let units = sources
+        .first()
+        .context("at least one assembly panel source is required")?
+        .units;
+    let xml = xml::write_fab_panel_xml(&provisional, units, &balance_features, &templates)?;
+    Ok(FabPanelCreation {
+        xml,
+        copper_balance,
+    })
 }
 
 fn prepare_source_panel(

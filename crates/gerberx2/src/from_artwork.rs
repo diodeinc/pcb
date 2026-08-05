@@ -5,12 +5,12 @@
 //! can be emitted as a Gerber file, regardless of which source dialect
 //! produced it.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::{
     AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
-    Point as GerberPoint, Result, WriterAperture, WriterApertureTemplate, WriterObject,
-    sanitize_attribute_field,
+    Point as GerberPoint, Result, WriterAperture, WriterApertureMacro, WriterApertureTemplate,
+    WriterMacroExpression, WriterMacroPrimitive, WriterObject, sanitize_attribute_field,
 };
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
 use pcb_ir::geom::path::{self as geom_path, ContourBuf, PathCmd};
@@ -142,18 +142,157 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
         .map(|layer| layer.meta.clone())
         .unwrap_or_default();
 
+    let flashes = plan_repeated_clear_flashes(layer, &mut apertures)?;
     for (source_index, object) in layer.objects.iter().enumerate() {
-        let objects = lower_artwork_object(layer, object, &mut apertures)?;
+        let objects = if let Some(flash) = flashes.get(&source_index) {
+            vec![WriterObject {
+                kind: ObjectKind::Flash {
+                    at: lower_point(flash.at),
+                    aperture: flash.aperture,
+                },
+                polarity: object.polarity,
+                attributes: lower_object_attributes(&object.meta),
+            }]
+        } else {
+            lower_artwork_object(layer, object, &mut apertures)?
+        };
         plan.push_group(source_index, object.order.stage, objects);
     }
     let objects = plan.into_ordered_objects()?;
 
+    let (aperture_list, aperture_macros) = apertures.into_parts();
     Ok(GerberLayer {
         file_attributes: lower_layer_attributes(&layer_attributes),
-        apertures: apertures.into_apertures(),
+        apertures: aperture_list,
+        aperture_macros,
         objects,
         ..GerberLayer::default()
     })
+}
+
+/// Minimum congruent clear regions before sharing their outline as a macro
+/// aperture pays for the definition.
+const MIN_REPEATED_CLEAR_FLASHES: usize = 16;
+
+/// Congruence quantum for translated-copy detection, in millimeters.
+const CLEAR_FLASH_QUANTUM_MM: f64 = 1e-6;
+
+struct PlannedClearFlash {
+    at: Point,
+    aperture: i32,
+}
+
+/// Plan translation-congruent single-contour clear regions as flashes of one
+/// shared outline-macro aperture.
+///
+/// Each flash replaces its region at the same position in the object order
+/// with identical geometry and polarity, so the painted image is unchanged
+/// and no polarity reasoning is required. Dense generated patterns — copper
+/// balance void lattices above all — collapse from hundreds of bytes per
+/// instance to one flash each.
+fn plan_repeated_clear_flashes(
+    layer: &ArtworkDocument,
+    apertures: &mut ApertureTable,
+) -> Result<HashMap<usize, PlannedClearFlash>> {
+    // Ordered so macro names and aperture codes are stable across runs.
+    type Signature = (Vec<String>, Vec<CommandSignature>);
+    let mut groups: BTreeMap<Signature, Vec<(usize, Point)>> = BTreeMap::new();
+    for (index, object) in layer.objects.iter().enumerate() {
+        if object.polarity != Polarity::Clear {
+            continue;
+        }
+        let ArtworkGeometry::Region { path } = object.geometry else {
+            continue;
+        };
+        let contours = layer.arena.path_contours(&layer.arena.paths[path as usize]);
+        let [contour] = contours.as_slice() else {
+            continue;
+        };
+        let Some(anchor) = contour_anchor(contour) else {
+            continue;
+        };
+        if contour.cmds.len() > 256 {
+            continue;
+        }
+        let function = object
+            .meta
+            .aperture_function
+            .clone()
+            .unwrap_or_else(|| vec!["Conductor".to_string()]);
+        groups
+            .entry((function, contour_signature(contour, anchor)))
+            .or_default()
+            .push((index, anchor));
+    }
+
+    let mut plan = HashMap::new();
+    for ((function, _), members) in groups {
+        if members.len() < MIN_REPEATED_CLEAR_FLASHES {
+            continue;
+        }
+        let (template_index, template_anchor) = members[0];
+        let ArtworkGeometry::Region { path } = layer.objects[template_index].geometry else {
+            continue;
+        };
+        let contours = layer.arena.path_contours(&layer.arena.paths[path as usize]);
+        let Some(ring) = region::rings_from_contours(&contours).into_iter().next() else {
+            continue;
+        };
+        let outline = ring
+            .iter()
+            .map(|[x, y]| [x - template_anchor.x, y - template_anchor.y])
+            .collect::<Vec<_>>();
+        let aperture = apertures.outline_macro(&outline, &function)?;
+        for (index, anchor) in members {
+            plan.insert(
+                index,
+                PlannedClearFlash {
+                    at: anchor,
+                    aperture,
+                },
+            );
+        }
+    }
+    Ok(plan)
+}
+
+fn contour_anchor(contour: &ContourBuf) -> Option<Point> {
+    let first = contour.cmds.first()?;
+    matches!(first.op, geom_path::PathOp::MoveTo).then(|| first.p0)
+}
+
+type CommandSignature = (u8, i64, i64, i64, i64, i64, i64, bool);
+
+/// Translation-invariant shape identity: command opcodes plus every control
+/// point relative to the contour anchor, quantized to the congruence
+/// quantum.
+fn contour_signature(contour: &ContourBuf, anchor: Point) -> Vec<CommandSignature> {
+    let quantize = |value: f64| (value / CLEAR_FLASH_QUANTUM_MM).round() as i64;
+    contour
+        .cmds
+        .iter()
+        .map(|cmd| {
+            let (p0, p1, p2, clockwise) = match cmd.op {
+                geom_path::PathOp::ArcTo => (cmd.p0, cmd.p1, anchor, cmd.clockwise),
+                geom_path::PathOp::CubicTo => (cmd.p0, cmd.p1, cmd.p2, false),
+                geom_path::PathOp::MoveTo | geom_path::PathOp::LineTo => {
+                    (cmd.p0, anchor, anchor, false)
+                }
+                // Close carries no control points of its own.
+                geom_path::PathOp::Close => (anchor, anchor, anchor, false),
+            };
+            (
+                cmd.op as u8,
+                quantize(p0.x - anchor.x),
+                quantize(p0.y - anchor.y),
+                quantize(p1.x - anchor.x),
+                quantize(p1.y - anchor.y),
+                quantize(p2.x - anchor.x),
+                quantize(p2.y - anchor.y),
+                clockwise,
+            )
+        })
+        .collect()
 }
 
 fn lower_artwork_object(
@@ -435,6 +574,7 @@ struct ApertureTable {
     next_code: i32,
     by_key: HashMap<ApertureKey, i32>,
     apertures: Vec<WriterAperture>,
+    aperture_macros: Vec<WriterApertureMacro>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -571,6 +711,45 @@ impl ApertureTable {
         }
     }
 
+    /// Define a one-off macro aperture filling the given closed outline,
+    /// expressed relative to the flash origin.
+    fn outline_macro(&mut self, outline: &[[f64; 2]], function: &[String]) -> Result<i32> {
+        if outline.len() < 3 {
+            return Err(GerberError::InvalidStructure(
+                "cannot export a Gerber outline macro with fewer than three vertices".to_string(),
+            ));
+        }
+        let name = format!("REPEAT{}", self.aperture_macros.len());
+        let mut parameters = Vec::with_capacity(2 * outline.len() + 5);
+        parameters.push(WriterMacroExpression::Number(1.0));
+        parameters.push(WriterMacroExpression::Number(outline.len() as f64));
+        for [x, y] in outline.iter().chain(std::iter::once(&outline[0])) {
+            parameters.push(WriterMacroExpression::Number(*x));
+            parameters.push(WriterMacroExpression::Number(*y));
+        }
+        parameters.push(WriterMacroExpression::Number(0.0));
+        self.aperture_macros.push(WriterApertureMacro {
+            name: name.clone(),
+            primitives: vec![WriterMacroPrimitive::Shape {
+                code: 4,
+                parameters,
+            }],
+        });
+        let code = self.allocate_code();
+        self.apertures.push(WriterAperture {
+            code,
+            template: WriterApertureTemplate::Macro {
+                name,
+                parameters: Vec::new(),
+            },
+            attributes: vec![AttributeValue::new(
+                ".AperFunction",
+                function.iter().cloned(),
+            )],
+        });
+        Ok(code)
+    }
+
     fn define(
         &mut self,
         template_key: ApertureTemplateKey,
@@ -584,13 +763,7 @@ impl ApertureTable {
         if let Some(code) = self.by_key.get(&key) {
             return Ok(*code);
         }
-        let code = if self.next_code == 0 {
-            self.next_code = 10;
-            10
-        } else {
-            self.next_code += 1;
-            self.next_code
-        };
+        let code = self.allocate_code();
         self.by_key.insert(key, code);
         self.apertures.push(WriterAperture {
             code,
@@ -603,8 +776,17 @@ impl ApertureTable {
         Ok(code)
     }
 
-    fn into_apertures(self) -> Vec<WriterAperture> {
-        self.apertures
+    fn allocate_code(&mut self) -> i32 {
+        if self.next_code == 0 {
+            self.next_code = 10;
+        } else {
+            self.next_code += 1;
+        }
+        self.next_code
+    }
+
+    fn into_parts(self) -> (Vec<WriterAperture>, Vec<WriterApertureMacro>) {
+        (self.apertures, self.aperture_macros)
     }
 }
 

@@ -7,6 +7,7 @@ use ipc2581::{Ipc2581, XmlWriter};
 
 use super::{FabPanelSpec, SourcePanel};
 use crate::commands::fab_panel::packing::Placement;
+use crate::generated::{GeneratedLayerFeature, GeneratedNameState, write_generated_layer_feature};
 use crate::steps::FAB_PANEL_STEP_NAME;
 
 const FAB_ROLE_ID: &str = "fab_panel_role";
@@ -175,7 +176,10 @@ fn should_namespace_attr(
     }
 }
 
-pub(super) fn write_fab_panel_xml(
+/// Render the fabrication-panel document from already-stripped sources. The
+/// provisional balancing pass consumes this directly; only the final document
+/// pays for reformatting via [`write_fab_panel_xml`].
+pub(super) fn render_fab_panel_xml(
     sources: &[SourcePanel],
     occurrences: &[usize],
     placements: &[Placement],
@@ -212,7 +216,43 @@ pub(super) fn write_fab_panel_xml(
     )?;
     writer.end_element("IPC-2581");
 
-    let xml = super::super::fabrication::strip_non_manufacturing(&writer.into_string())?;
+    Ok(writer.into_string())
+}
+
+/// Finalize the provisional document: splice the balance layer features into
+/// the fabrication-panel step, then reformat and re-parse. Splicing avoids a
+/// second full composition of the source documents.
+pub(super) fn write_fab_panel_xml(
+    provisional: &str,
+    units: Units,
+    balance_features: &[GeneratedLayerFeature],
+    templates: &[crate::copper_balance::BalanceVoidTemplate],
+) -> Result<String> {
+    let mut features_xml = XmlWriter::new();
+    let mut names = GeneratedNameState::default();
+    for layer_feature in balance_features {
+        write_generated_layer_feature(&mut features_xml, units, layer_feature, &mut names)?;
+    }
+    let features_xml = features_xml.into_string();
+
+    let xml = if features_xml.is_empty() && templates.is_empty() {
+        provisional.to_string()
+    } else {
+        let doc = Doc::parse(provisional)?;
+        let mut edits = Vec::new();
+        if !features_xml.is_empty() {
+            let fab_step = doc
+                .find_all("Step")
+                .into_iter()
+                .find(|step| doc.attr(*step, "name") == Some(FAB_PANEL_STEP_NAME))
+                .context("provisional fabrication panel has no fab step")?;
+            edits.push(doc.append_inside(fab_step, features_xml));
+        }
+        edits.extend(crate::generated::user_dictionary_edit(
+            &doc, units, templates,
+        )?);
+        edit::apply(provisional, edits)?
+    };
     let xml = crate::utils::format::reformat_xml(&xml)?;
     Ipc2581::validate(&xml)
         .context("Generated IPC-2581 fabrication panel XML failed schema validation")?;
@@ -225,8 +265,15 @@ fn write_content(
     docs: &[Doc<'_>],
     shared_stackup_layers: &HashSet<String>,
 ) -> Result<()> {
+    let section_key = super::super::fabrication::fabrication_section_key_union(docs);
     writer.start_element("Content", &[("roleRef", FAB_ROLE_ID)]);
-    writer.empty_element("FunctionMode", &[("mode", "FABRICATION")]);
+    writer.empty_element(
+        "FunctionMode",
+        &[
+            ("mode", "FABRICATION"),
+            ("sectionKey", section_key.as_str()),
+        ],
+    );
     writer.empty_element("StepRef", &[("name", FAB_PANEL_STEP_NAME)]);
 
     for (doc_index, doc) in docs.iter().enumerate() {
