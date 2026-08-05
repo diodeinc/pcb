@@ -57,6 +57,12 @@ impl StrokeStyle {
     pub fn round(width: f64) -> Self {
         Self::new(width, LineCap::Round)
     }
+
+    /// Whether this stroke images as one unbroken run, so a target that only
+    /// understands solid strokes can draw it natively.
+    pub fn is_solid(&self) -> bool {
+        matches!(self.pattern, LinePattern::Solid | LinePattern::Erase)
+    }
 }
 
 /// How a path's contours are painted.

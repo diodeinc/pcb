@@ -11,8 +11,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `--layout-target` now takes `board` or `board-array` on every command, and defaults to `board-array`.
-- `ipc2581 render` no longer takes `--flat`; use `ipc2581 outline --nested-outlines` for nested panel boundaries.
-- Rendered SVGs are several times smaller and open in `rsvg-convert`, ImageMagick, and other SVG tools.
 
 ### Fixed
 

@@ -6,7 +6,7 @@ use crate::dialects::mask;
 use crate::geom::path::{PathCmd, PathOp};
 
 use crate::geom::{
-    Affine2, Arc, BBox, FillRule, LineCap, LineJoin, Path, PathArena, Point, Polarity,
+    Affine2, Arc, BBox, FillRule, LineCap, LineJoin, Path, PathArena, Point, Polarity, StrokeStyle,
 };
 use crate::render::{RenderOptions, SizeConstraint};
 
@@ -17,15 +17,11 @@ const POINT_EPSILON_MM: f64 = 1e-9;
 pub fn svg<LayerMeta>(doc: &mask::Document<LayerMeta>, options: &RenderOptions) -> String {
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = crate::render::bbox(doc, Some(&layers));
-    let mut svg = open_svg(
-        &bbox,
-        pixel_size(options, bbox),
-        layers
-            .first()
-            .and_then(|&index| doc.layers.get(index))
-            .map(|layer| layer.name.as_str())
-            .unwrap_or("mask"),
-    );
+    let title = layers
+        .first()
+        .and_then(|&index| doc.layers.get(index))
+        .map(|layer| layer.name.as_str());
+    let mut svg = open_svg(&bbox, pixel_size(options, bbox), title);
 
     for &layer_index in &layers {
         let layer = &doc.layers[layer_index];
@@ -70,15 +66,11 @@ pub fn artwork_svg<LayerMeta, ObjectMeta>(
         write_artwork_layer(&mut body, &mut defs, doc, layer);
     }
 
-    let mut svg = open_svg(
-        &bbox,
-        pixel_size(options, bbox),
-        layers
-            .first()
-            .and_then(|&index| doc.layers.get(index))
-            .map(|layer| layer.name.as_str())
-            .unwrap_or("artwork"),
-    );
+    let title = layers
+        .first()
+        .and_then(|&index| doc.layers.get(index))
+        .map(|layer| layer.name.as_str());
+    let mut svg = open_svg(&bbox, pixel_size(options, bbox), title);
     writeln!(svg, "  <defs>\n{defs}  </defs>").unwrap();
     svg.push_str(&body);
     close_svg(svg)
@@ -113,9 +105,6 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
         write_artwork_object(&mut run, doc, layer.role, object);
     }
     flush_run(&mut painted, defs, &mut run, run_polarity, layer);
-    if painted.is_empty() {
-        return;
-    }
 
     // One group opacity rather than per-object alpha, so overlapping objects
     // composite once instead of darkening where they touch.
@@ -140,7 +129,7 @@ fn flush_run<LayerMeta>(
         Polarity::Dark => painted.push_str(&run),
         // A clear run removes from what is already painted, so with nothing
         // under it there is nothing to remove.
-        Polarity::Clear if painted.is_empty() || run.is_empty() => {}
+        Polarity::Clear if painted.is_empty() => {}
         Polarity::Clear => {
             let mask_id = format!("m{}", defs.matches("<mask ").count());
             let bounds = layer.bbox.expand(1.0);
@@ -180,15 +169,30 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
                 out,
                 "      <path d='{}' fill-rule='{}' stroke='none'/>",
                 path_data(&doc.arena, path),
-                fill_rule_name(path.fill_rule().unwrap_or(FillRule::NonZero))
+                fill_rule_name(
+                    path.fill_rule()
+                        .expect("region geometry carries a fill paint")
+                )
+            )
+            .unwrap();
+        }
+        // SVG has no notion of IPC line patterns, so a patterned stroke
+        // images through the same expansion the mask compositor uses.
+        Geometry::Stroke { path } if !stroke_of(doc, path).is_solid() => {
+            let contours = crate::geom::path::stroke_to_fill(
+                &doc.arena.path_contours(doc.arena.path(path)),
+                stroke_of(doc, path).into(),
+            )
+            .unwrap_or_default();
+            writeln!(
+                out,
+                "      <path d='{}' fill-rule='nonzero' stroke='none'/>",
+                contours_data(&contours)
             )
             .unwrap();
         }
         Geometry::Stroke { path } => {
-            let path = doc.arena.path(path);
-            let stroke = path
-                .stroke()
-                .expect("stroke geometry carries a stroke paint");
+            let stroke = stroke_of(doc, path);
             let outline = if role == LayerRole::Profile {
                 " data-board-outline='true'"
             } else {
@@ -197,7 +201,7 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
             writeln!(
                 out,
                 "      <path d='{}' fill='none' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='{}'{outline}/>",
-                path_data(&doc.arena, path),
+                path_data(&doc.arena, doc.arena.path(path)),
                 fmt_num(stroke.width),
                 line_cap_name(stroke.cap),
                 line_join_name(stroke.join),
@@ -205,6 +209,16 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
             .unwrap();
         }
     }
+}
+
+fn stroke_of<LayerMeta, ObjectMeta>(
+    doc: &artwork::Document<LayerMeta, ObjectMeta>,
+    path: u32,
+) -> StrokeStyle {
+    doc.arena
+        .path(path)
+        .stroke()
+        .expect("stroke geometry carries a stroke paint")
 }
 
 fn line_cap_name(cap: LineCap) -> &'static str {
@@ -224,9 +238,6 @@ fn line_join_name(join: LineJoin) -> &'static str {
 }
 
 fn svg_transform(transform: Affine2) -> String {
-    if transform.is_identity() {
-        return String::new();
-    }
     format!(
         " transform='matrix({} {} {} {} {} {})'",
         fmt_num(transform.m00),
@@ -249,7 +260,8 @@ fn pixel_size(options: &RenderOptions, bbox: BBox) -> Option<(u32, u32)> {
     }
 }
 
-fn open_svg(bbox: &BBox, pixel_size: Option<(u32, u32)>, title: &str) -> String {
+fn open_svg(bbox: &BBox, pixel_size: Option<(u32, u32)>, title: Option<&str>) -> String {
+    let title = title.unwrap_or("layer");
     let mut svg = String::new();
     let size = pixel_size
         .map(|(width, height)| format!(" width='{width}' height='{height}'"))
@@ -298,7 +310,7 @@ fn write_shape(svg: &mut String, arena: &PathArena, role: LayerRole, shape: &Pat
             svg,
             "    <path d='{d}' fill='{color}' fill-opacity='{}' fill-rule='{}'/>",
             fmt_num(opacity),
-            fill_rule_name(shape.fill_rule().unwrap_or(FillRule::NonZero))
+            fill_rule_name(shape.fill_rule().expect("mask shapes are filled"))
         )
         .unwrap();
     }
@@ -500,6 +512,32 @@ mod tests {
     }
 
     #[test]
+    fn artwork_svg_images_patterned_strokes_as_dashes() {
+        let mut doc = copper_artwork();
+        let path = doc.push_path(
+            Paint::Stroke(StrokeStyle {
+                pattern: crate::geom::LinePattern::Dashed,
+                ..StrokeStyle::round(0.2)
+            }),
+            vec![ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(20.0, 0.0)),
+            ])],
+        );
+        doc.push_object(
+            0,
+            artwork::Object::new(Polarity::Dark, Geometry::Stroke { path }),
+        );
+        artwork::normalize_bounds(&mut doc);
+
+        let svg = artwork_svg(&doc, &RenderOptions::default());
+
+        // Expanded into separate filled dashes rather than one native stroke.
+        assert!(!svg.contains("stroke-width"), "{svg}");
+        assert!(svg.matches('M').count() > 1, "{svg}");
+    }
+
+    #[test]
     fn artwork_svg_masks_a_clear_run_over_earlier_paint() {
         let mut doc = copper_artwork();
         let pour = doc.push_path(
@@ -528,6 +566,14 @@ mod tests {
 
         assert_eq!(svg.matches("<mask id='m0'").count(), 1);
         assert_eq!(svg.matches("<g mask='url(#m0)'>").count(), 1);
+        // The mask's covering rect shares the user space of the geometry it
+        // masks, so it spans the layer bounds in source coordinates. Flipping
+        // it would leave the masked content outside the rect and drop the
+        // whole layer.
+        assert!(
+            svg.contains("<rect x='-1' y='-1' width='12' height='12'"),
+            "{svg}"
+        );
     }
 
     #[test]

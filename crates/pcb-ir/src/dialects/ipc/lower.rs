@@ -131,45 +131,23 @@ where
     let mut instance_apertures = HashMap::<Symbol, u32>::new();
 
     for feature in layer.features.slice(&doc.features) {
-        if let Some((aperture, transform, bbox)) = lowering.source_aperture(feature) {
-            let aperture = out.push_aperture(aperture);
-            push_flash(
-                &mut out,
-                artwork_layer,
-                lowering,
-                feature,
-                aperture,
-                transform,
-                bbox,
-            );
-            continue;
-        }
-
-        if let Some((aperture, transform)) =
-            instance_aperture(&mut out, doc, feature, &mut instance_apertures)
+        if let Some((aperture, transform, bbox)) =
+            flash_for(&mut out, doc, feature, lowering, &mut instance_apertures)
         {
-            push_flash(
-                &mut out,
+            let meta = lowering.object_meta(feature, ArtworkObjectKind::Flash);
+            let order = lowering.paint_order(feature);
+            out.push_object(
                 artwork_layer,
-                lowering,
-                feature,
-                aperture,
-                transform,
-                feature.bbox,
-            );
-            continue;
-        }
-
-        if let Some((at, diameter)) = circle_flash(doc, feature) {
-            let aperture = out.push_aperture(artwork::Aperture::circle(diameter));
-            push_flash(
-                &mut out,
-                artwork_layer,
-                lowering,
-                feature,
-                aperture,
-                Affine2::translation(at),
-                BBox::from_point(at).expand(diameter / 2.0),
+                artwork::Object {
+                    polarity: feature.polarity,
+                    order,
+                    geometry: artwork::Geometry::Flash {
+                        aperture,
+                        transform,
+                    },
+                    bbox,
+                    meta,
+                },
             );
             continue;
         }
@@ -209,30 +187,31 @@ where
     out
 }
 
-fn push_flash<Symbol, LayerFunction, ObjectMeta>(
-    out: &mut artwork::Document<LayerFunction, ObjectMeta>,
-    artwork_layer: u32,
-    lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
+/// The shared aperture a feature flashes through, if any: one the source
+/// declares, one derived from a repeated dictionary instance, or a plain
+/// circle for a drilled or fiducial feature.
+fn flash_for<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
+    out: &mut artwork::Document<LayerMeta, ObjectMeta>,
+    doc: &Document<Symbol, LayerFunction>,
     feature: &Feature<Symbol>,
-    aperture: u32,
-    transform: Affine2,
-    bbox: BBox,
-) {
-    let meta = lowering.object_meta(feature, ArtworkObjectKind::Flash);
-    let order = lowering.paint_order(feature);
-    out.push_object(
-        artwork_layer,
-        artwork::Object {
-            polarity: feature.polarity,
-            order,
-            geometry: artwork::Geometry::Flash {
-                aperture,
-                transform,
-            },
-            bbox,
-            meta,
-        },
-    );
+    lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
+    apertures: &mut HashMap<Symbol, u32>,
+) -> Option<(u32, Affine2, BBox)>
+where
+    Symbol: Copy + Eq + Hash,
+{
+    if let Some((aperture, transform, bbox)) = lowering.source_aperture(feature) {
+        return Some((out.push_aperture(aperture), transform, bbox));
+    }
+    if let Some((aperture, transform)) = instance_aperture(out, doc, feature, apertures) {
+        return Some((aperture, transform, feature.bbox));
+    }
+    let (at, diameter) = circle_flash(doc, feature)?;
+    Some((
+        out.push_aperture(artwork::Aperture::circle(diameter)),
+        Affine2::translation(at),
+        BBox::from_point(at).expand(diameter / 2.0),
+    ))
 }
 
 /// A user-dictionary instance feature: a placed reference whose local shape
