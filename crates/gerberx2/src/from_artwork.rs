@@ -195,7 +195,7 @@ fn plan_repeated_clear_flashes(
     apertures: &mut ApertureTable,
 ) -> Result<HashMap<usize, PlannedClearFlash>> {
     // Ordered so macro names and aperture codes are stable across runs.
-    type Signature = (Vec<String>, Vec<(u8, i64, i64, i64, i64, bool)>);
+    type Signature = (Vec<String>, Vec<CommandSignature>);
     let mut groups: BTreeMap<Signature, Vec<(usize, Point)>> = BTreeMap::new();
     for (index, object) in layer.objects.iter().enumerate() {
         if object.polarity != Polarity::Clear {
@@ -261,21 +261,25 @@ fn contour_anchor(contour: &ContourBuf) -> Option<Point> {
     matches!(first.op, geom_path::PathOp::MoveTo).then(|| first.p0)
 }
 
-/// Translation-invariant shape identity: command opcodes plus their control
-/// points relative to the contour anchor, quantized to the congruence
+type CommandSignature = (u8, i64, i64, i64, i64, i64, i64, bool);
+
+/// Translation-invariant shape identity: command opcodes plus every control
+/// point relative to the contour anchor, quantized to the congruence
 /// quantum.
-fn contour_signature(contour: &ContourBuf, anchor: Point) -> Vec<(u8, i64, i64, i64, i64, bool)> {
+fn contour_signature(contour: &ContourBuf, anchor: Point) -> Vec<CommandSignature> {
     let quantize = |value: f64| (value / CLEAR_FLASH_QUANTUM_MM).round() as i64;
     contour
         .cmds
         .iter()
         .map(|cmd| {
-            let (p0, p1, clockwise) = match cmd.op {
-                geom_path::PathOp::ArcTo => (cmd.p0, cmd.p1, cmd.clockwise),
-                geom_path::PathOp::CubicTo => (cmd.p0, cmd.p1, false),
-                geom_path::PathOp::MoveTo | geom_path::PathOp::LineTo => (cmd.p0, anchor, false),
+            let (p0, p1, p2, clockwise) = match cmd.op {
+                geom_path::PathOp::ArcTo => (cmd.p0, cmd.p1, anchor, cmd.clockwise),
+                geom_path::PathOp::CubicTo => (cmd.p0, cmd.p1, cmd.p2, false),
+                geom_path::PathOp::MoveTo | geom_path::PathOp::LineTo => {
+                    (cmd.p0, anchor, anchor, false)
+                }
                 // Close carries no control points of its own.
-                geom_path::PathOp::Close => (anchor, anchor, false),
+                geom_path::PathOp::Close => (anchor, anchor, anchor, false),
             };
             (
                 cmd.op as u8,
@@ -283,6 +287,8 @@ fn contour_signature(contour: &ContourBuf, anchor: Point) -> Vec<(u8, i64, i64, 
                 quantize(p0.y - anchor.y),
                 quantize(p1.x - anchor.x),
                 quantize(p1.y - anchor.y),
+                quantize(p2.x - anchor.x),
+                quantize(p2.y - anchor.y),
                 clockwise,
             )
         })

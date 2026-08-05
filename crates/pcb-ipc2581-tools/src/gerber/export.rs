@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1180,26 +1180,63 @@ fn nearly_equal(left: f64, right: f64) -> bool {
 fn clear_polarity_needs_resolution(doc: &IpcGeometryDocument) -> bool {
     doc.layers.iter().any(|layer| {
         let features = layer.features.slice(&doc.features);
-        let clear_bounds = features
-            .iter()
-            .filter(|feature| {
-                feature.bucket != FeatureBucket::Cutout
-                    && feature.polarity == Polarity::Clear
-                    && !feature.flags.clears_previous_in_set
-            })
-            .map(|feature| feature.bbox)
-            .collect::<Vec<_>>();
+        let clear_bounds = ClearBoundsGrid::new(features.iter().filter_map(|feature| {
+            (feature.bucket != FeatureBucket::Cutout
+                && feature.polarity == Polarity::Clear
+                && !feature.flags.clears_previous_in_set)
+                .then_some(feature.bbox)
+        }));
         if clear_bounds.is_empty() {
             return false;
         }
         features.iter().any(|feature| {
             feature.polarity == Polarity::Dark
                 && paint_order(feature).stage == PaintStage::Overlay
-                && clear_bounds
-                    .iter()
-                    .any(|bounds| bounds.intersects(feature.bbox))
+                && clear_bounds.intersects(feature.bbox)
         })
     })
+}
+
+/// Uniform spatial hash over clear-feature bounds, sized for the
+/// millimeter-scale voids and pads that dominate them. Both insertion and
+/// queries touch only the handful of cells a bounding box covers, keeping
+/// the clear-versus-overlay reachability check linear in feature count.
+struct ClearBoundsGrid {
+    cells: HashMap<(i64, i64), Vec<pcb_ir::geom::BBox>>,
+}
+
+impl ClearBoundsGrid {
+    const CELL_MM: f64 = 4.0;
+
+    fn new(bounds: impl Iterator<Item = pcb_ir::geom::BBox>) -> Self {
+        let mut cells: HashMap<(i64, i64), Vec<pcb_ir::geom::BBox>> = HashMap::new();
+        for bbox in bounds {
+            for cell in Self::covered_cells(bbox) {
+                cells.entry(cell).or_default().push(bbox);
+            }
+        }
+        Self { cells }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    fn intersects(&self, bbox: pcb_ir::geom::BBox) -> bool {
+        Self::covered_cells(bbox).any(|cell| {
+            self.cells
+                .get(&cell)
+                .is_some_and(|bounds| bounds.iter().any(|clear| clear.intersects(bbox)))
+        })
+    }
+
+    fn covered_cells(bbox: pcb_ir::geom::BBox) -> impl Iterator<Item = (i64, i64)> {
+        let min_x = (bbox.min.x / Self::CELL_MM).floor() as i64;
+        let max_x = (bbox.max.x / Self::CELL_MM).floor() as i64;
+        let min_y = (bbox.min.y / Self::CELL_MM).floor() as i64;
+        let max_y = (bbox.max.y / Self::CELL_MM).floor() as i64;
+        (min_x..=max_x).flat_map(move |x| (min_y..=max_y).map(move |y| (x, y)))
+    }
 }
 
 fn paint_order(feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
