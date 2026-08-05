@@ -407,21 +407,31 @@ impl ApertureTable {
 
     fn artwork_aperture(&mut self, aperture: Aperture, function: &[String]) -> Result<i32> {
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
+        let fill_rule = aperture.fill_rule();
         match aperture.shape {
             ApertureShape::Contour(contour) => {
-                let mut rings = region::rings_from_contours(std::slice::from_ref(&contour));
+                // Resolve the buffer's raw loops under the aperture's fill
+                // rule so winding is canonical: each shape is an outer ring
+                // followed by its holes, wound opposite. Larger shapes paint
+                // first so an island inside a hole survives the hole's erase.
+                let mut shapes = region::simplify_shapes(
+                    region::rings_from_contours(std::slice::from_ref(&contour)),
+                    fill_rule,
+                );
+                shapes.sort_by(|a, b| {
+                    let area = |shape: &region::Shape| {
+                        shape
+                            .first()
+                            .map_or(0.0, |ring| region::ring_signed_area(ring).abs())
+                    };
+                    area(b).total_cmp(&area(a))
+                });
+                let rings = shapes.into_iter().flatten().collect::<Vec<_>>();
                 if rings.is_empty() {
                     return Err(GerberError::InvalidStructure(
                         "cannot export an empty contour aperture".to_string(),
                     ));
                 }
-                // Paint larger loops before the loops they contain, so a
-                // hole's exposure-off outline erases the material under it.
-                rings.sort_by(|a, b| {
-                    region::ring_signed_area(b)
-                        .abs()
-                        .total_cmp(&region::ring_signed_area(a).abs())
-                });
                 let key = rings
                     .iter()
                     .map(|ring| {
@@ -996,6 +1006,70 @@ mod tests {
         assert!(
             (summary.area_mm2 - 64.0).abs() < 0.01,
             "the hole ring must survive as an exposure-off outline: {}",
+            summary.area_mm2
+        );
+    }
+
+    #[test]
+    fn contour_apertures_normalize_material_winding() {
+        // A clockwise-wound solitary loop is still material under NonZero;
+        // winding normalization must not turn it into an exposure-off ring.
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+
+        let clockwise = [
+            Point::new(0.0, 0.0),
+            Point::new(0.0, 10.0),
+            Point::new(10.0, 10.0),
+            Point::new(10.0, 0.0),
+        ];
+        let mut bbox = BBox::empty();
+        let mut cmds = Vec::new();
+        for (index, point) in clockwise.into_iter().enumerate() {
+            bbox.include_point(point);
+            cmds.push(if index == 0 {
+                PathCmd::move_to(point)
+            } else {
+                PathCmd::line_to(point)
+            });
+        }
+        cmds.push(PathCmd::close());
+        let contour = ContourBuf::from_parts(bbox, cmds);
+
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour(contour)));
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                polarity: Polarity::Dark,
+                order: Default::default(),
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: pcb_ir::geom::Affine2::translation(Point::new(20.0, 5.0)),
+                },
+                bbox: BBox {
+                    min: Point::new(20.0, 5.0),
+                    max: Point::new(30.0, 15.0),
+                },
+                meta: ObjectAttributes::default(),
+            },
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let contents = crate::write_layer(&gerber).expect("write Gerber");
+        assert_external_parser_accepts(&contents);
+        let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
+        let geometry = crate::geometry::extract_document(&parsed);
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        assert!(
+            (summary.area_mm2 - 100.0).abs() < 0.01,
+            "a clockwise material loop must keep its full area: {}",
             summary.area_mm2
         );
     }
