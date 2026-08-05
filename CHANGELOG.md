@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `--layout-target` now takes `board` or `board-array` on every command, and defaults to `board-array`.
+- Copper balancing can shift a layer up to 1% off its target density to counterweight the rest of the stack, paid for by an opposite shift elsewhere.
 
 ### Removed
 
