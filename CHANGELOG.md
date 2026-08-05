@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `--layout-target` now takes `board` or `board-array` on every command, and defaults to `board-array`.
 
+### Removed
+
+- `ipc2581 render --flat`, which produced the same output as a plain render.
+
 ### Fixed
 
 - Copper balancing no longer over-fills narrow panel frames and gutters, which made board-array frames pour solid instead of matching the board's copper density.
