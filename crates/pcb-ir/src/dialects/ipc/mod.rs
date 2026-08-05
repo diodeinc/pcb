@@ -38,7 +38,7 @@ pub use document::{Document, Layer};
 pub use feature::{
     Feature, FeatureBucket, FeatureDomain, FeatureFlags, FeatureIntent, FeatureKind,
     FeatureMaterial, FeatureOperation, FeatureRole, FeatureSet, FeatureSpan, FiducialKind, PinRef,
-    PlatingKind, SourceRef,
+    PlatingKind, PrimitiveRef, SourceRef,
 };
 pub use layout::{
     LayoutGraph, LayoutInstance, LayoutMargins, LayoutPurpose, LayoutRepeat, LayoutStep,

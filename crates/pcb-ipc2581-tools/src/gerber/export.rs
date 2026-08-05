@@ -19,7 +19,7 @@ use pcb_ir::dialects::artwork::{
 };
 use pcb_ir::dialects::ipc::{
     Feature, FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind,
-    LayoutPurpose, PlatingKind, ProfileSet, View, profile_occurrences_for, relief,
+    LayoutPurpose, PlatingKind, PrimitiveRef, ProfileSet, View, profile_occurrences_for, relief,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
@@ -987,17 +987,20 @@ struct InstanceApertures {
     by_primitive: HashMap<ipc2581::Symbol, u32>,
 }
 
-/// A dictionary-instance feature: a translated reference whose local shape
+/// A user-dictionary instance feature: a placed reference whose local shape
 /// is shared by every sibling instance. The shape flashes through one
 /// contour aperture per dictionary entry, keeping repeated geometry
-/// repeated in the output.
+/// repeated in the output. Standard-dictionary references stay out: those
+/// are exact catalogue primitives and flash through standard apertures.
 fn instance_flash(
     artwork: &mut GerberArtwork,
     doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
     apertures: &mut InstanceApertures,
 ) -> Option<(u32, Affine2)> {
-    let primitive = feature.primitive_ref?;
+    let Some(PrimitiveRef::User(primitive)) = feature.primitive_ref else {
+        return None;
+    };
     if feature.kind != pcb_ir::dialects::ipc::FeatureKind::Primitive || !is_rigid(feature.transform)
     {
         return None;
@@ -1173,7 +1176,9 @@ fn standard_primitive_for_feature<'a>(
     ipc: &'a Ipc2581,
     feature: &Feature<ipc2581::Symbol>,
 ) -> Option<&'a StandardPrimitive> {
-    let primitive_ref = feature.primitive_ref?;
+    let Some(PrimitiveRef::Standard(primitive_ref)) = feature.primitive_ref else {
+        return None;
+    };
     ipc.content()
         .dictionary_standard
         .entries
@@ -1625,6 +1630,70 @@ mod tests {
         assert!(
             (copper_area - expected).abs() <= expected * 0.02,
             "expected quarter-cleared pad area {expected:.4}, got {copper_area:.4}"
+        );
+    }
+
+    #[test]
+    fn standard_dictionary_fiducials_keep_exact_circle_apertures() {
+        // Repeated references to a standard catalogue entry are exact
+        // primitives, not user-dictionary instances: they must flash as
+        // circle apertures rather than flatten into outline macros.
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="fid"><Circle diameter="1"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <LocalFiducial>
+              <Location x="3" y="3"/>
+              <StandardPrimitiveRef id="fid"/>
+            </LocalFiducial>
+            <LocalFiducial>
+              <Location x="7" y="7"/>
+              <StandardPrimitiveRef id="fid"/>
+            </LocalFiducial>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let copper = files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert!(
+            !copper.contents.contains("%AM"),
+            "catalogue circles must not lower to outline macros"
+        );
+        assert!(
+            copper.contents.contains("C,1"),
+            "fiducials should flash through a shared circle aperture"
         );
     }
 
