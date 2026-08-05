@@ -337,20 +337,31 @@ fn hex_void_instances(
 }
 
 /// Extract one layer's flattened, composed copper image.
+///
+/// Composition goes through the artwork mask fold so clear-polarity
+/// features subtract in paint order instead of being unioned as copper.
 pub fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourSet> {
     let mut document = geometry::extract_layer_for_view(ipc, layer_name, View::ArrayFlattened)
         .with_context(|| {
             format!("failed to extract flattened IPC-2581 copper layer '{layer_name}'")
         })?;
     pcb_ir::dialects::ipc::process::compose_for_rendering(&mut document);
-    Ok(ContourSet::from_painted_paths(
-        &document.arena,
-        document
-            .features
-            .iter()
-            .flat_map(|feature| feature.paths.slice(&document.arena.paths)),
-        tol::REGION_MM,
-    ))
+    let artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
+        &document,
+        0,
+        pcb_ir::dialects::LayerRole::Copper,
+        pcb_ir::dialects::Side::None,
+    );
+    let mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork);
+    let mut rings = Vec::new();
+    for layer in &mask.layers {
+        for shape in mask.shapes(layer) {
+            rings.extend(pcb_ir::geom::region::rings_from_contours(
+                &mask.arena.path_contours(shape),
+            ));
+        }
+    }
+    Ok(ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM))
 }
 
 /// Signed first-moment weight `z * thickness` per copper layer, from the

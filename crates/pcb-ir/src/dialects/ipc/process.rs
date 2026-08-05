@@ -60,7 +60,9 @@ where
 ///
 /// This is intentionally destructive: it outlines strokes, applies boolean
 /// union/difference, resolves voids, and may convert arcs into polygon
-/// contours. Use it only when a target needs a final painted image.
+/// contours. Negative polarity stays native — mask composition paints
+/// polarity runs sequentially. Use it only when a target needs a final
+/// painted image.
 pub fn compose_for_rendering<S, L>(doc: &mut Document<S, L>)
 where
     S: Copy + Eq + Hash,
@@ -71,7 +73,6 @@ where
     union_feature_filled_paths(doc);
     coalesce_related_trace_features(doc);
     resolve_set_voids(doc);
-    resolve_negative_polarity(doc);
     subtract_layer_cutouts(doc);
     compact(doc);
     normalize_bounds(doc);
@@ -521,49 +522,6 @@ fn layer_features_by_set<S, L>(
     features_by_set
 }
 
-/// Resolve negative (clear) polarity as a layer-wide subtraction.
-pub fn resolve_negative_polarity<S, L>(doc: &mut Document<S, L>)
-where
-    S: Clone,
-    L: Clone,
-{
-    for layer_index in 0..doc.layers.len() {
-        let layer = doc.layers[layer_index].clone();
-        let negative_features = layer
-            .features
-            .range()
-            .filter(|&feature_index| {
-                let feature = &doc.features[feature_index];
-                feature.bucket != FeatureBucket::Cutout
-                    && !feature.flags.clears_previous_in_set
-                    && feature.polarity == Polarity::Clear
-            })
-            .collect::<Vec<_>>();
-        let mut cutters = negative_features
-            .iter()
-            .flat_map(|&feature_index| feature_filled_rings(doc, &doc.features[feature_index]))
-            .collect::<Vec<_>>();
-        if cutters.is_empty() {
-            continue;
-        }
-        if cutters.len() > 1 {
-            cutters = region::simplify_rings(cutters, FillRule::NonZero);
-        }
-
-        let cutter_bounds = ring_bounds(&cutters);
-        for feature_index in layer.features.range() {
-            let feature = &doc.features[feature_index];
-            if feature.bucket != FeatureBucket::Cutout && feature.polarity == Polarity::Dark {
-                subtract_rings_from_feature(doc, feature_index, &cutters, &cutter_bounds);
-            }
-        }
-
-        for feature_index in negative_features {
-            clear_feature_paths(doc, feature_index);
-        }
-    }
-}
-
 /// Subtract cutout features from every other feature on their layer.
 pub fn subtract_layer_cutouts<S, L>(doc: &mut Document<S, L>)
 where
@@ -1001,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_negative_polarity_as_layer_subtraction() {
+    fn compose_keeps_clear_polarity_native() {
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1027,14 +985,28 @@ mod tests {
 
         compose_for_rendering(&mut doc);
 
-        let feature = &doc.features[0];
-        let path = &doc.arena.paths[feature.paths.start as usize];
-        assert_eq!(feature.paths.len(), 1);
-        assert!(path.contours.len() > 1);
-        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(path.bbox.max, Point::new(4.0, 4.0));
-        assert_eq!(doc.features[1].paths.len(), 0);
-        assert!(doc.features[1].bbox.is_empty());
+        // Both features keep their native geometry and polarity; the
+        // sequential paint fold applies the subtraction at composition.
+        assert_eq!(doc.features[0].paths.len(), 1);
+        assert_eq!(doc.features[0].polarity, Polarity::Dark);
+        assert_eq!(doc.features[1].paths.len(), 1);
+        assert_eq!(doc.features[1].polarity, Polarity::Clear);
+
+        let artwork = crate::dialects::ipc::lower_layer_to_artwork(
+            &doc,
+            0,
+            crate::dialects::LayerRole::Copper,
+            crate::dialects::Side::Top,
+        );
+        let mask = crate::dialects::artwork::compose_to_mask(&artwork);
+        let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
+        let image = crate::geom::region::ContourSet::from_contours(
+            &mask.arena.path_contours(&shape),
+            FillRule::NonZero,
+            crate::geom::tol::REGION_MM,
+        );
+        assert!((image.area() - 12.0).abs() < 1e-6);
+        assert!(!image.contains_point(Point::new(2.0, 2.0)));
     }
 
     #[test]
@@ -1323,13 +1295,17 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(1, 1),
+            flags: crate::dialects::ipc::FeatureFlags {
+                clears_previous_in_set: true,
+                ..Default::default()
+            },
             ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
         compose_for_rendering(&mut doc);
 
-        // The negative feature and the pre-subtraction positive path are gone.
+        // The set void and the pre-subtraction positive path are gone.
         assert_eq!(doc.arena.paths.len(), 1);
         assert_eq!(doc.features[0].paths, Span::new(0, 1));
         doc.arena.validate("compacted").unwrap();

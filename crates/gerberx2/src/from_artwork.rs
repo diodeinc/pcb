@@ -5,7 +5,7 @@
 //! can be emitted as a Gerber file, regardless of which source dialect
 //! produced it.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{
     AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
@@ -156,9 +156,9 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
         } else {
             lower_artwork_object(layer, object, &mut apertures)?
         };
-        plan.push_group(source_index, object.order.stage, objects);
+        plan.push_group(object.order.stage, object.polarity, objects);
     }
-    let objects = plan.into_ordered_objects()?;
+    let objects = plan.into_ordered_objects();
 
     let (aperture_list, aperture_macros) = apertures.into_parts();
     Ok(GerberLayer {
@@ -413,159 +413,47 @@ struct GerberPlan {
 
 #[derive(Debug)]
 struct GerberObjectGroup {
-    source_index: usize,
     stage: PaintStage,
+    polarity: Polarity,
     objects: Vec<WriterObject>,
 }
 
 impl GerberPlan {
-    fn push_group(&mut self, source_index: usize, stage: PaintStage, objects: Vec<WriterObject>) {
+    fn push_group(&mut self, stage: PaintStage, polarity: Polarity, objects: Vec<WriterObject>) {
         if objects.is_empty() {
             return;
         }
         self.groups.push(GerberObjectGroup {
-            source_index,
             stage,
+            polarity,
             objects,
         });
     }
 
-    fn into_ordered_objects(self) -> Result<Vec<WriterObject>> {
-        let order = self.topological_order()?;
-        let mut groups = self.groups.into_iter().map(Some).collect::<Vec<_>>();
-        let mut objects = Vec::new();
-        for group_index in order {
-            let Some(group) = groups[group_index].take() else {
-                continue;
-            };
-            objects.extend(group.objects);
-        }
-        Ok(objects)
-    }
-
-    fn topological_order(&self) -> Result<Vec<usize>> {
-        let group_count = self.groups.len();
-        let base_barrier = group_count;
-        let overlay_barrier = group_count + 1;
-        let node_count = group_count + 2;
-        let mut graph = ScheduleGraph::new(node_count);
-
-        let mut by_stage = [
-            Vec::<usize>::new(),
-            Vec::<usize>::new(),
-            Vec::<usize>::new(),
-        ];
-        for (index, group) in self.groups.iter().enumerate() {
-            by_stage[group.stage as usize].push(index);
-        }
-
-        for stage_groups in &by_stage {
-            for pair in stage_groups.windows(2) {
-                graph.add_edge(pair[0], pair[1]);
-            }
-        }
-        for &group in &by_stage[PaintStage::Base as usize] {
-            graph.add_edge(group, base_barrier);
-        }
-        graph.add_edge(base_barrier, overlay_barrier);
-        for &group in &by_stage[PaintStage::Overlay as usize] {
-            graph.add_edge(base_barrier, group);
-            graph.add_edge(group, overlay_barrier);
-        }
-        for &group in &by_stage[PaintStage::FinalCutout as usize] {
-            graph.add_edge(overlay_barrier, group);
-        }
-
-        let priorities = (0..node_count)
-            .map(|node| self.schedule_priority(node, base_barrier, overlay_barrier))
-            .collect::<Vec<_>>();
-        let order = graph.topological_order(&priorities)?;
-        Ok(order
+    fn into_ordered_objects(self) -> Vec<WriterObject> {
+        // Dark paint commutes with dark paint and clear with clear, but not
+        // across a polarity change: stage ordering (fills before pads) may
+        // only permute groups within each maximal same-polarity run. Final
+        // cutouts are terminal by definition and emit after everything.
+        let (cutouts, mut painted): (Vec<_>, Vec<_>) = self
+            .groups
             .into_iter()
-            .filter(|&node| node < group_count)
-            .collect())
-    }
-
-    fn schedule_priority(
-        &self,
-        node: usize,
-        base_barrier: usize,
-        overlay_barrier: usize,
-    ) -> SchedulePriority {
-        if node == base_barrier {
-            return SchedulePriority {
-                stage: PaintStage::Base,
-                source_index: usize::MAX,
-                barrier: 0,
-            };
-        }
-        if node == overlay_barrier {
-            return SchedulePriority {
-                stage: PaintStage::Overlay,
-                source_index: usize::MAX,
-                barrier: 0,
-            };
-        }
-        let group = &self.groups[node];
-        SchedulePriority {
-            stage: group.stage,
-            source_index: group.source_index,
-            barrier: 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct SchedulePriority {
-    stage: PaintStage,
-    source_index: usize,
-    barrier: usize,
-}
-
-struct ScheduleGraph {
-    outgoing: Vec<Vec<usize>>,
-    indegree: Vec<usize>,
-}
-
-impl ScheduleGraph {
-    fn new(node_count: usize) -> Self {
-        Self {
-            outgoing: vec![Vec::new(); node_count],
-            indegree: vec![0; node_count],
-        }
-    }
-
-    fn add_edge(&mut self, from: usize, to: usize) {
-        self.outgoing[from].push(to);
-        self.indegree[to] += 1;
-    }
-
-    fn topological_order(&self, priorities: &[SchedulePriority]) -> Result<Vec<usize>> {
-        let mut indegree = self.indegree.clone();
-        let mut ready = BTreeSet::new();
-        for (node, &degree) in indegree.iter().enumerate() {
-            if degree == 0 {
-                ready.insert((priorities[node], node));
+            .partition(|group| group.stage == PaintStage::FinalCutout);
+        let mut start = 0;
+        while start < painted.len() {
+            let polarity = painted[start].polarity;
+            let mut end = start + 1;
+            while end < painted.len() && painted[end].polarity == polarity {
+                end += 1;
             }
+            painted[start..end].sort_by_key(|group| group.stage);
+            start = end;
         }
-
-        let mut order = Vec::with_capacity(indegree.len());
-        while let Some((_, node)) = ready.pop_first() {
-            order.push(node);
-            for &next in &self.outgoing[node] {
-                indegree[next] -= 1;
-                if indegree[next] == 0 {
-                    ready.insert((priorities[next], next));
-                }
-            }
-        }
-
-        if order.len() != indegree.len() {
-            return Err(GerberError::InvalidStructure(
-                "Gerber emission schedule contains a cycle".to_string(),
-            ));
-        }
-        Ok(order)
+        painted
+            .into_iter()
+            .chain(cutouts)
+            .flat_map(|group| group.objects)
+            .collect()
     }
 }
 
