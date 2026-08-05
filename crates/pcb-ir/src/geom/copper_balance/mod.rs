@@ -19,7 +19,8 @@ use lattice::{
 };
 use spatial::{
     LatticeDensityKernel, density_evaluation_points, lattice_cell_coverage,
-    normalized_stack_weights, project_box_sum, spatial_result_from_squared_radii,
+    normalized_stack_weights, project_box_interval, project_box_sum,
+    spatial_result_from_squared_radii,
 };
 
 const NUMERIC_EPSILON: f64 = 1e-9;
@@ -51,6 +52,21 @@ pub struct DenseCopperBalanceProfile {
     /// cannot hold finer distinctions, and the shared grid keeps the voids a
     /// small set of repeated templates instead of thousands of unique shapes.
     pub void_radius_step_mm: f64,
+    /// How far a layer's density may drift from its target to counterweight
+    /// the stack, as a fraction of its density domain.
+    ///
+    /// The spatial solve otherwise conserves each layer's selected copper area
+    /// exactly, which lets it redistribute copper but never trade a little of
+    /// one layer's density match for a flatter through-stack moment. This band
+    /// frees that trade and bounds it: no layer's achieved density leaves this
+    /// distance from its target. Zero pins every layer to its uniform
+    /// selection, the behavior before the band existed.
+    ///
+    /// The trade needs no weight of its own. Both terms already sit in the
+    /// objective, so a layer spends the band only while `w_l |m|` exceeds its
+    /// own growing density error, and never spends it at all when the stackup
+    /// supplies no weights.
+    pub stack_flex_density: f64,
 }
 
 impl DenseCopperBalanceProfile {
@@ -63,6 +79,7 @@ impl DenseCopperBalanceProfile {
         boundary_web_mm: 0.20,
         density_sigma_mm: 5.0,
         void_radius_step_mm: 0.005,
+        stack_flex_density: 0.0,
     };
 
     pub fn lattice_column_pitch_mm(self) -> f64 {
@@ -100,6 +117,14 @@ impl DenseCopperBalanceProfile {
                     "{name} must be finite and greater than zero"
                 )));
             }
+        }
+        // Zero is meaningful here — it pins every layer to its uniform
+        // selection — so this bound is separate from the strictly positive
+        // geometry above.
+        if !self.stack_flex_density.is_finite() || !(0.0..=1.0).contains(&self.stack_flex_density) {
+            return Err(DenseCopperBalanceError::InvalidProfile(
+                "stack flex density must be between zero and one".to_string(),
+            ));
         }
         if self.min_void_radius_mm > self.max_void_radius_mm {
             return Err(DenseCopperBalanceError::InvalidProfile(
@@ -531,6 +556,23 @@ pub fn generate_spatial_dense_copper_balance(
             DenseCopperBalanceMode::None | DenseCopperBalanceMode::Solid => Vec::new(),
         })
         .collect::<Vec<Vec<f64>>>();
+    // Void area moves opposite to copper area, so a symmetric copper band is a
+    // symmetric band on the squared-radius sum. Clamping to the range the box
+    // itself can reach keeps the feasible set nonempty, and since each uniform
+    // sum is already inside that range the band always contains its own center.
+    let squared_radius_bands = squared_radius_sums
+        .iter()
+        .enumerate()
+        .map(|(layer_index, sum)| {
+            let slack = profile.stack_flex_density * density_domain_areas[layer_index]
+                / ROUNDED_HEXAGON_AREA_FACTOR;
+            let site_count = active_sites[layer_index].len() as f64;
+            (
+                (sum - slack).max(site_count * profile.min_void_radius_mm.powi(2)),
+                (sum + slack).min(site_count * profile.max_void_radius_mm.powi(2)),
+            )
+        })
+        .collect::<Vec<_>>();
     let cell_area_mm2 = SQRT_3 * profile.pitch_mm.powi(2) / 2.0;
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
     let normalized_stack_weights = normalized_stack_weights(request.layers);
@@ -622,7 +664,7 @@ pub fn generate_spatial_dense_copper_balance(
             let density_kernel = &density_kernel;
             let lower = &lower;
             let upper = &upper;
-            let squared_radius_sums = &squared_radius_sums;
+            let squared_radius_bands = &squared_radius_bands;
             let normalized_stack_weights = &normalized_stack_weights;
             let handles = squared_radii
                 .iter_mut()
@@ -653,11 +695,13 @@ pub fn generate_spatial_dense_copper_balance(
                                         * influence[active_sites[layer_index][local_index]]
                             })
                             .collect::<Vec<_>>();
-                        let projected = project_box_sum(
+                        let (sum_min, sum_max) = squared_radius_bands[layer_index];
+                        let projected = project_box_interval(
                             &proposed,
                             &lower[layer_index],
                             &upper[layer_index],
-                            squared_radius_sums[layer_index],
+                            sum_min,
+                            sum_max,
                         );
                         let update = radii
                             .iter()
@@ -1022,6 +1066,7 @@ mod tests {
             boundary_web_mm: 0.2,
             density_sigma_mm: 5.0,
             void_radius_step_mm: 0.005,
+            stack_flex_density: 0.0,
         };
         profile.validate().unwrap();
         let safe_region = ContourSet::rectangle(
@@ -1482,6 +1527,79 @@ mod tests {
             (result.solution.generated_area_mm2 - baseline.solution.generated_area_mm2).abs()
                 <= AREA_SOLVE_TOLERANCE_MM2 + quantization_bound_mm2
         );
+    }
+
+    /// A layer with nowhere to generate leaves a moment that redistribution
+    /// cannot touch. Its mirror sits exactly on its own target, so the only
+    /// force acting on it is the stack term, and the only way it can answer is
+    /// to leave that target. The band both permits and bounds that move.
+    #[test]
+    fn stack_flex_moves_a_layer_off_target_to_counterweight_its_mirror() {
+        let panel = ContourSet::rectangle(
+            BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
+            tol::REGION_MM,
+        );
+        // The immutable layer is poured solid and has no safe region, so its
+        // surplus is uniform across the panel. A uniform moment is exactly
+        // what redistribution cannot answer: every site sees the same
+        // residual, leaving the layer's total as the only remaining lever.
+        let solid = panel.clone();
+        let safe = panel.clone();
+        let empty = ContourSet::empty(tol::REGION_MM);
+        let solve = |stack_flex_density: f64| {
+            generate_spatial_dense_copper_balance(
+                DenseCopperBalanceProfile {
+                    stack_flex_density,
+                    ..DenseCopperBalanceProfile::V1
+                },
+                SpatialCopperBalanceRequest {
+                    panel_region: &panel,
+                    lattice_origin: Point::ZERO,
+                    layers: &[
+                        SpatialCopperBalanceLayerRequest {
+                            safe_region: &empty,
+                            existing_copper: &solid,
+                            density_domain: &solid,
+                            target_density: 0.5,
+                            stack_weight_mm2: 1.0,
+                        },
+                        SpatialCopperBalanceLayerRequest {
+                            safe_region: &safe,
+                            existing_copper: &empty,
+                            density_domain: &safe,
+                            target_density: 0.5,
+                            stack_weight_mm2: -1.0,
+                        },
+                    ],
+                },
+            )
+            .unwrap()
+        };
+        // Radius quantization alone moves the achieved density this far.
+        let quantization = 5e-3;
+        let flex = 0.02;
+
+        let pinned = solve(0.0);
+        let flexed = solve(flex);
+
+        // The immutable layer generates nothing either way.
+        for results in [&pinned, &flexed] {
+            assert_eq!(results[0].solution.mode, DenseCopperBalanceMode::None);
+            assert_eq!(results[0].solution.generated_area_mm2, 0.0);
+        }
+        // Pinned, the free layer is held on its target and the moment stands.
+        assert!(
+            (pinned[1].solution.achieved_density - pinned[1].solution.target_density).abs()
+                <= quantization,
+            "{:?}",
+            pinned[1].solution
+        );
+        // Flexed, it takes on copper to answer the surplus opposite it, and
+        // stops at the edge of its band rather than chasing the moment all the
+        // way down.
+        let deviation = flexed[1].solution.achieved_density - pinned[1].solution.target_density;
+        assert!(deviation > quantization, "{:?}", flexed[1].solution);
+        assert!(deviation <= flex + quantization, "{:?}", flexed[1].solution);
     }
 
     #[test]

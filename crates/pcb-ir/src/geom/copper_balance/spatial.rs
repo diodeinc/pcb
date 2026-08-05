@@ -271,6 +271,36 @@ fn scanline_indicator(points: &[Point], region: &ContourSet) -> Vec<f64> {
     result
 }
 
+/// Euclidean projection onto `{x : lower <= x <= upper, sum_min <= sum(x) <= sum_max}`.
+///
+/// The band is two halfspaces and at most one can bind, so clamping to the box
+/// is already the projection whenever its sum lands inside the band; otherwise
+/// the binding halfspace holds with equality and [`project_box_sum`] is exact.
+/// `sum_min == sum_max` recovers that fixed-sum projection unchanged.
+pub(super) fn project_box_interval(
+    values: &[f64],
+    lower: &[f64],
+    upper: &[f64],
+    sum_min: f64,
+    sum_max: f64,
+) -> Vec<f64> {
+    debug_assert!(sum_min <= sum_max);
+    let clamped = values
+        .iter()
+        .zip(lower)
+        .zip(upper)
+        .map(|((value, lower), upper)| value.clamp(*lower, *upper))
+        .collect::<Vec<_>>();
+    let total = clamped.iter().sum::<f64>();
+    if total < sum_min {
+        project_box_sum(values, lower, upper, sum_min)
+    } else if total > sum_max {
+        project_box_sum(values, lower, upper, sum_max)
+    } else {
+        clamped
+    }
+}
+
 pub(super) fn project_box_sum(
     values: &[f64],
     lower: &[f64],
@@ -378,6 +408,57 @@ mod tests {
     use super::super::lattice::hex_aligned_lattice_centers;
     use super::*;
     use crate::geom::{BBox, ContourSet, Point, tol};
+
+    /// The band projection agrees with the fixed-sum projection wherever the
+    /// band binds, and is a plain box clamp wherever it does not.
+    #[test]
+    fn box_interval_projection_binds_only_at_its_edges() {
+        let values: [f64; 5] = [0.10, 0.42, -0.30, 0.25, 0.61];
+        let lower = [0.04_f64; 5];
+        let upper = [0.42_f64; 5];
+        let clamped = values
+            .iter()
+            .zip(&lower)
+            .zip(&upper)
+            .map(|((value, lower), upper)| value.clamp(*lower, *upper))
+            .collect::<Vec<_>>();
+        let clamped_sum = clamped.iter().sum::<f64>();
+
+        // Band straddling the clamped sum: the clamp already satisfies it.
+        let inside = project_box_interval(
+            &values,
+            &lower,
+            &upper,
+            clamped_sum - 0.2,
+            clamped_sum + 0.2,
+        );
+        assert_eq!(inside, clamped);
+
+        // Band entirely below or above it: the near edge holds with equality.
+        for target in [clamped_sum - 0.3, clamped_sum + 0.15] {
+            let band = if target < clamped_sum {
+                project_box_interval(&values, &lower, &upper, target - 0.5, target)
+            } else {
+                project_box_interval(&values, &lower, &upper, target, target + 0.5)
+            };
+            let fixed = project_box_sum(&values, &lower, &upper, target);
+            assert!(
+                band.iter().zip(&fixed).all(|(l, r)| (l - r).abs() <= 1e-12),
+                "{band:?} != {fixed:?}"
+            );
+            assert!((band.iter().sum::<f64>() - target).abs() <= 1e-9);
+        }
+
+        // A degenerate band is the fixed-sum projection exactly.
+        let pinned = project_box_interval(&values, &lower, &upper, 1.0, 1.0);
+        let fixed = project_box_sum(&values, &lower, &upper, 1.0);
+        assert!(
+            pinned
+                .iter()
+                .zip(&fixed)
+                .all(|(l, r)| (l - r).abs() <= 1e-12)
+        );
+    }
 
     #[test]
     fn density_kernel_adjoint_matches_the_forward_operator() {
