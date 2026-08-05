@@ -125,25 +125,49 @@ For a proposed generated fill, let `rho_li` be the modeled final local density
 and:
 
 ```text
-e_li = rho_li - d_l
-m_i  = sum_l w_l e_li
+M_i = sum_l w_l rho_li
 ```
 
-`m_i` is a first-moment proxy for the stack asymmetry introduced by
-panelization at `x_i`. Equal residual density on mirrored layers cancels;
-thicker copper and copper farther from the mid-plane contribute more. Normalize
-the RMS metric by `W = sum_l abs(w_l)`:
+`M_i` is a first-moment proxy for the copper the panel actually carries about
+its mid-plane at `x_i`. Equal density on mirrored layers cancels; thicker
+copper and copper farther from the mid-plane contribute more. Normalize the RMS
+metric by `W = sum_l abs(w_l)`:
 
 ```text
-E_stack = sqrt(weighted_mean_i(m_i^2)) / W
+E_stack = sqrt(weighted_mean_i(M_i^2)) / W
 ```
 
-The reference is the board's own per-layer density, not zero copper moment.
-The optimizer therefore avoids adding new stack asymmetry without trying to
-repair immutable board content from the rails. Board-array creation prints a
-per-layer balance summary, warns when stackup thickness data is missing (the
-solver then balances each layer independently), and the per-layer report
-retains the signed stack weight.
+Penalizing this field pointwise is what covers both warp modes at once. Bow
+follows the field's mean, twist follows its variation, and squaring `M_i` at
+every site charges for both — so there is one term here rather than separate
+bow and twist machinery.
+
+The reference is zero copper moment, not the board's own per-layer density.
+Reading `rho_li` rather than `rho_li - d_l` is the whole difference: the
+subtracted form is zero exactly when every layer sits on its target, so a
+correctly balanced panel would report no asymmetry left to remove while still
+carrying whatever imbalance the boards were designed with. The optimizer
+therefore does repair immutable board content from the rails, which is
+deliberate — bow answers to the panel-integrated moment, so copper spent
+anywhere on the panel counts against it.
+
+That repair is bounded, because it is spending density the boards did not ask
+for. Two profile settings govern it, with separate jobs:
+
+- `stack_moment_weight` scales this term against the local density match, and
+  says how hard the solver tries. Equal weighting is far too timid to be
+  useful: with `L` layers the local term carries `L` squared errors against
+  this one, so a six-layer stack removes only about a sixth of a uniform
+  moment.
+- `stack_flex_density` caps how far any layer's density may end up from its
+  own target, whatever the weight asks for. It is the guarantee that survives
+  a pathological board: a two-layer panel poured 0.9 against 0.3 wants a 30%
+  correction, and the cap is what refuses it.
+
+Board-array creation prints a per-layer balance summary and the stack moment
+before and after, warns when stackup thickness data is missing (the solver then
+balances each layer independently and neither setting does anything), and the
+per-layer report retains the signed stack weight.
 
 ## One spatial solve
 
@@ -180,29 +204,49 @@ energy:
 
 ```text
 J(x) = sum_l mean_i(e_li^2)
-     + mean_i((m_i / W)^2)
+     + lambda mean_i((M_i / W)^2)
 ```
 
-subject to one box constraint and one equality per perforated layer:
+where `lambda` is `stack_moment_weight`.
+
+Each perforated layer carries a box constraint and a band on its total, and one
+equality couples the bands across the stack:
 
 ```text
-sum_i x_li = X_l
 r_min^2 <= x_li <= r_max^2
+X_l - D_l <= sum_i x_li <= X_l + D_l
+sum_l (sum_i x_li - X_l) / A_l = 0
 ```
 
 `X_l` is computed from the selected total void area after subtracting the
-already-clipped edge-fragment area. The equality therefore redistributes the
-full-void area without changing the layer-density result. Edge fragments keep
-their projected geometry; they are boundary constraints, not optimizer
-variables.
+already-clipped edge-fragment area. Edge fragments keep their projected
+geometry; they are boundary constraints, not optimizer variables.
 
-The objective is a convex quadratic. Its gradient uses the exact transpose
-`-beta P_l^T H^T` of the forward density operator. A fixed-count
-projected-gradient solve applies that gradient, then projects each layer onto
-the intersection of the box and sum constraints with one-dimensional
-bisection. A constant-radius pattern is the result when the measured fields
-and constraints are spatially symmetric; it is not a separate mode or
-fallback.
+`D_l` is `stack_flex_density` converted from density to squared radius through
+the density-domain area `A_l`, so the band is symmetric in copper. Without it
+each `sum_i x_li` is pinned and the layer can only redistribute; the band is
+what lets a layer take on or give back copper to flatten `M_i`.
+
+The joint equality is what keeps that useful. It says the stack's density
+deviations cancel — copper moves between layers rather than being created.
+Freeing each total independently instead frees a direction the stack cannot
+see: a symmetric stackup's weights sum to zero, so every layer drifting the
+same way leaves `M_i` untouched, and the local term will happily spend the
+whole band on exactly that drift, since bare clearance reads as a deficit on
+every layer at once.
+
+The objective is a convex quadratic and the feasible set is convex, so
+projected gradient converges as before. Its gradient uses the exact transpose
+`-beta P_l^T H^T` of the forward density operator. Projection is two-level:
+one linear equality over per-layer convex sets dualizes to a single
+multiplier, so each layer projects its own commonly shifted proposal onto its
+box and band, and the multiplier is found by bisection. A layer pinned at a
+band edge stops responding to the multiplier, so scoring a trial costs one
+clamped sum per layer rather than a nested projection. Setting
+`stack_flex_density` to zero makes every band degenerate and recovers the
+pinned per-layer projection exactly. A constant-radius pattern is the result
+when the measured fields and constraints are spatially symmetric; it is not a
+separate mode or fallback.
 
 ## Fill-to-geometry map
 
@@ -243,6 +287,10 @@ Initial verification should cover:
 - a left-to-right density gradient produces the opposite smooth radius
   gradient without changing generated area;
 - equal mirrored layers cancel in `E_stack`;
+- a stack carrying a copper moment ends with a smaller one, by layers trading
+  density in opposite directions rather than all drifting the same way;
+- no layer's achieved density leaves `stack_flex_density` of its target,
+  however large the moment; and zero flex reproduces the pinned result;
 - conductor thickness and mid-plane distance scale the metric correctly;
 - translation and reflection preserve objective values; and
 - clipped edge voids preserve the existing web and minimum-fragment rules; and
