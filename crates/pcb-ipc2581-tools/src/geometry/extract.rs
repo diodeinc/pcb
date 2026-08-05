@@ -131,12 +131,6 @@ fn apply_ipc_placement(feature: &mut GeometryFeature, placement: IpcPlacement) {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum PadPrimitiveRef {
-    Standard(Symbol),
-    User(Symbol),
-}
-
-#[derive(Debug, Clone, Copy)]
 struct StrokedFeatureStyle {
     net: Option<Symbol>,
     polarity: GeometryPolarity,
@@ -1379,7 +1373,7 @@ fn extract_pad(
 
     let path_start = doc.arena.paths.len() as u32;
     let paint = match primitive_ref {
-        PadPrimitiveRef::Standard(primitive_ref) => {
+        PrimitiveRef::Standard(primitive_ref) => {
             let Some(primitive) = context.standard_primitives.get(&primitive_ref).copied() else {
                 doc.warn(format!(
                     "Skipping padstack '{}' because primitive '{}' is missing",
@@ -1390,7 +1384,7 @@ fn extract_pad(
             };
             lower_standard_primitive(context, doc, primitive, placement.transform)?
         }
-        PadPrimitiveRef::User(primitive_ref) => {
+        PrimitiveRef::User(primitive_ref) => {
             let Some(primitive) = context.user_primitives.get(&primitive_ref).copied() else {
                 doc.warn(format!(
                     "Skipping padstack '{}' because user primitive '{}' is missing",
@@ -1424,11 +1418,7 @@ fn extract_pad(
     feature.intent.role = role;
     apply_ipc_placement(&mut feature, placement);
     feature.padstack_ref = Some(padstack_ref);
-    feature.primitive_ref = match primitive_ref {
-        PadPrimitiveRef::Standard(primitive_ref) | PadPrimitiveRef::User(primitive_ref) => {
-            Some(primitive_ref)
-        }
-    };
+    feature.primitive_ref = Some(primitive_ref);
     feature.intent.plating = padstack
         .hole_def
         .as_ref()
@@ -1455,7 +1445,7 @@ fn extract_pad(
 /// The layer's `PadstackPadDef` is the sole authority for the offset, even
 /// when the pad-level inline primitive reference wins the primitive choice.
 struct PadShape {
-    primitive: PadPrimitiveRef,
+    primitive: PrimitiveRef<Symbol>,
     offset: Point,
 }
 
@@ -1475,14 +1465,14 @@ fn pad_shape(
         });
     let primitive = pad
         .standard_primitive_ref
-        .map(PadPrimitiveRef::Standard)
-        .or_else(|| pad.user_primitive_ref.map(PadPrimitiveRef::User))
+        .map(PrimitiveRef::Standard)
+        .or_else(|| pad.user_primitive_ref.map(PrimitiveRef::User))
         .or_else(|| {
             pad_def.and_then(|pad_def| {
                 pad_def
                     .standard_primitive_ref
-                    .map(PadPrimitiveRef::Standard)
-                    .or_else(|| pad_def.user_primitive_ref.map(PadPrimitiveRef::User))
+                    .map(PrimitiveRef::Standard)
+                    .or_else(|| pad_def.user_primitive_ref.map(PrimitiveRef::User))
             })
         })?;
     let offset = pad_def.map_or(Point::default(), |pad_def| Point::new(pad_def.x, pad_def.y));
@@ -1511,7 +1501,7 @@ fn extract_feature_primitive(
         1.0,
     );
     let path_start = doc.arena.paths.len() as u32;
-    let paint = match primitive_kind {
+    let (paint, primitive_ref) = match primitive_kind {
         FeaturePrimitiveKind::Standard => {
             let Some(primitive) = context.standard_primitives.get(&primitive_ref.id).copied()
             else {
@@ -1521,7 +1511,10 @@ fn extract_feature_primitive(
                 ));
                 return Ok(Vec::new());
             };
-            lower_standard_primitive(context, doc, primitive, transform)?
+            (
+                lower_standard_primitive(context, doc, primitive, transform)?,
+                PrimitiveRef::Standard(primitive_ref.id),
+            )
         }
         FeaturePrimitiveKind::User => {
             let Some(primitive) = context.user_primitives.get(&primitive_ref.id).copied() else {
@@ -1531,7 +1524,10 @@ fn extract_feature_primitive(
                 ));
                 return Ok(Vec::new());
             };
-            lower_user_primitive(context, doc, primitive, transform)
+            (
+                lower_user_primitive(context, doc, primitive, transform),
+                PrimitiveRef::User(primitive_ref.id),
+            )
         }
     };
 
@@ -1544,7 +1540,7 @@ fn extract_feature_primitive(
             transform,
             path_start,
             paint,
-            Some(primitive_ref.id),
+            Some(primitive_ref),
         ),
     )
 }
@@ -1574,7 +1570,7 @@ fn primitive_path_feature(
     transform: Affine2,
     path_start: u32,
     paint: PrimitivePaint,
-    primitive_ref: Option<Symbol>,
+    primitive_ref: Option<PrimitiveRef<Symbol>>,
 ) -> GeometryFeature {
     let mut feature = GeometryFeature::new(
         FeatureKind::Primitive,
@@ -1636,7 +1632,7 @@ fn extract_fiducial(
             };
             (
                 lower_standard_primitive(context, doc, primitive, placement.transform)?,
-                Some(*primitive_ref),
+                Some(PrimitiveRef::Standard(*primitive_ref)),
                 standard_primitive_outer_diameter(primitive),
             )
         }

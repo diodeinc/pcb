@@ -89,7 +89,7 @@ impl PathCmd {
 ///
 /// This is the detached form of an arena [`crate::geom::Contour`] record, used
 /// to move contours between documents and geometry passes.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ContourBuf {
     pub bbox: BBox,
     pub cmds: Vec<PathCmd>,

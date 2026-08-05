@@ -48,10 +48,27 @@ pub struct Feature<Symbol> {
     pub line_cap: LineCap,
     pub fill_rule: FillRule,
     pub padstack_ref: Option<Symbol>,
-    pub primitive_ref: Option<Symbol>,
+    pub primitive_ref: Option<PrimitiveRef<Symbol>>,
     /// Spans `doc.pin_refs`.
     pub pin_refs: Span,
     pub flags: FeatureFlags,
+}
+
+/// A reference into one of the source document's two shape dictionaries.
+/// The dictionary matters: standard entries are exact catalogue primitives
+/// (circles, rectangles, ovals), user entries are arbitrary contour shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimitiveRef<Symbol> {
+    Standard(Symbol),
+    User(Symbol),
+}
+
+impl<Symbol: Copy> PrimitiveRef<Symbol> {
+    pub fn id(self) -> Symbol {
+        match self {
+            Self::Standard(id) | Self::User(id) => id,
+        }
+    }
 }
 
 impl<Symbol> Feature<Symbol> {

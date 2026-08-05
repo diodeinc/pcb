@@ -19,7 +19,7 @@ use pcb_ir::dialects::artwork::{
 };
 use pcb_ir::dialects::ipc::{
     Feature, FeatureBucket, FeatureDomain, FeatureOperation, FeatureRole, FiducialKind,
-    LayoutPurpose, PlatingKind, ProfileSet, View, profile_occurrences_for, relief,
+    LayoutPurpose, PlatingKind, PrimitiveRef, ProfileSet, View, profile_occurrences_for, relief,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
@@ -84,11 +84,6 @@ pub fn build_gerber_x2_files_with_options(
         let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
-        if clear_polarity_needs_resolution(&doc) {
-            pcb_ir::dialects::ipc::process::resolve_negative_polarity(&mut doc);
-            pcb_ir::dialects::ipc::process::compact(&mut doc);
-            pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
-        }
         if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
             bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
         }
@@ -465,8 +460,17 @@ fn artwork_from_ipc_layer(
         bbox: layer.bbox,
         meta: spec.meta,
     });
+    let mut instance_apertures = InstanceApertures::default();
     for feature in layer.features.slice(&doc.features) {
-        push_artwork_feature(&mut artwork, artwork_layer, ipc, doc, feature, &layer.name)?;
+        push_artwork_feature(
+            &mut artwork,
+            artwork_layer,
+            ipc,
+            doc,
+            feature,
+            &layer.name,
+            &mut instance_apertures,
+        )?;
     }
     if spec.role == GerberLayerRole::Profile
         && spec.view != View::ArrayFlattened
@@ -976,6 +980,67 @@ fn ir_side(side: Option<IpcSide>) -> IrSide {
     }
 }
 
+/// Shared contour apertures for repeated primitive instances, one per
+/// referenced dictionary entry.
+#[derive(Default)]
+struct InstanceApertures {
+    by_primitive: HashMap<ipc2581::Symbol, u32>,
+}
+
+/// A user-dictionary instance feature: a placed reference whose local shape
+/// is shared by every sibling instance. The shape flashes through one
+/// contour aperture per dictionary entry, keeping repeated geometry
+/// repeated in the output. Standard-dictionary references stay out: those
+/// are exact catalogue primitives and flash through standard apertures.
+fn instance_flash(
+    artwork: &mut GerberArtwork,
+    doc: &IpcGeometryDocument,
+    feature: &Feature<ipc2581::Symbol>,
+    apertures: &mut InstanceApertures,
+) -> Option<(u32, Affine2)> {
+    let Some(PrimitiveRef::User(primitive)) = feature.primitive_ref else {
+        return None;
+    };
+    if feature.kind != pcb_ir::dialects::ipc::FeatureKind::Primitive || !is_rigid(feature.transform)
+    {
+        return None;
+    }
+    let [path] = feature.paths.slice(&doc.arena.paths) else {
+        return None;
+    };
+    if !path.is_filled() {
+        return None;
+    }
+    if let Some(&aperture) = apertures.by_primitive.get(&primitive) {
+        return Some((aperture, feature.transform));
+    }
+    // Derive the origin-local template from this first instance; every
+    // sibling shares the aperture and differs only by its rigid transform.
+    let inverse = feature.transform.inverse()?;
+    let local = doc
+        .arena
+        .path_contours(path)
+        .iter()
+        .map(|contour| pcb_ir::geom::path::transform_cmds(contour.cmds.iter().copied(), inverse))
+        .collect::<Vec<_>>();
+    let [local] = local.as_slice() else {
+        return None;
+    };
+    let aperture = artwork.push_aperture(Aperture::solid(
+        pcb_ir::dialects::artwork::ApertureShape::Contour(local.clone()),
+    ));
+    apertures.by_primitive.insert(primitive, aperture);
+    Some((aperture, feature.transform))
+}
+
+/// Rotation plus translation, without mirroring or scaling.
+fn is_rigid(transform: Affine2) -> bool {
+    let determinant = transform.m00 * transform.m11 - transform.m01 * transform.m10;
+    (determinant - 1.0).abs() <= GEOMETRY_EPSILON
+        && (transform.m00 * transform.m00 + transform.m10 * transform.m10 - 1.0).abs()
+            <= GEOMETRY_EPSILON
+}
+
 fn push_artwork_feature(
     artwork: &mut GerberArtwork,
     artwork_layer: u32,
@@ -983,7 +1048,25 @@ fn push_artwork_feature(
     doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
     layer_name: &str,
+    instance_apertures: &mut InstanceApertures,
 ) -> Result<()> {
+    if let Some((aperture, transform)) = instance_flash(artwork, doc, feature, instance_apertures) {
+        artwork.push_object(
+            artwork_layer,
+            ArtworkObject {
+                polarity: feature.polarity,
+                order: paint_order(feature),
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform,
+                },
+                bbox: feature.bbox,
+                meta: object_attributes(ipc, doc, feature, Some(aperture_function(feature))),
+            },
+        );
+        return Ok(());
+    }
+
     if let Some((aperture, at, bbox)) = standard_flash_aperture(ipc, feature) {
         let aperture = artwork.push_aperture(aperture);
         artwork.push_object(
@@ -1076,7 +1159,7 @@ fn standard_flash_aperture(
     };
 
     let at = feature.center;
-    let bbox = flash_bbox(at, aperture);
+    let bbox = flash_bbox(at, &aperture);
     Some((aperture, at, bbox))
 }
 
@@ -1093,7 +1176,9 @@ fn standard_primitive_for_feature<'a>(
     ipc: &'a Ipc2581,
     feature: &Feature<ipc2581::Symbol>,
 ) -> Option<&'a StandardPrimitive> {
-    let primitive_ref = feature.primitive_ref?;
+    let Some(PrimitiveRef::Standard(primitive_ref)) = feature.primitive_ref else {
+        return None;
+    };
     ipc.content()
         .dictionary_standard
         .entries
@@ -1159,7 +1244,7 @@ fn axis_aligned_size(transform: Affine2, width: f64, height: f64) -> Option<(f64
     None
 }
 
-fn flash_bbox(at: Point, aperture: Aperture) -> BBox {
+fn flash_bbox(at: Point, aperture: &Aperture) -> BBox {
     let local = aperture.bbox();
     BBox::new(at + local.min, at + local.max)
 }
@@ -1168,99 +1253,6 @@ const GEOMETRY_EPSILON: f64 = 1e-9;
 
 fn nearly_equal(left: f64, right: f64) -> bool {
     (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
-}
-
-/// Ordered artwork paints clear features in source order within their paint
-/// stage, but overlay-stage dark geometry always lands after the base stage.
-/// When a clear feature can reach overlay geometry that sequential model
-/// diverges from IPC's layer-wide negative semantics, so those documents fall
-/// back to resolving the polarity geometrically. Generated balance planes
-/// keep their clear voids native: the voids are certified clear of all other
-/// copper.
-fn clear_polarity_needs_resolution(doc: &IpcGeometryDocument) -> bool {
-    let is_clear = |feature: &Feature<ipc2581::Symbol>| {
-        feature.bucket != FeatureBucket::Cutout
-            && feature.polarity == Polarity::Clear
-            && !feature.flags.clears_previous_in_set
-    };
-    doc.layers.iter().any(|layer| {
-        let features = layer.features.slice(&doc.features);
-        let all_clears = ClearBoundsGrid::new(
-            features
-                .iter()
-                .filter_map(|feature| is_clear(feature).then_some(feature.bbox)),
-        );
-        if all_clears.is_empty() {
-            return false;
-        }
-        // Base-stage darks paint before only the clears that follow them in
-        // source order; every other stage paints after all base-stage
-        // clears. A dark feature that a clear could erase under layer-wide
-        // semantics but that paints after it natively needs resolution.
-        let mut preceding_clears = ClearBoundsGrid::default();
-        features.iter().any(|feature| {
-            if is_clear(feature) {
-                preceding_clears.insert(feature.bbox);
-                return false;
-            }
-            if feature.polarity != Polarity::Dark {
-                return false;
-            }
-            match paint_order(feature).stage {
-                PaintStage::Base => preceding_clears.intersects(feature.bbox),
-                PaintStage::Overlay | PaintStage::FinalCutout => {
-                    all_clears.intersects(feature.bbox)
-                }
-            }
-        })
-    })
-}
-
-/// Uniform spatial hash over clear-feature bounds, sized for the
-/// millimeter-scale voids and pads that dominate them. Both insertion and
-/// queries touch only the handful of cells a bounding box covers, keeping
-/// the clear-versus-overlay reachability check linear in feature count.
-#[derive(Default)]
-struct ClearBoundsGrid {
-    cells: HashMap<(i64, i64), Vec<pcb_ir::geom::BBox>>,
-}
-
-impl ClearBoundsGrid {
-    const CELL_MM: f64 = 4.0;
-
-    fn new(bounds: impl Iterator<Item = pcb_ir::geom::BBox>) -> Self {
-        let mut grid = Self::default();
-        for bbox in bounds {
-            grid.insert(bbox);
-        }
-        grid
-    }
-
-    fn insert(&mut self, bbox: pcb_ir::geom::BBox) {
-        for cell in Self::covered_cells(bbox) {
-            self.cells.entry(cell).or_default().push(bbox);
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.cells.is_empty()
-    }
-
-    fn intersects(&self, bbox: pcb_ir::geom::BBox) -> bool {
-        Self::covered_cells(bbox).any(|cell| {
-            self.cells
-                .get(&cell)
-                .is_some_and(|bounds| bounds.iter().any(|clear| clear.intersects(bbox)))
-        })
-    }
-
-    fn covered_cells(bbox: pcb_ir::geom::BBox) -> impl Iterator<Item = (i64, i64)> {
-        let min_x = (bbox.min.x / Self::CELL_MM).floor() as i64;
-        let max_x = (bbox.max.x / Self::CELL_MM).floor() as i64;
-        let min_y = (bbox.min.y / Self::CELL_MM).floor() as i64;
-        let max_y = (bbox.max.y / Self::CELL_MM).floor() as i64;
-        (min_x..=max_x).flat_map(move |x| (min_y..=max_y).map(move |y| (x, y)))
-    }
 }
 
 fn paint_order(feature: &Feature<ipc2581::Symbol>) -> PaintOrder {
@@ -1443,10 +1435,9 @@ mod tests {
     use std::io::{Cursor, Read};
 
     #[test]
-    fn negative_set_before_a_later_fill_resolves_geometrically() {
-        // Layer-wide negative semantics erase every dark feature on the
-        // layer, including fills written after the clear; the sequential
-        // paint order would instead paint the later fill over the clear.
+    fn negative_set_before_a_later_fill_is_repainted_by_it() {
+        // Sequential set semantics: a fill written after the clear repaints
+        // the cleared area, so the fill survives intact.
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1514,13 +1505,6 @@ mod tests {
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        assert!(
-            parsed
-                .objects()
-                .iter()
-                .all(|object| object.polarity == Polarity::Dark),
-            "clear preceding a later fill should be resolved geometrically"
-        );
 
         let mask = pcb_ir::dialects::artwork::compose_to_mask(
             &gerberx2::geometry::extract_document(&parsed),
@@ -1539,19 +1523,18 @@ mod tests {
             pcb_ir::geom::tol::REGION_MM,
         )
         .area();
-        // 6x6 fill minus the 2x2 clear it overlaps.
-        let expected = 36.0 - 4.0;
+        // The 6x6 fill paints after the clear and survives whole.
+        let expected = 36.0;
         assert!(
             (copper_area - expected).abs() <= expected * 0.01,
-            "expected cleared fill area {expected:.2}, got {copper_area:.2}"
+            "expected intact fill area {expected:.2}, got {copper_area:.2}"
         );
     }
 
     #[test]
-    fn negative_set_over_overlay_pad_resolves_geometrically() {
-        // A clear set that reaches overlay-stage dark geometry must fall back
-        // to layer-wide geometric resolution: the stage scheduler would
-        // otherwise paint the pad after the clear and never erase it.
+    fn negative_set_after_an_overlay_pad_erases_it_natively() {
+        // Sequential set semantics: the clear paints after the pad, erasing
+        // the overlap, and exports natively as clear polarity.
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1622,8 +1605,8 @@ mod tests {
             parsed
                 .objects()
                 .iter()
-                .all(|object| object.polarity == Polarity::Dark),
-            "clear set reaching an overlay pad should be resolved geometrically"
+                .any(|object| object.polarity == Polarity::Clear),
+            "the clear set should export natively as clear polarity"
         );
 
         let mask = pcb_ir::dialects::artwork::compose_to_mask(
@@ -1647,6 +1630,70 @@ mod tests {
         assert!(
             (copper_area - expected).abs() <= expected * 0.02,
             "expected quarter-cleared pad area {expected:.4}, got {copper_area:.4}"
+        );
+    }
+
+    #[test]
+    fn standard_dictionary_fiducials_keep_exact_circle_apertures() {
+        // Repeated references to a standard catalogue entry are exact
+        // primitives, not user-dictionary instances: they must flash as
+        // circle apertures rather than flatten into outline macros.
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="fid"><Circle diameter="1"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <LocalFiducial>
+              <Location x="3" y="3"/>
+              <StandardPrimitiveRef id="fid"/>
+            </LocalFiducial>
+            <LocalFiducial>
+              <Location x="7" y="7"/>
+              <StandardPrimitiveRef id="fid"/>
+            </LocalFiducial>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let files = build_gerber_x2_files(&ipc, View::Board).unwrap();
+        let copper = files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert!(
+            !copper.contents.contains("%AM"),
+            "catalogue circles must not lower to outline macros"
+        );
+        assert!(
+            copper.contents.contains("C,1"),
+            "fiducials should flash through a shared circle aperture"
         );
     }
 

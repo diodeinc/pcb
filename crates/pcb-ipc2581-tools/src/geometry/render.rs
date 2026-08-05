@@ -30,9 +30,17 @@ fn layer_has_content(geometry: &GeometryDocument) -> bool {
 }
 
 pub fn layer_has_native_content(geometry: &GeometryDocument) -> bool {
-    let Some(layer) = geometry.layers.first() else {
+    let Some(mut native) = native_layer_document(geometry) else {
         return false;
     };
+    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native);
+    layer_has_content(&native)
+}
+
+/// Restrict a single-layer document to the features native to its source
+/// layer, dropping borrowed features. Returns `None` when nothing is native.
+pub fn native_layer_document(geometry: &GeometryDocument) -> Option<GeometryDocument> {
+    let layer = geometry.layers.first()?;
 
     let source_layer_ref = layer.source_layer_ref;
     let features = layer
@@ -43,14 +51,13 @@ pub fn layer_has_native_content(geometry: &GeometryDocument) -> bool {
         .cloned()
         .collect::<Vec<_>>();
     if features.is_empty() {
-        return false;
+        return None;
     }
 
     let mut native = geometry.clone();
     native.layers[0].features = Span::new(0, features.len() as u32);
     native.features = features;
-    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native);
-    layer_has_content(&native)
+    Some(native)
 }
 
 pub fn layer_mask(

@@ -210,14 +210,14 @@ impl Geometry {
 }
 
 /// A standard aperture: a primitive shape with an optional round hole.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Aperture {
     pub shape: ApertureShape,
     /// Diameter of the round hole through the aperture; `0.0` means solid.
     pub hole_diameter: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ApertureShape {
     Circle {
         diameter: f64,
@@ -237,6 +237,10 @@ pub enum ApertureShape {
         vertices: u32,
         rotation_degrees: f64,
     },
+    /// An arbitrary origin-local filled contour, shared by every flash of
+    /// this aperture. This is how repeated dictionary instances stay
+    /// instances all the way to the output.
+    Contour(ContourBuf),
 }
 
 impl Aperture {
@@ -254,15 +258,16 @@ impl Aperture {
     /// Flatten to local-space contours. With a hole, the result is the outer
     /// shape plus the hole contour and must be filled with `EvenOdd`.
     pub fn contours(&self) -> Vec<ContourBuf> {
-        let outer = match self.shape {
-            ApertureShape::Circle { diameter } => shapes::circle(diameter),
-            ApertureShape::Rectangle { width, height } => shapes::rect(width, height),
-            ApertureShape::Obround { width, height } => shapes::obround(width, height, true),
+        let outer = match &self.shape {
+            ApertureShape::Circle { diameter } => shapes::circle(*diameter),
+            ApertureShape::Rectangle { width, height } => shapes::rect(*width, *height),
+            ApertureShape::Obround { width, height } => shapes::obround(*width, *height, true),
             ApertureShape::Polygon {
                 diameter,
                 vertices,
                 rotation_degrees,
-            } => shapes::regular_polygon(diameter, vertices, rotation_degrees),
+            } => shapes::regular_polygon(*diameter, *vertices, *rotation_degrees),
+            ApertureShape::Contour(contour) => return vec![contour.clone()],
         };
         let mut contours: Vec<ContourBuf> = outer.into_iter().collect();
         if !contours.is_empty() && self.hole_diameter > 0.0 {
@@ -280,7 +285,7 @@ impl Aperture {
     }
 
     pub fn bbox(&self) -> BBox {
-        match self.shape {
+        match &self.shape {
             ApertureShape::Circle { diameter } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
@@ -292,6 +297,7 @@ impl Aperture {
             ApertureShape::Polygon { diameter, .. } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
+            ApertureShape::Contour(contour) => contour.bbox,
         }
     }
 }
@@ -329,6 +335,30 @@ pub fn expand_native_geometry_to_regions<LayerMeta, ObjectMeta>(
 /// clears and final cutouts remove painted material. A layer containing only
 /// final-cutout objects, such as a drill or rout document, images the
 /// removals themselves.
+/// Order a layer's objects for painting.
+///
+/// Dark paint commutes with dark paint and clear with clear, but not across
+/// a polarity change, so stage ordering may only permute objects within each
+/// maximal same-polarity run. Final cutouts are terminal by definition and
+/// paint after everything.
+fn paint_ordered<ObjectMeta>(objects: &[Object<ObjectMeta>]) -> Vec<&Object<ObjectMeta>> {
+    let (cutouts, mut painted): (Vec<_>, Vec<_>) = objects
+        .iter()
+        .partition(|object| object.order.stage == PaintStage::FinalCutout);
+    let mut start = 0;
+    while start < painted.len() {
+        let polarity = painted[start].polarity;
+        let mut end = start + 1;
+        while end < painted.len() && painted[end].polarity == polarity {
+            end += 1;
+        }
+        painted[start..end].sort_by_key(|object| object.order.stage);
+        start = end;
+    }
+    painted.extend(cutouts);
+    painted
+}
+
 pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
 ) -> mask::Document<LayerMeta> {
@@ -347,8 +377,7 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     }
 
     for (layer_index, layer) in doc.layers.iter().enumerate() {
-        let mut objects = layer.objects.slice(&doc.objects).iter().collect::<Vec<_>>();
-        objects.sort_by_key(|object| object.order.stage);
+        let objects = paint_ordered(layer.objects.slice(&doc.objects));
         let has_material = objects
             .iter()
             .any(|object| object.order.stage != PaintStage::FinalCutout);
@@ -414,7 +443,7 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
         else {
             continue;
         };
-        let Some(aperture) = doc.apertures.get(aperture as usize).copied() else {
+        let Some(aperture) = doc.apertures.get(aperture as usize).cloned() else {
             doc.warn("Skipping artwork flash with invalid aperture reference");
             continue;
         };
@@ -567,19 +596,21 @@ mod tests {
             object
         };
 
-        // Painted out of stage order: overlay trace first, then the base pour
-        // with a clear, then a dark-drawn final cutout.
-        let overlay = rect(&mut doc, 4.0, 4.0, 6.0, 6.0);
-        doc.push_object(
-            layer,
-            stage_object(Polarity::Dark, overlay, PaintStage::Overlay),
-        );
+        // The thermal-relief pattern in its paint order: pour, clearance,
+        // then the overlay trace over the cleared area, then a dark-drawn
+        // final cutout. Stage ordering may only permute within polarity
+        // runs, so the trace survives because it follows the clear.
         let base = rect(&mut doc, 0.0, 0.0, 10.0, 10.0);
         doc.push_object(layer, stage_object(Polarity::Dark, base, PaintStage::Base));
         let base_clear = rect(&mut doc, 3.0, 3.0, 7.0, 7.0);
         doc.push_object(
             layer,
             stage_object(Polarity::Clear, base_clear, PaintStage::Base),
+        );
+        let overlay = rect(&mut doc, 4.0, 4.0, 6.0, 6.0);
+        doc.push_object(
+            layer,
+            stage_object(Polarity::Dark, overlay, PaintStage::Overlay),
         );
         let cutout = rect(&mut doc, 0.0, 0.0, 1.0, 1.0);
         doc.push_object(
@@ -595,7 +626,7 @@ mod tests {
             crate::geom::tol::REGION_MM,
         );
 
-        // Overlay survives the base-stage clear painted after it.
+        // The overlay trace follows the clear in paint order and survives.
         assert!(image.contains_point(Point::new(5.0, 5.0)));
         // The base clear still removes material around the overlay.
         assert!(!image.contains_point(Point::new(3.5, 5.0)));
