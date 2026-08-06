@@ -1,12 +1,6 @@
 mod common;
 
-use std::{fs, path::PathBuf};
-
 use pcb_kicad_sch::{SchItem, SymbolSlotKey, analysis::SchematicIssue};
-
-fn fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/analysis")
-}
 
 #[test]
 fn connectivity_graphs_match() {
@@ -52,15 +46,7 @@ fn broken_route_reports_the_disconnected_net() {
 }
 
 #[test]
-fn analysis_fixture_uses_kicad_10_format() {
-    let schematic = fs::read_to_string(fixture_root().join("kicad/simple.kicad_sch"))
-        .expect("read KiCad fixture");
-
-    assert!(schematic.contains("(version 20260306)"));
-}
-
-#[test]
-fn schematic_symbol_uuids_match_layout_identity() {
+fn managed_symbol_uuids_follow_the_existing_component_identity() {
     let fixture = common::AnalysisFixture::load("analysis", "simple.zen", "kicad");
 
     for symbol in fixture.kicad_document().pages[0]

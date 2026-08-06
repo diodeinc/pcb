@@ -10,7 +10,7 @@ fn issue_24201_reduces_hierarchical_connectivity() {
     assert_eq!(project.schematic_files.len(), 2);
     assert_eq!(project.document.pages.len(), 2);
 
-    let graph = ConnectivityGraph::from_kicad(&project.document);
+    let graph = ConnectivityGraph::from_kicad(&project.document).expect("reduce KiCad project");
     assert_eq!(graph.components.len(), 2);
     assert!(
         graph
