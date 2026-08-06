@@ -685,11 +685,13 @@ fn rejects_a_board_instead_of_an_assembly_panel() {
     assert!(error.to_string().contains("expected a board array"));
 }
 
-/// A compact stock so balance tests solve quickly: 120 x 220 mm usable.
+/// A compact stock so balance tests solve quickly: 66 x 116 mm usable. The
+/// spatial solve costs the gutter area, and everything these tests assert --
+/// rotation, target aggregation, clearances, bare margins -- is scale-free.
 const BALANCE_SPEC: FabPanelSpec = FabPanelSpec {
-    width_mm: 150.0,
-    height_mm: 250.0,
-    edge_margin_mm: EdgeInsetsMm::all(15.0),
+    width_mm: 90.0,
+    height_mm: 140.0,
+    edge_margin_mm: EdgeInsetsMm::all(12.0),
     panel_gap_mm: 5.0,
 };
 
@@ -724,8 +726,8 @@ fn dense_assembly_panel_xml(width_mm: f64, height_mm: f64) -> String {
 #[test]
 fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
     let sources = vec![
-        dense_assembly_panel_xml(200.0, 80.0),
-        dense_assembly_panel_xml(30.0, 25.0),
+        dense_assembly_panel_xml(90.0, 40.0),
+        dense_assembly_panel_xml(25.0, 20.0),
     ];
     let creation = create_fab_panel(&sources, &[0, 1], BALANCE_SPEC, true).unwrap();
 
@@ -755,7 +757,7 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
     Ipc2581::validate(&creation.xml).unwrap();
     let parsed = Ipc2581::parse(&creation.xml).unwrap();
     let layout = geometry::extract_layout(&parsed).unwrap();
-    // The 200 mm panel exceeds the 120 mm usable width, so packing must
+    // The 90 mm panel exceeds the 66 mm usable width, so packing must
     // rotate it; balancing has to respect the rotated footprint.
     assert!(
         layout
@@ -763,8 +765,8 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
             .instances
             .iter()
             .filter(|instance| instance.parent_instance.is_none())
-            .any(|instance| (instance.bbox.width() - 80.0).abs() < 1e-6
-                && (instance.bbox.height() - 200.0).abs() < 1e-6)
+            .any(|instance| (instance.bbox.width() - 40.0).abs() < 1e-6
+                && (instance.bbox.height() - 90.0).abs() < 1e-6)
     );
 
     let profile = geometry::board_array_fabrication_profile(&parsed, &layout, &[]).unwrap();
@@ -784,7 +786,7 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
         "process margins must stay bare"
     );
     assert!(
-        gutter_copper.area() > 3_000.0,
+        gutter_copper.area() > 800.0,
         "expected substantial generated gutter copper, got {:.1} mm²",
         gutter_copper.area()
     );
@@ -820,7 +822,7 @@ fn fab_panel_creation_skips_copper_balancing_unless_enabled() {
 
 #[test]
 fn single_panel_filling_the_usable_area_generates_no_fill() {
-    let sources = vec![dense_assembly_panel_xml(120.0, 220.0)];
+    let sources = vec![dense_assembly_panel_xml(66.0, 116.0)];
     let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, true).unwrap();
 
     let layer = &creation.copper_balance.unwrap().layers[0];

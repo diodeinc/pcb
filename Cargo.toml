@@ -162,6 +162,23 @@ rustfft = "6.4"
 num-complex = "0.4"
 
 # The profile that release CI uses for published binaries.
+# The geometry stack burns most of the test suite's wall clock in pcb-ir's
+# solver loops and the polygon-boolean crates under them. Optimizing these
+# packages in dev keeps everything else debuggable while the tests that
+# exercise panel geometry run several times faster.
+[profile.dev.package.pcb-ir]
+opt-level = 2
+[profile.dev.package.i_overlay]
+opt-level = 2
+[profile.dev.package.i_float]
+opt-level = 2
+[profile.dev.package.i_shape]
+opt-level = 2
+[profile.dev.package.i_tree]
+opt-level = 2
+[profile.dev.package.i_key_sort]
+opt-level = 2
+
 [profile.dist]
 inherits = "release"
 lto = "fat"           # Maximum link-time optimization

@@ -189,9 +189,10 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
     assert!(result.certificate.passes(1e-4));
 }
 
-#[test]
-fn board_array_creation_automatically_balances_every_copper_layer() {
-    let input = board_fixture_with_top_line_mm()
+/// A two-copper-layer board with copper only on TOP, on the smallest sheet:
+/// balancing costs the panel's area, and nothing here asks how many boards fit.
+fn two_layer_board_xml() -> String {
+    board_fixture_with_top_line_mm()
         .replace(
             r#"<LayerRef name="TOP"/>"#,
             r#"<LayerRef name="TOP"/>
@@ -202,10 +203,13 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
             r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
   <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>"#,
         )
-        .replace(r#"lineWidth="0.2""#, r#"lineWidth="4""#);
+        .replace(r#"lineWidth="0.2""#, r#"lineWidth="4""#)
+}
+
+#[test]
+fn board_array_balancing_solves_every_copper_layer() {
+    let input = two_layer_board_xml();
     let ipc = Ipc2581::parse(&input).unwrap();
-    // The smallest sheet. Balancing costs the panel's area, and nothing here
-    // asks how many boards fit on it.
     let sheet = Some(AutoSheetSize::A7);
     let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
@@ -250,8 +254,14 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
                 <= (layer.result.solution.initial_density - layer.target_density).abs() + 1e-9
         );
     }
+}
 
-    let creation = create_auto_board_array(&input, sheet, true).unwrap();
+/// The same panel through creation itself: the report's accounting and the
+/// generated geometry in the emitted document.
+#[test]
+fn board_array_creation_reports_and_emits_the_balance() {
+    let input = two_layer_board_xml();
+    let creation = create_auto_board_array(&input, Some(AutoSheetSize::A7), true).unwrap();
     let copper_balance = creation.copper_balance.as_ref().unwrap();
     assert_eq!(copper_balance.layers.len(), 2);
     for report in &copper_balance.layers {
@@ -296,31 +306,53 @@ fn board_array_creation_can_skip_copper_balancing() {
     Ipc2581::parse(&creation.xml).unwrap();
 }
 
+/// Two-sided fiducials and their mask openings must reserve area on both
+/// surface copper layers alike. That is a property of the balancing regions,
+/// so it is read off them directly rather than through a full solve.
 #[test]
 fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_layers() {
     let input = large_board_fixture_mm();
     let ipc = Ipc2581::parse(input).unwrap();
-    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, None).unwrap();
+    // The smallest sheet the board fits: fiducial scoping does not depend on
+    // how much panel surrounds it.
+    let sheet = Some(AutoSheetSize::A6);
+    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
     let provisional_xml = write_board_array_xml(input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
-    let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
-    let top = balance
-        .layers
-        .iter()
-        .find(|layer| layer.layer_name == "TOP")
-        .unwrap();
-    let bottom = balance
-        .layers
-        .iter()
-        .find(|layer| layer.layer_name == "BOTTOM")
-        .unwrap();
+    let layout = geometry::extract_layout(&provisional).unwrap();
+    let score_lines = geometry::board_array_vscore_lines(&provisional).unwrap();
+    let fabrication_profile =
+        geometry::board_array_fabrication_profile(&provisional, &layout, &score_lines).unwrap();
+    let support_layers = extract_array_support_layers(&provisional).unwrap();
+    let copper_layers = crate::layers::copper_layers(provisional.ecad().unwrap());
+    let collection = collect_board_array_balancing_input(
+        &layout,
+        &fabrication_profile,
+        &copper_layers,
+        support_layers
+            .iter()
+            .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
+    )
+    .unwrap();
 
+    let safe_area = |name: &str| {
+        let layer = copper_layers
+            .iter()
+            .find(|layer| provisional.resolve(layer.name) == name)
+            .unwrap();
+        let input = collection.input_for_layer(layer.name);
+        board_array_balancing_region(&input, BalancingRegionOptions::default())
+            .unwrap()
+            .safe_region
+            .area()
+    };
+
+    let top = safe_area("TOP");
+    let bottom = safe_area("BOTTOM");
     assert!(
-        (bottom.result.usable.area() - top.result.usable.area()).abs() <= 1e-6,
-        "two-sided fiducials and mask openings should reserve equal surface-copper area: top {:.6} mm², bottom {:.6} mm²",
-        top.result.usable.area(),
-        bottom.result.usable.area(),
+        (bottom - top).abs() <= 1e-6,
+        "two-sided fiducials and mask openings should reserve equal surface-copper area: top {top:.6} mm², bottom {bottom:.6} mm²",
     );
 }
 
