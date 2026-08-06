@@ -132,6 +132,15 @@ enum Commands {
         #[arg(long, default_value_t = 0.09)]
         min_width_mm: f64,
     },
+    /// Estimate panel bow and twist from the through-stack copper distribution
+    Warp {
+        /// IPC-2581 XML file to analyze
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Write a field report, with the copper and deflection maps, here
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        report: Option<PathBuf>,
+    },
     /// Export IPC-2581 fabrication layers as manufacturing files
     Gerber {
         /// IPC-2581 XML file to export from
@@ -462,6 +471,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             layout_target,
             min_width_mm,
         } => commands::dfm::execute(&file, layout_target.artwork_scope(), min_width_mm),
+        Commands::Warp { file, report } => commands::warp::execute(&file, report.as_deref()),
         Commands::Gerber {
             file,
             layout_target,
