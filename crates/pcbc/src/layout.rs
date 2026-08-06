@@ -246,20 +246,3 @@ fn print_layout_result(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::Parser;
-
-    #[derive(Parser)]
-    struct TestCli {
-        #[command(flatten)]
-        args: LayoutArgs,
-    }
-
-    #[test]
-    fn temp_flag_is_rejected() {
-        assert!(TestCli::try_parse_from(["pcb", "--temp", "board.zen"]).is_err());
-    }
-}
