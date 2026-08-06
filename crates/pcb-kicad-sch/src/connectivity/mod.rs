@@ -18,11 +18,11 @@ use pcb_sch::Schematic;
 use crate::SchDocument;
 
 impl ConnectivityGraph {
-    pub fn from_zener(netlist: &Schematic) -> Self {
+    pub fn from_zener(netlist: &Schematic) -> anyhow::Result<Self> {
         zener::reduce(netlist)
     }
 
-    pub fn from_kicad(document: &SchDocument) -> Self {
+    pub fn from_kicad(document: &SchDocument) -> anyhow::Result<Self> {
         kicad::reduce(document)
     }
 }

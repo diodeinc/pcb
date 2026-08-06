@@ -64,12 +64,12 @@ pub struct SymbolSlotKey {
 impl SymbolSlotKey {
     pub fn new(component_path: impl Into<String>, unit: u32) -> Option<Self> {
         let component_path = component_path.into();
-        if component_path.is_empty() {
+        if component_path.is_empty() || unit == 0 {
             return None;
         }
         Some(Self {
             component_path,
-            unit: unit.max(1),
+            unit,
         })
     }
 
@@ -220,6 +220,11 @@ mod tests {
         assert_eq!(slot.uuid_key(), "BUCK.U1@U2");
         assert_eq!(slot.symbol_id(), "0a774e0e-ef6a-58f5-acae-b595eb1cd1fe");
         assert_eq!(slot.component_id(), "6ea18345-0f07-5a15-a6d1-0870367a6dd4");
+    }
+
+    #[test]
+    fn symbol_slot_rejects_unit_zero() {
+        assert_eq!(SymbolSlotKey::new("U1", 0), None);
     }
 
     #[test]
