@@ -17,7 +17,7 @@ use ipc2581::types::{
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult,
-    SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest,
+    SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest, StackMomentField,
     generate_spatial_dense_copper_balance, rounded_hexagonal_void,
 };
 use pcb_ir::geom::region::simplify_shapes;
@@ -110,6 +110,9 @@ pub struct CopperBalancePlan {
     /// Whether the physical stackup supplied signed stack weights. When false,
     /// every layer balances independently with zero through-stack coupling.
     pub stack_weights_available: bool,
+    /// What the solve did to the panel's copper-moment field, when the stackup
+    /// supplied the weights to measure it.
+    pub moment_field: Option<StackMomentField>,
     pub layers: Vec<CopperBalanceLayer>,
 }
 
@@ -149,18 +152,71 @@ pub enum CopperBalanceMode {
     Perforated,
 }
 
+/// RMS of the panel's copper-moment field before and after the spatial solve.
+///
+/// Named separately from [`StackMomentField`] only because the report is
+/// serializable and `pcb-ir` carries no serde dependency.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StackMomentFieldReport {
+    pub initial_rms: f64,
+    pub achieved_rms: f64,
+}
+
+impl From<StackMomentField> for StackMomentFieldReport {
+    fn from(field: StackMomentField) -> Self {
+        Self {
+            initial_rms: field.initial_rms,
+            achieved_rms: field.achieved_rms,
+        }
+    }
+}
+
 /// Compact, serializable accounting for a completed automatic balance plan.
 #[derive(Debug, Clone, Serialize)]
 pub struct CopperBalanceReport {
     pub panel_area_mm2: f64,
     pub footprint_area_mm2: f64,
     pub stack_weights_available: bool,
+    /// RMS of the copper-moment field before and after the spatial solve.
+    /// Carries bow and twist together, where
+    /// [`CopperBalanceReport::stack_moments`] carries bow alone.
+    pub moment_field: Option<StackMomentFieldReport>,
     pub layers: Vec<CopperBalanceLayerReport>,
 }
 
 impl CopperBalanceReport {
-    /// One short status line per copper layer, plus a warning when the
-    /// stackup could not supply physical stack weights.
+    /// The panel's normalized copper moment about the stack mid-plane, as it
+    /// would stand with every layer on its target and as it actually stands.
+    ///
+    /// The first is what the boards were drawn carrying; the second is what
+    /// the balanced panel carries after layers traded density to flatten it.
+    /// `None` when the stackup supplied no weights, which is also when the
+    /// solver leaves the moment alone.
+    pub fn stack_moments(&self) -> Option<(f64, f64)> {
+        // The solver already decided whether the moment was modelled at all;
+        // deciding it a second time here is how the two drift apart.
+        self.moment_field?;
+        let scale = self
+            .layers
+            .iter()
+            .map(|layer| layer.stack_weight_mm2.abs())
+            .sum::<f64>();
+        let moment = |density: fn(&CopperBalanceLayerReport) -> f64| {
+            self.layers
+                .iter()
+                .map(|layer| layer.stack_weight_mm2 * density(layer))
+                .sum::<f64>()
+                / scale
+        };
+        Some((
+            moment(|layer| layer.target_density),
+            moment(|layer| layer.achieved_density),
+        ))
+    }
+
+    /// One short status line per copper layer, the stack moment the trade
+    /// moved, plus a warning when the stackup could not supply physical stack
+    /// weights.
     pub fn summary_lines(&self) -> Vec<String> {
         let mut lines = self
             .layers
@@ -189,6 +245,14 @@ impl CopperBalanceReport {
                 )
             })
             .collect::<Vec<_>>();
+        if let (Some((untouched, achieved)), Some(field)) =
+            (self.stack_moments(), self.moment_field)
+        {
+            lines.push(format!(
+                "balance: stack moment {untouched:.4} -> {achieved:.4} (field rms {:.4} -> {:.4})",
+                field.initial_rms, field.achieved_rms
+            ));
+        }
         if !self.layers.is_empty() && !self.stack_weights_available {
             lines.push(
                 "balance: stackup thickness data unavailable; layers balanced independently"
@@ -206,6 +270,7 @@ impl CopperBalancePlan {
             panel_area_mm2: self.panel_area_mm2,
             footprint_area_mm2: self.footprints.area(),
             stack_weights_available: self.stack_weights_available,
+            moment_field: self.moment_field.map(StackMomentFieldReport::from),
             layers: self
                 .layers
                 .iter()
@@ -274,7 +339,7 @@ pub fn solve_copper_balance(
             stack_weight_mm2: layer.stack_weight_mm2,
         })
         .collect::<Vec<_>>();
-    let results = generate_spatial_dense_copper_balance(
+    let balance = generate_spatial_dense_copper_balance(
         DenseCopperBalanceProfile::V1,
         SpatialCopperBalanceRequest {
             panel_region,
@@ -286,7 +351,7 @@ pub fn solve_copper_balance(
 
     let layers = prepared
         .into_iter()
-        .zip(results)
+        .zip(balance.layers)
         .map(|(layer, result)| {
             let features = balance_features(&result)?;
             Ok(CopperBalanceLayer {
@@ -305,6 +370,7 @@ pub fn solve_copper_balance(
         footprints,
         panel_area_mm2: panel_region.area(),
         stack_weights_available,
+        moment_field: balance.moment_field,
         layers,
     })
 }
@@ -596,6 +662,7 @@ mod tests {
             },
         )
         .unwrap()
+        .layers
         .pop()
         .unwrap();
         let features = balance_features(&result).unwrap();

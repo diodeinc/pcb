@@ -11,6 +11,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `--layout-target` now takes `board` or `board-array` on every command, and defaults to `board-array`.
+- Copper balancing now flattens the copper the panel actually carries about its mid-plane, rather than preserving whatever through-stack imbalance the boards were drawn with.
+- Copper balancing can shift a layer up to 1% off its target density to counterweight the rest of the stack, paid for by an opposite shift elsewhere.
+- The copper-balance summary reports the panel's stack moment before and after balancing.
 
 ### Removed
 

@@ -894,6 +894,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         },
     )
     .unwrap()
+    .layers
     .pop()
     .unwrap();
     let features = balance_features(&balance).unwrap();
