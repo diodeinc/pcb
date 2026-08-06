@@ -158,14 +158,18 @@ pub enum CopperBalanceMode {
 /// serializable and `pcb-ir` carries no serde dependency.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct StackMomentFieldReport {
+    pub initial_mean: f64,
     pub initial_rms: f64,
+    pub achieved_mean: f64,
     pub achieved_rms: f64,
 }
 
 impl From<StackMomentField> for StackMomentFieldReport {
     fn from(field: StackMomentField) -> Self {
         Self {
+            initial_mean: field.initial_mean,
             initial_rms: field.initial_rms,
+            achieved_mean: field.achieved_mean,
             achieved_rms: field.achieved_rms,
         }
     }
@@ -185,38 +189,9 @@ pub struct CopperBalanceReport {
 }
 
 impl CopperBalanceReport {
-    /// The panel's normalized copper moment about the stack mid-plane, as it
-    /// would stand with every layer on its target and as it actually stands.
-    ///
-    /// The first is what the boards were drawn carrying; the second is what
-    /// the balanced panel carries after layers traded density to flatten it.
-    /// `None` when the stackup supplied no weights, which is also when the
-    /// solver leaves the moment alone.
-    pub fn stack_moments(&self) -> Option<(f64, f64)> {
-        // The solver already decided whether the moment was modelled at all;
-        // deciding it a second time here is how the two drift apart.
-        self.moment_field?;
-        let scale = self
-            .layers
-            .iter()
-            .map(|layer| layer.stack_weight_mm2.abs())
-            .sum::<f64>();
-        let moment = |density: fn(&CopperBalanceLayerReport) -> f64| {
-            self.layers
-                .iter()
-                .map(|layer| layer.stack_weight_mm2 * density(layer))
-                .sum::<f64>()
-                / scale
-        };
-        Some((
-            moment(|layer| layer.target_density),
-            moment(|layer| layer.achieved_density),
-        ))
-    }
-
-    /// One short status line per copper layer, the stack moment the trade
-    /// moved, plus a warning when the stackup could not supply physical stack
-    /// weights.
+    /// One short status line per copper layer, what the trade did to the
+    /// panel's copper moment, plus a warning when the stackup could not supply
+    /// physical stack weights.
     pub fn summary_lines(&self) -> Vec<String> {
         let mut lines = self
             .layers
@@ -245,12 +220,10 @@ impl CopperBalanceReport {
                 )
             })
             .collect::<Vec<_>>();
-        if let (Some((untouched, achieved)), Some(field)) =
-            (self.stack_moments(), self.moment_field)
-        {
+        if let Some(field) = self.moment_field {
             lines.push(format!(
-                "balance: stack moment {untouched:.4} -> {achieved:.4} (field rms {:.4} -> {:.4})",
-                field.initial_rms, field.achieved_rms
+                "balance: stack moment {:.4} -> {:.4} (field rms {:.4} -> {:.4})",
+                field.initial_mean, field.achieved_mean, field.initial_rms, field.achieved_rms
             ));
         }
         if !self.layers.is_empty() && !self.stack_weights_available {

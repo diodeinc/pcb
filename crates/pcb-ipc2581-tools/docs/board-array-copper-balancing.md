@@ -142,6 +142,13 @@ follows the field's mean, twist follows its variation, and squaring `M_i` at
 every site charges for both — so there is one term here rather than separate
 bow and twist machinery.
 
+Both readings are taken from that one field over the same sites, which is what
+makes them comparable: `E_stack` never falls below the mean's magnitude, so a
+mean that drops while `E_stack` holds has moved bow into twist rather than
+removing anything. Measuring the two separately — say a mean over per-layer
+average densities against an RMS over the field — would weight the panel
+differently in each and quietly break that reading.
+
 The reference is zero copper moment, not the board's own per-layer density.
 Reading `rho_li` rather than `rho_li - d_l` is the whole difference: the
 subtracted form is zero exactly when every layer sits on its target, so a
