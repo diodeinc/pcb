@@ -194,250 +194,47 @@ pub(super) fn lattice_cell_coverage(
     region: &ContourSet,
     profile: DenseCopperBalanceProfile,
 ) -> Vec<f64> {
-    const STRATA: usize = 3;
-    let offset = |index: usize, span: f64| ((index as f64 + 0.5) / STRATA as f64 - 0.5) * span;
-    let mut subsamples = Vec::with_capacity(points.len() * STRATA * STRATA);
-    for point in points {
-        for row in 0..STRATA {
-            for column in 0..STRATA {
-                subsamples.push(Point::new(
-                    point.x + offset(column, profile.lattice_column_pitch_mm()),
-                    point.y + offset(row, profile.pitch_mm),
-                ));
-            }
-        }
-    }
-    scanline_indicator(&subsamples, region)
-        .chunks_exact(STRATA * STRATA)
-        .map(|tile| tile.iter().sum::<f64>() / (STRATA * STRATA) as f64)
-        .collect()
+    region.cell_coverage(
+        points,
+        (profile.lattice_column_pitch_mm(), profile.pitch_mm),
+    )
 }
 
-fn scanline_indicator(points: &[Point], region: &ContourSet) -> Vec<f64> {
-    let mut result = vec![0.0; points.len()];
-    let mut by_y = (0..points.len()).collect::<Vec<_>>();
-    by_y.sort_by(|left, right| {
-        points[*left]
-            .y
-            .total_cmp(&points[*right].y)
-            .then_with(|| points[*left].x.total_cmp(&points[*right].x))
-    });
-    let edges = region
-        .rings
-        .iter()
-        .flat_map(|ring| {
-            ring.iter()
-                .copied()
-                .zip(ring.iter().copied().cycle().skip(1))
-                .take(ring.len())
-        })
-        .collect::<Vec<_>>();
-
-    let mut first = 0;
-    while first < by_y.len() {
-        let y = points[by_y[first]].y;
-        let mut last = first + 1;
-        while last < by_y.len() && (points[by_y[last]].y - y).abs() <= NUMERIC_EPSILON {
-            last += 1;
-        }
-        let mut crossings = edges
-            .iter()
-            .filter_map(|([x0, y0], [x1, y1])| {
-                let direction = if *y0 <= y && y < *y1 {
-                    1
-                } else if *y1 <= y && y < *y0 {
-                    -1
-                } else {
-                    return None;
-                };
-                let x = x0 + (y - y0) * (x1 - x0) / (y1 - y0);
-                Some((x, direction))
-            })
-            .collect::<Vec<_>>();
-        crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
-        let mut crossing_index = 0;
-        let mut winding = 0;
-        for &point_index in &by_y[first..last] {
-            while crossing_index < crossings.len()
-                && crossings[crossing_index].0 <= points[point_index].x
-            {
-                winding += crossings[crossing_index].1;
-                crossing_index += 1;
-            }
-            result[point_index] = (winding != 0) as u8 as f64;
-        }
-        first = last;
-    }
-    result
-}
-
-/// One layer's share of a coupled band projection.
-pub(super) struct CoupledBand<'a> {
-    /// Gradient proposal, one squared radius per active site.
-    pub proposal: &'a [f64],
-    /// Bounds on this layer's squared-radius sum.
-    pub sum_bounds: (f64, f64),
-    /// Sum those bounds surround: the layer's selected copper area.
-    pub center: f64,
-    /// Density denominator, turning a squared-radius change into the density
-    /// change the stack conserves.
-    pub domain_area_mm2: f64,
-}
-
-/// Project every layer onto its box and band, jointly constrained so the
-/// stack's density deviations cancel: `sum_l (sum(x_l) - center_l) / area_l == 0`.
+/// Euclidean projection onto `{x : lower <= x <= upper, sum(x) = target}`.
 ///
-/// The joint constraint says copper moves between layers rather than being
-/// created. Without it the bands free a direction the stack cannot see — every
-/// layer drifting the same way leaves the moment untouched, because a
-/// symmetric stackup's weights sum to zero — and that common drift is what the
-/// local density error spends them on.
-///
-/// One linear equality over separable convex sets dualizes to a single
-/// multiplier, so the solution is each layer's own band projection of a
-/// commonly shifted proposal and the multiplier follows by bisection. Shifting
-/// harder only lowers each sum, and a layer whose band binds stops responding
-/// altogether, so the deviation falls monotonically and brackets cleanly.
-pub(super) fn project_coupled_bands(
-    layers: &[CoupledBand<'_>],
-    lower: f64,
-    upper: f64,
-) -> Vec<Vec<f64>> {
-    // A layer pinned at a band edge takes the same value for every multiplier
-    // past that point, so scoring a trial needs one clamped sum per layer
-    // rather than a nested projection.
-    let deviation = |multiplier: f64| {
-        layers
-            .iter()
-            .map(|layer| {
-                let sum = clamped_sum(
-                    layer.proposal,
-                    multiplier / layer.domain_area_mm2,
-                    lower,
-                    upper,
-                )
-                .clamp(layer.sum_bounds.0, layer.sum_bounds.1);
-                // Carrying the void-area factor keeps this a density, which is
-                // the unit the exit tolerance below is stated in.
-                ROUNDED_HEXAGON_AREA_FACTOR * (sum - layer.center) / layer.domain_area_mm2
-            })
-            .sum::<f64>()
-    };
-
-    // Past this shift every site clamps, so both ends saturate their bands.
-    let span = layers
-        .iter()
-        .flat_map(|layer| layer.proposal.iter())
-        .map(|value| (value - lower).abs().max((upper - value).abs()))
-        .fold(0.0_f64, f64::max);
-    let widest_domain = layers
-        .iter()
-        .map(|layer| layer.domain_area_mm2)
-        .fold(0.0_f64, f64::max);
-    let bound = span * widest_domain + 1.0;
-    let (mut low, mut high) = (-bound, bound);
-    let mut multiplier = 0.0;
-    for _ in 0..64 {
-        multiplier = (low + high) / 2.0;
-        let deviation = deviation(multiplier);
-        // Every trial rescans every site, so stop as soon as the constraint
-        // holds to a density the radius quantization could not express anyway.
-        // A stack whose bands all saturate never gets here and runs the full
-        // bracket down.
-        if deviation.abs() <= NUMERIC_EPSILON {
-            break;
-        }
-        if deviation > 0.0 {
-            low = multiplier;
-        } else {
-            high = multiplier;
-        }
-    }
-
-    std::thread::scope(|scope| {
-        let handles = layers
-            .iter()
-            .map(|layer| {
-                scope.spawn(move || {
-                    project_box_interval(
-                        layer.proposal,
-                        multiplier / layer.domain_area_mm2,
-                        lower,
-                        upper,
-                        layer.sum_bounds.0,
-                        layer.sum_bounds.1,
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        handles
-            .into_iter()
-            .map(|handle| handle.join().expect("coupled band projection panicked"))
-            .collect()
-    })
-}
-
-/// Euclidean projection onto `{x : lower <= x <= upper, sum_min <= sum(x) <= sum_max}`.
-///
-/// The band is two halfspaces and at most one can bind, so clamping to the box
-/// is already the projection whenever its sum lands inside the band; otherwise
-/// the binding halfspace holds with equality and [`project_box_sum`] is exact.
-/// `sum_min == sum_max` recovers that fixed-sum projection unchanged.
-pub(super) fn project_box_interval(
-    values: &[f64],
-    shift: f64,
-    lower: f64,
-    upper: f64,
-    sum_min: f64,
-    sum_max: f64,
-) -> Vec<f64> {
-    debug_assert!(sum_min <= sum_max);
-    let total = clamped_sum(values, shift, lower, upper);
-    let target = if total < sum_min {
-        sum_min
-    } else if total > sum_max {
-        sum_max
-    } else {
-        return values
+/// Water-filling: one common shift moves every value, the box clamps, and the
+/// shift that lands the clamped sum on the target is found by bisection. A
+/// target outside what the box can reach saturates every value at the nearer
+/// bound, which is the closest feasible point.
+pub(super) fn project_box_sum(values: &[f64], lower: f64, upper: f64, target: f64) -> Vec<f64> {
+    let clamped_sum = |shift: f64| -> f64 {
+        values
             .iter()
             .map(|value| (value - shift).clamp(lower, upper))
-            .collect();
+            .sum()
     };
-    project_box_sum(values, shift, lower, upper, target)
-}
-
-/// `sum_i clamp(values_i - shift, lower, upper)`, the quantity both sum
-/// projections bisect on.
-fn clamped_sum(values: &[f64], shift: f64, lower: f64, upper: f64) -> f64 {
-    values
-        .iter()
-        .map(|value| (value - shift).clamp(lower, upper))
-        .sum()
-}
-
-fn project_box_sum(values: &[f64], shift: f64, lower: f64, upper: f64, target: f64) -> Vec<f64> {
     let mut low_shift = values
         .iter()
-        .map(|value| value - shift - upper)
+        .map(|value| value - upper)
         .min_by(f64::total_cmp)
         .unwrap_or(0.0);
     let mut high_shift = values
         .iter()
-        .map(|value| value - shift - lower)
+        .map(|value| value - lower)
         .max_by(f64::total_cmp)
         .unwrap_or(0.0);
     for _ in 0..44 {
         let trial = (low_shift + high_shift) / 2.0;
-        if clamped_sum(values, shift + trial, lower, upper) > target {
+        if clamped_sum(trial) > target {
             low_shift = trial;
         } else {
             high_shift = trial;
         }
     }
-    let trial = (low_shift + high_shift) / 2.0;
+    let shift = (low_shift + high_shift) / 2.0;
     values
         .iter()
-        .map(|value| (value - shift - trial).clamp(lower, upper))
+        .map(|value| (value - shift).clamp(lower, upper))
         .collect()
 }
 
@@ -506,53 +303,27 @@ mod tests {
     use super::*;
     use crate::geom::{BBox, ContourSet, Point, tol};
 
-    /// The band projection agrees with the fixed-sum projection wherever the
-    /// band binds, and is a plain box clamp wherever it does not.
+    /// The projection lands the sum on the target when the box can reach it,
+    /// and saturates at the nearer bound when it cannot.
     #[test]
-    fn box_interval_projection_binds_only_at_its_edges() {
+    fn box_sum_projection_hits_reachable_targets_and_saturates_otherwise() {
         let values: [f64; 5] = [0.10, 0.42, -0.30, 0.25, 0.61];
         let (lower, upper) = (0.04_f64, 0.42_f64);
-        let clamped = values
-            .iter()
-            .map(|value| value.clamp(lower, upper))
-            .collect::<Vec<_>>();
-        let clamped_sum = clamped.iter().sum::<f64>();
 
-        // Band straddling the clamped sum: the clamp already satisfies it.
-        let inside = project_box_interval(
-            &values,
-            0.0,
-            lower,
-            upper,
-            clamped_sum - 0.2,
-            clamped_sum + 0.2,
-        );
-        assert_eq!(inside, clamped);
-
-        // Band entirely below or above it: the near edge holds with equality.
-        for target in [clamped_sum - 0.3, clamped_sum + 0.15] {
-            let band = if target < clamped_sum {
-                project_box_interval(&values, 0.0, lower, upper, target - 0.5, target)
-            } else {
-                project_box_interval(&values, 0.0, lower, upper, target, target + 0.5)
-            };
-            let fixed = project_box_sum(&values, 0.0, lower, upper, target);
+        for target in [0.6, 1.0, 1.9] {
+            let projected = project_box_sum(&values, lower, upper, target);
+            assert!(projected.iter().all(|v| (lower..=upper).contains(v)));
             assert!(
-                band.iter().zip(&fixed).all(|(l, r)| (l - r).abs() <= 1e-12),
-                "{band:?} != {fixed:?}"
+                (projected.iter().sum::<f64>() - target).abs() <= 1e-9,
+                "{projected:?}"
             );
-            assert!((band.iter().sum::<f64>() - target).abs() <= 1e-9);
         }
 
-        // A degenerate band is the fixed-sum projection exactly.
-        let pinned = project_box_interval(&values, 0.0, lower, upper, 1.0, 1.0);
-        let fixed = project_box_sum(&values, 0.0, lower, upper, 1.0);
-        assert!(
-            pinned
-                .iter()
-                .zip(&fixed)
-                .all(|(l, r)| (l - r).abs() <= 1e-12)
-        );
+        // Beyond the box's reach on either side, every value saturates.
+        let low = project_box_sum(&values, lower, upper, 0.0);
+        assert!(low.iter().all(|v| (v - lower).abs() <= 1e-9));
+        let high = project_box_sum(&values, lower, upper, 10.0);
+        assert!(high.iter().all(|v| (v - upper).abs() <= 1e-9));
     }
 
     #[test]
