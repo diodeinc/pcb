@@ -251,13 +251,33 @@ pub struct DenseCopperVoid {
 ///
 /// The field's mean is the panel's bow and its variation is twist, so an RMS
 /// carries both: a falling RMS means the field flattened, not merely that a
-/// positive lobe found a negative one to cancel against. Comparing it against
-/// the mean alone separates the two — a mean that drops while the RMS holds
-/// has moved bow into twist.
+/// positive lobe found a negative one to cancel against. Both readings come
+/// from the same field over the same sites, so the pair can be compared — a
+/// mean that drops while the RMS holds has moved bow into twist, and that
+/// reading is only trustworthy because neither number was measured its own way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StackMomentField {
+    pub initial_mean: f64,
     pub initial_rms: f64,
+    pub achieved_mean: f64,
     pub achieved_rms: f64,
+}
+
+/// One reading of the copper-moment field.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MomentReading {
+    mean: f64,
+    rms: f64,
+}
+
+impl MomentReading {
+    fn of(field: &[f64]) -> Self {
+        let count = field.len() as f64;
+        Self {
+            mean: field.iter().sum::<f64>() / count,
+            rms: (field.iter().map(|moment| moment * moment).sum::<f64>() / count).sqrt(),
+        }
+    }
 }
 
 /// Every layer's solved geometry, plus what the solve did to the stack.
@@ -654,8 +674,11 @@ pub fn generate_spatial_dense_copper_balance(
     // reduction. The first reading is the field the uniform selection left
     // behind; the last trails the emitted radii by one gradient step, which at
     // convergence is smaller than the radius quantization.
-    let mut initial_rms: Option<f64> = None;
-    let mut achieved_rms = 0.0;
+    let mut initial_reading: Option<MomentReading> = None;
+    let mut achieved_reading = MomentReading {
+        mean: 0.0,
+        rms: 0.0,
+    };
     for _ in 0..SPATIAL_SOLVE_ITERATIONS {
         // The modeled final copper fraction of each layer, not its distance
         // from target: the moment below is the copper the panel carries, and
@@ -730,13 +753,8 @@ pub fn generate_spatial_dense_copper_balance(
             })
             .collect::<Vec<_>>();
         if moment_gain > 0.0 {
-            achieved_rms = (stack_moment
-                .iter()
-                .map(|moment| moment * moment)
-                .sum::<f64>()
-                / stack_moment.len() as f64)
-                .sqrt();
-            initial_rms.get_or_insert(achieved_rms);
+            achieved_reading = MomentReading::of(&stack_moment);
+            initial_reading.get_or_insert(achieved_reading);
         }
 
         let proposals = std::thread::scope(|scope| {
@@ -833,9 +851,11 @@ pub fn generate_spatial_dense_copper_balance(
                 )
             })
             .collect(),
-        moment_field: initial_rms.map(|initial_rms| StackMomentField {
-            initial_rms,
-            achieved_rms,
+        moment_field: initial_reading.map(|initial| StackMomentField {
+            initial_mean: initial.mean,
+            initial_rms: initial.rms,
+            achieved_mean: achieved_reading.mean,
+            achieved_rms: achieved_reading.rms,
         }),
     })
 }
@@ -1822,6 +1842,17 @@ mod tests {
         };
 
         let weighed = solve(1.0).moment_field.expect("weights were supplied");
+        // Both readings come from one field over one set of sites, so the RMS
+        // bounds the mean's magnitude. Measuring them apart would let this
+        // slip without anything noticing.
+        assert!(
+            weighed.initial_rms >= weighed.initial_mean.abs(),
+            "{weighed:?}"
+        );
+        assert!(
+            weighed.achieved_rms >= weighed.achieved_mean.abs(),
+            "{weighed:?}"
+        );
         // These layers are asked for markedly different densities, so the
         // field starts well away from zero and the solve flattens it.
         assert!(weighed.initial_rms > 0.0, "{weighed:?}");
