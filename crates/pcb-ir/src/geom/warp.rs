@@ -390,7 +390,9 @@ pub struct WarpEstimate {
     /// Deflection sampled at the same points as the moment field, millimeters,
     /// measured from the plane through the panel corners.
     pub deflection: PanelField,
-    /// Maximum deviation from that plane, millimeters.
+    /// Largest single departure from that plane, millimeters. A surface that
+    /// rises along one axis and dips along the other reports the larger lobe,
+    /// not their sum.
     pub bow_mm: f64,
     /// Bow as a percentage of the panel dimension it is worst against.
     pub bow_percent: f64,
@@ -471,13 +473,17 @@ pub fn estimate_warp(
         bowed = (bowed.0.min(without_saddle), bowed.1.max(without_saddle));
     }
 
-    // 2.4.22 separates the two: bow is the curvature a panel takes with all
-    // four corners on the table, normalized by the dimension it is measured
+    // 2.4.22 separates the two: bow is the largest departure a corner-seated
+    // panel makes from the table, normalized by the dimension it is measured
     // along — the shorter one gives the larger percentage, so that is the one
-    // reported. Twist is the corner that will not stay down: the rise of the
-    // fourth corner above the plane of the other three is four times the
-    // alternating corner residual, normalized by twice the diagonal.
-    let bow_mm = bowed.1 - bowed.0;
+    // reported. The corners sit at zero by construction, so that departure is
+    // the levelled surface's largest magnitude on either side, not its range:
+    // a saddle-free surface rising along one axis and dipping along the other
+    // seats on whichever lobe it rests and shows the other. Twist is the
+    // corner that will not stay down: the rise of the fourth corner above the
+    // plane of the other three is four times the alternating corner residual,
+    // normalized by twice the diagonal.
+    let bow_mm = bowed.1.max(-bowed.0);
     let width = moment_field.bounds.width();
     let height = moment_field.bounds.height();
     let bow_percent = 100.0 * bow_mm / width.min(height);
@@ -751,6 +757,47 @@ mod tests {
                 warp.bow_mm,
             );
         }
+    }
+
+    /// An astigmatic surface rises along one axis and dips along the other,
+    /// both sides of the corner plane. Bow is the larger lobe -- the departure
+    /// a seated panel actually shows -- not the two lobes summed.
+    #[test]
+    fn an_astigmatic_surface_reports_its_larger_lobe_as_bow() {
+        let stack = symmetric_four_layer();
+        let bounds = BBox::new(Point::new(0.0, 0.0), Point::new(400.0, 400.0));
+        let mut field = uniform_field(bounds, 0.0);
+        field.values = field
+            .samples
+            .iter()
+            .map(|point| {
+                let (x, y) = field.normalized(*point);
+                0.01 * (x * x - y * y)
+            })
+            .collect();
+        let warp = estimate_warp(&stack, Material::LAMINATE, &field, 150.0);
+
+        let (low, high) = warp
+            .deflection
+            .values
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(low, high), value| {
+                (low.min(*value), high.max(*value))
+            });
+        // On a square panel the two lobes match, so the range is twice the bow.
+        assert!(warp.bow_mm > 0.0);
+        assert!(
+            (warp.bow_mm - high.max(-low)).abs() <= 1e-12,
+            "{} != {}",
+            warp.bow_mm,
+            high.max(-low)
+        );
+        assert!(
+            ((high - low) - 2.0 * warp.bow_mm).abs() <= 1e-9 * warp.bow_mm,
+            "range {} vs bow {}",
+            high - low,
+            warp.bow_mm
+        );
     }
 
     /// A saddle-shaped imbalance is what twist reads, and it produces no bow

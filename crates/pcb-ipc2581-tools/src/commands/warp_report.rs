@@ -30,6 +30,23 @@ const WARM: [f64; 3] = [178.0, 52.0, 30.0];
 /// Light-to-dark single hue for unsigned magnitude.
 const MAGNITUDE: ([f64; 3], [f64; 3]) = ([250.0, 249.0, 246.0], [38.0, 42.0, 48.0]);
 
+/// The one string in the report that comes from the input document rather
+/// than from numbers is the layer name; everything interpolated into markup
+/// passes through here.
+fn escape(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
+}
+
 pub fn render(analysis: &WarpAnalysis) -> String {
     let mut html = String::from(HEAD);
     masthead(&mut html, analysis);
@@ -74,16 +91,18 @@ and cancels.</p>
 
 fn results(html: &mut String, analysis: &WarpAnalysis) {
     let warp = &analysis.warp;
-    let verdict = if warp.bow_percent <= SURFACE_MOUNT_LIMIT_PERCENT {
-        format!(
-            r#"<span class="pass">PASS</span> {:.0}&times; margin"#,
-            SURFACE_MOUNT_LIMIT_PERCENT / warp.bow_percent.max(f64::MIN_POSITIVE)
-        )
-    } else {
+    // Past three digits the multiple stops informing anyone, and a perfectly
+    // flat panel would otherwise print the limit divided by nearly zero.
+    let margin = SURFACE_MOUNT_LIMIT_PERCENT / warp.bow_percent;
+    let verdict = if warp.bow_percent > SURFACE_MOUNT_LIMIT_PERCENT {
         format!(
             r#"<span class="fail">OVER</span> {:.1}&times; limit"#,
             warp.bow_percent / SURFACE_MOUNT_LIMIT_PERCENT
         )
+    } else if margin > 999.0 {
+        r#"<span class="pass">PASS</span> &gt;999&times; margin"#.to_string()
+    } else {
+        format!(r#"<span class="pass">PASS</span> {margin:.0}&times; margin"#)
     };
     let _ = write!(
         html,
@@ -119,7 +138,7 @@ fn stack_table(html: &mut String, analysis: &WarpAnalysis) {
             rows,
             r#"<tr><td>{}</td><td>{:+.4}</td><td>{:.3}</td>
 <td class="bar"><span style="width:{:.1}%"></span></td><td>{:+.5}</td><td>{pair}</td></tr>"#,
-            layer.layer_name,
+            escape(&layer.layer_name),
             conductor.lever_arm_mm,
             layer.mean,
             100.0 * layer.mean,
@@ -210,7 +229,8 @@ fn layer_figures(html: &mut String, analysis: &WarpAnalysis) {
         let _ = write!(
             plates,
             r#"<figure><figcaption><b>{}</b><span>{:.3}</span></figcaption>{map}</figure>"#,
-            layer.layer_name, layer.mean,
+            escape(&layer.layer_name),
+            layer.mean,
         );
     }
     let _ = write!(
