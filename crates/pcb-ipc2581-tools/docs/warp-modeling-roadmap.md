@@ -261,8 +261,64 @@ max deviation, report **bow %** and **twist %** exactly as 2.4.22 defines them.
 The metric is then a simulation of the acceptance test rather than an invented
 score.
 
-*Deliverable:* `pcbc ipc2581 warp <panel>` reporting estimated bow % and twist %
-against the IPC limit.
+**A6 — The report.**
+
+Two percentages are a lossy projection of data the forward model has already
+computed. Every stage of the chain is a full field over the panel — per-layer
+density $\rho_l(x)$, the moment field $m(x)$, the curvature field, the
+deflection surface $w(x)$ — and the scalars are the last step that throws all
+of it away. **The fields are already there; only the rendering is missing.**
+
+The tool should emit a self-contained HTML report alongside the scalars, using
+the SVG rendering the crate already does. The scalars stay on stdout for
+scripting.
+
+| View | Shows | Form | Colour job |
+|---|---|---|---|
+| **Predicted panel shape** | $w(x)$, the surface a flatness scanner would see | heat map + contours, panel geometry overlaid | **diverging**, zero at the neutral midpoint |
+| **Moment field** | $m(x)$ — *where* the imbalance is | heat map + contours | **diverging**, zero-centred |
+| **Per-layer copper** | $\rho_l(x)$ for each layer | small multiples, one per layer | **sequential**, shared scale across layers |
+| **Through-stack profile** | each layer at its true $z$, bar length = density, sign of $w_l\rho_l$ | horizontal bars positioned by $z$ | diverging by contribution sign |
+| **Modal breakdown** | $a_k$ raw vs after the $\lambda^2$ response | grouped horizontal bars, baseline at zero | two series, legend + direct labels |
+| **Deflection by scale** | share of predicted deflection per spatial-scale band | single-series bar, log-scaled x | sequential |
+| **Before / after** | any of the above, pinned vs balanced | side by side | **shared scale across both** |
+
+The through-stack profile is the one a PCB engineer will read first — it makes
+mirror-pair asymmetry visible at a glance, which is the thing balancing is
+actually manipulating. The deflection-by-scale view is the one that makes §4
+concrete: it should show most of the warp living in the longest-wavelength band,
+and it is the chart that would have prevented us reading a flat RMS as if it
+meant something.
+
+Overlay board outlines, frame and gutters on every field map. Without them you
+cannot tell whether an imbalance sits over a board (immutable) or over fillable
+panel material (actionable), which is the first question anyone will ask.
+
+**Design constraints**, mostly forced by the data rather than taste:
+
+- **Diverging palettes for every signed field**, two hues with a **neutral grey
+  midpoint pinned at zero** and a symmetric range. No rainbow colormaps — the
+  classic scientific-visualisation failure, and it destroys the sign reading
+  these fields exist to convey.
+- **Sequential — one hue, light to dark — for unsigned magnitude** ($\rho_l$).
+- **Shared colour scale** across per-layer small multiples and across any
+  before/after pair. An independently scaled comparison is a lie.
+- **Contours alongside the fill.** Redundant magnitude encoding, which keeps the
+  maps readable under colour-vision deficiency and in print.
+- **No dual-axis charts.** Two measures of different scale become two charts or
+  are indexed to a common base.
+- Legend whenever there are two or more series; direct labels when there are
+  few; text in ink tokens, never in a series colour.
+- Dark mode chosen from the same ramps and validated against the dark surface,
+  not an automatic inversion.
+- A table view of the scalars and modal coefficients, so nothing is available
+  only as colour.
+- Run a palette validator over the chosen ramps rather than eyeballing
+  colour-blind separation.
+
+*Deliverable:* `pcbc ipc2581 warp <panel> [--report warp.html]` — estimated
+bow % and twist % against the IPC limit on stdout, and the full field report
+when asked.
 
 ### B. Knowing what the model is worth
 
