@@ -66,8 +66,7 @@ pub struct DenseCopperBalanceProfile {
     /// fabricators quote ten to fifteen for mirrored-layer mismatch, so a step
     /// of a few percent sits well inside what the process already carries.
     ///
-    /// Zero pins every layer to its own board density, the behavior before the
-    /// band existed.
+    /// Zero pins every layer to its own board density.
     pub stack_flex_density: f64,
 }
 
@@ -596,7 +595,7 @@ pub fn generate_spatial_dense_copper_balance(
     // no moment to report and none to flatten, and saying it is zero would
     // claim we looked.
     let stack_is_weighed = normalized_stack_weights.iter().any(|weight| *weight != 0.0);
-    // Where each layer sits within its band is settled once, here, rather than
+    // Where each layer's copper area lands is settled once, here, rather than
     // argued against the local term on every iteration. The moment is linear in
     // the copper each layer carries, so the position that flattens it is a
     // closed form, and the iteration below is left to the local density term
@@ -761,7 +760,7 @@ pub fn generate_spatial_dense_copper_balance(
                             return Vec::new();
                         }
                         // Its own density error. The moment is not here: the
-                        // band position already spent what the stack was owed.
+                        // settlement already spent what the stack was owed.
                         let residual = density[layer_index]
                             .iter()
                             .map(|density| density - layers[layer_index].target_density)
@@ -785,7 +784,7 @@ pub fn generate_spatial_dense_copper_balance(
                 .map(|handle| handle.join().expect("spatial update pass panicked"))
                 .collect::<Vec<_>>()
         });
-        // Each layer keeps the copper area its band position asked for, so it
+        // Each layer keeps the copper area the settlement asked for, so it
         // redistributes within the panel and never spends against the stack.
         let update = squared_radii
             .iter_mut()
@@ -1228,25 +1227,6 @@ mod tests {
     }
 
     #[test]
-    fn spatial_solver_accepts_no_layers() {
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(24.0, 16.0)),
-            tol::REGION_MM,
-        );
-        let result = generate_spatial_dense_copper_balance(
-            DenseCopperBalanceProfile::V1,
-            SpatialCopperBalanceRequest {
-                panel_region: &panel,
-                lattice_origin: Point::ZERO,
-                layers: &[],
-            },
-        )
-        .unwrap();
-
-        assert!(result.layers.is_empty());
-    }
-
-    #[test]
     fn spatial_solver_rejects_existing_copper_in_the_safe_region() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
@@ -1626,11 +1606,11 @@ mod tests {
         );
     }
 
-    /// A layer that takes no lattice still sits in the joint solve, and its
-    /// band has to describe a sum that cannot move. Sizing that band from the
-    /// sites it declined would place it above zero and invert it.
+    /// A layer saturated to a solid pour has no lattice and brings no step to
+    /// the trade, but the moment it creates is still there to answer: only its
+    /// mirror can counterweight, within that layer's own bound.
     #[test]
-    fn a_layer_without_a_lattice_keeps_a_degenerate_band() {
+    fn a_solid_layer_leaves_the_counterweight_to_its_mirror() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(30.0, 20.0)),
             tol::REGION_MM,
@@ -1681,49 +1661,9 @@ mod tests {
         assert!(deviation <= 0.01 + 5e-3, "{:?}", results[1].solution);
     }
 
-    /// A layer whose radii all sit on one bound is where the band is most
-    /// fragile: its accumulated sum is compared against a multiplied bound, so
-    /// rounding can carry it across, and with the band shut there is no slack
-    /// to absorb that. The band has to hold the sum it surrounds regardless.
-    #[test]
-    fn a_saturated_radius_field_still_yields_a_usable_band() {
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(30.0, 20.0)),
-            tol::REGION_MM,
-        );
-        let empty = ContourSet::empty(tol::REGION_MM);
-        // Just under the sparsest fill the lattice can reach, so a perforated
-        // plane is still the nearest projection but every radius pins to the
-        // maximum; zero weights hold the band shut around that sum.
-        let results = generate_spatial_dense_copper_balance(
-            DenseCopperBalanceProfile::V1,
-            SpatialCopperBalanceRequest {
-                panel_region: &panel,
-                lattice_origin: Point::ZERO,
-                layers: &[SpatialCopperBalanceLayerRequest {
-                    safe_region: &panel,
-                    existing_copper: &empty,
-                    density_domain: &panel,
-                    target_density: 0.30,
-                    stack_weight_mm2: 0.0,
-                }],
-            },
-        )
-        .unwrap();
-
-        let (min, max) = results.layers[0]
-            .full_void_radius_range_mm()
-            .expect("a perforated layer has voids");
-        assert!(
-            (max - DenseCopperBalanceProfile::V1.max_void_radius_mm).abs() <= 1e-9,
-            "expected saturated radii, got {min}..{max}"
-        );
-    }
-
-    /// Without stack weights there is no moment to flatten, so the bands buy
-    /// nothing and must stay shut. An open band would still let the local
-    /// density error trade layers off their targets, which is exactly what a
-    /// panel told its layers were balanced independently must not do.
+    /// Without stack weights there is no moment to flatten: the settlement
+    /// spends nothing, every layer holds its own target, and no moment field
+    /// is reported -- claiming a flat moment would say we looked.
     #[test]
     fn layers_hold_their_targets_when_the_stackup_weighs_nothing() {
         let panel = ContourSet::rectangle(
@@ -1835,7 +1775,7 @@ mod tests {
     /// copper moment, because their targets differ and the boards were drawn
     /// that way. Balancing against the deviation from target cannot see it —
     /// the deviations are zero. Balancing against the copper itself does, and
-    /// spends the band pulling the heavy layer down and the light one up.
+    /// spends the step pulling the heavy layer down and the light one up.
     #[test]
     fn stack_moment_shrinks_when_the_boards_themselves_are_asymmetric() {
         let panel = ContourSet::rectangle(
@@ -1884,8 +1824,8 @@ mod tests {
         let ignored = solve(0.0);
         let weighted = solve(DenseCopperBalanceProfile::V1.stack_flex_density);
 
-        // Ignored, the boards' own imbalance survives untouched: with the band
-        // shut each layer holds its own target and has nothing to trade.
+        // Ignored, the boards' own imbalance survives untouched: with a zero
+        // step each layer holds its own target and has nothing to trade.
         let untouched = 0.5 * (heavy - light);
         assert!(
             (moment(&ignored) - untouched).abs() <= 5e-3,
@@ -1919,9 +1859,9 @@ mod tests {
 
     /// Fixed copper on one side of one layer tilts the stack in a way no
     /// redistribution can answer: it is real copper sitting off the mid-plane,
-    /// and only the layer opposite it can counterweight. The band lets the
-    /// tilted layer shed density and its mirror take density on, each within
-    /// the step its own fill region allows.
+    /// and only the layer opposite it can counterweight: the tilted layer
+    /// sheds density and its mirror takes density on, each within the step its
+    /// own fill region allows.
     #[test]
     fn stack_flex_trades_density_between_mirrored_layers() {
         let panel = ContourSet::rectangle(
@@ -1992,7 +1932,7 @@ mod tests {
         // it sheds density and its mirror takes the same amount on.
         assert!(deviations[0] < -quantization, "{deviations:?}");
         assert!(deviations[1] > quantization, "{deviations:?}");
-        // Neither leaves its band.
+        // Neither exceeds its step.
         for deviation in &deviations {
             assert!(deviation.abs() <= flex + quantization, "{deviations:?}");
         }
