@@ -188,6 +188,28 @@ enum EditCommands {
     },
 }
 
+#[derive(Args, Debug, Clone, Copy, Default)]
+struct CopperBalanceArgs {
+    /// Enable automatic copper balancing.
+    #[arg(long, conflicts_with = "no_copper_balance")]
+    copper_balance: bool,
+    /// Disable automatic copper balancing.
+    #[arg(long, conflicts_with = "copper_balance")]
+    no_copper_balance: bool,
+}
+
+impl CopperBalanceArgs {
+    fn resolve(self, default: bool) -> bool {
+        if self.copper_balance {
+            true
+        } else if self.no_copper_balance {
+            false
+        } else {
+            default
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum BoardArrayCommands {
     /// Create a rectangular board array. Generated array size must be 70-297 mm per side.
@@ -213,6 +235,8 @@ enum BoardArrayCommands {
         /// Edge rail in millimeters. Defaults to 5. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
         #[arg(long, num_args = 1..=4, value_name = "RAIL")]
         edge_rail: Vec<f64>,
+        #[command(flatten)]
+        copper_balance: CopperBalanceArgs,
         /// Output IPC-2581 XML file, or '-' for stdout
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
@@ -240,6 +264,8 @@ enum FabPanelCommands {
         /// Gap between assembly panels in millimeters. Defaults to 7.62.
         #[arg(long, value_name = "GAP")]
         panel_gap: Option<f64>,
+        #[command(flatten)]
+        copper_balance: CopperBalanceArgs,
         /// Output IPC-2581 XML file, or '-' for stdout
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
@@ -328,8 +354,10 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 rows,
                 board_margin,
                 edge_rail,
+                copper_balance,
                 output,
             } => {
+                let copper_balance = copper_balance.resolve(true);
                 if auto || sheet.is_some() {
                     if columns.is_some()
                         || rows.is_some()
@@ -340,7 +368,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                             "--auto/--sheet cannot be combined with manual board array options"
                         );
                     }
-                    commands::board_array::execute_auto(&input, &output, sheet)
+                    commands::board_array::execute_auto(&input, &output, sheet, copper_balance)
                 } else {
                     let board_margin_mm = if board_margin.is_empty() {
                         commands::board_array::BoardMarginMm::all(5.0)
@@ -364,6 +392,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                             board_margin_mm,
                             edge_rail_mm,
                         },
+                        copper_balance,
                     )
                 }
             }
@@ -374,6 +403,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 panel_size,
                 edge_margin,
                 panel_gap,
+                copper_balance,
                 output,
             } => {
                 let mut spec = panel_size.map(FabPanelSize::spec).unwrap_or_default();
@@ -386,7 +416,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 if let Some(panel_gap) = panel_gap {
                     spec.panel_gap_mm = panel_gap;
                 }
-                commands::fab_panel::execute(&inputs, &output, spec)
+                commands::fab_panel::execute(&inputs, &output, spec, copper_balance.resolve(false))
             }
         },
         Commands::View {

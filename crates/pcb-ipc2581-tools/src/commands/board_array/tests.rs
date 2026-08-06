@@ -248,9 +248,10 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
         );
     }
 
-    let creation = create_auto_board_array(&input, None).unwrap();
-    assert_eq!(creation.copper_balance.layers.len(), 2);
-    for report in &creation.copper_balance.layers {
+    let creation = create_auto_board_array(&input, None, true).unwrap();
+    let copper_balance = creation.copper_balance.as_ref().unwrap();
+    assert_eq!(copper_balance.layers.len(), 2);
+    for report in &copper_balance.layers {
         // Fixed copper, fillable region, and permanently bare area partition
         // that layer's density domain exactly.
         assert!(
@@ -262,7 +263,7 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
                 <= 1e-6
         );
         // Unfillable panel material stays out of the denominator entirely.
-        assert!(report.density_domain_area_mm2 <= creation.copper_balance.panel_area_mm2 + 1e-6);
+        assert!(report.density_domain_area_mm2 <= copper_balance.panel_area_mm2 + 1e-6);
         assert!(
             report.residual_error <= (report.initial_density - report.target_density).abs() + 1e-9
         );
@@ -279,9 +280,17 @@ fn board_array_creation_accepts_no_source_copper_layers() {
         r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
         r#"<Layer name="TOP" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>"#,
     );
-    let creation = create_auto_board_array(&input, None).unwrap();
+    let creation = create_auto_board_array(&input, None, true).unwrap();
 
-    assert!(creation.copper_balance.layers.is_empty());
+    assert!(creation.copper_balance.unwrap().layers.is_empty());
+}
+
+#[test]
+fn board_array_creation_can_skip_copper_balancing() {
+    let creation = create_auto_board_array(board_fixture_with_top_line_mm(), None, false).unwrap();
+
+    assert!(creation.copper_balance.is_none());
+    Ipc2581::parse(&creation.xml).unwrap();
 }
 
 #[test]

@@ -460,7 +460,7 @@ fn creates_supported_standard_fabrication_panel_sizes() {
         (FabPanelSpec::INCHES_18_X_24, 406.4, 508.0),
         (FabPanelSpec::INCHES_21_X_24, 482.6, 508.0),
     ] {
-        let generated = create_fab_panel(&sources, &[0], spec).unwrap().xml;
+        let generated = create_fab_panel(&sources, &[0], spec, false).unwrap().xml;
         Ipc2581::validate(&generated).unwrap();
         let parsed = Ipc2581::parse(&generated).unwrap();
         let layout = geometry::extract_layout(&parsed).unwrap();
@@ -500,7 +500,7 @@ fn applies_asymmetric_process_margin_and_gap_overrides() {
         panel_gap_mm: 7.0,
         ..FabPanelSpec::INCHES_12_X_18
     };
-    let generated = create_fab_panel(&[assembly_panel_xml(100.0, 80.0)], &[0], spec)
+    let generated = create_fab_panel(&[assembly_panel_xml(100.0, 80.0)], &[0], spec, false)
         .unwrap()
         .xml;
     let parsed = Ipc2581::parse(&generated).unwrap();
@@ -536,13 +536,13 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
         panel_gap_mm: 0.5,
         ..FabPanelSpec::INCHES_18_X_24
     };
-    create_fab_panel(&sources, &[0], subtool_spacing).unwrap();
+    create_fab_panel(&sources, &[0], subtool_spacing, false).unwrap();
 
     let negative_margin = FabPanelSpec {
         edge_margin_mm: EdgeInsetsMm::new(50.8, 25.4, 50.8, -0.5),
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel(&sources, &[0], negative_margin).unwrap_err();
+    let error = create_fab_panel(&sources, &[0], negative_margin, false).unwrap_err();
     assert!(
         error
             .to_string()
@@ -553,7 +553,7 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
         panel_gap_mm: -0.5,
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel(&sources, &[0], negative_gap).unwrap_err();
+    let error = create_fab_panel(&sources, &[0], negative_gap, false).unwrap_err();
     assert!(
         error
             .to_string()
@@ -564,7 +564,7 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
         edge_margin_mm: EdgeInsetsMm::new(50.8, 250.0, 50.8, 250.0),
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel(&sources, &[0], no_usable_width).unwrap_err();
+    let error = create_fab_panel(&sources, &[0], no_usable_width, false).unwrap_err();
     assert!(
         error
             .to_string()
@@ -727,9 +727,9 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
         dense_assembly_panel_xml(200.0, 80.0),
         dense_assembly_panel_xml(30.0, 25.0),
     ];
-    let creation = create_fab_panel(&sources, &[0, 1], BALANCE_SPEC).unwrap();
+    let creation = create_fab_panel(&sources, &[0, 1], BALANCE_SPEC, true).unwrap();
 
-    let report = &creation.copper_balance;
+    let report = creation.copper_balance.as_ref().unwrap();
     assert!(report.stack_weights_available);
     assert_eq!(report.layers.len(), 1);
     let layer = &report.layers[0];
@@ -802,11 +802,28 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
 }
 
 #[test]
+fn fab_panel_creation_skips_copper_balancing_unless_enabled() {
+    let sources = vec![dense_assembly_panel_xml(30.0, 25.0)];
+    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, false).unwrap();
+
+    assert!(creation.copper_balance.is_none());
+    assert_eq!(
+        creation
+            .xml
+            .matches(r#"<LayerFeature layerRef="TOP">"#)
+            .count(),
+        1,
+        "disabled balancing should retain only the source panel's copper"
+    );
+    Ipc2581::validate(&creation.xml).unwrap();
+}
+
+#[test]
 fn single_panel_filling_the_usable_area_generates_no_fill() {
     let sources = vec![dense_assembly_panel_xml(120.0, 220.0)];
-    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC).unwrap();
+    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, true).unwrap();
 
-    let layer = &creation.copper_balance.layers[0];
+    let layer = &creation.copper_balance.unwrap().layers[0];
     assert_eq!(layer.mode, CopperBalanceMode::None);
     assert_eq!(layer.generated_area_mm2, 0.0);
     assert_eq!(

@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Fabrication panels now default to a 7.62 mm gap between tiled assembly panels.
+- Board arrays default to copper balancing; fabrication panels default to no balancing. Both can be overridden.
 - Default board configurations now keep copper at least 0.4 mm from the board edge.
 - The default 1 oz board netclass now uses a 0.45 mm via diameter with a 0.20 mm drill.
 - `--layout-target` now takes `board` or `board-array` on every command, and defaults to `board-array`.

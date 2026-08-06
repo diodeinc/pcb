@@ -183,11 +183,11 @@ pub struct BoardArrayCreateOptions {
     pub edge_rail_mm: BoardMarginMm,
 }
 
-/// Generated board-array IPC plus compact per-layer copper-balance accounting.
+/// Generated board-array IPC plus optional per-layer copper-balance accounting.
 #[derive(Debug, Clone)]
 pub struct BoardArrayCreation {
     pub xml: String,
-    pub copper_balance: CopperBalanceReport,
+    pub copper_balance: Option<CopperBalanceReport>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -408,25 +408,37 @@ struct VcutLine {
     end_y_mm: f64,
 }
 
-pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -> Result<()> {
+pub fn execute(
+    input: &Path,
+    output: &Path,
+    options: &BoardArrayCreateOptions,
+    balance_copper: bool,
+) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_board_array(&content, options)?;
-    print_copper_balance_summary(&creation.copper_balance);
+    let creation = create_board_array(&content, options, balance_copper)?;
+    print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
 }
 
-pub fn execute_auto(input: &Path, output: &Path, sheet: Option<AutoSheetSize>) -> Result<()> {
+pub fn execute_auto(
+    input: &Path,
+    output: &Path,
+    sheet: Option<AutoSheetSize>,
+    balance_copper: bool,
+) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_auto_board_array(&content, sheet)?;
-    print_copper_balance_summary(&creation.copper_balance);
+    let creation = create_auto_board_array(&content, sheet, balance_copper)?;
+    print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
 }
 
-fn print_copper_balance_summary(report: &CopperBalanceReport) {
-    for line in report.summary_lines() {
-        eprintln!("  {line}");
+fn print_copper_balance_summary(report: Option<&CopperBalanceReport>) {
+    if let Some(report) = report {
+        for line in report.summary_lines() {
+            eprintln!("  {line}");
+        }
     }
 }
 
@@ -446,6 +458,7 @@ fn write_board_array_output(output: &Path, content: &str) -> Result<()> {
 pub fn create_board_array(
     xml: &str,
     options: &BoardArrayCreateOptions,
+    balance_copper: bool,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(
@@ -458,12 +471,12 @@ pub fn create_board_array(
             sheet_target_mm: None,
         },
     )?;
-    write_balanced_board_array_xml(xml, spec)
+    write_board_array_creation(xml, spec, balance_copper)
 }
 
 #[cfg(test)]
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
-    Ok(create_board_array(xml, options)?.xml)
+    Ok(create_board_array(xml, options, true)?.xml)
 }
 
 #[cfg(test)]
@@ -475,11 +488,12 @@ fn create_auto_board_array_xml(xml: &str) -> Result<String> {
 pub fn create_auto_board_array(
     xml: &str,
     sheet: Option<AutoSheetSize>,
+    balance_copper: bool,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet)?;
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization)?;
-    write_balanced_board_array_xml(xml, spec)
+    write_board_array_creation(xml, spec, balance_copper)
 }
 
 #[cfg(test)]
@@ -487,7 +501,7 @@ fn create_auto_board_array_xml_with_sheet(
     xml: &str,
     sheet: Option<AutoSheetSize>,
 ) -> Result<String> {
-    Ok(create_auto_board_array(xml, sheet)?.xml)
+    Ok(create_auto_board_array(xml, sheet, true)?.xml)
 }
 
 fn auto_board_array_options(
@@ -619,10 +633,18 @@ fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
     Ok(xml)
 }
 
-fn write_balanced_board_array_xml(
+fn write_board_array_creation(
     xml: &str,
     mut spec: BoardArraySpec,
+    balance_copper: bool,
 ) -> Result<BoardArrayCreation> {
+    if !balance_copper {
+        return Ok(BoardArrayCreation {
+            xml: write_board_array_xml(xml, &spec)?,
+            copper_balance: None,
+        });
+    }
+
     // The provisional array only feeds safe-region discovery; parsing it below
     // already validates it, so skip the cosmetic reformat pass.
     let provisional_xml = board_array_edited_xml(xml, &spec)?;
@@ -641,7 +663,7 @@ fn write_balanced_board_array_xml(
 
     Ok(BoardArrayCreation {
         xml: write_board_array_xml(xml, &spec)?,
-        copper_balance,
+        copper_balance: Some(copper_balance),
     })
 }
 

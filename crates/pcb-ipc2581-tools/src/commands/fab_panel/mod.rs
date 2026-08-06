@@ -177,15 +177,20 @@ struct SurfaceFinishSignature {
     products: Vec<(String, Option<String>)>,
 }
 
-/// Generated fabrication-panel IPC plus compact per-layer copper-balance
+/// Generated fabrication-panel IPC plus optional per-layer copper-balance
 /// accounting.
 #[derive(Debug, Clone)]
 pub struct FabPanelCreation {
     pub xml: String,
-    pub copper_balance: CopperBalanceReport,
+    pub copper_balance: Option<CopperBalanceReport>,
 }
 
-pub fn execute(inputs: &[PathBuf], output: &Path, spec: FabPanelSpec) -> Result<()> {
+pub fn execute(
+    inputs: &[PathBuf],
+    output: &Path,
+    spec: FabPanelSpec,
+    balance_copper: bool,
+) -> Result<()> {
     if inputs.is_empty() {
         bail!("at least one assembly panel IPC-2581 file is required");
     }
@@ -213,9 +218,11 @@ pub fn execute(inputs: &[PathBuf], output: &Path, spec: FabPanelSpec) -> Result<
         occurrences.push(source_index);
     }
 
-    let creation = create_fab_panel(&source_xml, &occurrences, spec)?;
-    for line in creation.copper_balance.summary_lines() {
-        eprintln!("  {line}");
+    let creation = create_fab_panel(&source_xml, &occurrences, spec, balance_copper)?;
+    if let Some(report) = &creation.copper_balance {
+        for line in report.summary_lines() {
+            eprintln!("  {line}");
+        }
     }
     if output.as_os_str() == "-" {
         io::stdout().lock().write_all(creation.xml.as_bytes())?;
@@ -232,13 +239,15 @@ pub fn execute(inputs: &[PathBuf], output: &Path, spec: FabPanelSpec) -> Result<
 
 #[cfg(test)]
 fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<String> {
-    create_fab_panel(source_xml, occurrences, FabPanelSpec::default()).map(|creation| creation.xml)
+    create_fab_panel(source_xml, occurrences, FabPanelSpec::default(), false)
+        .map(|creation| creation.xml)
 }
 
 fn create_fab_panel(
     source_xml: &[String],
     occurrences: &[usize],
     spec: FabPanelSpec,
+    balance_copper: bool,
 ) -> Result<FabPanelCreation> {
     if occurrences.is_empty() {
         bail!("at least one assembly panel is required");
@@ -328,44 +337,48 @@ fn create_fab_panel(
         &shared_stackup_layers,
         spec,
     )?;
-    let parsed = Ipc2581::parse(&provisional)
-        .context("Failed to parse provisional IPC-2581 fabrication panel")?;
-    let balance =
-        balance::generate_automatic_fab_panel_copper_balance(&parsed, spec.usable_bbox()?)?;
-    let copper_balance = balance.report();
     let mut templates = Vec::new();
-    let balance_features = balance
-        .layers
-        .into_iter()
-        .flat_map(|layer| {
-            for template in layer.features.templates {
-                if !templates
-                    .iter()
-                    .any(|entry: &crate::copper_balance::BalanceVoidTemplate| {
-                        entry.id == template.id
-                    })
-                {
-                    templates.push(template);
+    let (balance_features, copper_balance) = if balance_copper {
+        let parsed = Ipc2581::parse(&provisional)
+            .context("Failed to parse provisional IPC-2581 fabrication panel")?;
+        let balance =
+            balance::generate_automatic_fab_panel_copper_balance(&parsed, spec.usable_bbox()?)?;
+        let report = balance.report();
+        let features = balance
+            .layers
+            .into_iter()
+            .flat_map(|layer| {
+                for template in layer.features.templates {
+                    if !templates.iter().any(
+                        |entry: &crate::copper_balance::BalanceVoidTemplate| {
+                            entry.id == template.id
+                        },
+                    ) {
+                        templates.push(template);
+                    }
                 }
-            }
-            [
-                GeneratedLayerFeature {
-                    layer_name: layer.layer_name.clone(),
-                    polarity: Polarity::Positive,
-                    spec_refs: Vec::new(),
-                    features: layer.features.positive,
-                    instance_refs: Vec::new(),
-                },
-                GeneratedLayerFeature {
-                    layer_name: layer.layer_name,
-                    polarity: Polarity::Negative,
-                    spec_refs: Vec::new(),
-                    features: Vec::new(),
-                    instance_refs: layer.features.instances,
-                },
-            ]
-        })
-        .collect::<Vec<_>>();
+                [
+                    GeneratedLayerFeature {
+                        layer_name: layer.layer_name.clone(),
+                        polarity: Polarity::Positive,
+                        spec_refs: Vec::new(),
+                        features: layer.features.positive,
+                        instance_refs: Vec::new(),
+                    },
+                    GeneratedLayerFeature {
+                        layer_name: layer.layer_name,
+                        polarity: Polarity::Negative,
+                        spec_refs: Vec::new(),
+                        features: Vec::new(),
+                        instance_refs: layer.features.instances,
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        (features, Some(report))
+    } else {
+        (Vec::new(), None)
+    };
 
     let units = sources
         .first()

@@ -20,6 +20,11 @@ alias provides the same commands.
 
 Run `pcb ipc2581 <command> --help` for arguments and output options.
 
+Board-array creation balances copper by default; pass `--no-copper-balance`
+to disable it. Fabrication-panel creation leaves copper unchanged by default;
+pass `--copper-balance` to enable balancing. Both commands accept the inverse
+flag as an explicit override, and reject using both flags together.
+
 The mathematical and geometric strategy for automatically balancing board
 arrays is documented in
 [`docs/board-array-copper-balancing.md`](docs/board-array-copper-balancing.md);
