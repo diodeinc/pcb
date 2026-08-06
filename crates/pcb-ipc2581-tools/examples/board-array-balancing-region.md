@@ -5,7 +5,7 @@ creation consumes the result before it emits balancing copper. The harness does
 not define a user-facing CLI contract.
 
 The balancing objective and generated copper geometry are documented in
-[`../docs/board-array-copper-balancing.md`](../docs/board-array-copper-balancing.md).
+[`../docs/copper-balancing.md`](../docs/copper-balancing.md).
 
 ## Geometry contract
 
