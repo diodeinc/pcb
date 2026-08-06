@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Removed
 
+- `pcb layout --temp`; layouts are now always generated in their configured directory.
 - `ipc2581 render --flat`, which produced the same output as a plain render.
 
 ### Fixed

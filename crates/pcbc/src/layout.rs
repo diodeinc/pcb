@@ -28,10 +28,6 @@ pub struct LayoutArgs {
     #[arg(long = "offline")]
     pub offline: bool,
 
-    /// Generate layout in a temporary directory (fresh layout, opens KiCad)
-    #[arg(long = "temp")]
-    pub temp: bool,
-
     /// Run KiCad DRC checks after layout generation
     #[arg(long = "check")]
     pub check: bool,
@@ -43,7 +39,7 @@ pub struct LayoutArgs {
     pub suppress: Vec<String>,
 
     /// Resolve existing layout files without updating them
-    #[arg(long = "no-sync", conflicts_with_all = ["temp", "check"])]
+    #[arg(long = "no-sync", conflicts_with = "check")]
     pub no_sync: bool,
 
     /// Output format
@@ -137,7 +133,7 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     };
     let spinner = Spinner::builder(spinner_msg).hidden(hide_progress).start();
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
-    let result = process_layout(&schematic, args.temp, args.check, &mut diagnostics)?;
+    let result = process_layout(&schematic, args.check, &mut diagnostics)?;
     spinner.finish();
 
     let Some(layout_result) = result else {
@@ -191,8 +187,8 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         anyhow::bail!("DRC failed");
     }
 
-    // Open the layout if not disabled (or if using temp)
-    if !args.no_open || args.temp {
+    // Open the layout if not disabled
+    if !args.no_open {
         pcb_kicad::open_pcbnew(&pcb_file)?;
     }
 
@@ -249,4 +245,21 @@ fn print_layout_result(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        args: LayoutArgs,
+    }
+
+    #[test]
+    fn temp_flag_is_rejected() {
+        assert!(TestCli::try_parse_from(["pcb", "--temp", "board.zen"]).is_err());
+    }
 }
