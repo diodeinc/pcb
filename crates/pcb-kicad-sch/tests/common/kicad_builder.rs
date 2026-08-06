@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use pcb_kicad_sch::{
-    Junction, Label, LabelKind, LabelShape, NoConnect, Point, SchDocument, SchItem, SchPage, Sheet,
-    SheetPin, Symbol, SymbolDefinition, SymbolField, Wire,
+    Junction, Label, LabelKind, LabelShape, PinInstance, Point, SchDocument, SchItem, SchPage,
+    Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField, Wire,
 };
 
 /// Compact semantic builder for connectivity tests.
@@ -20,7 +20,7 @@ impl KicadBuilder {
         Self {
             document: SchDocument {
                 pages: vec![page("root", "root.kicad_sch")],
-                library: Default::default(),
+                root_page_ids: vec!["root".to_string()],
             },
             page: 0,
             next_id: 0,
@@ -28,7 +28,20 @@ impl KicadBuilder {
     }
 
     pub fn add_page(&mut self, id: &str, file_name: &str) -> &mut Self {
-        self.document.pages.push(page(id, file_name));
+        self.add_page_with_root(id, file_name, false)
+    }
+
+    pub fn add_root_page(&mut self, id: &str, file_name: &str) -> &mut Self {
+        self.add_page_with_root(id, file_name, true)
+    }
+
+    fn add_page_with_root(&mut self, id: &str, file_name: &str, is_root: bool) -> &mut Self {
+        let mut page = page(id, file_name);
+        page.library = self.document.pages[self.page].library.clone();
+        self.document.pages.push(page);
+        if is_root {
+            self.document.root_page_ids.push(id.to_string());
+        }
         self.page = self.document.pages.len() - 1;
         self
     }
@@ -64,16 +77,6 @@ impl KicadBuilder {
         self
     }
 
-    pub fn no_connect(&mut self, at: (f64, f64)) -> &mut Self {
-        let id = self.id("no-connect");
-        self.push(SchItem::NoConnect(NoConnect {
-            id,
-            at: point(at),
-            unsupported: Vec::new(),
-        }));
-        self
-    }
-
     pub fn local_label(&mut self, name: &str, at: (f64, f64)) -> &mut Self {
         self.label(name, at, LabelKind::Local)
     }
@@ -98,6 +101,16 @@ impl KicadBuilder {
         )
     }
 
+    pub fn directive_label(&mut self, at: (f64, f64)) -> &mut Self {
+        self.label(
+            "",
+            at,
+            LabelKind::Directive {
+                shape: LabelShape::Round,
+            },
+        )
+    }
+
     pub fn sheet(&mut self, file_name: &str, pins: &[(&str, (f64, f64))]) -> &mut Self {
         let id = self.id("sheet");
         let pins = pins
@@ -106,13 +119,14 @@ impl KicadBuilder {
                 id: self.id("sheet-pin"),
                 name: (*name).to_string(),
                 at: point(*at),
+                rotation: Default::default(),
                 shape: LabelShape::Bidirectional,
                 unsupported: Vec::new(),
             })
             .collect();
         self.push(SchItem::Sheet(Sheet {
             id,
-            file_name: file_name.to_string(),
+            file: SymbolField::new("Sheetfile", file_name, Point::default()),
             pins,
             unsupported: Vec::new(),
         }));
@@ -139,7 +153,7 @@ impl KicadBuilder {
             "(symbol \"{lib_id}\" (symbol \"Test_1_1\" {pin_text}))"
         ))
         .expect("valid test symbol definition");
-        self.document
+        self.document.pages[self.page]
             .library
             .definitions
             .insert(lib_id.to_string(), definition);
@@ -149,7 +163,7 @@ impl KicadBuilder {
     pub fn define_symbol_raw(&mut self, sexpr: &str) -> &mut Self {
         let definition = SymbolDefinition::from_kicad_symbol_sexpr(sexpr)
             .expect("valid raw test symbol definition");
-        self.document
+        self.document.pages[self.page]
             .library
             .definitions
             .insert(definition.lib_id.clone(), definition);
@@ -192,6 +206,20 @@ impl KicadBuilder {
             pins: Vec::new(),
             unsupported: Vec::new(),
         }));
+        self
+    }
+
+    pub fn pin_alternate(&mut self, number: &str, alternate: &str) -> &mut Self {
+        let id = self.id("pin");
+        let Some(SchItem::Symbol(symbol)) = self.document.pages[self.page].items.last_mut() else {
+            panic!("pin_alternate requires a preceding symbol");
+        };
+        symbol.pins.push(PinInstance {
+            number: number.to_string(),
+            id,
+            alternate: Some(alternate.to_string()),
+            unsupported: Vec::new(),
+        });
         self
     }
 

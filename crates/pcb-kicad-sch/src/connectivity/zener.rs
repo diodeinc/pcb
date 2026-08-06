@@ -1,35 +1,31 @@
 use std::collections::BTreeSet;
 
+use anyhow::Result;
 use pcb_sch::{AttributeValue, InstanceRef, Schematic};
 
 use super::{
     ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,
     ConnectivityGraph, Terminal,
 };
-use crate::{SymbolSlotKey, component_slots, hierarchy};
+use crate::{component_slots, root_interface};
 
-pub(super) fn reduce(netlist: &Schematic) -> ConnectivityGraph {
-    let mut components = component_slots::component_symbol_slots(netlist)
+pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
+    let mut components = component_slots::component_symbol_slots(netlist)?
         .into_iter()
-        .filter_map(|component| {
-            Some(ComponentNode {
-                managed_slot: Some(SymbolSlotKey::new(
-                    component.component_path,
-                    component.unit,
-                )?),
-                origin: ComponentOrigin::Zener,
-            })
+        .map(|slot| ComponentNode {
+            managed_slot: Some(slot),
+            origin: ComponentOrigin::Zener,
         })
         .collect::<Vec<_>>();
     components.sort();
 
-    let root_io_labels = hierarchy::root_io_labels_by_net(netlist);
+    let interface_ports = root_interface::ports_by_net(netlist)?;
     let mut nets = netlist.nets.values().collect::<Vec<_>>();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     let groups = nets
         .into_iter()
         .filter_map(|net| {
-            let name = net.name.trim();
+            let name = net.name.as_str();
             if name.is_empty() {
                 return None;
             }
@@ -38,10 +34,12 @@ pub(super) fn reduce(netlist: &Schematic) -> ConnectivityGraph {
                 .iter()
                 .filter_map(|port| component_terminal(netlist, port))
                 .collect::<BTreeSet<_>>();
-            if let Some(label) = root_io_labels.get(name) {
-                terminals.insert(Terminal::HierarchicalPort {
-                    label_text: label.io_name.clone(),
-                });
+            if let Some(ports) = interface_ports.get(name) {
+                terminals.extend(
+                    ports
+                        .iter()
+                        .map(|port| Terminal::InterfacePort { name: port.clone() }),
+                );
             }
             Some(ConnectionGroup {
                 names: BTreeSet::from([name.to_string()]),
@@ -53,7 +51,7 @@ pub(super) fn reduce(netlist: &Schematic) -> ConnectivityGraph {
         })
         .collect();
 
-    ConnectivityGraph { components, groups }
+    Ok(ConnectivityGraph { components, groups })
 }
 
 fn component_terminal(netlist: &Schematic, port: &InstanceRef) -> Option<Terminal> {
@@ -61,7 +59,7 @@ fn component_terminal(netlist: &Schematic, port: &InstanceRef) -> Option<Termina
     let component_path = crate::canonical_component_path(&component_ref.instance_path)?;
     let mut pin_keys = BTreeSet::from([pin_name.clone()]);
     pin_keys.extend(pads_for_port(netlist, port));
-    pin_keys.retain(|key| !key.trim().is_empty());
+    pin_keys.retain(|key| !key.is_empty());
     Some(Terminal::ComponentPin {
         component: ComponentIdentity::ManagedPath(component_path),
         pin_name,

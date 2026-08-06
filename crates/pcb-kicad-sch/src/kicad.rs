@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use pcb_sexpr::{
     Sexpr, SexprKind,
     formatter::{FormatMode, format_tree},
@@ -16,6 +16,7 @@ use crate::model::{
 
 pub const KICAD_SCH_VERSION: i64 = 20260306;
 pub const GENERATOR: &str = "diode";
+pub const GENERATOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn format_sexpr(value: &Sexpr, _indent: usize) -> String {
     format_tree(value, FormatMode::Normal)
@@ -27,6 +28,7 @@ fn format_sexpr(value: &Sexpr, _indent: usize) -> String {
 pub struct KicadSchSource<'a> {
     pub file_name: Option<&'a str>,
     pub content: &'a str,
+    pub is_root: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,10 +39,10 @@ pub struct KicadSchFile {
 
 impl SchDocument {
     pub fn from_kicad_sch(content: &str) -> Result<Self> {
-        let (page, library) = parse_kicad_sch_page(None, content)?;
+        let page = parse_kicad_sch_page(None, content)?;
         Ok(Self {
+            root_page_ids: vec![page.id.clone()],
             pages: vec![page],
-            library,
         })
     }
 
@@ -50,9 +52,11 @@ impl SchDocument {
         let mut document = Self::default();
 
         for file in files {
-            let (page, library) = parse_kicad_sch_page(file.file_name, file.content)?;
+            let page = parse_kicad_sch_page(file.file_name, file.content)?;
+            if file.is_root {
+                document.root_page_ids.push(page.id.clone());
+            }
             document.pages.push(page);
-            document.library.merge(library);
         }
 
         Ok(document)
@@ -66,7 +70,7 @@ impl SchDocument {
             );
         };
 
-        Ok(format_kicad_sch_page(page, &self.library))
+        Ok(format_kicad_sch_page(page))
     }
 
     pub fn to_kicad_sch_files(&self) -> Vec<KicadSchFile> {
@@ -74,7 +78,7 @@ impl SchDocument {
             .iter()
             .map(|page| KicadSchFile {
                 file_name: page.file_name.clone(),
-                content: format_kicad_sch_page(page, &self.library),
+                content: format_kicad_sch_page(page),
             })
             .collect()
     }
@@ -94,15 +98,12 @@ impl SymbolDefinition {
     }
 }
 
-pub fn parse_kicad_sch_page(
-    file_name: Option<&str>,
-    content: &str,
-) -> Result<(SchPage, SymbolLibrary)> {
+pub fn parse_kicad_sch_page(file_name: Option<&str>, content: &str) -> Result<SchPage> {
     let root = parse(content).map_err(|err| anyhow!("failed to parse KiCad schematic: {err}"))?;
     parse_kicad_sch_root(file_name, &root)
 }
 
-fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<(SchPage, SymbolLibrary)> {
+fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<SchPage> {
     let root =
         SexprList::from_sexpr(root).ok_or_else(|| anyhow!("expected kicad_sch root list"))?;
 
@@ -111,8 +112,8 @@ fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<(SchPag
     }
 
     let mut page_id = None;
+    let mut version = None;
     let mut paper = Paper::default();
-    let mut page_number = "1".to_string();
     let mut items = Vec::new();
     let mut library = SymbolLibrary::default();
 
@@ -123,82 +124,63 @@ fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<(SchPag
         };
 
         match list.tag() {
-            Some("version") | Some("generator") => {}
+            Some("version") => version = list.i64(1),
+            Some("generator") | Some("generator_version") => {}
             Some("uuid") => {
                 page_id = list.string(1);
             }
             Some("paper") => {
-                paper = parse_paper(list);
+                paper = parse_paper(list)?;
             }
             Some("lib_symbols") => {
-                library = parse_lib_symbols(list);
+                library = parse_lib_symbols(list)?;
             }
             Some("symbol") => {
-                if let Some(symbol) = parse_symbol(list)? {
-                    items.push(SchItem::Symbol(symbol));
-                } else {
-                    items.push(SchItem::Unsupported(child.clone()));
-                }
+                items.push(SchItem::Symbol(parse_symbol(list)?));
             }
             Some("wire") => {
-                if let Some(wire) = parse_wire(list)? {
-                    items.push(SchItem::Wire(wire));
-                } else {
-                    items.push(SchItem::Unsupported(child.clone()));
-                }
+                items.push(SchItem::Wire(parse_wire(list)?));
             }
             Some("junction") => {
-                if let Some(junction) = parse_junction(list)? {
-                    items.push(SchItem::Junction(junction));
-                } else {
-                    items.push(SchItem::Unsupported(child.clone()));
-                }
+                items.push(SchItem::Junction(parse_junction(list)?));
             }
             Some("no_connect") => {
-                if let Some(no_connect) = parse_no_connect(list)? {
-                    items.push(SchItem::NoConnect(no_connect));
-                } else {
-                    items.push(SchItem::Unsupported(child.clone()));
-                }
+                items.push(SchItem::NoConnect(parse_no_connect(list)?));
             }
-            Some("label") | Some("global_label") | Some("hierarchical_label") => {
-                if let Some(label) = parse_label(list)? {
-                    items.push(SchItem::Label(label));
-                } else {
-                    items.push(SchItem::Unsupported(child.clone()));
-                }
+            Some("label")
+            | Some("global_label")
+            | Some("hierarchical_label")
+            | Some("netclass_flag")
+            | Some("directive_label") => {
+                items.push(SchItem::Label(parse_label(list)?));
             }
             Some("sheet") => {
-                if let Some(sheet) = parse_sheet(list)? {
-                    items.push(SchItem::Sheet(sheet));
-                } else {
-                    items.push(SchItem::Unsupported(child.clone()));
-                }
+                items.push(SchItem::Sheet(parse_sheet(list)?));
             }
             Some("sheet_instances") => {
-                if let Some(parsed) = parse_root_page_number(list) {
-                    page_number = parsed;
-                }
                 items.push(SchItem::Unsupported(child.clone()));
             }
             _ => items.push(SchItem::Unsupported(child.clone())),
         }
     }
 
+    let version = version.ok_or_else(|| anyhow!("kicad_sch missing version"))?;
+    if version != KICAD_SCH_VERSION {
+        bail!(
+            "unsupported KiCad schematic version {version}; expected KiCad 10 version {KICAD_SCH_VERSION}"
+        );
+    }
     let page_id = page_id.ok_or_else(|| anyhow!("kicad_sch missing uuid"))?;
-    Ok((
-        SchPage {
-            id: page_id,
-            file_name: file_name.map(str::to_string),
-            paper,
-            page_number,
-            items,
-        },
+    Ok(SchPage {
+        id: page_id,
+        file_name: file_name.map(str::to_string),
         library,
-    ))
+        paper,
+        items,
+    })
 }
 
-fn format_kicad_sch_page(page: &SchPage, library: &SymbolLibrary) -> String {
+fn format_kicad_sch_page(page: &SchPage) -> String {
     let mut root = vec![
         Sexpr::symbol("kicad_sch"),
         Sexpr::list(vec![
@@ -206,9 +188,13 @@ fn format_kicad_sch_page(page: &SchPage, library: &SymbolLibrary) -> String {
             Sexpr::int(KICAD_SCH_VERSION),
         ]),
         Sexpr::list(vec![Sexpr::symbol("generator"), Sexpr::string(GENERATOR)]),
+        Sexpr::list(vec![
+            Sexpr::symbol("generator_version"),
+            Sexpr::string(GENERATOR_VERSION),
+        ]),
         Sexpr::list(vec![Sexpr::symbol("uuid"), Sexpr::string(&page.id)]),
         paper_to_sexpr(&page.paper),
-        library_to_sexpr(library),
+        library_to_sexpr(&page.library),
     ];
 
     root.extend(page.items.iter().map(|item| item_to_sexpr(item, page)));
@@ -216,24 +202,35 @@ fn format_kicad_sch_page(page: &SchPage, library: &SymbolLibrary) -> String {
     format!("{}\n", format_sexpr(&Sexpr::list(root), 0))
 }
 
-fn parse_lib_symbols(items: SexprList<'_>) -> SymbolLibrary {
+fn parse_lib_symbols(items: SexprList<'_>) -> Result<SymbolLibrary> {
     let mut definitions = BTreeMap::new();
+    let mut unsupported = Vec::new();
 
     for child in items.children_from(1) {
         let Some(list) = SexprList::from_sexpr(child) else {
+            unsupported.push(child.clone());
             continue;
         };
 
         if list.tag() != Some("symbol") {
+            unsupported.push(child.clone());
             continue;
         }
 
-        if let Some(definition) = symbol_definition_from_symbol_items(child, list) {
-            definitions.insert(definition.lib_id.clone(), definition);
+        let definition = symbol_definition_from_symbol_items(child, list)
+            .context("lib_symbols contains a symbol without a library id")?;
+        if definitions
+            .insert(definition.lib_id.clone(), definition)
+            .is_some()
+        {
+            bail!("lib_symbols contains duplicate symbol definition");
         }
     }
 
-    SymbolLibrary { definitions }
+    Ok(SymbolLibrary {
+        definitions,
+        unsupported,
+    })
 }
 
 fn symbol_definition_from_sexpr(root: &Sexpr) -> Option<SymbolDefinition> {
@@ -265,13 +262,12 @@ fn symbol_definition_from_symbol_items(
     Some(SymbolDefinition { lib_id, sexpr })
 }
 
-fn parse_symbol(items: SexprList<'_>) -> Result<Option<Symbol>> {
+fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
     let mut id = None;
     let mut lib_id = None;
-    let mut unit = 1;
+    let mut unit = None;
     let mut body_style = 1;
-    let mut at = Point::default();
-    let mut rotation = Rotation::default();
+    let mut at = None;
     let mut mirror = None;
     let mut fields_autoplaced = false;
     let mut fields = BTreeMap::new();
@@ -289,52 +285,52 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Option<Symbol>> {
                 lib_id = list.string(1);
             }
             Some("at") => {
-                if let Some((point, rot)) = parse_at(list)? {
-                    at = point;
-                    rotation = rot;
-                }
+                at = Some(parse_at(list)?);
             }
             Some("unit") => {
-                if let Some(value) = list.i64(1) {
-                    unit = value.max(1) as u32;
-                }
+                unit = Some(positive_u32(
+                    "symbol unit",
+                    list.i64(1).context("symbol unit is not an integer")?,
+                )?);
             }
             Some("body_style") => {
-                if let Some(value) = list.i64(1) {
-                    body_style = value.max(1) as u32;
-                }
+                body_style = positive_u32(
+                    "symbol body_style",
+                    list.i64(1).context("symbol body_style is not an integer")?,
+                )?;
             }
             Some("mirror") => {
-                mirror = list.get(1).and_then(parse_mirror_axis);
+                mirror = Some(
+                    list.get(1)
+                        .and_then(parse_mirror_axis)
+                        .context("symbol mirror must be x or y")?,
+                );
             }
             Some("fields_autoplaced") => {
-                fields_autoplaced = list.bool_or(1, true);
+                fields_autoplaced = list.bool_or(1, true, "fields_autoplaced")?;
             }
             Some("uuid") => {
                 id = list.string(1);
             }
             Some("property") => {
-                if let Some(field) = parse_property(list) {
-                    fields.insert(field.name.clone(), field);
+                let field = parse_property(list)?;
+                if fields.insert(field.name.clone(), field).is_some() {
+                    bail!("symbol contains duplicate property name");
                 }
             }
             Some("pin") => {
-                if let Some(pin) = parse_pin(list)? {
-                    pins.push(pin);
-                }
+                pins.push(parse_pin(list)?);
             }
             _ => unsupported.push(child.clone()),
         }
     }
 
-    let Some(lib_id) = lib_id else {
-        return Ok(None);
-    };
-
-    Ok(Some(Symbol {
+    let lib_id = lib_id.context("symbol missing lib_id")?;
+    let (at, rotation) = at.with_context(|| format!("symbol {lib_id} missing at"))?;
+    Ok(Symbol {
         id: id.ok_or_else(|| anyhow!("symbol {lib_id} missing uuid"))?,
         lib_id,
-        unit,
+        unit: unit.context("symbol missing unit")?,
         body_style,
         at,
         rotation,
@@ -343,10 +339,17 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Option<Symbol>> {
         fields,
         pins,
         unsupported,
-    }))
+    })
 }
 
-fn parse_wire(items: SexprList<'_>) -> Result<Option<Wire>> {
+fn positive_u32(field: &str, value: i64) -> Result<u32> {
+    u32::try_from(value)
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| anyhow!("{field} must be a positive 32-bit integer, found {value}"))
+}
+
+fn parse_wire(items: SexprList<'_>) -> Result<Wire> {
     let mut id = None;
     let mut points = None;
     let mut unsupported = Vec::new();
@@ -359,7 +362,7 @@ fn parse_wire(items: SexprList<'_>) -> Result<Option<Wire>> {
 
         match list.tag() {
             Some("pts") => {
-                points = parse_wire_points(list)?;
+                points = Some(parse_wire_points(list)?);
             }
             Some("uuid") => {
                 id = list.string(1);
@@ -368,19 +371,16 @@ fn parse_wire(items: SexprList<'_>) -> Result<Option<Wire>> {
         }
     }
 
-    let Some((a, b)) = points else {
-        return Ok(None);
-    };
-
-    Ok(Some(Wire {
+    let (a, b) = points.context("wire missing pts")?;
+    Ok(Wire {
         id: id.ok_or_else(|| anyhow!("wire missing uuid"))?,
         a,
         b,
         unsupported,
-    }))
+    })
 }
 
-fn parse_junction(items: SexprList<'_>) -> Result<Option<Junction>> {
+fn parse_junction(items: SexprList<'_>) -> Result<Junction> {
     let mut id = None;
     let mut at = None;
     let mut unsupported = Vec::new();
@@ -393,7 +393,7 @@ fn parse_junction(items: SexprList<'_>) -> Result<Option<Junction>> {
 
         match list.tag() {
             Some("at") => {
-                at = parse_at(list)?.map(|(point, _)| point);
+                at = Some(parse_at(list)?.0);
             }
             Some("uuid") => {
                 id = list.string(1);
@@ -402,18 +402,14 @@ fn parse_junction(items: SexprList<'_>) -> Result<Option<Junction>> {
         }
     }
 
-    let Some(at) = at else {
-        return Ok(None);
-    };
-
-    Ok(Some(Junction {
+    Ok(Junction {
         id: id.ok_or_else(|| anyhow!("junction missing uuid"))?,
-        at,
+        at: at.context("junction missing at")?,
         unsupported,
-    }))
+    })
 }
 
-fn parse_no_connect(items: SexprList<'_>) -> Result<Option<NoConnect>> {
+fn parse_no_connect(items: SexprList<'_>) -> Result<NoConnect> {
     let mut id = None;
     let mut at = None;
     let mut unsupported = Vec::new();
@@ -424,25 +420,22 @@ fn parse_no_connect(items: SexprList<'_>) -> Result<Option<NoConnect>> {
             continue;
         };
         match list.tag() {
-            Some("at") => at = parse_at(list)?.map(|(point, _)| point),
+            Some("at") => at = Some(parse_at(list)?.0),
             Some("uuid") => id = list.string(1),
             _ => unsupported.push(child.clone()),
         }
     }
 
-    let Some(at) = at else {
-        return Ok(None);
-    };
-    Ok(Some(NoConnect {
+    Ok(NoConnect {
         id: id.ok_or_else(|| anyhow!("no_connect missing uuid"))?,
-        at,
+        at: at.context("no_connect missing at")?,
         unsupported,
-    }))
+    })
 }
 
-fn parse_sheet(items: SexprList<'_>) -> Result<Option<Sheet>> {
+fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
     let mut id = None;
-    let mut file_name = None;
+    let mut file = None;
     let mut pins = Vec::new();
     let mut unsupported = Vec::new();
 
@@ -454,36 +447,29 @@ fn parse_sheet(items: SexprList<'_>) -> Result<Option<Sheet>> {
         match list.tag() {
             Some("uuid") => id = list.string(1),
             Some("property") if list.string(1).as_deref() == Some("Sheetfile") => {
-                file_name = list.string(2);
-                unsupported.push(child.clone());
+                file = Some(parse_property(list)?);
             }
             Some("pin") => {
-                if let Some(pin) = parse_sheet_pin(list)? {
-                    pins.push(pin);
-                } else {
-                    unsupported.push(child.clone());
-                }
+                pins.push(parse_sheet_pin(list)?);
             }
             _ => unsupported.push(child.clone()),
         }
     }
 
-    let (Some(id), Some(file_name)) = (id, file_name) else {
-        return Ok(None);
-    };
-    Ok(Some(Sheet {
-        id,
-        file_name,
+    Ok(Sheet {
+        id: id.context("sheet missing uuid")?,
+        file: file.context("sheet missing Sheetfile property")?,
         pins,
         unsupported,
-    }))
+    })
 }
 
-fn parse_sheet_pin(items: SexprList<'_>) -> Result<Option<SheetPin>> {
-    let (Some(name), Some(shape)) = (items.string(1), items.get(2).and_then(parse_label_shape))
-    else {
-        return Ok(None);
-    };
+fn parse_sheet_pin(items: SexprList<'_>) -> Result<SheetPin> {
+    let name = items.string(1).context("sheet pin missing name")?;
+    let shape = items
+        .get(2)
+        .and_then(parse_label_shape)
+        .with_context(|| format!("sheet pin {name} missing or invalid shape"))?;
     let mut id = None;
     let mut at = None;
     let mut unsupported = Vec::new();
@@ -493,33 +479,28 @@ fn parse_sheet_pin(items: SexprList<'_>) -> Result<Option<SheetPin>> {
             continue;
         };
         match list.tag() {
-            Some("at") => at = parse_at(list)?.map(|(point, _)| point),
+            Some("at") => at = Some(parse_at(list)?),
             Some("uuid") => id = list.string(1),
             _ => unsupported.push(child.clone()),
         }
     }
-    let Some(at) = at else {
-        return Ok(None);
-    };
-    Ok(Some(SheetPin {
+    let (at, rotation) = at.with_context(|| format!("sheet pin {name} missing at"))?;
+    Ok(SheetPin {
         id: id.ok_or_else(|| anyhow!("sheet pin {name} missing uuid"))?,
         name,
         at,
+        rotation,
         shape,
         unsupported,
-    }))
+    })
 }
 
-fn parse_label(items: SexprList<'_>) -> Result<Option<Label>> {
-    let Some(tag) = items.tag() else {
-        return Ok(None);
-    };
-    let Some(text) = items.string(1) else {
-        return Ok(None);
-    };
+fn parse_label(items: SexprList<'_>) -> Result<Label> {
+    let tag = items.tag().context("label missing type")?;
+    let text = items.string(1).context("label missing text")?;
 
     let mut id = None;
-    let mut at = Point::default();
+    let mut at = None;
     let mut spin = LabelSpin::Right;
     let mut effects = TextEffects::default();
     let mut parsed_justify = None;
@@ -536,31 +517,31 @@ fn parse_label(items: SexprList<'_>) -> Result<Option<Label>> {
 
         match list.tag() {
             Some("at") => {
-                if let Some((point, parsed_spin)) = parse_label_at(list)? {
-                    at = point;
-                    spin = parsed_spin;
-                }
+                let (point, parsed_spin) = parse_label_at(list)?;
+                at = Some(point);
+                spin = parsed_spin;
             }
             Some("shape") => {
-                if let Some(parsed) = list.get(1).and_then(parse_label_shape) {
-                    shape = parsed;
-                }
+                shape = list
+                    .get(1)
+                    .and_then(parse_label_shape)
+                    .with_context(|| format!("{tag} {text} has invalid shape"))?;
             }
             Some("fields_autoplaced") => {
-                fields_autoplaced = list.bool_or(1, true);
+                fields_autoplaced = list.bool_or(1, true, "fields_autoplaced")?;
             }
             Some("effects") => {
-                let parsed = parse_effects(list);
+                let parsed = parse_effects(list)?;
                 effects = parsed.effects;
                 parsed_justify = merge_field_justify(parsed_justify, parsed.justify);
-                unsupported.push(child.clone());
             }
             Some("uuid") => {
                 id = list.string(1);
             }
             Some("property") => {
-                if let Some(field) = parse_property(list) {
-                    fields.insert(field.name.clone(), field);
+                let field = parse_property(list)?;
+                if fields.insert(field.name.clone(), field).is_some() {
+                    bail!("{tag} {text} contains duplicate property name");
                 }
             }
             _ => unsupported.push(child.clone()),
@@ -575,10 +556,12 @@ fn parse_label(items: SexprList<'_>) -> Result<Option<Label>> {
         "label" => LabelKind::Local,
         "global_label" => LabelKind::Global { shape },
         "hierarchical_label" => LabelKind::Hierarchical { shape },
-        _ => return Ok(None),
+        "netclass_flag" | "directive_label" => LabelKind::Directive { shape },
+        _ => bail!("unsupported label type {tag}"),
     };
+    let at = at.with_context(|| format!("{tag} {text} missing at"))?;
 
-    Ok(Some(Label {
+    Ok(Label {
         id: id.ok_or_else(|| anyhow!("{tag} {text} missing uuid"))?,
         text,
         at,
@@ -588,33 +571,31 @@ fn parse_label(items: SexprList<'_>) -> Result<Option<Label>> {
         fields_autoplaced,
         fields,
         unsupported,
-    }))
+    })
 }
 
-fn parse_label_at(items: SexprList<'_>) -> Result<Option<(Point, LabelSpin)>> {
-    let (Some(x), Some(y)) = (items.f64(1), items.f64(2)) else {
-        return Ok(None);
-    };
+fn parse_label_at(items: SexprList<'_>) -> Result<(Point, LabelSpin)> {
+    let x = items.f64(1).context("label at missing or invalid x")?;
+    let y = items.f64(2).context("label at missing or invalid y")?;
 
     let degrees = items.f64(3).unwrap_or(0.0);
     let spin = kicad_angle_to_label_spin(degrees)
         .ok_or_else(|| anyhow!("unsupported label rotation {degrees}; expected a finite angle"))?;
-    Ok(Some((Point::new(x, y), spin)))
+    Ok((Point::new(x, y), spin))
 }
 
-fn parse_at(items: SexprList<'_>) -> Result<Option<(Point, Rotation)>> {
-    let (Some(x), Some(y)) = (items.f64(1), items.f64(2)) else {
-        return Ok(None);
-    };
+fn parse_at(items: SexprList<'_>) -> Result<(Point, Rotation)> {
+    let x = items.f64(1).context("at missing or invalid x")?;
+    let y = items.f64(2).context("at missing or invalid y")?;
 
     let degrees = items.i64(3).unwrap_or(0);
     let rotation = Rotation::from_degrees(degrees).ok_or_else(|| {
         anyhow!("unsupported symbol rotation {degrees}; expected 0, 90, 180, or 270")
     })?;
-    Ok(Some((Point::new(x, y), rotation)))
+    Ok((Point::new(x, y), rotation))
 }
 
-fn parse_wire_points(items: SexprList<'_>) -> Result<Option<(Point, Point)>> {
+fn parse_wire_points(items: SexprList<'_>) -> Result<(Point, Point)> {
     let mut points = Vec::new();
 
     for child in items.children_from(1) {
@@ -623,33 +604,37 @@ fn parse_wire_points(items: SexprList<'_>) -> Result<Option<(Point, Point)>> {
         };
 
         if list.tag() == Some("xy") {
-            let Some(point) = parse_xy(list) else {
-                continue;
-            };
-            points.push(point);
+            points.push(parse_xy(list)?);
         }
     }
 
     match points.as_slice() {
-        [a, b] => Ok(Some((*a, *b))),
-        [] => Ok(None),
+        [a, b] => Ok((*a, *b)),
         _ => bail!("wire must contain exactly two xy points"),
     }
 }
 
-fn parse_xy(items: SexprList<'_>) -> Option<Point> {
-    Some(Point::new(items.f64(1)?, items.f64(2)?))
+fn parse_xy(items: SexprList<'_>) -> Result<Point> {
+    Ok(Point::new(
+        items.f64(1).context("xy missing or invalid x")?,
+        items.f64(2).context("xy missing or invalid y")?,
+    ))
 }
 
-fn parse_property(items: SexprList<'_>) -> Option<SymbolField> {
+fn parse_property(items: SexprList<'_>) -> Result<SymbolField> {
     let mut cursor = 1;
-    if items.atom(cursor) == Some("private") {
+    let private = items.atom(cursor) == Some("private");
+    if private {
         cursor += 1;
     }
 
-    let name = items.string(cursor)?;
-    let value = items.string(cursor + 1)?;
+    let name = items.string(cursor).context("property missing name")?;
+    let value = items
+        .string(cursor + 1)
+        .with_context(|| format!("property {name} missing value"))?;
     let mut field = SymbolField::new(name, value, Point::default());
+    field.private = private;
+    let mut at = None;
 
     for child in items.children_from(cursor + 2) {
         if child.as_atom() == Some("hide") {
@@ -664,22 +649,19 @@ fn parse_property(items: SexprList<'_>) -> Option<SymbolField> {
 
         match list.tag() {
             Some("at") => {
-                if let Some((point, rotation_deg)) = parse_field_at(list) {
-                    field.at = point;
-                    field.rotation_deg = rotation_deg;
-                }
+                at = Some(parse_field_at(list)?);
             }
             Some("hide") => {
-                field.hidden = list.bool_or(1, true);
+                field.hidden = list.bool_or(1, true, "property hide")?;
             }
             Some("do_not_autoplace") => {
-                field.do_not_autoplace = list.bool_or(1, true);
+                field.do_not_autoplace = list.bool_or(1, true, "property do_not_autoplace")?;
             }
             Some("effects") => {
-                let parsed = parse_effects(list);
+                let parsed = parse_effects(list)?;
+                field.effects = parsed.effects;
                 field.justify = merge_field_justify(field.justify, parsed.justify);
                 field.hidden |= parsed.hidden;
-                field.unsupported.push(child.clone());
             }
             _ => field.unsupported.push(child.clone()),
         }
@@ -688,13 +670,20 @@ fn parse_property(items: SexprList<'_>) -> Option<SymbolField> {
     if is_internal_kicad_metadata_property(&field.name) {
         field.hidden = true;
     }
+    let (point, rotation_deg) =
+        at.with_context(|| format!("property {} missing at", field.name))?;
+    field.at = point;
+    field.rotation_deg = rotation_deg;
 
-    Some(field)
+    Ok(field)
 }
 
-fn parse_field_at(items: SexprList<'_>) -> Option<(Point, f64)> {
-    Some((
-        Point::new(items.f64(1)?, items.f64(2)?),
+fn parse_field_at(items: SexprList<'_>) -> Result<(Point, f64)> {
+    Ok((
+        Point::new(
+            items.f64(1).context("property at missing or invalid x")?,
+            items.f64(2).context("property at missing or invalid y")?,
+        ),
         items.f64(3).unwrap_or(0.0).rem_euclid(360.0),
     ))
 }
@@ -706,67 +695,76 @@ struct ParsedTextEffects {
     hidden: bool,
 }
 
-fn parse_effects(items: SexprList<'_>) -> ParsedTextEffects {
+fn parse_effects(items: SexprList<'_>) -> Result<ParsedTextEffects> {
     let mut effects = TextEffects::default();
     let mut justify = None;
     let mut hidden = false;
 
     for item in items.children_from(1) {
         let Some(list) = SexprList::from_sexpr(item) else {
-            hidden |= item.as_atom() == Some("hide");
+            if item.as_atom() == Some("hide") {
+                hidden = true;
+            } else {
+                effects.unsupported.push(item.clone());
+            }
             continue;
         };
 
         match list.tag() {
             Some("font") => {
-                effects = parse_font_effects(list, effects);
+                effects = parse_font_effects(list, effects)?;
             }
             Some("justify") => {
-                justify = merge_field_justify(justify, parse_field_justify(list));
+                justify = merge_field_justify(justify, parse_field_justify(list)?);
             }
             Some("hide") => {
-                hidden |= list.bool_or(1, true);
+                hidden |= list.bool_or(1, true, "effects hide")?;
             }
-            _ => {}
+            _ => effects.unsupported.push(item.clone()),
         }
     }
 
-    ParsedTextEffects {
+    Ok(ParsedTextEffects {
         effects,
         justify,
         hidden,
-    }
+    })
 }
 
-fn parse_font_effects(items: SexprList<'_>, mut effects: TextEffects) -> TextEffects {
+fn parse_font_effects(items: SexprList<'_>, mut effects: TextEffects) -> Result<TextEffects> {
     for item in items.children_from(1) {
         let Some(list) = SexprList::from_sexpr(item) else {
+            effects.font_unsupported.push(item.clone());
             continue;
         };
 
         match list.tag() {
             Some("size") => {
-                if let (Some(x), Some(y)) = (list.f64(1), list.f64(2)) {
-                    effects.font_size = TextSize::new(x, y);
-                }
+                effects.font_size = TextSize::new(
+                    list.f64(1).context("font size missing or invalid x")?,
+                    list.f64(2).context("font size missing or invalid y")?,
+                );
             }
             Some("thickness") => {
-                effects.thickness = list.f64(1);
+                effects.thickness = Some(
+                    list.f64(1)
+                        .context("font thickness missing or invalid value")?,
+                );
             }
             Some("bold") => {
-                effects.bold = list.bool_or(1, true);
+                effects.bold = list.bool_or(1, true, "font bold")?;
             }
             Some("italic") => {
-                effects.italic = list.bool_or(1, true);
+                effects.italic = list.bool_or(1, true, "font italic")?;
             }
-            _ => {}
+            _ => effects.font_unsupported.push(item.clone()),
         }
     }
 
-    effects
+    Ok(effects)
 }
 
-fn parse_field_justify(items: SexprList<'_>) -> Option<FieldJustify> {
+fn parse_field_justify(items: SexprList<'_>) -> Result<Option<FieldJustify>> {
     let mut justify = FieldJustify::default();
 
     for value in items.children_from(1) {
@@ -779,11 +777,11 @@ fn parse_field_justify(items: SexprList<'_>) -> Option<FieldJustify> {
                 justify.horizontal = Some(FieldHorizontalJustify::Center);
                 justify.vertical = Some(FieldVerticalJustify::Center);
             }
-            _ => {}
+            value => bail!("invalid effects justification {value:?}"),
         }
     }
 
-    (!justify.is_empty()).then_some(justify)
+    Ok((!justify.is_empty()).then_some(justify))
 }
 
 fn merge_field_justify(
@@ -803,32 +801,30 @@ fn merge_field_justify(
     (!merged.is_empty()).then_some(merged)
 }
 
-fn parse_pin(items: SexprList<'_>) -> Result<Option<PinInstance>> {
-    let Some(number) = items.string(1) else {
-        return Ok(None);
-    };
+fn parse_pin(items: SexprList<'_>) -> Result<PinInstance> {
+    let number = items.string(1).context("pin missing number")?;
 
-    let id = items
-        .child("uuid")
-        .and_then(|uuid| uuid.string(1))
-        .ok_or_else(|| anyhow!("pin {number} missing uuid"))?;
-
-    Ok(Some(PinInstance { number, id }))
-}
-
-fn parse_root_page_number(items: SexprList<'_>) -> Option<String> {
-    for child in items.children_from(1) {
-        let list = SexprList::from_sexpr(child)?;
-        if list.tag() != Some("path") {
+    let mut id = None;
+    let mut alternate = None;
+    let mut unsupported = Vec::new();
+    for child in items.children_from(2) {
+        let Some(list) = SexprList::from_sexpr(child) else {
+            unsupported.push(child.clone());
             continue;
+        };
+        match list.tag() {
+            Some("uuid") => id = list.string(1),
+            Some("alternate") => alternate = list.string(1),
+            _ => unsupported.push(child.clone()),
         }
-        if list.atom(1) != Some("/") {
-            continue;
-        }
-        return list.child("page").and_then(|page| page.string(1));
     }
 
-    None
+    Ok(PinInstance {
+        number: number.clone(),
+        id: id.ok_or_else(|| anyhow!("pin {number} missing uuid"))?,
+        alternate,
+        unsupported,
+    })
 }
 
 fn item_to_sexpr(item: &SchItem, _page: &SchPage) -> Sexpr {
@@ -863,6 +859,7 @@ fn no_connect_to_sexpr(no_connect: &NoConnect) -> Sexpr {
 fn sheet_to_sexpr(sheet: &Sheet) -> Sexpr {
     let mut items = vec![Sexpr::symbol("sheet")];
     items.extend(sheet.unsupported.iter().cloned());
+    items.push(field_to_sexpr(&sheet.file));
     items.extend(sheet.pins.iter().map(sheet_pin_to_sexpr));
     items.push(Sexpr::list(vec![
         Sexpr::symbol("uuid"),
@@ -880,7 +877,7 @@ fn sheet_pin_to_sexpr(pin: &SheetPin) -> Sexpr {
             Sexpr::symbol("at"),
             Sexpr::float(pin.at.x),
             Sexpr::float(pin.at.y),
-            Sexpr::int(0),
+            Sexpr::int(pin.rotation.degrees()),
         ]),
     ];
     items.extend(pin.unsupported.iter().cloned());
@@ -998,12 +995,10 @@ fn label_to_sexpr(label: &Label) -> Sexpr {
         ]));
     }
 
-    if !has_tag(&label.unsupported, "effects") {
-        items.push(text_effects_to_sexpr(
-            label.effects,
-            Some(label_spin_justify(label.kind, label.spin)),
-        ));
-    }
+    items.push(text_effects_to_sexpr(
+        &label.effects,
+        Some(label_spin_justify(label.kind, label.spin)),
+    ));
     items.push(Sexpr::list(vec![
         Sexpr::symbol("uuid"),
         Sexpr::string(&label.id),
@@ -1015,8 +1010,11 @@ fn label_to_sexpr(label: &Label) -> Sexpr {
 }
 
 fn field_to_sexpr(field: &SymbolField) -> Sexpr {
-    let mut items = vec![
-        Sexpr::symbol("property"),
+    let mut items = vec![Sexpr::symbol("property")];
+    if field.private {
+        items.push(Sexpr::symbol("private"));
+    }
+    items.extend([
         Sexpr::string(&field.name),
         Sexpr::string(&field.value),
         Sexpr::list(vec![
@@ -1025,7 +1023,7 @@ fn field_to_sexpr(field: &SymbolField) -> Sexpr {
             Sexpr::float(field.at.y),
             angle_to_sexpr(field.rotation_deg.rem_euclid(360.0)),
         ]),
-    ];
+    ]);
 
     if field.hidden || is_internal_kicad_metadata_property(&field.name) {
         items.push(Sexpr::list(vec![
@@ -1041,17 +1039,27 @@ fn field_to_sexpr(field: &SymbolField) -> Sexpr {
         ]));
     }
 
+    items.push(text_effects_to_sexpr(&field.effects, field.justify));
+
     items.extend(field.unsupported.iter().cloned());
 
     Sexpr::list(items)
 }
 
 fn pin_to_sexpr(pin: &PinInstance) -> Sexpr {
-    Sexpr::list(vec![
+    let mut items = vec![
         Sexpr::symbol("pin"),
         Sexpr::string(&pin.number),
         Sexpr::list(vec![Sexpr::symbol("uuid"), Sexpr::string(&pin.id)]),
-    ])
+    ];
+    if let Some(alternate) = &pin.alternate {
+        items.push(Sexpr::list(vec![
+            Sexpr::symbol("alternate"),
+            Sexpr::string(alternate),
+        ]));
+    }
+    items.extend(pin.unsupported.iter().cloned());
+    Sexpr::list(items)
 }
 
 fn library_to_sexpr(library: &SymbolLibrary) -> Sexpr {
@@ -1062,6 +1070,7 @@ fn library_to_sexpr(library: &SymbolLibrary) -> Sexpr {
             .values()
             .map(|definition| definition.sexpr.clone()),
     );
+    items.extend(library.unsupported.iter().cloned());
     Sexpr::list(items)
 }
 
@@ -1154,26 +1163,28 @@ fn paper_to_sexpr(paper: &Paper) -> Sexpr {
     }
 }
 
-fn parse_paper(items: SexprList<'_>) -> Paper {
-    let Some(name) = items.string(1) else {
-        return Paper::default();
-    };
+fn parse_paper(items: SexprList<'_>) -> Result<Paper> {
+    let name = items.string(1).context("paper missing name")?;
 
-    if name == "User"
-        && let (Some(width_mm), Some(height_mm)) = (items.f64(2), items.f64(3))
-    {
-        return Paper::Custom {
-            width_mm,
-            height_mm,
-        };
+    if name == "User" {
+        return Ok(Paper::Custom {
+            width_mm: items
+                .f64(2)
+                .context("custom paper missing or invalid width")?,
+            height_mm: items
+                .f64(3)
+                .context("custom paper missing or invalid height")?,
+        });
     }
 
-    Paper::Named {
-        name,
-        portrait: items
-            .children_from(2)
-            .any(|item| item.as_atom() == Some("portrait")),
+    let mut portrait = false;
+    for value in items.children_from(2) {
+        match value.as_atom() {
+            Some("portrait") => portrait = true,
+            value => bail!("named paper {name} has invalid option {value:?}"),
+        }
     }
+    Ok(Paper::Named { name, portrait })
 }
 
 fn xy_to_sexpr(point: Point) -> Sexpr {
@@ -1193,7 +1204,7 @@ fn angle_to_sexpr(degrees: f64) -> Sexpr {
     }
 }
 
-fn text_effects_to_sexpr(effects: TextEffects, justify: Option<FieldJustify>) -> Sexpr {
+fn text_effects_to_sexpr(effects: &TextEffects, justify: Option<FieldJustify>) -> Sexpr {
     let mut font_items = vec![
         Sexpr::symbol("font"),
         Sexpr::list(vec![
@@ -1221,6 +1232,7 @@ fn text_effects_to_sexpr(effects: TextEffects, justify: Option<FieldJustify>) ->
             Sexpr::symbol("yes"),
         ]));
     }
+    font_items.extend(effects.font_unsupported.iter().cloned());
 
     let mut items = vec![Sexpr::symbol("effects"), Sexpr::list(font_items)];
     if let Some(justify) = justify {
@@ -1231,6 +1243,7 @@ fn text_effects_to_sexpr(effects: TextEffects, justify: Option<FieldJustify>) ->
             items.push(Sexpr::list(justify_items));
         }
     }
+    items.extend(effects.unsupported.iter().cloned());
 
     Sexpr::list(items)
 }
@@ -1240,6 +1253,7 @@ fn label_kind_token(kind: LabelKind) -> &'static str {
         LabelKind::Local => "label",
         LabelKind::Global { .. } => "global_label",
         LabelKind::Hierarchical { .. } => "hierarchical_label",
+        LabelKind::Directive { .. } => "netclass_flag",
     }
 }
 
@@ -1247,6 +1261,7 @@ fn default_label_shape_for_tag(tag: &str) -> LabelShape {
     match tag {
         "global_label" => LabelShape::Bidirectional,
         "hierarchical_label" => LabelShape::Input,
+        "netclass_flag" | "directive_label" => LabelShape::Round,
         _ => LabelShape::Input,
     }
 }
@@ -1283,7 +1298,9 @@ fn label_shape_token(shape: LabelShape) -> &'static str {
 fn label_shape(kind: LabelKind) -> Option<LabelShape> {
     match kind {
         LabelKind::Local => None,
-        LabelKind::Global { shape } | LabelKind::Hierarchical { shape } => Some(shape),
+        LabelKind::Global { shape }
+        | LabelKind::Hierarchical { shape }
+        | LabelKind::Directive { shape } => Some(shape),
     }
 }
 
@@ -1325,7 +1342,9 @@ fn label_spin_from_justify(spin: LabelSpin, justify: FieldJustify) -> LabelSpin 
 fn label_spin_justify(kind: LabelKind, spin: LabelSpin) -> FieldJustify {
     let vertical = match kind {
         LabelKind::Local => Some(FieldVerticalJustify::Bottom),
-        LabelKind::Global { .. } | LabelKind::Hierarchical { .. } => None,
+        LabelKind::Global { .. } | LabelKind::Hierarchical { .. } | LabelKind::Directive { .. } => {
+            None
+        }
     };
     FieldJustify::new(Some(spin.horizontal_justify()), vertical)
 }
@@ -1388,19 +1407,15 @@ impl<'a> SexprList<'a> {
         atom_f64(self.get(index)?)
     }
 
-    fn bool_or(self, index: usize, default: bool) -> bool {
-        self.get(index).and_then(atom_bool).unwrap_or(default)
+    fn bool_or(self, index: usize, default: bool, field: &str) -> Result<bool> {
+        let Some(value) = self.get(index) else {
+            return Ok(default);
+        };
+        atom_bool(value).with_context(|| format!("{field} must be yes or no"))
     }
 
     fn children_from(self, index: usize) -> impl Iterator<Item = &'a Sexpr> {
         self.items.get(index..).unwrap_or_default().iter()
-    }
-
-    fn child(self, tag: &str) -> Option<Self> {
-        self.children_from(1).find_map(|item| {
-            let child = Self::from_sexpr(item)?;
-            (child.tag() == Some(tag)).then_some(child)
-        })
     }
 }
 
@@ -1412,6 +1427,7 @@ fn find_child<'a>(items: &'a [Sexpr], tag: &str) -> Option<&'a [Sexpr]> {
     })
 }
 
+#[cfg(test)]
 fn has_tag(items: &[Sexpr], tag: &str) -> bool {
     items.iter().any(|item| {
         item.as_list()
@@ -1434,7 +1450,15 @@ fn parse_mirror_axis(value: &Sexpr) -> Option<MirrorAxis> {
 fn atom_i64(value: &Sexpr) -> Option<i64> {
     match &value.kind {
         SexprKind::Int(value) => Some(*value),
-        SexprKind::F64(value) => Some(*value as i64),
+        SexprKind::F64(value)
+            if value.is_finite()
+                && value.fract() == 0.0
+                && *value >= i64::MIN as f64
+                && *value <= i64::MAX as f64 =>
+        {
+            Some(*value as i64)
+        }
+        SexprKind::F64(_) => None,
         SexprKind::Symbol(value) | SexprKind::String(value) => value.parse().ok(),
         SexprKind::List(_) => None,
     }
@@ -1442,18 +1466,90 @@ fn atom_i64(value: &Sexpr) -> Option<i64> {
 
 fn atom_bool(value: &Sexpr) -> Option<bool> {
     match value.as_atom()? {
-        "yes" | "true" => Some(true),
-        "no" | "false" => Some(false),
+        "yes" => Some(true),
+        "no" => Some(false),
         _ => None,
     }
 }
 
 fn atom_f64(value: &Sexpr) -> Option<f64> {
-    match &value.kind {
+    let value = match &value.kind {
         SexprKind::F64(value) => Some(*value),
         SexprKind::Int(value) => Some(*value as f64),
         SexprKind::Symbol(value) | SexprKind::String(value) => value.parse().ok(),
         SexprKind::List(_) => None,
+    }?;
+    value.is_finite().then_some(value)
+}
+
+/// Decode the brace escapes KiCad applies before displaying text.
+pub(crate) fn unescape_text(source: &str) -> String {
+    let characters = source.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(source.len());
+    let mut index = 0;
+    while index < characters.len() {
+        if characters[index] != '{' {
+            output.push(characters[index]);
+            index += 1;
+            continue;
+        }
+
+        let previous = index.checked_sub(1).map(|index| characters[index]);
+        let mut depth = 1;
+        let mut end = index + 1;
+        while end < characters.len() && depth > 0 {
+            match characters[end] {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+            end += 1;
+        }
+        let terminated = depth == 0;
+        let token_end = if terminated {
+            end - 1
+        } else {
+            characters.len()
+        };
+        let token = characters[index + 1..token_end].iter().collect::<String>();
+        let token = unescape_text(&token);
+
+        if !terminated {
+            output.push('{');
+            output.push_str(&token);
+        } else if matches!(previous, Some('$' | '~' | '^' | '_')) {
+            output.push('{');
+            output.push_str(&token);
+            output.push('}');
+        } else if let Some(value) = unescaped_token(&token) {
+            output.push_str(value);
+        } else {
+            output.push('{');
+            output.push_str(&token);
+            output.push('}');
+        }
+        index = end;
+    }
+    output
+}
+
+fn unescaped_token(token: &str) -> Option<&'static str> {
+    match token {
+        "dblquote" => Some("\""),
+        "quote" => Some("'"),
+        "lt" => Some("<"),
+        "gt" => Some(">"),
+        "backslash" => Some("\\"),
+        "slash" => Some("/"),
+        "bar" => Some("|"),
+        "comma" => Some(","),
+        "colon" => Some(":"),
+        "space" => Some(" "),
+        "dollar" => Some("$"),
+        "tab" => Some("\t"),
+        "return" => Some("\n"),
+        "brace" => Some("{"),
+        _ => None,
     }
 }
 
@@ -1518,8 +1614,7 @@ mod tests {
 
         assert_eq!(document.pages.len(), 1);
         assert_eq!(document.pages[0].id, "page-1");
-        assert_eq!(document.pages[0].page_number, "2");
-        assert_eq!(document.library.definitions.len(), 1);
+        assert_eq!(document.pages[0].library.definitions.len(), 1);
         assert_eq!(document.pages[0].items.len(), 4);
 
         let SchItem::Symbol(symbol) = &document.pages[0].items[2] else {
@@ -1565,6 +1660,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_pre_kicad_10_schematics() {
+        let error =
+            SchDocument::from_kicad_sch(&SAMPLE.replace("20260306", "20231120")).unwrap_err();
+
+        assert!(error.to_string().contains("expected KiCad 10"));
+    }
+
+    #[test]
+    fn malformed_supported_electrical_item_is_an_error() {
+        let content = SAMPLE.replace("(pts (xy 10 20) (xy 30 20))", "(pts (xy 10 20))");
+
+        let error = SchDocument::from_kicad_sch(&content).unwrap_err();
+
+        assert!(error.to_string().contains("wire must contain exactly two"));
+    }
+
+    #[test]
     fn parses_and_formats_label_items() {
         let content = SAMPLE.replace(
             r#"  (sheet_instances"#,
@@ -1589,6 +1701,14 @@ mod tests {
     (at 70 20 181.5)
     (effects (font (size 1.27 1.27)))
     (uuid "label-raw-angle")
+  )
+  (netclass_flag ""
+    (length 2.54)
+    (shape round)
+    (at 80 20 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid "directive")
+    (property "Net Class" "Power" (at 80 20 0))
   )
   (sheet_instances"#,
         );
@@ -1633,10 +1753,68 @@ mod tests {
         };
         assert_eq!(raw_angle.spin, LabelSpin::Right);
 
+        let SchItem::Label(directive) = &document.pages[0].items[7] else {
+            panic!("expected directive label");
+        };
+        assert_eq!(
+            directive.kind,
+            LabelKind::Directive {
+                shape: LabelShape::Round,
+            }
+        );
+        assert_eq!(directive.at, Point::new(80.0, 20.0));
+        assert!(directive.fields.contains_key("Net Class"));
+
         let formatted = document.to_kicad_sch().expect("format schematic");
         let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse schematic");
 
         assert_eq!(reparsed.pages[0].items, document.pages[0].items);
+    }
+
+    #[test]
+    fn semantic_text_effect_edits_are_serialized() {
+        let content = SAMPLE.replace(
+            r#"  (sheet_instances"#,
+            r#"  (label "EDIT" (at 40 20 0)
+    (effects (font (size 1.27 1.27)) (justify left bottom))
+    (uuid "label-edit"))
+  (sheet_instances"#,
+        );
+        let mut document = SchDocument::from_kicad_sch(&content).unwrap();
+        let label = document.pages[0]
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                SchItem::Label(label) => Some(label),
+                _ => None,
+            })
+            .unwrap();
+        label.effects.font_size = TextSize::new(2.0, 2.0);
+        label.effects.bold = true;
+
+        let formatted = document.to_kicad_sch().unwrap();
+        let reparsed = SchDocument::from_kicad_sch(&formatted).unwrap();
+        let SchItem::Label(label) = &reparsed.pages[0].items[3] else {
+            panic!("expected label");
+        };
+        assert_eq!(label.effects.font_size, TextSize::new(2.0, 2.0));
+        assert!(label.effects.bold);
+    }
+
+    #[test]
+    fn placed_pin_alternate_round_trips() {
+        let content = SAMPLE.replace(
+            r#"(pin "1" (uuid "pin-1"))"#,
+            r#"(pin "1" (alternate "ALT") (uuid "pin-1"))"#,
+        );
+        let document = SchDocument::from_kicad_sch(&content).unwrap();
+        let SchItem::Symbol(symbol) = &document.pages[0].items[2] else {
+            panic!("expected symbol");
+        };
+        assert_eq!(symbol.pins[0].alternate.as_deref(), Some("ALT"));
+
+        let reparsed = SchDocument::from_kicad_sch(&document.to_kicad_sch().unwrap()).unwrap();
+        assert_eq!(reparsed, document);
     }
 
     #[test]
@@ -1695,7 +1873,7 @@ mod tests {
         let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse schematic");
 
         assert_eq!(reparsed.pages.len(), 1);
-        assert_eq!(reparsed.library.definitions.len(), 1);
+        assert_eq!(reparsed.pages[0].library.definitions.len(), 1);
         assert_eq!(reparsed.pages[0].items.len(), 4);
         assert_eq!(reparsed.pages[0].items, document.pages[0].items);
     }
@@ -1722,7 +1900,7 @@ mod tests {
         ));
 
         let formatted = document.to_kicad_sch().expect("format KiCad 10 fixture");
-        assert!(formatted.contains("(generator_version \"10.0\")"));
+        assert!(formatted.contains(&format!("(generator_version \"{GENERATOR_VERSION}\")")));
         let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse KiCad 10 fixture");
         assert_eq!(reparsed, document);
     }
@@ -1757,7 +1935,7 @@ mod tests {
             2
         );
         assert!(document.pages[0].items.iter().any(
-            |item| matches!(item, SchItem::Sheet(sheet) if sheet.file_name == "aSheet.kicad_sch" && sheet.pins.len() == 2)
+            |item| matches!(item, SchItem::Sheet(sheet) if sheet.file_name() == "aSheet.kicad_sch" && sheet.pins.len() == 2)
         ));
 
         let formatted = document.to_kicad_sch().expect("format KiCad 10 fixture");
@@ -1865,17 +2043,20 @@ mod tests {
             KicadSchSource {
                 file_name: Some("a.kicad_sch"),
                 content: SAMPLE,
+                is_root: true,
             },
             KicadSchSource {
                 file_name: Some("b.kicad_sch"),
                 content: &SAMPLE.replace("page-1", "page-2"),
+                is_root: false,
             },
         ])
         .expect("parse pages");
 
         assert_eq!(document.pages.len(), 2);
         assert_eq!(document.pages[0].file_name.as_deref(), Some("a.kicad_sch"));
-        assert_eq!(document.library.definitions.len(), 1);
+        assert_eq!(document.pages[0].library.definitions.len(), 1);
+        assert_eq!(document.pages[1].library.definitions.len(), 1);
 
         let files = document.to_kicad_sch_files();
         assert_eq!(files.len(), 2);

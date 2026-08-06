@@ -46,11 +46,12 @@ impl AnalysisFixture {
     }
 
     pub fn zener_connectivity(&self) -> ConnectivityGraph {
-        ConnectivityGraph::from_zener(&self.netlist)
+        ConnectivityGraph::from_zener(&self.netlist).expect("reduce Zener analysis fixture")
     }
 
     pub fn kicad_connectivity(&self) -> ConnectivityGraph {
         ConnectivityGraph::from_kicad(&self.project.document)
+            .expect("reduce KiCad analysis fixture")
     }
 
     pub fn kicad_document(&self) -> &SchDocument {

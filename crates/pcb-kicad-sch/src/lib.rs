@@ -6,12 +6,11 @@
 
 mod component_slots;
 pub mod connectivity;
-mod hierarchy;
 pub mod identity;
 pub mod kicad;
 pub mod model;
-mod net_symbols;
 mod project;
+mod root_interface;
 mod symbol;
 
 pub mod analysis;

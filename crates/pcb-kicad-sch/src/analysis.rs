@@ -98,11 +98,14 @@ impl SchematicAnalysis {
 }
 
 /// Reduce both sources independently, then compare their connectivity graphs.
-pub fn analyze_schematic(document: &SchDocument, netlist: &Schematic) -> SchematicAnalysis {
-    analyze_connectivity(
-        &ConnectivityGraph::from_zener(netlist),
-        &ConnectivityGraph::from_kicad(document),
-    )
+pub fn analyze_schematic(
+    document: &SchDocument,
+    netlist: &Schematic,
+) -> anyhow::Result<SchematicAnalysis> {
+    Ok(analyze_connectivity(
+        &ConnectivityGraph::from_zener(netlist)?,
+        &ConnectivityGraph::from_kicad(document)?,
+    ))
 }
 
 /// Compare an expected logical graph with an observed physical graph.
@@ -250,12 +253,8 @@ fn terminals_match(expected: &Terminal, observed: &Terminal) -> bool {
             ) && !expected_keys.is_disjoint(observed_keys)
         }
         (
-            Terminal::HierarchicalPort {
-                label_text: expected,
-            },
-            Terminal::HierarchicalPort {
-                label_text: observed,
-            },
+            Terminal::InterfacePort { name: expected },
+            Terminal::InterfacePort { name: observed },
         ) => expected == observed,
         _ => false,
     }
@@ -353,7 +352,7 @@ fn collect_connection_issues(
                     || group.terminals.iter().any(|terminal| {
                         matches!(
                             terminal,
-                            Terminal::HierarchicalPort { label_text } if label_text == name
+                            Terminal::InterfacePort { name: port_name } if port_name == name
                         )
                     })
             });
@@ -365,13 +364,22 @@ fn collect_connection_issues(
             }
         }
 
-        if matching_expected.is_empty()
-            && observed_group.names.is_empty()
-            && !observed_group.terminals.is_empty()
-        {
+        let unexpected_terminals = observed_group
+            .terminals
+            .iter()
+            .filter(|observed_terminal| {
+                !matching_expected.iter().any(|expected_group| {
+                    expected_group.terminals.iter().any(|expected_terminal| {
+                        terminals_match(expected_terminal, observed_terminal)
+                    })
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unexpected_terminals.is_empty() {
             issues.push(SchematicIssue::UnexpectedConnection {
                 islands: kicad_islands(observed_group),
-                terminals: observed_group.terminals.iter().cloned().collect(),
+                terminals: unexpected_terminals,
             });
         }
     }
@@ -425,7 +433,7 @@ mod tests {
         );
         let document = document_with_pages(vec![SchPage::new("page")]);
 
-        let analysis = analyze_schematic(&document, &netlist);
+        let analysis = analyze_schematic(&document, &netlist).unwrap();
 
         assert!(matches!(
             analysis.issues(),
@@ -456,7 +464,7 @@ mod tests {
             pages.push(page);
         }
 
-        let analysis = analyze_schematic(&document_with_pages(pages), &netlist);
+        let analysis = analyze_schematic(&document_with_pages(pages), &netlist).unwrap();
 
         assert!(analysis.nets["N1"].is_disconnected());
         assert!(!analysis.nets["GND"].is_disconnected());
@@ -472,7 +480,7 @@ mod tests {
             SchItem::Label(Label::new("c", "EXTRA", Point::new(10.0, 0.0))),
         ]);
 
-        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist);
+        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
 
         assert!(
             analysis
@@ -486,6 +494,44 @@ mod tests {
     }
 
     #[test]
+    fn reports_an_extra_terminal_on_an_otherwise_matching_net() {
+        let terminal = |path: &str| Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath(path.to_string()),
+            pin_name: "1".to_string(),
+            pin_keys: BTreeSet::from(["1".to_string()]),
+        };
+        let expected = ConnectivityGraph {
+            components: Vec::new(),
+            groups: vec![ConnectionGroup {
+                names: BTreeSet::from(["N".to_string()]),
+                terminals: BTreeSet::from([terminal("U1")]),
+                origins: BTreeSet::from([ConnectionOrigin::ZenerNet {
+                    name: "N".to_string(),
+                }]),
+            }],
+        };
+        let extra = terminal("U2");
+        let observed = ConnectivityGraph {
+            components: Vec::new(),
+            groups: vec![ConnectionGroup {
+                names: BTreeSet::from(["N".to_string()]),
+                terminals: BTreeSet::from([terminal("U1"), extra.clone()]),
+                origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(IslandRef {
+                    page_id: "page".to_string(),
+                    index: 0,
+                })]),
+            }],
+        };
+
+        let analysis = analyze_connectivity(&expected, &observed);
+
+        assert!(matches!(
+            analysis.issues(),
+            [SchematicIssue::UnexpectedConnection { terminals, .. }] if terminals == &[extra]
+        ));
+    }
+
+    #[test]
     fn equivalent_project_has_no_issues() {
         let netlist = netlist_with_nets(&["N1"]);
         let mut page = SchPage::new("page");
@@ -495,26 +541,40 @@ mod tests {
             Point::new(0.0, 0.0),
         )));
 
-        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist);
+        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
 
         assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
     }
 
     #[test]
-    fn root_hierarchical_label_maps_to_realized_net() {
+    fn root_interface_ports_map_to_their_shared_realized_net() {
         let mut netlist = netlist_with_nets(&["REALIZED_SIG"]);
         netlist.nets.get_mut("REALIZED_SIG").unwrap().id = 42;
         add_root_signature_io(&mut netlist, "SIG", "REALIZED_SIG", 42);
-        let mut label = Label::new("port", "SIG", Point::new(0.0, 0.0));
-        label.kind = LabelKind::Hierarchical {
-            shape: LabelShape::Bidirectional,
-        };
+        add_root_signature_io(&mut netlist, "ALIAS", "REALIZED_SIG", 42);
         let mut page = SchPage::new("page");
-        page.items.push(SchItem::Label(label));
+        for (id, name) in [("port", "SIG"), ("alias", "ALIAS")] {
+            let mut label = Label::new(id, name, Point::new(0.0, 0.0));
+            label.kind = LabelKind::Hierarchical {
+                shape: LabelShape::Bidirectional,
+            };
+            page.items.push(SchItem::Label(label));
+        }
 
-        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist);
+        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
 
         assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+    }
+
+    #[test]
+    fn invalid_root_signature_net_reference_is_an_error() {
+        let mut netlist = netlist_with_nets(&["N"]);
+        add_root_signature_io(&mut netlist, "SIG", "N", 42);
+
+        let error = analyze_schematic(&document_with_pages(vec![SchPage::new("page")]), &netlist)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("references unknown net id 42"));
     }
 
     #[test]
@@ -522,34 +582,34 @@ mod tests {
         let netlist = netlist_with_nets(&["GND"]);
         let definition = SymbolDefinition::from_kicad_symbol_sexpr(
             r#"(symbol "power:GND"
-              (power)
+              (power global)
               (symbol "GND_1_1"
                 (pin power_in line (at 0 0 0) (length 2.54)
                   (name "GND") (number "1"))))"#,
         )
         .unwrap();
         let mut document = document_with_pages(vec![SchPage::new("a"), SchPage::new("b")]);
-        document
-            .library
-            .definitions
-            .insert(definition.lib_id.clone(), definition);
         for (index, page) in document.pages.iter_mut().enumerate() {
+            page.library
+                .definitions
+                .insert(definition.lib_id.clone(), definition.clone());
             page.items.push(SchItem::Symbol(power_symbol(
                 format!("power-{index}"),
                 Point::new(index as f64, 0.0),
             )));
         }
 
-        let analysis = analyze_schematic(&document, &netlist);
+        let analysis = analyze_schematic(&document, &netlist).unwrap();
 
         assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
         assert_eq!(analysis.nets["GND"].connected_islands.len(), 1);
     }
 
     fn document_with_pages(pages: Vec<SchPage>) -> SchDocument {
+        let root_page_ids = pages.iter().map(|page| page.id.clone()).collect();
         SchDocument {
             pages,
-            library: Default::default(),
+            root_page_ids,
         }
     }
 
@@ -568,18 +628,32 @@ mod tests {
     }
 
     fn add_root_signature_io(netlist: &mut Schematic, io_name: &str, net_name: &str, id: u64) {
+        let parameter = serde_json::json!({
+            "name": io_name,
+            "is_config": false,
+            "value": { "Net": { "id": id, "name": net_name, "properties": {} } },
+            "default_value": { "Net": { "id": id, "name": io_name, "properties": {} } }
+        });
+        if let Some(root_ref) = netlist.root_ref.clone() {
+            let root = netlist.instances.get_mut(&root_ref).unwrap();
+            let Some(AttributeValue::Json(signature)) = root.attributes.get_mut("__signature")
+            else {
+                panic!("root signature");
+            };
+            signature["parameters"]
+                .as_array_mut()
+                .unwrap()
+                .push(parameter);
+            return;
+        }
+
         let module = ModuleRef::from_path(Path::new("/tmp/root.zen"), "root");
         let root_ref = InstanceRef::new(module.clone(), Vec::new());
         let mut root = Instance::module(module);
         root.attributes.insert(
             "__signature".to_string(),
             AttributeValue::Json(serde_json::json!({
-                "parameters": [{
-                    "name": io_name,
-                    "is_config": false,
-                    "value": { "Net": { "id": id, "name": net_name, "properties": {} } },
-                    "default_value": { "Net": { "id": id, "name": io_name, "properties": {} } }
-                }]
+                "parameters": [parameter]
             })),
         );
         netlist.root_ref = Some(root_ref.clone());

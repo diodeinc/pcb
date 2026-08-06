@@ -9,20 +9,15 @@ pub type LibId = String;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SchDocument {
     pub pages: Vec<SchPage>,
-    pub library: SymbolLibrary,
+    /// UUIDs of the project's top-level schematic pages, in project order.
+    pub root_page_ids: Vec<Id>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SymbolLibrary {
     pub definitions: BTreeMap<LibId, SymbolDefinition>,
-}
-
-impl SymbolLibrary {
-    pub fn merge(&mut self, other: SymbolLibrary) {
-        for (lib_id, definition) in other.definitions {
-            self.definitions.entry(lib_id).or_insert(definition);
-        }
-    }
+    /// Library children that this crate does not interpret.
+    pub unsupported: Vec<Sexpr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,8 +32,8 @@ pub struct SymbolDefinition {
 pub struct SchPage {
     pub id: Id,
     pub file_name: Option<String>,
+    pub library: SymbolLibrary,
     pub paper: Paper,
-    pub page_number: String,
     pub items: Vec<SchItem>,
 }
 
@@ -47,8 +42,8 @@ impl SchPage {
         Self {
             id: id.into(),
             file_name: None,
+            library: SymbolLibrary::default(),
             paper: Paper::default(),
-            page_number: "1".to_string(),
             items: Vec::new(),
         }
     }
@@ -84,10 +79,16 @@ pub enum SchItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub id: Id,
-    pub file_name: String,
+    pub file: SymbolField,
     pub pins: Vec<SheetPin>,
     /// Direct child expressions not represented by the semantic fields above.
     pub unsupported: Vec<Sexpr>,
+}
+
+impl Sheet {
+    pub fn file_name(&self) -> &str {
+        &self.file.value
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,6 +96,7 @@ pub struct SheetPin {
     pub id: Id,
     pub name: String,
     pub at: Point,
+    pub rotation: Rotation,
     pub shape: LabelShape,
     /// Direct child expressions not represented by the semantic fields above.
     pub unsupported: Vec<Sexpr>,
@@ -132,11 +134,13 @@ impl Symbol {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SymbolField {
+    pub private: bool,
     pub name: String,
     pub value: String,
     /// Absolute schematic editor position in millimeters.
     pub at: Point,
     pub rotation_deg: f64,
+    pub effects: TextEffects,
     pub justify: Option<FieldJustify>,
     pub hidden: bool,
     pub do_not_autoplace: bool,
@@ -147,10 +151,12 @@ pub struct SymbolField {
 impl SymbolField {
     pub fn new(name: impl Into<String>, value: impl Into<String>, at: Point) -> Self {
         Self {
+            private: false,
             name: name.into(),
             value: value.into(),
             at,
             rotation_deg: 0.0,
+            effects: TextEffects::default(),
             justify: None,
             hidden: false,
             do_not_autoplace: false,
@@ -221,6 +227,10 @@ pub enum LabelKind {
     Hierarchical {
         shape: LabelShape,
     },
+    /// A connectable KiCad netclass/directive flag. It carries no net name.
+    Directive {
+        shape: LabelShape,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -259,12 +269,16 @@ impl LabelSpin {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextEffects {
     pub font_size: TextSize,
     pub thickness: Option<f64>,
     pub bold: bool,
     pub italic: bool,
+    /// Font children not represented by the semantic fields above.
+    pub font_unsupported: Vec<Sexpr>,
+    /// Effects children not represented by the semantic fields above.
+    pub unsupported: Vec<Sexpr>,
 }
 
 impl Default for TextEffects {
@@ -274,6 +288,8 @@ impl Default for TextEffects {
             thickness: None,
             bold: false,
             italic: false,
+            font_unsupported: Vec::new(),
+            unsupported: Vec::new(),
         }
     }
 }
@@ -353,6 +369,9 @@ pub enum FieldVerticalJustify {
 pub struct PinInstance {
     pub number: String,
     pub id: Id,
+    pub alternate: Option<String>,
+    /// Direct child expressions not represented by the semantic fields above.
+    pub unsupported: Vec<Sexpr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
