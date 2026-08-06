@@ -10,17 +10,13 @@
 //! Also provides `compute_net_renames_patches` for implicit net rename detection,
 //! which uses exact-match only and patches only net-related strings.
 
+use pcb_sch::kicad_identity::uuid_for_path;
 use pcb_sexpr::board::{
     is_footprint_kiid_path, is_footprint_path_property, is_group_name, is_net_name,
     is_zone_net_name,
 };
 use pcb_sexpr::{PatchSet, Sexpr, WalkCtx};
 use std::collections::{HashMap, HashSet};
-use uuid::Uuid;
-
-/// UUID namespace used for generating deterministic footprint UUIDs from paths.
-/// This matches Python: uuid.NAMESPACE_URL
-const UUID_NAMESPACE_URL: Uuid = Uuid::from_u128(0x6ba7b811_9dad_11d1_80b4_00c04fd430c8);
 
 /// Compute patches for net-only renames (exact match, no prefix matching).
 ///
@@ -146,7 +142,7 @@ pub fn compute_moved_paths_patches(
 /// Compute deterministic UUID from a hierarchical path.
 /// Uses UUID v5 with NAMESPACE_URL, matching Python's uuid.uuid5(uuid.NAMESPACE_URL, path).
 fn compute_uuid_from_path(path: &str) -> String {
-    Uuid::new_v5(&UUID_NAMESPACE_URL, path.as_bytes()).to_string()
+    uuid_for_path(path)
 }
 
 /// Apply longest-prefix matching to remap a path.

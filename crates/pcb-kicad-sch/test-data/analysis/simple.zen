@@ -1,0 +1,13 @@
+"""Minimal schematic-analysis regression design."""
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+LEFT = Net("LEFT")
+MID = Net("MID")
+RIGHT = Net("RIGHT")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=LEFT, P2=MID)
+Resistor(name="R2", value="2kohms", package="0402", P1=MID, P2=RIGHT)
+
+# pcb:sch R1.R x=50.0000 y=50.0000 rot=0
+# pcb:sch R2.R x=100.0000 y=50.0000 rot=0
