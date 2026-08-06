@@ -53,9 +53,8 @@ pub enum Terminal {
         pin_name: String,
         pin_keys: BTreeSet<String>,
     },
-    HierarchicalPort {
-        label_text: String,
-    },
+    /// A named port at the design boundary, independent of source format.
+    InterfacePort { name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

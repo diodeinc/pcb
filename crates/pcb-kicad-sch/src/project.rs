@@ -6,15 +6,17 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use pcb_sch::{AttributeValue, Schematic};
+use serde_json::Value;
+use uuid::Uuid;
 
-use crate::{SchDocument, SchItem, SymbolLibrary, parse_kicad_sch_page};
+use crate::{SchDocument, SchItem, parse_kicad_sch_page};
 
 /// A KiCad schematic project loaded from one project directory.
 #[derive(Debug, Clone)]
 pub struct KicadProject {
     pub directory: PathBuf,
     pub project_file: PathBuf,
-    pub root_schematic: PathBuf,
+    pub root_schematics: Vec<PathBuf>,
     pub schematic_files: Vec<PathBuf>,
     pub document: SchDocument,
 }
@@ -22,8 +24,8 @@ pub struct KicadProject {
 impl KicadProject {
     /// Load the `.kicad_pro` and the schematic hierarchy reachable from its root.
     ///
-    /// The root schematic must have the same stem as the single project file.
-    /// Child paths are resolved relative to the file containing each sheet.
+    /// KiCad 10 flat projects use `schematic.top_level_sheets`. Projects without
+    /// that field use KiCad's legacy same-stem root-file rule.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let requested = path.as_ref();
         let directory = if requested.extension().and_then(|ext| ext.to_str()) == Some("kicad_pro") {
@@ -46,34 +48,44 @@ impl KicadProject {
             );
         }
         let project_file = project_files.remove(0);
-        let root_schematic = project_file.with_extension("kicad_sch");
-        if !root_schematic.is_file() {
-            bail!(
-                "KiCad project {} has no root schematic {}",
-                project_file.display(),
-                root_schematic.display()
-            );
-        }
-
-        let (schematic_files, document) = load_schematic_hierarchy(&directory, &root_schematic)?;
+        let project_roots = project_root_schematics(&directory, &project_file)?;
+        let root_schematics = project_roots.iter().map(|root| root.path.clone()).collect();
+        let (schematic_files, document) = load_schematic_hierarchy(&directory, &project_roots)?;
         Ok(Self {
             directory,
             project_file,
-            root_schematic,
+            root_schematics,
             schematic_files,
             document,
         })
     }
 }
 
+struct ProjectRoot {
+    path: PathBuf,
+    id: Option<String>,
+}
+
 fn load_schematic_hierarchy(
     directory: &Path,
-    root_schematic: &Path,
+    roots: &[ProjectRoot],
 ) -> Result<(Vec<PathBuf>, SchDocument)> {
-    let mut schematic_files = vec![root_schematic.to_path_buf()];
-    let mut seen = BTreeSet::from([normalize_path(root_schematic)]);
+    let mut schematic_files = Vec::new();
+    let mut root_by_path = std::collections::BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    for root in roots {
+        let path = normalize_path(&root.path);
+        if !seen.insert(path.clone()) {
+            bail!(
+                "top-level schematic {} is listed more than once",
+                path.display()
+            );
+        }
+        root_by_path.insert(path.clone(), root.id.as_deref());
+        schematic_files.push(path);
+    }
     let mut pages = Vec::new();
-    let mut library = SymbolLibrary::default();
+    let mut root_page_ids = Vec::new();
     let mut index = 0;
     while index < schematic_files.len() {
         let path = schematic_files[index].clone();
@@ -82,14 +94,20 @@ fn load_schematic_hierarchy(
             .with_context(|| format!("failed to read {}", path.display()))?;
         let relative = path.strip_prefix(directory).unwrap_or(&path);
         let relative = relative.to_string_lossy().replace('\\', "/");
-        let (page, page_library) = parse_kicad_sch_page(Some(&relative), &content)
+        let mut page = parse_kicad_sch_page(Some(&relative), &content)
             .with_context(|| format!("failed to parse {}", path.display()))?;
+        if let Some(root_id) = root_by_path.get(&normalize_path(&path)) {
+            if let Some(root_id) = root_id {
+                page.id = (*root_id).to_string();
+            }
+            root_page_ids.push(page.id.clone());
+        }
         let parent = path.parent().unwrap_or(directory);
         for sheet in page.items.iter().filter_map(|item| match item {
             SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         }) {
-            let child = normalize_path(&parent.join(&sheet.file_name));
+            let child = normalize_path(&parent.join(sheet.file_name()));
             if !child.is_file() {
                 bail!(
                     "sheet {} references missing schematic {}",
@@ -102,9 +120,77 @@ fn load_schematic_hierarchy(
             }
         }
         pages.push(page);
-        library.merge(page_library);
     }
-    Ok((schematic_files, SchDocument { pages, library }))
+    Ok((
+        schematic_files,
+        SchDocument {
+            pages,
+            root_page_ids,
+        },
+    ))
+}
+
+fn project_root_schematics(directory: &Path, project_file: &Path) -> Result<Vec<ProjectRoot>> {
+    let content = fs::read_to_string(project_file)
+        .with_context(|| format!("failed to read {}", project_file.display()))?;
+    let project: Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse {}", project_file.display()))?;
+    let Some(top_levels) = project
+        .get("schematic")
+        .and_then(|schematic| schematic.get("top_level_sheets"))
+    else {
+        return legacy_project_root(project_file);
+    };
+    let top_levels = top_levels
+        .as_array()
+        .context("schematic.top_level_sheets must be an array")?;
+    if top_levels.is_empty() {
+        return legacy_project_root(project_file);
+    }
+    top_levels
+        .iter()
+        .enumerate()
+        .map(|(index, sheet)| {
+            let file_name = sheet
+                .get("filename")
+                .and_then(Value::as_str)
+                .with_context(|| {
+                    format!("schematic.top_level_sheets[{index}].filename must be a string")
+                })?;
+            let path = normalize_path(&directory.join(file_name));
+            if !path.is_file() {
+                bail!("top-level schematic {} does not exist", path.display());
+            }
+            let id = match sheet.get("uuid") {
+                None => None,
+                Some(value) => {
+                    let value = value.as_str().with_context(|| {
+                        format!("schematic.top_level_sheets[{index}].uuid must be a string")
+                    })?;
+                    let id = Uuid::parse_str(value).with_context(|| {
+                        format!("schematic.top_level_sheets[{index}].uuid is invalid")
+                    })?;
+                    (!id.is_nil()).then(|| id.to_string())
+                }
+            };
+            Ok(ProjectRoot { path, id })
+        })
+        .collect()
+}
+
+fn legacy_project_root(project_file: &Path) -> Result<Vec<ProjectRoot>> {
+    let root = project_file.with_extension("kicad_sch");
+    if !root.is_file() {
+        bail!(
+            "KiCad project {} has no legacy root schematic {}",
+            project_file.display(),
+            root.display()
+        );
+    }
+    Ok(vec![ProjectRoot {
+        path: root,
+        id: None,
+    }])
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -113,7 +199,14 @@ fn normalize_path(path: &Path) -> PathBuf {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                normalized.pop();
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else if !path.is_absolute() {
+                    normalized.push("..");
+                }
             }
             other => normalized.push(other.as_os_str()),
         }
@@ -140,11 +233,17 @@ pub fn schematic_project_path(netlist: &Schematic) -> Result<Option<PathBuf>> {
 }
 
 fn files_with_extension(directory: &Path, extension: &str) -> Result<Vec<PathBuf>> {
-    let mut files = fs::read_dir(directory)
-        .with_context(|| format!("failed to read {}", directory.display()))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some(extension))
-        .collect::<Vec<_>>();
+    let entries = fs::read_dir(directory)
+        .with_context(|| format!("failed to read {}", directory.display()))?;
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("failed to read an entry in {}", directory.display()))?
+            .path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some(extension) {
+            files.push(path);
+        }
+    }
     files.sort();
     Ok(files)
 }
@@ -174,6 +273,21 @@ mod tests {
     }
 
     #[test]
+    fn empty_top_level_sheet_list_uses_legacy_root_rule() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("demo.kicad_pro"),
+            r#"{"schematic":{"top_level_sheets":[]}}"#,
+        )
+        .unwrap();
+        fs::write(directory.path().join("demo.kicad_sch"), schematic("root")).unwrap();
+
+        let project = KicadProject::load(directory.path()).unwrap();
+
+        assert_eq!(project.document.root_page_ids, ["root"]);
+    }
+
+    #[test]
     fn rejects_ambiguous_project_directories() {
         let directory = tempfile::tempdir().unwrap();
         fs::write(directory.path().join("one.kicad_pro"), "{}").unwrap();
@@ -184,9 +298,50 @@ mod tests {
         assert!(error.to_string().contains("exactly one .kicad_pro"));
     }
 
+    #[test]
+    fn loads_all_kicad_10_top_level_sheets_in_project_order() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("demo.kicad_pro"),
+            r#"{"schematic":{"top_level_sheets":[
+                {"uuid":"11111111-1111-1111-1111-111111111111","name":"Main","filename":"main.kicad_sch"},
+                {"uuid":"22222222-2222-2222-2222-222222222222","name":"Power","filename":"power.kicad_sch"}
+            ]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("main.kicad_sch"),
+            schematic("file-main"),
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("power.kicad_sch"),
+            schematic("file-power"),
+        )
+        .unwrap();
+
+        let project = KicadProject::load(directory.path()).unwrap();
+
+        assert_eq!(
+            project.document.root_page_ids,
+            [
+                "11111111-1111-1111-1111-111111111111",
+                "22222222-2222-2222-2222-222222222222"
+            ]
+        );
+        assert_eq!(
+            project
+                .root_schematics
+                .iter()
+                .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+                .collect::<Vec<_>>(),
+            ["main.kicad_sch", "power.kicad_sch"]
+        );
+    }
+
     fn schematic(uuid: &str) -> String {
         format!(
-            "(kicad_sch (version 20231120) (generator eeschema) (uuid {uuid}) (paper \"A4\") (lib_symbols) (sheet_instances (path \"/\" (page \"1\"))))"
+            "(kicad_sch (version 20260306) (generator eeschema) (uuid {uuid}) (paper \"A4\") (lib_symbols) (sheet_instances (path \"/\" (page \"1\"))))"
         )
     }
 
