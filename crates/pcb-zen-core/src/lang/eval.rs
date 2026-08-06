@@ -334,29 +334,31 @@ impl EvalOutput {
         if let Some(ref mut schematic) = result.output {
             schematic.package_roots = self.config.resolution.package_roots();
 
-            // Resolve any non-package:// layout_path attributes to stable URIs
+            // Resolve project paths to stable, machine-independent package URIs.
             for inst in schematic.instances.values_mut() {
                 if inst.kind != pcb_sch::InstanceKind::Module {
                     continue;
                 }
-                let layout_val = inst
-                    .attributes
-                    .get(pcb_sch::ATTR_LAYOUT_PATH)
-                    .and_then(|v| v.string())
-                    .map(|s| s.to_owned());
-                if let Some(raw) = layout_val
-                    && !raw.starts_with(pcb_sch::PACKAGE_URI_PREFIX)
-                {
-                    let source_dir = inst.type_ref.source_path.parent();
-                    if let Some(uri) = format_relative_path_as_package_uri(
-                        &raw,
-                        source_dir,
-                        &self.config.resolution,
-                    ) {
-                        inst.add_attribute(
-                            pcb_sch::ATTR_LAYOUT_PATH.to_string(),
-                            pcb_sch::AttributeValue::String(uri),
-                        );
+                for key in [pcb_sch::ATTR_LAYOUT_PATH, pcb_sch::ATTR_SCHEMATIC_PATH] {
+                    let value = inst
+                        .attributes
+                        .get(key)
+                        .and_then(|value| value.string())
+                        .map(str::to_owned);
+                    if let Some(raw) = value
+                        && !raw.starts_with(pcb_sch::PACKAGE_URI_PREFIX)
+                    {
+                        let source_dir = inst.type_ref.source_path.parent();
+                        if let Some(uri) = format_relative_path_as_package_uri(
+                            &raw,
+                            source_dir,
+                            &self.config.resolution,
+                        ) {
+                            inst.add_attribute(
+                                key.to_string(),
+                                pcb_sch::AttributeValue::String(uri),
+                            );
+                        }
                     }
                 }
             }
