@@ -46,7 +46,7 @@ macro_rules! layout_test {
 
                 // Process the layout
                 let mut diagnostics = Diagnostics::default();
-                let result = process_layout(&schematic, false, false, &mut diagnostics)?.unwrap();
+                let result = process_layout(&schematic, false, &mut diagnostics)?.unwrap();
 
                 // Verify the layout was created
                 assert!(result.pcb_file.exists(), "PCB file should exist");

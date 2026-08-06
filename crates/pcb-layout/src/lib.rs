@@ -468,7 +468,6 @@ pub fn check_layout_sync(
 /// - Runs the pure semantic layout sync check without mutating layout files
 pub fn process_layout(
     schematic: &Schematic,
-    use_temp_dir: bool,
     check_mode: bool,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> Result<Option<LayoutResult>, LayoutError> {
@@ -477,18 +476,9 @@ pub fn process_layout(
     }
 
     // Resolve layout directory
-    let resolved_layout_dir = if use_temp_dir {
-        // Create a temporary directory and keep it (prevent cleanup on drop)
-        tempfile::Builder::new()
-            .prefix("pcb-layout-")
-            .tempdir()
-            .expect("Failed to create temporary directory")
-            .keep()
-    } else {
-        match utils::resolve_layout_dir(schematic)? {
-            Some(path) => path,
-            None => return Ok(None),
-        }
+    let resolved_layout_dir = match utils::resolve_layout_dir(schematic)? {
+        Some(path) => path,
+        None => return Ok(None),
     };
 
     let source_path = schematic
