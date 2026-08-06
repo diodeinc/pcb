@@ -152,6 +152,25 @@ pub enum CopperBalanceMode {
     Perforated,
 }
 
+/// RMS of the panel's copper-moment field before and after the spatial solve.
+///
+/// Named separately from [`StackMomentField`] only because the report is
+/// serializable and `pcb-ir` carries no serde dependency.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StackMomentFieldReport {
+    pub initial_rms: f64,
+    pub achieved_rms: f64,
+}
+
+impl From<StackMomentField> for StackMomentFieldReport {
+    fn from(field: StackMomentField) -> Self {
+        Self {
+            initial_rms: field.initial_rms,
+            achieved_rms: field.achieved_rms,
+        }
+    }
+}
+
 /// Compact, serializable accounting for a completed automatic balance plan.
 #[derive(Debug, Clone, Serialize)]
 pub struct CopperBalanceReport {
@@ -161,7 +180,7 @@ pub struct CopperBalanceReport {
     /// RMS of the copper-moment field before and after the spatial solve.
     /// Carries bow and twist together, where
     /// [`CopperBalanceReport::stack_moments`] carries bow alone.
-    pub moment_field_rms: Option<(f64, f64)>,
+    pub moment_field: Option<StackMomentFieldReport>,
     pub layers: Vec<CopperBalanceLayerReport>,
 }
 
@@ -174,14 +193,14 @@ impl CopperBalanceReport {
     /// `None` when the stackup supplied no weights, which is also when the
     /// solver leaves the moment alone.
     pub fn stack_moments(&self) -> Option<(f64, f64)> {
+        // The solver already decided whether the moment was modelled at all;
+        // deciding it a second time here is how the two drift apart.
+        self.moment_field?;
         let scale = self
             .layers
             .iter()
             .map(|layer| layer.stack_weight_mm2.abs())
             .sum::<f64>();
-        if !self.stack_weights_available || scale <= 0.0 {
-            return None;
-        }
         let moment = |density: fn(&CopperBalanceLayerReport) -> f64| {
             self.layers
                 .iter()
@@ -226,14 +245,12 @@ impl CopperBalanceReport {
                 )
             })
             .collect::<Vec<_>>();
-        if let Some((untouched, achieved)) = self.stack_moments() {
-            let field = self
-                .moment_field_rms
-                .map_or(String::new(), |(before, after)| {
-                    format!(" (field rms {before:.4} -> {after:.4})")
-                });
+        if let (Some((untouched, achieved)), Some(field)) =
+            (self.stack_moments(), self.moment_field)
+        {
             lines.push(format!(
-                "balance: stack moment {untouched:.4} -> {achieved:.4}{field}"
+                "balance: stack moment {untouched:.4} -> {achieved:.4} (field rms {:.4} -> {:.4})",
+                field.initial_rms, field.achieved_rms
             ));
         }
         if !self.layers.is_empty() && !self.stack_weights_available {
@@ -253,9 +270,7 @@ impl CopperBalancePlan {
             panel_area_mm2: self.panel_area_mm2,
             footprint_area_mm2: self.footprints.area(),
             stack_weights_available: self.stack_weights_available,
-            moment_field_rms: self
-                .moment_field
-                .map(|field| (field.initial_rms, field.achieved_rms)),
+            moment_field: self.moment_field.map(StackMomentFieldReport::from),
             layers: self
                 .layers
                 .iter()

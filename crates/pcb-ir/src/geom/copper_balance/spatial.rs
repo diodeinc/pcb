@@ -310,14 +310,16 @@ pub(super) fn project_coupled_bands(
         layers
             .iter()
             .map(|layer| {
-                let shift = multiplier / layer.domain_area_mm2;
-                let sum = layer
-                    .proposal
-                    .iter()
-                    .map(|value| (value - shift).clamp(lower, upper))
-                    .sum::<f64>()
-                    .clamp(layer.sum_bounds.0, layer.sum_bounds.1);
-                (sum - layer.center) / layer.domain_area_mm2
+                let sum = clamped_sum(
+                    layer.proposal,
+                    multiplier / layer.domain_area_mm2,
+                    lower,
+                    upper,
+                )
+                .clamp(layer.sum_bounds.0, layer.sum_bounds.1);
+                // Carrying the void-area factor keeps this a density, which is
+                // the unit the exit tolerance below is stated in.
+                ROUNDED_HEXAGON_AREA_FACTOR * (sum - layer.center) / layer.domain_area_mm2
             })
             .sum::<f64>()
     };
@@ -357,14 +359,9 @@ pub(super) fn project_coupled_bands(
             .iter()
             .map(|layer| {
                 scope.spawn(move || {
-                    let shift = multiplier / layer.domain_area_mm2;
-                    let shifted = layer
-                        .proposal
-                        .iter()
-                        .map(|value| value - shift)
-                        .collect::<Vec<_>>();
                     project_box_interval(
-                        &shifted,
+                        layer.proposal,
+                        multiplier / layer.domain_area_mm2,
                         lower,
                         upper,
                         layer.sum_bounds.0,
@@ -388,53 +385,59 @@ pub(super) fn project_coupled_bands(
 /// `sum_min == sum_max` recovers that fixed-sum projection unchanged.
 pub(super) fn project_box_interval(
     values: &[f64],
+    shift: f64,
     lower: f64,
     upper: f64,
     sum_min: f64,
     sum_max: f64,
 ) -> Vec<f64> {
     debug_assert!(sum_min <= sum_max);
-    let clamped = values
-        .iter()
-        .map(|value| value.clamp(lower, upper))
-        .collect::<Vec<_>>();
-    let total = clamped.iter().sum::<f64>();
-    if total < sum_min {
-        project_box_sum(values, lower, upper, sum_min)
+    let total = clamped_sum(values, shift, lower, upper);
+    let target = if total < sum_min {
+        sum_min
     } else if total > sum_max {
-        project_box_sum(values, lower, upper, sum_max)
+        sum_max
     } else {
-        clamped
-    }
+        return values
+            .iter()
+            .map(|value| (value - shift).clamp(lower, upper))
+            .collect();
+    };
+    project_box_sum(values, shift, lower, upper, target)
 }
 
-fn project_box_sum(values: &[f64], lower: f64, upper: f64, target: f64) -> Vec<f64> {
+/// `sum_i clamp(values_i - shift, lower, upper)`, the quantity both sum
+/// projections bisect on.
+fn clamped_sum(values: &[f64], shift: f64, lower: f64, upper: f64) -> f64 {
+    values
+        .iter()
+        .map(|value| (value - shift).clamp(lower, upper))
+        .sum()
+}
+
+fn project_box_sum(values: &[f64], shift: f64, lower: f64, upper: f64, target: f64) -> Vec<f64> {
     let mut low_shift = values
         .iter()
-        .map(|value| value - upper)
+        .map(|value| value - shift - upper)
         .min_by(f64::total_cmp)
         .unwrap_or(0.0);
     let mut high_shift = values
         .iter()
-        .map(|value| value - lower)
+        .map(|value| value - shift - lower)
         .max_by(f64::total_cmp)
         .unwrap_or(0.0);
     for _ in 0..44 {
-        let shift = (low_shift + high_shift) / 2.0;
-        let sum = values
-            .iter()
-            .map(|value| (value - shift).clamp(lower, upper))
-            .sum::<f64>();
-        if sum > target {
-            low_shift = shift;
+        let trial = (low_shift + high_shift) / 2.0;
+        if clamped_sum(values, shift + trial, lower, upper) > target {
+            low_shift = trial;
         } else {
-            high_shift = shift;
+            high_shift = trial;
         }
     }
-    let shift = (low_shift + high_shift) / 2.0;
+    let trial = (low_shift + high_shift) / 2.0;
     values
         .iter()
-        .map(|value| (value - shift).clamp(lower, upper))
+        .map(|value| (value - shift - trial).clamp(lower, upper))
         .collect()
 }
 
@@ -516,18 +519,24 @@ mod tests {
         let clamped_sum = clamped.iter().sum::<f64>();
 
         // Band straddling the clamped sum: the clamp already satisfies it.
-        let inside =
-            project_box_interval(&values, lower, upper, clamped_sum - 0.2, clamped_sum + 0.2);
+        let inside = project_box_interval(
+            &values,
+            0.0,
+            lower,
+            upper,
+            clamped_sum - 0.2,
+            clamped_sum + 0.2,
+        );
         assert_eq!(inside, clamped);
 
         // Band entirely below or above it: the near edge holds with equality.
         for target in [clamped_sum - 0.3, clamped_sum + 0.15] {
             let band = if target < clamped_sum {
-                project_box_interval(&values, lower, upper, target - 0.5, target)
+                project_box_interval(&values, 0.0, lower, upper, target - 0.5, target)
             } else {
-                project_box_interval(&values, lower, upper, target, target + 0.5)
+                project_box_interval(&values, 0.0, lower, upper, target, target + 0.5)
             };
-            let fixed = project_box_sum(&values, lower, upper, target);
+            let fixed = project_box_sum(&values, 0.0, lower, upper, target);
             assert!(
                 band.iter().zip(&fixed).all(|(l, r)| (l - r).abs() <= 1e-12),
                 "{band:?} != {fixed:?}"
@@ -536,8 +545,8 @@ mod tests {
         }
 
         // A degenerate band is the fixed-sum projection exactly.
-        let pinned = project_box_interval(&values, lower, upper, 1.0, 1.0);
-        let fixed = project_box_sum(&values, lower, upper, 1.0);
+        let pinned = project_box_interval(&values, 0.0, lower, upper, 1.0, 1.0);
+        let fixed = project_box_sum(&values, 0.0, lower, upper, 1.0);
         assert!(
             pinned
                 .iter()
