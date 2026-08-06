@@ -320,19 +320,124 @@ reasoned decision that the remaining error is not worth further modelling.
 Only now does the solver change, and only if the Phase 1 authority bound said
 it was worth reaching.
 
-1. **Replace the objective's moment term.** Swap pointwise $m_i^{2}$ for the
-   validated warp functional — the $\lambda^{2}$-weighted modal norm, i.e.
-   penalise low-order coefficients of $\mathbf{M}^{T}$ weighted by their
-   deflection response. Practically this is a handful of dot products against
-   an orthonormal polynomial basis over the panel.
-2. **Keep the local density term at 5 mm.** It is serving etch loading and
-   plating uniformity, which are genuinely short-scale (§7). The two terms
-   should have *different* kernels — that they currently share one is the
-   central error.
-3. **Retune the band.** With the objective correctly scaled the trade will be
-   spent differently; `stack_flex_density` and `stack_moment_weight` need
-   re-deriving against predicted bow % rather than a dimensionless residual.
-4. **Re-measure.** Close the loop from Phase 2 on optimised panels.
+#### 4.1 The structural fact that makes this tractable
+
+Warp depends on the copper field only through a handful of numbers.
+
+The deflection response rolls off as $\lambda^{2}$ (§4) and the acceptance
+criteria are low-order modes of the deflection surface (§5). So pick an
+orthogonal basis $\{\varphi_k\}$ over the panel — $1,\;x,\;y,\;xy,\;x^2-y^2,\;x^2+y^2$
+is enough — and the entire warp objective is a function of
+
+$$
+a_k=\langle m,\varphi_k\rangle=\sum_l w_l\underbrace{\langle \rho_l,\varphi_k\rangle}_{c_{lk}}
+$$
+
+**Six numbers.** The 485 000 radii enter the warp objective only through six
+linear functionals of them. The decision variables that matter are the
+$c_{lk}$ — six modes × six layers = 36 scalars — and the objective sees only
+their weighted sum.
+
+This is why Phase 4 does not need a better large-scale solver. The part of the
+problem that concerns warp is *tiny*; the expensive part concerns etch
+uniformity and is already solved adequately.
+
+#### 4.2 A capability we do not currently have
+
+Today the band constrains one functional per layer: the total, $c_{l0}$. The
+higher modes are unconstrained and unused — the solver has never been asked to
+put *more copper on the left of the frame than the right*.
+
+That tilt is exactly the lever a spatially varying moment needs. Extending from
+"constrain the sum" to "constrain the low-order modal coefficients" is a
+genuine new actuator, not a re-weighting of the old one.
+
+#### 4.3 Two-level formulation
+
+**Outer problem — tiny, solve it properly.** Choose modal targets $c^{*}_{lk}$
+minimising predicted warp:
+
+$$
+\min_{c}\;\; \mathrm{bow\%}(a)^2+\mathrm{twist\%}(a)^2
+\quad\text{s.t.}\quad
+a_k=\sum_l w_l c_{lk},\qquad c_{lk}\in\mathcal{C}_{lk}
+$$
+
+36 variables, box constraints, convex quadratic. This is small enough that an
+off-the-shelf QP solver *is* appropriate here — or it can be solved directly,
+since at this size the cost is negligible either way. Note the inversion: we
+argued against a QP solver for the 485 k-variable problem because its Hessian
+is matrix-free and enormous; at 36 variables that objection evaporates.
+
+**Inner problem — large, keep what we have.** Given $c^{*}$, run the existing
+spatial solve with the modal coefficients constrained instead of only the sum.
+The projection generalises from "box ∩ sum-band ∩ one joint equality" to
+"box ∩ *several* banded linear functionals" — the same dual-multiplier
+bisection, now over a handful of multipliers rather than one.
+
+Constraining only $k=0$ reproduces today's behaviour exactly, which makes this
+a strict generalisation and gives a safe rollout path.
+
+#### 4.4 Bound the degradation, minimise the warp
+
+Rather than weighting two incommensurable terms with a $\mu$ nobody can
+interpret, keep the shape the band already has: **constrain the thing we
+understand, minimise the thing we care about.**
+
+The feasible set $\mathcal{C}_{lk}$ encodes "no layer's density may stray more
+than $\varepsilon$ from its target, in any low-order mode." That is a statable
+guarantee, it is what `stack_flex_density` already means for $k=0$, and it
+makes `stack_moment_weight` unnecessary — the warp term becomes the sole
+objective inside a bounded set rather than one half of a weighted sum.
+
+#### 4.5 The modal response table
+
+Rather than deriving free-edge plate solutions analytically — the boundary
+conditions are the fiddly part, and harmonic components of $m$ produce no
+interior forcing, so the naive $1/k^2$ reading needs care on a finite plate —
+compute the response **numerically, once per panel geometry**:
+
+for each basis mode $\varphi_k$, solve the plate problem for a unit
+$m=\varphi_k$, fit bow % and twist % from the resulting surface, and store a
+$6\times 2$ table. Panel dimensions change rarely, so this is cached, and it
+sidesteps the analytic subtleties entirely.
+
+#### 4.6 Simpler options, and when they suffice
+
+We do not need optimality. Ranked by effort:
+
+| Strategy | What it does | When it is enough |
+|---|---|---|
+| **Mirror-pair trade** | greedily trade density between the pair contributing most to $a_0$, until the band binds | if Phase 1 shows warp is almost entirely uniform bow — likely |
+| **One-shot modal correction** | run today's solve, measure residual $a_k$, apply a single corrective shift | if the correction is small enough not to disturb the local term |
+| **Two-level (4.3)** | outer modal solve, inner spatial solve | the recommended target |
+| **Full joint solve** | warp functional folded into $J$, one big projected gradient | not recommended — the warp gradient is rank-6 against a full-rank local term, badly conditioned, and it discards the structure that makes this easy |
+
+The honest expectation is that **mirror-pair trade captures most of the
+available benefit**, because §4 says the uniform mode dominates warp
+quadratically and Phase 1 will likely confirm $a_0$ carries nearly all of it.
+Build 4.3 only if the measured residual justifies it.
+
+#### 4.7 What we explicitly do not need
+
+- **Optimality.** Radii quantise to a 5 µm grid; solving below that is waste.
+- **Tight convergence.** Same reason. A convergence *certificate* is worth
+  having — we currently cannot tell whether 512 iterations is five times too
+  many or twice too few — but a tight tolerance is not.
+- **A general solver for the big problem.** Matrix-free, ~485 k variables,
+  trivial projection, low accuracy: first-order projected gradient is the right
+  tool and we already have it.
+
+#### 4.8 Sequencing within the phase
+
+1. Add the projected-gradient norm as a reported diagnostic. Measurement, not
+   optimisation — it can land any time and answers whether the iteration count
+   is sane.
+2. Implement the modal response table and report $a_k$ per panel. Still
+   analysis: it tells us which modes actually carry the warp.
+3. Mirror-pair trade against $a_0$. Smallest change that could work.
+4. Generalise the band projection to several modal functionals only if (2)
+   shows meaningful warp outside $a_0$.
 
 **Exit criteria.** A measured reduction in bow on real panels, not a
 dimensionless number moving.
