@@ -15,6 +15,7 @@ pub mod bom;
 #[cfg(feature = "table")]
 mod bom_table;
 pub mod hierarchical_layout;
+pub mod kicad_identity;
 pub mod kicad_netlist;
 pub mod natural_string;
 pub mod physical;
@@ -36,6 +37,10 @@ pub type Symbol = String;
 /// Attribute key that stores the path to the KiCad PCB layout associated with
 /// a module or instance. Used with `AttributeValue::String`.
 pub const ATTR_LAYOUT_PATH: &str = "layout_path";
+
+/// Attribute key that stores the path to the KiCad schematic project associated
+/// with a module or instance. Used with `AttributeValue::String`.
+pub const ATTR_SCHEMATIC_PATH: &str = "schematic_path";
 
 /// Attribute key that stores a list of layout hint expressions (e.g. placement
 /// constraints). Used with `AttributeValue::Array` where each element is an

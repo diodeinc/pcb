@@ -1,0 +1,21 @@
+{
+  "meta": {
+    "version": 1
+  },
+  "erc": {
+    "erc_exclusions": [],
+    "rule_severities": {
+      "footprint_link_issues": "ignore",
+      "multiple_net_names": "ignore",
+      "pin_not_driven": "ignore",
+      "pin_to_pin": "ignore",
+      "power_pin_not_driven": "ignore",
+      "unresolved_variable": "ignore"
+    }
+  },
+  "schematic": {
+    "drawing": {
+      "hop_over_size_choice": 3
+    }
+  }
+}

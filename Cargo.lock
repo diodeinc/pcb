@@ -4315,6 +4315,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-kicad-sch"
+version = "0.4.23"
+dependencies = [
+ "anyhow",
+ "insta",
+ "pcb-sch",
+ "pcb-sexpr",
+ "pcb-zen-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "pcb-layout"
 version = "0.4.24"
 dependencies = [
@@ -4338,7 +4352,6 @@ dependencies = [
  "starlark",
  "tempfile",
  "thiserror 2.0.19",
- "uuid",
  "walkdir",
  "zip",
 ]

@@ -1,12 +1,10 @@
 use anyhow::{Context, Result, bail};
+use pcb_sch::kicad_identity::{footprint_kiid_path, uuid_for_path};
 use pcb_sch::kicad_netlist::try_format_footprint_with_package_roots;
 use pcb_sch::{AttributeValue, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::board::{extract_keyed_footprints, footprint_name_from_fpid};
 use std::collections::{BTreeMap, BTreeSet};
-use uuid::Uuid;
-
-const UUID_NAMESPACE_URL: Uuid = Uuid::from_u128(0x6ba7b811_9dad_11d1_80b4_00c04fd430c8);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Port {
@@ -487,13 +485,8 @@ fn comparable_fpid(fpid: &str) -> String {
     footprint_name_from_fpid(fpid)
 }
 
-fn uuid_for_path(path: &str) -> String {
-    Uuid::new_v5(&UUID_NAMESPACE_URL, path.as_bytes()).to_string()
-}
-
 fn expected_kiid_path(path: &str) -> String {
-    let uuid = uuid_for_path(path);
-    format!("/{uuid}/{uuid}")
+    footprint_kiid_path(path)
 }
 
 #[cfg(test)]

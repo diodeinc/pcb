@@ -38,6 +38,7 @@ pcb-zen = { path = "crates/pcb-zen" }
 pcb-zen-core = { path = "crates/pcb-zen-core" }
 pcb-ui = { path = "crates/pcb-ui" }
 pcb-kicad = { path = "crates/pcb-kicad" }
+pcb-kicad-sch = { path = "crates/pcb-kicad-sch" }
 pcb-sexpr = { path = "crates/pcb-sexpr", features = ["serde"] }
 pcb-starlark-lsp = { path = "crates/pcb-starlark-lsp" }
 pcb-fmt = { path = "crates/pcb-fmt" }
