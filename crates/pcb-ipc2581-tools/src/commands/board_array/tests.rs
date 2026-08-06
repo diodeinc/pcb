@@ -204,7 +204,10 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
         )
         .replace(r#"lineWidth="0.2""#, r#"lineWidth="4""#);
     let ipc = Ipc2581::parse(&input).unwrap();
-    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, None).unwrap();
+    // The smallest sheet. Balancing costs the panel's area, and nothing here
+    // asks how many boards fit on it.
+    let sheet = Some(AutoSheetSize::A7);
+    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
     let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
@@ -248,7 +251,7 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
         );
     }
 
-    let creation = create_auto_board_array(&input, None, true).unwrap();
+    let creation = create_auto_board_array(&input, sheet, true).unwrap();
     let copper_balance = creation.copper_balance.as_ref().unwrap();
     assert_eq!(copper_balance.layers.len(), 2);
     for report in &copper_balance.layers {
