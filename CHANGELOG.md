@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Sandbox requests now use freshly minted provider-neutral connection endpoints and headers without replaying rejected mutations.
 - Fabrication panels now default to a 7.62 mm gap between tiled assembly panels.
 - Board arrays default to copper balancing; fabrication panels default to no balancing. Both can be overridden.
 - Default board configurations now keep copper at least 0.4 mm from the board edge.
