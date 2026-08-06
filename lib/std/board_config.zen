@@ -935,7 +935,7 @@ BASE_CONSTRAINTS = Constraints(
         minimum_track_width=0.09,  # Min track width (1oz)
         minimum_via_diameter=0.25,  # Min via diameter (0.25mm)
         copper_to_hole_clearance=0.2,  # Inner layer via hole to copper clearance
-        copper_to_edge_clearance=0.3,  # Reasonable edge clearance
+        copper_to_edge_clearance=0.4,
     ),
     holes=Holes(
         minimum_through_hole=0.15,  # Min via hole size
@@ -966,7 +966,7 @@ BASE_CONSTRAINTS_2OZ = Constraints(
         minimum_track_width=0.16,  # Min track width (2oz copper)
         minimum_via_diameter=0.25,  # Same via diameter
         copper_to_hole_clearance=0.2,  # Same hole clearance
-        copper_to_edge_clearance=0.3,  # Same edge clearance
+        copper_to_edge_clearance=0.4,
     ),
     holes=Holes(
         minimum_through_hole=0.15,  # Same hole size
