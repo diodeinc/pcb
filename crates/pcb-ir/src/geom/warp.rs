@@ -218,8 +218,8 @@ impl ThermalStack {
 
     /// Per-conductor moment arms `t_l z_l`, signed about the neutral axis.
     ///
-    /// These are the weights the copper-balance solver already uses. Recovering
-    /// them here from the same stackup is what lets the two agree.
+    /// The copper-balance solver draws its stack weights from here, so the
+    /// moment it flattens is the moment the warp estimate measures.
     pub fn conductor_weights(&self) -> Vec<ConductorWeight> {
         self.layers
             .iter()
@@ -643,16 +643,18 @@ mod tests {
         PanelField::new(samples, values, bounds).unwrap()
     }
 
-    /// A conventional 1.6 mm six-layer build: 1 oz foils, thin outer prepreg,
-    /// thicker cores.
+    /// A conventional 1.6 mm six-layer build: six 1 oz foils, thin outer
+    /// prepregs, thicker cores.
     fn six_layer_panel() -> ThermalStack {
         ThermalStack::new(vec![
             copper(0.035),
             laminate(0.2),
             copper(0.035),
-            laminate(0.5),
+            laminate(0.3),
             copper(0.035),
-            laminate(0.5),
+            laminate(0.39),
+            copper(0.035),
+            laminate(0.3),
             copper(0.035),
             laminate(0.2),
             copper(0.035),

@@ -229,7 +229,7 @@ Related constants outside the profile, with the same posture:
 |---|---|---|
 | Balancing-region clearance / regularization radii | 0.5 mm | safe-region construction |
 | Warp model temperature drop (`LAMINATE_RELAXATION_DROP_K`) | 110 K | `pcb-ir::geom::warp` — the largest uncertainty in the *absolute* warp figure; cancels when comparing panelizations of one stackup |
-| Warp material constants | textbook Cu / FR-4 | `pcb-ir::geom::warp` — calibrated only by consistency: the model puts the 0.75 % IPC bow limit at ~12 % mirror-pair mismatch, inside the 10–15 % fabricators quote |
+| Warp material constants | textbook Cu / FR-4 | `pcb-ir::geom::warp` — calibrated only by consistency: the model puts the 0.75 % IPC bow limit at ~13 % mirror-pair mismatch, inside the 10–15 % fabricators quote |
 
 Removed knobs, for the record: `stack_moment_weight` (the local-versus-moment
 exchange rate) is gone — the moment left the iterated objective when its

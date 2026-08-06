@@ -58,7 +58,7 @@ pub struct WarpAnalysis {
 /// Requires a stackup carrying a thickness for every layer: without it there is
 /// no neutral axis, no lever arms, and nothing to estimate.
 pub fn analyze(ipc: &Ipc2581) -> Result<WarpAnalysis> {
-    let (stack, copper_names) = read_stack(ipc)?;
+    let (stack, copper_names) = physical_stack(ipc)?;
     let conductors = stack.conductor_weights();
     let bounds = panel_bounds(ipc)?;
     let sample_pitch_mm =
@@ -117,8 +117,10 @@ pub fn analyze(ipc: &Ipc2581) -> Result<WarpAnalysis> {
 ///
 /// Both come from the stackup so a lever arm cannot land on the wrong layer:
 /// the ECAD layer list carries the same layers, but nothing obliges it to carry
-/// them in the build order the stackup describes.
-fn read_stack(ipc: &Ipc2581) -> Result<(ThermalStack, Vec<String>)> {
+/// them in the build order the stackup describes. This is the one place the
+/// stackup becomes physics -- the balance solver's stack weights come through
+/// here too, so what balancing optimizes is exactly what warp measures.
+pub(crate) fn physical_stack(ipc: &Ipc2581) -> Result<(ThermalStack, Vec<String>)> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let stackup = ecad
         .cad_data
@@ -140,6 +142,9 @@ fn read_stack(ipc: &Ipc2581) -> Result<(ThermalStack, Vec<String>)> {
             let thickness_mm = layer
                 .thickness
                 .context("physical stackup is missing a thickness for at least one layer")?;
+            if !thickness_mm.is_finite() || thickness_mm < 0.0 {
+                bail!("physical stackup carries a negative layer thickness");
+            }
             let name = ipc.resolve(layer.layer_ref);
             let is_conductor = ecad.cad_data.layers.iter().any(|ecad_layer| {
                 ipc.resolve(ecad_layer.name) == name
