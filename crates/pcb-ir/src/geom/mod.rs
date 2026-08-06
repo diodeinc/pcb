@@ -18,6 +18,7 @@ pub mod shapes;
 mod store;
 mod style;
 pub mod tol;
+pub mod warp;
 
 pub use affine::Affine2;
 pub use arc::Arc;

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `ipc2581 warp` estimates panel bow and twist against the IPC-6012 limit, with an optional HTML report.
+
 ### Changed
 
 - Sandbox requests now use freshly minted provider-neutral connection endpoints and headers without replaying rejected mutations.
@@ -17,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - The default 1 oz board netclass now uses a 0.45 mm via diameter with a 0.20 mm drill.
 - `--layout-target` now takes `board` or `board-array` on every command, and defaults to `board-array`.
 - Copper balancing now accounts for the full panel stack and handles narrow frames and gutters more accurately.
+- Copper balancing now counterweights the stack's imbalance from the frame instead of extending it.
 - `pcb layout --temp`; layouts are now always generated in their configured directory.
 - `ipc2581 render --flat`, which produced the same output as a plain render.
 

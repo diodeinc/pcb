@@ -25,11 +25,9 @@ to disable it. Fabrication-panel creation leaves copper unchanged by default;
 pass `--copper-balance` to enable balancing. Both commands accept the inverse
 flag as an explicit override, and reject using both flags together.
 
-The mathematical and geometric strategy for automatically balancing board
-arrays is documented in
-[`docs/board-array-copper-balancing.md`](docs/board-array-copper-balancing.md);
-the fabrication-panel pass that extends it is documented in
-[`docs/fab-panel-copper-balancing.md`](docs/fab-panel-copper-balancing.md).
+The mathematical and geometric strategy for automatic copper balancing — both
+the board-array and fabrication-panel passes — is documented in
+[`docs/copper-balancing.md`](docs/copper-balancing.md).
 
 `edit bom` modifies the input file when `--output` is omitted. Specify an output
 path when the source document must remain unchanged.

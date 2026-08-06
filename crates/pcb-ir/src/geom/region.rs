@@ -117,6 +117,32 @@ pub fn ring_signed_area(ring: &Ring) -> f64 {
     area / 2.0
 }
 
+/// Sutherland-Hodgman clip of a closed ring against a half-plane, kept where
+/// `inside` is non-negative.
+///
+/// A concave ring can come back with edges doubled back along the cut. They
+/// enclose nothing, so the signed area of the result is the true clipped area,
+/// which is all this is used for.
+fn clip_half_plane(ring: &Ring, inside: impl Fn([f64; 2]) -> f64) -> Ring {
+    let mut clipped = Ring::new();
+    for index in 0..ring.len() {
+        let start = ring[index];
+        let end = ring[(index + 1) % ring.len()];
+        let (from, to) = (inside(start), inside(end));
+        if (from < 0.0) != (to < 0.0) {
+            let step = from / (from - to);
+            clipped.push([
+                start[0] + step * (end[0] - start[0]),
+                start[1] + step * (end[1] - start[1]),
+            ]);
+        }
+        if to >= 0.0 {
+            clipped.push(end);
+        }
+    }
+    clipped
+}
+
 /// Net enclosed area of a regularized ring set (holes are wound opposite the
 /// outer boundary, so summing signed areas subtracts them).
 pub fn rings_area(rings: &[Ring]) -> f64 {
@@ -294,6 +320,149 @@ impl ContourSet {
         simplify_shapes(self.rings.clone(), FillRule::NonZero)
             .into_iter()
             .map(|shape| Self::new(shape, FillRule::NonZero, self.tolerance))
+            .collect()
+    }
+
+    /// Whether the region contains each point, as a one-or-zero indicator.
+    ///
+    /// Testing points one at a time walks every edge per point. This sweeps
+    /// them instead: sort by height, and at each height solve the edge
+    /// crossings once and share them across every point on that line. Sampling
+    /// a region's coverage means asking about tens of thousands of points at
+    /// once, where the difference is the difference between usable and not.
+    fn contains_points(&self, points: &[Point]) -> Vec<f64> {
+        let mut result = vec![0.0; points.len()];
+        if self.is_empty() {
+            return result;
+        }
+        let mut by_height = (0..points.len()).collect::<Vec<_>>();
+        by_height.sort_by(|left, right| {
+            points[*left]
+                .y
+                .total_cmp(&points[*right].y)
+                .then_with(|| points[*left].x.total_cmp(&points[*right].x))
+        });
+        let edges = self
+            .rings
+            .iter()
+            .flat_map(|ring| {
+                ring.iter()
+                    .copied()
+                    .zip(ring.iter().copied().cycle().skip(1))
+                    .take(ring.len())
+            })
+            .collect::<Vec<_>>();
+
+        let mut first = 0;
+        while first < by_height.len() {
+            let y = points[by_height[first]].y;
+            let mut last = first + 1;
+            while last < by_height.len() && (points[by_height[last]].y - y).abs() <= tol::EPSILON_MM
+            {
+                last += 1;
+            }
+            let mut crossings = edges
+                .iter()
+                .filter_map(|([x0, y0], [x1, y1])| {
+                    // Half-open in y so a vertex shared by two edges is counted
+                    // once, which is what keeps the winding number honest.
+                    let direction = if *y0 <= y && y < *y1 {
+                        1
+                    } else if *y1 <= y && y < *y0 {
+                        -1
+                    } else {
+                        return None;
+                    };
+                    Some((x0 + (y - y0) * (x1 - x0) / (y1 - y0), direction))
+                })
+                .collect::<Vec<_>>();
+            crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
+            let mut crossing = 0;
+            let mut winding = 0;
+            for &point in &by_height[first..last] {
+                while crossing < crossings.len() && crossings[crossing].0 <= points[point].x {
+                    winding += crossings[crossing].1;
+                    crossing += 1;
+                }
+                result[point] = f64::from(winding != 0);
+            }
+            first = last;
+        }
+        result
+    }
+
+    /// What fraction of each cell of a regular grid over `bounds` the region
+    /// covers, row-major from the bottom-left cell.
+    ///
+    /// Measured as an area rather than sampled. A periodic fill — a hatch, a
+    /// thieving lattice — beats against any sampling pitch and comes back as a
+    /// moire pattern that is an artefact of the sampling and not of the copper.
+    ///
+    /// Area is additive over the rings of a regularized region, holes included
+    /// with their sign, so each ring is clipped to the cells its bounds reach
+    /// and its signed area accumulated there. Clipping runs a row at a time so a
+    /// ring meets only the columns of the band it actually crosses.
+    pub fn grid_coverage(&self, bounds: BBox, columns: usize, rows: usize) -> Vec<f64> {
+        assert!(columns > 0 && rows > 0, "a grid needs at least one cell");
+        let width = bounds.width() / columns as f64;
+        let height = bounds.height() / rows as f64;
+        let index = |value: f64, origin: f64, span: f64, count: usize| {
+            ((value - origin) / span)
+                .floor()
+                .clamp(0.0, count as f64 - 1.0) as usize
+        };
+        let mut areas = vec![0.0; columns * rows];
+        for ring in &self.rings {
+            let ring_bbox = rings_bbox(std::slice::from_ref(ring));
+            for row in index(ring_bbox.min.y, bounds.min.y, height, rows)
+                ..=index(ring_bbox.max.y, bounds.min.y, height, rows)
+            {
+                let floor = bounds.min.y + row as f64 * height;
+                let band =
+                    clip_half_plane(&clip_half_plane(ring, |point| point[1] - floor), |point| {
+                        floor + height - point[1]
+                    });
+                let band_bbox = rings_bbox(std::slice::from_ref(&band));
+                for column in index(band_bbox.min.x, bounds.min.x, width, columns)
+                    ..=index(band_bbox.max.x, bounds.min.x, width, columns)
+                {
+                    let left = bounds.min.x + column as f64 * width;
+                    let cell = clip_half_plane(
+                        &clip_half_plane(&band, |point| point[0] - left),
+                        |point| left + width - point[0],
+                    );
+                    areas[row * columns + column] += ring_signed_area(&cell);
+                }
+            }
+        }
+        areas.iter().map(|area| area / (width * height)).collect()
+    }
+
+    /// What fraction of each cell the region covers.
+    ///
+    /// Cells are centred on `centers` and share one `(width, height)`. Coverage
+    /// is estimated by stratified subsampling rather than by intersecting
+    /// geometry, so a trace narrower than a cell contributes its true share
+    /// instead of aliasing to nothing or to everything.
+    pub fn cell_coverage(&self, centers: &[Point], cell: (f64, f64)) -> Vec<f64> {
+        const STRATA: usize = 3;
+        let offset = |index: usize, span: f64| ((index as f64 + 0.5) / STRATA as f64 - 0.5) * span;
+        let subsamples = centers
+            .iter()
+            .flat_map(|center| {
+                (0..STRATA).flat_map(move |row| {
+                    (0..STRATA).map(move |column| {
+                        Point::new(
+                            center.x + offset(column, cell.0),
+                            center.y + offset(row, cell.1),
+                        )
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        self.contains_points(&subsamples)
+            .chunks_exact(STRATA * STRATA)
+            .map(|tile| tile.iter().sum::<f64>() / (STRATA * STRATA) as f64)
             .collect()
     }
 
@@ -1263,6 +1432,41 @@ fn segment_bbox(start: Point, end: Point) -> BBox {
 mod tests {
     use super::*;
     use crate::geom::shapes;
+
+    /// Partial cells are the whole point: a sampled estimate would round each
+    /// of these to nothing or to everything.
+    #[test]
+    fn grid_coverage_measures_partly_covered_cells_exactly() {
+        let square = ContourSet::rectangle(rect(0.5, 0.5, 2.5, 2.5), tol::REGION_MM);
+
+        let coverage = square.grid_coverage(rect(0.0, 0.0, 3.0, 3.0), 3, 3);
+
+        #[rustfmt::skip]
+        let expected = [
+            0.25, 0.5, 0.25,
+            0.5,  1.0, 0.5,
+            0.25, 0.5, 0.25,
+        ];
+        for (measured, expected) in coverage.iter().zip(expected) {
+            assert!(
+                (measured - expected).abs() < 1e-12,
+                "{measured} != {expected}"
+            );
+        }
+    }
+
+    /// Holes are separate rings wound against their outer, and the cell they
+    /// fall in has to see that sign.
+    #[test]
+    fn grid_coverage_subtracts_holes() {
+        let ring = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM).difference(
+            &ContourSet::rectangle(rect(1.0, 1.0, 2.0, 3.0), tol::REGION_MM),
+        );
+
+        let coverage = ring.grid_coverage(rect(0.0, 0.0, 4.0, 4.0), 1, 1);
+
+        assert!((coverage[0] - 14.0 / 16.0).abs() < 1e-12, "{coverage:?}");
+    }
 
     #[test]
     fn contour_set_composes_region_operations() {

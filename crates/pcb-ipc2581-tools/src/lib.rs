@@ -13,6 +13,7 @@ pub mod manufacturing;
 pub mod placement;
 mod steps;
 pub mod utils;
+pub mod warp;
 pub mod xnc;
 
 // Re-export ipc2581 for external use

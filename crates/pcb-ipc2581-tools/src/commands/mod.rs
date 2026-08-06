@@ -13,6 +13,8 @@ pub mod info;
 pub mod outline;
 pub mod render;
 pub mod view;
+pub mod warp;
+pub mod warp_report;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EdgeInsetsMm {

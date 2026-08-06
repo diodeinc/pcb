@@ -425,53 +425,29 @@ pub fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourS
     Ok(ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM))
 }
 
-/// Signed first-moment weight `z * thickness` per copper layer, from the
-/// physical stackup's ordered layer thicknesses. `None` when the stackup
-/// cannot locate every copper layer.
+/// Signed first-moment weight `t * z` per copper layer, arms measured from
+/// the stackup's stiffness-weighted neutral axis, positive out of the top
+/// face. `None` when the stackup cannot locate every copper layer.
+///
+/// Derived from the same [`pcb_ir::geom::warp::ThermalStack`] the warp
+/// estimate reads, so the moment balancing flattens is the moment warp
+/// measures.
 pub fn physical_copper_stack_weights(ipc: &Ipc2581) -> Option<HashMap<String, f64>> {
-    let ecad = ipc.ecad()?;
-    let stackup = ecad.cad_data.stackups.first()?;
-    let mut layers = stackup.layers.iter().collect::<Vec<_>>();
-    if layers.iter().all(|layer| layer.layer_number.is_some()) {
-        layers.sort_by_key(|layer| layer.layer_number);
-    }
-
-    let mut cursor_mm = 0.0;
-    let mut copper = Vec::new();
-    for stack_layer in layers {
-        let thickness_mm = stack_layer.thickness?;
-        if !thickness_mm.is_finite() || thickness_mm < 0.0 {
-            return None;
-        }
-        let center_mm = cursor_mm + thickness_mm / 2.0;
-        let name = ipc.resolve(stack_layer.layer_ref);
-        if ecad.cad_data.layers.iter().any(|layer| {
-            ipc.resolve(layer.name) == name && crate::layers::is_copper(layer.layer_function)
-        }) {
-            if thickness_mm <= 0.0 {
-                return None;
-            }
-            copper.push((name.to_string(), center_mm, thickness_mm));
-        }
-        cursor_mm += thickness_mm;
-    }
-
-    let expected = ecad
+    let (stack, copper_names) = crate::warp::physical_stack(ipc).ok()?;
+    let expected = ipc
+        .ecad()?
         .cad_data
         .layers
         .iter()
         .filter(|layer| crate::layers::is_copper(layer.layer_function))
         .count();
-    if copper.len() != expected || cursor_mm <= 0.0 {
-        return None;
-    }
-    let midplane_mm = cursor_mm / 2.0;
-    Some(
-        copper
+    (copper_names.len() == expected).then(|| {
+        copper_names
             .into_iter()
-            .map(|(name, center_mm, thickness_mm)| (name, (midplane_mm - center_mm) * thickness_mm))
-            .collect(),
-    )
+            .zip(stack.conductor_weights())
+            .map(|(name, weight)| (name, weight.moment_arm_mm2))
+            .collect()
+    })
 }
 
 struct IpcCopperComponent {

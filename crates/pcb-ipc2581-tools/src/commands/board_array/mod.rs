@@ -475,8 +475,12 @@ pub fn create_board_array(
 }
 
 #[cfg(test)]
+/// Panelize without balancing copper, for the cases that are about the array
+/// itself. Balancing costs the panel's whole area, so the cases that are about
+/// it ask for it.
+#[cfg(test)]
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
-    Ok(create_board_array(xml, options, true)?.xml)
+    Ok(create_board_array(xml, options, false)?.xml)
 }
 
 #[cfg(test)]
@@ -501,7 +505,7 @@ fn create_auto_board_array_xml_with_sheet(
     xml: &str,
     sheet: Option<AutoSheetSize>,
 ) -> Result<String> {
-    Ok(create_auto_board_array(xml, sheet, true)?.xml)
+    Ok(create_auto_board_array(xml, sheet, false)?.xml)
 }
 
 fn auto_board_array_options(

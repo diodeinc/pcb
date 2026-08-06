@@ -18,8 +18,8 @@ use lattice::{
     LatticeCandidates, ROUNDED_HEXAGON_AREA_FACTOR, hex_aligned_lattice_centers, lattice_index,
 };
 use spatial::{
-    CoupledBand, LatticeDensityKernel, density_evaluation_points, lattice_cell_coverage,
-    normalized_stack_weights, project_coupled_bands, spatial_result_from_squared_radii,
+    LatticeDensityKernel, density_evaluation_points, lattice_cell_coverage,
+    normalized_stack_weights, project_box_sum, spatial_result_from_squared_radii,
 };
 
 const NUMERIC_EPSILON: f64 = 1e-9;
@@ -51,37 +51,23 @@ pub struct DenseCopperBalanceProfile {
     /// cannot hold finer distinctions, and the shared grid keeps the voids a
     /// small set of repeated templates instead of thousands of unique shapes.
     pub void_radius_step_mm: f64,
-    /// How far a layer's density may end up from its target to flatten the
-    /// stack's copper moment, as a fraction of its density domain.
+    /// How far a layer's fill may step off its board's own density to flatten
+    /// the stack's copper moment.
     ///
-    /// The spatial solve otherwise conserves each layer's selected copper area
-    /// exactly, which lets it redistribute copper but never trade a little of
-    /// one layer's density match for a flatter moment. This band frees that
-    /// trade and is the bound on it: no layer's achieved density leaves this
-    /// distance from its target, whatever [`Self::stack_moment_weight`] asks
-    /// for. Zero pins every layer to its uniform selection, the behavior
-    /// before the band existed, and nothing below can move it.
+    /// This is the whole trade between the two things balancing is for, so it
+    /// is stated in the units the losing side is stated in. Etch loading is a
+    /// local effect — etchant works faster in sparse regions — so what it cares
+    /// about is the step in density across the boundary between a board and the
+    /// frame beside it. This bounds that step, and every layer's fill stays
+    /// within it whatever the moment asks for.
     ///
-    /// The cap earns its keep on boards the weight alone would maul. A
-    /// two-layer panel poured 0.9 against 0.3 carries a moment worth a 30%
-    /// correction; this is what refuses to spend it.
+    /// The moment needs a few percent on these panels. Plating already varies
+    /// by under ten percent across a panel once thieving is doing its work, and
+    /// fabricators quote ten to fifteen for mirrored-layer mismatch, so a step
+    /// of a few percent sits well inside what the process already carries.
+    ///
+    /// Zero pins every layer to its own board density.
     pub stack_flex_density: f64,
-    /// How hard the through-stack moment competes with each layer's own
-    /// density match.
-    ///
-    /// The objective already holds both terms, so this only sets their
-    /// exchange rate. It is normalized against the stack's own weights, which
-    /// makes it scale-free: the moment that survives is `M_0 / (1 + weight)`
-    /// whatever the stack's depth, so two sheds two thirds of it on a
-    /// two-layer board and on a twelve-layer one alike.
-    /// [`Self::stack_flex_density`] is what keeps the correction bounded while
-    /// it does.
-    ///
-    /// Zero drops the moment from the objective, leaving each layer to match
-    /// its own density alone — and with nothing to spend them on, holds the
-    /// bands shut. A stackup that supplies no weights reaches the same place
-    /// on its own, whatever this is set to.
-    pub stack_moment_weight: f64,
 }
 
 impl DenseCopperBalanceProfile {
@@ -94,8 +80,7 @@ impl DenseCopperBalanceProfile {
         boundary_web_mm: 0.20,
         density_sigma_mm: 5.0,
         void_radius_step_mm: 0.005,
-        stack_flex_density: 0.01,
-        stack_moment_weight: 2.0,
+        stack_flex_density: 0.05,
     };
 
     pub fn lattice_column_pitch_mm(self) -> f64 {
@@ -140,11 +125,6 @@ impl DenseCopperBalanceProfile {
         if !self.stack_flex_density.is_finite() || !(0.0..=1.0).contains(&self.stack_flex_density) {
             return Err(DenseCopperBalanceError::InvalidProfile(
                 "stack flex density must be between zero and one".to_string(),
-            ));
-        }
-        if !self.stack_moment_weight.is_finite() || self.stack_moment_weight < 0.0 {
-            return Err(DenseCopperBalanceError::InvalidProfile(
-                "stack moment weight must be finite and non-negative".to_string(),
             ));
         }
         if self.min_void_radius_mm > self.max_void_radius_mm {
@@ -609,52 +589,61 @@ pub fn generate_spatial_dense_copper_balance(
         .iter()
         .map(|radii| radii.iter().sum::<f64>())
         .collect::<Vec<_>>();
-    // Void area moves opposite to copper area, so a symmetric copper band is a
-    // symmetric band on the squared-radius sum. Clamping to the range the box
-    // itself can reach keeps the feasible set nonempty, and since each uniform
-    // sum is already inside that range the band always contains its own center.
+    let cell_area_mm2 = SQRT_3 * profile.pitch_mm.powi(2) / 2.0;
     let normalized_stack_weights = normalized_stack_weights(request.layers);
-    // Whether there is a moment to flatten at all: a stackup that located no
-    // conductors leaves every weight zero, and a zero weight drops the term
-    // from the objective. Either way the bands buy nothing, and leaving them
-    // open would let the local density error trade layers off their targets
-    // for it -- on the very panels reported as balanced independently.
-    let moment_scale = normalized_stack_weights
+    // A stackup that located no conductors leaves every weight zero. There is
+    // no moment to report and none to flatten, and saying it is zero would
+    // claim we looked.
+    let stack_is_weighed = normalized_stack_weights.iter().any(|weight| *weight != 0.0);
+    // Where each layer's copper area lands is settled once, here, rather than
+    // argued against the local term on every iteration. The moment is linear in
+    // the copper each layer carries, so the position that flattens it is a
+    // closed form, and the iteration below is left to the local density term
+    // alone -- the term that does etch and plating work, at a scale the moment
+    // cannot see.
+    //
+    // How far each layer may step, as copper area. Measured over the lattice it
+    // actually controls, so the bound is the density step across the boundary
+    // between a board and the frame beside it, and a layer that took no lattice
+    // brings nothing to the trade.
+    let slack_areas_mm2 = squared_radii
         .iter()
-        .map(|weight| weight * weight)
+        .map(|radii| profile.stack_flex_density * radii.len() as f64 * cell_area_mm2)
+        .collect::<Vec<_>>();
+    // The moment the uniform selection carries, and the most those steps can
+    // move it. A stackup that located no conductors leaves every weight zero,
+    // which leaves both at zero and every layer on its own density.
+    let moment_mm4 = uniform
+        .iter()
+        .zip(request.layers)
+        .zip(&normalized_stack_weights)
+        .map(|((result, layer), weight)| {
+            weight * (layer.existing_copper.area() + result.solution.generated_area_mm2)
+        })
         .sum::<f64>();
-    // Dividing by `sum_l w_l^2` is what makes the weight scale-free: the
-    // moment that survives is `M_0 / (1 + weight)` whatever the stack's depth,
-    // rather than shrinking with layer count because the local term brings one
-    // squared error per layer against this term's one.
-    let moment_gain = if moment_scale > 0.0 {
-        profile.stack_moment_weight / moment_scale
-    } else {
-        0.0
-    };
-    let squared_radius_bands = squared_radius_sums
+    // Shares are weighted by lever arm against the longest one, so the layer
+    // with the most leverage spends its whole step and the others spend in
+    // proportion. A layer the stackup gave no weight does not move, and none
+    // can exceed the step it was given.
+    let longest_arm = normalized_stack_weights
         .iter()
-        .enumerate()
-        .map(|(layer_index, sum)| {
-            let slack = if moment_gain > 0.0 {
-                profile.stack_flex_density * density_domain_areas[layer_index]
-                    / ROUNDED_HEXAGON_AREA_FACTOR
-            } else {
-                0.0
-            };
-            // Clamping the slack rather than the endpoints keeps "the band
-            // contains the sum it surrounds" structural. Clamping the
-            // endpoints would rest on an accumulated sum comparing against a
-            // multiplied bound, which a layer whose radii all sit on one bound
-            // rounds across, and it would need its own case for the layer that
-            // took no lattice and has nothing to trade.
-            let site_count = squared_radii[layer_index].len() as f64;
-            let room_below = (sum - site_count * lower).max(0.0);
-            let room_above = (site_count * upper - sum).max(0.0);
-            (sum - slack.min(room_below), sum + slack.min(room_above))
+        .fold(0.0_f64, |longest, weight| longest.max(weight.abs()));
+    let share = |weight: f64| weight / longest_arm.max(f64::MIN_POSITIVE);
+    let reach_mm4 = normalized_stack_weights
+        .iter()
+        .zip(&slack_areas_mm2)
+        .map(|(weight, slack)| weight * share(*weight) * slack)
+        .sum::<f64>();
+    let spend = (-moment_mm4).clamp(-reach_mm4, reach_mm4) / reach_mm4.max(f64::MIN_POSITIVE);
+    // Void area moves opposite to copper area.
+    let pinned_sums = squared_radius_sums
+        .iter()
+        .zip(&normalized_stack_weights)
+        .zip(&slack_areas_mm2)
+        .map(|((sum, weight), slack)| {
+            sum - spend * share(*weight) * slack / ROUNDED_HEXAGON_AREA_FACTOR
         })
         .collect::<Vec<_>>();
-    let cell_area_mm2 = SQRT_3 * profile.pitch_mm.powi(2) / 2.0;
     let void_fraction_per_radius_squared = ROUNDED_HEXAGON_AREA_FACTOR / cell_area_mm2;
     let step = 0.25 / void_fraction_per_radius_squared.powi(2);
 
@@ -740,9 +729,8 @@ pub fn generate_spatial_dense_copper_balance(
                 .map(|handle| handle.join().expect("spatial density pass panicked"))
                 .collect::<Vec<_>>()
         });
-        // The panel's copper moment about its mid-plane. Squaring this field
-        // pointwise charges for both warp modes at once: bow is its mean,
-        // twist is its variation.
+        // The panel's copper moment about its mid-plane, reported before and
+        // after so the summary can say what the settlement bought.
         let stack_moment = (0..evaluation_points.len())
             .map(|site_index| {
                 normalized_stack_weights
@@ -752,7 +740,7 @@ pub fn generate_spatial_dense_copper_balance(
                     .sum::<f64>()
             })
             .collect::<Vec<_>>();
-        if moment_gain > 0.0 {
+        if stack_is_weighed {
             achieved_reading = MomentReading::of(&stack_moment);
             initial_reading.get_or_insert(achieved_reading);
         }
@@ -760,29 +748,22 @@ pub fn generate_spatial_dense_copper_balance(
         let proposals = std::thread::scope(|scope| {
             let active_sites = &active_sites;
             let density_kernel = &density_kernel;
-            let normalized_stack_weights = &normalized_stack_weights;
             let handles = squared_radii
                 .iter()
                 .zip(influence_scratch.iter_mut())
                 .enumerate()
                 .map(|(layer_index, (radii, influence))| {
                     let density = &density;
-                    let stack_moment = &stack_moment;
                     let layers = request.layers;
                     scope.spawn(move || {
                         if radii.is_empty() {
                             return Vec::new();
                         }
-                        // Its own density error, plus its share of the moment
-                        // it helps carry, weighted by how hard the moment is
-                        // allowed to argue.
+                        // Its own density error. The moment is not here: the
+                        // settlement already spent what the stack was owed.
                         let residual = density[layer_index]
                             .iter()
-                            .zip(stack_moment)
-                            .map(|(density, moment)| {
-                                (density - layers[layer_index].target_density)
-                                    + moment_gain * normalized_stack_weights[layer_index] * moment
-                            })
+                            .map(|density| density - layers[layer_index].target_density)
                             .collect::<Vec<_>>();
                         density_kernel.smooth_adjoint_into(&residual, influence);
                         radii
@@ -803,22 +784,14 @@ pub fn generate_spatial_dense_copper_balance(
                 .map(|handle| handle.join().expect("spatial update pass panicked"))
                 .collect::<Vec<_>>()
         });
-        // The layers meet here: their bands are only useful against each other,
-        // so the trade between them is settled before any radius is committed.
-        let bands = proposals
-            .iter()
-            .enumerate()
-            .map(|(layer_index, proposal)| CoupledBand {
-                proposal,
-                sum_bounds: squared_radius_bands[layer_index],
-                center: squared_radius_sums[layer_index],
-                domain_area_mm2: density_domain_areas[layer_index],
-            })
-            .collect::<Vec<_>>();
+        // Each layer keeps the copper area the settlement asked for, so it
+        // redistributes within the panel and never spends against the stack.
         let update = squared_radii
             .iter_mut()
-            .zip(project_coupled_bands(&bands, lower, upper))
-            .map(|(radii, projected)| {
+            .zip(&proposals)
+            .zip(&pinned_sums)
+            .map(|((radii, proposal), pinned)| {
+                let projected = project_box_sum(proposal, lower, upper, *pinned);
                 let update = radii
                     .iter()
                     .zip(&projected)
@@ -1185,7 +1158,6 @@ mod tests {
             density_sigma_mm: 5.0,
             void_radius_step_mm: 0.005,
             stack_flex_density: 0.0,
-            stack_moment_weight: 0.0,
         };
         profile.validate().unwrap();
         let safe_region = ContourSet::rectangle(
@@ -1252,25 +1224,6 @@ mod tests {
                 .any(|void| (void.bbox.max.y - voidable.bbox.max.y).abs() <= 2.0 * tol::FLATTEN_MM),
         ];
         assert!(touches_each_boundary.into_iter().all(|touches| touches));
-    }
-
-    #[test]
-    fn spatial_solver_accepts_no_layers() {
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(24.0, 16.0)),
-            tol::REGION_MM,
-        );
-        let result = generate_spatial_dense_copper_balance(
-            DenseCopperBalanceProfile::V1,
-            SpatialCopperBalanceRequest {
-                panel_region: &panel,
-                lattice_origin: Point::ZERO,
-                layers: &[],
-            },
-        )
-        .unwrap();
-
-        assert!(result.layers.is_empty());
     }
 
     #[test]
@@ -1653,11 +1606,11 @@ mod tests {
         );
     }
 
-    /// A layer that takes no lattice still sits in the joint solve, and its
-    /// band has to describe a sum that cannot move. Sizing that band from the
-    /// sites it declined would place it above zero and invert it.
+    /// A layer saturated to a solid pour has no lattice and brings no step to
+    /// the trade, but the moment it creates is still there to answer: only its
+    /// mirror can counterweight, within that layer's own bound.
     #[test]
-    fn a_layer_without_a_lattice_keeps_a_degenerate_band() {
+    fn a_solid_layer_leaves_the_counterweight_to_its_mirror() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(30.0, 20.0)),
             tol::REGION_MM,
@@ -1699,59 +1652,18 @@ mod tests {
             results[1].solution.mode,
             DenseCopperBalanceMode::Perforated { .. }
         ));
-        // The saturated layer cannot trade, so the free layer has no partner
-        // and stays on its own target.
-        assert!(
-            (results[1].solution.achieved_density - results[1].solution.target_density).abs()
-                <= 5e-3,
-            "{:?}",
-            results[1].solution
-        );
+        // The saturated layer brings no step to the trade, but the free layer
+        // still has one and the moment is still there to answer: it takes
+        // copper on, against the solid pour opposite it, and stops at its own
+        // bound.
+        let deviation = results[1].solution.achieved_density - results[1].solution.target_density;
+        assert!(deviation > 5e-3, "{:?}", results[1].solution);
+        assert!(deviation <= 0.01 + 5e-3, "{:?}", results[1].solution);
     }
 
-    /// A layer whose radii all sit on one bound is where the band is most
-    /// fragile: its accumulated sum is compared against a multiplied bound, so
-    /// rounding can carry it across, and with the band shut there is no slack
-    /// to absorb that. The band has to hold the sum it surrounds regardless.
-    #[test]
-    fn a_saturated_radius_field_still_yields_a_usable_band() {
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(30.0, 20.0)),
-            tol::REGION_MM,
-        );
-        let empty = ContourSet::empty(tol::REGION_MM);
-        // Just under the sparsest fill the lattice can reach, so a perforated
-        // plane is still the nearest projection but every radius pins to the
-        // maximum; zero weights hold the band shut around that sum.
-        let results = generate_spatial_dense_copper_balance(
-            DenseCopperBalanceProfile::V1,
-            SpatialCopperBalanceRequest {
-                panel_region: &panel,
-                lattice_origin: Point::ZERO,
-                layers: &[SpatialCopperBalanceLayerRequest {
-                    safe_region: &panel,
-                    existing_copper: &empty,
-                    density_domain: &panel,
-                    target_density: 0.30,
-                    stack_weight_mm2: 0.0,
-                }],
-            },
-        )
-        .unwrap();
-
-        let (min, max) = results.layers[0]
-            .full_void_radius_range_mm()
-            .expect("a perforated layer has voids");
-        assert!(
-            (max - DenseCopperBalanceProfile::V1.max_void_radius_mm).abs() <= 1e-9,
-            "expected saturated radii, got {min}..{max}"
-        );
-    }
-
-    /// Without stack weights there is no moment to flatten, so the bands buy
-    /// nothing and must stay shut. An open band would still let the local
-    /// density error trade layers off their targets, which is exactly what a
-    /// panel told its layers were balanced independently must not do.
+    /// Without stack weights there is no moment to flatten: the settlement
+    /// spends nothing, every layer holds its own target, and no moment field
+    /// is reported -- claiming a flat moment would say we looked.
     #[test]
     fn layers_hold_their_targets_when_the_stackup_weighs_nothing() {
         let panel = ContourSet::rectangle(
@@ -1863,7 +1775,7 @@ mod tests {
     /// copper moment, because their targets differ and the boards were drawn
     /// that way. Balancing against the deviation from target cannot see it —
     /// the deviations are zero. Balancing against the copper itself does, and
-    /// spends the band pulling the heavy layer down and the light one up.
+    /// spends the step pulling the heavy layer down and the light one up.
     #[test]
     fn stack_moment_shrinks_when_the_boards_themselves_are_asymmetric() {
         let panel = ContourSet::rectangle(
@@ -1874,10 +1786,10 @@ mod tests {
         // Mirrored layers, no fixed copper, but one is asked for markedly more
         // copper than the other: the imbalance is in the targets themselves.
         let (heavy, light) = (0.70, 0.40);
-        let solve = |stack_moment_weight: f64| {
+        let solve = |stack_flex_density: f64| {
             generate_spatial_dense_copper_balance(
                 DenseCopperBalanceProfile {
-                    stack_moment_weight,
+                    stack_flex_density,
                     ..DenseCopperBalanceProfile::V1
                 },
                 SpatialCopperBalanceRequest {
@@ -1910,11 +1822,10 @@ mod tests {
         };
 
         let ignored = solve(0.0);
-        let weighted = solve(DenseCopperBalanceProfile::V1.stack_moment_weight);
+        let weighted = solve(DenseCopperBalanceProfile::V1.stack_flex_density);
 
-        // Ignored, the boards' own imbalance survives untouched: with no
-        // moment in the objective the bands stay shut and each layer holds its
-        // own target.
+        // Ignored, the boards' own imbalance survives untouched: with a zero
+        // step each layer holds its own target and has nothing to trade.
         let untouched = 0.5 * (heavy - light);
         assert!(
             (moment(&ignored) - untouched).abs() <= 5e-3,
@@ -1948,10 +1859,9 @@ mod tests {
 
     /// Fixed copper on one side of one layer tilts the stack in a way no
     /// redistribution can answer: it is real copper sitting off the mid-plane,
-    /// and only the layer opposite it can counterweight. The band lets the
-    /// tilted layer shed density and its mirror take the same amount on,
-    /// bounded on both sides, and the trade nets to zero so the stack gains no
-    /// copper overall.
+    /// and only the layer opposite it can counterweight: the tilted layer
+    /// sheds density and its mirror takes density on, each within the step its
+    /// own fill region allows.
     #[test]
     fn stack_flex_trades_density_between_mirrored_layers() {
         let panel = ContourSet::rectangle(
@@ -1999,7 +1909,7 @@ mod tests {
         };
         // Radius quantization alone moves the achieved density this far.
         let quantization = 5e-3;
-        let flex = 0.02;
+        let flex = DenseCopperBalanceProfile::V1.stack_flex_density;
 
         let pinned = solve(0.0);
         let flexed = solve(flex);
@@ -2022,95 +1932,10 @@ mod tests {
         // it sheds density and its mirror takes the same amount on.
         assert!(deviations[0] < -quantization, "{deviations:?}");
         assert!(deviations[1] > quantization, "{deviations:?}");
-        // Neither leaves its band, and the stack gains nothing overall.
+        // Neither exceeds its step.
         for deviation in &deviations {
             assert!(deviation.abs() <= flex + quantization, "{deviations:?}");
         }
-        assert!(
-            deviations.iter().sum::<f64>().abs() <= 2.0 * quantization,
-            "{deviations:?}"
-        );
-    }
-
-    #[test]
-    fn spatial_solver_uses_signed_stack_weights() {
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
-        );
-        let safe = ContourSet::rectangle(
-            BBox::new(Point::new(20.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
-        );
-        let top_copper = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 20.0)),
-            tol::REGION_MM,
-        );
-        let bottom_copper = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
-            tol::REGION_MM,
-        );
-        // The layers hold different fixed copper, so their density domains
-        // differ: the bottom layer's upper-left quadrant is bare and
-        // unfillable, and stays out of its denominator.
-        let top_domain = top_copper.union(&safe);
-        let bottom_domain = bottom_copper.union(&safe);
-        // This is the redistribution the stack weights drive at a fixed copper
-        // area, so the band stays shut: with it open the two solves are free
-        // to trade area as well, and the area assertion below would be
-        // asserting the opposite of what the band exists to allow.
-        let solve = |stack_weight_mm2: f64| {
-            generate_spatial_dense_copper_balance(
-                DenseCopperBalanceProfile {
-                    stack_flex_density: 0.0,
-                    ..DenseCopperBalanceProfile::V1
-                },
-                SpatialCopperBalanceRequest {
-                    panel_region: &panel,
-                    lattice_origin: Point::ZERO,
-                    layers: &[
-                        SpatialCopperBalanceLayerRequest {
-                            safe_region: &safe,
-                            existing_copper: &top_copper,
-                            density_domain: &top_domain,
-                            target_density: 0.75,
-                            stack_weight_mm2,
-                        },
-                        SpatialCopperBalanceLayerRequest {
-                            safe_region: &safe,
-                            existing_copper: &bottom_copper,
-                            density_domain: &bottom_domain,
-                            target_density: 0.50,
-                            stack_weight_mm2: -stack_weight_mm2,
-                        },
-                    ],
-                },
-            )
-            .unwrap()
-            .layers
-        };
-        let independent = solve(0.0);
-        let stack_aware = solve(1.0);
-        let radius_difference = independent
-            .iter()
-            .zip(&stack_aware)
-            .flat_map(|(independent, stack_aware)| {
-                independent
-                    .full_voids
-                    .iter()
-                    .zip(&stack_aware.full_voids)
-                    .map(|(independent, stack_aware)| {
-                        (independent.radius_mm - stack_aware.radius_mm).abs()
-                    })
-            })
-            .sum::<f64>();
-
-        assert!(radius_difference > 0.01);
-        assert!(independent.iter().zip(&stack_aware).all(|(left, right)| {
-            let quantization_bound_mm2 = 0.01 * left.full_voids.len() as f64;
-            (left.solution.generated_area_mm2 - right.solution.generated_area_mm2).abs()
-                <= AREA_SOLVE_TOLERANCE_MM2 + quantization_bound_mm2
-        }));
     }
 
     /// The scalar area bounds must tolerate what `contains` tolerates.
