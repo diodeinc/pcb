@@ -237,7 +237,7 @@ enum FabPanelCommands {
         /// Edge margin in millimeters. Defaults to 50.8 vertical and 25.4 horizontal. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
         #[arg(long, num_args = 1..=4, value_name = "MARGIN")]
         edge_margin: Vec<f64>,
-        /// Gap between assembly panels in millimeters. Defaults to 5.
+        /// Gap between assembly panels in millimeters. Defaults to 7.62.
         #[arg(long, value_name = "GAP")]
         panel_gap: Option<f64>,
         /// Output IPC-2581 XML file, or '-' for stdout

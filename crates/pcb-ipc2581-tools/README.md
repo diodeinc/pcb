@@ -57,14 +57,14 @@ the top and bottom of every stock panel. This gives the following packing areas:
 | 21 by 24 in | 19 by 20 in |
 
 Use `--edge-margin` with one to four CSS-shorthand values to override the
-process margins in millimeters. Use `--panel-gap` to override the default 5 mm
+process margins in millimeters. Use `--panel-gap` to override the default 7.62 mm
 gap between assembly panels:
 
 ```bash
 pcb ipc2581 fab-panel create \
   --panel-size 18x24 \
   --edge-margin 50.8 25.4 \
-  --panel-gap 5 \
+  --panel-gap 7.62 \
   --output fabrication-panel.xml \
   assembly-a.xml assembly-b.xml
 ```

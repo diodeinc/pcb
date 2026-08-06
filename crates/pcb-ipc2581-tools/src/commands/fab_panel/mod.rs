@@ -22,7 +22,7 @@ mod xml;
 use packing::{MAX_ITEM_COUNT, Size, pack};
 
 const DEFAULT_EDGE_MARGIN_MM: EdgeInsetsMm = EdgeInsetsMm::new(50.8, 25.4, 50.8, 25.4);
-const DEFAULT_PANEL_GAP_MM: f64 = 5.0;
+const DEFAULT_PANEL_GAP_MM: f64 = 7.62;
 const MICROMETERS_PER_MM: f64 = 1_000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

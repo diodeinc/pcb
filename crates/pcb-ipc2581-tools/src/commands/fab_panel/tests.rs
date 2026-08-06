@@ -486,7 +486,7 @@ fn writes_default_process_margin_and_usable_area_metadata() {
         r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_right_mm" type="DOUBLE" value="25.4"/>"#,
         r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_bottom_mm" type="DOUBLE" value="50.8"/>"#,
         r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_left_mm" type="DOUBLE" value="25.4"/>"#,
-        r#"<NonstandardAttribute name="diode.fab_panel.gap_mm" type="DOUBLE" value="5"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.gap_mm" type="DOUBLE" value="7.62"/>"#,
     ] {
         assert!(generated.contains(metadata), "missing {metadata}");
     }
