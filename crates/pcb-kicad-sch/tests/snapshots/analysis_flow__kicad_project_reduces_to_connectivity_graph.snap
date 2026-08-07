@@ -42,7 +42,7 @@ ConnectivityGraph {
                         "R1.R",
                     ),
                     pin_name: "",
-                    pin_keys: {
+                    pin_numbers: {
                         "1",
                     },
                 },
@@ -64,7 +64,7 @@ ConnectivityGraph {
                         "R1.R",
                     ),
                     pin_name: "",
-                    pin_keys: {
+                    pin_numbers: {
                         "2",
                     },
                 },
@@ -73,7 +73,7 @@ ConnectivityGraph {
                         "R2.R",
                     ),
                     pin_name: "",
-                    pin_keys: {
+                    pin_numbers: {
                         "1",
                     },
                 },
@@ -95,7 +95,7 @@ ConnectivityGraph {
                         "R2.R",
                     ),
                     pin_name: "",
-                    pin_keys: {
+                    pin_numbers: {
                         "2",
                     },
                 },

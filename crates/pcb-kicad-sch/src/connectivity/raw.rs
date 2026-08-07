@@ -51,7 +51,7 @@ pub enum Terminal {
     ComponentPin {
         component: ComponentIdentity,
         pin_name: String,
-        pin_keys: BTreeSet<String>,
+        pin_numbers: BTreeSet<String>,
     },
     /// A named port at the design boundary, independent of source format.
     InterfacePort { name: String },

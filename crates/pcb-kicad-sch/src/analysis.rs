@@ -235,13 +235,13 @@ fn terminals_match(expected: &Terminal, observed: &Terminal) -> bool {
         (
             Terminal::ComponentPin {
                 component: expected_component,
-                pin_keys: expected_keys,
-                ..
+                pin_name: expected_name,
+                pin_numbers: expected_numbers,
             },
             Terminal::ComponentPin {
                 component: observed_component,
-                pin_keys: observed_keys,
-                ..
+                pin_name: observed_name,
+                pin_numbers: observed_numbers,
             },
         ) => {
             matches!(
@@ -250,7 +250,10 @@ fn terminals_match(expected: &Terminal, observed: &Terminal) -> bool {
                     ComponentIdentity::ManagedPath(expected_path),
                     ComponentIdentity::ManagedPath(observed_path),
                 ) if expected_path == observed_path
-            ) && !expected_keys.is_disjoint(observed_keys)
+            ) && ((!expected_name.is_empty()
+                && !observed_name.is_empty()
+                && expected_name == observed_name)
+                || !expected_numbers.is_disjoint(observed_numbers))
         }
         (
             Terminal::InterfacePort { name: expected },
@@ -498,7 +501,7 @@ mod tests {
         let terminal = |path: &str| Terminal::ComponentPin {
             component: ComponentIdentity::ManagedPath(path.to_string()),
             pin_name: "1".to_string(),
-            pin_keys: BTreeSet::from(["1".to_string()]),
+            pin_numbers: BTreeSet::from(["1".to_string()]),
         };
         let expected = ConnectivityGraph {
             components: Vec::new(),
@@ -529,6 +532,19 @@ mod tests {
             analysis.issues(),
             [SchematicIssue::UnexpectedConnection { terminals, .. }] if terminals == &[extra]
         ));
+    }
+
+    #[test]
+    fn component_pins_match_names_to_names_or_numbers_to_numbers() {
+        let terminal = |name: &str, number: &str| Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath("U1".to_string()),
+            pin_name: name.to_string(),
+            pin_numbers: BTreeSet::from([number.to_string()]),
+        };
+
+        assert!(terminals_match(&terminal("A", "1"), &terminal("A", "2")));
+        assert!(terminals_match(&terminal("A", "1"), &terminal("B", "1")));
+        assert!(!terminals_match(&terminal("A", "1"), &terminal("1", "2")));
     }
 
     #[test]
