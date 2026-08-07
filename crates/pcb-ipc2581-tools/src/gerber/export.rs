@@ -1810,15 +1810,12 @@ mod tests {
             .find(|file| file.filename == "F_Fab.gbr")
             .unwrap();
         assert!(array_fab.contents.contains("%TF.Part,Array*%"));
+        assert!(!array_fab.contents.contains("%ABD"));
         let parsed = gerberx2::GerberX2::parse(&array_fab.contents).unwrap();
-        assert_eq!(
-            parsed.objects().len(),
-            2,
-            "board flashes stay compact block instances"
-        );
+        assert_eq!(parsed.objects().len(), 8);
         let artwork = gerberx2::geometry::extract_document(&parsed);
-        let expanded = pcb_ir::dialects::artwork::expand_instances(&artwork);
-        assert_eq!(expanded.objects.len(), 8);
+        assert!(artwork.blocks.is_empty());
+        assert_eq!(artwork.objects.len(), 8);
     }
 
     #[test]
@@ -2405,7 +2402,7 @@ mod tests {
     }
 
     #[test]
-    fn gerber_preserves_nested_panel_repeats() {
+    fn gerber_expands_nested_panel_repeats() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2469,28 +2466,15 @@ mod tests {
         assert!(top.contents.contains("%TF.Part,Array*%"));
         assert_eq!(
             top.layer.objects.len(),
-            3,
-            "fab-panel root places three assembly-panel flashes inline"
+            6,
+            "three assembly panels containing two boards each are expanded inline"
         );
-        assert_eq!(
-            top.layer
-                .apertures
-                .iter()
-                .filter(|aperture| matches!(
-                    aperture.template,
-                    gerberx2::WriterApertureTemplate::Block { .. }
-                ))
-                .count(),
-            2,
-            "board and assembly panel each retain one definition"
-        );
-        assert_eq!(top.contents.matches("%ABD").count(), 2);
+        assert!(!top.contents.contains("%ABD"));
         let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
-        assert_eq!(parsed.objects().len(), 3);
+        assert_eq!(parsed.objects().len(), 6);
         let artwork = gerberx2::geometry::extract_document(&parsed);
-        assert_eq!(artwork.blocks.len(), 2);
-        let expanded = pcb_ir::dialects::artwork::expand_instances(&artwork);
-        assert_eq!(expanded.objects.len(), 6);
+        assert!(artwork.blocks.is_empty());
+        assert_eq!(artwork.objects.len(), 6);
     }
 
     #[test]

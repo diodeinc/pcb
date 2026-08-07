@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Gerber manufacturing exports now expand panel instances for compatibility with CAM systems that do not support aperture blocks.
+
 ## [0.4.24] - 2026-08-07
 
 ### Added

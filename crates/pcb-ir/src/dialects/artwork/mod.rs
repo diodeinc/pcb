@@ -20,9 +20,8 @@ use crate::geom::{
 #[derive(Debug, Clone, Default)]
 pub struct Document<LayerMeta = (), ObjectMeta = ()> {
     pub apertures: Vec<Aperture>,
-    /// Reusable ordered sub-images. Blocks are target-independent: Gerber
-    /// lowers them to aperture blocks while targets without native instancing
-    /// compose and expand them explicitly.
+    /// Reusable ordered sub-images. Blocks are target-independent; consumers
+    /// either preserve or expand them explicitly.
     pub blocks: Vec<Block<ObjectMeta>>,
     pub layers: Vec<Layer<LayerMeta>>,
     pub objects: Vec<Object<ObjectMeta>>,

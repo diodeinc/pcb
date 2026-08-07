@@ -16,7 +16,7 @@ use crate::{
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
 use pcb_ir::geom::path::{self as geom_path, ContourBuf, PathCmd};
 use pcb_ir::geom::region::{self, Ring};
-use pcb_ir::geom::{Affine2, FillRule, Mirror, Point, Polarity, Segment, StrokePatternMark};
+use pcb_ir::geom::{Affine2, FillRule, Point, Polarity, Segment, StrokePatternMark};
 
 /// Gerber file-level attributes carried as artwork layer metadata.
 #[derive(Debug, Clone, Default)]
@@ -42,8 +42,8 @@ pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerAttributes, 
 ///
 /// This is the normalize pipeline: extract the parsed layer into artwork,
 /// carry its X2 attributes across, and lower it back to idiomatic Gerber.
-/// Standard and block-aperture flashes survive as reusable objects; macro
-/// flashes and shaped draws are flattened to regions.
+/// Standard-aperture flashes survive as flashes; block instances are expanded,
+/// while macro flashes and shaped draws are flattened to regions.
 pub fn normalize_layer(gerber: &crate::GerberX2) -> Result<String> {
     let annotated = annotate_for_export(gerber, crate::geometry::extract_document(gerber));
     crate::write_layer(&lower_artwork_layer(&annotated)?)
@@ -153,18 +153,8 @@ fn resolve_fields(gerber: &crate::GerberX2, attribute: &crate::types::Attribute)
 }
 
 pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
+    let layer = pcb_ir::dialects::artwork::expand_instances(layer);
     let mut apertures = ApertureTable::default();
-    let mut block_placements = Vec::with_capacity(layer.blocks.len());
-    for block in &layer.blocks {
-        let mut plan = GerberPlan::default();
-        for object in &block.objects {
-            let lowered = lower_artwork_object(layer, object, &mut apertures, &block_placements)?;
-            push_lowered_group(&mut plan, object.order.stage, lowered);
-        }
-        let mut objects = plan.into_ordered_objects();
-        factor_repeated_regions(&mut objects, &mut apertures);
-        block_placements.push(lower_block(objects, &mut apertures));
-    }
     let mut plan = GerberPlan::default();
     let layer_attributes = layer
         .layers
@@ -172,12 +162,11 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
         .map(|layer| layer.meta.clone())
         .unwrap_or_default();
 
-    for object in layer.objects.iter() {
-        let objects = lower_artwork_object(layer, object, &mut apertures, &block_placements)?;
-        push_lowered_group(&mut plan, object.order.stage, objects);
+    for object in &layer.objects {
+        let objects = lower_artwork_object(&layer, object, &mut apertures)?;
+        plan.push_group(object.order.stage, object.polarity, objects);
     }
-    let mut objects = plan.into_ordered_objects();
-    factor_repeated_regions(&mut objects, &mut apertures);
+    let objects = plan.into_ordered_objects();
 
     let (aperture_list, aperture_macros) = apertures.into_parts();
     Ok(GerberLayer {
@@ -189,202 +178,10 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
     })
 }
 
-#[derive(Debug, Clone, Copy)]
-struct BlockPlacement {
-    aperture: i32,
-    transform: Affine2,
-    polarity: Polarity,
-}
-
-fn push_lowered_group(plan: &mut GerberPlan, stage: PaintStage, objects: Vec<WriterObject>) {
-    let Some(first) = objects.first() else {
-        return;
-    };
-    let polarity = first.polarity;
-    debug_assert!(objects.iter().all(|object| object.polarity == polarity));
-    plan.push_group(stage, polarity, objects);
-}
-
-/// Remove a block that is only an unannotated placement of one aperture.
-/// IPC placement groups legitimately preserve this hierarchy, but emitting a
-/// Gerber AB wrapper for every balance template makes CAM tools index one
-/// extra object for every lattice site.
-fn lower_block(
-    objects: Vec<WriterObject>,
-    apertures: &mut ApertureTable,
-) -> Option<BlockPlacement> {
-    if objects.is_empty() {
-        return None;
-    }
-    if let [object] = objects.as_slice()
-        && object.attributes.is_empty()
-        && let ObjectKind::Flash { at, aperture } = object.kind
-    {
-        return Some(BlockPlacement {
-            aperture,
-            transform: writer_placement(at, object.aperture_transform),
-            polarity: object.polarity,
-        });
-    }
-
-    Some(BlockPlacement {
-        aperture: apertures.block(objects),
-        transform: Affine2::IDENTITY,
-        polarity: Polarity::Dark,
-    })
-}
-
-fn writer_placement(at: GerberPoint, transform: WriterApertureTransform) -> Affine2 {
-    let mirror = match transform.mirroring {
-        Mirroring::None => Mirror::NONE,
-        Mirroring::X => Mirror::X,
-        Mirroring::Y => Mirror::Y,
-        Mirroring::XY => Mirror::XY,
-    };
-    Affine2::placement(
-        Point::new(at.x, at.y),
-        transform.rotation_degrees,
-        mirror,
-        transform.scaling,
-    )
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct RegionTemplateKey(Vec<Vec<RegionSegmentKey>>);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum RegionSegmentKey {
-    Line {
-        start: (i64, i64),
-        end: (i64, i64),
-    },
-    Arc {
-        start: (i64, i64),
-        end: (i64, i64),
-        center_offset: (i64, i64),
-        clockwise: bool,
-    },
-}
-
-struct RepeatedRegion {
-    key: RegionTemplateKey,
-    contours: Vec<Contour>,
-    occurrences: Vec<(usize, GerberPoint)>,
-}
-
-/// Replace translated copies of the same arbitrary region with flashes of one
-/// single-region aperture block. Gerber defines such a block as one graphical
-/// object, and unlike an aperture-macro outline it retains circular arcs.
-fn factor_repeated_regions(objects: &mut [WriterObject], apertures: &mut ApertureTable) {
-    let mut by_key = HashMap::<RegionTemplateKey, usize>::new();
-    let mut groups = Vec::<RepeatedRegion>::new();
-
-    for (object_index, object) in objects.iter().enumerate() {
-        let ObjectKind::Region { contours } = &object.kind else {
-            continue;
-        };
-        let Some((key, local, origin)) = local_region_template(contours) else {
-            continue;
-        };
-        let group_index = if let Some(group_index) = by_key.get(&key) {
-            *group_index
-        } else {
-            let index = groups.len();
-            groups.push(RepeatedRegion {
-                key: key.clone(),
-                contours: local,
-                occurrences: Vec::new(),
-            });
-            by_key.insert(key, index);
-            index
-        };
-        groups[group_index].occurrences.push((object_index, origin));
-    }
-
-    for group in groups {
-        if group.occurrences.len() < 2 {
-            continue;
-        }
-        let aperture = apertures.region_block(group.key, group.contours);
-        for (object_index, at) in group.occurrences {
-            objects[object_index].kind = ObjectKind::Flash { at, aperture };
-        }
-    }
-}
-
-fn local_region_template(
-    contours: &[Contour],
-) -> Option<(RegionTemplateKey, Vec<Contour>, GerberPoint)> {
-    let origin = contours
-        .iter()
-        .find_map(|contour| contour.segments.first().map(region_segment_start))?;
-    let local_point = |point: GerberPoint| GerberPoint {
-        x: point.x - origin.x,
-        y: point.y - origin.y,
-    };
-    let point_key = |point: GerberPoint| (quantize_mm(point.x), quantize_mm(point.y));
-    let mut key_contours = Vec::with_capacity(contours.len());
-    let mut local_contours = Vec::with_capacity(contours.len());
-
-    for contour in contours {
-        let mut key_segments = Vec::with_capacity(contour.segments.len());
-        let mut local_segments = Vec::with_capacity(contour.segments.len());
-        for segment in &contour.segments {
-            match *segment {
-                crate::ContourSegment::Line { start, end } => {
-                    let start = local_point(start);
-                    let end = local_point(end);
-                    key_segments.push(RegionSegmentKey::Line {
-                        start: point_key(start),
-                        end: point_key(end),
-                    });
-                    local_segments.push(crate::ContourSegment::Line { start, end });
-                }
-                crate::ContourSegment::Arc {
-                    start,
-                    end,
-                    center_offset,
-                    clockwise,
-                } => {
-                    let start = local_point(start);
-                    let end = local_point(end);
-                    key_segments.push(RegionSegmentKey::Arc {
-                        start: point_key(start),
-                        end: point_key(end),
-                        center_offset: point_key(center_offset),
-                        clockwise,
-                    });
-                    local_segments.push(crate::ContourSegment::Arc {
-                        start,
-                        end,
-                        center_offset,
-                        clockwise,
-                    });
-                }
-            }
-        }
-        key_contours.push(key_segments);
-        local_contours.push(Contour {
-            segments: local_segments,
-        });
-    }
-
-    Some((RegionTemplateKey(key_contours), local_contours, origin))
-}
-
-fn region_segment_start(segment: &crate::ContourSegment) -> GerberPoint {
-    match *segment {
-        crate::ContourSegment::Line { start, .. } | crate::ContourSegment::Arc { start, .. } => {
-            start
-        }
-    }
-}
-
 fn lower_artwork_object(
     layer: &ArtworkDocument,
     object: &pcb_ir::dialects::artwork::Object<ObjectAttributes>,
     apertures: &mut ApertureTable,
-    block_placements: &[Option<BlockPlacement>],
 ) -> Result<Vec<WriterObject>> {
     let attributes = lower_object_attributes(&object.meta);
     let mut objects = Vec::new();
@@ -490,30 +287,7 @@ fn lower_artwork_object(
                 attributes,
             });
         }
-        ArtworkGeometry::Instance { block, transform } => {
-            let placement = block_placements
-                .get(block as usize)
-                .copied()
-                .ok_or_else(|| {
-                    GerberError::InvalidStructure(format!(
-                        "artwork instance references unavailable block {block}"
-                    ))
-                })?;
-            let Some(placement) = placement else {
-                return Ok(objects);
-            };
-            let (at, aperture_transform) =
-                lower_aperture_placement(transform.concat(placement.transform))?;
-            objects.push(WriterObject {
-                kind: ObjectKind::Flash {
-                    at,
-                    aperture: placement.aperture,
-                },
-                polarity: object.polarity.compose(placement.polarity),
-                aperture_transform,
-                attributes,
-            });
-        }
+        ArtworkGeometry::Instance { .. } => unreachable!("artwork instances are expanded above"),
     }
     Ok(objects)
 }
@@ -594,7 +368,6 @@ impl GerberPlan {
 struct ApertureTable {
     next_code: i32,
     by_key: HashMap<ApertureKey, i32>,
-    region_blocks: HashMap<RegionTemplateKey, i32>,
     apertures: Vec<WriterAperture>,
     aperture_macros: Vec<WriterApertureMacro>,
 }
@@ -779,25 +552,6 @@ impl ApertureTable {
                 )
             }
         }
-    }
-
-    fn block(&mut self, objects: Vec<WriterObject>) -> i32 {
-        let code = self.allocate_code();
-        self.apertures.push(WriterAperture {
-            code,
-            template: WriterApertureTemplate::Block { objects },
-            attributes: Vec::new(),
-        });
-        code
-    }
-
-    fn region_block(&mut self, key: RegionTemplateKey, contours: Vec<Contour>) -> i32 {
-        if let Some(code) = self.region_blocks.get(&key) {
-            return *code;
-        }
-        let code = self.block(vec![WriterObject::dark(ObjectKind::Region { contours })]);
-        self.region_blocks.insert(key, code);
-        code
     }
 
     /// Define a one-off macro aperture filling the given closed outline,
@@ -1114,7 +868,7 @@ mod tests {
         Layer as IrArtworkDocument, Object as ArtworkObject, PaintOrder,
     };
     use pcb_ir::dialects::{LayerRole, Side};
-    use pcb_ir::geom::{BBox, Paint, Span};
+    use pcb_ir::geom::{BBox, Mirror, Paint, Span};
 
     #[test]
     fn sanitizes_net_names_for_gerber_attribute_fields() {
@@ -1157,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_translated_regions_use_one_exact_block() {
+    fn repeated_translated_regions_remain_expanded() {
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1187,26 +941,15 @@ mod tests {
         }
 
         let gerber = lower_artwork_layer(&artwork).expect("lower repeated regions");
-        assert_eq!(
-            gerber
-                .apertures
-                .iter()
-                .filter(|aperture| matches!(
-                    &aperture.template,
-                    WriterApertureTemplate::Block { .. }
-                ))
-                .count(),
-            1
-        );
         assert!(
             gerber
                 .objects
                 .iter()
-                .all(|object| matches!(&object.kind, ObjectKind::Flash { .. }))
+                .all(|object| matches!(&object.kind, ObjectKind::Region { .. }))
         );
 
         let contents = crate::write_layer(&gerber).expect("write repeated regions");
-        assert!(contents.contains("%ABD"));
+        assert!(!contents.contains("%ABD"));
         assert!(!contents.contains("%AM"));
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse repeated regions");
@@ -1289,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_repeated_clear_arc_regions_round_trip_exactly() {
+    fn nested_clear_arc_regions_expand_without_aperture_blocks() {
         let mut artwork = ArtworkDocument::new();
         let layer = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1349,29 +1092,21 @@ mod tests {
         );
 
         let gerber = lower_artwork_layer(&artwork).expect("lower repeated clear arcs");
-        let repeated_contours = gerber
-            .apertures
-            .iter()
-            .find_map(|aperture| match &aperture.template {
-                WriterApertureTemplate::Block { objects } => objects.first().and_then(|object| {
-                    if let ObjectKind::Region { contours } = &object.kind {
-                        Some(contours)
-                    } else {
-                        None
-                    }
-                }),
-                _ => None,
-            })
-            .expect("single-region block");
-        assert_eq!(repeated_contours.len(), 1);
         assert!(
-            repeated_contours[0]
-                .segments
-                .iter()
-                .any(|segment| matches!(segment, ContourSegment::Arc { .. }))
+            gerber.objects.iter().any(|object| {
+                matches!(
+                    &object.kind,
+                    ObjectKind::Region { contours }
+                        if contours.iter().any(|contour| contour.segments.iter().any(
+                            |segment| matches!(segment, ContourSegment::Arc { .. })
+                        ))
+                )
+            }),
+            "expanded circular cutouts should retain arcs"
         );
 
         let contents = crate::write_layer(&gerber).expect("write repeated clear arcs");
+        assert!(!contents.contains("%ABD"));
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse repeated clear arcs");
         let geometry = crate::geometry::extract_document(&parsed);
@@ -1391,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn single_flash_blocks_collapse_without_losing_placement_or_polarity() {
+    fn single_flash_instances_expand_without_losing_placement_or_polarity() {
         let mut artwork = ArtworkDocument::new();
         let aperture = artwork.push_aperture(Aperture::circle(1.0));
         let block = artwork.push_block();
