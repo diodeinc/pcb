@@ -1,0 +1,362 @@
+(kicad_sch
+  (version 20260306)
+  (generator "diode")
+  (generator_version "1.0")
+  (uuid "67ba23f6-8b58-5596-9d28-7774b90e1e12")
+  (paper "A3")
+  (title_block
+    (title "simple")
+  )
+  (lib_symbols
+    (symbol
+      "diode:R_Small"
+      (pin_numbers
+        (hide yes)
+      )
+      (pin_names
+        (offset 0.254)
+        (hide yes)
+      )
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property
+        "Reference"
+        "R"
+        (at 0 0 90)
+        (show_name no)
+        (do_not_autoplace no)
+        (effects
+          (font (size 1.016 1.016))
+        )
+      )
+      (property
+        "Value"
+        "R_Small"
+        (at 1.778 0 90)
+        (show_name no)
+        (do_not_autoplace no)
+        (effects
+          (font (size 1.27 1.27))
+        )
+      )
+      (property
+        "Footprint"
+        ""
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font (size 1.27 1.27))
+        )
+      )
+      (property
+        "Datasheet"
+        ""
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font (size 1.27 1.27))
+        )
+      )
+      (property
+        "Description"
+        "Resistor, small symbol"
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font (size 1.27 1.27))
+        )
+      )
+      (property
+        "ki_keywords"
+        "R resistor"
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font (size 1.27 1.27))
+        )
+      )
+      (property
+        "ki_fp_filters"
+        "R_*"
+        (at 0 0 0)
+        (show_name no)
+        (do_not_autoplace no)
+        (hide yes)
+        (effects
+          (font (size 1.27 1.27))
+        )
+      )
+      (symbol
+        "R_Small_0_1"
+        (rectangle
+          (start
+            -0.762
+            1.778
+          )
+          (end
+            0.762
+            -1.778
+          )
+          (stroke
+            (width 0.2032)
+            (type default)
+          )
+          (fill
+            (type none)
+          )
+        )
+      )
+      (symbol
+        "R_Small_1_1"
+        (pin
+          passive
+          line
+          (at 0 2.54 270)
+          (length 0.762)
+          (name
+            ""
+            (effects
+              (font (size 1.27 1.27))
+            )
+          )
+          (number
+            "1"
+            (effects
+              (font (size 1.27 1.27))
+            )
+          )
+        )
+        (pin
+          passive
+          line
+          (at 0 -2.54 90)
+          (length 0.762)
+          (name
+            ""
+            (effects
+              (font (size 1.27 1.27))
+            )
+          )
+          (number
+            "2"
+            (effects
+              (font (size 1.27 1.27))
+            )
+          )
+        )
+      )
+      (embedded_fonts no)
+    )
+  )
+  (symbol
+    (lib_id "diode:R_Small")
+    (at 207.01 148.59 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid "d527c2b8-3606-5386-bbed-5a45ed7b31a6")
+    (property
+      "Reference"
+      "R1"
+      (id 0)
+      (at 204.67 147.32 0)
+      (effects
+        (font (size 1 1))
+      )
+    )
+    (property
+      "Value"
+      "1k"
+      (id 1)
+      (at 204.77 148.59 0)
+      (effects
+        (font (size 1 1))
+      )
+    )
+    (property
+      "Footprint"
+      "0402"
+      (id 2)
+      (at 203.74 149.86 0)
+      (effects
+        (font (size 1 1))
+        (hide yes)
+      )
+    )
+    (property
+      "Path"
+      "R1.R"
+      (id 4)
+      (at 207.01 148.59 0)
+      (effects
+        (font (size 1.27 1.27))
+        (hide yes)
+      )
+    )
+    (pin
+      "1"
+      (uuid "fad82416-bfa0-54c6-9f47-06558da9aeb6")
+    )
+    (pin
+      "2"
+      (uuid "c0417ea5-4a58-5ce4-8e7d-eba5facb88e9")
+    )
+    (instances
+      (project
+        "simple"
+        (path
+          "/67ba23f6-8b58-5596-9d28-7774b90e1e12"
+          (reference "R1")
+          (unit 1)
+        )
+      )
+    )
+  )
+  (symbol
+    (lib_id "diode:R_Small")
+    (at 212.09 148.59 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid "cda8dfca-6e8a-59fd-87a2-5ff0162348de")
+    (property
+      "Reference"
+      "R2"
+      (id 0)
+      (at 214.43 147.32 0)
+      (effects
+        (font (size 1 1))
+      )
+    )
+    (property
+      "Value"
+      "2k"
+      (id 1)
+      (at 214.33 148.59 0)
+      (effects
+        (font (size 1 1))
+      )
+    )
+    (property
+      "Footprint"
+      "0402"
+      (id 2)
+      (at 215.36 149.86 0)
+      (effects
+        (font (size 1 1))
+        (hide yes)
+      )
+    )
+    (property
+      "Path"
+      "R2.R"
+      (id 4)
+      (at 212.09 148.59 0)
+      (effects
+        (font (size 1.27 1.27))
+        (hide yes)
+      )
+    )
+    (pin
+      "1"
+      (uuid "07dc0a1b-b5cf-5484-9870-4a0597c9b41a")
+    )
+    (pin
+      "2"
+      (uuid "54c5be86-bfd9-58c5-b204-6634450a295d")
+    )
+    (instances
+      (project
+        "simple"
+        (path
+          "/67ba23f6-8b58-5596-9d28-7774b90e1e12"
+          (reference "R2")
+          (unit 1)
+        )
+      )
+    )
+  )
+  (wire
+    (pts
+      (xy 207.01 151.13)
+      (xy 207.01 152.4)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "7a490608-016e-58f2-8e95-047dc37bfb71")
+  )
+  (wire
+    (pts
+      (xy 207.01 152.4)
+      (xy 209.55 152.4)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "ebc3da2f-be9f-56fe-94e3-cdcd8c28cecf")
+  )
+  (wire
+    (pts
+      (xy 209.55 152.4)
+      (xy 209.55 144.78)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "627df81b-e72c-5cb7-b108-ce1a95204e8e")
+  )
+  (wire
+    (pts
+      (xy 209.55 144.78)
+      (xy 212.09 144.78)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "4be368df-72e3-55e3-8368-d27410596328")
+  )
+  (wire
+    (pts
+      (xy 212.09 144.78)
+      (xy 212.09 146.05)
+    )
+    (stroke
+      (width 0)
+      (type default)
+    )
+    (uuid "1c4f7b13-3ce4-5a9a-b385-e8e3d360dfa6")
+  )
+  (no_connect
+    (at 207.01 146.05)
+    (uuid "e8669459-5d30-51b4-bc1a-f69be317ebb7")
+  )
+  (no_connect
+    (at 212.09 151.13)
+    (uuid "ed780769-8e0c-5f11-93c1-dcd0981be168")
+  )
+  (sheet_instances
+    (path
+      "/"
+      (page "1")
+    )
+  )
+  (embedded_fonts no)
+)

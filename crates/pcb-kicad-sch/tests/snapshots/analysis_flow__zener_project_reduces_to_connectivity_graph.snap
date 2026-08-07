@@ -1,0 +1,100 @@
+---
+source: crates/pcb-kicad-sch/tests/analysis_flow.rs
+expression: fixture.zener_connectivity()
+---
+ConnectivityGraph {
+    components: [
+        ComponentNode {
+            managed_slot: Some(
+                SymbolSlotKey {
+                    component_path: "R1.R",
+                    unit: 1,
+                },
+            ),
+            origin: Zener,
+        },
+        ComponentNode {
+            managed_slot: Some(
+                SymbolSlotKey {
+                    component_path: "R2.R",
+                    unit: 1,
+                },
+            ),
+            origin: Zener,
+        },
+    ],
+    groups: [
+        ConnectionGroup {
+            names: {
+                "LEFT",
+            },
+            terminals: {
+                ComponentPin {
+                    component: ManagedPath(
+                        "R1.R",
+                    ),
+                    pin_name: "1",
+                    pin_numbers: {
+                        "1",
+                    },
+                },
+            },
+            origins: {
+                ZenerNet {
+                    name: "LEFT",
+                },
+            },
+        },
+        ConnectionGroup {
+            names: {
+                "MID",
+            },
+            terminals: {
+                ComponentPin {
+                    component: ManagedPath(
+                        "R1.R",
+                    ),
+                    pin_name: "2",
+                    pin_numbers: {
+                        "2",
+                    },
+                },
+                ComponentPin {
+                    component: ManagedPath(
+                        "R2.R",
+                    ),
+                    pin_name: "1",
+                    pin_numbers: {
+                        "1",
+                    },
+                },
+            },
+            origins: {
+                ZenerNet {
+                    name: "MID",
+                },
+            },
+        },
+        ConnectionGroup {
+            names: {
+                "RIGHT",
+            },
+            terminals: {
+                ComponentPin {
+                    component: ManagedPath(
+                        "R2.R",
+                    ),
+                    pin_name: "2",
+                    pin_numbers: {
+                        "2",
+                    },
+                },
+            },
+            origins: {
+                ZenerNet {
+                    name: "RIGHT",
+                },
+            },
+        },
+    ],
+}

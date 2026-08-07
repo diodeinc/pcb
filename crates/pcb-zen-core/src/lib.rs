@@ -103,6 +103,7 @@ pub mod attrs {
     pub const MODEL_ARGS: &str = "__model_args";
     pub const SIGNATURE: &str = "__signature";
     pub const LAYOUT_PATH: &str = "layout_path";
+    pub const SCHEMATIC_PATH: &str = "schematic_path";
     pub const FOOTPRINT: &str = "footprint";
     pub const PREFIX: &str = "prefix";
     pub const MPN: &str = "mpn";
