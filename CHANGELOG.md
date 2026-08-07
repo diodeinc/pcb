@@ -14,17 +14,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Sandbox requests now use freshly minted provider-neutral connection endpoints and headers without replaying rejected mutations.
-- Fabrication panels now default to a 7.62 mm gap between tiled assembly panels.
 - Board arrays default to copper balancing; fabrication panels default to no balancing. Both can be overridden.
 - Default board configurations now keep copper at least 0.4 mm from the board edge.
 - The default 1 oz board netclass now uses a 0.45 mm via diameter with a 0.20 mm drill.
-- `--layout-target` now takes `board` or `board-array` on every command, and defaults to `board-array`.
-- Copper balancing now accounts for the full panel stack and handles narrow frames and gutters more accurately.
-- Copper balancing now counterweights the stack's imbalance from the frame instead of extending it.
-- IPC-2581 and Gerber panel exports now deduplicate repeated balance, board, and panel geometry.
-- `pcb layout --temp`; layouts are now always generated in their configured directory.
-- `ipc2581 render --flat`, which produced the same output as a plain render.
+- Removed `pcb layout --temp`; layouts are now always generated in their configured directory.
 
 ### Fixed
 
