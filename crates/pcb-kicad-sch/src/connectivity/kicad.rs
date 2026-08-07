@@ -288,7 +288,6 @@ fn reduce_page(instance: &PageInstance<'_>, repeated_page: bool) -> Result<Reduc
     let mut union_find = UnionFind::new(connectables.len());
     union_internal_connections(&connectables, &mut union_find);
     union_touching(&connectables, &mut union_find);
-    resolve_legacy_power_drivers(&mut connectables, &mut union_find);
     union_same_page_drivers(&connectables, &mut union_find);
     Ok(ReducedPage {
         components,
@@ -383,7 +382,7 @@ fn collect_symbol(
             },
             driver: pin.is_hidden_power_input().then(|| NameDriver {
                 name: pin_name.clone(),
-                kind: DriverKind::LegacyGlobal,
+                kind: DriverKind::Global,
                 merge_by_name: true,
             }),
             terminal: Some(Terminal::ComponentPin {
@@ -548,27 +547,6 @@ struct NameDriver {
 enum DriverKind {
     Local,
     Global,
-    LegacyGlobal,
-}
-
-fn resolve_legacy_power_drivers(connectables: &mut [Connectable], union_find: &mut UnionFind) {
-    let mut group_sizes = BTreeMap::new();
-    for index in 0..connectables.len() {
-        *group_sizes.entry(union_find.find(index)).or_insert(0usize) += 1;
-    }
-    for (index, item) in connectables.iter_mut().enumerate() {
-        let Some(driver) = &mut item.driver else {
-            continue;
-        };
-        if driver.kind != DriverKind::LegacyGlobal {
-            continue;
-        }
-        if group_sizes[&union_find.find(index)] == 1 {
-            driver.kind = DriverKind::Global;
-        } else {
-            item.driver = None;
-        }
-    }
 }
 
 fn union_same_page_drivers(connectables: &[Connectable], union_find: &mut UnionFind) {

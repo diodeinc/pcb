@@ -255,7 +255,7 @@ fn explicitly_visible_power_input_pin_is_not_a_global_connection() {
 }
 
 #[test]
-fn wired_hidden_power_input_does_not_create_a_global_connection() {
+fn wired_hidden_power_input_joins_the_global_net() {
     let mut builder = KicadBuilder::new();
     builder
         .define_symbol_raw(
@@ -272,7 +272,7 @@ fn wired_hidden_power_input_does_not_create_a_global_connection() {
 
     assert_eq!(
         named_groups(builder.build()),
-        vec![names(&["LOCAL"]), names(&["VCC"])]
+        vec![names(&["LOCAL", "VCC"])]
     );
 }
 
