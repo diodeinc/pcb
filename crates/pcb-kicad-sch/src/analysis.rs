@@ -349,17 +349,11 @@ fn collect_connection_issues(
             });
         }
 
-        for name in &observed_group.names {
-            let accepted = matching_expected.iter().any(|group| {
-                group.names.contains(name)
-                    || group.terminals.iter().any(|terminal| {
-                        matches!(
-                            terminal,
-                            Terminal::InterfacePort { name: port_name } if port_name == name
-                        )
-                    })
-            });
-            if !accepted {
+        // Hierarchy merges union sheet-pin names and child-sheet label names onto
+        // an otherwise correct electrical group. Those aliases are not Zener net
+        // names, so only report UnexpectedNet for islands that match nothing.
+        if matching_expected.is_empty() {
+            for name in &observed_group.names {
                 issues.push(SchematicIssue::UnexpectedNet {
                     net_name: name.clone(),
                     islands: kicad_islands(observed_group),
@@ -545,6 +539,41 @@ mod tests {
         assert!(terminals_match(&terminal("A", "1"), &terminal("A", "2")));
         assert!(terminals_match(&terminal("A", "1"), &terminal("B", "1")));
         assert!(!terminals_match(&terminal("A", "1"), &terminal("1", "2")));
+    }
+
+    #[test]
+    fn hierarchical_aliases_are_not_unexpected_nets() {
+        let expected = ConnectivityGraph {
+            components: Vec::new(),
+            groups: vec![ConnectionGroup {
+                names: BTreeSet::from(["PARENT".to_string()]),
+                terminals: BTreeSet::new(),
+                origins: BTreeSet::from([ConnectionOrigin::ZenerNet {
+                    name: "PARENT".to_string(),
+                }]),
+            }],
+        };
+        // Observed shape after hierarchy merge: parent net name plus sheet-pin
+        // and child-sheet label aliases on the same electrical group.
+        let observed = ConnectivityGraph {
+            components: Vec::new(),
+            groups: vec![ConnectionGroup {
+                names: BTreeSet::from([
+                    "CHILD".to_string(),
+                    "PARENT".to_string(),
+                    "PORT".to_string(),
+                ]),
+                terminals: BTreeSet::new(),
+                origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(IslandRef {
+                    page_id: "root".to_string(),
+                    index: 0,
+                })]),
+            }],
+        };
+
+        let analysis = analyze_connectivity(&expected, &observed);
+
+        assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
     }
 
     #[test]
