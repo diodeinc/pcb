@@ -417,6 +417,24 @@ fn stacked_pin_numbers_expand_to_exact_logical_numbers() {
 }
 
 #[test]
+fn oversized_stacked_pin_range_is_rejected() {
+    let mut builder = KicadBuilder::new();
+    builder
+        .define_symbol_raw(
+            r#"(symbol "Test:Stacked"
+              (symbol "Stacked_1_1"
+                (pin passive line (at 0 0 0) (length 0)
+                  (name "P") (number "[1-4097]"))))"#,
+        )
+        .component("Test:Stacked", Some("U1"), (0.0, 0.0));
+
+    let error = ConnectivityGraph::from_kicad(&builder.build()).unwrap_err();
+    let message = format!("{error:#}");
+
+    assert!(message.contains("limit of 4096 pins"), "{message}");
+}
+
+#[test]
 fn connectivity_uses_exact_kicad_internal_units() {
     let mut builder = KicadBuilder::new();
     builder
