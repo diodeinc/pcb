@@ -2,7 +2,7 @@
 source: crates/pcb-kicad-sch/tests/analysis_flow.rs
 expression: analysis
 ---
-SchematicAnalysis {
+ConnectivityAnalysis {
     components: {
         SymbolSlotKey {
             component_path: "R1.R",
