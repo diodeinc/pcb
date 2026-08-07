@@ -230,6 +230,31 @@ fn hidden_power_input_pin_is_a_global_connection() {
 }
 
 #[test]
+fn explicitly_visible_power_input_pin_is_not_a_global_connection() {
+    let mut builder = KicadBuilder::new();
+    builder
+        .define_symbol_raw(
+            r#"(symbol "Test:Powered"
+              (symbol "Powered_1_1"
+                (pin power_in line (at 0 0 0) (length 0) (hide no)
+                  (name "VCC") (number "1"))))"#,
+        )
+        .component("Test:Powered", Some("U1"), (0.0, 0.0))
+        .add_root_page("other", "other.kicad_sch")
+        .global_label("VCC", (10.0, 10.0));
+
+    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+    let vcc = graph
+        .groups
+        .iter()
+        .filter(|group| group.names.contains("VCC"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(vcc.len(), 1);
+    assert!(vcc[0].terminals.is_empty());
+}
+
+#[test]
 fn wired_hidden_power_input_does_not_create_a_global_connection() {
     let mut builder = KicadBuilder::new();
     builder
