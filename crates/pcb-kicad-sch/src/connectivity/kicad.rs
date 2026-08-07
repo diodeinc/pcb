@@ -552,6 +552,11 @@ enum DriverKind {
 }
 
 fn resolve_legacy_power_drivers(connectables: &mut [Connectable], union_find: &mut UnionFind) {
+    // KiCad's generateGlobalPowerPinSubGraphs() suppresses the implicit global
+    // connection for an invisible power-input pin on a non-power symbol when
+    // ConnectedItems() is non-empty; ERC reports the wired legacy pin instead.
+    // Modern power symbols take the separate PowerScope path above and always
+    // retain their declared local or global drive.
     let mut group_sizes = BTreeMap::new();
     for index in 0..connectables.len() {
         *group_sizes.entry(union_find.find(index)).or_insert(0usize) += 1;

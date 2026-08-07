@@ -5,6 +5,8 @@ use pcb_sexpr::Sexpr;
 
 use crate::{MirrorAxis, Point, Rotation, Symbol, SymbolDefinition};
 
+const MAX_EXPANDED_STACKED_PIN_NUMBERS: usize = 4096;
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SymbolPin {
     pub name: String,
@@ -206,7 +208,7 @@ fn parse_pin(items: &[Sexpr], include_hidden: bool) -> Result<Option<SymbolPin>>
         .and_then(Sexpr::as_atom)
         .context("symbol pin missing number")?
         .to_string();
-    let numbers = expand_stacked_pin_number(&crate::kicad::unescape_text(&number));
+    let numbers = expand_stacked_pin_number(&crate::kicad::unescape_text(&number))?;
     let mut alternates = BTreeMap::new();
     for alternate in items
         .iter()
@@ -285,8 +287,8 @@ fn validate_electrical_type(electrical_type: &str) -> Result<()> {
     }
 }
 
-pub(crate) fn expand_stacked_pin_number(number: &str) -> BTreeSet<String> {
-    let literal = || BTreeSet::from([number.to_string()]);
+pub(crate) fn expand_stacked_pin_number(number: &str) -> Result<BTreeSet<String>> {
+    let literal = || Ok(BTreeSet::from([number.to_string()]));
     let has_open = number.contains('[');
     let has_close = number.contains(']');
     if has_open || has_close {
@@ -312,17 +314,33 @@ pub(crate) fn expand_stacked_pin_number(number: &str) -> BTreeSet<String> {
             if start_prefix != end_prefix || start_value > end_value {
                 return literal();
             }
+            let range_len = usize::try_from(end_value - start_value)
+                .ok()
+                .and_then(|difference| difference.checked_add(1))
+                .context("stacked pin range length exceeds platform limits")?;
+            if range_len > MAX_EXPANDED_STACKED_PIN_NUMBERS
+                || expanded.len() > MAX_EXPANDED_STACKED_PIN_NUMBERS - range_len
+            {
+                bail!(
+                    "stacked pin number {number} expands beyond the limit of {MAX_EXPANDED_STACKED_PIN_NUMBERS} pins"
+                );
+            }
             for value in start_value..=end_value {
                 expanded.insert(format!("{start_prefix}{value}"));
             }
         } else {
             expanded.insert(part.to_string());
+            if expanded.len() > MAX_EXPANDED_STACKED_PIN_NUMBERS {
+                bail!(
+                    "stacked pin number {number} expands beyond the limit of {MAX_EXPANDED_STACKED_PIN_NUMBERS} pins"
+                );
+            }
         }
     }
     if expanded.is_empty() {
         literal()
     } else {
-        expanded
+        Ok(expanded)
     }
 }
 
