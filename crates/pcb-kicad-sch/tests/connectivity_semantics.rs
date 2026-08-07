@@ -5,7 +5,10 @@ use std::collections::BTreeSet;
 use common::kicad_builder::{KicadBuilder, TestPin};
 use pcb_kicad_sch::{
     SchItem,
-    connectivity::{ComponentIdentity, ConnectivityGraph, Terminal},
+    analysis::analyze_connectivity,
+    connectivity::{
+        ComponentIdentity, ConnectionGroup, ConnectionOrigin, ConnectivityGraph, Terminal,
+    },
 };
 
 #[test]
@@ -120,8 +123,34 @@ fn sheet_pin_connects_only_to_its_child_hierarchical_label() {
 
     assert_eq!(
         named_groups(builder.build()),
-        vec![names(&["CHILD", "PARENT", "PORT"])]
+        vec![names(&["CHILD", "PARENT"])]
     );
+}
+
+#[test]
+fn hierarchy_aliases_are_not_reported_as_unexpected_nets() {
+    let mut builder = KicadBuilder::new();
+    builder
+        .wire((0.0, 0.0), (1.0, 0.0))
+        .local_label("NET", (0.0, 0.0))
+        .sheet("child.kicad_sch", &[("PORT", (1.0, 0.0))])
+        .add_page("child", "child.kicad_sch")
+        .hierarchical_label("PORT", (0.0, 0.0));
+    let observed = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+    let expected = ConnectivityGraph {
+        components: Vec::new(),
+        groups: vec![ConnectionGroup {
+            names: names(&["NET"]),
+            terminals: BTreeSet::new(),
+            origins: BTreeSet::from([ConnectionOrigin::ZenerNet {
+                name: "NET".to_string(),
+            }]),
+        }],
+    };
+
+    let analysis = analyze_connectivity(&expected, &observed);
+
+    assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
 }
 
 #[test]
@@ -139,7 +168,7 @@ fn repeated_child_instances_do_not_merge_same_name_sheet_pins() {
 
     assert_eq!(
         named_groups(builder.build()),
-        vec![names(&["A", "PORT"]), names(&["B", "PORT"])]
+        vec![names(&["A"]), names(&["B"])]
     );
 }
 

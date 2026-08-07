@@ -278,6 +278,7 @@ fn reduce_page(
                         driver: Some(NameDriver {
                             name: name.clone(),
                             kind: DriverKind::Local,
+                            role: DriverNameRole::HierarchyAlias,
                             merge_by_name: false,
                         }),
                         terminal: None,
@@ -369,6 +370,7 @@ fn collect_symbol(
                         PowerScope::Local => DriverKind::Local,
                         PowerScope::Global => DriverKind::Global,
                     },
+                    role: DriverNameRole::NetName,
                     merge_by_name: true,
                 }),
                 terminal: None,
@@ -413,6 +415,7 @@ fn collect_symbol(
             driver: pin.is_hidden_power_input().then(|| NameDriver {
                 name: pin_name.clone(),
                 kind: DriverKind::LegacyGlobal,
+                role: DriverNameRole::NetName,
                 merge_by_name: true,
             }),
             terminal: Some(Terminal::ComponentPin {
@@ -454,11 +457,12 @@ fn collect_label(
     if name.is_empty() {
         return Ok(());
     }
-    let (kind, terminal) = match label.kind {
-        LabelKind::Local => (DriverKind::Local, None),
-        LabelKind::Global { .. } => (DriverKind::Global, None),
+    let (kind, role, terminal) = match label.kind {
+        LabelKind::Local => (DriverKind::Local, DriverNameRole::NetName, None),
+        LabelKind::Global { .. } => (DriverKind::Global, DriverNameRole::NetName, None),
         LabelKind::Hierarchical { .. } => (
             DriverKind::Local,
+            DriverNameRole::HierarchyAlias,
             expose_hierarchical_terminal.then(|| Terminal::InterfacePort { name: name.clone() }),
         ),
         LabelKind::Directive { .. } => unreachable!(),
@@ -473,6 +477,7 @@ fn collect_label(
         driver: Some(NameDriver {
             name: name.clone(),
             kind,
+            role,
             merge_by_name: true,
         }),
         terminal,
@@ -570,7 +575,14 @@ enum HierarchyEndpoint {
 struct NameDriver {
     name: String,
     kind: DriverKind,
+    role: DriverNameRole,
     merge_by_name: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DriverNameRole {
+    NetName,
+    HierarchyAlias,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -739,7 +751,9 @@ fn connection_groups(
             let mut child_pins = BTreeSet::new();
             for item in items {
                 if let Some(driver) = item.driver {
-                    names.insert(driver.name.clone());
+                    if driver.role == DriverNameRole::NetName {
+                        names.insert(driver.name.clone());
+                    }
                     if driver.kind == DriverKind::Global {
                         global_names.insert(driver.name);
                     }
@@ -755,7 +769,11 @@ fn connection_groups(
                     None => {}
                 }
             }
-            if names.is_empty() && terminals.is_empty() {
+            if names.is_empty()
+                && terminals.is_empty()
+                && hierarchical_ports.is_empty()
+                && child_pins.is_empty()
+            {
                 return None;
             }
             Some(ScopedConnectionGroup {
@@ -827,7 +845,10 @@ fn merge_scoped_groups(groups: Vec<ScopedConnectionGroup>) -> Vec<ConnectionGrou
         entry.terminals.extend(group.group.terminals);
         entry.origins.extend(group.group.origins);
     }
-    merged.into_values().collect()
+    merged
+        .into_values()
+        .filter(|group| !group.names.is_empty() || !group.terminals.is_empty())
+        .collect()
 }
 
 fn empty_connection_group() -> ConnectionGroup {
